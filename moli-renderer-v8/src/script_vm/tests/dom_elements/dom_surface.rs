@@ -139,6 +139,89 @@ fn dom_api_known_pseudo_element_selectors_with_after_part_pseudo_classes_return_
 }
 
 #[test]
+fn element_heading_reflections_drive_flat_tree_heading_matching() {
+    let mut vm = new_storage_test_vm("https://heading-offset.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const descriptor = name => Object.getOwnPropertyDescriptor(Element.prototype, name);
+              const outcome = callback => {
+                try {
+                  return `ok:${String(callback())}`;
+                } catch (error) {
+                  return `throw:${error && error.name}`;
+                }
+              };
+
+              const parent = document.createElement("div");
+              const heading = document.createElement("h1");
+              parent.append(heading);
+              const mount = document.body || document.documentElement ||
+                document.appendChild(document.createElement("html"));
+              mount.append(parent);
+              const initial = [heading.headingOffset, heading.headingReset, heading.matches(":heading(1)")];
+              parent.headingOffset = 3;
+              const parentOffset = [parent.getAttribute("headingoffset"), heading.matches(":heading(4)")];
+              heading.headingReset = true;
+              const reset = [heading.hasAttribute("headingreset"), heading.matches(":heading(1)")];
+              heading.headingReset = false;
+              heading.headingOffset = 20;
+              const clamped = [heading.getAttribute("headingoffset"), heading.headingOffset, heading.matches(":heading(9)")];
+
+              const host = document.createElement("section");
+              host.headingOffset = 1;
+              const root = host.attachShadow({ mode: "open" });
+              const container = document.createElement("div");
+              container.headingOffset = 1;
+              const slot = document.createElement("slot");
+              container.append(slot);
+              root.append(container);
+              const slotted = document.createElement("h2");
+              host.append(slotted);
+              mount.append(host);
+
+              const modalParent = document.createElement("div");
+              modalParent.headingOffset = 8;
+              const modal = document.createElement("dialog");
+              const modalHeading = document.createElement("h1");
+              modal.append(modalHeading);
+              modalParent.append(modal);
+              mount.append(modalParent);
+              const modalBefore = modal.headingReset;
+              modal.showModal();
+              const modalState = [modalBefore, modal.headingReset, modalHeading.matches(":heading(1)")];
+              modal.close();
+
+              return JSON.stringify({
+                owner: [
+                  Object.prototype.hasOwnProperty.call(Element.prototype, "headingOffset"),
+                  Object.prototype.hasOwnProperty.call(HTMLElement.prototype, "headingOffset"),
+                  descriptor("headingOffset").enumerable,
+                  descriptor("headingReset").enumerable
+                ],
+                initial,
+                parentOffset,
+                reset,
+                clamped,
+                slotted: slotted.matches(":heading(4)"),
+                modalState,
+                badGetter: outcome(() => descriptor("headingOffset").get.call({})),
+                badSetter: outcome(() => descriptor("headingReset").set.call({}, true))
+              });
+            })()
+            "#,
+        )
+        .expect("heading reflection and selector probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"owner":[true,false,true,true],"initial":[0,false,true],"parentOffset":["3",true],"reset":[true,true],"clamped":["20",8,true],"slotted":true,"modalState":[false,true,true],"badGetter":"throw:TypeError","badSetter":"throw:TypeError"}"#
+    );
+}
+
+#[test]
 fn element_scroll_into_view_surface_is_available() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
@@ -1188,6 +1271,69 @@ fn classic_scrollbar_metrics_and_thumb_drag_match_chromium_without_dom_mouse_eve
     assert!(result["left"].as_f64().is_some_and(|value| value > 50.0));
     assert!(result["top"].as_f64().is_some_and(|value| value > 100.0));
     assert_eq!(result["events"], serde_json::json!([]));
+}
+
+#[test]
+fn single_line_text_input_preserves_programmatic_scroll_across_select() {
+    let mut vm = new_storage_test_vm("https://text-input-scroll.test/");
+    vm.eval(
+        r#"
+        (() => {
+          if (!document.documentElement) {
+            document.appendChild(document.createElement("html"));
+          }
+          if (!document.body) {
+            document.documentElement.appendChild(document.createElement("body"));
+          }
+          const previous = document.createElement("input");
+          previous.value = "0123456789".repeat(100);
+          document.body.append(previous);
+          globalThis.__previousScrollInput = previous;
+          return "installed";
+        })()
+        "#,
+    )
+    .expect("text input scroll fixture should initialize");
+    refresh_layout_for_test(&mut vm);
+    vm.eval("__previousScrollInput.scrollLeft")
+        .expect("the previous input should retain the frozen layout");
+
+    vm.eval(
+        r#"
+        (() => {
+          __previousScrollInput.remove();
+          const input = document.createElement("input");
+          input.value = "0123456789".repeat(100);
+          document.body.append(input);
+          globalThis.__scrollInput = input;
+          return "replaced";
+        })()
+        "#,
+    )
+    .expect("the previous text input should be replaced");
+
+    vm.eval("__scrollInput.scrollLeft = 33")
+        .expect("text input should accept a programmatic scroll");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("__scrollInput.scrollWidth > __scrollInput.clientWidth")
+            .expect("text input overflow should be observable"),
+        "true"
+    );
+    assert_eq!(
+        vm.eval("__scrollInput.scrollLeft")
+            .expect("text input scroll should remain observable"),
+        "33"
+    );
+
+    vm.eval("__scrollInput.select()")
+        .expect("selecting the input contents should succeed");
+    refresh_layout_for_test(&mut vm);
+    assert_eq!(
+        vm.eval("__scrollInput.scrollLeft")
+            .expect("selection should preserve the text input scroll"),
+        "33"
+    );
 }
 
 #[test]
@@ -2938,6 +3084,105 @@ fn document_own_enumerable_surface_matches_browser_location_shape() {
         r#"{"keys":["location"],"internalOwnNames":[],"ownLocation":true,"locationEnumerable":true,"locationConfigurable":false,"locationIdentity":true}"#
     );
 }
+
+#[test]
+fn constructed_documents_share_legacy_unforgeable_location_accessors() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const first = new Document();
+              const second = new Document();
+              const firstDescriptor = Object.getOwnPropertyDescriptor(first, "location");
+              const secondDescriptor = Object.getOwnPropertyDescriptor(second, "location");
+              const throwsName = callback => {
+                try {
+                  callback();
+                  return "returned";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
+
+              return JSON.stringify({
+                firstValue: first.location,
+                secondValue: second.location,
+                own: Object.prototype.hasOwnProperty.call(first, "location"),
+                getType: typeof firstDescriptor.get,
+                setType: typeof firstDescriptor.set,
+                getName: firstDescriptor.get.name,
+                getLength: firstDescriptor.get.length,
+                setName: firstDescriptor.set.name,
+                setLength: firstDescriptor.set.length,
+                getSame: firstDescriptor.get === secondDescriptor.get,
+                setSame: firstDescriptor.set === secondDescriptor.set,
+                enumerable: firstDescriptor.enumerable,
+                configurable: firstDescriptor.configurable,
+                assign: throwsName(() => {
+                  "use strict";
+                  first.location = "https://example.org/";
+                }),
+                badGet: throwsName(() => firstDescriptor.get.call({})),
+                badSet: throwsName(() => firstDescriptor.set.call({}, "x")),
+              });
+            })()
+            "#,
+        )
+        .expect("constructed Document location accessor probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"firstValue":null,"secondValue":null,"own":true,"getType":"function","setType":"function","getName":"get location","getLength":0,"setName":"set location","setLength":1,"getSame":true,"setSame":true,"enumerable":true,"configurable":false,"assign":"TypeError","badGet":"TypeError","badSet":"TypeError"}"#
+    );
+}
+
+#[test]
+fn document_named_item_does_not_shadow_legacy_unforgeable_location() {
+    let mut vm = new_storage_test_vm("https://example.com/current/path");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              if (!document.documentElement) {
+                document.appendChild(document.createElement("html"));
+              }
+              if (!document.body) {
+                document.documentElement.appendChild(document.createElement("body"));
+              }
+
+              const originalLocation = document.location;
+              const originalPathname = originalLocation.pathname;
+              const locationForm = document.createElement("form");
+              locationForm.name = "location";
+              const ordinaryForm = document.createElement("form");
+              ordinaryForm.name = "namedProbe";
+              document.body.append(locationForm, ordinaryForm);
+
+              const whileConnected = [
+                document.location === originalLocation,
+                document.location.pathname === originalPathname,
+                document.namedProbe === ordinaryForm,
+              ];
+              locationForm.remove();
+
+              return JSON.stringify({
+                whileConnected,
+                afterRemoval: document.location === originalLocation,
+              });
+            })()
+            "#,
+        )
+        .expect("legacy-unforgeable document location probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"whileConnected":[true,true,true],"afterRemoval":true}"#
+    );
+}
+
 #[test]
 fn customized_built_in_constructors_can_extend_specialized_html_elements() {
     let mut vm = new_storage_test_vm("https://example.com/");
@@ -3344,6 +3589,97 @@ fn autocorrect_reflects_boolean_and_inherits_from_form_owner() {
     assert_eq!(
         result,
         r#"{"descriptor":[true,true],"canonical":[true,true,true,false,false,true,true],"truthy":[true,"on"],"falsy":[false,"off"],"inherited":["false:false:true:false","false:false:true:false","false:false:true:false","false:false:true:false","false:false:true:false","false:false:true:false"],"nonInherited":[true,true],"forcedOff":[false,false,false],"incompatible":["TypeError","TypeError"]}"#
+    );
+}
+
+#[test]
+fn writing_suggestions_reflects_and_inherits_nearest_ancestor_state() {
+    let mut vm = new_parsed_test_vm(
+        "https://writing-suggestions.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parent = document.createElement('section');
+  const child = document.createElement('div');
+  const grandchild = document.createElement('span');
+  parent.append(child);
+  child.append(grandchild);
+  parent.setAttribute('writingsuggestions', 'FaLsE');
+
+  const inherited = [
+    parent.writingSuggestions,
+    child.writingSuggestions,
+    grandchild.writingSuggestions
+  ];
+  child.setAttribute('writingsuggestions', '');
+  const emptyOverride = [child.writingSuggestions, grandchild.writingSuggestions];
+  child.setAttribute('writingsuggestions', 'invalid');
+  const invalidOverride = [child.writingSuggestions, grandchild.writingSuggestions];
+  child.removeAttribute('writingsuggestions');
+  const restoredInheritance = grandchild.writingSuggestions;
+
+  grandchild.writingSuggestions = false;
+  const booleanSetter = [
+    grandchild.writingSuggestions,
+    grandchild.getAttribute('writingsuggestions')
+  ];
+  grandchild.writingSuggestions = { toString() { return 'TrUe'; } };
+  const domStringSetter = [
+    grandchild.writingSuggestions,
+    grandchild.getAttribute('writingsuggestions')
+  ];
+
+  const namespaceOnly = document.createElement('div');
+  namespaceOnly.setAttributeNS('urn:test', 'writingsuggestions', 'false');
+
+  const detachedParent = document.createElement('div');
+  const detachedChild = document.createElement('span');
+  detachedParent.setAttribute('writingsuggestions', 'false');
+  detachedParent.append(detachedChild);
+
+  const descriptor = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    'writingSuggestions'
+  );
+  const incompatible = operation => {
+    try {
+      operation(document.createElementNS('urn:test', 'div'));
+      return 'none';
+    } catch (error) {
+      return error.name;
+    }
+  };
+
+  return JSON.stringify({
+    descriptor: [descriptor.enumerable, descriptor.configurable],
+    inherited,
+    emptyOverride,
+    invalidOverride,
+    restoredInheritance,
+    booleanSetter,
+    domStringSetter,
+    namespaceOnly: [
+      namespaceOnly.writingSuggestions,
+      namespaceOnly.getAttribute('writingsuggestions')
+    ],
+    detached: detachedChild.writingSuggestions,
+    incompatible: [
+      incompatible(receiver => descriptor.get.call(receiver)),
+      incompatible(receiver => descriptor.set.call(receiver, 'false'))
+    ]
+  });
+})()
+"#,
+        )
+        .expect("writingSuggestions semantics should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptor":[true,true],"inherited":["false","false","false"],"emptyOverride":["true","true"],"invalidOverride":["true","true"],"restoredInheritance":"false","booleanSetter":["false","false"],"domStringSetter":["true","TrUe"],"namespaceOnly":["true","false"],"detached":"false","incompatible":["TypeError","TypeError"]}"#
     );
 }
 
@@ -3874,10 +4210,12 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
   body.textContent = "";
   body.append(
     document.createTextNode("Here is a text node you can't select while the dialog is open."),
-    document.createElement("dialog"),
+    document.createElement("div"),
     document.createTextNode("Trailing text.")
   );
-  const dialog = body.querySelector("dialog");
+  const wrapper = body.querySelector("div");
+  const dialog = document.createElement("dialog");
+  wrapper.appendChild(dialog);
   dialog.textContent = "I'm selectable.";
   const selection = getSelection();
 
@@ -3895,6 +4233,11 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
     commandRange.endContainer === dialog &&
     commandRange.endOffset === dialog.childNodes.length;
 
+  wrapper.inert = true;
+  selection.selectAllChildren(body);
+  const inertAncestorText = selection.toString();
+  wrapper.inert = false;
+
   dialog.close();
   selection.selectAllChildren(body);
   const afterCloseText = selection.toString();
@@ -3904,6 +4247,7 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
     commandReturned,
     commandText,
     commandRangeSpansDialog,
+    inertAncestorText,
     afterCloseHasOutside: afterCloseText.includes("text node you can't select"),
     afterCloseHasDialog: afterCloseText.includes("I'm selectable."),
     afterCloseHasTrailing: afterCloseText.includes("Trailing text.")
@@ -3915,7 +4259,7 @@ fn exec_command_select_all_respects_modal_dialog_inertness() {
 
     assert_eq!(
         result,
-        r#"{"manualBodyText":"I'm selectable.","commandReturned":true,"commandText":"I'm selectable.","commandRangeSpansDialog":true,"afterCloseHasOutside":true,"afterCloseHasDialog":false,"afterCloseHasTrailing":true}"#
+        r#"{"manualBodyText":"I'm selectable.","commandReturned":true,"commandText":"I'm selectable.","commandRangeSpansDialog":true,"inertAncestorText":"I'm selectable.","afterCloseHasOutside":true,"afterCloseHasDialog":false,"afterCloseHasTrailing":true}"#
     );
 }
 
@@ -4127,7 +4471,11 @@ fn selection_to_string_uses_rendered_native_range_projection() {
   const contentHidden = document.createElement("div");
   contentHidden.setAttribute("style", "content-visibility: hidden");
   contentHidden.textContent = "hidden content";
-  root.append(basic, nested, container, contentHidden);
+  const inlineWhitespace = document.createElement("div");
+  inlineWhitespace.append("alpha\n  ", Object.assign(document.createElement("span"), {
+    textContent: "\n beta\n"
+  }), "\n gamma");
+  root.append(basic, nested, container, contentHidden, inlineWhitespace);
   const scriptStyleRange = document.createRange();
   scriptStyleRange.selectNode(p);
   const scriptStyle = selectedStringFor(scriptStyleRange).replace(/\r\n/g, "\n");
@@ -4144,7 +4492,8 @@ fn selection_to_string_uses_rendered_native_range_projection() {
     selectContents(basic),
     selectContents(nested),
     selectContents(container),
-    selectContents(contentHidden)
+    selectContents(contentHidden),
+    selectContents(inlineWhitespace)
   ].join("|");
 })()
 "##,
@@ -4153,8 +4502,71 @@ fn selection_to_string_uses_rendered_native_range_projection() {
 
     assert_eq!(
         result,
-        "\nstyle text line\nfunction x() { return 1; }\n\nPASS|Hell|ac|start  end|selectabletext|"
+        "\nstyle text line\nfunction x() { return 1; }\n\nPASS|Hell|ac|start  end|selectabletext||alpha beta gamma"
     );
+}
+
+#[test]
+fn selection_only_applies_inert_attribute_to_html_elements() {
+    let mut vm = new_storage_test_vm("https://selection-html-inert-namespace.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || html.appendChild(document.createElement('body'));
+  const root = document.createElement('div');
+  body.appendChild(root);
+  const selection = getSelection();
+  const mathml = 'http://www.w3.org/1998/Math/MathML';
+
+  const selectedText = element => {
+    selection.removeAllRanges();
+    selection.selectAllChildren(element);
+    return selection.toString();
+  };
+  const mathWithText = text => {
+    const math = document.createElementNS(mathml, 'math');
+    const mi = document.createElementNS(mathml, 'mi');
+    mi.textContent = text;
+    math.appendChild(mi);
+    return { math, mi };
+  };
+
+  const own = mathWithText('math own');
+  own.math.setAttribute('inert', '');
+  own.mi.setAttribute('inert', '');
+  root.appendChild(own.math);
+
+  const nested = mathWithText('math ancestors');
+  nested.math.setAttribute('inert', '');
+  nested.mi.setAttribute('inert', '');
+  root.appendChild(nested.math);
+
+  const htmlChild = document.createElement('span');
+  htmlChild.textContent = 'html child';
+  htmlChild.inert = true;
+  root.appendChild(htmlChild);
+
+  const htmlAncestor = document.createElement('div');
+  htmlAncestor.inert = true;
+  const inherited = mathWithText('html ancestor');
+  htmlAncestor.appendChild(inherited.math);
+  root.appendChild(htmlAncestor);
+
+  return [
+    selectedText(own.math),
+    selectedText(nested.math),
+    selectedText(htmlChild),
+    selectedText(htmlAncestor)
+  ].join('|');
+})()
+"#,
+        )
+        .expect("Selection inert namespace probe should evaluate");
+
+    assert_eq!(result, "math own|math ancestors||");
 }
 
 #[test]
@@ -6291,6 +6703,154 @@ async fn element_matches_delegates_loaded_child_document_elements() {
 }
 
 #[tokio::test]
+async fn child_parser_eof_syncs_selectedcontent_for_navigation_and_document_write() {
+    let mut vm = new_storage_test_vm("https://child-selectedcontent-parser.test/");
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.srcdoc = "<select><button><selectedcontent></button><option>X";
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("child selectedcontent navigation setup should evaluate");
+    run_child_navigation_commit_and_host_load_for_test(&mut vm, "child selectedcontent navigation")
+        .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const doc = document.querySelector("iframe").contentDocument;
+  const selectedcontent = doc.querySelector("selectedcontent");
+  const source = doc.querySelector("option");
+  return [selectedcontent.textContent, selectedcontent.firstChild !== source.firstChild].join("|");
+})()
+"#,
+        )
+        .expect("child selectedcontent navigation state should evaluate"),
+        "X|true"
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  const doc = document.querySelector("iframe").contentDocument;
+  doc.open();
+  doc.write("<select><button><selectedcontent></button><option>x<i>i<b>ib</i>b");
+  doc.close();
+})()
+"#,
+    )
+    .expect("child selectedcontent document.write setup should evaluate");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const doc = document.querySelector("iframe").contentDocument;
+  const selectedcontent = doc.querySelector("selectedcontent");
+  const source = doc.querySelector("option");
+  return [
+    selectedcontent.textContent,
+    selectedcontent.innerHTML === source.innerHTML,
+    selectedcontent.firstChild !== source.firstChild,
+    selectedcontent.querySelector("i") !== source.querySelector("i"),
+    selectedcontent.querySelectorAll("b").length
+  ].join("|");
+})()
+"#,
+        )
+        .expect("child selectedcontent document.write state should evaluate"),
+        "xiibb|true|true|true|2"
+    );
+}
+
+#[tokio::test]
+async fn child_navigation_performance_name_updates_after_iframe_src_change() {
+    let mut vm = new_storage_test_vm("https://child-navigation-performance.test/page.html");
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__childNavigationLoadCount = 0;
+  const frame = document.createElement("iframe");
+  globalThis.__childNavigationFrame = frame;
+  frame.onload = () => {
+    globalThis.__childNavigationLoadCount++;
+  };
+  frame.src = "/src/browser/tests/navigation-timing/resources/blank_page_green.html";
+  (document.body || document.documentElement || document).appendChild(frame);
+})()
+"#,
+    )
+    .expect("child navigation performance setup should evaluate");
+    let loads_before_initial_dispatch = vm
+        .eval("String(globalThis.__childNavigationLoadCount)")
+        .expect("initial child navigation load count should evaluate");
+    assert_eq!(loads_before_initial_dispatch, "0");
+    run_child_navigation_commit_and_host_load_for_test(
+        &mut vm,
+        "initial child navigation performance load",
+    )
+    .await;
+    let first = vm
+        .eval(
+            r#"
+(() => {
+  const frame = __childNavigationFrame;
+  const entry = frame.contentWindow.performance.getEntriesByType("navigation")[0];
+  const timing = frame.contentWindow.performance.timing;
+  return [
+    entry.name === frame.contentWindow.location.href,
+    entry.name.endsWith("/blank_page_green.html"),
+    globalThis.__childNavigationLoadCount,
+    timing.domInteractive > timing.navigationStart,
+    timing.loadEventStart >= timing.domInteractive,
+    timing.loadEventEnd >= timing.loadEventStart,
+    frame.contentWindow.performance.now() >=
+      timing.loadEventEnd - timing.navigationStart
+  ].join(":");
+})()
+"#,
+        )
+        .expect("first child navigation performance probe should evaluate");
+    assert_eq!(first, "true:true:1:true:true:true:true");
+
+    vm.eval(
+        r#"__childNavigationFrame.src = "/src/browser/tests/navigation-timing/resources/blank_page_yellow.html";"#,
+    )
+    .expect("second child navigation should queue");
+    let loads_before_second_dispatch = vm
+        .eval("String(globalThis.__childNavigationLoadCount)")
+        .expect("second child navigation pre-HostLoad load count should evaluate");
+    assert_eq!(loads_before_second_dispatch, "1");
+    run_child_navigation_commit_and_host_load_for_test(
+        &mut vm,
+        "second child navigation performance load",
+    )
+    .await;
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = __childNavigationFrame;
+  const entry = frame.contentWindow.performance.getEntriesByType("navigation")[0];
+  return [
+    entry.name === frame.contentWindow.location.href,
+    entry.name.endsWith("/blank_page_yellow.html"),
+    globalThis.__childNavigationLoadCount
+  ].join(":");
+})()
+"#,
+        )
+        .expect("second child navigation performance probe should evaluate");
+
+    assert_eq!(result, "true:true:2");
+}
+
+#[tokio::test]
 async fn child_content_document_getter_does_not_enumerate_script_wrappers_after_load() {
     let mut vm = new_storage_test_vm("https://child-content-document-getter-script-state.test/");
     vm.eval(
@@ -7719,6 +8279,239 @@ fn svg_list_objects_keep_declared_brand_and_members() {
 }
 
 #[test]
+fn svg_value_lists_enforce_item_types_indices_and_read_only_anim_values() {
+    let mut vm = new_storage_test_vm("https://svg-value-list-semantics.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const errorName = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return error.name;
+                }
+              };
+              const SVG_NS = "http://www.w3.org/2000/svg";
+              const text = document.createElementNS(SVG_NS, "text");
+              const svg = document.createElementNS(SVG_NS, "svg");
+              text.setAttribute("x", "10 20");
+              text.setAttribute("rotate", "15 30");
+
+              const lengths = text.x;
+              const lengthBase = lengths.baseVal;
+              const lengthAnim = lengths.animVal;
+              const numbers = text.rotate;
+              const numberBase = numbers.baseVal;
+              const numberAnim = numbers.animVal;
+              const invalidItems = [30, "invalid", text, null];
+
+              for (const item of invalidItems) {
+                assert(errorName(() => lengthBase.initialize(item)) === "TypeError",
+                  "SVGLengthList.initialize item type");
+                assert(errorName(() => lengthBase.insertItemBefore(item, 0)) === "TypeError",
+                  "SVGLengthList.insertItemBefore item type");
+                assert(errorName(() => lengthBase.replaceItem(item, 0)) === "TypeError",
+                  "SVGLengthList.replaceItem item type");
+                assert(errorName(() => lengthBase.appendItem(item)) === "TypeError",
+                  "SVGLengthList.appendItem item type");
+                assert(errorName(() => { lengthBase[0] = item; }) === "TypeError",
+                  "SVGLengthList indexed setter item type");
+              }
+
+              const length = svg.createSVGLength();
+              length.value = 42;
+              lengthBase[0] = length;
+              assert(lengthBase[0] === length, "SVGLengthList indexed getter");
+              assert(text.getAttribute("x") === "42 20", "SVGLengthList indexed reflection");
+
+              const number = svg.createSVGNumber();
+              number.value = 7;
+              numberBase[1] = number;
+              assert(numberBase[1] === number, "SVGNumberList indexed getter");
+              assert(text.getAttribute("rotate") === "15 7", "SVGNumberList indexed reflection");
+              assert(errorName(() => lengthBase.appendItem(number)) === "TypeError",
+                "SVGLengthList rejects SVGNumber");
+              assert(errorName(() => numberBase.appendItem(length)) === "TypeError",
+                "SVGNumberList rejects SVGLength");
+
+              text.setAttribute("x", "1 2 3");
+              assert(lengthBase.length === 3 && lengthBase[2].value === 3,
+                "saved baseVal resynchronizes");
+              assert(text.x.animVal.length === 3 && text.x.animVal[2].value === 3,
+                "animVal resynchronizes after direct baseVal access");
+
+              assert(errorName(() => lengthAnim.clear()) === "NoModificationAllowedError",
+                "SVGLengthList animVal clear");
+              assert(errorName(() => { lengthAnim[0] = length; }) === "NoModificationAllowedError",
+                "SVGLengthList animVal indexed setter");
+              assert(errorName(() => numberAnim.appendItem(number)) === "NoModificationAllowedError",
+                "SVGNumberList animVal appendItem");
+              assert(errorName(() => SVGLengthList.prototype.clear.call({})) === "TypeError",
+                "SVGLengthList receiver brand");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG value list semantics probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn svg_point_lists_are_live_mutable_and_clear_invalid_content() {
+    let mut vm = new_storage_test_vm("https://svg-point-list-semantics.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const errorName = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return error.name;
+                }
+              };
+              const ns = "http://www.w3.org/2000/svg";
+              const polygon = document.createElementNS(ns, "polygon");
+              const polyline = document.createElementNS(ns, "polyline");
+              const svg = document.createElementNS(ns, "svg");
+
+              assert(typeof SVGPointList === "function", "constructor exposed");
+              assert(errorName(() => new SVGPointList()) === "TypeError",
+                "illegal constructor");
+              for (const [constructor, element] of [
+                [SVGPolygonElement, polygon],
+                [SVGPolylineElement, polyline],
+              ]) {
+                const pointsDescriptor = Object.getOwnPropertyDescriptor(
+                  constructor.prototype,
+                  "points",
+                );
+                const animatedDescriptor = Object.getOwnPropertyDescriptor(
+                  constructor.prototype,
+                  "animatedPoints",
+                );
+                assert(typeof pointsDescriptor.get === "function" &&
+                  pointsDescriptor.set === undefined, `${constructor.name}.points descriptor`);
+                assert(typeof animatedDescriptor.get === "function" &&
+                  animatedDescriptor.set === undefined,
+                  `${constructor.name}.animatedPoints descriptor`);
+                assert(pointsDescriptor.enumerable && pointsDescriptor.configurable &&
+                  animatedDescriptor.enumerable && animatedDescriptor.configurable,
+                  `${constructor.name} descriptor flags`);
+                assert(element.points instanceof SVGPointList &&
+                  element.animatedPoints instanceof SVGPointList,
+                  `${constructor.name} point list interfaces`);
+                assert(element.points === element.points &&
+                  element.animatedPoints === element.animatedPoints &&
+                  element.points !== element.animatedPoints,
+                  `${constructor.name} SameObject lists`);
+              }
+
+              polygon.setAttribute("points", "0,0 100,0 100,100 0,100");
+              const points = polygon.points;
+              const animatedPoints = polygon.animatedPoints;
+              assert(Object.prototype.toString.call(points) === "[object SVGPointList]",
+                "point list tag");
+              assert(points.length === 4 && points.numberOfItems === 4,
+                "valid content points");
+              assert(points.getItem(1) === points[1] && points[1] instanceof DOMPoint &&
+                points[1] instanceof SVGPoint && points[1].x === 100 && points[1].y === 0,
+                "indexed point identity and values");
+
+              polygon.setAttribute("points", "0,0 100,0 INVALID");
+              assert(points.numberOfItems === 0,
+                "invalid token clears the whole point list");
+              polygon.setAttribute("points", "0,0 100,0 20");
+              assert(points.numberOfItems === 2,
+                "missing final y coordinate truncates the point list");
+              polygon.setAttribute("points", "0,0 100,0 20,");
+              assert(points.numberOfItems === 2,
+                "trailing comma with missing y truncates the point list");
+
+              polygon.setAttribute("points", "0,0 10,20");
+              const first = points[0];
+              first.x = 2;
+              assert(polygon.getAttribute("points") === "2 0 10 20",
+                "point coordinate mutation reflects to content");
+
+              const point = svg.createSVGPoint();
+              point.x = 5;
+              point.y = 6;
+              points.clear();
+              assert(points.length === 0 && polygon.getAttribute("points") === "",
+                "clear reflects an empty list");
+              assert(points.initialize(point) === point && points[0] === point,
+                "initialize keeps point identity");
+              assert(polygon.getAttribute("points") === "5 6", "initialize reflection");
+              point.x = 7;
+              assert(polygon.getAttribute("points") === "7 6", "owned point stays live");
+
+              const second = svg.createSVGPoint();
+              second.x = 8;
+              second.y = 9;
+              assert(points.appendItem(second) === second && points.length === 2,
+                "appendItem");
+              const third = svg.createSVGPoint();
+              third.x = 10;
+              third.y = 11;
+              assert(points.insertItemBefore(third, 1) === third && points.length === 3,
+                "insertItemBefore");
+              const replacement = svg.createSVGPoint();
+              replacement.x = 12;
+              replacement.y = 13;
+              assert(points.replaceItem(replacement, 0) === replacement &&
+                points[0] === replacement,
+                "replaceItem");
+              assert(points.removeItem(1) === third && points.length === 2,
+                "removeItem");
+              points[0] = point;
+              assert(points[0] === point, "indexed setter");
+
+              for (const invalid of [1, "point", polygon, null]) {
+                assert(errorName(() => points.appendItem(invalid)) === "TypeError",
+                  "point item type enforcement");
+              }
+              assert(errorName(() => points.getItem(99)) === "IndexSizeError",
+                "getItem bounds");
+
+              polygon.setAttribute("points", "1,2 3,4");
+              assert(animatedPoints.length === 2 && animatedPoints[1].x === 3,
+                "animatedPoints live synchronization");
+              assert(errorName(() => animatedPoints.clear()) === "NoModificationAllowedError",
+                "animatedPoints list is read-only");
+              assert(errorName(() => { animatedPoints[0].x = 9; }) ===
+                "NoModificationAllowedError", "animated point is read-only");
+              assert(errorName(() => SVGPointList.prototype.clear.call({})) === "TypeError",
+                "point list receiver brand");
+
+              const pointsDescriptor = Object.getOwnPropertyDescriptor(
+                SVGPolygonElement.prototype,
+                "points",
+              );
+              assert(errorName(() => pointsDescriptor.get.call(svg)) === "TypeError",
+                "animated points receiver brand");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG point list semantics probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn svg_list_matrix_and_transform_declared_methods_keep_descriptors() {
     let mut vm = new_storage_test_vm("https://svg-method-descriptors.test/");
 
@@ -7753,6 +8546,7 @@ fn svg_list_matrix_and_transform_declared_methods_keep_descriptors() {
                 numberInsertItemBefore: methodDescriptor(numberList, "insertItemBefore"),
                 transformListCreate: methodDescriptor(transformList, "createSVGTransformFromMatrix"),
                 transformListConsolidate: methodDescriptor(transformList, "consolidate"),
+                transformSetMatrix: methodDescriptor(transform, "setMatrix"),
                 transformSetRotate: methodDescriptor(transform, "setRotate"),
                 transformSetSkewX: methodDescriptor(transform, "setSkewX"),
                 matrixScaleNonUniform: methodDescriptor(matrix, "scaleNonUniform"),
@@ -7772,7 +8566,7 @@ fn svg_list_matrix_and_transform_declared_methods_keep_descriptors() {
 
     assert_eq!(
         result,
-        r#"{"lengthGetItem":"false,true,true,getItem,1","lengthAppendItem":"false,true,true,appendItem,1","numberInsertItemBefore":"false,true,true,insertItemBefore,2","transformListCreate":"false,true,true,createSVGTransformFromMatrix,1","transformListConsolidate":"false,true,true,consolidate,0","transformSetRotate":"false,true,true,setRotate,3","transformSetSkewX":"false,true,true,setSkewX,1","matrixScaleNonUniform":"false,true,true,scaleNonUniform,2","matrixRotateFromVector":"false,true,true,rotateFromVector,2","matrixFlipX":"false,true,true,flipX,0","transformOwnMethods":["setMatrix","setRotate","setScale","setSkewX","setSkewY","setTranslate"],"matrixOwnMethods":["flipX","flipY","inverse","multiply","rotate","rotateFromVector","scale","scaleNonUniform","skewX","skewY","translate"]}"#
+        r#"{"lengthGetItem":"false,true,true,getItem,1","lengthAppendItem":"false,true,true,appendItem,1","numberInsertItemBefore":"false,true,true,insertItemBefore,2","transformListCreate":"false,true,true,createSVGTransformFromMatrix,0","transformListConsolidate":"false,true,true,consolidate,0","transformSetMatrix":"false,true,true,setMatrix,0","transformSetRotate":"false,true,true,setRotate,3","transformSetSkewX":"false,true,true,setSkewX,1","matrixScaleNonUniform":"false,true,true,scaleNonUniform,2","matrixRotateFromVector":"false,true,true,rotateFromVector,2","matrixFlipX":"false,true,true,flipX,0","transformOwnMethods":["setMatrix","setRotate","setScale","setSkewX","setSkewY","setTranslate"],"matrixOwnMethods":["flipX","flipY","inverse","multiply","rotate","rotateFromVector","scale","scaleNonUniform","skewX","skewY","translate"]}"#
     );
 }
 
@@ -8030,6 +8824,291 @@ fn html_link_rel_list_exposes_supported_tokens() {
         result,
         r#"{"beforeAdd":{"tag":"[object DOMTokenList]","stable":true,"supportsType":"function","supportsPreload":true,"supportsModulepreload":true,"supportsUnknown":false,"supportsEmpty":false,"supportsMissing":"throw:TypeError","length":2,"item0":"preload","item1":"stylesheet","containsPreload":true,"value":"preload stylesheet preload","stringValue":"preload stylesheet preload"},"afterAddRel":"preload stylesheet prefetch","afterSetterRel":"preconnect","afterSetterLength":1,"afterSetterContainsPreconnect":true}"#
     );
+}
+
+#[test]
+fn reflected_dom_token_list_attributes_are_live_same_object_and_owner_scoped() {
+    let mut vm = new_storage_test_vm("https://reflected-token-lists.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const svg = "http://www.w3.org/2000/svg";
+              const detached = document.implementation.createHTMLDocument("");
+              const descriptors = [
+                [HTMLIFrameElement.prototype, "sandbox"],
+                [HTMLLinkElement.prototype, "sizes"],
+                [HTMLOutputElement.prototype, "htmlFor"],
+                [SVGAElement.prototype, "relList"]
+              ];
+              for (const [prototype, name] of descriptors) {
+                const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+                assert(!!descriptor, `${prototype.constructor.name}.${name} descriptor`);
+                assert(typeof descriptor.get === "function", `${name} getter`);
+                assert(typeof descriptor.set === "function", `${name} PutForwards setter`);
+                assert(descriptor.enumerable && descriptor.configurable, `${name} descriptor flags`);
+              }
+
+              const noSupportedTokens = list => {
+                try {
+                  list.supports("anything");
+                  return false;
+                } catch (error) {
+                  return error && error.name === "TypeError";
+                }
+              };
+              const exercise = ownerDocument => {
+                const iframe = ownerDocument.createElement("iframe");
+                const sandbox = iframe.sandbox;
+                assert(Object.prototype.toString.call(sandbox) === "[object DOMTokenList]", "sandbox type");
+                assert(sandbox === iframe.sandbox, "sandbox SameObject");
+                iframe.sandbox = "allow-scripts allow-forms allow-scripts";
+                assert(sandbox.length === 2 && sandbox.contains("allow-forms"), "sandbox tokens");
+                assert(iframe.getAttribute("sandbox") === "allow-scripts allow-forms allow-scripts", "sandbox PutForwards");
+                assert(sandbox.supports("ALLOW-SCRIPTS"), "sandbox supports ASCII case-insensitively");
+                assert(sandbox.supports("allow-storage-access-by-user-activation"), "sandbox storage-access token");
+                assert(!sandbox.supports("unknown"), "sandbox rejects unknown token");
+                sandbox.add("allow-popups");
+                assert(iframe.getAttribute("sandbox") === "allow-scripts allow-forms allow-popups", "sandbox mutation reflects");
+
+                const output = ownerDocument.createElement("output");
+                const htmlFor = output.htmlFor;
+                assert(Object.prototype.toString.call(htmlFor) === "[object DOMTokenList]", "htmlFor type");
+                assert(htmlFor === output.htmlFor, "htmlFor SameObject");
+                output.htmlFor = "first second first";
+                htmlFor.add("third");
+                assert(output.getAttribute("for") === "first second third", "htmlFor reflects for");
+                assert(noSupportedTokens(htmlFor), "htmlFor has no supported tokens");
+
+                const link = ownerDocument.createElement("link");
+                const sizes = link.sizes;
+                assert(Object.prototype.toString.call(sizes) === "[object DOMTokenList]", "sizes type");
+                assert(sizes === link.sizes, "sizes SameObject");
+                assert(sizes !== link.relList, "link token lists have distinct identity");
+                link.sizes = "16x16 32x32 16x16";
+                sizes.remove("16x16");
+                assert(link.getAttribute("sizes") === "32x32", "sizes mutation reflects");
+                assert(noSupportedTokens(sizes), "sizes has no supported tokens");
+
+                const anchor = ownerDocument.createElementNS(svg, "a");
+                const relList = anchor.relList;
+                assert(Object.prototype.toString.call(relList) === "[object DOMTokenList]", "SVG relList type");
+                assert(relList === anchor.relList, "SVG relList SameObject");
+                anchor.relList = "noopener noreferrer";
+                relList.add("opener");
+                assert(anchor.getAttribute("rel") === "noopener noreferrer opener", "SVG relList reflects rel");
+                assert(relList.supports("NOOPENER"), "SVG relList supported tokens");
+              };
+
+              exercise(document);
+              exercise(detached);
+
+              const div = document.createElement("div");
+              for (const name of ["htmlFor", "sandbox", "sizes", "relList"]) {
+                assert(div[name] === undefined, `div.${name} should be undefined`);
+              }
+              assert(document.createElementNS(svg, "link").sizes === undefined, "SVG link.sizes");
+              assert(document.createElementNS(svg, "output").htmlFor === undefined, "SVG output.htmlFor");
+              assert(document.createElementNS(svg, "iframe").sandbox === undefined, "SVG iframe.sandbox");
+              assert(document.createElement("svg").relList === undefined, "HTML svg.relList");
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("reflected DOMTokenList attributes should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn svg_svg_element_deselect_all_clears_the_owner_document_selection() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-deselect-all.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const svgNamespace = "http://www.w3.org/2000/svg";
+              const outer = document.createElementNS(svgNamespace, "svg");
+              const inner = document.createElementNS(svgNamespace, "svg");
+              const svgText = document.createElementNS(svgNamespace, "text");
+              const htmlText = document.createElement("p");
+              svgText.textContent = "SVG selection";
+              htmlText.textContent = "HTML selection";
+              inner.appendChild(svgText);
+              outer.appendChild(inner);
+              document.body.append(outer, htmlText);
+
+              const descriptor = Object.getOwnPropertyDescriptor(
+                SVGSVGElement.prototype,
+                "deselectAll"
+              );
+              assert(!!descriptor, "deselectAll descriptor");
+              assert(typeof descriptor.value === "function", "deselectAll function");
+              assert(descriptor.value.name === "deselectAll", "deselectAll name");
+              assert(descriptor.value.length === 0, "deselectAll length");
+              assert(descriptor.enumerable && descriptor.writable && descriptor.configurable,
+                "deselectAll descriptor flags");
+
+              const selection = window.getSelection();
+              const select = node => {
+                const range = document.createRange();
+                range.selectNodeContents(node);
+                selection.removeAllRanges();
+                selection.addRange(range);
+                assert(selection.rangeCount === 1, "selection precondition");
+              };
+
+              outer.deselectAll();
+              assert(selection.rangeCount === 0 && selection.isCollapsed,
+                "empty selection stays empty");
+
+              select(svgText);
+              outer.deselectAll();
+              assert(selection.rangeCount === 0 && selection.isCollapsed,
+                "outer svg clears SVG selection");
+
+              select(htmlText);
+              inner.deselectAll();
+              assert(selection.rangeCount === 0 && selection.isCollapsed,
+                "inner svg clears selection outside its subtree");
+
+              select(svgText);
+              const originalDocumentGetSelection = document.getSelection;
+              const originalRemoveAllRanges = Selection.prototype.removeAllRanges;
+              document.getSelection = () => { throw new Error("observable getSelection call"); };
+              Selection.prototype.removeAllRanges = () => {
+                throw new Error("observable removeAllRanges call");
+              };
+              Object.defineProperty(outer, "ownerDocument", {
+                value: null,
+                configurable: true
+              });
+              Object.defineProperty(document, "defaultView", {
+                value: null,
+                configurable: true
+              });
+              try {
+                outer.deselectAll();
+              } finally {
+                delete outer.ownerDocument;
+                delete document.defaultView;
+                document.getSelection = originalDocumentGetSelection;
+                Selection.prototype.removeAllRanges = originalRemoveAllRanges;
+              }
+              assert(selection.rangeCount === 0, "deselectAll uses internal selection state");
+
+              let borrowed = "returned";
+              try {
+                descriptor.value.call(document.createElement("div"));
+              } catch (error) {
+                borrowed = error && error.name;
+              }
+              assert(borrowed === "TypeError", "deselectAll receiver brand");
+
+              const detachedDocument = document.implementation.createHTMLDocument("");
+              const detachedSvg = detachedDocument.createElementNS(svgNamespace, "svg");
+              detachedSvg.deselectAll();
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVGSVGElement.deselectAll should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn svg_href_animated_string_prefers_href_and_falls_back_to_xlink_href() {
+    let mut vm = new_storage_test_vm("https://svg-href-reflection.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const assert = (condition, message) => {
+                if (!condition) throw new Error(message);
+              };
+              const svg = "http://www.w3.org/2000/svg";
+              const xlink = "http://www.w3.org/1999/xlink";
+              const unrelated = "https://namespaced-href.test/";
+              const exercise = ownerDocument => {
+                const anchor = ownerDocument.createElementNS(svg, "a");
+                const href = anchor.href;
+                assert(href === anchor.href, "href is SameObject");
+
+                anchor.setAttributeNS(xlink, "href", "xlink-unprefixed");
+                assert(href.baseVal === "xlink-unprefixed", "unprefixed XLink fallback");
+                assert(href.animVal === "xlink-unprefixed", "XLink animVal fallback");
+                href.baseVal = "xlink-updated";
+                assert(anchor.getAttributeNS(xlink, "href") === "xlink-updated",
+                  "baseVal updates the XLink attribute");
+                assert(!anchor.hasAttributeNS(null, "href"),
+                  "XLink update does not create href");
+
+                anchor.setAttributeNS(null, "href", "preferred");
+                assert(href.baseVal === "preferred", "href wins regardless of insertion order");
+                href.baseVal = "preferred-updated";
+                assert(anchor.getAttributeNS(null, "href") === "preferred-updated",
+                  "baseVal updates preferred href");
+                assert(anchor.getAttributeNS(xlink, "href") === "xlink-updated",
+                  "preferred href leaves XLink unchanged");
+
+                anchor.removeAttributeNS(null, "href");
+                assert(href.baseVal === "xlink-updated", "removing href restores fallback");
+                anchor.removeAttributeNS(xlink, "href");
+                assert(href.baseVal === "" && href.animVal === "", "removing fallback resets values");
+
+                anchor.setAttributeNS(xlink, "xlink:href", "xlink-prefixed");
+                assert(href.baseVal === "xlink-prefixed", "prefixed XLink fallback");
+                href.baseVal = "xlink-prefixed-updated";
+                assert(anchor.getAttributeNS(xlink, "href") === "xlink-prefixed-updated",
+                  "baseVal updates prefixed XLink attribute");
+                assert(anchor.getAttributeNames().includes("xlink:href"),
+                  "baseVal preserves the XLink prefix");
+
+                anchor.removeAttributeNS(xlink, "href");
+                anchor.setAttributeNS(unrelated, "href", "unrelated");
+                assert(href.baseVal === "", "unrelated namespaced href is ignored");
+                href.baseVal = "created";
+                assert(anchor.getAttributeNS(null, "href") === "created",
+                  "baseVal creates an unnamespaced href");
+                assert(anchor.getAttributeNS(unrelated, "href") === "unrelated",
+                  "baseVal leaves unrelated namespaced href unchanged");
+
+                anchor.removeAttributeNS(null, "href");
+                anchor.setAttributeNS(xlink, "xlink:href", "side-effect-fallback");
+                href.baseVal = {
+                  toString() {
+                    anchor.setAttributeNS(null, "href", "created-during-conversion");
+                    return "converted";
+                  }
+                };
+                assert(anchor.getAttributeNS(null, "href") === "converted",
+                  "baseVal chooses its backing attribute after value conversion");
+                assert(anchor.getAttributeNS(xlink, "href") === "side-effect-fallback",
+                  "conversion-created href leaves XLink fallback unchanged");
+              };
+
+              exercise(document);
+              exercise(document.implementation.createHTMLDocument(""));
+              return "ok";
+            })()
+            "#,
+        )
+        .expect("SVG href reflection should evaluate");
+
+    assert_eq!(result, "ok");
 }
 
 #[test]
@@ -8737,6 +9816,151 @@ fn window_named_properties_respect_later_prototype_properties_and_descriptor_fla
 }
 
 #[test]
+fn window_named_properties_implement_webidl_exotic_object_operations() {
+    let mut vm = new_storage_test_vm("https://window-named-properties.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+                "use strict";
+                if (!document.documentElement) {
+                    document.appendChild(document.createElement("html"));
+                }
+                if (!document.body) {
+                    document.documentElement.appendChild(document.createElement("body"));
+                }
+
+                const frame = document.createElement("iframe");
+                document.body.appendChild(frame);
+                const w = frame.contentWindow;
+                const wp = Object.getPrototypeOf(w.Window.prototype);
+                const originalPrototype = Object.getPrototypeOf(wp);
+
+                const named = w.document.createElement("div");
+                named.id = "a";
+                w.document.body.appendChild(named);
+                const indexed = w.document.createElement("div");
+                indexed.id = "0";
+                w.document.body.appendChild(indexed);
+
+                let differentPrototypeThrows = false;
+                let childPrototypeSetterThrows = false;
+                let preventExtensionsThrows = false;
+                let directSetThrows = false;
+                try {
+                    Object.setPrototypeOf(wp, {});
+                } catch (error) {
+                    differentPrototypeThrows = error instanceof TypeError;
+                }
+                try {
+                    wp.__proto__ = null;
+                } catch (error) {
+                    childPrototypeSetterThrows = error instanceof w.TypeError;
+                }
+                try {
+                    Object.preventExtensions(wp);
+                } catch (error) {
+                    preventExtensionsThrows = error instanceof TypeError;
+                }
+                try {
+                    wp.a = 1;
+                } catch (error) {
+                    directSetThrows = error instanceof TypeError;
+                }
+
+                let setterThis;
+                let directSetterThis;
+                Object.defineProperty(w.Object.prototype, "setterProbe", {
+                    configurable: true,
+                    set() { setterThis = this; }
+                });
+                Object.defineProperty(w.Object.prototype, "directSetterProbe", {
+                    configurable: true,
+                    set() { directSetterThis = this; }
+                });
+                Object.defineProperty(w.EventTarget.prototype, "blockedProbe", {
+                    configurable: true,
+                    value: 1,
+                    writable: false
+                });
+                const receiver = Object.create(wp);
+                const namedDescriptor = Object.getOwnPropertyDescriptor(wp, "a");
+                const indexedDescriptor = Reflect.getOwnPropertyDescriptor(wp, 0);
+
+                const observations = {
+                    prototype: [
+                        Reflect.setPrototypeOf(wp, originalPrototype),
+                        !Reflect.setPrototypeOf(wp, w.Object.prototype),
+                        Object.getPrototypeOf(wp) === originalPrototype,
+                        differentPrototypeThrows,
+                        childPrototypeSetterThrows
+                    ],
+                    extensibility: [
+                        !Reflect.preventExtensions(wp),
+                        Object.isExtensible(wp),
+                        preventExtensionsThrows
+                    ],
+                    properties: [
+                        wp.a === named,
+                        wp[0] === indexed,
+                        "a" in wp,
+                        Reflect.has(wp, 0),
+                        namedDescriptor.value === named,
+                        namedDescriptor.writable && !namedDescriptor.enumerable &&
+                            namedDescriptor.configurable,
+                        indexedDescriptor.value === indexed,
+                        indexedDescriptor.writable && !indexedDescriptor.enumerable &&
+                            indexedDescriptor.configurable
+                    ],
+                    directMutation: [
+                        !Reflect.defineProperty(wp, "a", {}),
+                        !Reflect.defineProperty(wp, Symbol(), {}),
+                        !Reflect.set(wp, "a", 1),
+                        !Reflect.set(wp, "missing", 1),
+                        !Reflect.set(wp, Symbol(), 1),
+                        directSetThrows,
+                        !Reflect.deleteProperty(wp, "a"),
+                        !Reflect.deleteProperty(wp, "missing"),
+                        !Reflect.deleteProperty(wp, Symbol.toStringTag),
+                        Reflect.set(wp, "directSetterProbe", 50),
+                        directSetterThis === wp
+                    ],
+                    receiverSet: [
+                        Reflect.set(wp, "a", 10, receiver),
+                        Reflect.set(wp, 0, 20, receiver),
+                        Reflect.set(wp, "setterProbe", 30, receiver),
+                        !Reflect.set(wp, "blockedProbe", 40, receiver),
+                        receiver.a === 10,
+                        receiver[0] === 20,
+                        setterThis === receiver,
+                        !Object.hasOwn(receiver, "setterProbe"),
+                        !Object.hasOwn(receiver, "blockedProbe")
+                    ],
+                    keys: [
+                        Object.getOwnPropertyNames(wp).length === 0,
+                        Reflect.ownKeys(wp).length === 1,
+                        Reflect.ownKeys(wp)[0] === Symbol.toStringTag
+                    ]
+                };
+
+                delete w.Object.prototype.setterProbe;
+                delete w.Object.prototype.directSetterProbe;
+                delete w.EventTarget.prototype.blockedProbe;
+                frame.remove();
+                return JSON.stringify(observations);
+            })()
+            "#,
+        )
+        .expect("WindowProperties exotic object operations should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"prototype":[true,true,true,true,true],"extensibility":[true,true,true],"properties":[true,true,true,true,true,true,true,true],"directMutation":[true,true,true,true,true,true,true,true,true,true,true],"receiverSet":[true,true,true,true,true,true,true,true,true],"keys":[true,true,true]}"#
+    );
+}
+
+#[test]
 fn window_internal_child_context_identity_is_not_read_from_web_properties() {
     let mut vm = new_storage_test_vm("https://window-private-identity.test/");
 
@@ -8829,7 +10053,7 @@ frame.name = 'target';
     assert_eq!(result, "[object Window]|true|object");
 }
 #[test]
-fn iframe_in_shadow_tree_is_not_a_named_window_property() {
+fn iframe_in_shadow_tree_is_not_a_window_child_property() {
     let mut vm = new_storage_test_vm("https://shadow-iframe-named-property.test/");
 
     let result = vm
@@ -8845,6 +10069,10 @@ const lightFrame = document.createElement('iframe');
 lightFrame.name = 'lightTarget';
 (document.body || document.documentElement || document).appendChild(lightFrame);
 [
+  window.length,
+  window.frames.length,
+  window[0] === lightFrame.contentWindow,
+  window[1] === undefined,
   'shadowTarget' in window,
   window.shadowTarget === undefined,
   shadowFrame.contentWindow !== null,
@@ -8855,7 +10083,7 @@ lightFrame.name = 'lightTarget';
         )
         .expect("shadow iframe named property probe should evaluate");
 
-    assert_eq!(result, "false|true|true|true|true");
+    assert_eq!(result, "1|1|true|true|false|true|true|true|true");
 }
 #[test]
 fn child_webassembly_constructors_use_newtarget_child_realm_default_prototype() {
@@ -9211,6 +10439,112 @@ seen.join('|')
         "push,true,true,false,false,true,https://targeted-child-navigate.test/next.html,false,,,-1,true"
     );
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn base_target_navigation_exposes_replacement_document_before_iframe_load() {
+    const HOST: &str = "anchor-base-target.test";
+
+    let server = StaticHttpServer::spawn(3).await;
+    let top_url = server.url_for_host(HOST, "/path/page.html");
+    let replacement_url = server.url_for_host(HOST, "/replacement.html");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__targetLoadCount = 0;
+  globalThis.__targetLoadAccess = "pending";
+  globalThis.__frameLoadCount = 0;
+  globalThis.__baseTargetOwnerRealm = "pending";
+
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  document.addEventListener('load', () => { __frameLoadCount += 1; }, true);
+  body.innerHTML = `
+    <iframe id="base-target-source" name="sourceFrame" src="/source.html"></iframe>
+    <iframe id="base-target-target" name="targetFrame" src="/target.html"></iframe>
+  `;
+})()
+"#,
+    )
+    .expect("base-target network child setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__frameLoadCount)",
+        "2",
+        "initial parser-created base-target child documents should load",
+    )
+    .await;
+
+    vm.eval(
+        r#"
+(() => {
+  const source = document.getElementById('base-target-source');
+  const target = document.getElementById('base-target-target');
+  __baseTargetOwnerRealm = [
+    source instanceof HTMLIFrameElement,
+    target instanceof HTMLIFrameElement,
+    target instanceof target.contentWindow.HTMLIFrameElement,
+    target.contentWindow.frameElement === target
+  ].join('|');
+
+  const doc = source.contentDocument;
+  const firstBase = doc.createElement('base');
+  firstBase.target = 'targetFrame';
+  const secondBase = doc.createElement('base');
+  secondBase.target = '_self';
+  doc.head.append(firstBase, secondBase);
+
+  const link = doc.createElement('a');
+  link.href = '/replacement.html';
+  link.setAttribute('target', '');
+  doc.body.appendChild(link);
+
+  target.addEventListener('load', () => {
+    __targetLoadCount += 1;
+    try {
+      __targetLoadAccess = target.contentDocument.location.href;
+    } catch (error) {
+      __targetLoadAccess = `${error && error.name}:${error && error.message}`;
+    }
+  }, true);
+  link.click();
+})()
+"#,
+    )
+    .expect("base-target replacement navigation should start");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__targetLoadCount)",
+        "1",
+        "base-target replacement document should load",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval("__baseTargetOwnerRealm")
+            .expect("base-target frame owner realm result should evaluate"),
+        "true|true|false|true",
+        "parser-created frame elements and window.frameElement must use the owner Document realm"
+    );
+    assert_eq!(
+        vm.eval("__targetLoadAccess")
+            .expect("target load callback access result should evaluate"),
+        replacement_url.as_str(),
+        "the replacement Document must be same-origin accessible during the iframe load callback"
+    );
+
+    let mut targets = server.finish_targets().await;
+    targets.sort();
+    assert_eq!(
+        targets,
+        ["/replacement.html", "/source.html", "/target.html"]
+    );
+}
+
 #[test]
 fn targeted_anchor_click_reports_same_document_hash_change_for_child_window() {
     let mut vm = new_storage_test_vm("https://targeted-child-hash.test/page.html");
@@ -9366,6 +10700,78 @@ fn document_open_with_three_arguments_uses_associated_window() {
 
     assert_eq!(result, "true|true|true|InvalidAccessError:15");
 }
+
+#[tokio::test]
+async fn embed_and_object_javascript_attributes_use_resource_fetch_not_script_navigation() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://embedded-javascript-attribute.test/",
+        &loader,
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__embeddedJavascriptAttributeEvents = [];
+  const root = document.body || document.documentElement || document;
+  for (const [tag, attribute] of [["embed", "src"], ["object", "data"]]) {
+    const element = document.createElement(tag);
+    element[attribute] =
+      `javascript:parent.__embeddedJavascriptAttributeEvents.push("executed-${tag}")`;
+    element.onload = () => {
+      __embeddedJavascriptAttributeEvents.push(`load-${tag}`);
+    };
+    if (tag === "object") {
+      element.onerror = event => {
+        __embeddedJavascriptAttributeEvents.push(
+          `error-object:${event.isTrusted}:${element.contentDocument === null}`
+        );
+      };
+    }
+    root.appendChild(element);
+  }
+})()
+"#,
+    )
+    .expect("embedded javascript attribute setup should evaluate");
+
+    for element in ["embed", "object"] {
+        expect_page_child_frame_task_source_after_realm_prerequisite(
+            &mut vm,
+            &loader,
+            ChildFrameSemanticTurnKind::NavigationCommit,
+            &format!("{element} javascript attribute should enter its navigation commit turn"),
+        )
+        .await;
+    }
+    assert!(
+        vm._context_host.borrow().has_pending_child_document_loads(),
+        "embed and object javascript attributes should start resource fetches"
+    );
+    assert!(
+        !vm.has_pending_child_frame_realm_materialization(),
+        "resource attributes must not schedule javascript execution in child realms"
+    );
+    for element in ["embed", "object"] {
+        wait_for_one_page_resource_completion_selected_task_executor_test_turn(
+            &mut vm,
+            &loader,
+            &format!("{element} javascript attribute fetch failure"),
+        )
+        .await;
+    }
+    assert!(
+        !vm._context_host.borrow().has_pending_child_document_loads(),
+        "both embedded resource fetch failures should settle"
+    );
+    assert_eq!(
+        vm.eval("JSON.stringify(__embeddedJavascriptAttributeEvents)")
+            .expect("embedded javascript attribute events should evaluate"),
+        r#"["error-object:true:true"]"#,
+        "resource failures must not execute javascript or load, and object must enter fallback"
+    );
+}
+
 #[tokio::test]
 async fn iframe_javascript_url_string_completion_replaces_child_document() {
     let mut vm = new_storage_test_vm("https://iframe-javascript-url.test/");
@@ -11248,7 +12654,7 @@ async fn child_image_network_failure_releases_lifecycle_before_later_host_load()
     assert!(
         vm._context_host
             .borrow()
-            .pending_image_load_event_is_current(child_image, detached_pending),
+            .pending_image_load_event_is_current(child_image, &detached_pending),
         "same-document detach must preserve current image ownership"
     );
     assert!(
@@ -12155,7 +13561,14 @@ fn window_pageshow_uses_original_page_transition_event() {
     throw new Error("page replacement should not be invoked");
   };
   addEventListener("pageshow", event => {
-    __pageshowShape = `${event.type}:${event.persisted === false}:${'persisted' in event}`;
+    __pageshowShape = [
+      event.type,
+      event.persisted === false,
+      'persisted' in event,
+      event.bubbles,
+      event.cancelable,
+      event.isTrusted
+    ].join(':');
   });
   return "ready";
 })()
@@ -12168,7 +13581,7 @@ fn window_pageshow_uses_original_page_transition_event() {
     let shape = vm
         .eval("globalThis.__pageshowShape")
         .expect("pageshow shape should evaluate");
-    assert_eq!(shape, "pageshow:true:true");
+    assert_eq!(shape, "pageshow:true:true:true:true:true");
 }
 
 #[test]
@@ -12183,12 +13596,12 @@ fn window_load_uses_original_event_after_global_constructors_are_deleted() {
   globalThis.__windowLifecycleEvents = [];
   addEventListener('load', event => {
     __windowLifecycleEvents.push(
-      `load:${event instanceof OriginalEvent}:${event.target === document}:${event.currentTarget === window}`
+      `load:${event instanceof OriginalEvent}:${event.target === document}:${event.currentTarget === window}:${event.isTrusted}:${event.bubbles}:${event.cancelable}`
     );
   });
   addEventListener('pageshow', event => {
     __windowLifecycleEvents.push(
-      `pageshow:${event instanceof OriginalPageTransitionEvent}:${event.persisted}`
+      `pageshow:${event instanceof OriginalPageTransitionEvent}:${event.persisted}:${event.isTrusted}:${event.bubbles}:${event.cancelable}`
     );
   });
   delete globalThis.Event;
@@ -12204,7 +13617,7 @@ fn window_load_uses_original_event_after_global_constructors_are_deleted() {
     assert_eq!(
         vm.eval("__windowLifecycleEvents.join('|')")
             .expect("window lifecycle results should evaluate"),
-        "load:true:true:true|pageshow:true:false"
+        "load:true:true:true:true:false:false|pageshow:true:false:true:true:true"
     );
 }
 
@@ -13250,7 +14663,7 @@ __domainAccessFrame.src = globalThis.__replacementDomainChildUrl;
 async fn one_sided_document_domain_disables_original_tuple_origin_fast_path() {
     const HOST: &str = "www.example.test";
 
-    let server = StaticHttpServer::spawn(1).await;
+    let server = StaticHttpServer::spawn(2).await;
     let parent_url = server.url_for_host(HOST, "/page.html");
     let child_url = server.url_for_host(HOST, "/child.html");
     let loader = static_http_loader([server.resolve_entry(HOST)]);
@@ -13330,7 +14743,52 @@ globalThis.__probeOneSidedDomainFrame = () => {
             .expect("restored exact-domain access probe should evaluate"),
         "www.example.test"
     );
-    assert_eq!(server.finish_targets().await, vec!["/child.html"]);
+
+    vm.exec(
+        r#"
+const retiredFrame = document.createElement("iframe");
+globalThis.__retiredOneSidedDomainChildLoaded = false;
+retiredFrame.onload = () => { globalThis.__retiredOneSidedDomainChildLoaded = true; };
+retiredFrame.src = globalThis.__oneSidedDomainChildUrl;
+(document.body || document.documentElement || document).appendChild(retiredFrame);
+globalThis.__retiredOneSidedDomainWindow = retiredFrame.contentWindow;
+"#,
+        None,
+    )
+    .expect("one-sided document.domain retired Window setup should run");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__retiredOneSidedDomainChildLoaded)",
+        "true",
+        "fresh child without document.domain should load",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const probe = () => {
+    try {
+      return __retiredOneSidedDomainWindow.document.domain;
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+  const beforeRemoval = probe();
+  document.querySelectorAll("iframe")[1].remove();
+  return [beforeRemoval, probe()].join("|");
+})()
+"#,
+        )
+        .expect("retired one-sided document.domain Window probe should evaluate"),
+        "SecurityError|SecurityError"
+    );
+    assert_eq!(
+        server.finish_targets().await,
+        vec!["/child.html", "/child.html"]
+    );
 }
 
 #[test]

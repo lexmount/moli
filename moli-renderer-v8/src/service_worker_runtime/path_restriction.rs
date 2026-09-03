@@ -7,16 +7,28 @@ pub(super) fn service_worker_allowed_header_value(headers: &[(String, String)]) 
         .map(|value| value.trim().to_owned())
 }
 
+pub(crate) fn verify_service_worker_registration_urls(
+    scope_url: &Url,
+    script_url: &Url,
+) -> Result<(), String> {
+    for (kind, url) in [("script", script_url), ("scope", scope_url)] {
+        if !matches!(url.scheme(), "http" | "https") {
+            return Err(format!(
+                "The URL protocol of the {kind} ('{url}') is not supported."
+            ));
+        }
+    }
+
+    disallowed_escape_error(scope_url, script_url).map_or(Ok(()), Err)
+}
+
 pub(super) fn verify_service_worker_script_path_restriction(
     scope_url: &Url,
     script_response_url: &Url,
     service_worker_allowed_header_value: Option<&str>,
 ) -> Result<(), String> {
-    if scope_or_script_contains_disallowed_escape(scope_url, script_response_url) {
-        return Err(format!(
-            "The provided scope ('{}') or scriptURL ('{}') includes a disallowed escape character.",
-            scope_url, script_response_url
-        ));
+    if let Some(error) = disallowed_escape_error(scope_url, script_response_url) {
+        return Err(error);
     }
 
     let (max_scope_path, from_allowed_header) = match service_worker_allowed_header_value {
@@ -55,9 +67,15 @@ pub(super) fn verify_service_worker_script_path_restriction(
     Err(message)
 }
 
-fn scope_or_script_contains_disallowed_escape(scope_url: &Url, script_url: &Url) -> bool {
-    path_contains_disallowed_escape(scope_url.path())
-        || path_contains_disallowed_escape(script_url.path())
+fn disallowed_escape_error(scope_url: &Url, script_url: &Url) -> Option<String> {
+    (path_contains_disallowed_escape(scope_url.path())
+        || path_contains_disallowed_escape(script_url.path()))
+    .then(|| {
+        format!(
+            "The provided scope ('{}') or scriptURL ('{}') includes a disallowed escape character.",
+            scope_url, script_url
+        )
+    })
 }
 
 fn path_contains_disallowed_escape(path: &str) -> bool {
@@ -74,7 +92,8 @@ fn script_directory_path(script_url: &Url) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        service_worker_allowed_header_value, verify_service_worker_script_path_restriction,
+        service_worker_allowed_header_value, verify_service_worker_registration_urls,
+        verify_service_worker_script_path_restriction,
     };
 
     fn url(value: &str) -> url::Url {
@@ -246,6 +265,40 @@ mod tests {
             None,
         );
         assert!(backslash_script.contains("disallowed escape character"));
+    }
+
+    #[test]
+    fn registration_url_validation_rejects_schemes_and_encoded_path_separators() {
+        let valid_scope = url("https://example.test/app/");
+        let valid_script = url("https://example.test/app/sw.js?value=%2f");
+        verify_service_worker_registration_urls(&valid_scope, &valid_script)
+            .expect("https registration URLs with encoded query separators should be valid");
+
+        for invalid_script in [
+            "data:text/javascript,",
+            "ftp://example.test/app/sw.js",
+            "https://example.test/app%2fsw.js",
+            "https://example.test/app%5Csw.js",
+        ] {
+            assert!(
+                verify_service_worker_registration_urls(&valid_scope, &url(invalid_script),)
+                    .is_err(),
+                "script URL should be rejected: {invalid_script}"
+            );
+        }
+
+        for invalid_scope in [
+            "data:text/html,",
+            "ftp://example.test/app/",
+            "https://example.test/app%2Fscope",
+            "https://example.test/app%5cscope",
+        ] {
+            assert!(
+                verify_service_worker_registration_urls(&url(invalid_scope), &valid_script,)
+                    .is_err(),
+                "scope URL should be rejected: {invalid_scope}"
+            );
+        }
     }
 
     #[test]

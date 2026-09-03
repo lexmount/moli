@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{cell::RefCell, rc::Rc};
 
 use html5ever::{LocalName, Namespace, QualName};
 use html5ever::{
@@ -7,10 +7,11 @@ use html5ever::{
     tokenizer::{
         BufferQueue, TagKind, Token, TokenSink, TokenSinkResult, Tokenizer, TokenizerOpts,
     },
-    tree_builder::{TreeBuilder, TreeBuilderOpts, TreeSink},
+    tree_builder::{Tracer, TreeBuilder, TreeBuilderOpts, TreeSink},
 };
 use markup5ever::TokenizerResult;
 use moli_dom::native::NativeNodeId;
+use moli_script::script_element_nonce_is_nonceable;
 
 use super::{
     html::{DocumentSink, ParseHandle, ParserFinishDiscoverySignals, ParserInputQueue},
@@ -37,6 +38,32 @@ struct EmbedderPausingTreeBuilder {
     inner: TreeBuilder<ParseHandle, DocumentSink>,
 }
 
+#[derive(Default)]
+struct OpenFormControlTracer {
+    handles: RefCell<Vec<NativeNodeId>>,
+}
+
+impl Tracer for OpenFormControlTracer {
+    type Handle = ParseHandle;
+
+    fn trace_handle(&self, node: &ParseHandle) {
+        let is_blocking_control = node.element_name.as_ref().is_some_and(|name| {
+            name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
+                && matches!(name.local.as_ref(), "select" | "textarea")
+        });
+        if !is_blocking_control {
+            return;
+        }
+        let Some(node_id) = node.dom_node_id() else {
+            return;
+        };
+        let mut handles = self.handles.borrow_mut();
+        if !handles.contains(&node_id) {
+            handles.push(node_id);
+        }
+    }
+}
+
 impl EmbedderPausingTreeBuilder {
     fn new(sink: DocumentSink, opts: TreeBuilderOpts) -> Self {
         Self {
@@ -57,12 +84,41 @@ impl EmbedderPausingTreeBuilder {
     fn sink(&self) -> &DocumentSink {
         &self.inner.sink
     }
+
+    fn begin_tree_builder_finish(&self) {
+        let tracer = OpenFormControlTracer::default();
+        self.inner.trace_handles(&tracer);
+        self.inner
+            .sink
+            .begin_tree_builder_finish(&tracer.handles.into_inner());
+    }
 }
 
 impl TokenSink for EmbedderPausingTreeBuilder {
     type Handle = ParseHandle;
 
     fn process_token(&self, token: Token, line_number: u64) -> TokenSinkResult<Self::Handle> {
+        let current_script_nonceable = match &token {
+            Token::TagToken(tag)
+                if tag.kind == TagKind::StartTag && tag.name.as_ref() == "script" =>
+            {
+                let nonce = tag
+                    .attrs
+                    .iter()
+                    .find(|attribute| {
+                        attribute.name.ns.is_empty() && attribute.name.local.as_ref() == "nonce"
+                    })
+                    .map(|attribute| attribute.value.as_ref());
+                Some(script_element_nonce_is_nonceable(
+                    nonce,
+                    tag.had_duplicate_attributes,
+                    tag.attrs
+                        .iter()
+                        .map(|attribute| (attribute.name.local.as_ref(), attribute.value.as_ref())),
+                ))
+            }
+            _ => None,
+        };
         let in_foreign_content = self
             .inner
             .adjusted_current_node_present_but_not_in_html_namespace();
@@ -80,7 +136,14 @@ impl TokenSink for EmbedderPausingTreeBuilder {
             }
             _ => None,
         };
+        let previous_script_nonceable = self
+            .inner
+            .sink
+            .replace_current_script_nonceable(current_script_nonceable);
         let result = self.inner.process_token(token, line_number);
+        self.inner
+            .sink
+            .replace_current_script_nonceable(previous_script_nonceable);
         if !matches!(result, TokenSinkResult::Continue) {
             return result;
         }
@@ -238,7 +301,7 @@ impl HtmlParserSession {
                 .pop_pending_blocking_stylesheet_pause();
         }
         debug_assert!(input_buffer.is_empty());
-        tokenizer.sink.sink().begin_tree_builder_finish();
+        tokenizer.sink.begin_tree_builder_finish();
         tokenizer.end();
         tokenizer.sink.inner.sink.finish()
     }
@@ -259,7 +322,7 @@ impl HtmlParserSession {
                 .pop_pending_blocking_stylesheet_pause();
         }
         debug_assert!(input_buffer.is_empty());
-        tokenizer.sink.sink().begin_tree_builder_finish();
+        tokenizer.sink.begin_tree_builder_finish();
         tokenizer.end();
         let sink = tokenizer.sink.sink();
         ParserFinishDiscoverySignals {

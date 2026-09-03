@@ -8,10 +8,7 @@ use super::{
     css_runtime::install_css_runtime_state,
     exposed_interfaces::is_lazy_exposed_interface,
     indexed_db::ensure_indexed_db_runtime_state,
-    location_runtime::{
-        ensure_location_constructor_runtime_state, location_href_slot,
-        sync_document_location_runtime_state_from_window,
-    },
+    location_runtime::{location_href_slot, sync_document_location_runtime_state_from_window},
     navigation_bootstrap::install_window_location_history_navigation_runtime_state,
     navigator_runtime::{bind_window_navigator_identity_seed, install_navigator_runtime_state},
     performance_runtime::install_default_window_performance_seed,
@@ -59,6 +56,7 @@ pub(crate) const ORIGINAL_WEBASSEMBLY_GLOBAL_VALUE_GETTER_SLOT: &str =
     "__moliOriginalWebAssemblyGlobalValueGetter";
 const WINDOW_INDEXED_DB_SURFACE_SLOT: &str = "moli.Window.indexedDB";
 const WINDOW_ORIGIN_RUNTIME_SLOT: &str = "__moliWindowOriginRuntime";
+const WINDOW_STATUS_RUNTIME_SLOT: &str = "__moliWindowStatusRuntime";
 const WINDOW_INTRINSIC_EVAL_SLOT: &str = "__moliWindowIntrinsicEval";
 pub(in crate::context_bootstrap) const WINDOW_SECURE_CONTEXT_AVAILABLE_SLOT: &str =
     "__moliWindowSecureContextAvailable";
@@ -122,6 +120,12 @@ struct DocumentPrototypeRuntimeDeclaration {
         setter = document_fullscreen_enabled_lenient_setter
     )]
     fullscreen_enabled: (),
+    #[webapi(
+        method = "exitFullscreen",
+        length = 0,
+        callback = native_bridge::fullscreen::document_exit_fullscreen_callback
+    )]
+    exit_fullscreen: (),
     #[webapi(
         accessor_property = "pointerLockElement",
         getter = native_bridge::pointer_lock::document_pointer_lock_element_getter
@@ -262,6 +266,13 @@ struct WindowPublicSurfaceAccessorsDeclaration<'scope> {
         setter = window_name_runtime_setter
     )]
     name: (),
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = window_status_runtime_getter,
+        setter = window_status_runtime_setter
+    )]
+    status: (),
 }
 
 #[derive(Default, WebApiObject)]
@@ -497,20 +508,25 @@ fn legacy_unforgeable_window_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_SELF_SLOT,
-    ));
+    if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_SELF_SLOT)
+    {
+        rv.set(value);
+    }
 }
 
 fn legacy_unforgeable_window_slot_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
     slot: &'static str,
-) -> v8::Local<'s, v8::Value> {
-    object_hidden_value(scope, receiver, slot)
-        .unwrap_or_else(|| scope.get_current_context().global(scope).into())
+) -> Option<v8::Local<'s, v8::Value>> {
+    if !super::is_window_receiver(scope, receiver) {
+        throw_type_error(scope, "Window getter called on incompatible receiver.");
+        return None;
+    }
+    Some(
+        object_hidden_value(scope, receiver, slot)
+            .unwrap_or_else(|| scope.get_current_context().global(scope).into()),
+    )
 }
 
 fn document_fullscreen_enabled_getter<'s>(
@@ -518,23 +534,32 @@ fn document_fullscreen_enabled_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let valid_receiver =
+    let Ok((runtime_ptr, handle)) =
         native_bridge::node_runtime_and_handle_from_object_or_detached(scope, args.this())
-            .ok()
-            .is_some_and(|(runtime_ptr, handle)| {
-                unsafe { &*runtime_ptr }
-                    .dom_host()
-                    .node(handle)
-                    .is_some_and(crate::dom::native::Node::is_document)
-            });
-    if !valid_receiver {
+    else {
+        throw_type_error(
+            scope,
+            "Document.fullscreenEnabled getter called on incompatible receiver.",
+        );
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    if !runtime
+        .dom_host()
+        .node(handle)
+        .is_some_and(crate::dom::native::Node::is_document)
+    {
         throw_type_error(
             scope,
             "Document.fullscreenEnabled getter called on incompatible receiver.",
         );
         return;
     }
-    rv.set_bool(false);
+    rv.set_bool(
+        runtime
+            .document_permissions_policy_for_document_handle(handle)
+            .is_some_and(crate::permissions_policy::DocumentPermissionsPolicy::fullscreen_enabled),
+    );
 }
 
 fn document_fullscreen_enabled_lenient_setter<'s>(
@@ -614,19 +639,33 @@ fn window_length_replaceable_getter<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let count = child_context_handle_from_owner(scope, args.this())
-        .map(|handle| host.child_browsing_context_child_frame_count(handle))
-        .unwrap_or_else(|| host.child_browsing_context_count());
+    let document = match super::navigation_window::runtime_window_dispatch_scope(scope, args.this())
+    {
+        Some(crate::native_bridge::OwnerDispatchScope::Top) => Some(host.document_handle()),
+        Some(crate::native_bridge::OwnerDispatchScope::Child(handle)) => {
+            host.child_browsing_context_document_handle(handle)
+        }
+        Some(crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)) => {
+            host.lightweight_popup_document_handle(popup_id)
+        }
+        None => None,
+    };
+    let count = document
+        .map(|document| {
+            host.sync_child_browsing_context_subtree(scope, document);
+            host.child_browsing_context_count_for_document(document)
+        })
+        .unwrap_or(0);
     rv.set(v8::Number::new(scope, count as f64).into());
 }
 
 fn window_event_replaceable_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     rv.set(
-        global_hidden_value(scope, WINDOW_EVENT_SLOT)
+        window_event_value_for_receiver(scope, args.this())
             .unwrap_or_else(|| v8::undefined(scope).into()),
     );
 }
@@ -677,11 +716,10 @@ fn legacy_unforgeable_self_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_SELF_SLOT,
-    ));
+    if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_SELF_SLOT)
+    {
+        rv.set(value);
+    }
 }
 
 fn replaceable_window_alias_set<'s>(
@@ -689,6 +727,10 @@ fn replaceable_window_alias_set<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     name: &'static str,
 ) {
+    if !super::is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Window setter called on incompatible receiver.");
+        return;
+    }
     define_replaceable_window_property(scope, args.this(), name, args.get(0));
 }
 
@@ -705,11 +747,11 @@ fn legacy_unforgeable_parent_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_PARENT_SLOT,
-    ));
+    if let Some(value) =
+        legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_PARENT_SLOT)
+    {
+        rv.set(value);
+    }
 }
 
 fn replaceable_parent_setter<'s>(
@@ -725,11 +767,9 @@ fn legacy_unforgeable_top_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_TOP_SLOT,
-    ));
+    if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_TOP_SLOT) {
+        rv.set(value);
+    }
 }
 
 fn legacy_unforgeable_frames_getter<'s>(
@@ -737,11 +777,11 @@ fn legacy_unforgeable_frames_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    rv.set(legacy_unforgeable_window_slot_value(
-        scope,
-        args.this(),
-        WINDOW_FRAMES_SLOT,
-    ));
+    if let Some(value) =
+        legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_FRAMES_SLOT)
+    {
+        rv.set(value);
+    }
 }
 
 fn replaceable_frames_setter<'s>(
@@ -842,6 +882,10 @@ fn window_surface_replaceable_setter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !super::is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Window setter called on incompatible receiver.");
+        return;
+    }
     let Some(name) = callback_data_item(
         scope,
         &args,
@@ -860,6 +904,10 @@ fn window_name_runtime_getter<'s>(
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
+    if !super::is_window_receiver(scope, receiver) {
+        throw_type_error(scope, "Window.name getter called on incompatible receiver.");
+        return;
+    }
     let value = object_hidden_value(scope, receiver, WINDOW_NAME_SLOT)
         .unwrap_or_else(|| v8::String::empty(scope).into());
     rv.set(value);
@@ -871,6 +919,10 @@ fn window_name_runtime_setter<'s>(
     _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
     let receiver = callback_this_object(scope, &args);
+    if !super::is_window_receiver(scope, receiver) {
+        throw_type_error(scope, "Window.name setter called on incompatible receiver.");
+        return;
+    }
     let next = args
         .get(0)
         .to_string(scope)
@@ -882,6 +934,44 @@ fn window_name_runtime_setter<'s>(
         unsafe { &mut *host_ptr }.set_child_browsing_context_name(handle, next.clone());
     }
     define_non_enumerable_string_property(scope, receiver, WINDOW_NAME_SLOT, &next);
+}
+
+fn window_status_runtime_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let receiver = callback_this_object(scope, &args);
+    if !super::is_window_receiver(scope, receiver) {
+        throw_type_error(
+            scope,
+            "Window.status getter called on incompatible receiver.",
+        );
+        return;
+    }
+    rv.set(
+        get_private_value(scope, receiver, WINDOW_STATUS_RUNTIME_SLOT)
+            .unwrap_or_else(|| v8::String::empty(scope).into()),
+    );
+}
+
+fn window_status_runtime_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let receiver = callback_this_object(scope, &args);
+    if !super::is_window_receiver(scope, receiver) {
+        throw_type_error(
+            scope,
+            "Window.status setter called on incompatible receiver.",
+        );
+        return;
+    }
+    let Some(next) = args.get(0).to_string(scope) else {
+        return;
+    };
+    set_private_value(scope, receiver, WINDOW_STATUS_RUNTIME_SLOT, next.into());
 }
 
 fn install_public_window_surface_accessors<'s>(
@@ -1008,6 +1098,7 @@ fn install_public_window_surface_accessors<'s>(
         session_storage: (),
         indexed_db: (),
         name: (),
+        status: (),
     }
     .initialize(scope, global)?;
     WindowAdditionalReplaceableAccessorsDeclaration {
@@ -1530,7 +1621,7 @@ fn document_parse_html_unsafe_callback<'s>(
     let Some(document) =
         crate::dom_parser::parse_detached_html_document_from_source_with_declarative_shadow_roots(
             scope,
-            runtime.document_url().clone(),
+            url::Url::parse("about:blank").expect("static about:blank URL parses"),
             &html,
         )
     else {
@@ -1677,7 +1768,6 @@ pub(crate) fn finish_context_bootstrap(
         ("NamedNodeMap", "NamedNodeMap"),
         ("HTMLAllCollection", "HTMLAllCollection"),
         ("DOMException", "DOMException"),
-        ("DOMError", "DOMError"),
         ("DocumentType", "DocumentType"),
         ("DOMImplementation", "DOMImplementation"),
         ("DOMTokenList", "DOMTokenList"),
@@ -1694,14 +1784,28 @@ pub(crate) fn finish_context_bootstrap(
         ("XPathEvaluator", "XPathEvaluator"),
         ("XPathResult", "XPathResult"),
         ("SVGLength", "SVGLength"),
+        ("SVGAngle", "SVGAngle"),
         ("SVGNumber", "SVGNumber"),
+        ("SVGAnimatedString", "SVGAnimatedString"),
         ("SVGAnimatedLength", "SVGAnimatedLength"),
+        ("SVGAnimatedAngle", "SVGAnimatedAngle"),
+        ("SVGAnimatedRect", "SVGAnimatedRect"),
+        ("SVGPreserveAspectRatio", "SVGPreserveAspectRatio"),
+        (
+            "SVGAnimatedPreserveAspectRatio",
+            "SVGAnimatedPreserveAspectRatio",
+        ),
         ("SVGLengthList", "SVGLengthList"),
         ("SVGAnimatedLengthList", "SVGAnimatedLengthList"),
         ("SVGAnimatedNumber", "SVGAnimatedNumber"),
+        ("SVGAnimatedInteger", "SVGAnimatedInteger"),
         ("SVGNumberList", "SVGNumberList"),
+        ("SVGPointList", "SVGPointList"),
+        ("SVGStringList", "SVGStringList"),
         ("SVGAnimatedNumberList", "SVGAnimatedNumberList"),
+        ("SVGAnimatedBoolean", "SVGAnimatedBoolean"),
         ("SVGAnimatedEnumeration", "SVGAnimatedEnumeration"),
+        ("SVGUnitTypes", "SVGUnitTypes"),
         ("SVGAnimatedTransformList", "SVGAnimatedTransformList"),
         ("SVGTransformList", "SVGTransformList"),
         ("SVGTransform", "SVGTransform"),
@@ -1967,7 +2071,6 @@ fn install_window_runtime_state<'s>(
         v8::Boolean::new(scope, secure_context_available).into(),
     );
     install_date_locale_runtime_state(scope, global)?;
-    ensure_location_constructor_runtime_state(scope, global)?;
     install_webassembly_runtime_state(scope, global)?;
     install_webidl_collection_iterator_intrinsics(scope, global)?;
 

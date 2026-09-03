@@ -550,6 +550,14 @@ impl<N> LayoutBox<N> {
             .is_some_and(LayoutElementSemantics::is_replaced)
     }
 
+    pub(crate) fn establishes_scroll_container(&self) -> bool {
+        self.style.establishes_scroll_container()
+            || self
+                .element_semantics
+                .as_ref()
+                .is_some_and(LayoutElementSemantics::has_internal_text_control_scroller)
+    }
+
     /// Resolve the used ratio at the layout-node boundary, after both authored
     /// style and natural replaced-element sizing are available.
     pub(crate) fn resolved_aspect_ratio(&self) -> Option<taffy::ResolvedAspectRatio> {

@@ -162,6 +162,9 @@ pub(crate) enum PageTask {
     //   into "script loop followed by immediate host callback".
     // - Keeping it in the queue means the owner lane sees one explicit task:
     //   pre-task checkpoint -> dispatch DOMContentLoaded -> post-task effects.
+    // - Its initial placement is a lifecycle sentinel. Reaching the queue
+    //   front after defer-like work establishes the actual DCL task queue
+    //   point; ready timers recorded during classic defer tasks run first.
     //
     DispatchDomContentLoaded,
     DispatchConnectedStyleLoad(ReadyConnectedStyleLoad),

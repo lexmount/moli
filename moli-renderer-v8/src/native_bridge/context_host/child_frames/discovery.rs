@@ -1,3 +1,4 @@
+use super::super::ChildBrowsingContextNavigationRequest;
 use super::*;
 use crate::dom::native::Node;
 
@@ -41,6 +42,13 @@ impl JsContextHost {
         handle: DomHandle,
     ) -> bool {
         self.child_frame_owner_element_kind(handle).is_some()
+    }
+
+    pub(in crate::native_bridge::context_host) fn child_browsing_context_host_is_object_element(
+        &self,
+        handle: DomHandle,
+    ) -> bool {
+        self.child_frame_owner_element_kind(handle) == Some(ChildFrameOwnerElementKind::Object)
     }
 
     fn child_frame_owner_element_kind(
@@ -93,6 +101,20 @@ impl JsContextHost {
     ) -> bool {
         self.child_frame_owner_element_kind(handle)
             .is_some_and(|kind| attribute_name.eq_ignore_ascii_case(kind.navigation_attribute()))
+    }
+
+    pub(crate) fn clear_object_fallback_for_attribute_change(
+        &mut self,
+        handle: DomHandle,
+        attribute_name: &str,
+    ) {
+        if self.child_browsing_context_host_is_object_element(handle)
+            && ["data", "type"]
+                .into_iter()
+                .any(|name| attribute_name.eq_ignore_ascii_case(name))
+        {
+            self.object_fallback_bootstraps.remove(&handle);
+        }
     }
 
     pub(in crate::native_bridge::context_host) fn child_browsing_context_host_is_active(
@@ -191,7 +213,25 @@ impl JsContextHost {
         {
             return None;
         }
-        Some(ChildBrowsingContextBootstrap::Url(url))
+        let bootstrap = if !kind.always_hosts_document() && url.scheme() == "javascript" {
+            // embed/object setup fetches its attribute resource. Preserve that
+            // distinction from iframe/frame navigation so Fetch rejects the
+            // javascript scheme instead of executing it in the child realm.
+            ChildBrowsingContextBootstrap::Request(ChildBrowsingContextNavigationRequest {
+                url,
+                method: "GET".to_owned(),
+                body: None,
+                request_headers: Vec::new(),
+            })
+        } else {
+            ChildBrowsingContextBootstrap::Url(url)
+        };
+        if kind == ChildFrameOwnerElementKind::Object
+            && self.object_fallback_bootstraps.get(&handle) == Some(&bootstrap)
+        {
+            return None;
+        }
+        Some(bootstrap)
     }
 
     fn embedded_content_is_inside_media_element(&self, handle: DomHandle) -> bool {

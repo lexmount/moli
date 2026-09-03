@@ -1,5 +1,5 @@
 use super::*;
-use crate::forms::parse_non_negative_integer_prefix;
+use crate::forms::{ButtonTypeState, InputType, parse_non_negative_integer_prefix};
 
 impl DomHost {
     pub fn option_value(&self, handle: DomHandle) -> Option<String> {
@@ -10,20 +10,20 @@ impl DomHost {
         let input = self.node(handle).and_then(Node::as_element)?;
         if !input.is_html_input()
             || !matches!(
-                input.input_type().as_str(),
-                "text"
-                    | "search"
-                    | "tel"
-                    | "url"
-                    | "email"
-                    | "date"
-                    | "month"
-                    | "week"
-                    | "time"
-                    | "datetime-local"
-                    | "number"
-                    | "range"
-                    | "color"
+                input.input_type(),
+                InputType::Text
+                    | InputType::Search
+                    | InputType::Tel
+                    | InputType::Url
+                    | InputType::Email
+                    | InputType::Date
+                    | InputType::Month
+                    | InputType::Week
+                    | InputType::Time
+                    | InputType::DatetimeLocal
+                    | InputType::Number
+                    | InputType::Range
+                    | InputType::Color
             )
         {
             return None;
@@ -95,30 +95,56 @@ impl DomHost {
         }
     }
 
+    pub fn button_is_submit_button(&self, handle: DomHandle) -> bool {
+        let Some(element) = self.node(handle).and_then(Node::as_element) else {
+            return false;
+        };
+        if !element.is_html_button() {
+            return false;
+        }
+        match element.button_type_state() {
+            ButtonTypeState::Submit => true,
+            ButtonTypeState::Auto => {
+                !element.has_attribute("command")
+                    && !element.has_attribute("commandfor")
+                    && !self
+                        .parent_node(handle)
+                        .is_some_and(|parent| self.is_html_element_named(parent, "select"))
+            }
+            ButtonTypeState::Reset | ButtonTypeState::Button => false,
+        }
+    }
+
     fn is_listed_form_control_handle(&self, handle: DomHandle) -> bool {
         self.node(handle)
             .and_then(Node::as_element)
             .is_some_and(is_listed_form_control_element)
     }
 
+    pub fn builtin_form_associated_owner(&self, handle: DomHandle) -> Option<DomHandle> {
+        let element = self.node(handle).and_then(Node::as_element)?;
+        if !is_parser_form_association_candidate(element) {
+            return None;
+        }
+        if is_builtin_reassociateable_form_associated_element(element) {
+            return self.form_control_owner(handle);
+        }
+        self.parser_or_ancestor_form_owner(handle)
+    }
+
     pub fn form_control_owner(&self, handle: DomHandle) -> Option<DomHandle> {
         let element = self.node(handle).and_then(Node::as_element)?;
-        if !matches!(
-            element.local_name(),
-            "button" | "fieldset" | "input" | "object" | "output" | "select" | "textarea"
-        ) || element.namespace() != "http://www.w3.org/1999/xhtml"
-        {
+        if !is_builtin_reassociateable_form_associated_element(element) {
             return None;
         }
 
-        if let Some(form_id) = element.attribute("form") {
+        if let Some(form_id) = element.attribute("form")
+            && self.is_connected_to_document(handle)
+        {
             if form_id.is_empty() {
                 return None;
             }
             let tree_root = self.root_node_handle(handle)?;
-            if self.is_shadow_root(tree_root) && !self.is_connected(tree_root) {
-                return None;
-            }
             let candidate = self.element_handle_by_id_in_subtree(tree_root, form_id)?;
             let candidate = self.resolve_reference_target_chain(candidate)?;
             return self
@@ -126,7 +152,14 @@ impl DomHost {
                 .then_some(candidate);
         }
 
-        if let Some(owner) = element.parser_associated_form_owner()
+        self.parser_or_ancestor_form_owner(handle)
+    }
+
+    fn parser_or_ancestor_form_owner(&self, handle: DomHandle) -> Option<DomHandle> {
+        if let Some(owner) = self
+            .node(handle)
+            .and_then(Node::as_element)
+            .and_then(Element::parser_associated_form_owner)
             && self.is_html_element_named(owner, "form")
             && self.root_node_handle(handle) == self.root_node_handle(owner)
         {
@@ -143,11 +176,44 @@ impl DomHost {
         None
     }
 
+    pub fn option_nearest_ancestor_select(&self, handle: DomHandle) -> Option<DomHandle> {
+        self.dom.option_nearest_ancestor_select(handle)
+    }
+
+    pub fn optgroup_nearest_ancestor_select(&self, handle: DomHandle) -> Option<DomHandle> {
+        self.dom.optgroup_nearest_ancestor_select(handle)
+    }
+
+    pub fn selectedcontent_nearest_ancestor_select(&self, handle: DomHandle) -> Option<DomHandle> {
+        self.dom.selectedcontent_nearest_ancestor_select(handle)
+    }
+
+    pub fn select_selectedcontent_elements(&self, handle: DomHandle) -> Vec<DomHandle> {
+        if !self.is_html_element_named(handle, "select") {
+            return Vec::new();
+        }
+        self.elements_by_tag_name_ns(
+            handle,
+            Some("http://www.w3.org/1999/xhtml"),
+            "selectedcontent",
+            false,
+        )
+        .into_iter()
+        .filter(|selectedcontent| {
+            self.selectedcontent_nearest_ancestor_select(*selectedcontent) == Some(handle)
+        })
+        .collect()
+    }
+
+    pub fn option_is_disabled(&self, handle: DomHandle) -> bool {
+        self.dom.option_is_disabled(handle)
+    }
+
     pub fn radio_group_members(&self, handle: DomHandle) -> Vec<DomHandle> {
         let Some(element) = self.node(handle).and_then(Node::as_element) else {
             return Vec::new();
         };
-        if !element.is_html_input() || element.input_type() != "radio" {
+        if !element.is_html_input() || element.input_type() != InputType::Radio {
             return Vec::new();
         }
         let Some(name) = element.name_attribute() else {
@@ -162,39 +228,15 @@ impl DomHost {
                 .and_then(Node::as_element)
                 .is_some_and(|candidate_element| {
                     candidate_element.is_html_input()
-                        && candidate_element.input_type() == "radio"
+                        && candidate_element.input_type() == InputType::Radio
                         && candidate_element.matches_name(name)
                         && self.form_control_owner(candidate) == form_owner
                 })
         })
     }
 
-    pub fn owner_select_for_option(&self, handle: DomHandle) -> Option<DomHandle> {
-        if !self.is_html_element_named(handle, "option") {
-            return None;
-        }
-        let mut current = self.parent_node(handle);
-        while let Some(parent) = current {
-            let Some(element) = self.node(parent).and_then(Node::as_element) else {
-                current = self.parent_node(parent);
-                continue;
-            };
-            if element.is_html_select() {
-                return Some(parent);
-            }
-            current = self.parent_node(parent);
-        }
-        None
-    }
-
     pub fn select_option_elements(&self, select_handle: DomHandle) -> Vec<DomHandle> {
-        if !self.is_html_element_named(select_handle, "select") {
-            return Vec::new();
-        }
-        self.collect_matching_elements(select_handle, false, |handle| {
-            self.is_html_element_named(handle, "option")
-                && self.option_belongs_to_select(handle, select_handle)
-        })
+        self.dom.select_option_elements(select_handle)
     }
 
     pub fn select_selected_option_elements(&self, select_handle: DomHandle) -> Vec<DomHandle> {
@@ -231,48 +273,6 @@ impl DomHost {
             .into_iter()
             .collect()
     }
-
-    fn option_belongs_to_select(&self, option: DomHandle, select_handle: DomHandle) -> bool {
-        let mut current = self.parent_node(option);
-        let mut seen_optgroup = false;
-        while let Some(parent) = current {
-            if parent == select_handle {
-                return true;
-            }
-            let Some(element) = self.node(parent).and_then(Node::as_element) else {
-                current = self.parent_node(parent);
-                continue;
-            };
-            match element.local_name() {
-                "option" | "hr" | "select" => return false,
-                "optgroup" if seen_optgroup => return false,
-                "optgroup" => seen_optgroup = true,
-                _ => {}
-            }
-            current = self.parent_node(parent);
-        }
-        false
-    }
-
-    fn option_is_disabled(&self, handle: DomHandle) -> bool {
-        let mut current = Some(handle);
-        while let Some(candidate) = current {
-            let Some(element) = self.node(candidate).and_then(Node::as_element) else {
-                current = self.parent_node(candidate);
-                continue;
-            };
-            if matches!(element.local_name(), "option" | "optgroup")
-                && element.has_attribute("disabled")
-            {
-                return true;
-            }
-            if element.is_html_select() {
-                return false;
-            }
-            current = self.parent_node(candidate);
-        }
-        false
-    }
 }
 
 fn select_display_size(select: &Element) -> i32 {
@@ -289,7 +289,7 @@ fn is_listed_form_control_element(element: &Element) -> bool {
     }
 
     match element.local_name() {
-        "input" => element.input_type() != "image",
+        "input" => element.input_type() != InputType::Image,
         "button" | "fieldset" | "object" | "output" | "select" | "textarea" => true,
         _ => false,
     }

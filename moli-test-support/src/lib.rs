@@ -139,7 +139,7 @@ const BROWSER_SURFACE_COMPAT_HTML: &str = concat!(
     "document.body.setAttribute('data-location-after-replace', location.pathname + location.search);",
     "</script></body></html>"
 );
-const DATE_LOCALE_DETAILS_HTML: &str = "<!doctype html><html><body data-locale-string=\"\" data-locale-date=\"\" data-locale-time=\"\" data-invalid=\"\"><script>const d=new Date(Date.UTC(2024,2,24,16,5,6));document.body.setAttribute('data-locale-string', d.toLocaleString('en-US'));document.body.setAttribute('data-locale-date', d.toLocaleDateString('en-US'));document.body.setAttribute('data-locale-time', d.toLocaleTimeString('en-US'));document.body.setAttribute('data-invalid', new Date(NaN).toLocaleString('en-US'));</script></body></html>";
+const DATE_LOCALE_DETAILS_HTML: &str = "<!doctype html><html><body data-locale-string=\"\" data-locale-date=\"\" data-locale-time=\"\" data-invalid=\"\"><script>const d=new Date(Date.UTC(2024,2,24,16,5,6));const options={timeZone:'UTC'};document.body.setAttribute('data-locale-string', d.toLocaleString('en-US',options));document.body.setAttribute('data-locale-date', d.toLocaleDateString('en-US',options));document.body.setAttribute('data-locale-time', d.toLocaleTimeString('en-US',options));document.body.setAttribute('data-invalid', new Date(NaN).toLocaleString('en-US',options));</script></body></html>";
 const BROWSER_SURFACE_DETAILS_HTML: &str = "<!doctype html><html><body data-mime-tag=\"\" data-plugin-tag=\"\" data-storage-tag=\"\" data-mime-item-hit=\"\" data-mime-named-item-hit=\"\" data-plugin-item-hit=\"\" data-plugin-named-item-hit=\"\" data-mime-item-null=\"\" data-mime-named-item-null=\"\" data-plugin-item-null=\"\" data-plugin-named-item-null=\"\" data-plugin-refresh-undefined=\"\" data-storage-prototype=\"\" data-storage-roundtrip=\"\" data-storage-length-after-set=\"\" data-storage-key0=\"\" data-storage-length-after-remove=\"\" data-history-scroll-restoration=\"\"><script>document.body.setAttribute('data-mime-tag', Object.prototype.toString.call(navigator.mimeTypes));document.body.setAttribute('data-plugin-tag', Object.prototype.toString.call(navigator.plugins));document.body.setAttribute('data-storage-tag', Object.prototype.toString.call(localStorage));document.body.setAttribute('data-mime-item-hit', String(navigator.mimeTypes.item(0)?.type ?? 'null'));document.body.setAttribute('data-mime-named-item-hit', String(navigator.mimeTypes.namedItem('application/pdf')?.type ?? 'null'));document.body.setAttribute('data-plugin-item-hit', String(navigator.plugins.item(0)?.name ?? 'null'));document.body.setAttribute('data-plugin-named-item-hit', String(navigator.plugins.namedItem('PDF Viewer')?.name ?? 'null'));document.body.setAttribute('data-mime-item-null', String(navigator.mimeTypes.item(999)===null));document.body.setAttribute('data-mime-named-item-null', String(navigator.mimeTypes.namedItem('application/x-missing')===null));document.body.setAttribute('data-plugin-item-null', String(navigator.plugins.item(999)===null));document.body.setAttribute('data-plugin-named-item-null', String(navigator.plugins.namedItem('Missing Plugin')===null));document.body.setAttribute('data-plugin-refresh-undefined', String(navigator.plugins.refresh()===undefined));document.body.setAttribute('data-storage-prototype', String(Storage.prototype.isPrototypeOf(localStorage) && Storage.prototype.isPrototypeOf(sessionStorage)));localStorage.clear();localStorage.setItem('alpha','1');document.body.setAttribute('data-storage-roundtrip', String(localStorage.getItem('alpha')));document.body.setAttribute('data-storage-length-after-set', String(localStorage.length));document.body.setAttribute('data-storage-key0', String(localStorage.key(0)));localStorage.removeItem('alpha');document.body.setAttribute('data-storage-length-after-remove', String(localStorage.length));document.body.setAttribute('data-history-scroll-restoration', String(history.scrollRestoration));</script></body></html>";
 const HISTORY_RELATIVE_URL_UPDATE_HTML: &str =
     include_str!("../../moli-core/tests/fixtures/runtime/history_relative_url_update.html");
@@ -973,8 +973,8 @@ const DYNAMIC_SCRIPT_PREPARATION_CONTEXT_STAYS_IN_OLD_DOCUMENT_HTML: &str = incl
 );
 const DYNAMIC_IMPORTMAP_BEFORE_MODULE_HTML: &str =
     include_str!("../../moli-core/tests/fixtures/runtime/dynamic_importmap_before_module.html");
-const DYNAMIC_ASYNC_MODULE_CLOSES_IMPORTMAP_ACQUISITION_HTML: &str = include_str!(
-    "../../moli-core/tests/fixtures/runtime/dynamic_async_module_closes_importmap_acquisition.html"
+const DYNAMIC_ASYNC_MODULE_ALLOWS_LATE_IMPORTMAP_HTML: &str = include_str!(
+    "../../moli-core/tests/fixtures/runtime/dynamic_async_module_allows_late_importmap.html"
 );
 const DYNAMIC_EXTERNAL_IMPORTMAP_ERROR_BEFORE_MODULE_HTML: &str = include_str!(
     "../../moli-core/tests/fixtures/runtime/dynamic_external_importmap_error_before_module.html"
@@ -997,11 +997,11 @@ const IMPORTMAP_URL_LIKE_NORMALIZATION_HTML: &str =
     include_str!("../../moli-core/tests/fixtures/runtime/importmap_url_like_normalization.html");
 const IMPORTMAP_AFTER_MODULE_LOAD_HTML: &str =
     include_str!("../../moli-core/tests/fixtures/runtime/importmap_after_module_load.html");
-const IMPORTMAP_CLOSED_BY_PARSER_OWNED_MODULE_BEFORE_LATE_DYNAMIC_MAP_HTML: &str = include_str!(
-    "../../moli-core/tests/fixtures/runtime/importmap_closed_by_parser_owned_module_before_late_dynamic_map.html"
+const PARSER_OWNED_MODULE_ALLOWS_LATE_DYNAMIC_IMPORTMAP_HTML: &str = include_str!(
+    "../../moli-core/tests/fixtures/runtime/parser_owned_module_allows_late_dynamic_importmap.html"
 );
-const PARSER_OWNED_IMPORTMAP_BLOCKED_AFTER_DYNAMIC_MODULE_PREPARE_HTML: &str = include_str!(
-    "../../moli-core/tests/fixtures/runtime/parser_owned_importmap_blocked_after_dynamic_module_prepare.html"
+const PARSER_OWNED_IMPORTMAP_APPLIES_AFTER_DYNAMIC_MODULE_PREPARE_HTML: &str = include_str!(
+    "../../moli-core/tests/fixtures/runtime/parser_owned_importmap_applies_after_dynamic_module_prepare.html"
 );
 const IMPORTMAP_NULL_BLOCKS_DYNAMIC_IMPORT_HTML: &str = include_str!(
     "../../moli-core/tests/fixtures/runtime/importmap_null_blocks_dynamic_import.html"

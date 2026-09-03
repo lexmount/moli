@@ -256,9 +256,16 @@ enum StylesheetResponseProvenance {
 }
 
 impl StylesheetResponseProvenance {
-    fn is_cors_same_origin(self, document_url: &Url, response_url: &Url) -> bool {
+    fn is_cors_same_origin(
+        self,
+        document_url: &Url,
+        request_url: &Url,
+        response: &crate::protocol_types::NavigationResponse,
+    ) -> bool {
         match self {
-            Self::Network => moli_url::same_origin(document_url, response_url),
+            Self::Network => {
+                stylesheet_response_url_chain_is_same_origin(document_url, request_url, response)
+            }
             Self::ServiceWorker { filter } => !matches!(
                 filter,
                 Some(
@@ -268,6 +275,19 @@ impl StylesheetResponseProvenance {
             ),
         }
     }
+}
+
+fn stylesheet_response_url_chain_is_same_origin(
+    document_url: &Url,
+    request_url: &Url,
+    response: &crate::protocol_types::NavigationResponse,
+) -> bool {
+    moli_url::same_origin(document_url, request_url)
+        && response.redirect_chain.iter().all(|redirect| {
+            moli_url::same_origin(document_url, &redirect.from_url)
+                && moli_url::same_origin(document_url, &redirect.to_url)
+        })
+        && moli_url::same_origin(document_url, &response.final_url)
 }
 
 fn stylesheet_terminal_from_response(
@@ -299,7 +319,7 @@ fn stylesheet_terminal_from_response(
             .map_err(|error| format!("failed to fetch stylesheet `{request_url}`: {error}")),
         });
     let origin_clean = cors_usability.as_ref().map_or_else(
-        || response_provenance.is_cors_same_origin(document_url, &response.final_url),
+        || response_provenance.is_cors_same_origin(document_url, request_url, &response),
         Result::is_ok,
     );
     let usability = if !(200..=299).contains(&response.status) {
@@ -310,7 +330,11 @@ fn stylesheet_terminal_from_response(
     } else {
         cors_usability.unwrap_or(Ok(()))
     }
-    .and_then(|()| validate_stylesheet_response_ref(request_url, &response));
+    .and_then(|()| {
+        let allow_non_css_mime = options.quirks_mode_mime_compatibility()
+            && stylesheet_response_url_chain_is_same_origin(document_url, request_url, &response);
+        validate_stylesheet_response_ref(request_url, &response, allow_non_css_mime)
+    });
 
     match usability {
         Ok(()) => StylesheetFetchTerminal::ready(response, origin_clean),
@@ -322,13 +346,14 @@ pub(crate) fn validate_stylesheet_response(
     url: &Url,
     response: crate::protocol_types::NavigationResponse,
 ) -> Result<crate::protocol_types::NavigationResponse, String> {
-    validate_stylesheet_response_ref(url, &response)?;
+    validate_stylesheet_response_ref(url, &response, false)?;
     Ok(response)
 }
 
 fn validate_stylesheet_response_ref(
     url: &Url,
     response: &crate::protocol_types::NavigationResponse,
+    allow_non_css_mime: bool,
 ) -> Result<(), String> {
     if should_response_be_blocked_due_to_nosniff(&response.headers, FetchDestination::Style) {
         return Err(format!(
@@ -340,7 +365,7 @@ fn validate_stylesheet_response_ref(
         MimeSniffingContext::Style,
         response.body_bytes(),
     );
-    if !is_css_mime(&computed_mime_type) {
+    if !allow_non_css_mime && !is_css_mime(&computed_mime_type) {
         return Err(format!(
             "failed to fetch stylesheet `{url}`: unsupported stylesheet MIME type `{computed_mime_type}`"
         ));
@@ -368,6 +393,23 @@ mod tests {
         )
     }
 
+    fn stylesheet_redirect(from_url: &Url, to_url: &Url) -> crate::types::NavigationRedirect {
+        crate::types::NavigationRedirect {
+            from_url: from_url.clone(),
+            to_url: to_url.clone(),
+            status: 302,
+            headers: Vec::new(),
+            network_extra_info_available: true,
+            request_extra_info: None,
+            response_extra_info: None,
+            redirect_has_extra_info: true,
+            request_cookie_report: None,
+            cookie_set_reports: Vec::new(),
+            from_cache: false,
+            negotiated_http_version: None,
+        }
+    }
+
     #[test]
     fn validates_stylesheet_response_rejects_explicit_non_css_mime() {
         let url = Url::parse("https://example.com/app.css").unwrap();
@@ -388,6 +430,111 @@ mod tests {
         let response = validate_stylesheet_response(&url, response)
             .expect("missing Content-Type stylesheet should be accepted");
         assert_eq!(response.body_text(), "body { color: red; }");
+    }
+
+    #[test]
+    fn quirks_mode_mime_compatibility_requires_same_origin_final_url() {
+        let document_url = Url::parse("https://page.example.test/document").unwrap();
+        let request_url = Url::parse("https://page.example.test/app.css").unwrap();
+        let options = StylesheetFetchOptions::default().with_quirks_mode_mime_compatibility(true);
+        let same_origin_response =
+            stylesheet_response(&request_url, Some("text/plain"), "body { color: green; }");
+
+        let same_origin_terminal = stylesheet_terminal_from_response(
+            &document_url,
+            &request_url,
+            &options,
+            same_origin_response,
+            StylesheetResponseProvenance::Network,
+        );
+
+        assert!(same_origin_terminal.is_ready());
+
+        let cross_origin_url = Url::parse("https://cdn.example.test/app.css").unwrap();
+        let cross_origin_response = stylesheet_response(
+            &cross_origin_url,
+            Some("text/plain"),
+            "body { color: red; }",
+        );
+        let cross_origin_terminal = stylesheet_terminal_from_response(
+            &document_url,
+            &request_url,
+            &options,
+            cross_origin_response,
+            StylesheetResponseProvenance::Network,
+        );
+
+        assert!(!cross_origin_terminal.is_ready());
+    }
+
+    #[test]
+    fn quirks_mode_mime_compatibility_rejects_cross_origin_redirect_taint() {
+        let document_url = Url::parse("https://page.example.test/document").unwrap();
+        let same_origin_url = Url::parse("https://page.example.test/app.css").unwrap();
+        let cross_origin_url = Url::parse("https://cdn.example.test/app.css").unwrap();
+        let options = StylesheetFetchOptions::default().with_quirks_mode_mime_compatibility(true);
+
+        let mut cross_to_same_response =
+            stylesheet_response(&same_origin_url, Some("text/plain"), "body { color: red; }");
+        cross_to_same_response.redirected = true;
+        cross_to_same_response.redirect_chain =
+            vec![stylesheet_redirect(&cross_origin_url, &same_origin_url)];
+
+        let cross_to_same_terminal = stylesheet_terminal_from_response(
+            &document_url,
+            &cross_origin_url,
+            &options,
+            cross_to_same_response,
+            StylesheetResponseProvenance::Network,
+        );
+
+        assert!(!cross_to_same_terminal.is_ready());
+        assert_eq!(cross_to_same_terminal.origin_clean(), Some(false));
+
+        let mut through_cross_response =
+            stylesheet_response(&same_origin_url, Some("text/plain"), "body { color: red; }");
+        through_cross_response.redirected = true;
+        through_cross_response.redirect_chain = vec![
+            stylesheet_redirect(&same_origin_url, &cross_origin_url),
+            stylesheet_redirect(&cross_origin_url, &same_origin_url),
+        ];
+
+        let through_cross_terminal = stylesheet_terminal_from_response(
+            &document_url,
+            &same_origin_url,
+            &options,
+            through_cross_response,
+            StylesheetResponseProvenance::Network,
+        );
+
+        assert!(!through_cross_terminal.is_ready());
+        assert_eq!(through_cross_terminal.origin_clean(), Some(false));
+    }
+
+    #[test]
+    fn quirks_mode_mime_compatibility_does_not_bypass_nosniff() {
+        let document_url = Url::parse("https://page.example.test/document").unwrap();
+        let stylesheet_url = Url::parse("https://page.example.test/app.css").unwrap();
+        let options = StylesheetFetchOptions::default().with_quirks_mode_mime_compatibility(true);
+        let response = crate::protocol_types::NavigationResponse::from_text_body(
+            stylesheet_url.clone(),
+            200,
+            vec![
+                ("Content-Type".to_owned(), "text/plain".to_owned()),
+                ("x-content-type-options".to_owned(), "nosniff".to_owned()),
+            ],
+            "body { color: red; }".to_owned(),
+        );
+
+        let terminal = stylesheet_terminal_from_response(
+            &document_url,
+            &stylesheet_url,
+            &options,
+            response,
+            StylesheetResponseProvenance::Network,
+        );
+
+        assert!(!terminal.is_ready());
     }
 
     #[test]

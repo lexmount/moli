@@ -181,6 +181,11 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         DirectCallOwner::NativeForwardingOrScript,
     ),
     allowed(
+        "context_bootstrap/trusted_types.rs",
+        2,
+        DirectCallOwner::NativeForwardingOrScript,
+    ),
+    allowed(
         "context_bootstrap/web_storage/interceptors.rs",
         1,
         DirectCallOwner::NativeForwardingOrScript,

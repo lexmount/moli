@@ -2436,9 +2436,11 @@ dependencies = [
  "indexmap",
  "moli-css-parse",
  "moli-html-input-temporal",
+ "moli-html-input-type",
  "percent-encoding",
  "selectors",
  "serde_json",
+ "strum",
  "thin-vec",
  "url",
 ]
@@ -2507,6 +2509,7 @@ dependencies = [
 name = "moli-geometry"
 version = "0.1.0"
 dependencies = [
+ "dragonbox_ecma",
  "moli-css-parse",
 ]
 
@@ -2519,6 +2522,13 @@ name = "moli-html-input-temporal"
 version = "0.1.0"
 dependencies = [
  "time",
+]
+
+[[package]]
+name = "moli-html-input-type"
+version = "0.1.0"
+dependencies = [
+ "strum",
 ]
 
 [[package]]
@@ -2769,6 +2779,7 @@ dependencies = [
  "moli-cookie-jar",
  "moli-core",
  "moli-fetch",
+ "moli-html-input-type",
  "moli-protocol",
  "moli-protocol-cdp",
  "moli-protocol-webdriver-bidi",
@@ -2819,6 +2830,7 @@ dependencies = [
  "data-url",
  "encoding_rs",
  "euclid",
+ "fastrand",
  "futures-util",
  "html-escape",
  "html5ever",
@@ -2878,6 +2890,7 @@ dependencies = [
  "moli-webidl",
  "moli-webidl-callback",
  "moli-websocket",
+ "moli-window-features",
  "moli-xpath",
  "parking_lot",
  "percent-encoding",
@@ -3193,6 +3206,14 @@ dependencies = [
  "tokio-tungstenite",
  "url",
  "webpki-roots",
+]
+
+[[package]]
+name = "moli-window-features"
+version = "0.1.0"
+dependencies = [
+ "indexmap",
+ "stylo",
 ]
 
 [[package]]
@@ -4236,7 +4257,7 @@ dependencies = [
 [[package]]
 name = "selectors"
 version = "0.40.0"
-source = "git+https://github.com/ldm0/stylo?rev=32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6#32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6"
+source = "git+https://github.com/ldm0/stylo?rev=efd2738e5f989fb787d8118b879a2b1ef3522bf4#efd2738e5f989fb787d8118b879a2b1ef3522bf4"
 dependencies = [
  "bitflags",
  "cssparser",
@@ -4368,7 +4389,7 @@ dependencies = [
 [[package]]
 name = "servo_arc"
 version = "0.4.3"
-source = "git+https://github.com/ldm0/stylo?rev=32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6#32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6"
+source = "git+https://github.com/ldm0/stylo?rev=efd2738e5f989fb787d8118b879a2b1ef3522bf4#efd2738e5f989fb787d8118b879a2b1ef3522bf4"
 dependencies = [
  "serde",
  "stable_deref_trait",
@@ -4615,7 +4636,7 @@ dependencies = [
 [[package]]
 name = "stylo"
 version = "0.20.0"
-source = "git+https://github.com/ldm0/stylo?rev=32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6#32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6"
+source = "git+https://github.com/ldm0/stylo?rev=efd2738e5f989fb787d8118b879a2b1ef3522bf4#efd2738e5f989fb787d8118b879a2b1ef3522bf4"
 dependencies = [
  "app_units",
  "arrayvec",
@@ -4671,7 +4692,7 @@ dependencies = [
 [[package]]
 name = "stylo_atoms"
 version = "0.20.0"
-source = "git+https://github.com/ldm0/stylo?rev=32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6#32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6"
+source = "git+https://github.com/ldm0/stylo?rev=efd2738e5f989fb787d8118b879a2b1ef3522bf4#efd2738e5f989fb787d8118b879a2b1ef3522bf4"
 dependencies = [
  "string_cache",
  "string_cache_codegen",
@@ -4680,7 +4701,7 @@ dependencies = [
 [[package]]
 name = "stylo_derive"
 version = "0.20.0"
-source = "git+https://github.com/ldm0/stylo?rev=32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6#32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6"
+source = "git+https://github.com/ldm0/stylo?rev=efd2738e5f989fb787d8118b879a2b1ef3522bf4#efd2738e5f989fb787d8118b879a2b1ef3522bf4"
 dependencies = [
  "darling",
  "proc-macro2",
@@ -4692,7 +4713,7 @@ dependencies = [
 [[package]]
 name = "stylo_dom"
 version = "0.20.0"
-source = "git+https://github.com/ldm0/stylo?rev=32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6#32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6"
+source = "git+https://github.com/ldm0/stylo?rev=efd2738e5f989fb787d8118b879a2b1ef3522bf4#efd2738e5f989fb787d8118b879a2b1ef3522bf4"
 dependencies = [
  "bitflags",
  "stylo_malloc_size_of",
@@ -4701,7 +4722,7 @@ dependencies = [
 [[package]]
 name = "stylo_malloc_size_of"
 version = "0.20.0"
-source = "git+https://github.com/ldm0/stylo?rev=32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6#32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6"
+source = "git+https://github.com/ldm0/stylo?rev=efd2738e5f989fb787d8118b879a2b1ef3522bf4#efd2738e5f989fb787d8118b879a2b1ef3522bf4"
 dependencies = [
  "app_units",
  "cssparser",
@@ -4718,7 +4739,7 @@ dependencies = [
 [[package]]
 name = "stylo_static_prefs"
 version = "0.20.0"
-source = "git+https://github.com/ldm0/stylo?rev=32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6#32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6"
+source = "git+https://github.com/ldm0/stylo?rev=efd2738e5f989fb787d8118b879a2b1ef3522bf4#efd2738e5f989fb787d8118b879a2b1ef3522bf4"
 dependencies = [
  "toml",
 ]
@@ -4736,7 +4757,7 @@ dependencies = [
 [[package]]
 name = "stylo_traits"
 version = "0.20.0"
-source = "git+https://github.com/ldm0/stylo?rev=32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6#32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6"
+source = "git+https://github.com/ldm0/stylo?rev=efd2738e5f989fb787d8118b879a2b1ef3522bf4#efd2738e5f989fb787d8118b879a2b1ef3522bf4"
 dependencies = [
  "app_units",
  "bitflags",
@@ -5022,7 +5043,7 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 [[package]]
 name = "to_shmem"
 version = "0.5.0"
-source = "git+https://github.com/ldm0/stylo?rev=32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6#32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6"
+source = "git+https://github.com/ldm0/stylo?rev=efd2738e5f989fb787d8118b879a2b1ef3522bf4#efd2738e5f989fb787d8118b879a2b1ef3522bf4"
 dependencies = [
  "cssparser",
  "servo_arc",
@@ -5035,7 +5056,7 @@ dependencies = [
 [[package]]
 name = "to_shmem_derive"
 version = "0.1.0"
-source = "git+https://github.com/ldm0/stylo?rev=32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6#32c3de3f2aab3340c51f03f2a0878d1e4eed7fd6"
+source = "git+https://github.com/ldm0/stylo?rev=efd2738e5f989fb787d8118b879a2b1ef3522bf4#efd2738e5f989fb787d8118b879a2b1ef3522bf4"
 dependencies = [
  "darling",
  "proc-macro2",

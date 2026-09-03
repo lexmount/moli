@@ -22,7 +22,7 @@ pub use labels::{
 };
 pub use legacy_text::decode_text_for_legacy_web;
 pub use query::encode_url_query_for_legacy_web;
-pub use script::decode_classic_script_source;
+pub use script::{decode_classic_script_source, decode_utf8};
 
 #[cfg(test)]
 mod tests;

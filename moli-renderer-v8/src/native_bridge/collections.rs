@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 
-use crate::dom::native::Node;
+use crate::dom::{forms::InputType, native::Node};
 
 use super::super::{
     document_runtime::DomHandle,

@@ -26,8 +26,8 @@ use super::{
     },
     live_target::{ParserRuntimeDomSinks, ParserStreamHtmlTreeSinkTarget},
     session::{
-        HtmlParserSession, HtmlParserSessionResult, new_fragment_html_tree_sink_session,
-        new_html_tree_sink_session,
+        HtmlParserSession, HtmlParserSessionResult, HtmlTreeSinkSession,
+        new_fragment_html_tree_sink_session, new_html_tree_sink_session,
     },
 };
 
@@ -425,17 +425,20 @@ pub(crate) fn prepare_parser_script_handoff_for_static_document(
 }
 
 impl HtmlTreeSinkStream {
-    pub(super) fn from_target_with_scripting(
-        target: ParserStreamHtmlTreeSinkTarget,
-        scripting_enabled: bool,
-    ) -> Self {
-        let session = new_html_tree_sink_session(target, scripting_enabled);
+    fn from_session(session: HtmlTreeSinkSession) -> Self {
         Self {
             parser: session.parser,
             script_input: session.script_input,
             parser_script_positions: HashMap::new(),
             next_parser_script_position: 0,
         }
+    }
+
+    pub(super) fn from_target_with_scripting(
+        target: ParserStreamHtmlTreeSinkTarget,
+        scripting_enabled: bool,
+    ) -> Self {
+        Self::from_session(new_html_tree_sink_session(target, scripting_enabled))
     }
 
     pub(super) fn from_fragment_target(
@@ -452,12 +455,7 @@ impl HtmlTreeSinkStream {
             context_local_name,
             scripting_enabled,
         );
-        Self {
-            parser: session.parser,
-            script_input: session.script_input,
-            parser_script_positions: HashMap::new(),
-            next_parser_script_position: 0,
-        }
+        Self::from_session(session)
     }
 
     fn parser_script_position(&mut self, node_id: NativeNodeId) -> usize {
@@ -1145,6 +1143,11 @@ mod tests {
             let _ = unsafe { &mut *self.host }.set_script_already_started(node_id, true);
         }
 
+        fn mark_unclosed_form_control_for_parser(&mut self, node_id: NativeNodeId) {
+            // SAFETY: the test keeps the DomHost alive for this parser pump step.
+            let _ = unsafe { &mut *self.host }.set_blocks_form_submission(node_id, true);
+        }
+
         fn finish_parsing_script_children(&mut self, node_id: NativeNodeId) {
             // SAFETY: the test keeps the DomHost alive for this parser pump step.
             let _ = unsafe { &mut *self.host }.finish_parsing_script_children(node_id);
@@ -1454,10 +1457,11 @@ mod tests {
         assert_eq!(prepared.source_kind, ScriptSourceKind::Inline);
 
         let (importmap_document, importmap_handle) = first_script_handle(
-            "<script type=\"importmap\">{\"imports\":{\"x\":\"/x.js\"}}</script>",
+            "<script type=\"importmap\" nonce=\"map-nonce\">{\"imports\":{\"x\":\"/x.js\"}}</script>",
         );
         let prepared = prepare_parser_import_map(&importmap_document, importmap_handle)
             .expect("inline importmap should produce a registration payload");
+        assert_eq!(prepared.nonce.as_deref(), Some("map-nonce"));
         assert!(matches!(
             prepared.source,
             crate::PreparedImportMapSource::Inline(ref source)
@@ -1698,6 +1702,42 @@ mod tests {
             failure.contains("failed to resolve script src"),
             "invalid src failure should survive the parser boundary"
         );
+    }
+
+    #[test]
+    fn parser_script_handoff_only_exposes_nonceable_nonces() {
+        fn handoff_nonce(markup: &str) -> Option<String> {
+            let mut stream = DocumentStream::new_scripting_enabled_parser_stream_for_testing(
+                Url::parse("https://example.test/page.html").expect("test url"),
+            );
+            let outcome = stream.pump_parser_step(markup);
+            let ParserPumpStep::Yield(ParserYield::Script(handoff)) = outcome.result else {
+                panic!("expected parser script handoff for {markup:?}");
+            };
+            let ParserScriptHandoff::BlockingClassic { script, .. } = *handoff else {
+                panic!("expected blocking classic script for {markup:?}");
+            };
+            script.fetch_metadata.nonce
+        }
+
+        assert_eq!(
+            handoff_nonce("<script nonce=abc>safe()</script>"),
+            Some("abc".to_owned()),
+            "ordinary parser script nonce should remain usable"
+        );
+        for markup in [
+            "<script attribute<script nonce=abc>blocked()</script>",
+            "<script data-marker='value<StYlE' nonce=abc>blocked()</script>",
+            "<script data-marker='value<LiNk' nonce=abc>blocked()</script>",
+            "<script duplicate duplicate nonce=abc>blocked()</script>",
+            "<svg><script duplicate duplicate nonce=abc>blocked()</script></svg>",
+        ] {
+            assert_eq!(
+                handoff_nonce(markup),
+                None,
+                "nonnonceable parser script must not expose its nonce: {markup:?}"
+            );
+        }
     }
 
     #[test]

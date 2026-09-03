@@ -70,6 +70,11 @@ pub(crate) enum PreparedRuntimeScriptStartCommit {
         host_script_handle: String,
         source: String,
     },
+    InlineImportMap {
+        node: NativeNodeId,
+        base_url: url::Url,
+        source: String,
+    },
     Admission {
         reservation: RuntimeScriptStartReservation,
         payload: Box<RuntimeScriptAdmissionPayload>,
@@ -157,6 +162,16 @@ impl PreparedRuntimeScriptStart {
             return Ok(None);
         }
 
+        self.execute_after_reservation(dom_host, scripts, host_script_handle)
+    }
+
+    #[cfg(test)]
+    fn execute_after_reservation(
+        self,
+        dom_host: &mut DomHost,
+        scripts: &mut HostScriptScheduler,
+        host_script_handle: &str,
+    ) -> std::result::Result<Option<String>, String> {
         let PreparedRuntimeScriptStart {
             node,
             preparation,
@@ -166,6 +181,7 @@ impl PreparedRuntimeScriptStart {
         match decision {
             RuntimeScriptStartDecision::Skip { commit_start, .. } => {
                 if !commit_start {
+                    scripts.cancel_script_start(host_script_handle, node);
                     return Ok(None);
                 }
                 if !commit_runtime_script_start(
@@ -210,7 +226,7 @@ impl PreparedRuntimeScriptStart {
                     scripts.cancel_script_start(host_script_handle, node);
                     return Ok(None);
                 }
-                scripts.register_dynamic_import_map(&preparation, &source);
+                scripts.register_dynamic_import_map(&preparation.base_url, &source);
                 Ok(None)
             }
             RuntimeScriptStartDecision::RejectExternalImportMap => {
@@ -402,16 +418,20 @@ pub(crate) fn prepare_runtime_script_start_commit(
             })
         }
         RuntimeScriptStartDecision::RegisterImportMap { source } => {
-            if finish_local_runtime_script_start(
+            if !finish_local_runtime_script_start(
                 dom_host,
                 scripts,
                 node,
                 &host_script_handle,
                 ScriptStartCommitKind::RegisterImportMap,
             ) {
-                scripts.register_dynamic_import_map(&preparation, &source);
+                return Ok(PreparedRuntimeScriptStartCommit::Noop);
             }
-            Ok(PreparedRuntimeScriptStartCommit::Noop)
+            Ok(PreparedRuntimeScriptStartCommit::InlineImportMap {
+                node,
+                base_url: preparation.base_url,
+                source,
+            })
         }
         RuntimeScriptStartDecision::RejectExternalImportMap => {
             if finish_local_runtime_script_start(
@@ -545,6 +565,53 @@ pub(super) fn commit_runtime_script_start(
     }
     let _ = dom_host.set_script_already_started(node, true);
     true
+}
+
+/// Holds the per-element start lane while a Trusted Types default policy runs.
+///
+/// Policy callbacks can mutate the connected script and synchronously trigger
+/// another preparation attempt. Reserving before entering JavaScript keeps
+/// that nested attempt from preparing the same element a second time. The
+/// reservation is released before the normal plan/commit pipeline resumes.
+#[derive(Debug)]
+pub(crate) struct RuntimeScriptTextPreparationReservation {
+    node: NativeNodeId,
+    host_script_handle: String,
+}
+
+impl RuntimeScriptTextPreparationReservation {
+    pub(crate) fn begin(
+        dom_host: &DomHost,
+        scripts: &mut HostScriptScheduler,
+        node: NativeNodeId,
+        host_script_handle: &str,
+    ) -> Option<Self> {
+        let can_prepare = dom_host.is_connected(node)
+            && dom_host
+                .node(node)
+                .and_then(|node| node.as_element())
+                .is_some_and(|element| {
+                    element.is_script_element() && !element.script_already_started()
+                });
+        if !can_prepare {
+            return None;
+        }
+        scripts.register_script_handle_with_source(
+            host_script_handle,
+            node,
+            ScriptHandleSource::RuntimeOwned,
+        );
+        scripts
+            .reserve_script_start(host_script_handle, node)
+            .then(|| Self {
+                node,
+                host_script_handle: host_script_handle.to_owned(),
+            })
+    }
+
+    pub(crate) fn release(self, scripts: &mut HostScriptScheduler) {
+        scripts.cancel_script_start(&self.host_script_handle, self.node);
+    }
 }
 
 pub(crate) fn begin_prepared_document_write_script_start(

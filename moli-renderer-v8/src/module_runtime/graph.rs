@@ -460,14 +460,24 @@ impl NativeModuleGraphFetchRequest {
                             .message()
                             .to_owned());
                     }
-                    crate::subresource_integrity::observe_subresource_integrity_metadata(
-                        integrity.as_deref(),
-                    );
                     let response_referrer_policy =
                         crate::referrer_policy::response_referrer_policy_from_headers(
                             &response.headers,
                         );
-                    let (head, body, body_bytes) = response.into_parts();
+                    let (head, _body, body_bytes) = response.into_parts();
+                    if !crate::subresource_integrity::response_body_matches_subresource_integrity_metadata(
+                        &body_bytes,
+                        integrity.as_deref(),
+                    ) {
+                        return Err(ModuleLoadError::new(
+                            ModuleLoadStage::Fetch,
+                            format!(
+                                "module request `{source_url}` failed its integrity check (FailedToLoad)"
+                            ),
+                        )
+                        .message()
+                        .to_owned());
+                    }
                     Ok(match kind {
                         ModuleKind::WebAssembly => ModuleGraphFetchedSource::new(
                             head.final_url,
@@ -481,7 +491,7 @@ impl NativeModuleGraphFetchRequest {
                         | ModuleKind::ModulePreloadText => ModuleGraphFetchedSource::new(
                             head.final_url,
                             head.redirected,
-                            ModuleSource::text(body),
+                            ModuleSource::text(moli_encoding::decode_utf8(&body_bytes)),
                         )
                         .with_response_referrer_policy(response_referrer_policy),
                     })
@@ -989,6 +999,7 @@ fn trace_module_graph_job_created(kind: &'static str, root: &ModuleRootInput) {
         initiator_url = %root.initiator_url,
         phase = ?root.phase,
         parser_owned = root.parser_owned,
+        integrity = ?root.fetch_metadata.request_metadata.integrity,
     );
 }
 
@@ -1319,6 +1330,7 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
                         "failed to resolve module specifier `{specifier}` from `{base_url}`: {error}"
                     ),
                 )
+                .with_error_constructor(module_tree::ModuleErrorConstructorKind::TypeError)
             })?;
         let attributes = local_attributes(attributes);
         let local_key = ModuleMapKey::from_url_and_attributes(&resolved_url, &attributes).map_err(
@@ -1327,6 +1339,7 @@ impl<O: NativeModuleTreeDocumentOwnerAdapter> module_tree::ModuleScriptTreeHost
                     module_tree::ModuleLoadStage::Resolve,
                     format!("{message} for import `{specifier}`"),
                 )
+                .with_error_constructor(module_tree::ModuleErrorConstructorKind::TypeError)
             },
         )?;
         if requested_phase == module_tree::ModuleImportPhase::Source
@@ -1865,9 +1878,19 @@ fn local_graph(graph: module_tree::ModuleGraphHandle) -> ModuleGraphHandle {
 fn chromium_error(error: ModuleLoadError) -> module_tree::ModuleLoadError {
     let mut converted =
         module_tree::ModuleLoadError::new(chromium_load_stage(error.stage()), error.message());
-    if error.error_constructor() == Some(ScriptErrorConstructorKind::SyntaxError) {
-        converted =
-            converted.with_error_constructor(module_tree::ModuleErrorConstructorKind::SyntaxError);
+    if let Some(constructor) = error.error_constructor() {
+        let constructor = match constructor {
+            ScriptErrorConstructorKind::SyntaxError => {
+                module_tree::ModuleErrorConstructorKind::SyntaxError
+            }
+            ScriptErrorConstructorKind::TypeError => {
+                module_tree::ModuleErrorConstructorKind::TypeError
+            }
+            ScriptErrorConstructorKind::Error
+            | ScriptErrorConstructorKind::WebAssemblyCompileError
+            | ScriptErrorConstructorKind::WebAssemblyLinkError => return converted,
+        };
+        converted = converted.with_error_constructor(constructor);
     }
     converted
 }
@@ -1887,6 +1910,7 @@ fn local_error_constructor(
         module_tree::ModuleErrorConstructorKind::SyntaxError => {
             ScriptErrorConstructorKind::SyntaxError
         }
+        module_tree::ModuleErrorConstructorKind::TypeError => ScriptErrorConstructorKind::TypeError,
     }
 }
 
@@ -1985,6 +2009,7 @@ fn module_key_for_root(
             ModuleLoadStage::Resolve,
             format!("{message} for module `{}`", root.source_url),
         )
+        .with_error_constructor(ScriptErrorConstructorKind::TypeError)
     })?;
     validate_source_phase_key(root.phase, &key, "module", root.source_url.as_str())?;
     Ok(key)
@@ -2283,7 +2308,7 @@ fn module_script_inline_tree_job_for_owner(
     let (record, identity) = match vm.compile_native_module_record(
         key.clone(),
         &source,
-        &root.source_url,
+        &root.base_url,
         &root.fetch_metadata,
     ) {
         Ok(result) => result,
@@ -2556,6 +2581,7 @@ where
                         request.base_url()
                     ),
                 )
+                .with_error_constructor(ScriptErrorConstructorKind::TypeError)
             })?,
     };
     let integrity = owner.resolve_module_integrity(&source_url);
@@ -3325,6 +3351,44 @@ import "./c.mjs";
     }
 
     #[test]
+    fn static_bare_specifier_resolve_failure_is_a_type_error() {
+        let mut vm = new_test_vm("https://app.example.test/page");
+        let root_url = url("https://app.example.test/root.mjs");
+        let job = parser_owned_external_module_script_graph_job(
+            &mut vm,
+            &root_url,
+            &url("https://app.example.test/page"),
+            &ScriptFetchMetadata::default(),
+        );
+
+        let root_fetch = expect_single_fetch(
+            advance_module_script_graph(&mut vm, job)
+                .expect("external parser graph should request root"),
+            "bare-specifier root",
+        );
+        let error = match root_fetch.finish_source_for_test(
+            &mut vm,
+            Ok(ModuleSource::text(
+                r#"import "unmapped-bare-specifier";"#.to_owned(),
+            )),
+        ) {
+            Ok(_) => panic!("an unmapped bare specifier should fail during graph resolution"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.stage(), ModuleLoadStage::Resolve);
+        assert_eq!(
+            error.error_constructor(),
+            Some(ScriptErrorConstructorKind::TypeError)
+        );
+        assert!(
+            error.message().contains("unmapped-bare-specifier"),
+            "{}",
+            error.message()
+        );
+    }
+
+    #[test]
     fn static_import_with_invalid_attribute_key_fails_before_dependency_fetch() {
         let mut vm = new_test_vm("https://app.example.test/page");
         let root_url = url("https://app.example.test/root.mjs");
@@ -3389,6 +3453,10 @@ import "./c.mjs";
         };
 
         assert_eq!(error.stage(), ModuleLoadStage::Resolve);
+        assert_eq!(
+            error.error_constructor(),
+            Some(ScriptErrorConstructorKind::TypeError)
+        );
         assert!(
             error
                 .message()
@@ -3425,6 +3493,10 @@ import "./c.mjs";
 
         assert!(!job.has_chromium_tree_for_test());
         assert_eq!(error.stage(), ModuleLoadStage::Resolve);
+        assert_eq!(
+            error.error_constructor(),
+            Some(ScriptErrorConstructorKind::TypeError)
+        );
         assert!(
             error.message().contains(
                 "module type `text` is not a valid module type for module `https://example.test/app/dep.txt`"
@@ -3771,7 +3843,7 @@ import "./c.mjs";
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn module_graph_fetch_allows_invalid_integrity() -> anyhow::Result<()> {
+    async fn module_graph_fetch_rejects_integrity_mismatch() -> anyhow::Result<()> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let server = tokio::spawn(async move {
@@ -3792,22 +3864,26 @@ import "./c.mjs";
         let module_url = Url::parse(&format!("http://{addr}/bad-integrity.js"))?;
         let metadata = ModuleFetchMetadata {
             request_metadata: ScriptFetchRequestMetadata {
-                integrity: Some("sha384-invalid".to_owned()),
+                integrity: Some(
+                    "sha384-Li9vy3DqF8tnTXuiaAJuML3ky+er10rcgNR/VqsVpcw+ThHmYcwiB1pbOxEbzJr7"
+                        .to_owned(),
+                ),
                 ..ScriptFetchRequestMetadata::default()
             },
             ..ModuleFetchMetadata::default()
         };
-        let response = fetch_module_for_test(
+        let error = fetch_module_for_test(
             &loader,
             module_url,
             Url::parse(&format!("http://{addr}/page.html"))?,
             metadata,
         )
-        .await?;
+        .await
+        .expect_err("an integrity mismatch must reject the module fetch");
 
         assert!(
-            !response.from_cache,
-            "module graph fetch should complete normally even with invalid integrity"
+            error.to_string().contains("failed its integrity check"),
+            "module graph fetch should report an integrity mismatch: {error:#}"
         );
         server.await?;
         Ok(())

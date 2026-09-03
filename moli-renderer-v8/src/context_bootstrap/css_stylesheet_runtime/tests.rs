@@ -778,6 +778,27 @@ fn grouping_rule_css_text_uses_stylo_rule_view_serialization() {
 }
 
 #[test]
+fn starting_style_rule_accepts_an_empty_prelude_and_rejects_nonempty_preludes() {
+    crate::style_engine::ensure_stylo_browser_compat_prefs();
+
+    assert_eq!(
+        parsed_top_level_rule_texts("@starting-style {}"),
+        ["@starting-style {\n}"]
+    );
+    for css_text in [
+        "@starting-style div {}",
+        "@starting-style () {}",
+        "@starting-style ( {}",
+        "@starting-style }{}",
+    ] {
+        assert!(
+            parsed_top_level_rule_texts(css_text).is_empty(),
+            "unexpectedly accepted {css_text:?}"
+        );
+    }
+}
+
+#[test]
 fn grouping_rule_css_text_uses_stylo_page_rule_child_serialization() {
     let css_text =
         r#"@media screen { @page :first { margin-top: 1px; @top-left { content: "x"; } } }"#;

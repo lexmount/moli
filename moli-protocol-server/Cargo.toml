@@ -14,6 +14,7 @@ moli-bounded-json = { path = "../moli-bounded-json" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-core = { path = "../moli-core" }
 moli-fetch = { path = "../moli-fetch" }
+moli-html-input-type = { path = "../moli-html-input-type" }
 moli-protocol = { path = "../moli-protocol" }
 moli-protocol-cdp = { path = "../moli-protocol-cdp" }
 moli-protocol-webdriver-bidi = { path = "../moli-protocol-webdriver-bidi" }

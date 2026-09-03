@@ -1,5 +1,5 @@
 use crate::dom::native::{DomHost, NodeType};
-use moli_dom::forms::{MeterElementValues, MeterGaugeRegion};
+use moli_dom::forms::{InputType, MeterElementValues, MeterGaugeRegion};
 use moli_page_types::{
     DocumentNodeAttributeSnapshot, DocumentNodeInspectorIdentity, DocumentNodeSnapshot,
 };
@@ -102,17 +102,17 @@ fn full_user_agent_shadow_root_snapshot(
         && dom_host
             .input_datalist_handle(originating_element.node_id)
             .is_some();
-    if element.is_html_input() && element.input_type() == "number" {
+    if element.is_html_input() && element.input_type() == InputType::Number {
         return Some(number_input_shadow_root_snapshot(
             element.input_value(),
             has_datalist,
             originating_element,
         ));
     }
-    if element.is_html_input() && element.input_type() == "range" {
+    if element.is_html_input() && element.input_type() == InputType::Range {
         return Some(range_input_shadow_root_snapshot(originating_element));
     }
-    if element.is_html_input() && element.input_type() == "date" {
+    if element.is_html_input() && element.input_type() == InputType::Date {
         return Some(date_input_shadow_root_snapshot(
             element.input_value(),
             element.attribute("min"),
@@ -120,7 +120,7 @@ fn full_user_agent_shadow_root_snapshot(
             originating_element,
         ));
     }
-    if element.is_html_input() && element.input_type() == "search" {
+    if element.is_html_input() && element.input_type() == InputType::Search {
         return Some(search_input_shadow_root_snapshot(
             element.input_value(),
             element.input_value_dirty(),
@@ -157,8 +157,12 @@ fn full_user_agent_shadow_root_snapshot(
     }
     let (tree_kind, value) = if element.is_html_input()
         && matches!(
-            element.input_type().as_str(),
-            "text" | "tel" | "url" | "email" | "password"
+            element.input_type(),
+            InputType::Text
+                | InputType::Tel
+                | InputType::Url
+                | InputType::Email
+                | InputType::Password
         ) {
         (INPUT_TEXT_CONTROL_TREE_KIND, element.input_value())
     } else if element.is_html_textarea() {

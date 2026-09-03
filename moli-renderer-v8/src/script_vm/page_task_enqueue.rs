@@ -23,10 +23,7 @@ use crate::v8_execution_watchdog::{
     V8ExecutionWatchdog, V8ExecutionWatchdogKind, V8ExecutionWatchdogOutcome,
 };
 
-#[cfg(not(test))]
 const LIFECYCLE_EVENT_WATCHDOG_TIMEOUT: Duration = Duration::from_secs(8);
-#[cfg(test)]
-const LIFECYCLE_EVENT_WATCHDOG_TIMEOUT: Duration = Duration::from_millis(500);
 
 impl ScriptVm {
     fn dispatch_document_event_body(&mut self, event_type: &str) -> Result<()> {
@@ -130,6 +127,7 @@ impl ScriptVm {
                     LIFECYCLE_EVENT_WATCHDOG_TIMEOUT,
                 )
             });
+        let watchdog_timeout = watchdog.timeout();
         let result = {
             let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
             self.renderer_document_isolate
@@ -150,7 +148,7 @@ impl ScriptVm {
         if timed_out {
             anyhow::bail!(
                 "document lifecycle event `{event_type}` exceeded {:?} and was terminated",
-                LIFECYCLE_EVENT_WATCHDOG_TIMEOUT
+                watchdog_timeout
             );
         }
         Ok(())
@@ -819,6 +817,30 @@ impl ScriptVm {
             self.sync_child_browsing_context_records();
         }
         Ok(result)
+    }
+
+    /// Execute one ready timer selected from the closed schedule ranges
+    /// recorded around classic defer script execution.
+    ///
+    /// Like the ordinary timer body, this does not checkpoint or reconcile
+    /// callback effects. The PageVm lifecycle owner commits the exact selected
+    /// callback completion after this method returns.
+    pub(super) fn run_next_timeout_queued_by_classic_defer_script_body(
+        &mut self,
+    ) -> Result<HostTimeoutRunResult> {
+        #[cfg(test)]
+        if let Some(message) = self.test_next_timeout_failure.take() {
+            return Err(anyhow!("{message}"));
+        }
+
+        let document_runtime: *mut DocumentRuntime = &mut *self.document_runtime;
+        self.with_default_context_scope(|scope, _host_ptr| {
+            // SAFETY: this is the same synchronous, non-escaping
+            // document-runtime borrow used by `run_next_timeout_body`; the
+            // schedule ranges only narrow which timer may be selected.
+            Ok(unsafe { &mut *document_runtime }
+                .run_next_timeout_queued_by_classic_defer_script(scope))
+        })
     }
 
     #[cfg(test)]

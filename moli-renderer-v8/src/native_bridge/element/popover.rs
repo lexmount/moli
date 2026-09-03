@@ -13,7 +13,7 @@ use super::super::node::{
 };
 use super::super::throw_dom_exception;
 use super::focus::{focus_element, is_focusable, update_focus};
-use super::toggle_event::queue_element_toggle_event;
+use super::toggle_event::{cancel_element_toggle_event, queue_element_toggle_event};
 use super::{
     JsContextHost, dispatch_public_event, element_attribute, element_has_attribute,
     remove_reflected_attribute, set_reflected_attribute,
@@ -35,7 +35,7 @@ fn is_manual_popover(runtime: &JsContextHost, handle: DomHandle) -> bool {
         .is_some_and(|value| canonical_popover_state(value) == "manual")
 }
 
-fn popover_is_open(runtime: &JsContextHost, handle: DomHandle) -> bool {
+pub(super) fn popover_is_open(runtime: &JsContextHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
         .node(handle)
@@ -121,6 +121,15 @@ pub(crate) fn dispatch_popover_show_events(
     source_handle: DomHandle,
 ) {
     let _ = set_popover_open_state(scope, runtime_ptr, target, true, Some(source_handle));
+}
+
+pub(crate) fn dispatch_popover_hide_events(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+    source_handle: DomHandle,
+) {
+    let _ = set_popover_open_state(scope, runtime_ptr, target, false, Some(source_handle));
 }
 
 pub(crate) fn dispatch_popover_toggle_events(
@@ -215,6 +224,38 @@ fn set_popover_open_state(
     open
 }
 
+pub(crate) fn handle_popover_attribute_change(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    namespace: Option<&str>,
+    local_name: &str,
+    old_value: Option<&str>,
+    new_value: Option<&str>,
+) {
+    if namespace.is_some() || !local_name.eq_ignore_ascii_case("popover") {
+        return;
+    }
+    let old_type = old_value.map(canonical_popover_state);
+    let new_type = new_value.map(canonical_popover_state);
+    if old_type == new_type {
+        return;
+    }
+    if popover_is_open(unsafe { &*runtime_ptr }, handle) {
+        let _ = set_popover_open_state(scope, runtime_ptr, handle, false, None);
+    }
+    if new_value.is_none() {
+        // Blink drops PopoverData when the attribute is removed. Its task
+        // handle owns and cancels any coalesced toggle event at that point.
+        cancel_element_toggle_event(
+            scope,
+            runtime_ptr,
+            RendererPageElementToggleEventKind::Popover,
+            handle,
+        );
+    }
+}
+
 fn autofocus_popover_descendant(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
@@ -307,6 +348,44 @@ fn shadow_including_tree_contains(
     }
 }
 
+fn popover_flat_tree_contains(
+    runtime: &JsContextHost,
+    ancestor: DomHandle,
+    handle: DomHandle,
+) -> bool {
+    let mut current = Some(handle);
+    while let Some(candidate) = current {
+        if candidate == ancestor {
+            return true;
+        }
+        current = popover_flat_tree_parent(runtime, candidate);
+    }
+    false
+}
+
+fn popover_flat_tree_parent(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+    if let Some(slot) = runtime.dom_host().assigned_slot_for_node(handle) {
+        return Some(slot);
+    }
+    let parent = runtime.dom_host().parent_node(handle)?;
+    if runtime.dom_host().is_shadow_root(parent) {
+        return runtime.dom_host().shadow_root_host(parent);
+    }
+    if runtime.dom_host().shadow_root_handle(parent).is_some() {
+        return None;
+    }
+    if runtime.dom_host().is_html_element_named(parent, "slot")
+        && runtime.dom_host().containing_shadow_root(parent).is_some()
+        && !runtime
+            .dom_host()
+            .assigned_nodes_for_slot_with_options(parent, false)
+            .is_empty()
+    {
+        return None;
+    }
+    Some(parent)
+}
+
 fn close_open_auto_popovers(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
@@ -325,20 +404,13 @@ fn close_open_auto_popovers(
         if !popover_is_open(runtime, candidate) {
             continue;
         }
-        if source.is_some_and(|source| runtime.dom_host().dom().contains(candidate, source)) {
+        if popover_flat_tree_contains(runtime, candidate, opening)
+            || source.is_some_and(|source| popover_flat_tree_contains(runtime, candidate, source))
+        {
             continue;
         }
         let _ = set_popover_open_state(scope, runtime_ptr, candidate, false, None);
     }
-}
-
-fn throw_redundant_popover_state_error(scope: &mut v8::PinScope<'_, '_>) {
-    throw_dom_exception(
-        scope,
-        "InvalidStateError",
-        11,
-        "Popover is already in the requested state.",
-    );
 }
 
 fn parse_popover_invocation<'s>(
@@ -444,14 +516,15 @@ pub(in crate::native_bridge) fn node_show_popover_callback<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    if !ensure_popover_supported(scope, runtime, handle)
-        || !ensure_popover_connected(scope, runtime, handle)
-    {
+    if !ensure_popover_supported(scope, runtime, handle) {
         rv.set_undefined();
         return;
     }
     if popover_is_open(runtime, handle) {
-        throw_redundant_popover_state_error(scope);
+        rv.set_undefined();
+        return;
+    }
+    if !ensure_popover_connected(scope, runtime, handle) {
         rv.set_undefined();
         return;
     }
@@ -470,14 +543,15 @@ pub(in crate::native_bridge) fn node_hide_popover_callback<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
-    if !ensure_popover_supported(scope, runtime, handle)
-        || !ensure_popover_connected(scope, runtime, handle)
-    {
+    if !ensure_popover_supported(scope, runtime, handle) {
         rv.set_undefined();
         return;
     }
     if !popover_is_open(runtime, handle) {
-        throw_redundant_popover_state_error(scope);
+        rv.set_undefined();
+        return;
+    }
+    if !ensure_popover_connected(scope, runtime, handle) {
         rv.set_undefined();
         return;
     }
@@ -517,26 +591,12 @@ pub(crate) fn perform_popover_invoker_default_action(
     invoker: DomHandle,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
-    let (target_id, action) =
-        if let Some(target_id) = element_attribute(runtime, invoker, "popovertarget") {
-            let action = element_attribute(runtime, invoker, "popovertargetaction")
-                .map(|value| value.to_ascii_lowercase())
-                .unwrap_or_else(|| "toggle".to_owned());
-            (target_id, action)
-        } else if let Some(target_id) = element_attribute(runtime, invoker, "commandfor") {
-            let action = match element_attribute(runtime, invoker, "command")
-                .map(|value| value.to_ascii_lowercase())
-                .as_deref()
-            {
-                Some("show-popover") => "show",
-                Some("hide-popover") => "hide",
-                Some("toggle-popover") => "toggle",
-                _ => return false,
-            };
-            (target_id, action.to_owned())
-        } else {
-            return false;
-        };
+    let Some(target_id) = element_attribute(runtime, invoker, "popovertarget") else {
+        return false;
+    };
+    let action = element_attribute(runtime, invoker, "popovertargetaction")
+        .map(|value| value.to_ascii_lowercase())
+        .unwrap_or_else(|| "toggle".to_owned());
     if target_id.is_empty() {
         return false;
     }

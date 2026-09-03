@@ -288,7 +288,7 @@ impl SharedWorkerScriptRequestPolicy {
             &self.document_content_security_policies,
             document_url,
             script_url,
-            ContentSecurityPolicyResourceKind::SharedWorkerScript,
+            ContentSecurityPolicyResourceKind::WorkerConstructor,
             || {
                 format!(
                     "Failed to load shared worker script `{script_url}`: blocked by Content Security Policy."
@@ -632,6 +632,7 @@ mod tests {
         SharedWorkerDescriptor::new(
             script_type,
             credentials_mode,
+            false,
             moli_shared_worker::SharedWorkerCreationContextType::Secure,
         )
     }

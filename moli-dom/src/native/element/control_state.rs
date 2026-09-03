@@ -1,6 +1,9 @@
 use super::Attribute;
-use crate::forms::{input_type_has_value_sanitization, sanitize_input_value_for_type};
+use crate::forms::{InputValueSanitizationContext, sanitize_input_value_for_type_with_context};
+use crate::native::NativeNodeId;
 use indexmap::IndexSet;
+use moli_html_input_type::InputType;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectedFile {
@@ -123,6 +126,11 @@ impl ScriptElementState {
 }
 
 #[derive(Debug, Clone, Default)]
+struct ExplicitElementReferenceState {
+    references_by_attribute: HashMap<String, Vec<NativeNodeId>>,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct ElementControlState {
     input_value: Option<String>,
     input_value_dirty: bool,
@@ -158,13 +166,45 @@ pub struct ElementControlState {
     scroll_top: Option<f64>,
     scroll_left: Option<f64>,
     custom_validation_message: String,
+    blocks_form_submission: bool,
     popover_open: bool,
     dialog_modal: bool,
+    dialog_previously_focused_element: Option<NativeNodeId>,
     dialog_return_value: String,
     custom_states: IndexSet<String>,
+    explicit_element_references: Option<Box<ExplicitElementReferenceState>>,
 }
 
 impl ElementControlState {
+    pub fn explicit_element_references(&self, attribute: &str) -> Option<&[NativeNodeId]> {
+        self.explicit_element_references
+            .as_deref()?
+            .references_by_attribute
+            .get(attribute)
+            .map(Vec::as_slice)
+    }
+
+    pub fn set_explicit_element_references(
+        &mut self,
+        attribute: &str,
+        references: Vec<NativeNodeId>,
+    ) {
+        self.explicit_element_references
+            .get_or_insert_with(Default::default)
+            .references_by_attribute
+            .insert(attribute.to_owned(), references);
+    }
+
+    pub fn clear_explicit_element_references(&mut self, attribute: &str) {
+        let Some(references) = self.explicit_element_references.as_mut() else {
+            return;
+        };
+        references.references_by_attribute.remove(attribute);
+        if references.references_by_attribute.is_empty() {
+            self.explicit_element_references = None;
+        }
+    }
+
     pub fn from_element_parts(
         namespace: &str,
         local_name: &str,
@@ -205,10 +245,17 @@ impl ElementControlState {
         };
 
         if local_name == "input" {
-            let input_type = attribute("type").unwrap_or("text");
-            state.input_value = Some(sanitize_input_value_for_type(
+            let input_type = InputType::from_attribute_value(attribute("type"));
+            state.input_value = Some(sanitize_input_value_for_type_with_context(
                 input_type,
                 attribute("value").unwrap_or_default(),
+                InputValueSanitizationContext {
+                    multiple: attribute("multiple").is_some(),
+                    min: attribute("min"),
+                    max: attribute("max"),
+                    step: attribute("step"),
+                    value_attribute: attribute("value"),
+                },
             ));
             state.checked = Some(attribute("checked").is_some());
             state.selection_start = Some(0);
@@ -393,12 +440,20 @@ impl ElementControlState {
         &self.custom_validation_message
     }
 
+    pub fn blocks_form_submission(&self) -> bool {
+        self.blocks_form_submission
+    }
+
     pub fn popover_open(&self) -> bool {
         self.popover_open
     }
 
     pub fn dialog_modal(&self) -> bool {
         self.dialog_modal
+    }
+
+    pub fn dialog_previously_focused_element(&self) -> Option<NativeNodeId> {
+        self.dialog_previously_focused_element
     }
 
     pub fn dialog_return_value(&self) -> &str {
@@ -532,6 +587,14 @@ impl ElementControlState {
             return false;
         }
         self.indeterminate = indeterminate;
+        true
+    }
+
+    pub fn set_blocks_form_submission(&mut self, blocks: bool) -> bool {
+        if self.blocks_form_submission == blocks {
+            return false;
+        }
+        self.blocks_form_submission = blocks;
         true
     }
 
@@ -780,6 +843,14 @@ impl ElementControlState {
         true
     }
 
+    pub fn set_dialog_previously_focused_element(&mut self, element: Option<NativeNodeId>) -> bool {
+        if self.dialog_previously_focused_element == element {
+            return false;
+        }
+        self.dialog_previously_focused_element = element;
+        true
+    }
+
     pub fn set_dialog_return_value(&mut self, value: &str) -> bool {
         if self.dialog_return_value == value {
             return false;
@@ -808,7 +879,8 @@ impl ElementControlState {
         &mut self,
         namespace: &str,
         local_name: &str,
-        input_type: &str,
+        input_type: InputType,
+        input_context: InputValueSanitizationContext<'_>,
         attribute_name: &str,
         attribute_value: Option<&str>,
     ) {
@@ -821,17 +893,61 @@ impl ElementControlState {
         match (local_name, attribute_name) {
             ("input", "value") => {
                 if !self.input_value_dirty {
-                    self.input_value = Some(sanitize_input_value_for_type(
+                    self.input_value = Some(sanitize_input_value_for_type_with_context(
                         input_type,
                         attribute_value.unwrap_or_default(),
+                        input_context,
                     ));
                 }
             }
             ("input", "type") => {
-                if input_type_has_value_sanitization(input_type) {
-                    let current = self.input_value.as_deref().unwrap_or_default();
-                    self.input_value = Some(sanitize_input_value_for_type(input_type, current));
+                // A non-dirty input value continues to follow the `value`
+                // content attribute across type changes. Sanitization can
+                // make that default observable (for example, color exposes
+                // `#000000`), but it must not turn the sanitized result into
+                // the source for a later type change.
+                let source = if self.input_value_dirty {
+                    self.input_value.as_deref().unwrap_or_default()
+                } else {
+                    input_context.value_attribute.unwrap_or_default()
+                };
+                let value =
+                    sanitize_input_value_for_type_with_context(input_type, source, input_context);
+                self.input_value = Some(value);
+                self.input_bad_input = false;
+
+                // The default/on mode exposes "on" when an empty dirty value
+                // changes into a checkable state. The filename mode likewise
+                // starts with an empty, non-dirty value.
+                if (input_type.is_checkable()
+                    && self.input_value.as_deref().is_none_or(str::is_empty))
+                    || input_type == InputType::File
+                {
+                    self.input_value_dirty = false;
+                    self.input_value_user_edited = false;
                 }
+            }
+            ("input", "multiple") if input_type == InputType::Email => {
+                let source = if self.input_value_dirty {
+                    self.input_value.as_deref().unwrap_or_default()
+                } else {
+                    input_context.value_attribute.unwrap_or_default()
+                };
+                self.input_value = Some(sanitize_input_value_for_type_with_context(
+                    input_type,
+                    source,
+                    input_context,
+                ));
+                self.input_bad_input = false;
+            }
+            ("input", "min" | "max" | "step") if input_type == InputType::Range => {
+                let source = self.input_value.as_deref().unwrap_or_default();
+                self.input_value = Some(sanitize_input_value_for_type_with_context(
+                    input_type,
+                    source,
+                    input_context,
+                ));
+                self.input_bad_input = false;
             }
             ("input", "checked") => {
                 if !self.checked_dirty {

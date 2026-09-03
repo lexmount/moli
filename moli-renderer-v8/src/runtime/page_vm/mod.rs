@@ -3202,6 +3202,12 @@ impl PageVm {
                     *task,
                 ))))
             }
+            PostParseLifecycleAdvance::TimerQueuedByClassicDeferBeforeDomContentLoaded => {
+                let request_client = self.request_client.clone();
+                self.run_classic_defer_timer_before_domcontentloaded(&request_client)
+                    .await?;
+                Ok(PostParseLifecycleLoopAdvance::Continue(Box::new(None)))
+            }
             PostParseLifecycleAdvance::NeedsContinuation => {
                 Ok(PostParseLifecycleLoopAdvance::Continue(Box::new(None)))
             }

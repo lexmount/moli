@@ -1,4 +1,8 @@
-use crate::{document_runtime::DomHandle, dom::native::Node, native_bridge::JsContextHost};
+use crate::{
+    document_runtime::DomHandle,
+    dom::{forms::InputType, native::Node},
+    native_bridge::JsContextHost,
+};
 
 #[derive(Clone, Copy)]
 pub(in crate::script_vm) struct KeyTargetInfo {
@@ -27,18 +31,17 @@ pub(in crate::script_vm) fn key_target_info(
         };
     };
     let local_name = element.local_name();
-    let input_type = if element.is_html_input() {
-        element.input_type()
-    } else {
-        String::new()
-    };
-    let is_checkbox = element.is_html_input() && input_type == "checkbox";
-    let is_radio = element.is_html_input() && input_type == "radio";
+    let input_type = element.input_type();
+    let is_checkbox = element.is_html_input() && input_type == InputType::Checkbox;
+    let is_radio = element.is_html_input() && input_type == InputType::Radio;
     let is_textarea = element.is_html_textarea();
     let is_select = element.is_html_select();
     let is_button_like = local_name == "button"
         || (element.is_html_input()
-            && matches!(input_type.as_str(), "button" | "submit" | "reset"));
+            && matches!(
+                input_type,
+                InputType::Button | InputType::Submit | InputType::Reset
+            ));
     let is_anchor_like = local_name == "a"
         && element
             .attribute("href")
@@ -46,8 +49,12 @@ pub(in crate::script_vm) fn key_target_info(
     let is_text_control = is_textarea
         || (element.is_html_input()
             && !matches!(
-                input_type.as_str(),
-                "checkbox" | "radio" | "button" | "submit" | "reset"
+                input_type,
+                InputType::Checkbox
+                    | InputType::Radio
+                    | InputType::Button
+                    | InputType::Submit
+                    | InputType::Reset
             ));
     KeyTargetInfo {
         is_checkbox,
@@ -90,7 +97,7 @@ pub(in crate::script_vm) fn radio_group_members(
                 .and_then(Node::as_element)
                 .is_some_and(|candidate_element| {
                     candidate_element.is_html_input()
-                        && candidate_element.input_type() == "radio"
+                        && candidate_element.input_type() == InputType::Radio
                         && candidate_element.attribute("name") == Some(name)
                         && !candidate_element.has_attribute("disabled")
                         && runtime
@@ -143,28 +150,5 @@ pub(in crate::script_vm) fn current_selection_state(
 }
 
 pub(in crate::script_vm) fn option_is_disabled(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    if runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .is_some_and(|element| element.has_attribute("disabled"))
-    {
-        return true;
-    }
-
-    let mut current = runtime.dom_host().parent_node(handle);
-    while let Some(parent) = current {
-        let Some(parent_element) = runtime.dom_host().node(parent).and_then(Node::as_element)
-        else {
-            current = runtime.dom_host().parent_node(parent);
-            continue;
-        };
-        match parent_element.local_name() {
-            "optgroup" => return parent_element.has_attribute("disabled"),
-            "select" | "hr" | "datalist" | "option" => return false,
-            _ => {}
-        }
-        current = runtime.dom_host().parent_node(parent);
-    }
-    false
+    runtime.dom_host().option_is_disabled(handle)
 }

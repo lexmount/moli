@@ -19,7 +19,7 @@ use crate::types::{
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct StylesheetFetchOptions(Arc<StylesheetFetchOptionsData>);
 
-#[derive(Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 struct StylesheetFetchOptionsData {
     cross_origin: Option<String>,
     referrer_policy: Option<String>,
@@ -27,6 +27,7 @@ struct StylesheetFetchOptionsData {
     nonce: Option<String>,
     charset: Option<String>,
     fetch_priority: Option<String>,
+    quirks_mode_mime_compatibility: bool,
 }
 
 impl Default for StylesheetFetchOptions {
@@ -51,7 +52,13 @@ impl StylesheetFetchOptions {
             nonce: normalize_preserved_value(nonce),
             charset: normalize_token(charset),
             fetch_priority: normalize_token(fetch_priority),
+            quirks_mode_mime_compatibility: false,
         }))
+    }
+
+    pub fn with_quirks_mode_mime_compatibility(mut self, enabled: bool) -> Self {
+        Arc::make_mut(&mut self.0).quirks_mode_mime_compatibility = enabled;
+        self
     }
 
     pub fn cross_origin(&self) -> Option<&str> {
@@ -76,6 +83,10 @@ impl StylesheetFetchOptions {
 
     pub fn fetch_priority(&self) -> Option<&str> {
         self.0.fetch_priority.as_deref()
+    }
+
+    pub fn quirks_mode_mime_compatibility(&self) -> bool {
+        self.0.quirks_mode_mime_compatibility
     }
 
     pub fn is_empty(&self) -> bool {
@@ -122,6 +133,7 @@ pub struct StylesheetResourceKey {
     referrer_policy: Option<String>,
     integrity: Option<String>,
     charset: Option<String>,
+    quirks_mode_mime_compatibility: bool,
 }
 
 impl StylesheetResourceKey {
@@ -135,6 +147,7 @@ impl StylesheetResourceKey {
             referrer_policy: options.referrer_policy().map(str::to_owned),
             integrity: options.integrity().map(str::to_owned),
             charset: options.charset().map(str::to_owned),
+            quirks_mode_mime_compatibility: options.quirks_mode_mime_compatibility(),
         }
     }
 

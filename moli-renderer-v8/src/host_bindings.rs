@@ -444,7 +444,7 @@ fn host_prepare_script_start_callback(
         rv.set_undefined();
         return;
     };
-    match host.plan_and_commit_current_main_runtime_script_start(node, &host_script_handle) {
+    match host.plan_and_commit_current_main_runtime_script_start(scope, node, &host_script_handle) {
         Ok(Some(committed)) => {
             let (_, _, source) = committed.into_parts();
             if let Some(source) = v8_string(scope, &source) {

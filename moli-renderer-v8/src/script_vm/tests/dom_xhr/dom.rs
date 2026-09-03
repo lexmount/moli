@@ -51,6 +51,57 @@ fn child_document_create_text_and_comment_nodes_work() {
         "function|3|#text|hello|true|function|8|#comment|note|2"
     );
 }
+
+#[test]
+fn child_document_factories_allocate_results_in_document_realm() {
+    let mut vm = new_storage_test_vm("https://child-document-factory-realm.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const child = frame.contentWindow;
+  const doc = child.document;
+  const ChildObject = child.Object;
+  child.Object = Object;
+  const range = doc.createRange();
+  const canvas = doc.createElement('canvas');
+  const context = canvas.getContext('2d');
+  const createdImageData = context.createImageData(1, 1);
+  const readImageData = context.getImageData(0, 0, 1, 1);
+  const values = {
+    nodeList: doc.querySelectorAll('*'),
+    attribute: doc.createAttribute('data-value'),
+    namespacedAttribute: doc.createAttributeNS(null, 'data-value'),
+    event: doc.createEvent('Event'),
+    range,
+    clonedRange: range.cloneRange(),
+    nodeIterator: doc.createNodeIterator(doc),
+    treeWalker: doc.createTreeWalker(doc),
+    implementation: doc.implementation,
+    documentType: doc.implementation.createDocumentType('html', '', ''),
+    xmlDocument: doc.implementation.createDocument(null, 'root'),
+    htmlDocument: doc.implementation.createHTMLDocument('title'),
+    canvasContext: context,
+    createdImageData,
+    createdImageDataData: createdImageData.data,
+    readImageData,
+    readImageDataData: readImageData.data
+  };
+  return Object.entries(values)
+    .filter(([, value]) => !(value instanceof ChildObject) || value instanceof Object)
+    .map(([name]) => name)
+    .join(',');
+})()
+"#,
+        )
+        .expect("child document factory realm probe should evaluate");
+
+    assert_eq!(result, "");
+}
+
 #[test]
 fn detached_character_data_accessors_parse_webidl_arguments() {
     let mut vm = new_storage_test_vm("https://detached-character-data-webidl.test/");
@@ -423,6 +474,82 @@ fn element_insert_adjacent_methods_parse_webidl_arguments() {
         "true|elementtextundefinedbold|bold|throw:TypeError|throw:TypeError|throw:RangeError|throw:TypeError|throw:SyntaxError|throw:TypeError|throw:TypeError|throw:TypeError|throw:TypeError"
     );
 }
+
+#[test]
+fn insert_adjacent_html_enforces_sibling_context_rules() {
+    let mut vm = new_storage_test_vm("https://insert-adjacent-sibling-context.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      callback();
+      return 'missing';
+    } catch (error) {
+      return `${error.name}:${error.code}`;
+    }
+  };
+  const sources = ['', 'text', '<!--comment-->', '<div></div>'];
+  const positions = ['beforebegin', 'afterend'];
+  const detached = document.createElement('div');
+  const root = document.documentElement ||
+    document.appendChild(document.createElement('html'));
+  const detachedErrors = positions.flatMap(position =>
+    sources.map(source => probe(() => detached.insertAdjacentHTML(position, source)))
+  );
+  const documentErrors = positions.flatMap(position =>
+    sources.map(source => probe(() => root.insertAdjacentHTML(position, source)))
+  );
+
+  while (root.firstChild) {
+    root.removeChild(root.firstChild);
+  }
+  root.insertAdjacentHTML(
+    'afterbegin',
+    '<head id="inside-head"></head><body id="inside-body"></body>'
+  );
+  const preservedInnerHtmlContext =
+    document.head?.id === 'inside-head' &&
+    document.body?.id === 'inside-body' &&
+    root.firstChild === document.head &&
+    root.lastChild === document.body;
+  const head = document.head ||
+    root.insertBefore(document.createElement('head'), root.firstChild);
+  const body = document.body || root.appendChild(document.createElement('body'));
+  head.insertAdjacentHTML('beforebegin', '<p id="before-head"></p>');
+  body.insertAdjacentHTML('afterend', '<p id="after-body"></p>');
+  const beforeHead = document.getElementById('before-head');
+  const afterBody = document.getElementById('after-body');
+
+  return JSON.stringify({
+    detachedErrors,
+    documentErrors,
+    preservedInnerHtmlContext,
+    counts: [
+      document.getElementsByTagName('html').length,
+      document.getElementsByTagName('head').length,
+      document.getElementsByTagName('body').length
+    ],
+    placement: [
+      beforeHead.nextSibling === head,
+      body.nextSibling === afterBody,
+      beforeHead.parentNode === root,
+      afterBody.parentNode === root
+    ]
+  });
+})()
+"#,
+        )
+        .expect("insertAdjacentHTML sibling context rules should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"detachedErrors":["NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7"],"documentErrors":["NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7","NoModificationAllowedError:7"],"preservedInnerHtmlContext":true,"counts":[1,1,1],"placement":[true,true,true,true]}"#
+    );
+}
+
 #[test]
 fn document_fragment_and_shadow_root_get_element_by_id_match_browser_lookup_boundaries() {
     let mut vm = new_storage_test_vm("https://fragment-shadow-get-by-id.test/");
@@ -1290,6 +1417,58 @@ fn outer_html_rejects_document_parent_without_mutating_tree() {
     assert_eq!(result, r#"["NoModificationAllowedError",7,true,true,true]"#);
 }
 #[test]
+fn markup_setters_apply_legacy_null_to_empty_string_conversion() {
+    let mut vm = new_storage_test_vm("https://markup-null-string-conversion.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const inner = document.createElement('div');
+  inner.innerHTML = '<span>old</span>';
+  inner.innerHTML = null;
+
+  const outerParent = document.createElement('div');
+  const outer = outerParent.appendChild(document.createElement('span'));
+  outer.outerHTML = null;
+
+  const undefinedValue = document.createElement('div');
+  undefinedValue.innerHTML = undefined;
+
+  const objectValue = document.createElement('div');
+  objectValue.innerHTML = { toString() { return 'converted'; } };
+
+  const shadow = document.createElement('div').attachShadow({ mode: 'open' });
+  shadow.innerHTML = '<span>old</span>';
+  shadow.innerHTML = null;
+
+  let symbolError = 'missing';
+  try {
+    inner.innerHTML = Symbol('markup');
+  } catch (error) {
+    symbolError = error.name;
+  }
+
+  return JSON.stringify([
+    inner.innerHTML,
+    inner.textContent,
+    outerParent.innerHTML,
+    undefinedValue.innerHTML,
+    objectValue.innerHTML,
+    shadow.innerHTML,
+    symbolError
+  ]);
+})()
+"#,
+        )
+        .expect("markup WebIDL string conversion should evaluate");
+
+    assert_eq!(
+        result,
+        r#"["","","","undefined","converted","","TypeError"]"#
+    );
+}
+#[test]
 fn mutation_observer_reports_local_name_and_namespace_for_attribute_ns() {
     let mut vm = new_storage_test_vm("https://mutation-observer-attribute-name.test/");
 
@@ -1359,6 +1538,39 @@ fn detached_child_document_anchor_resolves_url_properties() {
     assert_eq!(
         result,
         "about:blank|https://child-window-anchor.test/path/page.html|[object HTMLAnchorElement]|false|true|true|https://child-window-anchor.test/item?id=1#frag|https:|child-window-anchor.test|child-window-anchor.test||/item|?id=1|#frag|/"
+    );
+}
+
+#[test]
+fn child_document_base_uri_tracks_connected_base_href_mutations() {
+    let mut vm = new_storage_test_vm("https://child-base-uri.test/path/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const childDocument = frame.contentDocument;
+  const base = childDocument.body.appendChild(childDocument.createElement('base'));
+  const before = childDocument.baseURI;
+  base.href = 'sub/';
+  const image = childDocument.createElement('img');
+  image.src = 'asset.png';
+  return JSON.stringify({
+    before,
+    after: childDocument.baseURI,
+    image: image.src,
+    ownsBaseUri: Object.prototype.hasOwnProperty.call(childDocument, 'baseURI')
+  });
+})()
+"#,
+        )
+        .expect("child document base URL should remain live");
+
+    assert_eq!(
+        result,
+        r#"{"before":"https://child-base-uri.test/path/page.html","after":"https://child-base-uri.test/path/sub/","image":"https://child-base-uri.test/path/sub/asset.png","ownsBaseUri":false}"#
     );
 }
 #[test]
@@ -1626,6 +1838,37 @@ fn xml_serializer_synthesizes_required_namespace_declarations() {
 }
 
 #[test]
+fn outer_html_uses_xml_serialization_for_elements_in_xml_documents() {
+    let mut vm = new_storage_test_vm("https://xml-outer-html.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const xml = document.implementation.createDocument(null, '');
+  const htmlNamespace = 'http://www.w3.org/1999/xhtml';
+  const div = xml.createElementNS(htmlNamespace, 'div');
+  const br = xml.createElementNS(htmlNamespace, 'br');
+  const htmlBr = document.createElement('br');
+  return JSON.stringify({
+    contentType: xml.contentType,
+    div: div.outerHTML,
+    br: br.outerHTML,
+    serializerDiv: new XMLSerializer().serializeToString(div),
+    htmlBr: htmlBr.outerHTML
+  });
+})()
+"#,
+        )
+        .expect("XML document element outerHTML should use XML serialization");
+
+    assert_eq!(
+        result,
+        r#"{"contentType":"application/xml","div":"<div xmlns=\"http://www.w3.org/1999/xhtml\"></div>","br":"<br xmlns=\"http://www.w3.org/1999/xhtml\" />","serializerDiv":"<div xmlns=\"http://www.w3.org/1999/xhtml\"></div>","htmlBr":"<br>"}"#
+    );
+}
+
+#[test]
 fn xml_serializer_matches_chromium_for_empty_elements_attrs_and_parser_errors() {
     let mut vm = new_storage_test_vm("https://xml-serializer-node-kinds.test/");
 
@@ -1710,6 +1953,64 @@ fn dom_parser_xml_errors_preserve_the_partial_document_root() {
         .expect("DOMParser partial XML error tree should evaluate");
 
     assert_eq!(result, "catalog|1|true|http://www.w3.org/1999/xhtml|item|2");
+}
+
+#[test]
+fn dom_parser_rejects_public_doctype_without_system_literal() {
+    let mut vm = new_storage_test_vm("https://dom-parser-doctype.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parser = new DOMParser();
+  const prefix = '<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"';
+  const suffix = '><html><div id="test"/></html>';
+  const invalid = parser.parseFromString(prefix + suffix, 'application/xhtml+xml');
+  const emptySystemId = parser.parseFromString(prefix + ' ""' + suffix, 'application/xhtml+xml');
+  const quotedSystemId = parser.parseFromString(prefix + ' "x"' + suffix, 'application/xhtml+xml');
+
+  return [
+    invalid.getElementById('test') === null,
+    invalid.getElementsByTagName('parsererror').length === 1,
+    emptySystemId.getElementById('test') !== null,
+    quotedSystemId.getElementById('test') !== null
+  ].join('|');
+})()
+"#,
+        )
+        .expect("DOMParser doctype system ID validation should evaluate");
+
+    assert_eq!(result, "true|true|true|true");
+}
+
+#[test]
+fn dom_parser_expands_entities_from_an_internal_subset() {
+    let mut vm = new_storage_test_vm("https://dom-parser-internal-subset.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const doc = new DOMParser().parseFromString(
+    '<!DOCTYPE foo [ <!ENTITY x "y"> ]><foo>&x;</foo>',
+    'text/xml'
+  );
+  const serializer = new XMLSerializer();
+  return [
+    doc.doctype.name,
+    doc.doctype.publicId,
+    doc.doctype.systemId,
+    serializer.serializeToString(doc.documentElement),
+    serializer.serializeToString(doc.doctype),
+    doc.getElementsByTagName('parsererror').length
+  ].join('|');
+})()
+"#,
+        )
+        .expect("DOMParser internal subset entity should evaluate");
+
+    assert_eq!(result, "foo|||<foo>y</foo>|<!DOCTYPE foo>|0");
 }
 
 #[test]
@@ -2265,6 +2566,63 @@ fn document_point_queries_use_real_paint_order_geometry() {
         r#"{"element":"div","elements":["div","body","html"]}"#
     );
 }
+
+#[test]
+fn document_point_queries_skip_dynamic_inert_flat_tree_subtrees() {
+    let mut vm = new_parsed_test_vm(
+        "https://document-point-query-inert.test/",
+        r#"<!doctype html><style>
+html, body { margin: 0; }
+#under, #container, #target { position: absolute; inset: 0; width: 100px; height: 100px; }
+#under { background: red; }
+#container { background: blue; }
+#target { background: green; }
+</style>
+<div id="under"></div><div id="container"><div id="target"></div></div>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const container = document.getElementById('container');
+  const target = document.getElementById('target');
+  const top = () => document.elementFromPoint(1, 1);
+  const list = () => document.elementsFromPoint(1, 1)
+    .map(element => element.id || element.localName)
+    .join(',');
+  const values = [top() === target];
+
+  container.inert = true;
+  values.push(top()?.id, list());
+  container.inert = false;
+  values.push(top() === target);
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('style', 'position:fixed;inset:0;width:100px;height:100px');
+  const rect = document.createElementNS(svg.namespaceURI, 'rect');
+  rect.setAttribute('width', '100');
+  rect.setAttribute('height', '100');
+  svg.appendChild(rect);
+  document.body.appendChild(svg);
+  const svgHit = top();
+  svg.setAttribute('inert', '');
+  values.push(top() === svgHit);
+
+  const inertHtmlAncestor = document.createElement('div');
+  inertHtmlAncestor.inert = true;
+  inertHtmlAncestor.appendChild(svg);
+  document.body.appendChild(inertHtmlAncestor);
+  values.push(top() === target);
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("dynamic inert point-query probe should evaluate");
+
+    assert_eq!(result, "true|under|under,html|true|true|true");
+}
+
 #[test]
 fn document_point_queries_parse_webidl_coordinates() {
     let mut vm = new_parsed_test_vm(
@@ -3550,7 +3908,7 @@ fn dom_selector_queries_parse_webidl_strings() {
     );
 }
 #[test]
-fn reflected_id_lone_surrogates_use_the_lossy_dom_string_boundary() {
+fn dom_selector_id_escapes_do_not_match_lone_surrogate_ids() {
     let mut vm = new_parsed_test_vm(
         "https://dom-selector-surrogate-escapes.test/path/index.html",
         r#"<html><body></body></html>"#,
@@ -3580,14 +3938,10 @@ fn reflected_id_lone_surrogates_use_the_lossy_dom_string_boundary() {
   container.appendChild(surrogateSecond);
 
   return JSON.stringify({
-    highProperty: surrogateFirst.id,
-    highAttribute: surrogateFirst.getAttribute("id"),
-    highMatchesReplacementEscape: surrogateFirst.matches("#\\d83d surrogateFirst"),
-    escapedHighFindsFirstReplacement: container.querySelector("#\\d83d surrogateFirst") === replacementFirst,
-    lowProperty: surrogateSecond.id,
-    lowAttribute: surrogateSecond.getAttribute("id"),
-    lowMatchesReplacementEscape: surrogateSecond.matches("#surrogateSecond\\dd11"),
-    escapedLowFindsFirstReplacement: container.querySelector("#surrogateSecond\\dd11") === replacementSecond
+    escapedHighMatchesReplacement: container.querySelector("#\\d83d surrogateFirst") === replacementFirst,
+    escapedHighDoesNotMatchSurrogate: container.querySelector("#\\d83d surrogateFirst") !== surrogateFirst,
+    escapedLowMatchesReplacement: container.querySelector("#surrogateSecond\\dd11") === replacementSecond,
+    escapedLowDoesNotMatchSurrogate: container.querySelector("#surrogateSecond\\dd11") !== surrogateSecond
   });
 })()
 "##,
@@ -3596,7 +3950,7 @@ fn reflected_id_lone_surrogates_use_the_lossy_dom_string_boundary() {
 
     assert_eq!(
         result,
-        r#"{"highProperty":"�surrogateFirst","highAttribute":"�surrogateFirst","highMatchesReplacementEscape":true,"escapedHighFindsFirstReplacement":true,"lowProperty":"surrogateSecond�","lowAttribute":"surrogateSecond�","lowMatchesReplacementEscape":true,"escapedLowFindsFirstReplacement":true}"#
+        r#"{"escapedHighMatchesReplacement":true,"escapedHighDoesNotMatchSurrogate":true,"escapedLowMatchesReplacement":true,"escapedLowDoesNotMatchSurrogate":true}"#
     );
 }
 #[test]
@@ -3690,6 +4044,14 @@ fn file_constructor_preserves_declared_metadata_slots() {
     __lmFileLastModified: 99
   };
   const fakeFileList = { __lmFileListLength: 99 };
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
   return JSON.stringify({
     fileDescriptors: [
       descriptorReport(File.prototype, "name"),
@@ -3711,9 +4073,11 @@ fn file_constructor_preserves_declared_metadata_slots() {
     tag: Object.prototype.toString.call(explicitFile),
     ctor: explicitFile instanceof File,
     weirdLastModifiedFinite: Number.isFinite(weirdFile.lastModified),
-    fakeName: nameDescriptor.get.call(fakeFile),
-    fakeLastModifiedFinite: Number.isFinite(lastModifiedDescriptor.get.call(fakeFile)),
-    fakeLength: lengthDescriptor.get.call(fakeFileList)
+    constructFileListThrows: throwsTypeError(() => new FileList()),
+    fakeNameThrows: throwsTypeError(() => nameDescriptor.get.call(fakeFile)),
+    fakeLastModifiedThrows: throwsTypeError(() => lastModifiedDescriptor.get.call(fakeFile)),
+    fakeLengthThrows: throwsTypeError(() => lengthDescriptor.get.call(fakeFileList)),
+    fakeItemThrows: throwsTypeError(() => FileList.prototype.item.call(fakeFileList, 0))
   });
 })()
 "#,
@@ -3722,7 +4086,7 @@ fn file_constructor_preserves_declared_metadata_slots() {
 
     assert_eq!(
         result,
-        r#"{"fileDescriptors":["name:function:get name:0:undefined:true:true","lastModified:function:get lastModified:0:undefined:true:true"],"fileListDescriptors":["length:function:get length:0:undefined:true:true"],"fileInternalNames":[],"fileListInternalNames":[],"defaultName":"default.txt","defaultLastModifiedFinite":true,"explicitName":"note.txt","explicitLastModified":7,"explicitType":"text/plain","roundTripName":"note.txt","roundTripLastModified":7,"roundTripType":"text/plain","tag":"[object File]","ctor":true,"weirdLastModifiedFinite":true,"fakeName":"","fakeLastModifiedFinite":true,"fakeLength":0}"#
+        r#"{"fileDescriptors":["name:function:get name:0:undefined:true:true","lastModified:function:get lastModified:0:undefined:true:true"],"fileListDescriptors":["length:function:get length:0:undefined:true:true"],"fileInternalNames":[],"fileListInternalNames":[],"defaultName":"default.txt","defaultLastModifiedFinite":true,"explicitName":"note.txt","explicitLastModified":7,"explicitType":"text/plain","roundTripName":"note.txt","roundTripLastModified":7,"roundTripType":"text/plain","tag":"[object File]","ctor":true,"weirdLastModifiedFinite":true,"constructFileListThrows":true,"fakeNameThrows":true,"fakeLastModifiedThrows":true,"fakeLengthThrows":true,"fakeItemThrows":true}"#
     );
 }
 #[test]
@@ -6478,6 +6842,99 @@ fn detached_html_template_content_uses_separate_owner_document() {
 }
 
 #[test]
+fn detached_templates_share_their_inert_owner_document() {
+    let mut vm = new_storage_test_vm("https://detached-template-shared-owner.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const doc = document.implementation.createHTMLDocument('');
+  const first = doc.createElement('template');
+  const second = doc.createElement('template');
+  const owner = first.content.ownerDocument;
+  const nested = owner.createElement('template');
+  first.content.append(nested);
+  return [
+    owner !== doc,
+    owner.defaultView === null,
+    Object.prototype.toString.call(owner) === '[object Document]',
+    owner instanceof Document,
+    !(owner instanceof HTMLDocument),
+    second.content.ownerDocument === owner,
+    nested.ownerDocument === owner,
+    nested.content.ownerDocument === owner,
+    nested.content.ownerDocument.defaultView === null
+  ].join('|');
+})()
+"#,
+        )
+        .expect("detached templates should share one inert owner document");
+
+    assert_eq!(result, "true|true|true|true|true|true|true|true|true");
+}
+
+#[test]
+fn template_content_host_rejects_insertion_cycles_after_adoption() {
+    let mut vm = new_storage_test_vm("https://template-content-host.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  if (!document.documentElement) {
+    document.appendChild(document.createElement('html'));
+  }
+  if (!document.body) {
+    document.documentElement.appendChild(document.createElement('body'));
+  }
+  const parent = document.createElement('div');
+  const template = document.createElement('template');
+  template.innerHTML = '<span>content</span>';
+  parent.appendChild(template);
+  document.body.appendChild(parent);
+  const content = template.content;
+  const span = content.firstChild;
+  const errorName = callback => {
+    try {
+      callback();
+      return 'none';
+    } catch (error) {
+      return error.name;
+    }
+  };
+  const attempts = () => [
+    errorName(() => content.appendChild(parent)),
+    errorName(() => content.appendChild(template)),
+    errorName(() => span.appendChild(parent)),
+    errorName(() => span.appendChild(template))
+  ];
+  const beforeAdoption = attempts();
+  const newDocument = document.implementation.createHTMLDocument('');
+  const adopted = newDocument.adoptNode(content);
+  const afterAdoption = attempts();
+  newDocument.body.appendChild(content);
+  return [
+    ...beforeAdoption,
+    adopted === content,
+    content.ownerDocument === newDocument,
+    ...afterAdoption,
+    content.firstChild === null,
+    span.parentNode === newDocument.body,
+    template.parentNode === parent
+  ].join('|');
+})()
+"#,
+        )
+        .expect("template content host hierarchy probe should evaluate");
+
+    assert_eq!(
+        result,
+        "HierarchyRequestError|HierarchyRequestError|HierarchyRequestError|HierarchyRequestError|true|true|HierarchyRequestError|HierarchyRequestError|HierarchyRequestError|HierarchyRequestError|true|true|true"
+    );
+}
+
+#[test]
 fn detached_html_image_decode_uses_prototype_method() {
     let mut vm = new_storage_test_vm("https://detached-image-decode-surface.test/");
 
@@ -7601,6 +8058,34 @@ fn dom_parser_inner_text_is_html_only() {
         result,
         "true|\n  HTML  Text\n|false|undefined|false|undefined"
     );
+}
+
+#[test]
+fn selectedcontent_inner_text_falls_back_when_its_select_child_box_is_suppressed() {
+    let mut vm = new_parsed_test_vm(
+        "https://selectedcontent-inner-text.test/",
+        "<!doctype html><html><body><div id=before>before</div></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+void document.body.innerText;
+const select = document.createElement('select');
+select.innerHTML = '<button><selectedcontent id="selectedcontent">default</selectedcontent></button><option>one</option>';
+select.style.appearance = 'base-select';
+document.body.append(select);
+const selectedcontent = document.getElementById('selectedcontent');
+[
+  selectedcontent.textContent,
+  selectedcontent.innerText,
+  selectedcontent.getClientRects().length
+].join('|')
+"#,
+        )
+        .expect("selectedcontent innerText should evaluate");
+
+    assert_eq!(result, "one|one|0");
 }
 
 #[test]
@@ -8772,6 +9257,263 @@ fn dom_parser_prototype_parse_from_string_is_declared_operation() {
     assert_eq!(
         result,
         r#"{"descriptor":"function:parseFromString:2:true:true:true","own":false,"enumerable":"parseFromString","behavior":"MAIN:root:true"}"#
+    );
+}
+
+#[test]
+fn dom_parser_uses_its_constructor_realm_associated_document() {
+    let mut vm = new_storage_test_vm("https://dom-parser-realm.test/top.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const child = frame.contentWindow;
+  child.history.replaceState(null, '', '/child-v1.html');
+
+  const topParser = new DOMParser();
+  const childParser = new child.DOMParser();
+  const childParserWithTopNewTarget = Reflect.construct(
+    child.DOMParser,
+    [],
+    DOMParser
+  );
+  const topParserWithChildNewTarget = Reflect.construct(
+    DOMParser,
+    [],
+    child.DOMParser
+  );
+  const parseUrl = parser =>
+    DOMParser.prototype.parseFromString.call(
+      parser,
+      '<html></html>',
+      'text/html'
+    ).URL;
+  const beforeSameDocumentUpdate = parseUrl(childParser);
+  child.history.replaceState(null, '', '/child-v2.html');
+
+  let invalidReceiver;
+  try {
+    DOMParser.prototype.parseFromString.call({}, '<html></html>', 'text/html');
+    invalidReceiver = 'no-throw';
+  } catch (error) {
+    invalidReceiver = error.name;
+  }
+
+  return JSON.stringify({
+    top: parseUrl(topParser),
+    child: parseUrl(childParser),
+    childWithTopNewTarget: parseUrl(childParserWithTopNewTarget),
+    topWithChildNewTarget: child.DOMParser.prototype.parseFromString.call(
+      topParserWithChildNewTarget,
+      '<html></html>',
+      'text/html'
+    ).URL,
+    beforeSameDocumentUpdate,
+    invalidReceiver
+  });
+})()
+"#,
+        )
+        .expect("DOMParser relevant realm probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"top":"https://dom-parser-realm.test/top.html","child":"https://dom-parser-realm.test/child-v2.html","childWithTopNewTarget":"https://dom-parser-realm.test/child-v2.html","topWithChildNewTarget":"https://dom-parser-realm.test/top.html","beforeSameDocumentUpdate":"https://dom-parser-realm.test/child-v1.html","invalidReceiver":"TypeError"}"#
+    );
+}
+
+#[test]
+fn dom_parser_non_object_new_target_prototype_uses_new_target_realm_default() {
+    let mut vm = new_storage_test_vm("https://dom-parser-new-target.test/top.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const child = frame.contentWindow;
+  child.history.replaceState(null, '', '/child.html');
+
+  const TopBad = new Function();
+  TopBad.prototype = 7;
+  const ChildBad = new child.Function();
+  ChildBad.prototype = 7;
+
+  const BoundChild = Function.prototype.bind.call(new child.Function());
+  BoundChild.prototype = 7;
+  const BoundTop = child.Function.prototype.bind.call(new Function());
+  BoundTop.prototype = 7;
+
+  const ProxyChild = new Proxy(new child.Function(), {});
+  ProxyChild.prototype = 7;
+  const ProxyTop = new child.Proxy(new Function(), {});
+  ProxyTop.prototype = 7;
+
+  let getterCount = 0;
+  const GetterProxyChild = new Proxy(new child.Function(), {
+    get(target, property, receiver) {
+      if (property === 'prototype') {
+        getterCount += 1;
+        return 7;
+      }
+      return Reflect.get(target, property, receiver);
+    }
+  });
+
+  const parseUrl = parser =>
+    DOMParser.prototype.parseFromString.call(
+      parser,
+      '<html></html>',
+      'text/html'
+    ).URL;
+  const check = (parser, expectedPrototype, expectedUrl) => [
+    Object.getPrototypeOf(parser) === expectedPrototype,
+    parseUrl(parser) === expectedUrl
+  ];
+  const topUrl = location.href;
+  const childUrl = child.location.href;
+
+  return JSON.stringify({
+    directTop: check(
+      Reflect.construct(child.DOMParser, [], TopBad),
+      DOMParser.prototype,
+      childUrl
+    ),
+    directChild: check(
+      Reflect.construct(DOMParser, [], ChildBad),
+      child.DOMParser.prototype,
+      topUrl
+    ),
+    boundChild: check(
+      Reflect.construct(DOMParser, [], BoundChild),
+      child.DOMParser.prototype,
+      topUrl
+    ),
+    boundTop: check(
+      Reflect.construct(child.DOMParser, [], BoundTop),
+      DOMParser.prototype,
+      childUrl
+    ),
+    proxyChild: check(
+      Reflect.construct(DOMParser, [], ProxyChild),
+      child.DOMParser.prototype,
+      topUrl
+    ),
+    proxyTop: check(
+      Reflect.construct(child.DOMParser, [], ProxyTop),
+      DOMParser.prototype,
+      childUrl
+    ),
+    getterProxyChild: check(
+      Reflect.construct(DOMParser, [], GetterProxyChild),
+      child.DOMParser.prototype,
+      topUrl
+    ),
+    getterCount
+  });
+})()
+"#,
+        )
+        .expect("DOMParser NewTarget realm prototype fallback probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"directTop":[true,true],"directChild":[true,true],"boundChild":[true,true],"boundTop":[true,true],"proxyChild":[true,true],"proxyTop":[true,true],"getterProxyChild":[true,true],"getterCount":1}"#
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn dom_parser_retained_across_child_navigation_uses_original_document() {
+    const HOST: &str = "dom-parser-retained.test";
+
+    let server = StaticHttpServer::spawn(2).await;
+    let top_url = server.url_for_host(HOST, "/top.html");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement('iframe');
+  globalThis.__domParserRetainedLoadCount = 0;
+  frame.onload = () => { globalThis.__domParserRetainedLoadCount += 1; };
+  frame.src = '/child.html?1';
+  (document.body || document.documentElement || document).appendChild(frame);
+  globalThis.__domParserRetainedFrame = frame;
+})()
+"#,
+    )
+    .expect("retained DOMParser initial navigation should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__domParserRetainedLoadCount)",
+        "1",
+        "initial same-origin DOMParser child should load",
+    )
+    .await;
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = globalThis.__domParserRetainedFrame;
+  const child = frame.contentWindow;
+  const parser = new child.DOMParser();
+  globalThis.__domParserRetainedParser = parser;
+  globalThis.__domParserRetainedMethod = child.DOMParser.prototype.parseFromString;
+  globalThis.__domParserRetainedBoundMethod = parser.parseFromString.bind(parser);
+  globalThis.__domParserRetainedUrlBeforeNavigation = child.document.URL;
+  frame.src = '/child.html?2';
+})()
+"#,
+    )
+    .expect("retained DOMParser navigation setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__domParserRetainedLoadCount)",
+        "2",
+        "replacement same-origin DOMParser child should load",
+    )
+    .await;
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const probe = callback => {
+    try {
+      return callback();
+    } catch (error) {
+      return `error:${error.name}:${error.message}`;
+    }
+  };
+  const parser = globalThis.__domParserRetainedParser;
+  const source = '<html></html>';
+  const oldUrl = globalThis.__domParserRetainedUrlBeforeNavigation;
+  return JSON.stringify({
+    property: probe(() => typeof parser.parseFromString),
+    topCallUsesOldUrl: probe(() => DOMParser.prototype.parseFromString.call(parser, source, 'text/html').URL === oldUrl),
+    savedCallUsesOldUrl: probe(() => __domParserRetainedMethod.call(parser, source, 'text/html').URL === oldUrl),
+    boundCallUsesOldUrl: probe(() => __domParserRetainedBoundMethod(source, 'text/html').URL === oldUrl),
+    usesReplacementPrototype: probe(() => Object.getPrototypeOf(parser) === DOMParser.prototype)
+  });
+})()
+"#,
+        )
+        .expect("retained DOMParser probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"property":"function","topCallUsesOldUrl":true,"savedCallUsesOldUrl":true,"boundCallUsesOldUrl":true,"usesReplacementPrototype":false}"#
+    );
+    assert_eq!(
+        server.finish_targets().await,
+        vec!["/child.html?1", "/child.html?2"]
     );
 }
 

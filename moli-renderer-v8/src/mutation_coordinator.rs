@@ -56,6 +56,7 @@ pub(crate) struct RuntimeMutationOptions {
     pub(crate) dispatch_atomic_move_callbacks: bool,
     pub(crate) parser_created: bool,
     pub(crate) check_inline_style_csp: bool,
+    pub(crate) defer_document_followups_to_parser_owner: bool,
 }
 
 impl RuntimeMutationOptions {
@@ -67,6 +68,7 @@ impl RuntimeMutationOptions {
             dispatch_atomic_move_callbacks: false,
             parser_created: false,
             check_inline_style_csp: true,
+            defer_document_followups_to_parser_owner: false,
         }
     }
 
@@ -78,6 +80,19 @@ impl RuntimeMutationOptions {
             dispatch_atomic_move_callbacks: false,
             parser_created: true,
             check_inline_style_csp: true,
+            defer_document_followups_to_parser_owner: false,
+        }
+    }
+
+    pub(crate) const fn child_parser_tree_sink() -> Self {
+        Self {
+            source: DomMutationSource::ParserTreeSink,
+            connected_script_policy: ConnectedScriptMutationPolicy::DeferToOwner,
+            hide_nonce_content_attributes: false,
+            dispatch_atomic_move_callbacks: false,
+            parser_created: true,
+            check_inline_style_csp: false,
+            defer_document_followups_to_parser_owner: true,
         }
     }
 
@@ -113,9 +128,19 @@ impl RuntimeMutationOptions {
 }
 
 #[derive(Debug, Clone, Copy)]
-struct ScriptStartRequest {
+pub(super) struct ScriptStartRequest {
     handle: NativeNodeId,
     clears_force_async: bool,
+}
+
+impl ScriptStartRequest {
+    pub(super) fn handle(&self) -> NativeNodeId {
+        self.handle
+    }
+
+    pub(super) fn clears_force_async(&self) -> bool {
+        self.clears_force_async
+    }
 }
 
 #[derive(Debug, Default)]
@@ -244,20 +269,11 @@ impl MutationCoordinator {
         }
         let mutation_record_count = effects.observer_records().records().len();
         let script_planning_started = cpu_profile_enabled.then(Instant::now);
-        let mut script_start_requests = ScriptStartRequests::default();
-        if prepare_connected_scripts {
-            for &root in effects.scripts().connected_roots() {
-                self.collect_connected_scripts_in_subtree(
-                    dom_host,
-                    root,
-                    &mut script_start_requests,
-                );
-            }
-            for trigger in effects.scripts().prepare_triggers() {
-                script_start_requests.queue(trigger.handle(), trigger.clears_script_force_async());
-            }
-        }
-        let script_start_requests = script_start_requests.into_tree_order(dom_host);
+        let script_start_requests = if prepare_connected_scripts {
+            self.plan_connected_script_start_requests(dom_host, &effects)
+        } else {
+            Vec::new()
+        };
         let script_start_request_count = script_start_requests.len();
         let script_planning_us = script_planning_started
             .map(|started| started.elapsed().as_micros())
@@ -376,7 +392,22 @@ impl MutationCoordinator {
         }
     }
 
-    fn collect_connected_script_start_candidate(
+    pub(super) fn plan_connected_script_start_requests(
+        &self,
+        dom_host: &mut DomHost,
+        effects: &DomMutationEffects,
+    ) -> Vec<ScriptStartRequest> {
+        let mut requests = ScriptStartRequests::default();
+        for &root in effects.scripts().connected_roots() {
+            self.collect_connected_scripts_in_subtree(dom_host, root, &mut requests);
+        }
+        for trigger in effects.scripts().prepare_triggers() {
+            requests.queue(trigger.handle(), trigger.clears_script_force_async());
+        }
+        requests.into_tree_order(dom_host)
+    }
+
+    pub(super) fn collect_connected_script_start_candidate(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,

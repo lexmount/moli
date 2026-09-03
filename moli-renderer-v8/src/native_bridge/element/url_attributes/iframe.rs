@@ -136,6 +136,28 @@ pub(in crate::native_bridge::element) fn iframe_has_inactive_child_context(
         && !runtime.child_browsing_context_is_live(handle)
 }
 
+pub(in crate::native_bridge) fn live_frame_owner_content_window_for_handle<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let runtime = unsafe { &mut *runtime_ptr };
+    runtime.refresh_child_browsing_context(scope, handle);
+    let exposes_same_origin_wrapper =
+        runtime.child_browsing_context_is_same_origin_with_top(handle);
+    let window = runtime.child_browsing_context_window_proxy_for_top(scope, handle);
+    if window.is_some() {
+        runtime.mark_child_browsing_context_window_wrapper_exposed_to_top(handle);
+    }
+    if exposes_same_origin_wrapper && window.is_some() {
+        runtime.request_child_frame_realm_materialization(handle);
+    }
+    if exposes_same_origin_wrapper && let Some(window) = window {
+        runtime.set_cached_detached_iframe_content_window(scope, handle, window);
+    }
+    window
+}
+
 pub(in crate::native_bridge::element) fn iframe_is_inside_its_own_child_context_document(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,

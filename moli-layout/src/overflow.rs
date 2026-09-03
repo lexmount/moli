@@ -433,7 +433,7 @@ where
     } else if world.is_viewport_defining_body(id) {
         false
     } else {
-        world.boxes[id.index()].style.establishes_scroll_container()
+        world.boxes[id.index()].establishes_scroll_container()
     }
 }
 

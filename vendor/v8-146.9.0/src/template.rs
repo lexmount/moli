@@ -29,6 +29,7 @@ use crate::data::Data;
 use crate::data::FunctionTemplate;
 use crate::data::Name;
 use crate::data::ObjectTemplate;
+use crate::data::Private;
 use crate::data::Template;
 use crate::fast_api::CFunction;
 use crate::isolate::RealIsolate;
@@ -42,6 +43,12 @@ unsafe extern "C" {
   fn v8__Template__Set(
     this: *const Template,
     key: *const Name,
+    value: *const Data,
+    attr: PropertyAttribute,
+  );
+  fn v8__Template__SetPrivate(
+    this: *const Template,
+    key: *const Private,
     value: *const Data,
     attr: PropertyAttribute,
   );
@@ -731,6 +738,24 @@ impl Template {
     attr: PropertyAttribute,
   ) {
     unsafe { v8__Template__Set(self, &*key, &*value, attr) }
+  }
+
+  /// Adds a private property to each instance created by this template.
+  #[inline(always)]
+  pub fn set_private(&self, key: Local<Private>, value: Local<Data>) {
+    self.set_private_with_attr(key, value, PropertyAttribute::NONE);
+  }
+
+  /// Adds a private property with the specified attributes to each instance
+  /// created by this template.
+  #[inline(always)]
+  pub fn set_private_with_attr(
+    &self,
+    key: Local<Private>,
+    value: Local<Data>,
+    attr: PropertyAttribute,
+  ) {
+    unsafe { v8__Template__SetPrivate(self, &*key, &*value, attr) }
   }
 
   /// During template instantiation, sets the value with the

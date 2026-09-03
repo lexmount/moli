@@ -113,6 +113,7 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         SpecializedTemplateInstaller::None,
         SVG_GEOMETRY_RUNTIME_INSTALL_GROUPS,
     ),
+    descriptor("SVGClipPathElement", Some("SVGElement"), ELEMENT_GROUPS),
     descriptor("SVGDefsElement", Some("SVGGraphicsElement"), ELEMENT_GROUPS),
     descriptor("SVGDescElement", Some("SVGElement"), ELEMENT_GROUPS),
     specialized_descriptor(
@@ -122,6 +123,75 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         SpecializedTemplateInstaller::None,
         SVG_GEOMETRY_RUNTIME_INSTALL_GROUPS,
     ),
+    descriptor("SVGFilterElement", Some("SVGElement"), ELEMENT_GROUPS),
+    descriptor(
+        "SVGComponentTransferFunctionElement",
+        Some("SVGElement"),
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        "SVGFEFuncAElement",
+        Some("SVGComponentTransferFunctionElement"),
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        "SVGFEFuncBElement",
+        Some("SVGComponentTransferFunctionElement"),
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        "SVGFEFuncGElement",
+        Some("SVGComponentTransferFunctionElement"),
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        "SVGFEFuncRElement",
+        Some("SVGComponentTransferFunctionElement"),
+        ELEMENT_GROUPS,
+    ),
+    descriptor("SVGFEBlendElement", Some("SVGElement"), ELEMENT_GROUPS),
+    descriptor(
+        "SVGFEColorMatrixElement",
+        Some("SVGElement"),
+        ELEMENT_GROUPS,
+    ),
+    descriptor("SVGFECompositeElement", Some("SVGElement"), ELEMENT_GROUPS),
+    descriptor(
+        "SVGFEConvolveMatrixElement",
+        Some("SVGElement"),
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        "SVGFEDiffuseLightingElement",
+        Some("SVGElement"),
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        "SVGFEDisplacementMapElement",
+        Some("SVGElement"),
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
+        "SVGFEDistantLightElement",
+        Some("SVGElement"),
+        ELEMENT_GROUPS,
+    ),
+    descriptor("SVGFEDropShadowElement", Some("SVGElement"), ELEMENT_GROUPS),
+    descriptor(
+        "SVGFEGaussianBlurElement",
+        Some("SVGElement"),
+        ELEMENT_GROUPS,
+    ),
+    descriptor("SVGFEMorphologyElement", Some("SVGElement"), ELEMENT_GROUPS),
+    descriptor("SVGFEOffsetElement", Some("SVGElement"), ELEMENT_GROUPS),
+    descriptor("SVGFEPointLightElement", Some("SVGElement"), ELEMENT_GROUPS),
+    descriptor(
+        "SVGFESpecularLightingElement",
+        Some("SVGElement"),
+        ELEMENT_GROUPS,
+    ),
+    descriptor("SVGFESpotLightElement", Some("SVGElement"), ELEMENT_GROUPS),
+    descriptor("SVGFETurbulenceElement", Some("SVGElement"), ELEMENT_GROUPS),
     descriptor(
         "SVGForeignObjectElement",
         Some("SVGGraphicsElement"),
@@ -154,8 +224,11 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
             svg_gradient_transform: true,
         },
     ),
+    descriptor("SVGMarkerElement", Some("SVGElement"), ELEMENT_GROUPS),
+    descriptor("SVGMaskElement", Some("SVGElement"), ELEMENT_GROUPS),
     descriptor("SVGMetadataElement", Some("SVGElement"), ELEMENT_GROUPS),
     descriptor("SVGScriptElement", Some("SVGElement"), ELEMENT_GROUPS),
+    descriptor("SVGStopElement", Some("SVGElement"), ELEMENT_GROUPS),
     descriptor("SVGStyleElement", Some("SVGElement"), ELEMENT_GROUPS),
     specialized_descriptor(
         "SVGPathElement",
@@ -216,6 +289,11 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
         ELEMENT_GROUPS,
     ),
     descriptor(
+        "SVGTextPathElement",
+        Some("SVGTextContentElement"),
+        ELEMENT_GROUPS,
+    ),
+    descriptor(
         "SVGTextPositioningElement",
         Some("SVGTextContentElement"),
         ELEMENT_GROUPS,
@@ -248,6 +326,7 @@ const NODE_BRIDGE_DESCRIPTORS: &[BridgeDescriptor] = &[
     ),
     descriptor("SVGTitleElement", Some("SVGElement"), ELEMENT_GROUPS),
     descriptor("SVGUseElement", Some("SVGGraphicsElement"), ELEMENT_GROUPS),
+    descriptor("SVGViewElement", Some("SVGElement"), ELEMENT_GROUPS),
     specialized_descriptor(
         "SVGRectElement",
         Some("SVGGeometryElement"),

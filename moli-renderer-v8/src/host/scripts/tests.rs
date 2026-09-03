@@ -202,7 +202,10 @@ fn draining_dynamic_scripts_keeps_async_and_in_order_lanes_separate() {
 fn dynamic_importmap_registration_does_not_enter_script_batch() {
     let preparation = preparation("https://example.test/", NodeId::new(0));
     let mut scheduler = HostScriptScheduler::default();
-    scheduler.register_dynamic_import_map(&preparation, "{\"imports\":{\"fixture\":\"/mod.js\"}}");
+    scheduler.register_dynamic_import_map(
+        &preparation.base_url,
+        "{\"imports\":{\"fixture\":\"/mod.js\"}}",
+    );
 
     let batch = scheduler.drain_dynamic_scripts();
     assert!(batch.in_order.is_empty());
@@ -238,6 +241,59 @@ fn draining_dynamic_module_scripts_keeps_distinct_module_lane() {
 }
 
 #[test]
+fn dynamic_external_module_uses_import_map_integrity_when_attribute_is_absent() {
+    let preparation = preparation("https://example.test/", NodeId::new(0));
+    let mut scheduler = HostScriptScheduler::default();
+    scheduler.register_dynamic_import_map(
+        &preparation.base_url,
+        r#"{"integrity":{"/mod.js":"sha384-from-map"}}"#,
+    );
+    scheduler
+        .queue_dynamic_script(
+            &preparation,
+            "module",
+            "/mod.js",
+            ScriptSourceKind::External,
+            ScriptKind::Module,
+            ScriptMode::ModuleInOrder,
+        )
+        .expect("module script should queue");
+
+    let batch = scheduler.drain_dynamic_scripts();
+    assert_eq!(
+        batch.module_in_order[0].fetch_metadata.integrity.as_deref(),
+        Some("sha384-from-map")
+    );
+}
+
+#[test]
+fn dynamic_external_module_empty_integrity_overrides_import_map() {
+    let mut preparation = preparation("https://example.test/", NodeId::new(0));
+    preparation.fetch_metadata.integrity = Some(String::new());
+    let mut scheduler = HostScriptScheduler::default();
+    scheduler.register_dynamic_import_map(
+        &preparation.base_url,
+        r#"{"integrity":{"/mod.js":"sha384-from-map"}}"#,
+    );
+    scheduler
+        .queue_dynamic_script(
+            &preparation,
+            "module",
+            "/mod.js",
+            ScriptSourceKind::External,
+            ScriptKind::Module,
+            ScriptMode::ModuleInOrder,
+        )
+        .expect("module script should queue");
+
+    let batch = scheduler.drain_dynamic_scripts();
+    assert_eq!(
+        batch.module_in_order[0].fetch_metadata.integrity.as_deref(),
+        Some("")
+    );
+}
+
+#[test]
 fn queueing_dynamic_module_does_not_block_later_import_map_merge() {
     let preparation = preparation("https://example.test/", NodeId::new(0));
     let mut scheduler = HostScriptScheduler::default();
@@ -251,7 +307,10 @@ fn queueing_dynamic_module_does_not_block_later_import_map_merge() {
             ScriptMode::Async,
         )
         .expect("module script should queue");
-    scheduler.register_dynamic_import_map(&preparation, "{\"imports\":{\"late\":\"/late.mjs\"}}");
+    scheduler.register_dynamic_import_map(
+        &preparation.base_url,
+        "{\"imports\":{\"late\":\"/late.mjs\"}}",
+    );
 
     let batch = scheduler.drain_dynamic_scripts();
     assert_eq!(batch.async_scripts.len(), 1);
@@ -824,6 +883,38 @@ fn runtime_preparation_capture_uses_live_document_base_url() {
     assert!(
         !captured.fetch_metadata.parser_inserted,
         "a script created through the DOM API must capture not-parser-inserted metadata"
+    );
+}
+
+#[test]
+fn runtime_preparation_only_captures_nonceable_script_nonces() {
+    let url = Url::parse("https://example.test/").expect("test url should parse");
+    let document = HtmlParser::SCRIPTING_ENABLED.parse(
+        url.clone(),
+        "<!doctype html><html><head></head><body></body></html>".to_owned(),
+    );
+    let mut dom_host = DomHost::from_dom(document);
+    let document_state = HostDocumentState::new(url);
+
+    let safe_script = dom_host.create_element("script");
+    assert!(dom_host.set_attribute(safe_script, "nonce", "abc"));
+    assert_eq!(
+        RuntimeScriptPreparationContext::capture(&dom_host, &document_state, safe_script)
+            .fetch_metadata
+            .nonce
+            .as_deref(),
+        Some("abc")
+    );
+
+    let nonnonceable_script = dom_host.create_element("script");
+    assert!(dom_host.set_attribute(nonnonceable_script, "nonce", "abc"));
+    assert!(dom_host.set_attribute(nonnonceable_script, "data-marker", "value<ScRiPt"));
+    assert_eq!(
+        RuntimeScriptPreparationContext::capture(&dom_host, &document_state, nonnonceable_script,)
+            .fetch_metadata
+            .nonce,
+        None,
+        "markup-shaped attributes must make a dynamic script nonce nonnonceable"
     );
 }
 

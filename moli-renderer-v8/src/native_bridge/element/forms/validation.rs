@@ -5,10 +5,8 @@ use crate::webidl;
 use moli_dom::forms::{
     FormControlValidity, form_control_type_supports_intrinsic_validation, input_range_overflow,
     input_range_underflow, input_step as form_input_step, input_step_base as form_input_step_base,
-    input_type_supports_pattern, input_type_supports_text_length_validation,
-    input_type_suppresses_immutable_required, input_type_value_mismatch,
-    normalize_custom_validation_message, number_aligns_to_step, number_step_mismatch,
-    parse_input_numeric_value as parse_input_numeric_value_for_type,
+    input_type_value_mismatch, normalize_custom_validation_message, number_aligns_to_step,
+    number_step_mismatch, parse_input_numeric_value as parse_input_numeric_value_for_type,
     parse_non_negative_integer_prefix,
     text_control_suffers_too_long as form_text_control_suffers_too_long,
     text_control_suffers_too_short as form_text_control_suffers_too_short,
@@ -241,6 +239,20 @@ pub(in crate::native_bridge) fn control_matches_validity_pseudo(
     if !matches!(selector, ":valid" | ":invalid") {
         return None;
     }
+    let invalid = control_validity_pseudo_state(scope, runtime_ptr, handle)?;
+    Some(if selector == ":valid" {
+        !invalid
+    } else {
+        invalid
+    })
+}
+
+pub(in crate::native_bridge) fn control_validity_pseudo_state(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+) -> Option<bool> {
+    let runtime = unsafe { &*runtime_ptr };
     if runtime
         .dom_host()
         .node(handle)
@@ -251,24 +263,21 @@ pub(in crate::native_bridge) fn control_matches_validity_pseudo(
         let valid = controls
             .into_iter()
             .all(|control| control_satisfies_constraints(scope, runtime_ptr, control));
-        return Some(if selector == ":valid" { valid } else { !valid });
+        return Some(!valid);
     }
-    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
-        return Some(false);
-    };
+    let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
     if is_form_associated_custom_element_handle(runtime, handle) {
         if !control_will_validate(runtime, handle) {
-            return Some(false);
+            return None;
         }
-        let valid = control_validity(scope, runtime_ptr, handle).valid();
-        return Some(if selector == ":valid" { valid } else { !valid });
+        return Some(!control_validity(scope, runtime_ptr, handle).valid());
     }
     if !element_matches_validity_pseudo(runtime, handle, element) {
-        return Some(false);
+        return None;
     }
     let valid = control_is_readonly_barred_from_constraint_validation(element)
         || control_validity(scope, runtime_ptr, handle).valid();
-    Some(if selector == ":valid" { valid } else { !valid })
+    Some(!valid)
 }
 
 pub(in crate::native_bridge) fn control_validation_message_getter_function<'s>(
@@ -386,7 +395,7 @@ fn control_suffers_bad_input(
     element: &Element,
 ) -> bool {
     element.is_html_input()
-        && element.input_type() == "number"
+        && element.input_type() == InputType::Number
         && element_type_supports_intrinsic_validation(element)
         && element.input_bad_input()
 }
@@ -410,7 +419,7 @@ fn control_suffers_required_value_missing(
         return false;
     }
 
-    if element.is_html_input() && element.input_type() == "radio" {
+    if element.is_html_input() && element.input_type() == InputType::Radio {
         return radio_group_suffers_required_value_missing(runtime, handle);
     }
 
@@ -442,7 +451,7 @@ fn element_is_constraint_validation_candidate(
     if control_is_readonly_barred_from_constraint_validation(element) {
         return false;
     }
-    element_type_supports_intrinsic_validation(element)
+    element_type_supports_intrinsic_validation_with_tree(runtime, handle, element)
 }
 
 fn element_matches_validity_pseudo(
@@ -456,17 +465,24 @@ fn element_matches_validity_pseudo(
     if control_has_datalist_ancestor(runtime, handle) {
         return false;
     }
-    element_type_supports_intrinsic_validation(element)
+    element_type_supports_intrinsic_validation_with_tree(runtime, handle, element)
 }
 
 fn element_type_supports_intrinsic_validation(element: &Element) -> bool {
     let input_type = element.is_html_input().then(|| element.input_type());
+    form_control_type_supports_intrinsic_validation(element.local_name(), input_type, false)
+}
+
+fn element_type_supports_intrinsic_validation_with_tree(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    element: &Element,
+) -> bool {
+    let input_type = element.is_html_input().then(|| element.input_type());
     form_control_type_supports_intrinsic_validation(
         element.local_name(),
-        input_type.as_deref(),
-        element
-            .is_html_button()
-            .then(|| element.attribute("type").unwrap_or("submit")),
+        input_type,
+        runtime.dom_host().button_is_submit_button(handle),
     )
 }
 
@@ -486,8 +502,7 @@ fn required_value_missing_is_suppressed_for_immutable_control(
         element.has_attribute("readonly") || form_control_is_effectively_disabled(runtime, handle);
     immutable
         && (element.is_html_textarea()
-            || (element.is_html_input()
-                && input_type_suppresses_immutable_required(&element.input_type())))
+            || (element.is_html_input() && element.input_type().supports_readonly()))
 }
 
 fn control_has_datalist_ancestor(runtime: &JsContextHost, handle: DomHandle) -> bool {
@@ -511,9 +526,9 @@ fn input_suffers_required_value_missing(
     handle: DomHandle,
     element: &Element,
 ) -> bool {
-    match element.input_type().as_str() {
-        "checkbox" => !element.checked(),
-        "radio" => {
+    match element.input_type() {
+        InputType::Checkbox => !element.checked(),
+        InputType::Radio => {
             !element.attribute("name").unwrap_or_default().is_empty()
                 && !radio_group_has_checked_control(runtime, handle)
         }
@@ -534,7 +549,7 @@ fn control_suffers_type_mismatch(
         return false;
     }
     input_type_value_mismatch(
-        &element.input_type(),
+        element.input_type(),
         &value,
         element.has_attribute("multiple"),
     )
@@ -548,7 +563,7 @@ fn control_suffers_pattern_mismatch(
 ) -> bool {
     if !element.is_html_input()
         || !element_type_supports_intrinsic_validation(element)
-        || !input_type_supports_pattern(&element.input_type())
+        || !element.input_type().supports_pattern()
     {
         return false;
     }
@@ -559,7 +574,7 @@ fn control_suffers_pattern_mismatch(
     if value.is_empty() {
         return false;
     }
-    if element.input_type() == "email" && element.has_attribute("multiple") {
+    if element.input_type() == InputType::Email && element.has_attribute("multiple") {
         return v8_pattern_is_usable(scope, pattern).is_some_and(|()| {
             value
                 .split(',')
@@ -648,8 +663,7 @@ fn text_control_length_validation_applies(
 ) -> bool {
     element_is_constraint_validation_candidate(runtime, handle, element)
         && (element.is_html_textarea()
-            || (element.is_html_input()
-                && input_type_supports_text_length_validation(&element.input_type())))
+            || (element.is_html_input() && element.input_type().supports_text_length_validation()))
 }
 
 fn control_suffers_range_underflow(
@@ -661,7 +675,7 @@ fn control_suffers_range_underflow(
         return false;
     };
     input_range_underflow(
-        &element.input_type(),
+        element.input_type(),
         value,
         element.attribute("min"),
         element.attribute("max"),
@@ -677,7 +691,7 @@ fn control_suffers_range_overflow(
         return false;
     };
     input_range_overflow(
-        &element.input_type(),
+        element.input_type(),
         value,
         element.attribute("min"),
         element.attribute("max"),
@@ -703,7 +717,7 @@ fn control_suffers_step_mismatch(
 }
 
 fn control_suffers_number_step_mismatch(element: &Element) -> Option<bool> {
-    if !element.is_html_input() || element.input_type() != "number" {
+    if !element.is_html_input() || element.input_type() != InputType::Number {
         return None;
     }
     number_step_mismatch(
@@ -729,16 +743,16 @@ pub(in crate::native_bridge::element::forms) fn parse_input_numeric_value(
     element: &Element,
     value: &str,
 ) -> Option<f64> {
-    parse_input_numeric_value_for_type(&element.input_type(), value)
+    parse_input_numeric_value_for_type(element.input_type(), value)
 }
 
 pub(in crate::native_bridge::element::forms) fn input_step(element: &Element) -> Option<f64> {
-    form_input_step(&element.input_type(), element.attribute("step"))
+    form_input_step(element.input_type(), element.attribute("step"))
 }
 
 pub(in crate::native_bridge::element::forms) fn input_step_base(element: &Element) -> f64 {
     form_input_step_base(
-        &element.input_type(),
+        element.input_type(),
         element.attribute("min"),
         element.attribute("value"),
     )

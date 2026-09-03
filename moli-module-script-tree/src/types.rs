@@ -552,6 +552,7 @@ impl ModuleLoadError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModuleErrorConstructorKind {
     SyntaxError,
+    TypeError,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

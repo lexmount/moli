@@ -99,6 +99,7 @@ fn detached_document_write_preserves_existing_noscript_text() {
             r#"
 (() => {
   const doc = document.implementation.createHTMLDocument("");
+  doc.open();
   const noscript = doc.createElement("noscript");
   noscript.textContent = "<em>fallback&</em>";
   doc.body.append(noscript);
@@ -120,6 +121,69 @@ fn detached_document_write_preserves_existing_noscript_text() {
             "<noscript>&lt;em&gt;fallback&amp;&lt;/em&gt;</noscript><span>tail</span>|",
             "&lt;em&gt;fallback&amp;&lt;/em&gt;|true|span"
         )
+    );
+}
+
+#[test]
+fn obsolete_document_and_window_event_methods_are_branded_noops() {
+    let mut vm = new_storage_test_vm("https://obsolete-noop-methods.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.implementation.createHTMLDocument("");
+  const xml = document.implementation.createDocument("urn:test", "root");
+  const marker = document.createElement("p");
+  const markerParent = document.body || document.documentElement || document;
+  markerParent.append(marker);
+  const error = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (exception) {
+      return exception.name;
+    }
+  };
+  const shape = (prototype, name) => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    return [
+      typeof descriptor?.value,
+      descriptor?.value?.name,
+      descriptor?.value?.length,
+      descriptor?.writable,
+      descriptor?.enumerable,
+      descriptor?.configurable
+    ].join(":");
+  };
+
+  const values = [];
+  for (const name of ["clear", "captureEvents", "releaseEvents"]) {
+    values.push(shape(Document.prototype, name));
+    values.push(String(Document.prototype[name].call(document)));
+    values.push(String(Document.prototype[name].call(html, { ignored: true })));
+    values.push(String(Document.prototype[name].call(xml)));
+    values.push(error(() => Document.prototype[name].call({})));
+  }
+  for (const name of ["captureEvents", "releaseEvents"]) {
+    values.push(shape(window, name));
+    values.push(String(window[name].call(window, { ignored: true })));
+    values.push(error(() => window[name].call({})));
+    values.push(error(() => window[name].call(document)));
+    const forged = document.createElement("div");
+    Object.setPrototypeOf(forged, Window.prototype);
+    values.push(error(() => window[name].call(forged)));
+  }
+  values.push(String(marker.isConnected), String(markerParent.contains(marker)));
+  return values.join("|");
+})()
+"#,
+        )
+        .expect("obsolete Document and Window no-op methods should evaluate");
+
+    assert_eq!(
+        result,
+        "function:clear:0:true:true:true|undefined|undefined|undefined|TypeError|function:captureEvents:0:true:true:true|undefined|undefined|undefined|TypeError|function:releaseEvents:0:true:true:true|undefined|undefined|undefined|TypeError|function:captureEvents:0:true:true:true|undefined|TypeError|TypeError|TypeError|function:releaseEvents:0:true:true:true|undefined|TypeError|TypeError|TypeError|true|true"
     );
 }
 
@@ -193,6 +257,143 @@ fn adopted_xml_cdata_uses_html_fragment_serialization() {
     assert_eq!(
         result,
         r#"{"before":"<svg xmlns=\"http://www.w3.org/2000/svg\"><![CDATA[<img>]]></svg>","after":"<svg xmlns=\"http://www.w3.org/2000/svg\">&lt;img&gt;</svg>","declarationValue":"http://www.w3.org/2000/svg","cdataNodeType":4}"#
+    );
+}
+
+#[test]
+fn domparser_html_preserves_quirks_mode_and_parses_with_scripting_disabled() {
+    let mut vm = new_storage_test_vm("https://domparser-html-mode.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parser = new DOMParser();
+  const quirks = parser.parseFromString(
+    "<html><head></head><body></body></html>",
+    "text/html"
+  );
+  const standards = parser.parseFromString(
+    "<!doctype html><html><head></head><body></body></html>",
+    "text/html"
+  );
+  const noscript = parser.parseFromString(
+    "<body><noscript><p id='first'></p><p id='second'></p></noscript></body>",
+    "text/html"
+  );
+  return JSON.stringify({
+    quirks: quirks.compatMode,
+    standards: standards.compatMode,
+    noscriptChildren: Array.from(noscript.querySelector("noscript").children)
+      .map(element => element.id)
+  });
+})()
+"#,
+        )
+        .expect("DOMParser HTML parse mode probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"quirks":"BackCompat","standards":"CSS1Compat","noscriptChildren":["first","second"]}"#
+    );
+}
+
+#[test]
+fn offline_html_documents_parse_and_serialize_noscript_with_scripting_disabled() {
+    let mut vm = new_storage_test_vm("https://offline-noscript.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const encoded = '&amp;&nbsp;&lt;&gt;';
+  const decoded = '&\u00a0<>';
+  const markup = value => `<noscript>${value}</noscript>`;
+  const matches = (node, serialization) =>
+    node.textContent === decoded && node.innerHTML === serialization;
+
+  const live = document.createElement('div');
+  live.innerHTML = markup(decoded);
+
+  const parsed = new DOMParser().parseFromString(
+    `<body>${markup(encoded)}</body>`,
+    'text/html'
+  );
+
+  const template = document.createElement('template');
+  template.innerHTML = markup(encoded);
+
+  const created = document.implementation.createHTMLDocument('');
+  created.body.innerHTML = `<pre>${markup(encoded)}</pre>`;
+
+  const contextualDocument = document.implementation.createHTMLDocument('');
+  const range = contextualDocument.createRange();
+  range.selectNode(contextualDocument.body);
+  const contextual = range.createContextualFragment(markup(encoded));
+
+  const written = document.implementation.createHTMLDocument('');
+  written.write(`<div>${markup(decoded)}</div>`);
+
+  return [
+    matches(live.firstChild, decoded),
+    matches(parsed.body.firstChild, encoded),
+    matches(template.content.firstChild, encoded),
+    matches(created.body.firstChild.firstChild, encoded),
+    matches(contextual.firstChild, encoded),
+    matches(written.body.firstChild.firstChild, encoded)
+  ].join('|');
+})()
+"#,
+        )
+        .expect("offline noscript parsing and serialization probe should evaluate");
+
+    assert_eq!(result, "true|true|true|true|true|true");
+}
+
+#[test]
+fn domparser_xml_uses_document_interface_and_chromium_error_documents() {
+    let mut vm = new_storage_test_vm("https://domparser-xml-content-type.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parser = new DOMParser();
+  return JSON.stringify([
+    "text/xml",
+    "application/xml",
+    "application/xhtml+xml",
+    "image/svg+xml"
+  ].map(contentType => {
+    const valid = parser.parseFromString("<root/>", contentType);
+    const invalid = parser.parseFromString("<foo>", contentType);
+    const namespaceInvalid = parser.parseFromString(
+      '<span x:test="testing">1</span>',
+      contentType
+    );
+    const invalidError = invalid.getElementsByTagName("parsererror")[0];
+    const namespaceError = namespaceInvalid.getElementsByTagName("parsererror")[0];
+    return [
+      valid.contentType,
+      Object.getPrototypeOf(valid) === Document.prototype,
+      valid instanceof XMLDocument,
+      invalid.contentType,
+      Object.getPrototypeOf(invalid) === Document.prototype,
+      invalid instanceof XMLDocument,
+      invalid.documentElement.localName,
+      invalidError.namespaceURI,
+      namespaceInvalid.documentElement.localName,
+      namespaceError.namespaceURI
+    ];
+  }));
+})()
+"#,
+        )
+        .expect("DOMParser XML content type probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"[["text/xml",true,false,"text/xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"],["application/xml",true,false,"application/xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"],["application/xhtml+xml",true,false,"application/xhtml+xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"],["image/svg+xml",true,false,"image/svg+xml",true,false,"foo","http://www.w3.org/1999/xhtml","html","http://www.w3.org/1999/xhtml"]]"#
     );
 }
 
@@ -468,7 +669,7 @@ fn detached_interaction_brand_checks_accept_standard_prototype_methods() {
     rootSame: root === host.shadowRoot,
     rectType: Object.prototype.toString.call(rect),
     rectWidthType: typeof rect.width,
-    rectsArray: Array.isArray(rects),
+    rectsType: Object.prototype.toString.call(rects),
     activeAfterFocus,
     activeAfterBlur,
     events: events.join(","),
@@ -490,7 +691,7 @@ fn detached_interaction_brand_checks_accept_standard_prototype_methods() {
 
     assert_eq!(
         result,
-        r#"{"rootType":"[object ShadowRoot]","rootSame":true,"rectType":"[object DOMRect]","rectWidthType":"number","rectsArray":true,"activeAfterFocus":true,"activeAfterBlur":true,"events":"focus,click,blur","attachOwn":false,"boundingOwn":false,"rectsOwn":false,"focusOwn":false,"blurOwn":false,"clickOwn":false,"elementOwners":"Element,Element,Element,Element,Element,Element,Element,Element","elementShapes":"true:function:1:true:true:true|true:function:0:true:true:true|true:function:0:true:true:true|true:function:1:true:true:true|true:function:1:true:true:true|true:function:1:true:true:true|true:function:2:true:true:true|true:function:1:true:true:true","actionOwners":"HTMLElement,HTMLElement,HTMLElement","actionShapes":"true:function:0:true:true:true|true:function:0:true:true:true|true:function:0:true:true:true"}"#
+        r#"{"rootType":"[object ShadowRoot]","rootSame":true,"rectType":"[object DOMRect]","rectWidthType":"number","rectsType":"[object DOMRectList]","activeAfterFocus":true,"activeAfterBlur":true,"events":"focus,click,blur","attachOwn":false,"boundingOwn":false,"rectsOwn":false,"focusOwn":false,"blurOwn":false,"clickOwn":false,"elementOwners":"Element,Element,Element,Element,Element,Element,Element,Element","elementShapes":"true:function:1:true:true:true|true:function:0:true:true:true|true:function:0:true:true:true|true:function:1:true:true:true|true:function:1:true:true:true|true:function:1:true:true:true|true:function:2:true:true:true|true:function:1:true:true:true","actionOwners":"HTMLElement,HTMLElement,HTMLElement","actionShapes":"true:function:0:true:true:true|true:function:0:true:true:true|true:function:0:true:true:true"}"#
     );
 }
 
@@ -933,7 +1134,9 @@ fn detached_inner_outer_text_use_html_element_prototype_accessors() {
   assert(inner.get.call(read) === "Alpha Beta", "innerText getter");
   assert(outer.get.call(replace) === "Old", "outerText getter");
   inner.set.call(read, "Line one\nLine two");
-  assert(read.textContent === "Line one\nLine two", "innerText setter");
+  assert(read.innerHTML === "Line one<br>Line two", "innerText setter fragment");
+  assert(read.textContent === "Line oneLine two", "innerText setter text content");
+  assert(read.querySelector("br").ownerDocument === doc, "innerText setter owner document");
   outer.set.call(replace, "Done");
   assert(doc.querySelector("#replace").textContent === "Done", "outerText setter");
   assert(!own(read, "innerText"), "innerText should not be own after set");
@@ -1385,8 +1588,9 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   accessor(HTMLAnchorElement.prototype, "hreflang");
   accessor(HTMLAreaElement.prototype, "download");
   accessor(HTMLAreaElement.prototype, "ping");
-  accessor(HTMLAreaElement.prototype, "hreflang");
   accessor(HTMLLinkElement.prototype, "hreflang");
+  assert(!own(HTMLAreaElement.prototype, "hreflang"), "area hreflang should be removed");
+  assert(!own(HTMLAreaElement.prototype, "type"), "area type should be removed");
   for (const name of ["download", "ping", "hreflang"]) {
     assert(!own(HTMLElement.prototype, name), `HTMLElement should not own ${name}`);
   }
@@ -1403,11 +1607,15 @@ fn hyperlink_metadata_accessors_use_owner_prototypes() {
   );
   const cases = [
     [document.createElement("a"), parsed.querySelector("a"), ["download", "ping", "hreflang"], "anchor"],
-    [document.createElement("area"), parsed.querySelector("area"), ["download", "ping", "hreflang"], "area"],
+    [document.createElement("area"), parsed.querySelector("area"), ["download", "ping"], "area"],
     [document.createElement("link"), parsed.querySelector("link"), ["hreflang"], "link"]
   ];
   for (const [live, detached, names, label] of cases) {
     for (const element of [live, detached]) {
+      if (label === "area") {
+        assert(!("hreflang" in element), "area instance should not expose hreflang");
+        assert(!("type" in element), "area instance should not expose type");
+      }
       for (const name of names) {
         assert(!own(element, name), `${label}.${name} should not be own before set`);
       }
@@ -1713,6 +1921,75 @@ fn table_cell_legacy_accessors_use_owner_prototype() {
 }
 
 #[test]
+fn table_legacy_dom_string_reflectors_use_owner_prototype() {
+    let mut vm = new_storage_test_vm("https://table-legacy-dom-string-reflectors.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => {
+    if (!condition) throw new Error(message);
+  };
+  const own = (object, name) => Object.prototype.hasOwnProperty.call(object, name);
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
+  const cases = [
+    ["frame", "frame", false],
+    ["rules", "rules", false],
+    ["summary", "summary", false],
+    ["cellPadding", "cellpadding", true],
+    ["cellSpacing", "cellspacing", true]
+  ];
+  const detachedDocument = document.implementation.createHTMLDocument("");
+
+  for (const [name, attribute, nullAsEmpty] of cases) {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLTableElement.prototype, name);
+    assert(!!descriptor, `${name} descriptor missing`);
+    assert(typeof descriptor.get === "function", `${name} getter`);
+    assert(typeof descriptor.set === "function", `${name} setter`);
+    assert(descriptor.enumerable === true, `${name} enumerable`);
+    assert(descriptor.configurable === true, `${name} configurable`);
+    assert(!own(HTMLElement.prototype, name), `${name} should not be on HTMLElement.prototype`);
+
+    for (const [doc, label] of [[document, "live"], [detachedDocument, "detached"]]) {
+      const table = doc.createElement("table");
+      assert(!own(table, name), `${label}.${name} should not be own before set`);
+      assert(table[name] === "", `${label}.${name} missing-value default`);
+      table[name] = { toString: () => `${name}-value` };
+      assert(table[name] === `${name}-value`, `${label}.${name} getter`);
+      assert(table.getAttribute(attribute) === `${name}-value`, `${label}.${name} attribute`);
+      table[name] = null;
+      const expectedNull = nullAsEmpty ? "" : "null";
+      assert(table[name] === expectedNull, `${label}.${name} null getter`);
+      assert(table.getAttribute(attribute) === expectedNull, `${label}.${name} null attribute`);
+      assert(!own(table, name), `${label}.${name} should stay inherited after set`);
+      assert(delete table[name], `${label}.${name} delete`);
+      assert(!own(table, name), `${label}.${name} should stay inherited after delete`);
+      assert(table[name] === expectedNull, `${label}.${name} after delete`);
+    }
+
+    for (const receiver of [document.createElement("div"), {}]) {
+      assert(throwsTypeError(() => descriptor.get.call(receiver)), `${name} getter receiver`);
+      assert(throwsTypeError(() => descriptor.set.call(receiver, "wrong")), `${name} setter receiver`);
+    }
+  }
+  return "ok";
+})()
+"#,
+        )
+        .expect("table legacy DOMString reflectors should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn detached_table_structural_accessors_use_owner_prototypes() {
     let mut vm = new_storage_test_vm("https://detached-table-structural-prototypes.test/");
 
@@ -1787,8 +2064,27 @@ fn detached_table_structural_accessors_use_owner_prototypes() {
     secondCell.rowSpan = -5;
     assert(firstCell.colSpan === 7 && firstCell.getAttribute("colspan") === "7", `${label}.colSpan`);
     assert(firstCell.rowSpan === 0 && firstCell.getAttribute("rowspan") === "0", `${label}.rowSpan zero`);
-    assert(secondCell.colSpan === 1000 && secondCell.getAttribute("colspan") === "1000", `${label}.colSpan clamp`);
+    assert(secondCell.colSpan === 1000 && secondCell.getAttribute("colspan") === "2000", `${label}.colSpan clamp`);
     assert(secondCell.rowSpan === 1 && secondCell.getAttribute("rowspan") === "1", `${label}.rowSpan clamp`);
+
+    firstCell.setAttribute("colspan", "4294967296");
+    firstCell.setAttribute("rowspan", "2147483648");
+    assert(firstCell.colSpan === 1000, `${label}.colSpan large content clamp`);
+    assert(firstCell.rowSpan === 65534, `${label}.rowSpan large content clamp`);
+    firstCell.setAttribute("rowspan", "-0");
+    assert(firstCell.rowSpan === 0, `${label}.rowSpan minus-zero content`);
+    firstCell.colSpan = "-0";
+    assert(firstCell.getAttribute("colspan") === "0" && firstCell.colSpan === 1, `${label}.colSpan zero setter`);
+    firstCell.colSpan = 1001;
+    assert(firstCell.getAttribute("colspan") === "1001" && firstCell.colSpan === 1000, `${label}.colSpan setter clamp`);
+    firstCell.rowSpan = 65535;
+    assert(firstCell.getAttribute("rowspan") === "65535" && firstCell.rowSpan === 65534, `${label}.rowSpan setter clamp`);
+    firstCell.colSpan = 2147483648;
+    firstCell.rowSpan = 4294967295;
+    assert(firstCell.getAttribute("colspan") === "1" && firstCell.colSpan === 1, `${label}.colSpan setter default`);
+    assert(firstCell.getAttribute("rowspan") === "1" && firstCell.rowSpan === 1, `${label}.rowSpan setter default`);
+    firstCell.colSpan = 7;
+    firstCell.rowSpan = 0;
 
     for (const [element, names, elementLabel] of [
       [tbody, ["rows"], "tbody"],
@@ -1958,6 +2254,14 @@ fn table_legacy_alignment_accessors_use_owner_prototypes() {
     if (!condition) throw new Error(message);
   };
   const own = (object, name) => Object.prototype.hasOwnProperty.call(object, name);
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
   const accessor = (prototype, name) => {
     const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
     assert(!!descriptor, `${name} descriptor missing`);
@@ -2053,10 +2357,21 @@ fn table_legacy_alignment_accessors_use_owner_prototypes() {
     element.span = 1002;
     assert(element.getAttribute("span") === "1002", `${label}.span large attr`);
     assert(element.span === 1000, `${label}.span large canonical`);
+    element.setAttribute("span", "4294967296");
+    assert(element.span === 1000, `${label}.span large content clamp`);
+    element.span = 2147483648;
+    assert(element.getAttribute("span") === "1", `${label}.span setter default attr`);
+    assert(element.span === 1, `${label}.span setter default`);
     element.setAttribute("span", "invalid");
     assert(element.span === 1, `${label}.span invalid canonical`);
     assert(delete element.span, `${label}.span delete`);
     assert(!own(element, "span"), `${label}.span should stay inherited`);
+  }
+
+  const spanDescriptor = Object.getOwnPropertyDescriptor(HTMLTableColElement.prototype, "span");
+  for (const receiver of [document.createElement("div"), document.createElement("td"), {}]) {
+    assert(throwsTypeError(() => spanDescriptor.get.call(receiver)), "span getter receiver");
+    assert(throwsTypeError(() => spanDescriptor.set.call(receiver, 2)), "span setter receiver");
   }
   return "ok";
 })()
@@ -2497,7 +2812,11 @@ fn detached_reflected_element_attributes_use_owner_prototype_accessors() {
   assert(section.getAttribute("aria-label") === "Proxy label", "proxy aria-label attribute");
   const controls = [div];
   section.ariaControlsElements = controls;
-  assert(section.ariaControlsElements === controls, "proxy ariaControlsElements");
+  const reflectedControls = section.ariaControlsElements;
+  assert(reflectedControls !== controls, "proxy ariaControlsElements snapshots input");
+  assert(reflectedControls.length === 1 && reflectedControls[0] === div, "proxy ariaControlsElements");
+  assert(Object.isFrozen(reflectedControls), "proxy ariaControlsElements frozen");
+  assert(section.ariaControlsElements === reflectedControls, "proxy ariaControlsElements cached");
   assert(section.getAttribute("aria-controls") === "", "proxy aria-controls attribute");
   assert(!own(section, "ariaControlsElements"), "ariaControlsElements should stay inherited after set");
   assert(section.contentEditable === "plaintext-only", "proxy contentEditable");
@@ -2529,7 +2848,7 @@ fn detached_reflected_element_attributes_use_owner_prototype_accessors() {
   assert(section.attributes.getNamedItem("data-x").value === "1", "proxy attributes after delete");
   assert(section.shadowRoot === root, "proxy shadowRoot after delete");
   assert(section.ariaLabel === "Proxy label", "proxy ariaLabel after delete");
-  assert(section.ariaControlsElements === controls, "proxy ariaControlsElements after delete");
+  assert(section.ariaControlsElements === reflectedControls, "proxy ariaControlsElements after delete");
   assert(section.contentEditable === "plaintext-only", "proxy contentEditable after delete");
   assert(section.isContentEditable === true, "proxy isContentEditable after delete");
   assert(section.getHTML() === "<b>x</b>", "proxy getHTML after delete");
@@ -2668,9 +2987,11 @@ fn detached_global_html_attributes_use_html_element_prototype_accessors() {
     "translate",
     "dir",
     "hidden",
+    "inert",
     "accessKey",
     "draggable",
     "spellcheck",
+    "writingSuggestions",
     "enterKeyHint",
     "inputMode",
     "autofocus",
@@ -2693,10 +3014,12 @@ fn detached_global_html_attributes_use_html_element_prototype_accessors() {
     descriptors.enterKeyHint.set.call(element, "send");
     descriptors.inputMode.set.call(element, "email");
     descriptors.hidden.set.call(element, true);
+    descriptors.inert.set.call(element, true);
     descriptors.autofocus.set.call(element, true);
     descriptors.translate.set.call(element, false);
     descriptors.draggable.set.call(element, true);
     descriptors.spellcheck.set.call(element, false);
+    descriptors.writingSuggestions.set.call(element, false);
     descriptors.tabIndex.set.call(element, 7);
 
     assert(descriptors.title.get.call(element) === "Title", `${label}.title`);
@@ -2708,21 +3031,27 @@ fn detached_global_html_attributes_use_html_element_prototype_accessors() {
     assert(descriptors.enterKeyHint.get.call(element) === "send", `${label}.enterKeyHint`);
     assert(descriptors.inputMode.get.call(element) === "email", `${label}.inputMode`);
     assert(descriptors.hidden.get.call(element) === true, `${label}.hidden`);
+    assert(descriptors.inert.get.call(element) === true, `${label}.inert`);
     assert(descriptors.autofocus.get.call(element) === true, `${label}.autofocus`);
     assert(descriptors.translate.get.call(element) === false, `${label}.translate`);
     assert(descriptors.draggable.get.call(element) === true, `${label}.draggable`);
     assert(descriptors.spellcheck.get.call(element) === false, `${label}.spellcheck`);
+    assert(descriptors.writingSuggestions.get.call(element) === "false", `${label}.writingSuggestions`);
     assert(descriptors.tabIndex.get.call(element) === 7, `${label}.tabIndex`);
     assert(element.getAttribute("translate") === "no", `${label}.translate attr`);
     assert(element.getAttribute("draggable") === "true", `${label}.draggable attr`);
     assert(element.getAttribute("spellcheck") === "false", `${label}.spellcheck attr`);
+    assert(element.getAttribute("writingsuggestions") === "false", `${label}.writingsuggestions attr`);
     assert(element.getAttribute("tabindex") === "7", `${label}.tabindex attr`);
 
     descriptors.hidden.set.call(element, false);
+    descriptors.inert.set.call(element, false);
     descriptors.autofocus.set.call(element, false);
     assert(descriptors.hidden.get.call(element) === false, `${label}.hidden false`);
+    assert(descriptors.inert.get.call(element) === false, `${label}.inert false`);
     assert(descriptors.autofocus.get.call(element) === false, `${label}.autofocus false`);
     assert(!element.hasAttribute("hidden"), `${label}.hidden removed`);
+    assert(!element.hasAttribute("inert"), `${label}.inert removed`);
     assert(!element.hasAttribute("autofocus"), `${label}.autofocus removed`);
 
     for (const name of names) {
@@ -3197,8 +3526,8 @@ fn detached_document_state_and_collections_use_document_prototype_accessors() {
   const htmlKeys = Object.keys(html).filter((name) => names.includes(name)).join(",");
 
   assert(html.currentScript === null, "html currentScript");
-  assert(html.hidden === false, "html hidden");
-  assert(html.visibilityState === "visible", "html visibility");
+  assert(html.hidden === true, "html hidden");
+  assert(html.visibilityState === "hidden", "html visibility");
   assert(html.prerendering === false, "html prerendering");
   assert(html.scrollingElement === html.documentElement, "html scrollingElement");
   assert(html.forms.length === 1, "html forms");
@@ -3210,9 +3539,11 @@ fn detached_document_state_and_collections_use_document_prototype_accessors() {
   assert(html.plugins.length === 1, "html plugins");
   assert(html.applets.length === 0, "html applets");
   assert(parsed.images.length === 1, "parsed images");
+  assert(parsed.hidden === true, "parsed hidden");
+  assert(parsed.visibilityState === "hidden", "parsed visibility");
   assert(xml.images === undefined, "xml images");
-  assert(xml.hidden === false, "xml hidden");
-  assert(xml.visibilityState === "visible", "xml visibility");
+  assert(xml.hidden === true, "xml hidden");
+  assert(xml.visibilityState === "hidden", "xml visibility");
 
   for (const name of names) {
     html[name];
@@ -3313,6 +3644,24 @@ fn detached_legacy_boolean_accessors_use_owner_prototypes() {
         .expect("detached legacy boolean owner prototype accessors should evaluate");
 
     assert_eq!(result, "ok");
+}
+
+#[test]
+fn document_parse_html_unsafe_uses_about_blank_document_metadata() {
+    let mut vm = new_storage_test_vm("https://parse-html-unsafe-url.test/path/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parsed = Document.parseHTMLUnsafe("<html><head></head><body></body></html>");
+  return [parsed.URL, parsed.documentURI, parsed.baseURI].join("|");
+})()
+"#,
+        )
+        .expect("Document.parseHTMLUnsafe URL metadata probe should evaluate");
+
+    assert_eq!(result, "about:blank|about:blank|about:blank");
 }
 
 #[test]
@@ -3498,6 +3847,114 @@ fn document_structure_uses_document_prototype_accessors() {
 "#,
         )
         .expect("document structure prototype accessors should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn document_forwarded_reflections_use_html_targets() {
+    let mut vm = new_storage_test_vm("https://document-forwarded-reflections.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const assert = (condition, message) => {
+    if (!condition) throw new Error(message);
+  };
+  const own = (object, name) => Object.prototype.hasOwnProperty.call(object, name);
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
+  const names = ["dir", "fgColor", "linkColor", "vlinkColor", "alinkColor", "bgColor"];
+  const colorAttributes = {
+    fgColor: "text",
+    linkColor: "link",
+    vlinkColor: "vlink",
+    alinkColor: "alink",
+    bgColor: "bgcolor"
+  };
+  const descriptors = new Map();
+  for (const name of names) {
+    const descriptor = Object.getOwnPropertyDescriptor(Document.prototype, name);
+    assert(!!descriptor, `${name} descriptor missing`);
+    assert(typeof descriptor.get === "function", `${name} getter`);
+    assert(typeof descriptor.set === "function", `${name} setter`);
+    assert(descriptor.enumerable === true, `${name} enumerable`);
+    assert(descriptor.configurable === true, `${name} configurable`);
+    descriptors.set(name, descriptor);
+  }
+
+  if (!document.documentElement) {
+    const html = document.createElement("html");
+    html.append(document.createElement("head"), document.createElement("body"));
+    document.append(html);
+  }
+  const detachedDocument = document.implementation.createHTMLDocument("");
+  for (const [doc, label] of [[document, "live"], [detachedDocument, "detached"]]) {
+    for (const name of names) {
+      assert(!own(doc, name), `${label}.${name} should not be own before set`);
+      assert(doc[name] === "", `${label}.${name} missing-value default`);
+    }
+
+    doc.documentElement.setAttribute("dir", "RTL");
+    assert(doc.dir === "rtl", `${label}.dir canonical getter`);
+    doc.dir = { toString: () => "AUTO" };
+    assert(doc.documentElement.getAttribute("dir") === "AUTO", `${label}.dir target attribute`);
+    assert(doc.dir === "auto", `${label}.dir setter canonical getter`);
+    doc.dir = null;
+    assert(doc.documentElement.getAttribute("dir") === "null", `${label}.dir null attribute`);
+    assert(doc.dir === "", `${label}.dir null canonical getter`);
+
+    for (const [name, attribute] of Object.entries(colorAttributes)) {
+      doc[name] = { toString: () => `${label}-${name}` };
+      assert(doc[name] === `${label}-${name}`, `${label}.${name} getter`);
+      assert(doc.body.getAttribute(attribute) === `${label}-${name}`, `${label}.${name} target attribute`);
+      doc[name] = null;
+      assert(doc[name] === "", `${label}.${name} null getter`);
+      assert(doc.body.getAttribute(attribute) === "", `${label}.${name} null attribute`);
+    }
+
+    for (const name of names) {
+      assert(!own(doc, name), `${label}.${name} should stay inherited after set`);
+      assert(delete doc[name], `${label}.${name} delete`);
+      assert(!own(doc, name), `${label}.${name} should stay inherited after delete`);
+    }
+  }
+
+  const xmlDocument = document.implementation.createDocument("urn:test", "root", null);
+  let converted = false;
+  xmlDocument.dir = { toString() { converted = true; return "rtl"; } };
+  assert(converted, "XML document setter should still convert the value");
+  assert(xmlDocument.dir === "", "XML document dir getter");
+  assert(!xmlDocument.documentElement.hasAttribute("dir"), "XML document should not forward dir");
+  xmlDocument.fgColor = "red";
+  assert(xmlDocument.fgColor === "", "XML document color getter");
+
+  const framesetDocument = document.implementation.createHTMLDocument("");
+  const frameset = framesetDocument.createElement("frameset");
+  frameset.setAttribute("text", "seed");
+  framesetDocument.body = frameset;
+  assert(framesetDocument.fgColor === "seed", "frameset color getter target");
+  framesetDocument.fgColor = "changed";
+  assert(frameset.getAttribute("text") === "seed", "frameset color setter should be a no-op");
+
+  for (const [name, descriptor] of descriptors) {
+    for (const receiver of [document.documentElement, {}]) {
+      assert(throwsTypeError(() => descriptor.get.call(receiver)), `${name} getter receiver`);
+      assert(throwsTypeError(() => descriptor.set.call(receiver, "wrong")), `${name} setter receiver`);
+    }
+  }
+  return "ok";
+})()
+"#,
+        )
+        .expect("document forwarded reflections should evaluate");
 
     assert_eq!(result, "ok");
 }
@@ -5203,7 +5660,7 @@ fn detached_popover_methods_use_html_element_prototype_brand_checks() {
 
     assert_eq!(
         result,
-        r#"{"shapes":"true:function:0:true:true|true:function:0:true:true|true:function:0:true:true","own":"false,false,false","elementOwn":"false,false,false","svgTypes":"undefined,undefined,undefined","direct":"ERR:NotSupportedError:9|ERR:InvalidStateError:11|ERR:InvalidStateError:11|ERR:InvalidStateError:11","prototype":"ERR:NotSupportedError:9|ERR:InvalidStateError:11|ERR:InvalidStateError:11|ERR:InvalidStateError:11"}"#
+        r#"{"shapes":"true:function:0:true:true|true:function:0:true:true|true:function:0:true:true","own":"false,false,false","elementOwn":"false,false,false","svgTypes":"undefined,undefined,undefined","direct":"ERR:NotSupportedError:9|ERR:InvalidStateError:11|OK:undefined|ERR:InvalidStateError:11","prototype":"ERR:NotSupportedError:9|ERR:InvalidStateError:11|OK:undefined|ERR:InvalidStateError:11"}"#
     );
 }
 
@@ -5577,6 +6034,14 @@ fn detached_object_param_and_data_accessors_use_owner_prototypes() {
     assert(descriptor.enumerable === true, `${name} enumerable`);
     assert(descriptor.configurable === true, `${name} configurable`);
   };
+  const readonlyAccessor = (prototype, name) => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    assert(!!descriptor, `${prototype.constructor.name}.${name} descriptor missing`);
+    assert(typeof descriptor.get === "function", `${name} getter`);
+    assert(descriptor.set === undefined, `${name} setter absent`);
+    assert(descriptor.enumerable === true, `${name} enumerable`);
+    assert(descriptor.configurable === true, `${name} configurable`);
+  };
   const absent = (prototype, name) => {
     assert(
       Object.getOwnPropertyDescriptor(prototype, name) === undefined,
@@ -5598,6 +6063,13 @@ fn detached_object_param_and_data_accessors_use_owner_prototypes() {
     absent(HTMLElement.prototype, name);
     assert(!own(object, name), `object.${name} should not be own`);
     assert(!(name in div), `div.${name} should be absent`);
+  }
+  for (const name of ["contentDocument", "contentWindow"]) {
+    readonlyAccessor(HTMLObjectElement.prototype, name);
+    absent(HTMLElement.prototype, name);
+    assert(!own(object, name), `object.${name} should not be own`);
+    assert(!(name in div), `div.${name} should be absent`);
+    assert(object[name] === null, `detached object.${name} should be null`);
   }
   for (const name of ["value", "type", "valueType"]) {
     accessor(HTMLParamElement.prototype, name);
@@ -5888,7 +6360,7 @@ fn detached_simple_structural_accessors_use_owner_prototypes() {
     [HTMLOptGroupElement.prototype, ["disabled"]],
     [HTMLDetailsElement.prototype, ["open"]],
     [HTMLDialogElement.prototype, ["open", "returnValue"]],
-    [HTMLMetaElement.prototype, ["content", "httpEquiv"]],
+    [HTMLMetaElement.prototype, ["content", "httpEquiv", "scheme"]],
     [HTMLTitleElement.prototype, ["text"]]
   ];
   for (const [prototype, names] of prototypeCases) {
@@ -5921,6 +6393,7 @@ fn detached_simple_structural_accessors_use_owner_prototypes() {
       [dialog, "open", true, "", "open"],
       [meta, "content", "width=device-width", "width=device-width", "content"],
       [meta, "httpEquiv", "refresh", "refresh", "http-equiv"],
+      [meta, "scheme", "utf-8", "utf-8", "scheme"],
       [title, "text", "Page Title", "Page Title", null]
     ];
 
@@ -6000,11 +6473,13 @@ fn detached_simple_specialized_accessors_reject_incompatible_receivers() {
   const ol = doc.createElement("ol");
   const optgroup = doc.createElement("optgroup");
   const details = doc.createElement("details");
+  const link = doc.createElement("link");
   const meta = doc.createElement("meta");
+  const style = doc.createElement("style");
   const title = doc.createElement("title");
   const div = doc.createElement("div");
   const text = doc.createTextNode("x");
-  const elements = [li, ol, optgroup, details, meta, title, div];
+  const elements = [li, ol, optgroup, details, link, meta, style, title, div];
 
   const cases = [
     [HTMLLIElement.prototype, "value", li, 7],
@@ -6013,8 +6488,13 @@ fn detached_simple_specialized_accessors_reject_incompatible_receivers() {
     [HTMLOListElement.prototype, "type", ol, "A"],
     [HTMLOptGroupElement.prototype, "disabled", optgroup, true],
     [HTMLDetailsElement.prototype, "open", details, true],
+    [HTMLLinkElement.prototype, "integrity", link, "sha256-test"],
+    [HTMLLinkElement.prototype, "rev", link, "made"],
+    [HTMLLinkElement.prototype, "type", link, "text/css"],
     [HTMLMetaElement.prototype, "content", meta, "width=device-width"],
     [HTMLMetaElement.prototype, "httpEquiv", meta, "refresh"],
+    [HTMLMetaElement.prototype, "scheme", meta, "utf-8"],
+    [HTMLStyleElement.prototype, "type", style, "text/less"],
     [HTMLTitleElement.prototype, "text", title, "Page Title"]
   ];
 
@@ -6120,6 +6600,88 @@ fn detached_frame_legacy_accessors_use_owner_prototypes() {
 "#,
         )
         .expect("detached frame legacy owner prototype accessors should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
+fn detached_obsolete_element_reflectors_use_owner_prototypes() {
+    let mut vm = new_storage_test_vm("https://detached-obsolete-reflectors.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const doc = document.implementation.createHTMLDocument("");
+  const frameset = doc.createElement("frameset");
+  const frame = doc.createElement("frame");
+  const font = doc.createElement("font");
+  const marquee = doc.createElement("marquee");
+  const div = doc.createElement("div");
+
+  const assert = (condition, message) => {
+    if (!condition) throw new Error(message);
+  };
+  const own = (object, name) => Object.prototype.hasOwnProperty.call(object, name);
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error.name === "TypeError";
+    }
+  };
+  const cases = [
+    [HTMLFrameSetElement.prototype, frameset, "cols", "40%,60%", "cols"],
+    [HTMLFrameSetElement.prototype, frameset, "rows", "100,*", "rows"],
+    [HTMLFontElement.prototype, font, "face", "serif, sans-serif", "face"],
+  ];
+
+  for (const [prototype, element, name, value, attribute] of cases) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    assert(!!descriptor, `${name} descriptor`);
+    assert(typeof descriptor.get === "function", `${name} getter`);
+    assert(typeof descriptor.set === "function", `${name} setter`);
+    assert(descriptor.enumerable && descriptor.configurable, `${name} descriptor flags`);
+    assert(!own(HTMLElement.prototype, name), `${name} owner`);
+    assert(!(name in div), `${name} should not be on div`);
+    assert(throwsTypeError(() => descriptor.get.call(div)), `${name} getter brand`);
+    assert(throwsTypeError(() => descriptor.set.call(div, value)), `${name} setter brand`);
+    assert(element[name] === "", `${name} default`);
+    element[name] = value;
+    assert(element[name] === value, `${name} value`);
+    assert(element.getAttribute(attribute) === value, `${name} attribute`);
+    assert(!own(element, name), `${name} should stay inherited`);
+  }
+
+  for (const [prototype, element, name, attribute] of [
+    [HTMLFrameElement.prototype, frame, "noResize", "noresize"],
+    [HTMLMarqueeElement.prototype, marquee, "trueSpeed", "truespeed"],
+  ]) {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    assert(!!descriptor, `${name} descriptor`);
+    assert(typeof descriptor.get === "function", `${name} getter`);
+    assert(typeof descriptor.set === "function", `${name} setter`);
+    assert(descriptor.enumerable && descriptor.configurable, `${name} descriptor flags`);
+    assert(!own(HTMLElement.prototype, name), `${name} owner`);
+    assert(!(name in div), `${name} should not be on div`);
+    assert(throwsTypeError(() => descriptor.get.call(div)), `${name} getter brand`);
+    assert(throwsTypeError(() => descriptor.set.call(div, true)), `${name} setter brand`);
+    assert(element[name] === false, `${name} default`);
+    element.setAttribute(attribute, "false");
+    assert(element[name] === true, `${name} attribute presence`);
+    element[name] = false;
+    assert(!element.hasAttribute(attribute), `${name} false removes attribute`);
+    element[name] = true;
+    assert(element.getAttribute(attribute) === "", `${name} true adds attribute`);
+    assert(!own(element, name), `${name} should stay inherited`);
+  }
+
+  return "ok";
+})()
+"#,
+        )
+        .expect("detached obsolete element reflectors should evaluate");
 
     assert_eq!(result, "ok");
 }
@@ -6444,6 +7006,14 @@ fn detached_body_legacy_accessors_use_owner_prototype() {
     if (!condition) throw new Error(message);
   };
   const own = (object, name) => Object.prototype.hasOwnProperty.call(object, name);
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
   const accessor = (prototype, name) => {
     const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
     assert(!!descriptor, `${prototype.constructor.name}.${name} descriptor missing`);
@@ -6464,14 +7034,25 @@ fn detached_body_legacy_accessors_use_owner_prototype() {
   }
 
   const detachedDoc = document.implementation.createHTMLDocument("");
-  for (const [body, label] of [[detachedDoc.body, "detached"], [document.createElement("body"), "created"]]) {
+  for (const [body, label, usesWindow] of [
+    [detachedDoc.body, "windowless", false],
+    [document.createElement("body"), "created", true]
+  ]) {
     for (const name of names) {
       assert(!own(body, name), `${label}.${name} should not be own before set`);
     }
     const handler = () => `${label}-load`;
+    const priorWindowHandler = () => `${label}-prior-window-load`;
+    window.onload = priorWindowHandler;
     body.onload = handler;
-    assert(window.onload === handler, `${label}.onload setter syncs window.onload`);
-    assert(body.onload === handler, `${label}.onload getter reads window.onload`);
+    assert(
+      window.onload === (usesWindow ? handler : priorWindowHandler),
+      `${label}.onload setter follows owner browsing context`
+    );
+    assert(
+      body.onload === (usesWindow ? handler : null),
+      `${label}.onload getter follows owner browsing context`
+    );
     body.text = `${label}-text`;
     body.link = `${label}-link`;
     body.vLink = `${label}-vlink`;
@@ -6482,13 +7063,26 @@ fn detached_body_legacy_accessors_use_owner_prototype() {
     assert(body.vLink === `${label}-vlink` && body.getAttribute("vlink") === `${label}-vlink`, `${label}.vLink`);
     assert(body.aLink === `${label}-alink` && body.getAttribute("alink") === `${label}-alink`, `${label}.aLink`);
     assert(body.background === `${label}-background` && body.getAttribute("background") === `${label}-background`, `${label}.background`);
+    for (const name of ["text", "link", "vLink", "aLink"]) {
+      body[name] = null;
+      const attribute = name.toLowerCase();
+      assert(body[name] === "", `${label}.${name} null getter`);
+      assert(body.getAttribute(attribute) === "", `${label}.${name} null attribute`);
+    }
     for (const name of names) {
       assert(!own(body, name), `${label}.${name} should not be own after set`);
       assert(delete body[name], `${label}.${name} delete`);
       assert(!own(body, name), `${label}.${name} should stay inherited`);
     }
-    assert(body.onload === handler, `${label}.onload after delete`);
-    assert(body.text === `${label}-text`, `${label}.text after delete`);
+    assert(body.onload === (usesWindow ? handler : null), `${label}.onload after delete`);
+    assert(body.text === "", `${label}.text after delete`);
+  }
+  for (const name of ["text", "link", "vLink", "aLink"]) {
+    const descriptor = Object.getOwnPropertyDescriptor(HTMLBodyElement.prototype, name);
+    for (const receiver of [document.createElement("div"), {}]) {
+      assert(throwsTypeError(() => descriptor.get.call(receiver)), `${name} getter receiver`);
+      assert(throwsTypeError(() => descriptor.set.call(receiver, "wrong")), `${name} setter receiver`);
+    }
   }
   window.onload = null;
   return "ok";
@@ -6521,10 +7115,21 @@ fn detached_global_event_handler_accessors_use_owner_prototypes() {
     assert(descriptor.configurable === true, `${name} configurable`);
     return descriptor;
   };
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error instanceof TypeError;
+    }
+  };
 
   const click = accessor(HTMLElement.prototype, "onclick");
   accessor(HTMLElement.prototype, "onsubmit");
-  assert(HTMLElement.prototype.onclick === null, "HTMLElement.prototype.onclick default");
+  assert(
+    throwsTypeError(() => HTMLElement.prototype.onclick),
+    "HTMLElement.prototype.onclick receiver brand"
+  );
   assert(Object.getOwnPropertyDescriptor(HTMLBodyElement.prototype, "onload").get !==
     Object.getOwnPropertyDescriptor(HTMLElement.prototype, "onload").get,
     "HTMLBodyElement.onload should keep body/window override");
@@ -6549,7 +7154,7 @@ fn detached_global_event_handler_accessors_use_owner_prototypes() {
     assert(element[name] === handler, `${label}.${name} after delete`);
   }
 
-  assert(click.get.call({}) === null, "forged getter is lenient null");
+  assert(throwsTypeError(() => click.get.call({})), "forged getter receiver brand");
   return "ok";
 })()
 "#,
@@ -7054,6 +7659,48 @@ fn detached_specialized_url_resource_properties_use_owner_prototypes() {
 }
 
 #[test]
+fn hyperlink_protocol_is_colon_when_href_cannot_be_parsed() {
+    let mut vm = new_storage_test_vm("https://hyperlink-invalid-url.test/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const base = document.createElement("base");
+  base.href = "about:blank";
+  (document.head || document.documentElement || document).appendChild(base);
+  const inputs = [
+    "",
+    "javascript://:443",
+    "javascript://test:test",
+    "javascript://[:1]",
+    "mailto://:443",
+    "mailto://test:test",
+    "mailto://[:1]"
+  ];
+
+  for (const tag of ["a", "area"]) {
+    const element = document.createElement(tag);
+    for (const input of inputs) {
+      element.setAttribute("href", input);
+      if (element.href !== input) {
+        throw new Error(`${tag} should preserve the unparsable href ${input}`);
+      }
+      if (element.protocol !== ":") {
+        throw new Error(`${tag} should expose ':' for the unparsable href ${input}`);
+      }
+    }
+  }
+  return "ok";
+})()
+"#,
+        )
+        .expect("unparsable hyperlink protocol probe should evaluate");
+
+    assert_eq!(result, "ok");
+}
+
+#[test]
 fn hyperlink_stringifiers_use_native_href_and_enforce_owner_brand() {
     let mut vm = new_storage_test_vm("https://hyperlink-stringifier.test/base/page.html");
 
@@ -7244,6 +7891,10 @@ fn detached_resource_template_accessors_use_owner_prototypes() {
     accessor(HTMLStyleElement.prototype, name);
   }
   accessor(HTMLLinkElement.prototype, "disabled");
+  for (const name of ["integrity", "rev", "type"]) {
+    accessor(HTMLLinkElement.prototype, name);
+  }
+  accessor(HTMLIFrameElement.prototype, "csp");
   accessor(HTMLIFrameElement.prototype, "sandbox");
   accessor(HTMLIFrameElement.prototype, "allowFullscreen");
   for (const name of ["default", "kind", "src", "srclang", "label"]) {
@@ -7253,7 +7904,7 @@ fn detached_resource_template_accessors_use_owner_prototypes() {
   accessor(HTMLTrackElement.prototype, "track", false);
 
   const div = document.createElement("div");
-  for (const name of ["blocking", "sandbox", "allowFullscreen", "default", "srclang", "readyState", "track"]) {
+  for (const name of ["blocking", "csp", "sandbox", "allowFullscreen", "default", "srclang", "readyState", "track"]) {
     assert(!own(HTMLElement.prototype, name), `${name} should not be on HTMLElement.prototype`);
     assert(!(name in div), `${name} should not be on div`);
   }
@@ -7288,33 +7939,56 @@ fn detached_resource_template_accessors_use_owner_prototypes() {
   }
 
   for (const link of linkElements) {
-    assert(!own(link, "disabled"), "link.disabled should not be own before set");
+    for (const name of ["disabled", "integrity", "rev", "type"]) {
+      assert(!own(link, name), `link.${name} should not be own before set`);
+    }
+    assert(link.integrity === "" && link.rev === "" && link.type === "", "link string defaults");
+    link.integrity = "sha256-test";
+    link.rev = "made";
+    link.type = "text/css";
+    assert(link.integrity === "sha256-test" && link.getAttribute("integrity") === "sha256-test", "link integrity");
+    assert(link.rev === "made" && link.getAttribute("rev") === "made", "link rev");
+    assert(link.type === "text/css" && link.getAttribute("type") === "text/css", "link type");
     link.disabled = true;
     assert(link.disabled === true, "link disabled true");
     assert(link.getAttribute("disabled") === "", "link disabled attr");
-    assert(!own(link, "disabled"), "link.disabled should stay inherited after true");
+    for (const name of ["disabled", "integrity", "rev", "type"]) {
+      assert(!own(link, name), `link.${name} should stay inherited after set`);
+    }
     link.disabled = false;
     assert(link.disabled === false, "link disabled false");
     assert(link.getAttribute("disabled") === null, "link disabled attr removed");
     assert(!own(link, "disabled"), "link.disabled should stay inherited after false");
-    assert(delete link.disabled, "link.disabled delete");
-    assert(!own(link, "disabled"), "link.disabled should stay inherited after delete");
+    for (const name of ["disabled", "integrity", "rev", "type"]) {
+      assert(delete link[name], `link.${name} delete`);
+      assert(!own(link, name), `link.${name} should stay inherited after delete`);
+    }
+    assert(link.integrity === "sha256-test" && link.rev === "made" && link.type === "text/css", "link strings after delete");
   }
 
   for (const iframe of iframeElements) {
-    for (const name of ["sandbox", "allowFullscreen"]) {
+    for (const name of ["csp", "sandbox", "allowFullscreen"]) {
       assert(!own(iframe, name), `iframe.${name} should not be own before set`);
     }
+    assert(iframe.csp === "", "iframe csp default");
+    const sandbox = iframe.sandbox;
+    assert(Object.prototype.toString.call(sandbox) === "[object DOMTokenList]", "iframe sandbox type");
+    assert(sandbox === iframe.sandbox, "iframe sandbox SameObject");
+    iframe.csp = 123456;
     iframe.sandbox = "allow-scripts";
     iframe.allowFullscreen = true;
-    assert(iframe.sandbox === "allow-scripts" && iframe.getAttribute("sandbox") === "allow-scripts", "iframe sandbox");
+    assert(iframe.csp === "123456" && iframe.getAttribute("csp") === "123456", "iframe csp");
+    assert(sandbox.value === "allow-scripts" && iframe.getAttribute("sandbox") === "allow-scripts", "iframe sandbox");
+    assert(sandbox.supports("ALLOW-SCRIPTS"), "iframe sandbox supported token");
     assert(iframe.allowFullscreen === true && iframe.getAttribute("allowfullscreen") === "", "iframe allowFullscreen");
-    for (const name of ["sandbox", "allowFullscreen"]) {
+    for (const name of ["csp", "sandbox", "allowFullscreen"]) {
       assert(!own(iframe, name), `iframe.${name} should stay inherited after set`);
       assert(delete iframe[name], `iframe.${name} delete`);
       assert(!own(iframe, name), `iframe.${name} should stay inherited after delete`);
     }
-    assert(iframe.sandbox === "allow-scripts", "iframe sandbox after delete");
+    iframe.setAttribute("csp", "default-src 'self'");
+    assert(iframe.csp === "default-src 'self'", "iframe csp after delete");
+    assert(iframe.sandbox === sandbox && sandbox.value === "allow-scripts", "iframe sandbox after delete");
     assert(iframe.allowFullscreen === true, "iframe allowFullscreen after delete");
   }
 
@@ -7773,7 +8447,7 @@ fn detached_document_state_accessors_are_declared_on_prototypes() {
     descriptorOwner(htmlProto, "fonts") === Document.prototype,
     descriptorOwner(htmlProto, "implementation") === Document.prototype,
     htmlProto === HTMLDocument.prototype,
-    xmlProto === XMLDocument.prototype
+    xmlProto === Document.prototype
   ].join(",");
 
   return [

@@ -301,6 +301,13 @@ impl DomMatrixComponents {
     }
 
     pub fn inverse(self) -> Self {
+        if let Some(inverse) = self.inverse_2d() {
+            return inverse;
+        }
+        if let Some(inverse) = self.affine_inverse() {
+            return inverse;
+        }
+
         let mut matrix = [
             [self.m11, self.m21, self.m31, self.m41],
             [self.m12, self.m22, self.m32, self.m42],
@@ -371,6 +378,108 @@ impl DomMatrixComponents {
         }
     }
 
+    fn inverse_2d(self) -> Option<Self> {
+        if !self.is_2d() {
+            return None;
+        }
+
+        let determinant = self.m11 * self.m22 - self.m12 * self.m21;
+        if determinant == 0.0 || !determinant.is_finite() {
+            return None;
+        }
+        let inverse_determinant = 1.0 / determinant;
+        let inverse = Self {
+            m11: self.m22 * inverse_determinant,
+            m12: -self.m12 * inverse_determinant,
+            m21: -self.m21 * inverse_determinant,
+            m22: self.m11 * inverse_determinant,
+            m41: (self.m21 * self.m42 - self.m22 * self.m41) * inverse_determinant,
+            m42: (self.m12 * self.m41 - self.m11 * self.m42) * inverse_determinant,
+            ..Self::identity()
+        };
+        let values = [
+            inverse.m11,
+            inverse.m12,
+            inverse.m21,
+            inverse.m22,
+            inverse.m41,
+            inverse.m42,
+        ];
+
+        values
+            .iter()
+            .all(|value| value.is_finite())
+            .then_some(inverse)
+    }
+
+    fn affine_inverse(self) -> Option<Self> {
+        if self.m14 != 0.0 || self.m24 != 0.0 || self.m34 != 0.0 || self.m44 != 1.0 {
+            return None;
+        }
+
+        let a = self.m11;
+        let b = self.m21;
+        let c = self.m31;
+        let d = self.m12;
+        let e = self.m22;
+        let f = self.m32;
+        let g = self.m13;
+        let h = self.m23;
+        let i = self.m33;
+        let determinant = a * (e * i - f * h) - b * (d * i - f * g) + c * (d * h - e * g);
+        if determinant == 0.0 || !determinant.is_finite() {
+            return None;
+        }
+        let inverse_determinant = 1.0 / determinant;
+
+        let m11 = (e * i - f * h) * inverse_determinant;
+        let m21 = (c * h - b * i) * inverse_determinant;
+        let m31 = (b * f - c * e) * inverse_determinant;
+        let m12 = (f * g - d * i) * inverse_determinant;
+        let m22 = (a * i - c * g) * inverse_determinant;
+        let m32 = (c * d - a * f) * inverse_determinant;
+        let m13 = (d * h - e * g) * inverse_determinant;
+        let m23 = (b * g - a * h) * inverse_determinant;
+        let m33 = (a * e - b * d) * inverse_determinant;
+        let inverse = Self {
+            m11,
+            m12,
+            m13,
+            m14: 0.0,
+            m21,
+            m22,
+            m23,
+            m24: 0.0,
+            m31,
+            m32,
+            m33,
+            m34: 0.0,
+            m41: -(m11 * self.m41 + m21 * self.m42 + m31 * self.m43),
+            m42: -(m12 * self.m41 + m22 * self.m42 + m32 * self.m43),
+            m43: -(m13 * self.m41 + m23 * self.m42 + m33 * self.m43),
+            m44: 1.0,
+        };
+        let values = [
+            inverse.m11,
+            inverse.m12,
+            inverse.m13,
+            inverse.m21,
+            inverse.m22,
+            inverse.m23,
+            inverse.m31,
+            inverse.m32,
+            inverse.m33,
+            inverse.m41,
+            inverse.m42,
+            inverse.m43,
+        ];
+
+        values
+            .iter()
+            .all(|value| value.is_finite())
+            .then_some(inverse)
+    }
+
     pub fn is_2d(self) -> bool {
         self.m13 == 0.0
             && self.m14 == 0.0
@@ -389,19 +498,35 @@ impl DomMatrixComponents {
     }
 
     pub fn css_text(self) -> Option<String> {
-        if self.is_2d() {
+        self.css_text_with_dimension(self.is_2d())
+    }
+
+    pub fn css_text_with_dimension(self, is_2d: bool) -> Option<String> {
+        self.text_with_dimension(is_2d, css_number)
+    }
+
+    pub fn dom_matrix_text_with_dimension(self, is_2d: bool) -> Option<String> {
+        self.text_with_dimension(is_2d, ecmascript_number)
+    }
+
+    fn text_with_dimension(
+        self,
+        is_2d: bool,
+        serialize_number: fn(f64) -> String,
+    ) -> Option<String> {
+        if is_2d {
             let values = [self.m11, self.m12, self.m21, self.m22, self.m41, self.m42];
             if !values.iter().all(|value| value.is_finite()) {
                 return None;
             }
             return Some(format!(
                 "matrix({}, {}, {}, {}, {}, {})",
-                css_number(self.m11),
-                css_number(self.m12),
-                css_number(self.m21),
-                css_number(self.m22),
-                css_number(self.m41),
-                css_number(self.m42)
+                serialize_number(self.m11),
+                serialize_number(self.m12),
+                serialize_number(self.m21),
+                serialize_number(self.m22),
+                serialize_number(self.m41),
+                serialize_number(self.m42)
             ));
         }
 
@@ -414,24 +539,30 @@ impl DomMatrixComponents {
         }
         Some(format!(
             "matrix3d({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})",
-            css_number(self.m11),
-            css_number(self.m12),
-            css_number(self.m13),
-            css_number(self.m14),
-            css_number(self.m21),
-            css_number(self.m22),
-            css_number(self.m23),
-            css_number(self.m24),
-            css_number(self.m31),
-            css_number(self.m32),
-            css_number(self.m33),
-            css_number(self.m34),
-            css_number(self.m41),
-            css_number(self.m42),
-            css_number(self.m43),
-            css_number(self.m44)
+            serialize_number(self.m11),
+            serialize_number(self.m12),
+            serialize_number(self.m13),
+            serialize_number(self.m14),
+            serialize_number(self.m21),
+            serialize_number(self.m22),
+            serialize_number(self.m23),
+            serialize_number(self.m24),
+            serialize_number(self.m31),
+            serialize_number(self.m32),
+            serialize_number(self.m33),
+            serialize_number(self.m34),
+            serialize_number(self.m41),
+            serialize_number(self.m42),
+            serialize_number(self.m43),
+            serialize_number(self.m44)
         ))
     }
+}
+
+fn ecmascript_number(value: f64) -> String {
+    dragonbox_ecma::Buffer::new()
+        .format_finite(value)
+        .to_owned()
 }
 
 fn css_number(value: f64) -> String {

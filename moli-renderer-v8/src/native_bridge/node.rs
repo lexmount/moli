@@ -1307,6 +1307,42 @@ pub(super) fn node_runtime_and_handle_from_args_or_detached(
     node_runtime_and_handle_from_object_or_detached(scope, this)
 }
 
+pub(super) fn node_owner_document_relevant_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+) -> Option<v8::Local<'s, v8::Context>> {
+    let document_handle = unsafe { &*runtime_ptr }
+        .dom_host()
+        .owner_document_handle(handle)?;
+    if document_handle == unsafe { &*runtime_ptr }.document_handle() {
+        return unsafe { &*runtime_ptr }.page_default_context(scope);
+    }
+    if let Some(child_handle) =
+        unsafe { &*runtime_ptr }.child_browsing_context_host_for_document_handle(document_handle)
+        && let Some(context) =
+            unsafe { &*runtime_ptr }.child_browsing_context_relevant_context(scope, child_handle)
+    {
+        return Some(context);
+    }
+    let document = unsafe { &mut *runtime_ptr }
+        .native_bridge_mut()
+        .wrap_handle(scope, runtime_ptr, document_handle)?;
+    document.get_creation_context(scope)
+}
+
+pub(crate) fn node_relevant_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Context>> {
+    node_runtime_and_handle_from_object(scope, object)
+        .ok()
+        .and_then(|(runtime_ptr, handle)| {
+            node_owner_document_relevant_context(scope, runtime_ptr, handle)
+        })
+        .or_else(|| object.get_creation_context(scope))
+}
+
 pub(super) fn node_arg_handle(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,

@@ -760,6 +760,7 @@ pub(crate) use runtime_script_continuation::RuntimeScriptContinuationBodyEffect;
 #[cfg(test)]
 pub(crate) use runtime_script_continuation::RuntimeScriptOwnerAdvance;
 mod security_policy;
+pub(crate) use security_policy::string_code_generation_check_callback;
 mod service_worker_client_message_body;
 #[cfg(test)]
 mod service_worker_client_message_test_support;
@@ -2639,6 +2640,16 @@ impl ScriptVm {
         let Some(root) = root else {
             return;
         };
+        let skip_pristine_document = {
+            let host = self._context_host.borrow();
+            let document = host.document_handle();
+            host.document_web_font_sidecar_is_pristine()
+                && !host.document_has_style_state(document)
+                && !host.document_has_active_author_stylesheet_sources(document)
+        };
+        if skip_pristine_document {
+            return;
+        }
         let Some(resources) = crate::layout_renderer::current_native_stylesheet_resources(
             &self._context_host.borrow(),
             root,
@@ -4661,7 +4672,6 @@ impl ScriptVm {
     pub(crate) fn create_and_construct_parser_custom_element_direct_in_default_context(
         &mut self,
         document_handle: DomHandle,
-        document_has_body: bool,
         local_name: &str,
         namespace: &str,
         prefix: Option<&str>,
@@ -4686,7 +4696,6 @@ impl ScriptVm {
                         scope,
                         host_ptr,
                         document_handle,
-                        document_has_body,
                         local_name,
                         namespace,
                         prefix,
@@ -5832,6 +5841,17 @@ impl ScriptVm {
         })
     }
 
+    pub(crate) fn sync_selectedcontents_after_parser_option_finished_in_default_context(
+        &mut self,
+        option: NativeNodeId,
+    ) -> Result<()> {
+        self.with_default_context_scope(|scope, host_ptr| {
+            unsafe { &mut *host_ptr }
+                .sync_selectedcontents_after_parser_option_finished(scope, host_ptr, option);
+            Ok(())
+        })
+    }
+
     pub(crate) fn apply_parser_created_null_registry_associations_in_default_context(
         &mut self,
         handles: &[NativeNodeId],
@@ -5940,6 +5960,18 @@ impl ScriptVm {
         selection: crate::page_task_queue::RendererPageTimerSelection,
     ) -> Result<HostTimeoutRunResult> {
         let result = self.run_next_timeout_body(selection)?;
+        if let HostTimeoutRunResult::CallbackError(error) = &result {
+            self.record_runtime_warning(format_args!("timer callback dispatch failed: {error}"));
+        }
+        Ok(result)
+    }
+
+    /// Execute one ready timer whose scheduling sequence belongs to a classic
+    /// defer script, without committing its task-end callback completion.
+    pub(crate) fn run_next_classic_defer_timer_callback_body(
+        &mut self,
+    ) -> Result<HostTimeoutRunResult> {
+        let result = self.run_next_timeout_queued_by_classic_defer_script_body()?;
         if let HostTimeoutRunResult::CallbackError(error) = &result {
             self.record_runtime_warning(format_args!("timer callback dispatch failed: {error}"));
         }
@@ -8522,7 +8554,7 @@ impl ScriptVm {
         }
     }
 
-    fn inline_script_element_source_for_execution(
+    pub(crate) fn inline_script_element_source_for_execution(
         &mut self,
         node_id: DomHandle,
         source: &str,

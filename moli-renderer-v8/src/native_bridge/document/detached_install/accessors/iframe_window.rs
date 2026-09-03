@@ -40,6 +40,7 @@ pub(super) fn build_detached_iframe_content_window<'s>(
     let window = DetachedIframeWindowDeclaration::new(parent, top, document)
         .bind(scope)
         .ok()?;
+    crate::context_bootstrap::mark_window_receiver(scope, window);
     set_document_associated_window(scope, document, window);
     crate::network_host::install_fetch_constructors_for_base_url(scope, window, base_url);
     install_detached_iframe_window_messaging(scope, window);

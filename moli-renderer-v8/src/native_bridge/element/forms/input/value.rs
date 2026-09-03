@@ -1,11 +1,11 @@
 use super::super::*;
+use crate::util::utf16_len;
 use crate::webidl;
 use moli_dom::forms::{
-    InputStepDirection, InputStepError, InputStepOutcome, InputStepState, canonical_input_type,
-    date_input_milliseconds, date_input_value_from_milliseconds,
-    input_type_supports_value_as_number, month_input_milliseconds,
-    month_input_value_from_milliseconds, sanitize_input_value_for_type, step_input_value,
-    time_input_milliseconds, time_input_value_from_milliseconds, week_input_milliseconds,
+    InputStepDirection, InputStepError, InputStepOutcome, InputStepState, date_input_milliseconds,
+    date_input_value_from_milliseconds, month_input_milliseconds,
+    month_input_value_from_milliseconds, step_input_value, time_input_milliseconds,
+    time_input_value_from_milliseconds, week_input_milliseconds,
     week_input_value_from_milliseconds,
 };
 
@@ -41,13 +41,13 @@ fn input_type_getter_from_object<'s>(
         rv.set_null();
         return;
     };
-    let value = unsafe { &*runtime_ptr }
+    let input_type = unsafe { &*runtime_ptr }
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .map(|element| canonical_input_type(&element.input_type()).to_owned())
-        .unwrap_or_else(|| "text".to_owned());
-    let Some(value) = v8_string(scope, &value) else {
+        .map(Element::input_type)
+        .unwrap_or_default();
+    let Some(value) = v8_string(scope, input_type.as_ref()) else {
         rv.set_null();
         return;
     };
@@ -73,51 +73,41 @@ fn input_type_setter_on_object<'s>(
     else {
         return;
     };
-    let canonical = canonical_input_type(&value).to_owned();
+    let canonical = InputType::from_attribute_value(Some(&value));
     let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
     else {
         return;
     };
-    // HTML spec: when an input's type changes, the value sanitization
-    // algorithm runs against the current value. Snapshot the current value
-    // (either the dirty IDL value or, if unset, the `value` content
-    // attribute's default) BEFORE flipping the type so we can re-run the
-    // new state's sanitizer against the old text.
-    let (previous_type, current_value): (Option<String>, Option<String>) = {
+    let previous_state: Option<(InputType, String)> = {
         let runtime = unsafe { &*runtime_ptr };
         runtime
             .dom_host()
             .node(handle)
             .and_then(Node::as_element)
             .map(|element| (element.input_type(), element.input_value().to_owned()))
-            .unzip()
     };
 
     set_reflected_attribute(scope, runtime_ptr, handle, "type", &value);
 
-    if let Some(raw) = current_value {
-        let sanitized = sanitize_input_value_for_type(&canonical, &raw);
-        let was_selectable = previous_type
-            .as_deref()
-            .is_some_and(input_type_supports_variable_length_selection);
-        let is_selectable = input_type_supports_variable_length_selection(&canonical);
-        if sanitized.is_empty() && matches!(canonical.as_str(), "checkbox" | "radio") {
-            let runtime = unsafe { &mut *runtime_ptr };
-            let _ = runtime.set_input_value_with_dirty(handle, "", false);
-        } else if sanitized != raw {
-            let runtime = unsafe { &mut *runtime_ptr };
-            let _ = runtime.set_input_value(handle, &sanitized);
-            if !was_selectable && is_selectable {
-                let _ = runtime.set_selection_range(handle, 0, 0);
-            } else {
-                reset_input_selection_to_end(runtime, handle);
-            }
-        } else if !was_selectable && is_selectable {
+    if let Some((previous_type, previous_value)) = previous_state {
+        let was_selectable = previous_type.supports_variable_length_selection();
+        let is_selectable = canonical.supports_variable_length_selection();
+        if !was_selectable && is_selectable {
             let _ = unsafe { &mut *runtime_ptr }.set_selection_range(handle, 0, 0);
+        } else if was_selectable && is_selectable {
+            let current_value = unsafe { &*runtime_ptr }
+                .dom_host()
+                .node(handle)
+                .and_then(Node::as_element)
+                .map(Element::input_value)
+                .unwrap_or_default();
+            if current_value != previous_value {
+                reset_input_selection_to_end(unsafe { &mut *runtime_ptr }, handle);
+            }
         }
     }
 
-    if canonical == "radio" {
+    if canonical == InputType::Radio {
         let checked = unsafe { &*runtime_ptr }
             .dom_host()
             .node(handle)
@@ -175,9 +165,9 @@ pub(in crate::native_bridge) fn input_value_setter_function<'s>(
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .map(|element| canonical_input_type(&element.input_type()).to_owned())
-        .unwrap_or_else(|| "text".to_owned());
-    if matches!(input_type.as_str(), "checkbox" | "radio") {
+        .map(Element::input_type)
+        .unwrap_or_default();
+    if input_type.is_checkable() {
         // Checkbox and radio inputs use the HTML default/on value mode. Their
         // IDL setter reflects the content attribute instead of creating a
         // dirty, non-attribute value.
@@ -185,7 +175,7 @@ pub(in crate::native_bridge) fn input_value_setter_function<'s>(
         rv.set_undefined();
         return;
     }
-    if input_type == "file" && !next_value.is_empty() {
+    if input_type == InputType::File && !next_value.is_empty() {
         throw_dom_exception(
             scope,
             "InvalidStateError",
@@ -214,20 +204,13 @@ pub(in crate::native_bridge) fn input_value_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn input_type_supports_variable_length_selection(input_type: &str) -> bool {
-    matches!(
-        canonical_input_type(input_type),
-        "text" | "search" | "tel" | "url" | "password"
-    )
-}
-
 fn reset_input_selection_to_end(runtime: &mut JsContextHost, handle: DomHandle) {
     let Some(end) = runtime
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .filter(|element| input_type_supports_variable_length_selection(&element.input_type()))
-        .map(|element| element.input_value().chars().count() as u32)
+        .filter(|element| element.input_type().supports_variable_length_selection())
+        .map(|element| utf16_len(&element.input_value()) as u32)
     else {
         return;
     };
@@ -305,9 +288,8 @@ fn input_value_as_number_setter_on_object<'s>(
         .node(handle)
         .and_then(Node::as_element)
         .filter(|element| element.is_html_input())
-        .map(|element| element.input_type().to_owned());
-    let Some(input_type) =
-        input_type.filter(|input_type| input_type_supports_value_as_number(input_type))
+        .map(Element::input_type);
+    let Some(input_type) = input_type.filter(|input_type| input_type.supports_value_as_number())
     else {
         throw_dom_exception(
             scope,
@@ -320,7 +302,7 @@ fn input_value_as_number_setter_on_object<'s>(
     let next_value = if number.is_nan() {
         String::new()
     } else {
-        moli_dom::forms::input_number_to_value_string(&input_type, number).unwrap_or_default()
+        moli_dom::forms::input_number_to_value_string(input_type, number).unwrap_or_default()
     };
     let _ = runtime.set_input_value(handle, &next_value);
 }
@@ -354,7 +336,7 @@ fn input_value_as_date_getter_from_object<'s>(
         return;
     };
     let Some(millis) =
-        input_value_as_date_milliseconds(&element.input_type(), &element.input_value())
+        input_value_as_date_milliseconds(element.input_type(), &element.input_value())
     else {
         rv.set_null();
         return;
@@ -390,8 +372,8 @@ fn input_value_as_date_setter_on_object<'s>(
         .and_then(Node::as_element)
         .filter(|element| element.is_html_input())
         .map(Element::input_type)
-        .unwrap_or_else(|| "text".to_owned());
-    if !input_type_supports_value_as_date(&input_type) {
+        .unwrap_or_default();
+    if !input_type.supports_value_as_date() {
         throw_dom_exception(
             scope,
             "InvalidStateError",
@@ -411,7 +393,7 @@ fn input_value_as_date_setter_on_object<'s>(
             );
             return;
         };
-        input_date_value_from_milliseconds(&input_type, date.value_of()).unwrap_or_default()
+        input_date_value_from_milliseconds(input_type, date.value_of()).unwrap_or_default()
     };
     let _ = unsafe { &mut *runtime_ptr }.set_input_value(handle, &next_value);
 }
@@ -476,7 +458,7 @@ fn input_step_by(
                 let input_value = element.input_value();
                 step_input_value(
                     InputStepState {
-                        input_type: &input_type,
+                        input_type,
                         value: &input_value,
                         min: element.attribute("min"),
                         max: element.attribute("max"),
@@ -520,35 +502,28 @@ fn input_step_by(
 }
 
 fn input_value_as_number(element: &Element) -> Option<f64> {
-    moli_dom::forms::parse_input_numeric_value(&element.input_type(), &element.input_value())
+    moli_dom::forms::parse_input_numeric_value(element.input_type(), &element.input_value())
 }
 
-fn input_type_supports_value_as_date(input_type: &str) -> bool {
-    matches!(
-        canonical_input_type(input_type),
-        "date" | "month" | "week" | "time"
-    )
-}
-
-fn input_value_as_date_milliseconds(input_type: &str, value: &str) -> Option<f64> {
-    match canonical_input_type(input_type) {
-        "date" => date_input_milliseconds(value),
-        "month" => month_input_milliseconds(value),
-        "week" => week_input_milliseconds(value),
-        "time" => time_input_milliseconds(value),
+fn input_value_as_date_milliseconds(input_type: InputType, value: &str) -> Option<f64> {
+    match input_type {
+        InputType::Date => date_input_milliseconds(value),
+        InputType::Month => month_input_milliseconds(value),
+        InputType::Week => week_input_milliseconds(value),
+        InputType::Time => time_input_milliseconds(value),
         _ => None,
     }
 }
 
-fn input_date_value_from_milliseconds(input_type: &str, value: f64) -> Option<String> {
+fn input_date_value_from_milliseconds(input_type: InputType, value: f64) -> Option<String> {
     if !value.is_finite() {
         return Some(String::new());
     }
-    match canonical_input_type(input_type) {
-        "date" => date_input_value_from_milliseconds(value),
-        "month" => month_input_value_from_milliseconds(value),
-        "week" => week_input_value_from_milliseconds(value),
-        "time" => time_input_value_from_milliseconds(value),
+    match input_type {
+        InputType::Date => date_input_value_from_milliseconds(value),
+        InputType::Month => month_input_value_from_milliseconds(value),
+        InputType::Week => week_input_value_from_milliseconds(value),
+        InputType::Time => time_input_value_from_milliseconds(value),
         _ => None,
     }
 }
@@ -556,15 +531,6 @@ fn input_date_value_from_milliseconds(input_type: &str, value: f64) -> Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn canonical_input_type_uses_html_input_type_tokens() {
-        assert_eq!(canonical_input_type("text"), "text");
-        assert_eq!(canonical_input_type("EMAIL"), "email");
-        assert_eq!(canonical_input_type(" datetime-local "), "datetime-local");
-        assert_eq!(canonical_input_type("week"), "week");
-        assert_eq!(canonical_input_type("unknown"), "text");
-    }
 
     #[test]
     fn webidl_long_conversion_handles_special_and_wrapping_values() {

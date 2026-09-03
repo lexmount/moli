@@ -687,13 +687,6 @@ impl HostScriptScheduler {
         self.module_owner.native_compiled_module(entry_id)
     }
 
-    pub(crate) fn native_module_url_for(
-        &self,
-        module: v8::Local<'_, v8::Module>,
-    ) -> Option<url::Url> {
-        self.module_owner.native_module_url_for(module)
-    }
-
     pub(crate) fn mark_native_module_instantiated(&mut self, entry_id: ModuleEntryId) {
         self.module_owner.mark_native_module_instantiated(entry_id);
     }
@@ -1456,15 +1449,11 @@ impl HostScriptScheduler {
         )
     }
 
-    fn register_dynamic_import_map(
-        &mut self,
-        preparation: &RuntimeScriptPreparationContext,
-        source: &str,
-    ) {
-        if let Err(message) = self.register_import_map(source, &preparation.base_url) {
+    pub(crate) fn register_dynamic_import_map(&mut self, base_url: &Url, source: &str) {
+        if let Err(message) = self.register_import_map(source, base_url) {
             let work = self.plan_window_script_failure_report_lifecycle_work(
                 &message,
-                Some(preparation.base_url.as_str()),
+                Some(base_url.as_str()),
                 None,
             );
             self.enqueue_post_parse_lifecycle_work(work);
@@ -1518,7 +1507,7 @@ impl HostScriptScheduler {
         mode: ScriptMode,
     ) -> std::result::Result<PreparedScript, String> {
         let position = self.next_dynamic_position();
-        let script = build_runtime_prepared_script(
+        let mut script = build_runtime_prepared_script(
             preparation,
             NativeNodeId::new(node_id.index()),
             position,
@@ -1528,6 +1517,12 @@ impl HostScriptScheduler {
             kind,
             mode,
         )?;
+        if script.kind == ScriptKind::Module
+            && script.source_kind == ScriptSourceKind::External
+            && script.fetch_metadata.integrity.is_none()
+        {
+            script.fetch_metadata.integrity = self.resolve_module_integrity(&script.url);
+        }
         if let Some(state) = self.script_handles.get_mut(host_script_handle) {
             state.followup_lane = Self::followup_lane_for_script(state.source, script.mode);
             if Self::queued_script_waits_until_dom_content_loaded(

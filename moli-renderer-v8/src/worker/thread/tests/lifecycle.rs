@@ -9275,6 +9275,110 @@ async fn nested_worker_script_load_failure_is_async_error_event() {
 }
 
 #[tokio::test]
+async fn nested_worker_constructor_csp_block_is_async_and_reports_to_parent_global() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            const result = {
+                constructed: false,
+                violation: null,
+                error: null,
+                ping: false
+            };
+            function finish() {
+                if (result.violation && result.error) {
+                    postMessage(result);
+                    close();
+                }
+            }
+            const child = new Worker("data:text/javascript,postMessage('ping')");
+            child.addEventListener("message", () => {
+                result.ping = true;
+                postMessage(result);
+                close();
+            });
+            addEventListener("securitypolicyviolation", event => {
+                result.violation = {
+                    type: event.type,
+                    effectiveDirective: event.effectiveDirective,
+                    violatedDirective: event.violatedDirective,
+                    blockedURI: event.blockedURI,
+                    documentURI: event.documentURI,
+                    originalPolicy: event.originalPolicy,
+                    disposition: event.disposition,
+                    instance: event instanceof SecurityPolicyViolationEvent
+                };
+                finish();
+            });
+            child.addEventListener("error", event => {
+                event.preventDefault();
+                result.error = {
+                    messageIncludesCsp: event.message.includes("Content Security Policy"),
+                    filename: event.filename
+                };
+                finish();
+            });
+            result.constructed = true;
+            "#
+            .into(),
+            "https://app.example/parent.js".into(),
+        )
+        .with_content_security_policies(vec!["worker-src 'none'".to_owned()]),
+    );
+
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"constructed":true,"violation":{"type":"securitypolicyviolation","effectiveDirective":"worker-src","violatedDirective":"worker-src","blockedURI":"data","documentURI":"https://app.example/parent.js","originalPolicy":"worker-src 'none'","disposition":"enforce","instance":true},"error":{"messageIncludesCsp":true,"filename":"data:text/javascript,postMessage('ping')"},"ping":false}"#
+    );
+}
+
+#[tokio::test]
+async fn nested_worker_constructor_report_only_csp_is_async_and_does_not_block() {
+    ensure_v8();
+    let mut handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            const result = {
+                constructed: false,
+                violation: null,
+                childMessage: null
+            };
+            function finish() {
+                if (result.violation && result.childMessage) {
+                    postMessage(result);
+                    close();
+                }
+            }
+            const child = new Worker("data:text/javascript,postMessage('ping')");
+            addEventListener("securitypolicyviolation", event => {
+                result.violation = {
+                    effectiveDirective: event.effectiveDirective,
+                    blockedURI: event.blockedURI,
+                    disposition: event.disposition,
+                    instance: event instanceof SecurityPolicyViolationEvent
+                };
+                finish();
+            });
+            child.addEventListener("message", event => {
+                result.childMessage = event.data;
+                finish();
+            });
+            result.constructed = true;
+            "#
+            .into(),
+            "https://app.example/parent.js".into(),
+        )
+        .with_content_security_report_only_policies(vec!["worker-src 'none'".to_owned()]),
+    );
+
+    assert_eq!(
+        recv_post_json(&mut handle).await,
+        r#"{"constructed":true,"violation":{"effectiveDirective":"worker-src","blockedURI":"data","disposition":"report","instance":true},"childMessage":"ping"}"#
+    );
+}
+
+#[tokio::test]
 async fn worker_onmessage_exception_routes_through_worker_global_onerror() {
     ensure_v8();
     let mut handle = spawn_worker(

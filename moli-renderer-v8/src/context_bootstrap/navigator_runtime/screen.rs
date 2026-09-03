@@ -4,8 +4,10 @@ use super::super::media_queries::{
     simple_event_target_remove_event_listener_callback,
 };
 use super::super::*;
-use crate::util::{callback_data_index_value, callback_data_item};
-use crate::util::{get_private_value, set_private_value, throw_type_error};
+use crate::util::{
+    callback_data_index_value, callback_data_item, context_host_ptr_from_global_bridge,
+    get_private_value, set_private_value, throw_type_error,
+};
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
@@ -351,6 +353,21 @@ pub(in crate::context_bootstrap) fn build_window_screen<'s>(
     Ok(screen)
 }
 
+fn screen_owner_realm_is_current(
+    scope: &mut v8::PinScope<'_, '_>,
+    screen: v8::Local<'_, v8::Object>,
+) -> bool {
+    let Some(context) = screen.get_creation_context(scope) else {
+        return false;
+    };
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return false;
+    };
+    let host = unsafe { &*host_ptr };
+    host.window_execution_context_identity_for_access_check(context)
+        .is_some_and(|identity| host.window_execution_context_identity_is_current(identity))
+}
+
 fn screen_attribute_getter_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -373,6 +390,19 @@ fn screen_attribute_getter_callback<'s>(
                 &format!("Failed to materialize Screen.orientation: {error}"),
             ),
         }
+        return;
+    }
+    if matches!(
+        slot,
+        SCREEN_WIDTH_SLOT
+            | SCREEN_HEIGHT_SLOT
+            | SCREEN_AVAIL_WIDTH_SLOT
+            | SCREEN_AVAIL_HEIGHT_SLOT
+            | SCREEN_AVAIL_LEFT_SLOT
+            | SCREEN_AVAIL_TOP_SLOT
+    ) && !screen_owner_realm_is_current(scope, args.this())
+    {
+        rv.set(v8::Number::new(scope, 0.0).into());
         return;
     }
     rv.set(

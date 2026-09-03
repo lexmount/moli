@@ -53,6 +53,7 @@ impl<'a> QueryElement<'a> {
             shared_lock,
             style_data,
             atom_cache,
+            validity_states: None,
         }
     }
 
@@ -143,6 +144,7 @@ impl<'a> TElement for QueryElement<'a> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         }
     }
 
@@ -156,6 +158,7 @@ impl<'a> TElement for QueryElement<'a> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
             .collect::<Vec<_>>();
         LayoutIterator(children.into_iter())
@@ -344,6 +347,7 @@ impl<'a> TElement for QueryElement<'a> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
     }
 
@@ -356,6 +360,7 @@ impl<'a> TElement for QueryElement<'a> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
     }
 
@@ -390,6 +395,7 @@ impl<'a> TElement for QueryElement<'a> {
                         shared_lock: self.shared_lock,
                         style_data: self.style_data,
                         atom_cache: self.atom_cache,
+                        validity_states: self.validity_states,
                     })
             });
         }
@@ -457,6 +463,7 @@ impl SelectorsElement for QueryElement<'_> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         })
     }
 
@@ -475,6 +482,7 @@ impl SelectorsElement for QueryElement<'_> {
             shared_lock: self.shared_lock,
             style_data: self.style_data,
             atom_cache: self.atom_cache,
+            validity_states: self.validity_states,
         })
     }
 
@@ -491,6 +499,7 @@ impl SelectorsElement for QueryElement<'_> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
     }
 
@@ -503,6 +512,7 @@ impl SelectorsElement for QueryElement<'_> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
     }
 
@@ -515,6 +525,7 @@ impl SelectorsElement for QueryElement<'_> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
     }
 
@@ -529,6 +540,7 @@ impl SelectorsElement for QueryElement<'_> {
                 shared_lock: self.shared_lock,
                 style_data: self.style_data,
                 atom_cache: self.atom_cache,
+                validity_states: self.validity_states,
             })
     }
 
@@ -683,6 +695,16 @@ impl SelectorsElement for QueryElement<'_> {
         id: &<Self::Impl as selectors::parser::SelectorImpl>::Identifier,
         case_sensitivity: CaseSensitivity,
     ) -> bool {
+        if let Some(actual_units) = self.element().attribute_utf16_units("id") {
+            let expected_units = id.as_ref().encode_utf16().collect::<Vec<_>>();
+            return match case_sensitivity {
+                CaseSensitivity::CaseSensitive => actual_units == expected_units.as_slice(),
+                CaseSensitivity::AsciiCaseInsensitive => self
+                    .element()
+                    .id()
+                    .is_some_and(|actual| actual.eq_ignore_ascii_case(id.as_ref())),
+            };
+        }
         self.element()
             .id()
             .is_some_and(|actual| match case_sensitivity {

@@ -268,6 +268,42 @@ fn has_pseudo_class_invalidation_updates_derived_form_states() {
 }
 
 #[test]
+fn optgroup_disabled_invalidation_updates_nested_option_computed_style() {
+    let mut vm = new_storage_test_vm("https://nested-option-disabled-style.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const head = document.head || root.appendChild(document.createElement('head'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const style = document.createElement('style');
+  style.textContent = 'option { color: black; } option:disabled { color: gray; }';
+  head.append(style);
+
+  const select = document.createElement('select');
+  const optgroup = document.createElement('optgroup');
+  const div = document.createElement('div');
+  const option = document.createElement('option');
+  div.append(option);
+  optgroup.append(div);
+  select.append(optgroup);
+  body.append(select);
+
+  const computed = getComputedStyle(option);
+  const before = computed.color;
+  optgroup.disabled = true;
+  return [before, computed.color, option.matches(':disabled')].join('|');
+})()
+"#,
+        )
+        .expect("nested option disabled style should evaluate");
+
+    assert_eq!(result, "rgb(0, 0, 0)|rgb(128, 128, 128)|true");
+}
+
+#[test]
 fn focus_selector_invalidation_preserves_unrelated_cache_entries() {
     let mut vm = new_storage_test_vm("https://focus-style-cache-targeted.test/");
     let document = vm.document_handle_for_test();
@@ -2686,6 +2722,43 @@ fn live_input_validity_state_preserves_expected_shape() {
         "valueMissing,typeMismatch,patternMismatch,tooLong,tooShort,rangeUnderflow,rangeOverflow,stepMismatch,badInput,customError,valid|true|false|false|false|false|false|false|false|false|false|false"
     );
 }
+
+#[test]
+fn cloned_text_controls_preserve_user_edited_length_validity() {
+    let mut vm = new_parsed_test_vm(
+        "https://clone-user-edited-validity.test/",
+        "<!doctype html><body></body>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => ['input', 'textarea'].map(tag => {
+  const control = document.createElement(tag);
+  document.body.append(control);
+  control.focus();
+  document.execCommand('insertText', false, 'something');
+  control.maxLength = 0;
+  const clone = control.cloneNode(true);
+  return [
+    control.value,
+    control.validity.tooLong,
+    control.matches(':invalid'),
+    clone.value,
+    clone.validity.tooLong,
+    clone.matches(':invalid')
+  ].join(':');
+}).join('|'))()
+"#,
+        )
+        .expect("cloned text-control validity should evaluate");
+
+    assert_eq!(
+        result,
+        "something:true:true:something:true:true|something:true:true:something:true:true"
+    );
+}
+
 #[test]
 fn detached_input_and_textarea_track_dirty_state_for_form_reset() {
     let mut vm = new_storage_test_vm("https://detached-input-dirty-state.test/path/page.html");

@@ -1015,9 +1015,12 @@ pub(in crate::native_bridge::document) fn detached_document_implementation_gette
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     let document = args.this();
-    let global = scope.get_current_context().global(scope);
-    let _ = crate::context_bootstrap::ensure_dom_implementation_singleton(scope, global);
-    match ensure_detached_document_implementation(scope, document) {
+    let relevant_context = crate::native_bridge::node_relevant_context(scope, document)
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+    let global = relevant_context.global(target_scope);
+    let _ = crate::context_bootstrap::ensure_dom_implementation_singleton(target_scope, global);
+    match ensure_detached_document_implementation(target_scope, document) {
         Some(implementation) => rv.set(implementation.into()),
         None => rv.set_null(),
     }

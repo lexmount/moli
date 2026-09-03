@@ -25,13 +25,20 @@ use super::values::{
     parse_transition_shorthand_entries,
 };
 use style::{
+    color::{
+        ColorFunction,
+        component::ColorComponent,
+        parsing::{NumberOrAngleComponent, NumberOrPercentageComponent},
+    },
     context::QuirksMode,
     properties::{
-        PropertyDeclarationId, PropertyId, SourcePropertyDeclaration, parse_one_declaration_into,
+        PropertyDeclaration, PropertyDeclarationId, PropertyId, SourcePropertyDeclaration,
+        parse_one_declaration_into,
     },
     stylesheets::{CssRuleType, Origin, UrlExtraData},
+    values::specified::{Color as SpecifiedColor, ColorPropertyValue},
 };
-use style_traits::{CssString, ParsingMode};
+use style_traits::{CssString, ParsingMode, ToCss};
 
 pub(in crate::native_bridge::element::styles) struct StyleObjectEntries {
     pub(in crate::native_bridge::element::styles) entries: Vec<StyleEntry>,
@@ -1305,12 +1312,17 @@ pub(crate) fn pdb_property_value_for_cssom_query_with_side_entries(
     if !pdb_property_is_declared_for_cssom_query(block, property) {
         return None;
     }
-    let value = block.property_value(property)?;
+    let mut value = block.property_value(property)?;
     if value.is_empty() && moli_css_parse::is_cssom_custom_property_name(property) {
         return Some(" ".to_owned());
     }
     if value.is_empty() && !moli_css_parse::is_cssom_custom_property_name(property) {
         return None;
+    }
+    if css_color_value_property_requires_stylo_parser(property)
+        && let Some(canonical) = canonical_unresolved_legacy_color_function(&value)
+    {
+        value = canonical;
     }
     Some(value)
 }
@@ -1801,6 +1813,9 @@ fn style_entries_affecting_property(entries: &[StyleEntry], property: &str) -> V
 }
 
 fn cssom_style_property_write_uses_pdb(name: &str, value: &str) -> bool {
+    if moli_css_parse::css_value_is_eof_open_var_function(value) {
+        return false;
+    }
     let name = canonical_style_property_name(name);
     if moli_css_parse::is_cssom_custom_property_name(&name) {
         return !value.is_empty() && stylo_pdb_entries_for_property(&name, value, false).is_some();
@@ -1998,6 +2013,7 @@ fn cssom_style_shorthand_query_uses_pdb(name: &str) -> bool {
             | "text-decoration"
             | "text-emphasis"
             | "transition"
+            | "white-space"
             | "font"
             | "font-variant"
             | "-webkit-text-stroke"
@@ -2291,6 +2307,9 @@ fn stylo_pdb_entries_for_property(
     if projection.set_result == moli_css_parse::CssSetResult::ParseError {
         return None;
     }
+    let canonical_unresolved_color = css_color_value_property_requires_stylo_parser(name)
+        .then(|| canonical_unresolved_legacy_color_function(value))
+        .flatten();
     let mut accepted_names = projection.stored_names.clone();
     append_unique_name(&mut accepted_names, name);
     let affected_names = projection.affected_names.clone();
@@ -2310,12 +2329,13 @@ fn stylo_pdb_entries_for_property(
     let mut entries = Vec::new();
     for entry in block_entries {
         let entry_name = canonical_style_property_name(&entry.name);
-        let is_declared_empty_custom_property = entry.value.is_empty()
+        let mut entry_value = entry.value;
+        let is_declared_empty_custom_property = entry_value.is_empty()
             && !value.is_empty()
             && moli_css_parse::is_cssom_custom_property_name(&entry_name)
             && block.property_is_declared(&entry_name);
         if entry_name.is_empty()
-            || entry.value.is_empty() && !is_declared_empty_custom_property
+            || entry_value.is_empty() && !is_declared_empty_custom_property
             || entry.priority != priority
             || !accepted_names
                 .iter()
@@ -2323,9 +2343,14 @@ fn stylo_pdb_entries_for_property(
         {
             return None;
         }
+        if entry_name == name
+            && let Some(canonical) = canonical_unresolved_color.as_ref()
+        {
+            entry_value.clone_from(canonical);
+        }
         entries.push(StyleEntry {
             name: entry_name,
-            value: entry.value,
+            value: entry_value,
             priority: entry.priority,
         });
     }
@@ -2345,6 +2370,9 @@ fn parse_pdb_supplemental_entries(
     value: &str,
     priority: bool,
 ) -> Option<ParsedStylePropertyEntries> {
+    if let Some(entries) = parse_content_alt_counter_supplemental_entries(name, value, priority) {
+        return Some(entries);
+    }
     if let Some(entries) = parse_preferred_pdb_supplemental_entries(name, value, priority) {
         return Some(entries);
     }
@@ -2367,6 +2395,140 @@ fn parse_pdb_supplemental_entries(
         });
     }
     parse_transition_numeric_property_entries(name, value, priority)
+}
+
+fn parse_content_alt_counter_supplemental_entries(
+    name: &str,
+    value: &str,
+    priority: bool,
+) -> Option<ParsedStylePropertyEntries> {
+    if name != "content" {
+        return None;
+    }
+    let (content, alt) = split_content_alt_text(value)?;
+    if !content_alt_text_contains_only_strings_attrs_and_counters(alt)? {
+        return None;
+    }
+
+    // Stylo already owns the grammar on both sides of the slash. Its current
+    // content parser only has one narrower restriction: counter() and
+    // counters() are rejected after the alt marker. Validate the main list
+    // with an ordinary string alt, then validate the alt list as an ordinary
+    // content list. This keeps images and quote keywords out of alt text while
+    // retaining Stylo's counter argument and counter-style validation.
+    stylo_pdb_single_property_value(name, &format!("{content} / \"\""), priority)?;
+    let content = stylo_pdb_single_property_value(name, content, priority)?;
+    let alt = stylo_pdb_single_property_value(name, alt, priority)?;
+    Some(ParsedStylePropertyEntries {
+        entries: vec![StyleEntry {
+            name: name.to_owned(),
+            value: format!("{content} / {alt}"),
+            priority,
+        }],
+        affected_names: vec![name.to_owned()],
+    })
+}
+
+fn stylo_pdb_single_property_value(name: &str, value: &str, priority: bool) -> Option<String> {
+    let parsed = stylo_pdb_entries_for_property(name, value, priority)?;
+    let [entry] = parsed.entries.as_slice() else {
+        return None;
+    };
+    (entry.name == name && entry.priority == priority).then(|| entry.value.clone())
+}
+
+fn split_content_alt_text(value: &str) -> Option<(&str, &str)> {
+    let mut parser_input = cssparser::ParserInput::new(value);
+    let mut input = cssparser::Parser::new(&mut parser_input);
+    let value_start = input.position();
+    let mut slash = None;
+
+    loop {
+        let token_start = input.position();
+        let Ok(token) = input.next_including_whitespace_and_comments().cloned() else {
+            break;
+        };
+        let token_end = input.position();
+        match token {
+            cssparser::Token::Delim('/') => {
+                if slash.replace((token_start, token_end)).is_some() {
+                    return None;
+                }
+            }
+            token if content_component_starts_nested_block(&token) => {
+                let nested: Result<(), cssparser::ParseError<'_, ()>> =
+                    input.parse_nested_block(|input| {
+                        consume_nested_content_components(input)
+                            .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                    });
+                nested.ok()?;
+            }
+            _ => {}
+        }
+    }
+    if !input.is_exhausted() {
+        return None;
+    }
+
+    let value_end = input.position();
+    let (slash_start, slash_end) = slash?;
+    let content = input.slice(value_start..slash_start).trim();
+    let alt = input.slice(slash_end..value_end).trim();
+    (!content.is_empty() && !alt.is_empty()).then_some((content, alt))
+}
+
+fn content_alt_text_contains_only_strings_attrs_and_counters(value: &str) -> Option<bool> {
+    let mut parser_input = cssparser::ParserInput::new(value);
+    let mut input = cssparser::Parser::new(&mut parser_input);
+    let mut has_counter = false;
+
+    while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
+        match token {
+            cssparser::Token::WhiteSpace(_)
+            | cssparser::Token::Comment(_)
+            | cssparser::Token::QuotedString(_) => {}
+            cssparser::Token::Function(name)
+                if name.eq_ignore_ascii_case("attr")
+                    || name.eq_ignore_ascii_case("counter")
+                    || name.eq_ignore_ascii_case("counters") =>
+            {
+                has_counter |=
+                    name.eq_ignore_ascii_case("counter") || name.eq_ignore_ascii_case("counters");
+                let nested: Result<(), cssparser::ParseError<'_, ()>> =
+                    input.parse_nested_block(|input| {
+                        consume_nested_content_components(input)
+                            .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                    });
+                nested.ok()?;
+            }
+            _ => return None,
+        }
+    }
+    input.is_exhausted().then_some(has_counter)
+}
+
+fn content_component_starts_nested_block(token: &cssparser::Token<'_>) -> bool {
+    matches!(
+        token,
+        cssparser::Token::Function(_)
+            | cssparser::Token::ParenthesisBlock
+            | cssparser::Token::SquareBracketBlock
+            | cssparser::Token::CurlyBracketBlock
+    )
+}
+
+fn consume_nested_content_components(input: &mut cssparser::Parser<'_, '_>) -> Option<()> {
+    while let Ok(token) = input.next_including_whitespace_and_comments().cloned() {
+        if content_component_starts_nested_block(&token) {
+            let nested: Result<(), cssparser::ParseError<'_, ()>> =
+                input.parse_nested_block(|input| {
+                    consume_nested_content_components(input)
+                        .ok_or_else(|| input.new_custom_error::<(), ()>(()))
+                });
+            nested.ok()?;
+        }
+    }
+    input.is_exhausted().then_some(())
 }
 
 fn parse_text_decoration_line_supplemental_entries(
@@ -3242,6 +3404,93 @@ fn css_color_value_property_requires_stylo_parser(name: &str) -> bool {
     )
 }
 
+fn canonical_color_number_or_percentage(
+    component: &ColorComponent<NumberOrPercentageComponent>,
+    percentage_basis: f32,
+    minimum: f32,
+    maximum: Option<f32>,
+) -> ColorComponent<NumberOrPercentageComponent> {
+    let number = match component {
+        ColorComponent::Value(NumberOrPercentageComponent::Number(value)) => Some(*value),
+        ColorComponent::Value(NumberOrPercentageComponent::Percentage(value)) => {
+            Some(*value * percentage_basis)
+        }
+        _ => None,
+    };
+    let Some(number) = number else {
+        return component.clone();
+    };
+    let number = maximum.map_or(number.max(minimum), |maximum| {
+        number.clamp(minimum, maximum)
+    });
+    ColorComponent::Value(NumberOrPercentageComponent::Number(number))
+}
+
+fn canonical_color_number_or_angle(
+    component: &ColorComponent<NumberOrAngleComponent>,
+) -> ColorComponent<NumberOrAngleComponent> {
+    match component {
+        ColorComponent::Value(NumberOrAngleComponent::Angle(degrees)) => {
+            ColorComponent::Value(NumberOrAngleComponent::Number(*degrees))
+        }
+        _ => component.clone(),
+    }
+}
+
+fn canonical_unresolved_legacy_color_function(value: &str) -> Option<String> {
+    let lower = value.trim_start().to_ascii_lowercase();
+    if !["rgb(", "rgba(", "hsl(", "hsla(", "hwb("]
+        .iter()
+        .any(|prefix| lower.starts_with(prefix))
+    {
+        return None;
+    }
+
+    let mut declarations = parse_style_property_with_stylo("color", value, None)?;
+    let declaration = declarations.drain().declarations.next()?;
+    let PropertyDeclaration::Color(ColorPropertyValue(SpecifiedColor::ColorFunction(function))) =
+        declaration
+    else {
+        return None;
+    };
+
+    let canonical = match function.as_ref() {
+        ColorFunction::Rgb(origin, red, green, blue, alpha) if origin.as_ref().is_none() => {
+            ColorFunction::Rgb(
+                origin.clone(),
+                canonical_color_number_or_percentage(red, 255.0, 0.0, Some(255.0)),
+                canonical_color_number_or_percentage(green, 255.0, 0.0, Some(255.0)),
+                canonical_color_number_or_percentage(blue, 255.0, 0.0, Some(255.0)),
+                canonical_color_number_or_percentage(alpha, 1.0, 0.0, Some(1.0)),
+            )
+        }
+        ColorFunction::Hsl(origin, hue, saturation, lightness, alpha)
+            if origin.as_ref().is_none() =>
+        {
+            ColorFunction::Hsl(
+                origin.clone(),
+                canonical_color_number_or_angle(hue),
+                canonical_color_number_or_percentage(saturation, 100.0, 0.0, None),
+                canonical_color_number_or_percentage(lightness, 100.0, 0.0, None),
+                canonical_color_number_or_percentage(alpha, 1.0, 0.0, Some(1.0)),
+            )
+        }
+        ColorFunction::Hwb(origin, hue, whiteness, blackness, alpha)
+            if origin.as_ref().is_none() =>
+        {
+            ColorFunction::Hwb(
+                origin.clone(),
+                canonical_color_number_or_angle(hue),
+                canonical_color_number_or_percentage(whiteness, 100.0, 0.0, None),
+                canonical_color_number_or_percentage(blackness, 100.0, 0.0, None),
+                canonical_color_number_or_percentage(alpha, 1.0, 0.0, Some(1.0)),
+            )
+        }
+        _ => return None,
+    };
+    Some(canonical.to_css_string())
+}
+
 fn background_image_value_requires_stylo_parser(value: &str) -> bool {
     let lower = value.trim_start().to_ascii_lowercase();
     lower.starts_with("image-set(") || lower.starts_with("-webkit-image-set(")
@@ -3968,6 +4217,104 @@ mod tests {
     }
 
     #[test]
+    fn content_visibility_cssom_writes_use_stylo_pdb() {
+        for (value, expected) in [
+            ("hidden", "hidden"),
+            ("AUTO", "auto"),
+            ("inherit", "inherit"),
+        ] {
+            assert!(cssom_style_property_write_uses_pdb(
+                "content-visibility",
+                value
+            ));
+            let parsed = parse_style_property_entries_for_cssom_write(
+                "content-visibility",
+                value,
+                true,
+                None,
+            )
+            .expect("content-visibility should parse through Stylo PDB");
+            assert_eq!(parsed.entries.len(), 1);
+            assert_eq!(parsed.entries[0].name, "content-visibility");
+            assert_eq!(parsed.entries[0].value, expected);
+            assert!(parsed.entries[0].priority);
+            assert!(style_entry_is_pdb_safe(&parsed.entries[0]));
+        }
+
+        assert!(
+            parse_style_property_entries_for_cssom_write(
+                "content-visibility",
+                "bogus",
+                false,
+                None,
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn content_alt_counters_use_validated_supplemental_entries() {
+        for (input, expected) in [
+            ("\"\" / counter(cnt)", "\"\" / counter(cnt)"),
+            (
+                "\"regular text\" / \"alt text 1\" counter(cnt) \"alt text 2\"",
+                "\"regular text\" / \"alt text 1\" counter(cnt) \"alt text 2\"",
+            ),
+            (
+                "\"regular text\" / counter(cnt) \"alt text\"",
+                "\"regular text\" / counter(cnt) \"alt text\"",
+            ),
+            (
+                "\"regular text\" / counters(chapter, \".\", DECIMAL)",
+                "\"regular text\" / counters(chapter, \".\")",
+            ),
+            (
+                "\"main / label\" / /* alt */ counter(cnt)",
+                "\"main / label\" / counter(cnt)",
+            ),
+        ] {
+            let parsed = parse_style_property_entries_for_cssom_write("content", input, true, None)
+                .unwrap_or_else(|| panic!("content: {input} should parse"));
+            assert_eq!(parsed.entries.len(), 1, "content: {input}");
+            assert_eq!(parsed.entries[0].name, "content", "content: {input}");
+            assert_eq!(parsed.entries[0].value, expected, "content: {input}");
+            assert!(parsed.entries[0].priority, "content: {input}");
+            assert_eq!(parsed.affected_names, vec!["content".to_owned()]);
+            assert!(style_entry_is_pdb_safe(&parsed.entries[0]));
+            assert!(
+                style_entry_is_pdb_supplemental_side_entry(&parsed.entries[0]),
+                "content: {input} should use side storage until Stylo parses alt counters"
+            );
+        }
+
+        for invalid in [
+            "none / counter(cnt)",
+            "\"\" / counter()",
+            "\"\" / url(alt.svg) counter(cnt)",
+            "\"\" / open-quote counter(cnt)",
+            "\"\" / counter(cnt) / \"extra\"",
+            "\"\" / counter(cnt) }",
+        ] {
+            assert!(
+                parse_style_property_entries_for_cssom_write("content", invalid, false, None)
+                    .is_none(),
+                "content: {invalid} should remain invalid"
+            );
+        }
+
+        let ordinary = parse_style_property_entries_for_cssom_write(
+            "content",
+            "\"regular text\" / \"alt text\"",
+            false,
+            None,
+        )
+        .expect("ordinary string alt text should remain Stylo-backed");
+        assert!(!style_entry_is_pdb_supplemental_side_entry(
+            &ordinary.entries[0]
+        ));
+    }
+
+    #[test]
     fn transition_pdb_parser_accepts_dynamic_numeric_longhands() {
         let shorthand = parse_style_property_entries_with_base(
             "transition",
@@ -4382,6 +4729,44 @@ mod tests {
             assert!(parsed.entries[0].priority);
             assert!(parse_style_property_entries_with_pdb(property, value, true).is_some());
             assert!(style_entry_is_pdb_safe(&parsed.entries[0]));
+        }
+    }
+
+    #[test]
+    fn unresolved_legacy_color_functions_use_canonical_component_units() {
+        for (input, expected) in [
+            (
+                "rgba(calc(50 + (sign(1em - 10px) * 10)) 400% -400% / 50%)",
+                "rgb(calc(50 + (10 * sign(1em - 10px))) 255 0 / 0.5)",
+            ),
+            (
+                "hsla(calc(50deg + (sign(1em - 10px) * 10deg)) -100% 300% / 50%)",
+                "hsl(calc(50deg + (10deg * sign(1em - 10px))) 0 300 / 0.5)",
+            ),
+            (
+                "hwb(calc(110deg + (sign(1em - 10px) * 10deg)) 30% 50% / 50%)",
+                "hwb(calc(110deg + (10deg * sign(1em - 10px))) 30 50 / 0.5)",
+            ),
+            (
+                "hwb(120deg 30% 50% / calc(50% + (sign(1em - 10px) * 10%)))",
+                "hwb(120 30 50 / calc(50% + (10% * sign(1em - 10px))))",
+            ),
+        ] {
+            let parsed = parse_style_property_entries_for_cssom_write("color", input, false, None)
+                .unwrap_or_else(|| panic!("color should accept {input}"));
+            assert_eq!(parsed.entries.len(), 1);
+            assert_eq!(parsed.entries[0].value, expected);
+
+            let mut block = moli_css_parse::CssDeclarationBlock::default();
+            assert_ne!(
+                block.set_property("color", input, false),
+                moli_css_parse::CssSetResult::ParseError
+            );
+            assert_eq!(
+                pdb_property_value_for_cssom_query_with_side_entries(&block, "color", &[])
+                    .as_deref(),
+                Some(expected)
+            );
         }
     }
 

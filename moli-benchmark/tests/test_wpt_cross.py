@@ -122,7 +122,9 @@ from moli_benchmark.wpt_cross.server import (
     _inject_bench_report_bridge_config,
     _host_header_hostname,
     _headers_include,
+    _inspect_headers_response_headers,
     _normalize_harness_case_key,
+    _nosniff_javascript_response,
     _needs_wpt_template_substitution,
     _legacy_wpt_resource_alias,
     _pipe_response_header_operations,
@@ -137,6 +139,7 @@ from moli_benchmark.wpt_cross.server import (
     _substitute_wpt_template_variables,
     _window_js_window_wrapper,
     _wasm_webapi_status_code,
+    _workers_url_encoding_response,
     _wpt_delay_seconds,
     _wpt_dedicated_worker_js_wrapper_html,
     _wpt_any_dedicated_worker_wrapper_html,
@@ -438,6 +441,94 @@ class WptCrossTests(unittest.TestCase):
             sum(command[0] == "Runtime.evaluate" for command in client.commands),
             2,
         )
+
+    def test_run_one_case_gives_in_flight_probe_the_remaining_case_budget(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.commands: list[tuple[str, dict | None, str | None]] = []
+                self.probe_timeout: float | None = None
+
+            async def send(
+                self,
+                method: str,
+                params: dict | None = None,
+                *,
+                session_id: str | None = None,
+            ) -> int:
+                self.commands.append((method, params, session_id))
+                return len(self.commands)
+
+            async def recv_until_id(
+                self, command_id: int, *, timeout: float
+            ) -> tuple[dict, list[dict]]:
+                method = self.commands[command_id - 1][0]
+                if method == "Page.navigate":
+                    return (
+                        {
+                            "sessionId": "SESSION-1",
+                            "result": {
+                                "frameId": "FRAME-1",
+                                "loaderId": "LOADER-1",
+                            },
+                        },
+                        [
+                            {
+                                "method": "Page.frameNavigated",
+                                "sessionId": "SESSION-1",
+                                "params": {
+                                    "frame": {
+                                        "id": "FRAME-1",
+                                        "loaderId": "LOADER-1",
+                                        "url": "http://localhost/slow.html",
+                                    }
+                                },
+                            }
+                        ],
+                    )
+
+                self.probe_timeout = timeout
+                # Model a renderer-bound command that needs more than the old
+                # five-second receive cap without making this test actually wait.
+                if timeout <= 5.0:
+                    raise asyncio.TimeoutError()
+                return (
+                    {
+                        "result": {
+                            "result": {
+                                "value": {
+                                    "href": "http://localhost/slow.html",
+                                    "casePath": "/slow.html",
+                                    "bridgeInstalled": True,
+                                    "payload": {
+                                        "case_path": "/slow.html",
+                                        "source": "completion-callback",
+                                        "harness": {"status": 0},
+                                        "tests": [
+                                            {"name": "slow result", "status": 0}
+                                        ],
+                                    },
+                                }
+                            }
+                        }
+                    },
+                    [],
+                )
+
+        client = FakeClient()
+        result = asyncio.run(
+            _run_one_case(
+                client=client,  # type: ignore[arg-type]
+                session_id="SESSION-1",
+                case_path="slow.html",
+                url="http://localhost/slow.html",
+                timeout_seconds=30.0,
+            )
+        )
+
+        self.assertEqual(result.status, "pass")
+        self.assertEqual(result.subtests_pass, 1)
+        self.assertIsNotNone(client.probe_timeout)
+        self.assertGreater(client.probe_timeout or 0.0, 25.0)
 
     def test_close_page_disposes_context_with_all_auxiliary_targets(self) -> None:
         class FakeClient:
@@ -3947,6 +4038,17 @@ test(() => {}, "ok");
         self.assertIn(b"ctrlKey: !!modifiers.Control", BENCH_TESTDRIVER_VENDOR_BRIDGE)
         self.assertIn(b"shiftKey: !!modifiers.Shift", BENCH_TESTDRIVER_VENDOR_BRIDGE)
 
+    def test_testdriver_vendor_bridge_send_keys_runs_text_edit_default_action(
+        self,
+    ) -> None:
+        self.assertIn(b"insertSendKeyText", BENCH_TESTDRIVER_VENDOR_BRIDGE)
+        self.assertIn(
+            b"doc.execCommand('insertText', false, key)",
+            BENCH_TESTDRIVER_VENDOR_BRIDGE,
+        )
+        self.assertIn(b"codePoint >= 0xE000", BENCH_TESTDRIVER_VENDOR_BRIDGE)
+        self.assertIn(b"if (keyAllowed)", BENCH_TESTDRIVER_VENDOR_BRIDGE)
+
     def test_testdriver_vendor_bridge_focuses_user_activation_target(self) -> None:
         self.assertIn(b"focusForUserActivation", BENCH_TESTDRIVER_VENDOR_BRIDGE)
         self.assertIn(b"document.activeElement === before", BENCH_TESTDRIVER_VENDOR_BRIDGE)
@@ -3989,6 +4091,193 @@ test(() => {}, "ok");
         self.assertIsNone(_wpt_delay_seconds("ms=invalid"))
         self.assertIsNone(_wpt_delay_seconds("ms=-1"))
         self.assertIsNone(_wpt_delay_seconds("ms=nan"))
+
+    def test_fixture_server_models_worker_url_utf8_query_check(self) -> None:
+        self.assertEqual(_workers_url_encoding_response("x=%C3%A5"), b"PASS")
+        self.assertEqual(_workers_url_encoding_response("x=%C3%A5&x=wrong"), b"PASS")
+        self.assertEqual(_workers_url_encoding_response("x=%C3%83%C2%A5"), b"FAIL")
+        self.assertEqual(_workers_url_encoding_response("x=%E5"), b"FAIL")
+        self.assertEqual(_workers_url_encoding_response(""), b"FAIL")
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text(
+                "// testharness", encoding="utf-8"
+            )
+            with WptFixtureServer(root_path) as server:
+                url = (
+                    f"{server.base_url}/workers/semantics/encodings/"
+                    "003-1.py?x=%C3%A5"
+                )
+                responses = []
+                for method in ("GET", "HEAD"):
+                    with urlopen(Request(url, method=method), timeout=2) as response:
+                        responses.append(
+                            (
+                                method,
+                                response.status,
+                                response.read(),
+                                response.headers["Content-Type"],
+                            )
+                        )
+
+        self.assertEqual(
+            responses,
+            [
+                ("GET", 200, b"PASS", "text/plain; charset=utf-8"),
+                ("HEAD", 200, b"", "text/plain; charset=utf-8"),
+            ],
+        )
+
+    def test_fixture_server_models_form_echo_handler(self) -> None:
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text(
+                "// testharness", encoding="utf-8"
+            )
+            with WptFixtureServer(root_path) as server:
+                url = (
+                    f"{server.base_url}/html/semantics/forms/"
+                    "form-submission-0/form-echo.py"
+                )
+                responses = []
+                for method, body in (
+                    ("GET", None),
+                    ("HEAD", None),
+                    ("POST", b"\x00\x09\x7f\x80\xff"),
+                ):
+                    request = Request(url, data=body, method=method)
+                    with urlopen(request, timeout=2) as response:
+                        responses.append(
+                            (
+                                method,
+                                response.status,
+                                response.read(),
+                                response.headers["Content-Type"],
+                            )
+                        )
+
+        self.assertEqual(
+            responses,
+            [
+                ("GET", 200, b"", "text/plain"),
+                ("HEAD", 200, b"", "text/plain"),
+                ("POST", 200, b"00 09 7f 80 ff", "text/plain"),
+            ],
+        )
+
+    def test_fixture_server_models_fetch_inspect_headers_handler(self) -> None:
+        self.assertEqual(
+            _inspect_headers_response_headers(
+                "headers=referer%7Corigin%7Cmissing&cors&allow_headers=x-test",
+                [
+                    ("Referer", "http://source.test/path"),
+                    ("Origin", "http://origin.test"),
+                    ("X-Test", "value"),
+                ],
+            ),
+            [
+                ("x-request-referer", "http://source.test/path"),
+                ("x-request-origin", "http://origin.test"),
+                ("Access-Control-Allow-Origin", "http://origin.test"),
+                ("Access-Control-Allow-Credentials", "true"),
+                ("Access-Control-Allow-Methods", "GET, POST, HEAD"),
+                (
+                    "Access-Control-Expose-Headers",
+                    "x-request-referer, x-request-origin, x-request-missing",
+                ),
+                ("Access-Control-Allow-Headers", "x-test"),
+            ],
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text(
+                "// testharness", encoding="utf-8"
+            )
+            with WptFixtureServer(root_path) as server:
+                url = (
+                    f"{server.base_url}/fetch/api/resources/"
+                    "inspect-headers.py?headers=referer%7Corigin&cors"
+                )
+                request = Request(
+                    url,
+                    headers={
+                        "Referer": "http://source.test/path",
+                        "Origin": "http://origin.test",
+                    },
+                )
+                with urlopen(request, timeout=2) as response:
+                    self.assertEqual(response.status, 200)
+                    self.assertEqual(response.read(), b"")
+                    self.assertEqual(
+                        response.headers["x-request-referer"],
+                        "http://source.test/path",
+                    )
+                    self.assertEqual(
+                        response.headers["x-request-origin"],
+                        "http://origin.test",
+                    )
+                    self.assertEqual(
+                        response.headers["Access-Control-Allow-Origin"],
+                        "http://origin.test",
+                    )
+                    self.assertEqual(
+                        response.headers["Access-Control-Expose-Headers"],
+                        "x-request-referer, x-request-origin",
+                    )
+
+    def test_fixture_server_models_fetch_nosniff_javascript_handler(self) -> None:
+        self.assertEqual(
+            _nosniff_javascript_response(""),
+            (
+                None,
+                b"// nothing to see here\nlog('FAIL: Content-Type missing')",
+            ),
+        )
+        self.assertEqual(
+            _nosniff_javascript_response("type=text%2Fjavascript&outcome=p"),
+            ("text/javascript", b"// nothing to see here\np()"),
+        )
+
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            (root_path / "resources").mkdir()
+            (root_path / "resources" / "testharness.js").write_text(
+                "// testharness", encoding="utf-8"
+            )
+            with WptFixtureServer(root_path) as server:
+                base_url = f"{server.base_url}/fetch/nosniff/resources/js.py"
+                responses = []
+                for query in (
+                    "",
+                    "?type=",
+                    "?type=text%2Fjavascript&outcome=p",
+                ):
+                    with urlopen(base_url + query, timeout=2) as response:
+                        responses.append(
+                            (
+                                response.headers.get("Content-Type"),
+                                response.headers["X-Content-Type-Options"],
+                                response.read(),
+                            )
+                        )
+
+        self.assertEqual(
+            responses,
+            [
+                (
+                    None,
+                    "nosniff",
+                    b"// nothing to see here\nlog('FAIL: Content-Type missing')",
+                ),
+                ("", "nosniff", b"// nothing to see here\nlog('FAIL: ')"),
+                ("text/javascript", "nosniff", b"// nothing to see here\np()"),
+            ],
+        )
 
     def test_fixture_server_models_xhr_delay_py_methods(self) -> None:
         with tempfile.TemporaryDirectory() as root:

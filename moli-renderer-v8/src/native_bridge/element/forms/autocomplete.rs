@@ -169,7 +169,8 @@ pub(crate) fn autocomplete_field_name(
     handle: DomHandle,
 ) -> Option<String> {
     let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
-    let wears_autofill_anchor_mantle = element.is_html_input() && element.input_type() == "hidden";
+    let wears_autofill_anchor_mantle =
+        element.is_html_input() && element.input_type() == InputType::Hidden;
     let canonical = idl_exposed_autofill_value(
         element.attribute("autocomplete"),
         wears_autofill_anchor_mantle,

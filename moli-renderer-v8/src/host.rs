@@ -31,22 +31,24 @@ use self::document::{EVENT_STOP_IMMEDIATE_SLOT, EVENT_STOP_PROPAGATION_SLOT};
 pub(super) use self::events::{
     DispatchStatus, HostEventTargetRegistry, PublicEventDispatchResult, create_host_event,
     dispatch_host_event, dispatch_public_event, dispatch_public_event_with_original_target,
-    event_dispatch_status, event_target_value, host_event_defaults, invoke_prepared_event_callback,
-    invoke_prepared_event_callback_on_object, report_event_callback_exception,
-    report_event_listener_exception,
+    event_dispatch_status, event_handler_content_attribute_owner, event_target_value,
+    host_event_defaults, invoke_prepared_before_unload_event_handler,
+    invoke_prepared_event_callback, invoke_prepared_event_callback_on_object,
+    report_event_callback_exception, report_event_listener_exception,
 };
 pub(crate) use self::events::{EventListenerInspectorSnapshot, EventListenerRegistration};
 pub(super) use self::scripts::{
     CommittedInlineClassicScript, FailedDynamicScript, HostScriptScheduler, ModuleFailurePolicy,
     PreparedRuntimeScriptStartCommit, QueuedScriptFailureKind, RuntimeScriptAdmission,
     RuntimeScriptAdmissionPayload, RuntimeScriptPreparationContext, RuntimeScriptStartDecision,
-    RuntimeScriptStartPlan, RuntimeScriptStartReservation, ScriptElementLoader,
-    ScriptElementLoaderOptions, ScriptEventKind, ScriptEventTask, ScriptHandleSource,
-    ScriptPageTaskExecutionKind, apply_parser_script_element_state_transition,
+    RuntimeScriptStartPlan, RuntimeScriptStartReservation, RuntimeScriptTextPreparationReservation,
+    ScriptElementLoader, ScriptElementLoaderOptions, ScriptEventKind, ScriptEventTask,
+    ScriptHandleSource, ScriptPageTaskExecutionKind, apply_parser_script_element_state_transition,
     apply_parser_script_element_state_without_execution,
     begin_prepared_document_write_script_start, build_runtime_prepared_script,
     cancel_runtime_script_start_admission, dispatch_script_event,
     finish_runtime_script_start_admission, plan_script_start, prepare_runtime_script_start_commit,
+    script_element_nonce_for_csp,
 };
 #[cfg(test)]
 pub(super) use self::scripts::{

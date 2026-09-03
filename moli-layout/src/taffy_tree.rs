@@ -789,8 +789,7 @@ where
     let mut ancestor = world.boxes[id.index()].parent;
     while let Some(candidate) = ancestor {
         let layout_box = &world.boxes[candidate.index()];
-        if !world.is_viewport_defining_body(candidate)
-            && layout_box.style.establishes_scroll_container()
+        if !world.is_viewport_defining_body(candidate) && layout_box.establishes_scroll_container()
         {
             let layout = layout_box.unrounded_layout;
             let origin = unrounded_global_origin(world, candidate);

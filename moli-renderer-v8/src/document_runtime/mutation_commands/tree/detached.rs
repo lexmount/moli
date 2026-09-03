@@ -111,6 +111,14 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         roots: &[DomHandle],
     ) {
+        let iframe_roots = roots
+            .iter()
+            .copied()
+            .filter(|root| self.dom_host.is_html_element_named(*root, "iframe"))
+            .collect::<Vec<_>>();
+        if iframe_roots.is_empty() {
+            return;
+        }
         let Some(event_ctor) = scope
             .get_current_context()
             .global(scope)
@@ -119,10 +127,7 @@ impl DocumentRuntime {
         else {
             return;
         };
-        for &root in roots {
-            if !self.dom_host.is_html_element_named(root, "iframe") {
-                continue;
-            }
+        for root in iframe_roots {
             let Some(event) = event_ctor.new_instance(scope, &[v8str(scope, "load").into()]) else {
                 continue;
             };

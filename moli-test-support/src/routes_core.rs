@@ -1,7 +1,7 @@
 use super::*;
 use parking_lot::Mutex;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 
 static NET_UPSTREAM_XHR_404_THEN_200_REQUESTS: AtomicUsize = AtomicUsize::new(0);
@@ -18,6 +18,28 @@ static RUNTIME_OWNED_ASYNC_CHUNKED_TAIL_GATES: OnceLock<
 static RUNTIME_OWNED_IN_ORDER_ERROR_AFTER_DCL_GATES: OnceLock<
     Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
 > = OnceLock::new();
+static RUNTIME_OWNED_IN_ORDER_LOAD_AFTER_DCL_GATES: OnceLock<
+    Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
+> = OnceLock::new();
+static RUNTIME_INSERTED_STYLESHEET_HREF_MUTATION_GATES: OnceLock<
+    Mutex<HashMap<String, Arc<RuntimeInsertedStylesheetHrefMutationGate>>>,
+> = OnceLock::new();
+
+struct RuntimeInsertedStylesheetHrefMutationGate {
+    release_stale_response: tokio::sync::Notify,
+    stale_request_started: AtomicBool,
+    stale_response_timed_out: AtomicBool,
+}
+
+impl RuntimeInsertedStylesheetHrefMutationGate {
+    fn new() -> Self {
+        Self {
+            release_stale_response: tokio::sync::Notify::new(),
+            stale_request_started: AtomicBool::new(false),
+            stale_response_timed_out: AtomicBool::new(false),
+        }
+    }
+}
 
 struct ConcurrentSharedStateRequestGuard;
 
@@ -141,6 +163,55 @@ fn remove_runtime_owned_in_order_error_after_dcl_gate(host_key: &str) {
 
 pub(crate) fn notify_runtime_owned_in_order_error_after_dcl_gate(host_key: &str) {
     runtime_owned_in_order_error_after_dcl_gate(host_key).notify_one();
+}
+
+fn runtime_owned_in_order_load_after_dcl_gate(host_key: &str) -> Arc<tokio::sync::Notify> {
+    let gates =
+        RUNTIME_OWNED_IN_ORDER_LOAD_AFTER_DCL_GATES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut gates = gates.lock();
+    gates
+        .entry(host_key.to_owned())
+        .or_insert_with(|| Arc::new(tokio::sync::Notify::new()))
+        .clone()
+}
+
+fn remove_runtime_owned_in_order_load_after_dcl_gate(host_key: &str) {
+    let Some(gates) = RUNTIME_OWNED_IN_ORDER_LOAD_AFTER_DCL_GATES.get() else {
+        return;
+    };
+    gates.lock().remove(host_key);
+}
+
+pub(crate) fn notify_runtime_owned_in_order_load_after_dcl_gate(host_key: &str) {
+    runtime_owned_in_order_load_after_dcl_gate(host_key).notify_one();
+}
+
+fn runtime_inserted_stylesheet_href_mutation_gate(
+    host_key: &str,
+) -> Arc<RuntimeInsertedStylesheetHrefMutationGate> {
+    let gates =
+        RUNTIME_INSERTED_STYLESHEET_HREF_MUTATION_GATES.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut gates = gates.lock();
+    gates
+        .entry(host_key.to_owned())
+        .or_insert_with(|| Arc::new(RuntimeInsertedStylesheetHrefMutationGate::new()))
+        .clone()
+}
+
+fn remove_runtime_inserted_stylesheet_href_mutation_gate(host_key: &str) {
+    let Some(gates) = RUNTIME_INSERTED_STYLESHEET_HREF_MUTATION_GATES.get() else {
+        return;
+    };
+    gates.lock().remove(host_key);
+}
+
+pub(crate) fn clear_runtime_inserted_stylesheet_href_mutation_gate(host_key: &str) {
+    let Some(gates) = RUNTIME_INSERTED_STYLESHEET_HREF_MUTATION_GATES.get() else {
+        return;
+    };
+    if let Some(gate) = gates.lock().remove(host_key) {
+        gate.release_stale_response.notify_one();
+    }
 }
 
 pub(super) async fn static_page() -> Html<&'static str> {
@@ -2501,6 +2572,14 @@ pub(super) async fn runtime_owned_external_in_order_load_after_domcontentloaded_
     Html(RUNTIME_OWNED_EXTERNAL_IN_ORDER_LOAD_AFTER_DOMCONTENTLOADED_HTML)
 }
 
+pub(super) async fn release_runtime_owned_external_in_order_load_after_domcontentloaded(
+    headers: HeaderMap,
+) -> StatusCode {
+    let host_key = request_host_key(&headers).unwrap_or_default();
+    notify_runtime_owned_in_order_load_after_dcl_gate(&host_key);
+    StatusCode::NO_CONTENT
+}
+
 pub(super) async fn runtime_owned_external_in_order_with_defer_stays_after_domcontentloaded_page()
 -> Html<&'static str> {
     Html(RUNTIME_OWNED_EXTERNAL_IN_ORDER_WITH_DEFER_STAYS_AFTER_DOMCONTENTLOADED_HTML)
@@ -2666,8 +2745,8 @@ pub(super) async fn dynamic_importmap_before_module_page() -> Html<&'static str>
     Html(DYNAMIC_IMPORTMAP_BEFORE_MODULE_HTML)
 }
 
-pub(super) async fn dynamic_async_module_closes_importmap_acquisition_page() -> Html<&'static str> {
-    Html(DYNAMIC_ASYNC_MODULE_CLOSES_IMPORTMAP_ACQUISITION_HTML)
+pub(super) async fn dynamic_async_module_allows_late_importmap_page() -> Html<&'static str> {
+    Html(DYNAMIC_ASYNC_MODULE_ALLOWS_LATE_IMPORTMAP_HTML)
 }
 
 pub(super) async fn dynamic_external_importmap_error_before_module_page() -> Html<&'static str> {
@@ -2714,14 +2793,13 @@ pub(super) async fn importmap_after_module_load_page() -> Html<&'static str> {
     Html(IMPORTMAP_AFTER_MODULE_LOAD_HTML)
 }
 
-pub(super) async fn importmap_closed_by_parser_owned_module_before_late_dynamic_map_page()
--> Html<&'static str> {
-    Html(IMPORTMAP_CLOSED_BY_PARSER_OWNED_MODULE_BEFORE_LATE_DYNAMIC_MAP_HTML)
+pub(super) async fn parser_owned_module_allows_late_dynamic_importmap_page() -> Html<&'static str> {
+    Html(PARSER_OWNED_MODULE_ALLOWS_LATE_DYNAMIC_IMPORTMAP_HTML)
 }
 
-pub(super) async fn parser_owned_importmap_blocked_after_dynamic_module_prepare_page()
+pub(super) async fn parser_owned_importmap_applies_after_dynamic_module_prepare_page()
 -> Html<&'static str> {
-    Html(PARSER_OWNED_IMPORTMAP_BLOCKED_AFTER_DYNAMIC_MODULE_PREPARE_HTML)
+    Html(PARSER_OWNED_IMPORTMAP_APPLIES_AFTER_DYNAMIC_MODULE_PREPARE_HTML)
 }
 
 pub(super) async fn importmap_null_blocks_dynamic_import_page() -> Html<&'static str> {
@@ -4305,6 +4383,17 @@ pub(super) async fn asset_runtime_owned_in_order_load_script() -> Response {
     javascript_response(RUNTIME_OWNED_IN_ORDER_LOAD_JS)
 }
 
+pub(super) async fn asset_runtime_owned_in_order_load_after_dcl_gated_script(
+    headers: HeaderMap,
+) -> Response {
+    let host_key = request_host_key(&headers).unwrap_or_default();
+    runtime_owned_in_order_load_after_dcl_gate(&host_key)
+        .notified()
+        .await;
+    remove_runtime_owned_in_order_load_after_dcl_gate(&host_key);
+    javascript_response(RUNTIME_OWNED_IN_ORDER_LOAD_JS)
+}
+
 pub(super) async fn asset_missing_runtime_owned_in_order_error_script(
     headers: HeaderMap,
 ) -> Response {
@@ -5463,6 +5552,45 @@ pub(super) async fn asset_dynamic_blocking_stylesheet_gated_css(
 ) -> Response {
     state.dynamic_stylesheet_script_executed.wait().await;
     css_response(BLOCKING_STYLESHEET_SLOW_CSS)
+}
+
+pub(super) async fn asset_runtime_inserted_stylesheet_href_mutation_stale_css(
+    headers: HeaderMap,
+) -> Response {
+    let host_key = request_host_key(&headers).unwrap_or_default();
+    let gate = runtime_inserted_stylesheet_href_mutation_gate(&host_key);
+    gate.stale_request_started.store(true, Ordering::SeqCst);
+    let released_by_probe = tokio::time::timeout(
+        Duration::from_secs(2),
+        gate.release_stale_response.notified(),
+    )
+    .await
+    .is_ok();
+    if released_by_probe {
+        remove_runtime_inserted_stylesheet_href_mutation_gate(&host_key);
+    } else {
+        gate.stale_response_timed_out.store(true, Ordering::SeqCst);
+    }
+    css_response(BLOCKING_STYLESHEET_SLOW_CSS)
+}
+
+pub(super) async fn asset_runtime_inserted_stylesheet_href_mutation_fresh_css() -> Response {
+    css_response(CHROME_STYLESHEETLIST_1_CSS)
+}
+
+pub(super) async fn asset_runtime_inserted_stylesheet_href_mutation_probe_script(
+    headers: HeaderMap,
+) -> Response {
+    let host_key = request_host_key(&headers).unwrap_or_default();
+    let gate = runtime_inserted_stylesheet_href_mutation_gate(&host_key);
+    let parser_not_blocked = !gate.stale_response_timed_out.load(Ordering::SeqCst);
+    gate.release_stale_response.notify_one();
+    if gate.stale_request_started.load(Ordering::SeqCst) {
+        remove_runtime_inserted_stylesheet_href_mutation_gate(&host_key);
+    }
+    javascript_string_response(format!(
+        "window.runtimeInsertedHrefMutationParserNotBlocked = {parser_not_blocked};"
+    ))
 }
 
 pub(super) async fn asset_runtime_connected_preload_very_slow_css() -> Response {

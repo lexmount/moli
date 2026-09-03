@@ -11878,15 +11878,19 @@ async fn stream_declared_controller_and_writer_surface_ignores_reflection_and_sp
 async fn parser_inline_module_runs_from_parser_after_parsing_order() {
     run_page_vm_async_test(async move {
         let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(
+            "https://example.com/page.html?case=inline-module#document-fragment",
+        )
+        .expect("document URL");
         let mut page_vm = test_page_vm_with_loader_and_document_url(
             &loader,
             Vec::new(),
-            Url::parse("https://example.com/page.html").expect("document URL"),
+            document_url.clone(),
         );
         let script = prepared_inline_module_for_page_vm_test(
             &page_vm,
             9002,
-            "globalThis.__inlineParserModuleExecuted = (globalThis.__inlineParserModuleExecuted ?? 0) + 1; export const value = 1;",
+            "globalThis.__inlineParserModuleExecuted = (globalThis.__inlineParserModuleExecuted ?? 0) + 1; globalThis.__inlineParserModuleUrl = import.meta.url; export const value = 1;",
         );
 
         let parser_module_work = install_parser_module_defer_work(&mut page_vm, script);
@@ -11921,6 +11925,14 @@ async fn parser_inline_module_runs_from_parser_after_parsing_order() {
                 .expect("read module side effect after page task"),
             "1",
             "parser after-parsing release should evaluate the prewarmed inline graph once"
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("globalThis.__inlineParserModuleUrl")
+                .expect("read inline module URL after page task"),
+            document_url.as_str(),
+            "an inline module must expose its document base URL, not its internal module-map key"
         );
     })
     .await;
@@ -12696,6 +12708,77 @@ queueMicrotask(() => globalThis.__mainParserDeferCheckpointEvents.push('script-m
                 .expect("defer checkpoint events should evaluate"),
             "script|script-microtask|load|load-microtask",
             "classic-defer evaluation reactions must settle before load and the selected parser task must then settle load reactions"
+        );
+    })
+    .await;
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn main_parser_classic_defer_records_its_timer_range_for_domcontentloaded() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/defer-timer.html").expect("document URL"),
+        );
+        page_vm
+            .vm_mut()
+            .eval(
+                "globalThis.__mainParserDeferTimerEvents = []; \
+                 setTimeout(() => __mainParserDeferTimerEvents.push('outside'), 0);",
+            )
+            .expect("defer timer state should initialize");
+        let script = append_parser_owned_external_classic_defer_for_page_vm_test(
+            &mut page_vm,
+            1,
+            "timer-defer",
+            Url::parse("https://example.com/timer-defer.js").expect("script URL"),
+            ScriptSource::Loaded(
+                "setTimeout(() => __mainParserDeferTimerEvents.push('defer'), 0);".to_owned(),
+            ),
+            ("onload", ""),
+        );
+        let task_owner = page_vm
+            .vm()
+            .current_main_document_task_owner()
+            .expect("defer timer test requires a document owner");
+        assert!(
+            page_vm
+                .vm_mut()
+                .claim_main_parser_deferred_script(
+                    task_owner,
+                    script,
+                    None,
+                    None,
+                    Default::default(),
+                )
+                .expect("loaded classic defer should be accepted")
+        );
+        page_vm
+            .seal_main_parser_deferred_scripts(task_owner)
+            .expect("defer timer queue should seal");
+
+        run_ready_parser_deferred_body_for_test(&mut page_vm, &loader, "timer classic defer").await;
+        assert!(
+            page_vm
+                .vm()
+                .document_runtime
+                .has_ready_timeout_queued_by_classic_defer_script(),
+            "the specialized main-parser defer executor must retain its task-local timer range"
+        );
+        page_vm
+            .run_classic_defer_timer_before_domcontentloaded(&loader)
+            .await
+            .expect("the recorded defer timer should be selected");
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("__mainParserDeferTimerEvents.join('|')")
+                .expect("defer timer events should evaluate"),
+            "defer",
+            "the older unrelated timer must not enter the pre-DOMContentLoaded range"
         );
     })
     .await;

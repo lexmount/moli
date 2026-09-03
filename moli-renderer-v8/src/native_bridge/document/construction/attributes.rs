@@ -35,7 +35,20 @@ pub(in crate::native_bridge) fn node_create_attribute_callback<'s>(
     } else {
         parsed.name
     };
-    match new_attr_object(scope, &name, "", None, Some(args.this()), None, None, &name) {
+    let document = args.this();
+    let relevant_context = crate::native_bridge::node_relevant_context(scope, document)
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+    match new_attr_object(
+        target_scope,
+        &name,
+        "",
+        None,
+        Some(document),
+        None,
+        None,
+        &name,
+    ) {
         Some(attr) => rv.set(attr.into()),
         None => rv.set_null(),
     }
@@ -70,12 +83,16 @@ pub(in crate::native_bridge) fn node_create_attribute_ns_callback<'s>(
                 return;
             }
         };
+    let document = args.this();
+    let relevant_context = crate::native_bridge::node_relevant_context(scope, document)
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
     match new_attr_object(
-        scope,
+        target_scope,
         &parsed.qualified_name,
         "",
         None,
-        Some(args.this()),
+        Some(document),
         namespace.as_deref(),
         prefix.as_deref(),
         &local_name,

@@ -1,5 +1,8 @@
 use super::super::{dom_binding_timing_started, record_dom_binding_timing};
-use super::{node_iterators::NodeIteratorRemovalPlan, policy::TreeMutationSourceProfile};
+use super::{
+    node_iterators::NodeIteratorRemovalPlan, policy::TreeMutationSourceProfile,
+    resources::ImageRelevantMutationPlan,
+};
 use crate::{
     custom_elements,
     document_runtime::{DocumentRuntime, DomHandle},
@@ -19,6 +22,8 @@ pub(super) struct TreeRemovalPlan {
     pub(super) live_range_previous_sibling: Option<DomHandle>,
     pub(super) node_iterator_plan: Option<NodeIteratorRemovalPlan>,
     pub(super) registry_retargets: Vec<custom_elements::RegistryAssociationRetarget>,
+    pub(super) selected_option_owners_before_remove: Vec<(DomHandle, DomHandle)>,
+    pub(super) image_relevant_mutation_plan: ImageRelevantMutationPlan,
 }
 
 impl DocumentRuntime {
@@ -58,6 +63,10 @@ impl DocumentRuntime {
         };
         let registry_retargets =
             custom_elements::registry_association_retargets_before_removal(host_ptr, root);
+        let selected_option_owners_before_remove =
+            self.selected_option_owners_in_subtrees(std::slice::from_ref(&root));
+        let image_relevant_mutation_plan =
+            self.image_relevant_mutation_plan_before_remove(parent, root);
         TreeRemovalPlan {
             parent,
             root,
@@ -69,6 +78,8 @@ impl DocumentRuntime {
             live_range_previous_sibling,
             node_iterator_plan,
             registry_retargets,
+            selected_option_owners_before_remove,
+            image_relevant_mutation_plan,
         }
     }
 

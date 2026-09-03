@@ -8,16 +8,16 @@ use super::super::{
         v8_string, v8str,
     },
 };
-use super::JsContextHost;
 use super::node::{
-    element_name_for_owner_document, node_is_document, node_is_element,
-    node_runtime_and_handle_from_object, node_runtime_and_handle_from_object_or_detached,
-    node_text_content_getter_function, require_element_getter_receiver,
-    require_element_setter_receiver, set_text_content_in_reaction_scope,
-    throw_incompatible_getter_receiver, throw_incompatible_method_receiver,
-    throw_incompatible_setter_receiver,
+    current_or_live_delegate_node_arg_handle, element_name_for_owner_document, node_is_document,
+    node_is_element, node_runtime_and_handle_from_object,
+    node_runtime_and_handle_from_object_or_detached, node_text_content_getter_function,
+    require_element_getter_receiver, require_element_setter_receiver,
+    set_text_content_in_reaction_scope, throw_incompatible_getter_receiver,
+    throw_incompatible_method_receiver, throw_incompatible_setter_receiver,
 };
-use crate::document_runtime::DomHandle;
+use super::{JsContextHost, wrapped_handle_value};
+use crate::{custom_elements, document_runtime::DomHandle, webidl};
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiTemplateValue};
 
 mod activation;
@@ -54,8 +54,16 @@ mod trusted_types;
 pub(crate) use script_execution::{
     inline_script_source_for_execution, prepare_inline_classic_frame_script_job_for_execution,
 };
+pub(in crate::native_bridge) use trusted_types::{
+    TrustedAttributeSetter, trusted_attribute_string_value, trusted_attribute_value_string,
+};
 use trusted_types::{
-    TrustedScriptElementSink, trusted_script_element_sink_string, trusted_script_url_sink_string,
+    TrustedHtmlSink, TrustedScriptElementSink, trusted_html_sink_string,
+    trusted_script_element_sink_string, trusted_script_url_sink_string,
+};
+pub(crate) use trusted_types::{
+    prepare_trusted_script_text, set_svg_animated_string_base_value,
+    trusted_attribute_type_name_for_names, trusted_property_type_name_for_names,
 };
 
 pub(crate) use forms::{
@@ -161,20 +169,23 @@ pub(crate) use canvas::{
 pub(crate) use class_list::install_dom_token_list_prototype_bindings;
 pub(super) use class_list::{
     build_dom_token_list_wrapper_template, html_rel_list_getter_function,
-    html_rel_list_setter_function,
+    html_rel_list_setter_function, iframe_sandbox_getter_function, iframe_sandbox_setter_function,
+    link_sizes_getter_function, link_sizes_setter_function, output_html_for_getter_function,
+    output_html_for_setter_function, svg_rel_list_setter_function,
 };
 pub(super) use content::{
     node_direct_text_content, node_get_html_callback, node_inner_html_getter_function,
     node_inner_html_setter_function, node_inner_text_getter_function,
     node_inner_text_setter_function, node_outer_html_getter_function,
     node_outer_html_setter_function, node_outer_text_getter_function,
-    node_outer_text_setter_function, node_set_html_unsafe_callback, title_text_getter_function,
-    title_text_setter_function,
+    node_outer_text_setter_function, node_set_html_unsafe_callback,
+    set_inner_text_in_reaction_scope, title_text_getter_function, title_text_setter_function,
 };
 pub(super) use dataset::{build_dom_string_map_wrapper_template, node_dataset_getter_function};
 use details_dialog::{
-    close_dialog_element, details_open_getter_function, details_open_setter_function,
-    dialog_close_callback, dialog_open_getter_function, dialog_open_setter_function,
+    close_dialog_element, closed_details_ancestors_to_reveal, details_open_getter_function,
+    details_open_setter_function, dialog_close_callback, dialog_open_getter_function,
+    dialog_open_setter_function, dialog_request_close_callback,
     dialog_return_value_getter_function, dialog_return_value_setter_function, dialog_show_callback,
     dialog_show_modal_callback, perform_summary_click_default_action,
 };
@@ -182,16 +193,15 @@ pub(crate) use details_dialog::{
     queue_details_toggle_event_for_attribute_change, queue_parser_details_toggle_event,
     queue_parser_details_toggle_events_in_subtree,
 };
-pub(crate) use event_handlers::compile_window_body_onmessageerror_attribute;
+use event_handlers::install_body_or_frameset_window_event_handler_accessors;
 use event_handlers::install_global_event_handler_template_bindings as install_global_event_handler_templates_for_owner;
+use event_handlers::install_node_event_handler_template_bindings;
 pub(crate) use event_handlers::{
-    EventAttributeHandlerScope, GlobalEventHandlerOwner, compile_event_attribute_handler_for_owner,
+    EventAttributeHandlerScope, GlobalEventHandlerOwner,
+    body_or_frameset_reflects_window_event_type, canonical_event_handler_event_type,
+    compile_event_attribute_handler_for_owner, event_handler_content_attribute_name,
     initialize_parser_inserted_body_window_event_handlers,
-};
-use event_handlers::{
-    body_onerror_getter_function, body_onerror_setter_function, body_onload_getter_function,
-    body_onload_setter_function, body_onmessageerror_getter_function,
-    body_onmessageerror_setter_function,
+    resolve_window_event_handler_content_attribute,
 };
 pub(in crate::native_bridge::element) use events::construct_event;
 pub(crate) use events::{
@@ -228,6 +238,7 @@ pub(crate) use forms::{
 };
 pub(super) use forms::{
     button_command_for_element_getter_function, button_command_for_element_setter_function,
+    button_command_getter_function, button_command_setter_function,
     button_disabled_getter_function, button_disabled_setter_function,
     button_form_action_getter_function, button_form_action_setter_function,
     button_form_enctype_getter_function, button_form_enctype_setter_function,
@@ -330,7 +341,7 @@ pub(crate) use forms::{
     cache_input_files_from_selected_files, form_control_is_effectively_disabled,
 };
 pub(crate) use forms::{
-    char_offset_to_byte_index, dispatch_text_control_event, is_text_control,
+    dispatch_text_control_event, is_text_control,
     queue_text_control_document_selection_change_event, replace_text_control_selection,
     text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,
@@ -388,13 +399,13 @@ pub use geometry::ClientRect;
 #[cfg(test)]
 pub(crate) use geometry::observable_scrollbar_hit_test;
 pub(crate) use geometry::{
-    apply_scroll_observable_effects, observable_bounding_client_rect, observable_caret_position,
-    observable_deep_hit_test, observable_event_offset, observable_geometry_batch,
-    observable_hit_test, observable_hit_test_all, observable_input_hit_test,
-    observable_input_surface_hit_test, observable_scroll_adjusted_client_rect,
-    observable_sources_with_fragments, perform_scrollbar_scroll_default_action,
-    perform_wheel_scroll_default_action, queue_scroll_observable_effects,
-    scroll_node_into_view_at_start,
+    apply_scroll_observable_effects, element_is_inert_for_hit_testing,
+    observable_bounding_client_rect, observable_caret_position, observable_deep_hit_test,
+    observable_event_offset, observable_geometry_batch, observable_hit_test,
+    observable_hit_test_all, observable_input_hit_test, observable_input_surface_hit_test,
+    observable_scroll_adjusted_client_rect, observable_sources_with_fragments,
+    perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
+    queue_scroll_observable_effects, scroll_node_into_view_at_start,
 };
 pub(super) use geometry::{
     node_client_height_getter_function, node_client_left_getter_function,
@@ -408,11 +419,12 @@ pub(super) use geometry::{
     node_scroll_top_getter_function, node_scroll_top_setter_function,
     node_scroll_width_getter_function,
 };
+use global_attributes::canonical_fetch_priority_value;
 pub(super) use global_attributes::{
     anchor_target_getter_function, anchor_target_setter_function, area_no_href_setter_function,
     area_target_getter_function, area_target_setter_function, base_target_getter_function,
-    base_target_setter_function, canonical_cross_origin_value, canonical_loading_value,
-    canonical_preload_value, canonical_referrer_policy_value,
+    base_target_setter_function, canonical_cross_origin_value, canonical_dir_value,
+    canonical_loading_value, canonical_preload_value, canonical_referrer_policy_value,
     dom_string_reflection_getter_function, dom_string_reflection_setter_function,
     html_align_getter_function, html_align_setter_function, html_alt_getter_function,
     html_as_getter_function, html_bg_color_getter_function, html_border_getter_function,
@@ -424,14 +436,15 @@ pub(super) use global_attributes::{
     html_label_getter_function, html_long_desc_getter_function, html_lowsrc_getter_function,
     html_margin_height_getter_function, html_margin_width_getter_function,
     html_media_getter_function, html_name_getter_function, html_name_setter_function,
-    html_no_href_getter_function, html_no_shade_getter_function, html_no_shade_setter_function,
-    html_ping_getter_function, html_rel_getter_function, html_rel_setter_function,
-    html_scrolling_getter_function, html_shape_getter_function, html_size_getter_function,
-    html_sizes_getter_function, html_type_getter_function, html_use_map_getter_function,
-    html_value_getter_function, html_value_type_getter_function, html_version_getter_function,
-    html_vspace_getter_function, html_width_getter_function, image_decoding_setter_function,
-    image_long_desc_setter_function, image_lowsrc_setter_function, link_target_getter_function,
-    link_target_setter_function, node_access_key_getter_function,
+    html_no_href_getter_function, html_no_resize_getter_function, html_no_resize_setter_function,
+    html_no_shade_getter_function, html_no_shade_setter_function, html_ping_getter_function,
+    html_rel_getter_function, html_rel_setter_function, html_scrolling_getter_function,
+    html_shape_getter_function, html_size_getter_function, html_sizes_getter_function,
+    html_true_speed_getter_function, html_true_speed_setter_function, html_type_getter_function,
+    html_use_map_getter_function, html_value_getter_function, html_value_type_getter_function,
+    html_version_getter_function, html_vspace_getter_function, html_width_getter_function,
+    image_decoding_setter_function, image_long_desc_setter_function, image_lowsrc_setter_function,
+    link_target_getter_function, link_target_setter_function, node_access_key_getter_function,
     node_access_key_label_getter_function, node_access_key_setter_function,
     node_allow_fullscreen_getter_function, node_allow_fullscreen_setter_function,
     node_autocapitalize_getter_function, node_autocapitalize_setter_function,
@@ -441,13 +454,17 @@ pub(super) use global_attributes::{
     node_credentialless_getter_function, node_credentialless_setter_function,
     node_dir_getter_function, node_dir_setter_function, node_draggable_getter_function,
     node_draggable_setter_function, node_enter_key_hint_getter_function,
-    node_enter_key_hint_setter_function, node_hidden_getter_function, node_hidden_setter_function,
+    node_enter_key_hint_setter_function, node_focus_group_getter_function,
+    node_focus_group_setter_function, node_focus_group_start_getter_function,
+    node_focus_group_start_setter_function, node_hidden_getter_function,
+    node_hidden_setter_function, node_inert_getter_function, node_inert_setter_function,
     node_input_mode_getter_function, node_input_mode_setter_function,
     node_is_content_editable_getter_function, node_lang_getter_function, node_lang_setter_function,
-    node_sandbox_getter_function, node_sandbox_setter_function, node_spellcheck_getter_function,
-    node_spellcheck_setter_function, node_tab_index_getter_function,
-    node_tab_index_setter_function, node_title_getter_function, node_title_setter_function,
-    node_translate_getter_function, node_translate_setter_function,
+    node_spellcheck_getter_function, node_spellcheck_setter_function,
+    node_tab_index_getter_function, node_tab_index_setter_function, node_title_getter_function,
+    node_title_setter_function, node_translate_getter_function, node_translate_setter_function,
+    node_writing_suggestions_getter_function, node_writing_suggestions_setter_function,
+    null_to_empty_dom_string_reflection_getter_function,
     null_to_empty_dom_string_reflection_setter_function, object_archive_getter_function,
     object_code_base_getter_function, object_code_getter_function,
     object_code_type_getter_function, object_data_getter_function, object_declare_getter_function,
@@ -457,8 +474,8 @@ pub(super) use global_attributes::{
     table_cell_axis_getter_function, table_cell_headers_getter_function,
     table_cell_no_wrap_getter_function, table_cell_no_wrap_setter_function,
     table_cell_scope_getter_function, table_ch_getter_function, table_ch_off_getter_function,
-    table_col_span_getter_function, table_col_span_setter_function, table_v_align_getter_function,
-    unsigned_long_reflection_setter_function, usv_string_reflection_setter_function,
+    table_v_align_getter_function, unsigned_long_reflection_setter_function,
+    usv_string_reflection_setter_function,
 };
 pub(in crate::native_bridge) const BODY_LEGACY_PROTOTYPE_ACCESSORS: &[&str] = &[
     "onload",
@@ -471,18 +488,16 @@ pub(in crate::native_bridge) const BODY_LEGACY_PROTOTYPE_ACCESSORS: &[&str] = &[
 ];
 
 use html_elements::{
-    body_a_link_getter_function, body_a_link_setter_function, body_background_getter_function,
-    body_background_setter_function, body_link_getter_function, body_link_setter_function,
-    body_text_getter_function, body_text_setter_function, body_v_link_getter_function,
-    body_v_link_setter_function, li_value_getter_function, li_value_setter_function,
-    meta_content_getter_function, meta_content_setter_function, meta_http_equiv_getter_function,
-    meta_http_equiv_setter_function, ol_reversed_getter_function, ol_reversed_setter_function,
-    ol_start_getter_function, ol_start_setter_function, ol_type_getter_function,
-    ol_type_setter_function, optgroup_disabled_getter_function, optgroup_disabled_setter_function,
-    table_caption_getter_function, table_caption_setter_function,
-    table_cell_col_span_getter_function, table_cell_col_span_setter_function,
-    table_cell_index_getter_function, table_cell_row_span_getter_function,
-    table_cell_row_span_setter_function, table_create_caption_callback,
+    body_background_getter_function, body_background_setter_function, li_value_getter_function,
+    li_value_setter_function, meta_content_getter_function, meta_content_setter_function,
+    meta_http_equiv_getter_function, meta_http_equiv_setter_function, ol_reversed_getter_function,
+    ol_reversed_setter_function, ol_start_getter_function, ol_start_setter_function,
+    ol_type_getter_function, ol_type_setter_function, optgroup_disabled_getter_function,
+    optgroup_disabled_setter_function, table_caption_getter_function,
+    table_caption_setter_function, table_cell_col_span_getter_function,
+    table_cell_col_span_setter_function, table_cell_index_getter_function,
+    table_cell_row_span_getter_function, table_cell_row_span_setter_function,
+    table_col_span_getter_function, table_col_span_setter_function, table_create_caption_callback,
     table_create_t_body_callback, table_create_t_foot_callback, table_create_t_head_callback,
     table_delete_caption_callback, table_delete_row_callback, table_delete_t_foot_callback,
     table_delete_t_head_callback, table_insert_row_callback, table_row_cells_getter_function,
@@ -552,8 +567,13 @@ use pointer_capture::{
     node_has_pointer_capture_callback, node_release_pointer_capture_callback,
     node_set_pointer_capture_callback,
 };
-pub(crate) use popover::{dispatch_popover_removal_events, perform_popover_invoker_default_action};
-pub(super) use popover::{dispatch_popover_show_events, dispatch_popover_toggle_events};
+pub(super) use popover::{
+    dispatch_popover_hide_events, dispatch_popover_show_events, dispatch_popover_toggle_events,
+};
+pub(crate) use popover::{
+    dispatch_popover_removal_events, handle_popover_attribute_change,
+    perform_popover_invoker_default_action,
+};
 pub(super) use popover::{
     node_hide_popover_callback, node_popover_getter_function, node_popover_setter_function,
     node_show_popover_callback, node_toggle_popover_callback,
@@ -564,6 +584,7 @@ pub(super) use query::{
     node_get_elements_by_tag_name_ns_callback, node_matches_callback,
     node_query_selector_all_callback, node_query_selector_callback,
 };
+pub(super) use reflection::set_reflected_attribute;
 use reflection::{
     CrossOriginReflection, DomStringReflection, ElementReflectionInterface,
     NullToEmptyDomStringReflection, UnsignedLongReflection, UsvStringReflection,
@@ -573,9 +594,9 @@ use reflection::{
     property_dom_string_value, property_string_value, property_usv_string_value,
     remove_reflected_attribute, set_attribute_property_on_object_or_detached,
     set_boolean_attribute_property_on_object_or_detached,
-    set_dom_string_attribute_property_on_object,
-    set_nullable_dom_string_attribute_property_on_object, set_reflected_attribute,
-    set_reflected_boolean_attribute, set_reflected_style_attribute_with_inline_base_url,
+    set_dom_string_attribute_property_on_object, set_dom_string_attribute_property_utf16_on_object,
+    set_nullable_dom_string_attribute_property_on_object, set_reflected_boolean_attribute,
+    set_reflected_style_attribute_with_inline_base_url,
     set_usv_string_attribute_property_on_object,
 };
 pub(crate) use shadow_dom::install_element_internals_template_bindings;
@@ -606,7 +627,8 @@ use shadow_dom::{
     template_shadow_root_slot_assignment_getter_function,
     template_shadow_root_slot_assignment_setter_function,
 };
-use shared::{element_attribute, element_attribute_names, element_has_attribute, style_string};
+pub(super) use shared::element_attribute;
+use shared::{element_attribute_names, element_has_attribute, style_string};
 pub(super) use state_callbacks::{
     bridge_set_checked_state_callback, bridge_set_indeterminate_state_callback,
     bridge_set_input_value_callback, bridge_set_selected_state_callback,
@@ -646,13 +668,15 @@ pub(super) use tree_mutation::{
     node_insert_adjacent_element_callback, node_insert_adjacent_html_callback,
     node_insert_adjacent_node_callback, node_insert_adjacent_text_callback,
 };
-pub(super) use url_attributes::update_iframe_snapshot_navigation;
 use url_attributes::{
     default_port_for_scheme, disconnected_iframe_can_materialize_detached_content,
     iframe_has_inactive_child_context, iframe_is_in_own_child_document,
     iframe_is_inside_its_own_child_context_document, iframe_uses_detached_content_cache,
     normalize_url_default_port, parsed_url_like_attribute, resolve_url_like_attribute,
     set_resolved_url_attribute, should_block_dangling_markup_subresource,
+};
+pub(super) use url_attributes::{
+    live_frame_owner_content_window_for_handle, update_iframe_snapshot_navigation,
 };
 
 #[derive(WebApiFunctionTemplate)]
@@ -684,6 +708,20 @@ struct ElementPrototypeReflectionDeclaration {
     namespace_uri: (),
     #[webapi(accessor_property, enumerable, getter = element_prefix_getter_function)]
     prefix: (),
+    #[webapi(
+        accessor_property = "headingOffset",
+        enumerable,
+        getter = element_heading_offset_getter_function,
+        setter = element_heading_offset_setter_function
+    )]
+    heading_offset: (),
+    #[webapi(
+        accessor_property = "headingReset",
+        enumerable,
+        getter = element_heading_reset_getter_function,
+        setter = element_heading_reset_setter_function
+    )]
+    heading_reset: (),
     #[webapi(
         accessor_property = "innerHTML",
         enumerable,
@@ -765,6 +803,13 @@ struct ElementPrototypeReflectionDeclaration {
         callback = super::pointer_lock::element_request_pointer_lock_callback
     )]
     request_pointer_lock: (),
+    #[webapi(
+        method = "requestFullscreen",
+        length = 0,
+        enumerable,
+        callback = super::fullscreen::element_request_fullscreen_callback
+    )]
+    request_fullscreen: (),
     #[webapi(accessor_property = "shadowRoot", enumerable, getter = element_shadow_root_getter_function)]
     shadow_root: (),
     #[webapi(
@@ -1456,6 +1501,13 @@ struct HtmlElementStandardPrototypeDeclaration {
     )]
     hidden: (),
     #[webapi(
+        accessor_property,
+        enumerable,
+        getter = node_inert_getter_function,
+        setter = node_inert_setter_function
+    )]
+    inert: (),
+    #[webapi(
         accessor_property = "accessKey",
         enumerable,
         getter = node_access_key_getter_function,
@@ -1482,6 +1534,13 @@ struct HtmlElementStandardPrototypeDeclaration {
         setter = node_spellcheck_setter_function
     )]
     spellcheck: (),
+    #[webapi(
+        accessor_property = "writingSuggestions",
+        enumerable,
+        getter = node_writing_suggestions_getter_function,
+        setter = node_writing_suggestions_setter_function
+    )]
+    writing_suggestions: (),
     #[webapi(
         accessor_property = "contentEditable",
         enumerable,
@@ -1560,6 +1619,20 @@ struct HtmlOrForeignElementPrototypeDeclaration {
         setter = node_nonce_setter_function
     )]
     nonce: (),
+    #[webapi(
+        accessor_property = "focusGroup",
+        enumerable,
+        getter = node_focus_group_getter_function,
+        setter = node_focus_group_setter_function
+    )]
+    focus_group: (),
+    #[webapi(
+        accessor_property = "focusGroupStart",
+        enumerable,
+        getter = node_focus_group_start_getter_function,
+        setter = node_focus_group_start_setter_function
+    )]
+    focus_group_start: (),
     #[webapi(
         accessor_property,
         enumerable,
@@ -1705,53 +1778,34 @@ struct HtmlUListElementPrototypeDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Object", enumerable)]
-struct HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration {
-    #[webapi(
-        accessor_property,
-        getter = body_onload_getter_function,
-        setter = body_onload_setter_function
-    )]
-    onload: (),
-    #[webapi(
-        accessor_property,
-        getter = body_onmessageerror_getter_function,
-        setter = body_onmessageerror_setter_function
-    )]
-    onmessageerror: (),
-    #[webapi(
-        accessor_property,
-        getter = body_onerror_getter_function,
-        setter = body_onerror_setter_function
-    )]
-    onerror: (),
-}
-
-#[derive(WebApiFunctionTemplate)]
 #[webapi(name = "HTMLBodyElement", enumerable)]
 struct HtmlBodyElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property,
-        getter = body_text_getter_function,
-        setter = body_text_setter_function
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::BodyText
     )]
     text: (),
     #[webapi(
         accessor_property,
-        getter = body_link_getter_function,
-        setter = body_link_setter_function
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::BodyLink
     )]
     link: (),
     #[webapi(
         accessor_property = "vLink",
-        getter = body_v_link_getter_function,
-        setter = body_v_link_setter_function
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::BodyVLink
     )]
     v_link: (),
     #[webapi(
         accessor_property = "aLink",
-        getter = body_a_link_getter_function,
-        setter = body_a_link_setter_function
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::BodyALink
     )]
     a_link: (),
     #[webapi(
@@ -1767,6 +1821,25 @@ struct HtmlBodyElementLegacyPrototypeDeclaration {
         setter_data = NullToEmptyDomStringReflection::BodyBgColor
     )]
     bg_color: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "HTMLFrameSetElement", enumerable)]
+struct HtmlFrameSetElementLegacyPrototypeDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::FrameSetCols
+    )]
+    cols: (),
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::FrameSetRows
+    )]
+    rows: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -1806,6 +1879,13 @@ struct HtmlHrElementLegacyPrototypeDeclaration {
 struct HtmlFontElementLegacyPrototypeDeclaration {
     #[webapi(
         accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::FontFace
+    )]
+    face: (),
+    #[webapi(
+        accessor_property,
         getter = html_size_getter_function,
         setter = dom_string_reflection_setter_function,
         setter_data = DomStringReflection::FontSize
@@ -1823,6 +1903,12 @@ struct HtmlFontElementLegacyPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "HTMLMarqueeElement", enumerable)]
 struct HtmlMarqueeElementLegacyPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "trueSpeed",
+        getter = html_true_speed_getter_function,
+        setter = html_true_speed_setter_function
+    )]
+    true_speed: (),
     #[webapi(
         accessor_property = "loop",
         getter = marquee_loop_getter_function,
@@ -1908,6 +1994,46 @@ struct HtmlTableElementPrototypeDeclaration {
     #[webapi(
         accessor_property,
         enumerable,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::TableFrame
+    )]
+    frame: (),
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::TableRules
+    )]
+    rules: (),
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::TableSummary
+    )]
+    summary: (),
+    #[webapi(
+        accessor_property = "cellPadding",
+        enumerable,
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::TableCellPadding
+    )]
+    cell_padding: (),
+    #[webapi(
+        accessor_property = "cellSpacing",
+        enumerable,
+        getter = null_to_empty_dom_string_reflection_getter_function,
+        setter = null_to_empty_dom_string_reflection_setter_function,
+        data = NullToEmptyDomStringReflection::TableCellSpacing
+    )]
+    cell_spacing: (),
+    #[webapi(
+        accessor_property,
+        enumerable,
         getter = table_caption_getter_function,
         setter = table_caption_setter_function
     )]
@@ -1953,6 +2079,7 @@ struct HtmlTableElementPrototypeDeclaration {
 fn anchor_url_string_function_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
+    parse_failure_value: &'static str,
     project: impl FnOnce(&url::Url) -> String,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
@@ -1964,7 +2091,7 @@ fn anchor_url_string_function_getter<'s>(
     };
     let value = parsed_url_like_attribute(unsafe { &*runtime_ptr }, handle, "href")
         .map(|url| project(&url))
-        .unwrap_or_default();
+        .unwrap_or_else(|| parse_failure_value.to_owned());
     if let Some(value) = v8_string(scope, &value) {
         rv.set(value.into());
     } else {
@@ -2230,6 +2357,7 @@ fn anchor_host_getter_function<'s>(
     anchor_url_string_function_getter(
         scope,
         args.this(),
+        "",
         |url| {
             url.host_str()
                 .map(|host| {
@@ -2291,6 +2419,7 @@ fn anchor_hostname_getter_function<'s>(
     anchor_url_string_function_getter(
         scope,
         args.this(),
+        "",
         |url| url.host_str().unwrap_or_default().to_owned(),
         rv,
     );
@@ -2327,6 +2456,7 @@ fn anchor_port_getter_function<'s>(
     anchor_url_string_function_getter(
         scope,
         args.this(),
+        "",
         |url| url.port().map(|port| port.to_string()).unwrap_or_default(),
         rv,
     );
@@ -2375,7 +2505,7 @@ fn anchor_pathname_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    anchor_url_string_function_getter(scope, args.this(), |url| url.path().to_owned(), rv);
+    anchor_url_string_function_getter(scope, args.this(), "", |url| url.path().to_owned(), rv);
 }
 
 fn anchor_pathname_setter_function<'s>(
@@ -2411,6 +2541,7 @@ fn anchor_search_getter_function<'s>(
     anchor_url_string_function_getter(
         scope,
         args.this(),
+        "",
         |url| {
             url.query()
                 .map(|query| format!("?{query}"))
@@ -2453,6 +2584,7 @@ fn anchor_hash_getter_function<'s>(
     anchor_url_string_function_getter(
         scope,
         args.this(),
+        "",
         |url| {
             url.fragment()
                 .map(|fragment| format!("#{fragment}"))
@@ -2492,7 +2624,13 @@ fn anchor_origin_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    anchor_url_string_function_getter(scope, args.this(), moli_url::origin_ascii_serialization, rv);
+    anchor_url_string_function_getter(
+        scope,
+        args.this(),
+        "",
+        moli_url::origin_ascii_serialization,
+        rv,
+    );
 }
 
 fn anchor_protocol_getter_function<'s>(
@@ -2500,7 +2638,13 @@ fn anchor_protocol_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    anchor_url_string_function_getter(scope, args.this(), |url| format!("{}:", url.scheme()), rv);
+    anchor_url_string_function_getter(
+        scope,
+        args.this(),
+        ":",
+        |url| format!("{}:", url.scheme()),
+        rv,
+    );
 }
 
 fn anchor_protocol_setter_function<'s>(
@@ -2532,7 +2676,7 @@ fn anchor_username_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    anchor_url_string_function_getter(scope, args.this(), |url| url.username().to_owned(), rv);
+    anchor_url_string_function_getter(scope, args.this(), "", |url| url.username().to_owned(), rv);
 }
 
 fn anchor_username_setter_function<'s>(
@@ -2568,6 +2712,7 @@ fn anchor_password_getter_function<'s>(
     anchor_url_string_function_getter(
         scope,
         args.this(),
+        "",
         |url| url.password().unwrap_or("").to_owned(),
         rv,
     );
@@ -2714,6 +2859,114 @@ fn svg_script_type_setter_function<'s>(
     rv.set_undefined();
 }
 
+fn svg_fetch_priority_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    interface: &'static str,
+    local_name: &'static str,
+    setter: bool,
+) -> Option<(*mut JsContextHost, DomHandle)> {
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, receiver)
+    else {
+        if setter {
+            throw_incompatible_setter_receiver(scope, interface, "fetchPriority");
+        } else {
+            throw_incompatible_getter_receiver(scope, interface, "fetchPriority");
+        }
+        return None;
+    };
+    let is_expected_element = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(crate::dom::native::Node::as_element)
+        .is_some_and(|element| element.is_svg_element(local_name));
+    if !is_expected_element {
+        if setter {
+            throw_incompatible_setter_receiver(scope, interface, "fetchPriority");
+        } else {
+            throw_incompatible_getter_receiver(scope, interface, "fetchPriority");
+        }
+        return None;
+    }
+    Some((runtime_ptr, handle))
+}
+
+fn svg_fetch_priority_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+    interface: &'static str,
+    local_name: &'static str,
+) {
+    let Some((runtime_ptr, handle)) =
+        svg_fetch_priority_receiver(scope, args.this(), interface, local_name, false)
+    else {
+        return;
+    };
+    let raw = unsafe { &*runtime_ptr }
+        .dom_host()
+        .get_attribute(handle, "fetchpriority")
+        .unwrap_or_default();
+    let Some(value) = v8_string(scope, canonical_fetch_priority_value(&raw)) else {
+        rv.set_empty_string();
+        return;
+    };
+    rv.set(value.into());
+}
+
+fn svg_fetch_priority_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+    interface: &'static str,
+    local_name: &'static str,
+) {
+    let Some((runtime_ptr, handle)) =
+        svg_fetch_priority_receiver(scope, args.this(), interface, local_name, true)
+    else {
+        return;
+    };
+    let Some(value) = property_dom_string_value(scope, args.get(0), interface, "fetchPriority")
+    else {
+        return;
+    };
+    set_reflected_attribute(scope, runtime_ptr, handle, "fetchpriority", &value);
+    rv.set_undefined();
+}
+
+fn svg_image_fetch_priority_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    svg_fetch_priority_getter_function(scope, args, rv, "SVGImageElement", "image");
+}
+
+fn svg_image_fetch_priority_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_fetch_priority_setter_function(scope, args, rv, "SVGImageElement", "image");
+}
+
+fn svg_script_fetch_priority_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    svg_fetch_priority_getter_function(scope, args, rv, "SVGScriptElement", "script");
+}
+
+fn svg_script_fetch_priority_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    svg_fetch_priority_setter_function(scope, args, rv, "SVGScriptElement", "script");
+}
+
 fn node_nonce_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -2836,7 +3089,11 @@ fn script_source_setter_function<'s>(
     let _ = unsafe { &mut *runtime_ptr }
         .dom_host_mut()
         .set_script_text_internal_slot(handle, &text);
-    let _ = set_text_content_in_reaction_scope(scope, runtime_ptr, handle, &text);
+    if sink == TrustedScriptElementSink::InnerText {
+        let _ = set_inner_text_in_reaction_scope(scope, runtime_ptr, handle, &text);
+    } else {
+        let _ = set_text_content_in_reaction_scope(scope, runtime_ptr, handle, &text);
+    }
     rv.set_undefined();
 }
 
@@ -3200,8 +3457,12 @@ fn iframe_srcdoc_setter_function<'s>(
     else {
         return;
     };
-    let Some(value) = property_dom_string_value(scope, args.get(0), "HTMLIFrameElement", "srcdoc")
-    else {
+    let Some(value) = trusted_html_sink_string(
+        scope,
+        runtime_ptr,
+        args.get(0),
+        TrustedHtmlSink::IframeSrcdoc,
+    ) else {
         return;
     };
     set_reflected_attribute(scope, runtime_ptr, handle, "srcdoc", &value);
@@ -3214,7 +3475,7 @@ fn iframe_srcdoc_setter_function<'s>(
     rv.set_undefined();
 }
 
-fn iframe_content_document_getter_function<'s>(
+fn frame_owner_content_document_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -3281,7 +3542,93 @@ fn iframe_content_document_getter_function<'s>(
     }
 }
 
-fn iframe_content_window_getter_function<'s>(
+fn frame_owner_content_document_getter_for<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+    interface: &'static str,
+    local_name: &'static str,
+) {
+    if html_element_getter_receiver(scope, args.this(), interface, "contentDocument", local_name)
+        .is_none()
+    {
+        return;
+    }
+    frame_owner_content_document_getter_function(scope, args, rv);
+}
+
+fn frame_content_document_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    frame_owner_content_document_getter_for(scope, args, rv, "HTMLFrameElement", "frame");
+}
+
+fn iframe_content_document_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    frame_owner_content_document_getter_for(scope, args, rv, "HTMLIFrameElement", "iframe");
+}
+
+fn object_content_document_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    frame_owner_content_document_getter_for(scope, args, rv, "HTMLObjectElement", "object");
+}
+
+fn frame_owner_get_svg_document_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+    interface: &'static str,
+    local_name: &'static str,
+) {
+    let Ok((runtime_ptr, handle)) =
+        node_runtime_and_handle_from_object_or_detached(scope, args.this())
+    else {
+        throw_incompatible_method_receiver(scope, interface, "getSVGDocument");
+        return;
+    };
+    if !unsafe { &*runtime_ptr }
+        .dom_host()
+        .is_html_element_named(handle, local_name)
+    {
+        throw_incompatible_method_receiver(scope, interface, "getSVGDocument");
+        return;
+    }
+    frame_owner_content_document_getter_function(scope, args, rv);
+}
+
+fn iframe_get_svg_document_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    frame_owner_get_svg_document_callback(scope, args, rv, "HTMLIFrameElement", "iframe");
+}
+
+fn embed_get_svg_document_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    frame_owner_get_svg_document_callback(scope, args, rv, "HTMLEmbedElement", "embed");
+}
+
+fn object_get_svg_document_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    frame_owner_get_svg_document_callback(scope, args, rv, "HTMLObjectElement", "object");
+}
+
+fn frame_owner_content_window_getter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
@@ -3321,26 +3668,49 @@ fn iframe_content_window_getter_function<'s>(
         }
         return;
     }
-    let runtime = unsafe { &mut *runtime_ptr };
-    runtime.refresh_child_browsing_context(scope, handle);
-    let exposes_same_origin_wrapper =
-        runtime.child_browsing_context_is_same_origin_with_top(handle);
-    let window = runtime.child_browsing_context_window_proxy_for_top(scope, handle);
-    if window.is_some() {
-        runtime.mark_child_browsing_context_window_wrapper_exposed_to_top(handle);
-    }
-    if exposes_same_origin_wrapper && window.is_some() {
-        runtime.request_child_frame_realm_materialization(handle);
-    }
-    match window {
-        Some(window) => {
-            if runtime.child_browsing_context_is_same_origin_with_top(handle) {
-                runtime.set_cached_detached_iframe_content_window(scope, handle, window);
-            }
-            rv.set(window.into());
-        }
+    match live_frame_owner_content_window_for_handle(scope, runtime_ptr, handle) {
+        Some(window) => rv.set(window.into()),
         None => rv.set_null(),
     }
+}
+
+fn frame_owner_content_window_getter_for<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+    interface: &'static str,
+    local_name: &'static str,
+) {
+    if html_element_getter_receiver(scope, args.this(), interface, "contentWindow", local_name)
+        .is_none()
+    {
+        return;
+    }
+    frame_owner_content_window_getter_function(scope, args, rv);
+}
+
+fn frame_content_window_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    frame_owner_content_window_getter_for(scope, args, rv, "HTMLFrameElement", "frame");
+}
+
+fn iframe_content_window_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    frame_owner_content_window_getter_for(scope, args, rv, "HTMLIFrameElement", "iframe");
+}
+
+fn object_content_window_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    frame_owner_content_window_getter_for(scope, args, rv, "HTMLObjectElement", "object");
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -3446,6 +3816,12 @@ struct HtmlScriptElementPrototypeDeclaration {
 #[webapi(name = "SVGScriptElement", enumerable)]
 struct SvgScriptElementPrototypeDeclaration {
     #[webapi(
+        accessor_property = "fetchPriority",
+        getter = svg_script_fetch_priority_getter_function,
+        setter = svg_script_fetch_priority_setter_function
+    )]
+    fetch_priority: (),
+    #[webapi(
         accessor_property = "type",
         getter = script_type_getter_function,
         setter = svg_script_type_setter_function
@@ -3457,6 +3833,17 @@ struct SvgScriptElementPrototypeDeclaration {
         setter = script_async_setter_function
     )]
     r#async: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "SVGImageElement", enumerable)]
+struct SvgImageElementPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "fetchPriority",
+        getter = svg_image_fetch_priority_getter_function,
+        setter = svg_image_fetch_priority_setter_function
+    )]
+    fetch_priority: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -3809,11 +4196,23 @@ struct HtmlEmbedElementUrlPrototypeDeclaration {
         setter_data = DomStringReflection::EmbedType
     )]
     r#type: (),
+    #[webapi(
+        method = "getSVGDocument",
+        length = 0,
+        callback = embed_get_svg_document_callback
+    )]
+    get_svg_document: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "HTMLFrameElement", enumerable)]
 struct HtmlFrameElementLegacyPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "noResize",
+        getter = html_no_resize_getter_function,
+        setter = html_no_resize_setter_function
+    )]
+    no_resize: (),
     #[webapi(
         accessor_property,
         getter = generic_src_getter_function,
@@ -3855,6 +4254,16 @@ struct HtmlFrameElementLegacyPrototypeDeclaration {
         setter_data = NullToEmptyDomStringReflection::FrameMarginWidth
     )]
     margin_width: (),
+    #[webapi(
+        accessor_property,
+        getter = frame_content_document_getter_function
+    )]
+    content_document: (),
+    #[webapi(
+        accessor_property,
+        getter = frame_content_window_getter_function
+    )]
+    content_window: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -3874,6 +4283,20 @@ struct HtmlIFrameElementPrototypeDeclaration {
     srcdoc: (),
     #[webapi(
         accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::IframeAllow
+    )]
+    allow: (),
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::IframeCsp
+    )]
+    csp: (),
+    #[webapi(
+        accessor_property,
         getter = html_loading_getter_function,
         setter = dom_string_reflection_setter_function,
         setter_data = DomStringReflection::IframeLoading
@@ -3888,8 +4311,8 @@ struct HtmlIFrameElementPrototypeDeclaration {
     referrer_policy: (),
     #[webapi(
         accessor_property,
-        getter = node_sandbox_getter_function,
-        setter = node_sandbox_setter_function
+        getter = iframe_sandbox_getter_function,
+        setter = iframe_sandbox_setter_function
     )]
     sandbox: (),
     #[webapi(
@@ -3953,10 +4376,22 @@ struct HtmlIFrameElementPrototypeDeclaration {
         setter_data = NullToEmptyDomStringReflection::IframeMarginWidth
     )]
     margin_width: (),
-    #[webapi(accessor_property, getter = iframe_content_document_getter_function)]
+    #[webapi(
+        accessor_property,
+        getter = iframe_content_document_getter_function
+    )]
     content_document: (),
-    #[webapi(accessor_property, getter = iframe_content_window_getter_function)]
+    #[webapi(
+        accessor_property,
+        getter = iframe_content_window_getter_function
+    )]
     content_window: (),
+    #[webapi(
+        method = "getSVGDocument",
+        length = 0,
+        callback = iframe_get_svg_document_callback
+    )]
+    get_svg_document: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -4022,6 +4457,12 @@ struct HtmlLinkElementUrlPrototypeDeclaration {
     hreflang: (),
     #[webapi(
         accessor_property,
+        getter = link_sizes_getter_function,
+        setter = link_sizes_setter_function
+    )]
+    sizes: (),
+    #[webapi(
+        accessor_property,
         getter = html_charset_getter_function,
         setter = dom_string_reflection_setter_function,
         setter_data = DomStringReflection::LinkCharset
@@ -4034,6 +4475,27 @@ struct HtmlLinkElementUrlPrototypeDeclaration {
         setter_data = DomStringReflection::LinkMedia
     )]
     media: (),
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::LinkIntegrity
+    )]
+    integrity: (),
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::LinkRev
+    )]
+    rev: (),
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::LinkType
+    )]
+    r#type: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -4250,6 +4712,8 @@ struct HtmlDialogElementPrototypeDeclaration {
     show_modal: (),
     #[webapi(method, length = 1, callback = dialog_close_callback)]
     close: (),
+    #[webapi(method, length = 1, callback = dialog_request_close_callback)]
+    request_close: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -4267,6 +4731,13 @@ struct HtmlMetaElementPrototypeDeclaration {
         setter = meta_http_equiv_setter_function
     )]
     http_equiv: (),
+    #[webapi(
+        accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::MetaScheme
+    )]
+    scheme: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -4341,13 +4812,6 @@ struct HtmlAreaElementPrototypeDeclaration {
     download: (),
     #[webapi(
         accessor_property,
-        getter = html_hreflang_getter_function,
-        setter = dom_string_reflection_setter_function,
-        setter_data = DomStringReflection::AreaHreflang
-    )]
-    hreflang: (),
-    #[webapi(
-        accessor_property,
         getter = html_shape_getter_function,
         setter = dom_string_reflection_setter_function,
         setter_data = DomStringReflection::AreaShape
@@ -4360,13 +4824,6 @@ struct HtmlAreaElementPrototypeDeclaration {
         setter_data = UsvStringReflection::AreaPing
     )]
     ping: (),
-    #[webapi(
-        accessor_property,
-        getter = html_type_getter_function,
-        setter = dom_string_reflection_setter_function,
-        setter_data = DomStringReflection::AreaType
-    )]
-    r#type: (),
     #[webapi(
         accessor_property = "noHref",
         getter = html_no_href_getter_function,
@@ -4541,6 +4998,12 @@ struct HtmlLegendElementPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "HTMLButtonElement", enumerable)]
 struct HtmlButtonElementValuePrototypeDeclaration {
+    #[webapi(
+        accessor_property,
+        getter = button_command_getter_function,
+        setter = button_command_setter_function
+    )]
+    command: (),
     #[webapi(
         accessor_property,
         getter = button_disabled_getter_function,
@@ -4825,6 +5288,12 @@ struct HtmlInputElementValuePrototypeDeclaration {
 #[webapi(name = "HTMLOutputElement", enumerable)]
 struct HtmlOutputElementValuePrototypeDeclaration {
     #[webapi(
+        accessor_property = "htmlFor",
+        getter = output_html_for_getter_function,
+        setter = output_html_for_setter_function
+    )]
+    html_for: (),
+    #[webapi(
         accessor_property,
         getter = output_default_value_getter_function,
         setter = output_default_value_setter_function
@@ -4838,6 +5307,17 @@ struct HtmlOutputElementValuePrototypeDeclaration {
     value: (),
     #[webapi(accessor_property = "type", getter = output_type_getter_function)]
     type_: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "SVGAElement", enumerable)]
+struct SvgAElementRelListPrototypeDeclaration {
+    #[webapi(
+        accessor_property = "relList",
+        getter = html_rel_list_getter_function,
+        setter = svg_rel_list_setter_function
+    )]
+    rel_list: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -5210,6 +5690,22 @@ struct HtmlObjectElementPrototypeDeclaration {
         setter_data = DomStringReflection::ObjectHeight
     )]
     height: (),
+    #[webapi(
+        accessor_property,
+        getter = object_content_document_getter_function
+    )]
+    content_document: (),
+    #[webapi(
+        accessor_property,
+        getter = object_content_window_getter_function
+    )]
+    content_window: (),
+    #[webapi(
+        method = "getSVGDocument",
+        length = 0,
+        callback = object_get_svg_document_callback
+    )]
+    get_svg_document: (),
     #[webapi(
         accessor_property,
         getter = html_border_getter_function,
@@ -6018,6 +6514,14 @@ struct HtmlTableCellElementPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "ShadowRoot")]
 struct ShadowRootPrototypeReflectionDeclaration {
+    #[webapi(
+        accessor_property = "onslotchange",
+        enumerable,
+        getter = event_handlers::node_event_handler_getter_function,
+        setter = event_handlers::node_event_handler_setter_function,
+        data = v8str(scope, "onslotchange")
+    )]
+    on_slot_change: (),
     #[webapi(accessor_property, enumerable, getter = shadow_root_host_getter_function)]
     host: (),
     #[webapi(accessor_property, enumerable, getter = shadow_root_mode_getter_function)]
@@ -6214,13 +6718,52 @@ pub(in crate::native_bridge) fn set_live_element_attribute_appending_to_current_
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, name);
     }
+    crate::context_bootstrap::reset_html_canvas_backing_store_for_dimension_assignment(
+        scope,
+        runtime_ptr,
+        handle,
+        None,
+        name,
+    );
+    did_set
+}
+
+pub(in crate::native_bridge) fn set_live_element_attribute_utf16_units_appending_to_current_reaction_queue(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    name: &str,
+    value: &str,
+    units: Vec<u16>,
+) -> bool {
+    clear_detached_iframe_context_before_navigation_attribute_change(
+        scope,
+        runtime_ptr,
+        handle,
+        name,
+        Some(value),
+    );
+    let image_plan =
+        plan_image_attribute_mutation(unsafe { &*runtime_ptr }, handle, name, Some(value));
+    let runtime = unsafe { &mut *runtime_ptr };
+    let did_set = runtime.set_attribute_utf16_units_appending_to_current_reaction_queue(
+        scope,
+        runtime_ptr,
+        handle,
+        name,
+        value,
+        units,
+    );
+    if did_set && name.eq_ignore_ascii_case("style") {
+        runtime.set_element_inline_style_current_base_url(handle);
+    }
     if did_set {
-        event_handlers::invalidate_event_handler_content_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            name,
-        );
+        apply_image_attribute_mutation_plan(scope, runtime_ptr, image_plan);
+        if name.eq_ignore_ascii_case("loading") {
+            queue_image_load_event_for_loading_change(scope, runtime_ptr, handle);
+        }
+        queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, name);
+        queue_text_track_load_if_source(scope, runtime_ptr, handle, name);
     }
     crate::context_bootstrap::reset_html_canvas_backing_store_for_dimension_assignment(
         scope,
@@ -6278,14 +6821,6 @@ pub(in crate::native_bridge) fn set_live_element_attribute_ns_appending_to_curre
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, local_name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, local_name);
     }
-    if did_set && namespace.is_none() {
-        event_handlers::invalidate_event_handler_content_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            local_name,
-        );
-    }
     crate::context_bootstrap::reset_html_canvas_backing_store_for_dimension_assignment(
         scope,
         runtime_ptr,
@@ -6333,14 +6868,6 @@ pub(in crate::native_bridge) fn remove_live_element_attribute_appending_to_curre
         }
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, name);
-    }
-    if did_remove {
-        event_handlers::invalidate_event_handler_content_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            name,
-        );
     }
     did_remove
 }
@@ -6415,14 +6942,6 @@ pub(in crate::native_bridge) fn remove_live_element_attribute_ns_appending_to_cu
         queue_media_load_if_source_or_loading_change(scope, runtime_ptr, handle, local_name);
         queue_text_track_load_if_source(scope, runtime_ptr, handle, local_name);
     }
-    if did_remove && namespace.is_none() {
-        event_handlers::invalidate_event_handler_content_attribute(
-            scope,
-            runtime_ptr,
-            handle,
-            local_name,
-        );
-    }
     did_remove
 }
 
@@ -6450,6 +6969,91 @@ fn element_id_getter_function<'s>(
     set_element_string_return_value(scope, &mut rv, &value);
 }
 
+fn element_heading_offset_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = element_getter_receiver(scope, args.this(), "headingOffset")
+    else {
+        return;
+    };
+    let value = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(|node| node.as_element())
+        .map(|element| element.heading_offset())
+        .unwrap_or(0);
+    rv.set_uint32(value);
+}
+
+fn element_heading_offset_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = element_setter_receiver(scope, args.this(), "headingOffset")
+    else {
+        return;
+    };
+    let value = match webidl::convert::<webidl::UnsignedLong>(
+        scope,
+        args.get(0),
+        webidl::Context::member("Element", "headingOffset"),
+    ) {
+        Ok(value) => value.0,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    let value = if value <= i32::MAX as u32 { value } else { 0 };
+    set_reflected_attribute(
+        scope,
+        runtime_ptr,
+        handle,
+        "headingoffset",
+        &value.to_string(),
+    );
+    rv.set_undefined();
+}
+
+fn element_heading_reset_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = element_getter_receiver(scope, args.this(), "headingReset")
+    else {
+        return;
+    };
+    let value = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(|node| node.as_element())
+        .is_some_and(|element| element.heading_reset());
+    rv.set_bool(value);
+}
+
+fn element_heading_reset_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = element_setter_receiver(scope, args.this(), "headingReset")
+    else {
+        return;
+    };
+    set_reflected_boolean_attribute(
+        scope,
+        runtime_ptr,
+        handle,
+        "headingreset",
+        args.get(0).boolean_value(scope),
+    );
+    rv.set_undefined();
+}
+
 fn element_id_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -6458,14 +7062,7 @@ fn element_id_setter_function<'s>(
     if element_setter_receiver(scope, args.this(), "id").is_none() {
         return;
     }
-    set_dom_string_attribute_property_on_object(
-        scope,
-        args.this(),
-        "id",
-        args.get(0),
-        "Element",
-        "id",
-    );
+    set_dom_string_attribute_property_utf16_on_object(scope, args.this(), "id", args.get(0));
     rv.set_undefined();
 }
 
@@ -6892,15 +7489,22 @@ pub(crate) fn install_element_template_bindings<'s>(
     }
 
     match interface_name {
-        "Element" => install!(
-            ElementAriaStringReflectionDeclaration,
-            ElementAriaElementReflectionDeclaration,
-            ElementPrototypeReflectionDeclaration,
-            ElementPrototypeQueryAndAttributeMethodsDeclaration,
-            ExtendedElementPrototypeMethodsDeclaration,
-            ElementGeometryPrototypeDeclaration,
-            ElementStylePrototypeDeclaration,
-        ),
+        "Element" => {
+            install!(
+                ElementAriaStringReflectionDeclaration,
+                ElementAriaElementReflectionDeclaration,
+                ElementPrototypeReflectionDeclaration,
+                ElementPrototypeQueryAndAttributeMethodsDeclaration,
+                ExtendedElementPrototypeMethodsDeclaration,
+                ElementGeometryPrototypeDeclaration,
+                ElementStylePrototypeDeclaration,
+            );
+            install_node_event_handler_template_bindings(
+                scope,
+                prototype,
+                event_handlers::ELEMENT_FULLSCREEN_EVENT_HANDLER_PROPERTIES,
+            );
+        }
         "Document" => install!(DocumentCustomElementRegistryPrototypeDeclaration),
         "HTMLElement" => install!(
             ElementStylePrototypeDeclaration,
@@ -6978,18 +7582,21 @@ pub(crate) fn install_element_template_bindings<'s>(
         "HTMLLIElement" => install!(HtmlLiElementValuePrototypeDeclaration),
         "HTMLOListElement" => install!(HtmlOListElementPrototypeDeclaration),
         "HTMLUListElement" => install!(HtmlUListElementPrototypeDeclaration),
-        "HTMLBodyElement" => install!(
-            HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration,
-            HtmlBodyElementLegacyPrototypeDeclaration,
-        ),
+        "HTMLBodyElement" => {
+            install_body_or_frameset_window_event_handler_accessors(scope, prototype);
+            install!(HtmlBodyElementLegacyPrototypeDeclaration);
+        }
         "HTMLFrameSetElement" => {
-            install!(HtmlBodyOrFrameSetEventHandlersPrototypeDeclaration)
+            install_body_or_frameset_window_event_handler_accessors(scope, prototype);
+            install!(HtmlFrameSetElementLegacyPrototypeDeclaration);
         }
         "HTMLHRElement" => install!(HtmlHrElementLegacyPrototypeDeclaration),
         "HTMLFontElement" => install!(HtmlFontElementLegacyPrototypeDeclaration),
         "HTMLMarqueeElement" => install!(HtmlMarqueeElementLegacyPrototypeDeclaration),
         "HTMLScriptElement" => install!(HtmlScriptElementPrototypeDeclaration),
         "SVGScriptElement" => install!(SvgScriptElementPrototypeDeclaration),
+        "SVGImageElement" => install!(SvgImageElementPrototypeDeclaration),
+        "SVGAElement" => install!(SvgAElementRelListPrototypeDeclaration),
         "HTMLStyleElement" => install!(HtmlStyleElementPrototypeDeclaration),
         "SVGStyleElement" => install!(SvgStyleElementPrototypeDeclaration),
         "HTMLTableElement" => install!(HtmlTableElementPrototypeDeclaration),
@@ -7212,12 +7819,246 @@ fn aria_string_attribute_setter_callback<'s>(
     rv.set_undefined();
 }
 
-fn aria_element_reference_slot(attribute: &str) -> String {
-    format!("__moliAriaElementReference:{attribute}")
+fn aria_element_reference_array_cache_slot(attribute: &str) -> String {
+    format!("__moliAriaElementReferenceArrayCache:{attribute}")
 }
 
 fn aria_element_reference_is_singular(attribute: &str) -> bool {
     attribute == "aria-activedescendant"
+}
+
+struct AriaElementReferenceValue<'s> {
+    object: v8::Local<'s, v8::Object>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+}
+
+impl<'s> webidl::WebIdlConverter<'s> for AriaElementReferenceValue<'s> {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'s, '_>,
+        value: v8::Local<'s, v8::Value>,
+        _context: webidl::Context,
+        _options: &Self::Options,
+    ) -> std::result::Result<Self, webidl::WebIdlError> {
+        let object = v8::Local::<v8::Object>::try_from(value).map_err(|_| {
+            webidl::WebIdlError::custom_message("ARIA element references must be Elements.")
+        })?;
+        let (runtime_ptr, handle) = node_runtime_and_handle_from_object_or_detached(scope, object)
+            .map_err(|_| {
+                webidl::WebIdlError::custom_message("ARIA element references must be Elements.")
+            })?;
+        if !node_is_element(unsafe { &*runtime_ptr }, handle) {
+            return Err(webidl::WebIdlError::custom_message(
+                "ARIA element references must be Elements.",
+            ));
+        }
+        Ok(Self {
+            object,
+            runtime_ptr,
+            handle,
+        })
+    }
+}
+
+fn aria_element_reference_handle_for_owner(
+    scope: &mut v8::PinScope<'_, '_>,
+    owner_runtime_ptr: *mut JsContextHost,
+    reference: AriaElementReferenceValue<'_>,
+) -> Option<DomHandle> {
+    current_or_live_delegate_node_arg_handle(scope, owner_runtime_ptr, reference.object.into())
+        .filter(|handle| node_is_element(unsafe { &*owner_runtime_ptr }, *handle))
+        .or_else(|| (reference.runtime_ptr == owner_runtime_ptr).then_some(reference.handle))
+}
+
+fn element_reference_is_in_valid_scope(
+    runtime: &JsContextHost,
+    owner: DomHandle,
+    candidate: DomHandle,
+) -> bool {
+    if !node_is_element(runtime, candidate) {
+        return false;
+    }
+    let Some(candidate_root) = runtime.dom_host().root_node_handle(candidate) else {
+        return false;
+    };
+    let Some(mut owner_root) = runtime.dom_host().root_node_handle(owner) else {
+        return false;
+    };
+    loop {
+        if candidate_root == owner_root {
+            return true;
+        }
+        if !runtime.dom_host().is_shadow_root(owner_root) {
+            return false;
+        }
+        let Some(host) = runtime.dom_host().shadow_root_host(owner_root) else {
+            return false;
+        };
+        let Some(next_root) = runtime.dom_host().root_node_handle(host) else {
+            return false;
+        };
+        owner_root = next_root;
+    }
+}
+
+fn element_by_id_including_disconnected(
+    runtime: &JsContextHost,
+    owner: DomHandle,
+    id: &str,
+) -> Option<DomHandle> {
+    if id.is_empty() {
+        return None;
+    }
+    let root = runtime.dom_host().root_node_handle(owner)?;
+    let mut stack = runtime
+        .dom_host()
+        .child_handles_reversed(root)
+        .collect::<Vec<_>>();
+    while let Some(candidate) = stack.pop() {
+        if node_is_element(runtime, candidate)
+            && runtime.dom_host().get_attribute(candidate, "id").as_deref() == Some(id)
+        {
+            return Some(candidate);
+        }
+        stack.extend(runtime.dom_host().child_handles_reversed(candidate));
+    }
+    None
+}
+
+pub(in crate::native_bridge::element) fn reflected_element_attribute_handle(
+    runtime: &JsContextHost,
+    owner: DomHandle,
+    attribute: &str,
+) -> Option<DomHandle> {
+    let candidate = match runtime
+        .dom_host()
+        .explicit_element_references(owner, attribute)
+    {
+        Some(references) => references.into_iter().next()?,
+        None => {
+            let id = runtime.dom_host().get_attribute(owner, attribute)?;
+            element_by_id_including_disconnected(runtime, owner, &id)?
+        }
+    };
+    if !element_reference_is_in_valid_scope(runtime, owner, candidate) {
+        return None;
+    }
+    runtime
+        .dom_host()
+        .resolve_reference_target_chain(candidate)
+        .map(|_| candidate)
+}
+
+pub(in crate::native_bridge::element) fn resolved_reflected_element_attribute_handle(
+    runtime: &JsContextHost,
+    owner: DomHandle,
+    attribute: &str,
+) -> Option<DomHandle> {
+    reflected_element_attribute_handle(runtime, owner, attribute)
+        .and_then(|candidate| runtime.dom_host().resolve_reference_target_chain(candidate))
+}
+
+fn aria_element_reference_content_handles(
+    runtime: &JsContextHost,
+    owner: DomHandle,
+    attribute: &str,
+) -> Option<Vec<DomHandle>> {
+    let value = runtime.dom_host().get_attribute(owner, attribute)?;
+    if aria_element_reference_is_singular(attribute) {
+        return Some(
+            element_by_id_including_disconnected(runtime, owner, &value)
+                .into_iter()
+                .collect(),
+        );
+    }
+    Some(
+        value
+            .split([' ', '\t', '\n', '\r', '\u{000c}'])
+            .filter(|token| !token.is_empty())
+            .filter_map(|token| element_by_id_including_disconnected(runtime, owner, token))
+            .collect(),
+    )
+}
+
+fn aria_element_reference_handles(
+    runtime: &JsContextHost,
+    owner: DomHandle,
+    attribute: &str,
+) -> Option<Vec<DomHandle>> {
+    match runtime
+        .dom_host()
+        .explicit_element_references(owner, attribute)
+    {
+        Some(references) => Some(
+            references
+                .into_iter()
+                .filter(|candidate| element_reference_is_in_valid_scope(runtime, owner, *candidate))
+                .collect(),
+        ),
+        None => aria_element_reference_content_handles(runtime, owner, attribute),
+    }
+}
+
+fn aria_element_reference_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+) -> Option<v8::Local<'s, v8::Value>> {
+    wrapped_handle_value(scope, runtime_ptr, handle)
+}
+
+fn aria_element_reference_array_values<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handles: Vec<DomHandle>,
+) -> Option<Vec<v8::Local<'s, v8::Value>>> {
+    handles
+        .into_iter()
+        .map(|handle| aria_element_reference_value(scope, runtime_ptr, handle))
+        .collect()
+}
+
+fn aria_cached_frozen_element_array<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    attribute: &str,
+    values: &[v8::Local<'s, v8::Value>],
+) -> v8::Local<'s, v8::Array> {
+    let slot = aria_element_reference_array_cache_slot(attribute);
+    if let Some(cached) = get_private_value(scope, receiver, &slot)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+        && cached.length() as usize == values.len()
+    {
+        let mut equal = true;
+        for (index, expected) in values.iter().copied().enumerate() {
+            if !cached
+                .get_index(scope, index as u32)
+                .is_some_and(|actual| actual.strict_equals(expected))
+            {
+                equal = false;
+                break;
+            }
+        }
+        if equal {
+            return cached;
+        }
+    }
+    let array = v8::Array::new_with_elements(scope, values);
+    let _ = array.set_integrity_level(scope, v8::IntegrityLevel::Frozen);
+    set_private_value(scope, receiver, &slot, array.into());
+    array
+}
+
+fn clear_aria_element_reference_array_cache(
+    scope: &mut v8::PinScope<'_, '_>,
+    receiver: v8::Local<'_, v8::Object>,
+    attribute: &str,
+) {
+    let slot = aria_element_reference_array_cache_slot(attribute);
+    let undefined = v8::undefined(scope);
+    set_private_value(scope, receiver, &slot, undefined.into());
 }
 
 fn aria_element_reference_attribute_getter_callback<'s>(
@@ -7229,15 +8070,85 @@ fn aria_element_reference_attribute_getter_callback<'s>(
         rv.set_null();
         return;
     };
-    let slot = aria_element_reference_slot(&attribute);
-    if let Some(value) = get_private_value(scope, args.this(), &slot) {
-        rv.set(value);
+    let Some((runtime_ptr, owner)) = element_getter_receiver(scope, args.this(), &attribute) else {
+        return;
+    };
+    let Some(handles) = aria_element_reference_handles(unsafe { &*runtime_ptr }, owner, &attribute)
+    else {
+        clear_aria_element_reference_array_cache(scope, args.this(), &attribute);
+        rv.set_null();
+        return;
+    };
+    if aria_element_reference_is_singular(&attribute) {
+        match handles
+            .into_iter()
+            .next()
+            .and_then(|handle| aria_element_reference_value(scope, runtime_ptr, handle))
+        {
+            Some(value) => rv.set(value),
+            None => rv.set_null(),
+        }
         return;
     }
-    if aria_element_reference_is_singular(&attribute) {
+    let Some(values) = aria_element_reference_array_values(scope, runtime_ptr, handles) else {
         rv.set_null();
-    } else {
-        rv.set(v8::Array::new(scope, 0).into());
+        return;
+    };
+    let array = aria_cached_frozen_element_array(scope, args.this(), &attribute, &values);
+    rv.set(array.into());
+}
+
+fn set_explicit_aria_element_references(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    owner: DomHandle,
+    attribute: &str,
+    handles: Vec<DomHandle>,
+) {
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        let _ = unsafe { &mut *runtime_ptr }.set_attribute_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            owner,
+            attribute,
+            "",
+        );
+        let _ = unsafe { &mut *runtime_ptr }
+            .dom_host_mut()
+            .set_explicit_element_references(owner, attribute, handles);
+    });
+}
+
+fn clear_explicit_aria_element_references(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    owner: DomHandle,
+    attribute: &str,
+) {
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        let _ = unsafe { &mut *runtime_ptr }.remove_attribute_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            owner,
+            attribute,
+        );
+    });
+}
+
+fn converted_aria_element_reference<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    value: v8::Local<'s, v8::Value>,
+) -> Option<AriaElementReferenceValue<'s>> {
+    match webidl::convert::<AriaElementReferenceValue<'s>>(
+        scope,
+        value,
+        webidl::Context::argument("Element ARIA element reflection", 1),
+    ) {
+        Ok(reference) => Some(reference),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            None
+        }
     }
 }
 
@@ -7250,14 +8161,45 @@ fn aria_element_reference_attribute_setter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    let slot = aria_element_reference_slot(&attribute);
-    set_private_value(scope, args.this(), &slot, args.get(0));
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, args.this())
-    else {
-        rv.set_undefined();
+    let Some((runtime_ptr, owner)) = element_setter_receiver(scope, args.this(), &attribute) else {
         return;
     };
-    let _ = unsafe { &mut *runtime_ptr }.set_attribute(scope, runtime_ptr, handle, &attribute, "");
+    let value = args.get(0);
+    if value.is_null_or_undefined() {
+        clear_explicit_aria_element_references(scope, runtime_ptr, owner, &attribute);
+        rv.set_undefined();
+        return;
+    }
+    if aria_element_reference_is_singular(&attribute) {
+        let Some(reference) = converted_aria_element_reference(scope, value) else {
+            return;
+        };
+        let handles = aria_element_reference_handle_for_owner(scope, runtime_ptr, reference)
+            .into_iter()
+            .collect();
+        set_explicit_aria_element_references(scope, runtime_ptr, owner, &attribute, handles);
+        rv.set_undefined();
+        return;
+    }
+    let sequence = match webidl::convert::<webidl::Sequence<AriaElementReferenceValue<'s>>>(
+        scope,
+        value,
+        webidl::Context::argument("Element ARIA element reflection", 1),
+    ) {
+        Ok(sequence) => sequence,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    let mut handles = Vec::with_capacity(sequence.0.len());
+    for reference in sequence.0 {
+        if let Some(handle) = aria_element_reference_handle_for_owner(scope, runtime_ptr, reference)
+            && !handles.contains(&handle)
+        {
+            handles.push(handle);
+        }
+    }
+    set_explicit_aria_element_references(scope, runtime_ptr, owner, &attribute, handles);
     rv.set_undefined();
 }

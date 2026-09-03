@@ -146,4 +146,11 @@ impl NodeData {
             _ => None,
         }
     }
+
+    pub fn as_document_fragment_mut(&mut self) -> Option<&mut DocumentFragment> {
+        match self {
+            Self::DocumentFragment(fragment) => Some(fragment),
+            _ => None,
+        }
+    }
 }

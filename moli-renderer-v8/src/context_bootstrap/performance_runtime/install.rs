@@ -9,6 +9,7 @@ use crate::webidl_iterator::{
     SnapshotWebIdlIteratorKind, invoke_webidl_collection_for_each_callback,
     new_snapshot_webidl_iterator, prepare_webidl_collection_for_each_callback,
 };
+use anyhow::{Result, anyhow};
 use moli_webapi_declare::{ObjectLiteralDeclaration, WebApiFunctionTemplate, WebApiObject};
 
 pub(super) const MIN_LIFECYCLE_TIMING_DELTA_MILLIS: f64 = 0.001;
@@ -57,11 +58,18 @@ const LOAD_START_INDEX: usize = 2;
 const LOAD_END_INDEX: usize = 3;
 const LIFECYCLE_TIMESTAMP_COUNT: usize = 4;
 
+fn initial_performance_entry_id() -> f64 {
+    fastrand::u64(100..=10_000) as f64
+}
+
 #[derive(WebApiObject)]
 #[webapi(interface = "Performance")]
 struct PerformanceObjectDeclaration<'scope> {
     #[webapi(slot = PERFORMANCE_TIME_ORIGIN_SLOT)]
     time_origin: f64,
+
+    #[webapi(slot = PERFORMANCE_LAST_ENTRY_ID_SLOT)]
+    last_entry_id: f64,
 
     #[webapi(slot = PERFORMANCE_ENTRIES_SLOT, init = "array")]
     entries: (),
@@ -77,6 +85,19 @@ struct PerformanceObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
+#[webapi(interface = "Performance")]
+struct WorkerPerformanceObjectDeclaration {
+    #[webapi(slot = PERFORMANCE_TIME_ORIGIN_SLOT)]
+    time_origin: f64,
+
+    #[webapi(slot = PERFORMANCE_LAST_ENTRY_ID_SLOT)]
+    last_entry_id: f64,
+
+    #[webapi(slot = PERFORMANCE_ENTRIES_SLOT, init = "array")]
+    entries: (),
+}
+
+#[derive(WebApiObject)]
 #[webapi(interface = "Object", data_properties, enumerable)]
 struct PerformanceJsonSnapshotDeclaration<'scope> {
     time_origin: Option<v8::Local<'scope, v8::Value>>,
@@ -89,6 +110,16 @@ struct PerformanceJsonSnapshotDeclaration<'scope> {
 struct PerformanceObserverConstructorDeclaration {
     #[webapi(data_property = "supportedEntryTypes")]
     supported_entry_types: &'static [&'static str],
+}
+
+#[derive(Default, WebApiObject)]
+#[webapi(interface = "Object")]
+struct PerformanceObserverRuntimeStateDeclaration {
+    #[webapi(slot = PERFORMANCE_OBSERVER_REGISTRY_SLOT, init = "array")]
+    registry: (),
+
+    #[webapi(slot = PERFORMANCE_OBSERVER_QUEUE_SLOT, init = "array")]
+    queue: (),
 }
 
 #[derive(WebApiObject)]
@@ -160,14 +191,18 @@ struct PerformancePrototypeMethodsDeclaration {
 
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "Performance", enumerable)]
-struct PerformancePrototypeAccessorsDeclaration {
+struct PerformancePrototypeCommonAccessorsDeclaration {
     #[webapi(
         accessor_property,
         getter = performance_attribute_getter_callback,
         data = callback_data_index_value(scope, 0)
     )]
     time_origin: (),
+}
 
+#[derive(Default, WebApiObject)]
+#[webapi(interface = "Performance", enumerable)]
+struct PerformancePrototypeWindowAccessorsDeclaration {
     #[webapi(
         accessor_property,
         getter = performance_attribute_getter_callback,
@@ -295,7 +330,7 @@ pub(in crate::context_bootstrap) fn install_performance_template_bindings<'s>(
     match interface_name {
         "Performance" => {
             PerformancePrototypeMethodsDeclaration::initialize_prototype_template(scope, prototype);
-            PerformancePrototypeAccessorsDeclaration::initialize_prototype_template(
+            PerformancePrototypeCommonAccessorsDeclaration::initialize_prototype_template(
                 scope, prototype,
             );
             super::resource_buffer::install_resource_timing_buffer_template_bindings(
@@ -323,6 +358,49 @@ pub(in crate::context_bootstrap) fn install_performance_template_bindings<'s>(
     }
 }
 
+pub(in crate::context_bootstrap) fn install_worker_performance_runtime_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    global: v8::Local<'s, v8::Object>,
+) -> Result<()> {
+    install_performance_observer_runtime_state(
+        scope,
+        global,
+        WORKER_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES,
+    )?;
+    super::super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "Performance")?;
+
+    let performance = WorkerPerformanceObjectDeclaration::new(
+        unix_epoch_millis(),
+        initial_performance_entry_id(),
+    )
+    .bind(scope)
+    .map_err(|error| anyhow!("failed to create worker performance: {error}"))?;
+    install_simple_event_target_methods(
+        scope,
+        performance,
+        PERFORMANCE_EVENT_LISTENERS_SLOT,
+        false,
+    );
+    define_global_value(scope, global, WINDOW_PERFORMANCE_SLOT, performance.into())
+}
+
+pub(super) fn install_performance_observer_runtime_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    global: v8::Local<'s, v8::Object>,
+    supported_entry_types: &'static [&'static str],
+) -> Result<()> {
+    PerformanceObserverRuntimeStateDeclaration::default().initialize(scope, global)?;
+    let supported_entry_types_array = serialize_v8_array(scope, supported_entry_types)
+        .unwrap_or_else(|| v8::Array::new(scope, 0));
+    set_private_value(
+        scope,
+        global,
+        PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES_SLOT,
+        supported_entry_types_array.into(),
+    );
+    Ok(())
+}
+
 pub(super) fn create_performance_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: Option<v8::Local<'s, v8::Object>>,
@@ -331,6 +409,7 @@ pub(super) fn create_performance_object<'s>(
 ) -> v8::Local<'s, v8::Object> {
     let performance = PerformanceObjectDeclaration::new(
         time_origin,
+        initial_performance_entry_id(),
         v8::undefined(scope).into(),
         v8::undefined(scope).into(),
         v8::undefined(scope).into(),
@@ -435,12 +514,20 @@ pub(super) fn apply_pending_window_performance_state<'s>(
 pub(crate) fn finalize_performance_observer_realm_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     constructor: v8::Local<'s, v8::Object>,
+    supported_entry_types: &'static [&'static str],
 ) {
-    PerformanceObserverConstructorDeclaration::new(PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES)
+    PerformanceObserverConstructorDeclaration::new(supported_entry_types)
         .initialize(scope, constructor)
         .expect("PerformanceObserver constructor declaration should initialize");
 }
 
+pub(crate) fn finalize_window_performance_realm_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    prototype: v8::Local<'s, v8::Object>,
+) -> Result<()> {
+    PerformancePrototypeWindowAccessorsDeclaration::default().initialize(scope, prototype)?;
+    Ok(())
+}
 fn performance_navigation_timing_type(navigation_type: &str) -> &'static str {
     match navigation_type {
         "reload" => "reload",
@@ -785,6 +872,12 @@ pub(crate) fn record_performance_dom_content_loaded_event_start(scope: &mut v8::
         super::window_state::record_pending_dom_content_loaded_start(scope);
         return;
     };
+    if performance_lifecycle_timestamp(scope, performance, DOM_CONTENT_LOADED_START_INDEX)
+        .unwrap_or(0.0)
+        > 0.0
+    {
+        return;
+    }
     let previous = 0.0;
     let timestamp = monotonic_lifecycle_timestamp(scope, performance, previous);
     apply_dom_content_loaded_start(scope, performance, timestamp);
@@ -819,6 +912,12 @@ pub(crate) fn record_performance_dom_content_loaded_event_end(scope: &mut v8::Pi
         super::window_state::record_pending_dom_content_loaded_end(scope);
         return;
     };
+    if performance_lifecycle_timestamp(scope, performance, DOM_CONTENT_LOADED_END_INDEX)
+        .unwrap_or(0.0)
+        > 0.0
+    {
+        return;
+    }
     let previous =
         performance_lifecycle_timestamp(scope, performance, DOM_CONTENT_LOADED_START_INDEX)
             .unwrap_or(0.0);
@@ -853,6 +952,9 @@ pub(crate) fn record_performance_load_event_start(scope: &mut v8::PinScope<'_, '
         super::window_state::record_pending_load_start(scope);
         return;
     };
+    if performance_lifecycle_timestamp(scope, performance, LOAD_START_INDEX).unwrap_or(0.0) > 0.0 {
+        return;
+    }
     let previous =
         performance_lifecycle_timestamp(scope, performance, DOM_CONTENT_LOADED_END_INDEX)
             .unwrap_or(0.0);
@@ -954,12 +1056,21 @@ fn navigation_performance_entry<'s>(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
+pub(super) fn is_window_performance<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    performance: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, performance, PERFORMANCE_NAVIGATION_TYPE_SEED_SLOT).is_some()
+}
+
 pub(super) fn ensure_navigation_performance_entry<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
-) -> v8::Local<'s, v8::Object> {
-    if let Some(entry) = navigation_performance_entry(scope, performance) {
-        return entry;
+) {
+    if navigation_performance_entry(scope, performance).is_some()
+        || !is_window_performance(scope, performance)
+    {
+        return;
     }
     let navigation_type = performance_navigation_type_seed(scope, performance);
     let name = get_private_value(scope, performance, PERFORMANCE_NAVIGATION_NAME_SEED_SLOT)
@@ -967,6 +1078,7 @@ pub(super) fn ensure_navigation_performance_entry<'s>(
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_else(|| "document".to_owned());
     let entry = create_navigation_performance_entry(scope, &navigation_type, &name);
+    super::entries::assign_navigation_performance_entry_identity(scope, performance, entry);
     set_private_value(
         scope,
         performance,
@@ -975,7 +1087,6 @@ pub(super) fn ensure_navigation_performance_entry<'s>(
     );
     apply_lifecycle_to_navigation_entry(scope, performance, entry);
     append_performance_entry(scope, performance, entry);
-    entry
 }
 
 fn apply_lifecycle_to_navigation_entry<'s>(
@@ -1093,10 +1204,10 @@ impl PerformanceTimingSnapshot {
         let time_origin = legacy_timing_epoch_millis(time_origin);
         Self {
             navigation_start: time_origin,
-            unload_event_start: time_origin,
-            unload_event_end: time_origin,
-            redirect_start: time_origin,
-            redirect_end: time_origin,
+            unload_event_start: 0,
+            unload_event_end: 0,
+            redirect_start: 0,
+            redirect_end: 0,
             fetch_start: time_origin,
             domain_lookup_start: time_origin,
             domain_lookup_end: time_origin,
@@ -1107,12 +1218,12 @@ impl PerformanceTimingSnapshot {
             response_start: time_origin,
             response_end: time_origin,
             dom_loading: time_origin,
-            dom_interactive: time_origin,
-            dom_content_loaded_event_start: time_origin,
-            dom_content_loaded_event_end: time_origin,
-            dom_complete: time_origin,
-            load_event_start: time_origin,
-            load_event_end: time_origin,
+            dom_interactive: 0,
+            dom_content_loaded_event_start: 0,
+            dom_content_loaded_event_end: 0,
+            dom_complete: 0,
+            load_event_start: 0,
+            load_event_end: 0,
         }
     }
 }
@@ -1190,11 +1301,11 @@ fn performance_attribute_getter_callback<'s>(
         rv.set_undefined();
         return;
     };
+    if performance_slot_number(scope, args.this(), PERFORMANCE_TIME_ORIGIN_SLOT).is_none() {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     if let Some(subobject) = super::lazy_subobjects::PerformanceSubobject::from_slot(slot) {
-        if performance_slot_value(scope, args.this(), PERFORMANCE_TIME_ORIGIN_SLOT).is_none() {
-            rv.set_undefined();
-            return;
-        }
         match super::lazy_subobjects::ensure_performance_subobject(scope, args.this(), subobject) {
             Ok(value) => rv.set(value),
             Err(error) => throw_type_error(scope, &error.to_string()),
@@ -1214,7 +1325,7 @@ const PERFORMANCE_ATTRIBUTE_SLOTS: &[&str] = &[
     PERFORMANCE_EVENT_COUNTS_SLOT,
 ];
 
-const PERFORMANCE_TIMING_JSON_KEYS: &[&str] = &[
+pub(super) const PERFORMANCE_TIMING_ATTRIBUTE_NAMES: &[&str] = &[
     "navigationStart",
     "unloadEventStart",
     "unloadEventEnd",
@@ -1563,8 +1674,9 @@ pub(in crate::context_bootstrap) fn performance_to_json_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let timing = object_property_as_object(scope, args.this(), "timing")
-        .map(|timing| object_json_snapshot(scope, timing, PERFORMANCE_TIMING_JSON_KEYS).into());
+    let timing = object_property_as_object(scope, args.this(), "timing").map(|timing| {
+        object_json_snapshot(scope, timing, PERFORMANCE_TIMING_ATTRIBUTE_NAMES).into()
+    });
     let navigation =
         object_property_as_object(scope, args.this(), "navigation").map(|navigation| {
             object_json_snapshot(scope, navigation, PERFORMANCE_NAVIGATION_JSON_KEYS).into()
@@ -1584,7 +1696,7 @@ fn performance_timing_to_json_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set(object_json_snapshot(scope, args.this(), PERFORMANCE_TIMING_JSON_KEYS).into());
+    rv.set(object_json_snapshot(scope, args.this(), PERFORMANCE_TIMING_ATTRIBUTE_NAMES).into());
 }
 
 fn performance_navigation_to_json_callback<'s>(

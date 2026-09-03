@@ -1,4 +1,7 @@
-use crate::dom::native::{Element, Node};
+use crate::dom::{
+    forms::InputType,
+    native::{Element, Node},
+};
 use crate::{
     construct_form_data_entries_for_form, custom_elements,
     document_runtime::DomHandle,
@@ -13,7 +16,7 @@ use super::super::{
     node::{
         append_child_in_reaction_scope, append_child_to_current_reaction_queue,
         current_or_live_delegate_node_arg_handle, insert_before_in_reaction_scope,
-        insert_before_to_current_reaction_queue, node_or_foreign_arg_handle,
+        insert_before_to_current_reaction_queue, node_is_element, node_or_foreign_arg_handle,
         node_or_foreign_arg_handle_allow_detached, node_runtime_and_handle_from_args,
         node_runtime_and_handle_from_args_or_detached, node_runtime_and_handle_from_object,
         node_runtime_and_handle_from_object_or_detached, remove_child_in_reaction_scope,
@@ -29,9 +32,9 @@ use super::{
     element_has_attribute, html_element_getter_receiver, html_element_setter_receiver,
     navigate_form_target_browsing_context, parse_non_negative_dimension, property_usv_string_value,
     queue_deferred_named_iframe_target_navigation_from_document,
-    queue_deferred_named_iframe_target_request, resolve_url_like_attribute,
-    set_attribute_property_on_object_or_detached, set_reflected_attribute,
-    set_reflected_boolean_attribute, update_focus,
+    queue_deferred_named_iframe_target_request, reflected_element_attribute_handle,
+    resolve_url_like_attribute, set_attribute_property_on_object_or_detached,
+    set_reflected_attribute, set_reflected_boolean_attribute, update_focus,
 };
 use std::str::FromStr;
 
@@ -197,8 +200,10 @@ pub(in crate::native_bridge) use self::select::{
     select_size_getter_function, select_size_setter_function, select_value_getter_function,
     select_value_setter_function, set_select_indexed_option,
 };
+pub(in crate::native_bridge::element) use self::simple_controls::normalized_button_command;
 pub(in crate::native_bridge) use self::simple_controls::{
     button_command_for_element_getter_function, button_command_for_element_setter_function,
+    button_command_getter_function, button_command_setter_function,
     button_disabled_getter_function, button_disabled_setter_function,
     button_form_action_getter_function, button_form_action_setter_function,
     button_form_enctype_getter_function, button_form_enctype_setter_function,
@@ -230,7 +235,7 @@ pub(crate) use self::submission::{
     align_event_constructor_function_realm_with_target,
 };
 pub(crate) use self::text_control::{
-    char_offset_to_byte_index, dispatch_text_control_event, is_text_control,
+    dispatch_text_control_event, is_text_control,
     queue_text_control_document_selection_change_event, replace_text_control_selection,
     text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value,
@@ -247,8 +252,8 @@ pub(in crate::native_bridge) use self::validation::{
     control_check_validity_callback, control_matches_validity_pseudo,
     control_report_validity_callback, control_set_custom_validity_callback,
     control_validation_message_getter_function, control_validity_getter_function,
-    control_will_validate_getter_function, dispatch_invalid_event, form_check_validity_callback,
-    form_report_validity_callback, form_validate_for_submission,
+    control_validity_pseudo_state, control_will_validate_getter_function, dispatch_invalid_event,
+    form_check_validity_callback, form_report_validity_callback, form_validate_for_submission,
 };
 
 #[derive(strum::EnumString, strum::IntoStaticStr)]

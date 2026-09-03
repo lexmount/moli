@@ -11,7 +11,8 @@ use moli_webapi_declare::WebApiObject;
 use crate::callback_invocation::{CallbackInvocationOutcome, CallbackInvoker};
 use crate::context_bootstrap::{
     EVENT_DISPATCHING_SLOT, EVENT_STOP_IMMEDIATE_PROPAGATION_SLOT, EVENT_STOP_PROPAGATION_SLOT,
-    SimpleObjectEventListenerSnapshot, dispatch_message_port_events_for_port_collecting_errors,
+    EventHandlerType, SimpleObjectEventListenerSnapshot, apply_event_handler_return_value,
+    dispatch_message_port_events_for_port_collecting_errors,
     dispatch_service_worker_controller_change, ensure_message_port_wrapper_for_id,
     event_internal_bool_flag, mark_event_trusted, runtime_message_allowed_for_current_target,
     set_event_internal_flag, simple_object_event_listeners_snapshot,
@@ -1029,13 +1030,12 @@ pub(super) fn dispatch_worker_error_event<'s>(
             ],
         ) {
             Ok(returned) => {
-                if v8::Local::new(scope, &returned).is_true() {
-                    let _ = event.set(
-                        scope,
-                        v8str(scope, "defaultPrevented").into(),
-                        v8::Boolean::new(scope, true).into(),
-                    );
-                }
+                apply_event_handler_return_value(
+                    scope,
+                    event,
+                    v8::Local::new(scope, &returned),
+                    EventHandlerType::OnErrorEventHandler,
+                );
             }
             Err(nested_report) => {
                 report_exception_to_parent(

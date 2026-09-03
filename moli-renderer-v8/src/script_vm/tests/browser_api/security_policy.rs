@@ -1062,3 +1062,80 @@ async fn prepared_parser_inline_script_csp_blocks_before_v8_execution_and_report
         r#"[{"blockedURI":"inline","effectiveDirective":"script-src-elem","lineNumber":0,"columnNumber":0}]"#
     );
 }
+
+#[tokio::test]
+async fn eval_csp_violation_reports_external_script_scheme_and_call_location() {
+    let source = r#"
+globalThis.__evalCspErrorName = "";
+try {
+  eval("globalThis.__blockedEvalRan = true");
+} catch (error) {
+  globalThis.__evalCspErrorName = error.name;
+}
+"#;
+
+    for (index, (script_url, expected_source_file)) in [
+        ("data:text/javascript,eval-source", "data"),
+        (
+            "blob:https://eval-source-location.test/00000000-0000-0000-0000-000000000000",
+            "blob",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut vm = new_storage_test_vm("https://eval-source-location.test/page.html");
+        vm.set_response_content_security_policies(&["script-src data: blob:".to_owned()]);
+        vm.eval(
+            r#"
+globalThis.__evalCspViolations = [];
+document.addEventListener("securitypolicyviolation", event => {
+  globalThis.__evalCspViolations.push({
+    blockedURI: event.blockedURI,
+    sourceFile: event.sourceFile,
+    linePositive: event.lineNumber > 0,
+    columnPositive: event.columnNumber > 0,
+  });
+});
+"#,
+        )
+        .expect("eval CSP observer should install");
+
+        let script_url = Url::parse(script_url).expect("external script URL");
+        let script = PreparedScript {
+            position: index,
+            node_id: NodeId::new(index + 1),
+            kind: ScriptKind::Classic,
+            mode: ScriptMode::Async,
+            source_kind: ScriptSourceKind::External,
+            fetch_metadata: crate::planning::ScriptFetchMetadata::default(),
+            source: ScriptSource::External,
+            url: script_url.clone(),
+            base_url: script_url,
+            initiator_url: Url::parse("https://eval-source-location.test/page.html")
+                .expect("initiator URL"),
+            host_script_handle: None,
+        };
+
+        vm.execute_loaded_prepared_script_source(&script, source, None)
+            .await
+            .expect("external script with blocked eval should complete");
+        assert_eq!(
+            drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+            1
+        );
+        assert_eq!(
+            vm.eval(
+                r#"JSON.stringify({
+                  errorName: globalThis.__evalCspErrorName,
+                  ran: globalThis.__blockedEvalRan === true,
+                  violations: globalThis.__evalCspViolations,
+                })"#
+            )
+            .expect("eval CSP result should remain observable"),
+            format!(
+                r#"{{"errorName":"EvalError","ran":false,"violations":[{{"blockedURI":"eval","sourceFile":"{expected_source_file}","linePositive":true,"columnPositive":true}}]}}"#
+            )
+        );
+    }
+}

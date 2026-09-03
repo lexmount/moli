@@ -11,6 +11,11 @@ pub(crate) enum WorkerOwnerScope {
     LightweightPopup(u64),
 }
 
+pub(super) struct WorkerModuleStaticImportPolicySnapshot {
+    pub(super) initiator_url: url::Url,
+    pub(super) content_security_policies: Vec<String>,
+}
+
 pub(super) enum WorkerExecutionState {
     Loading {
         pending_messages: Vec<V8StructuredClonePayload>,
@@ -26,6 +31,7 @@ pub(super) enum WorkerExecutionState {
         outside_settings_load: crate::network::loads::ResourceLoadLease,
         name: String,
         module_credentials_mode: moli_fetch::RequestCredentialsMode,
+        module_static_import_policy: Option<Box<WorkerModuleStaticImportPolicySnapshot>>,
         storage_key_top_level_site: String,
         creator_storage_key: MoliStorageKey,
         reserved_service_worker_client_id:

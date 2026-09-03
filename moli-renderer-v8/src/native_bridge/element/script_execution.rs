@@ -5,7 +5,7 @@ use crate::{
     native_bridge::JsContextHost,
 };
 
-use super::trusted_types::trusted_script_source_for_execution;
+use super::trusted_types::prepare_trusted_script_text;
 
 pub(crate) fn prepare_inline_classic_frame_script_job_for_execution(
     scope: &mut v8::PinScope<'_, '_>,
@@ -56,7 +56,7 @@ pub(crate) fn inline_script_source_for_execution(
     source: &str,
     request: ContentSecurityPolicyScriptElementRequest<'_>,
 ) -> Option<String> {
-    let source = trusted_script_source_for_execution(scope, host_ptr, script, source)?;
+    let source = prepare_trusted_script_text(scope, host_ptr, script, source)?;
     let host = unsafe { &mut *host_ptr };
     let Some(owner) = host.owner_dispatch_scope_for_node(script) else {
         // A script with no live owner has no document policy container to

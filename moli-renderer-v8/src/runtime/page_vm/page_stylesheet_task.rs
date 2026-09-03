@@ -45,6 +45,28 @@ impl IntoPageTaskCompletion for PageStylesheetNetworkingTurnAction {
 }
 
 impl PageVm {
+    pub(super) async fn finish_selected_page_connected_style_event_task(
+        &mut self,
+        action: PageConnectedStyleEventTurnAction,
+        loader: &crate::network::ResourceRequestClient,
+    ) -> anyhow::Result<()> {
+        let targeted_current_owner = !matches!(
+            action.target_effect,
+            PageConnectedStyleEventTargetEffect::DiscardedStaleOwner
+        );
+        self.finish_selected_page_task_completion(action.into_page_task_completion(), loader)
+            .await?;
+        if targeted_current_owner {
+            // A load/error listener or one of its Promise reactions can
+            // connect another style/link owner. Preserve the established
+            // connected-style task boundary by admitting that follow-up only
+            // after the callback checkpoint and runtime reconciliation.
+            self.vm_mut()
+                .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        }
+        Ok(())
+    }
+
     pub(in crate::runtime) fn apply_selected_page_stylesheet_networking_turn(
         &mut self,
         task: RendererPageStylesheetNetworkingTask,

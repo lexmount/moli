@@ -80,6 +80,7 @@ moli-webcrypto = { path = "../moli-webcrypto" }
 moli-webapi-declare = { path = "../moli-webapi-declare" }
 moli-webidl = { path = "../moli-webidl" }
 moli-webidl-callback = { path = "../moli-webidl-callback" }
+moli-window-features = { path = "../moli-window-features" }
 moli-websocket = { path = "../moli-websocket" }
 moli-xpath = { path = "../moli-xpath" }
 curl = { version = "0.4.49", default-features = false, features = ["brotli", "http2", "poll_7_68_0", "ssl", "static-curl"] }
@@ -89,6 +90,7 @@ html-escape = "0.2.13"
 html5ever = "0.39.0"
 indexmap = "2.6"
 parking_lot = "0.12"
+fastrand = "2.3.0"
 markup5ever = "0.39.0"
 xml5ever = "0.39.0"
 serde = { version = "1.0.228", features = ["derive"] }

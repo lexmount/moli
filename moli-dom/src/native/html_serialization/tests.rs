@@ -254,6 +254,26 @@ fn html_serializers_apply_attribute_serialized_name_rules() {
 }
 
 #[test]
+fn html_serializers_escape_non_breaking_spaces_in_attribute_values() {
+    let mut dom = NativeDom::new_html(test_url());
+    let container = dom.create_element("span");
+    let element = dom.create_element("a");
+    assert!(dom.set_attribute(element, "b", "&\"\u{a0}<>"));
+    assert!(dom.append_child(container, element));
+
+    let expected = r#"<a b="&amp;&quot;&nbsp;&lt;&gt;"></a>"#;
+    assert_eq!(dom.outer_html(element).as_deref(), Some(expected));
+    assert_eq!(dom.inner_html(container).as_deref(), Some(expected));
+
+    let host = DomHost::from_dom(dom);
+    assert_eq!(
+        host.get_html(container, &scripting_enabled, false, &[])
+            .as_deref(),
+        Some(expected)
+    );
+}
+
+#[test]
 fn html_serializers_escape_adopted_cdata_as_text() {
     const SVG_NAMESPACE: &str = "http://www.w3.org/2000/svg";
     const XMLNS_NAMESPACE: &str = "http://www.w3.org/2000/xmlns/";

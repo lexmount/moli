@@ -360,3 +360,107 @@ fn worker_realm_lazy_properties_follow_chromium_exposure_sets() {
         vec![false, false, false, false, false, true, false]
     );
 }
+
+#[test]
+fn worker_geometry_interfaces_use_worker_specific_matrix_surface() {
+    crate::ensure_v8_for_test();
+    let mut isolate = v8::Isolate::new(Default::default());
+    let scope = pin!(v8::HandleScope::new(&mut isolate));
+    let scope = &mut scope.init();
+    let context = v8::Context::new(scope, Default::default());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    let global = context.global(scope);
+    crate::context_bootstrap::install_worker_lazy_exposed_interfaces(
+        scope,
+        global,
+        super::RealmKind::DedicatedWorker,
+        true,
+    )
+    .expect("worker geometry interfaces should install");
+
+    let source = v8::String::new(
+        scope,
+        r#"
+        (() => {
+          const names = [
+            "DOMPointReadOnly", "DOMPoint", "DOMRectReadOnly", "DOMRect",
+            "DOMQuad", "DOMMatrixReadOnly", "DOMMatrix"
+          ];
+          const errorName = callback => {
+            try {
+              callback();
+              return "missing";
+            } catch (error) {
+              return error.name;
+            }
+          };
+          const operationSets = [
+            [DOMPointReadOnly, ["fromPoint"]],
+            [DOMPointReadOnly.prototype, ["matrixTransform"]],
+            [DOMPoint, ["fromPoint"]],
+            [DOMRectReadOnly, ["fromRect"]],
+            [DOMRect, ["fromRect"]],
+            [DOMQuad, ["fromRect", "fromQuad"]],
+            [DOMMatrixReadOnly, [
+              "fromMatrix", "fromFloat32Array", "fromFloat64Array"
+            ]],
+            [DOMMatrixReadOnly.prototype, [
+              "translate", "scale", "scaleNonUniform", "scale3d", "rotate",
+              "rotateFromVector", "rotateAxisAngle", "skewX", "skewY",
+              "multiply", "flipX", "flipY", "inverse", "transformPoint",
+              "toFloat32Array", "toFloat64Array"
+            ]],
+            [DOMMatrix, [
+              "fromMatrix", "fromFloat32Array", "fromFloat64Array"
+            ]],
+            [DOMMatrix.prototype, [
+              "multiplySelf", "preMultiplySelf", "translateSelf", "scaleSelf",
+              "scale3dSelf", "rotateSelf", "rotateFromVectorSelf",
+              "rotateAxisAngleSelf", "skewXSelf", "skewYSelf", "invertSelf"
+            ]]
+          ];
+          const hasWebIdlOperationDescriptor = (owner, name) => {
+            const descriptor = Object.getOwnPropertyDescriptor(owner, name);
+            return descriptor !== undefined &&
+              typeof descriptor.value === "function" &&
+              descriptor.enumerable && descriptor.writable && descriptor.configurable;
+          };
+          return JSON.stringify({
+            constructors: names.map(name => typeof globalThis[name]).join(","),
+            strings: [
+              errorName(() => new DOMMatrix("matrix(1,0,0,1,0,0)")),
+              errorName(() => new DOMMatrixReadOnly(""))
+            ].join(","),
+            tags: [
+              String(new DOMMatrix()),
+              String(DOMMatrixReadOnly.fromMatrix({is2D: false})),
+              String(new DOMMatrix([1, 0, 0, NaN, Infinity, -Infinity]))
+            ].join(","),
+            windowOnly: [
+              Object.hasOwn(DOMMatrixReadOnly.prototype, "toString"),
+              "setMatrixValue" in DOMMatrix.prototype,
+              "WebKitCSSMatrix" in globalThis,
+              "SVGPoint" in globalThis,
+              "SVGRect" in globalThis,
+              "SVGMatrix" in globalThis
+            ].join(","),
+            operations: operationSets.every(([owner, operationNames]) =>
+              operationNames.every(name => hasWebIdlOperationDescriptor(owner, name))
+            ),
+            lengths: [DOMMatrix.length, DOMMatrixReadOnly.length].join(",")
+          });
+        })()
+        "#,
+    )
+    .expect("worker geometry test source");
+    let script = v8::Script::compile(scope, source, None).expect("worker geometry test compile");
+    let result = script
+        .run(scope)
+        .expect("worker geometry test evaluation")
+        .to_rust_string_lossy(scope);
+
+    assert_eq!(
+        result,
+        r#"{"constructors":"function,function,function,function,function,function,function","strings":"TypeError,TypeError","tags":"[object DOMMatrix],[object DOMMatrixReadOnly],[object DOMMatrix]","windowOnly":"false,false,false,false,false,false","operations":true,"lengths":"0,0"}"#
+    );
+}

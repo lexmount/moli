@@ -65,10 +65,6 @@ pub(crate) fn computed_longhand_count() -> usize {
     COMPUTED_LONGHAND_METADATA.longhands.len()
 }
 
-pub(crate) fn computed_longhand_first_vendor_index() -> usize {
-    COMPUTED_LONGHAND_METADATA.first_vendor_index
-}
-
 pub(crate) fn computed_longhand_name_at(index: usize) -> Option<&'static str> {
     COMPUTED_LONGHAND_METADATA
         .longhands
@@ -98,8 +94,7 @@ mod tests {
     use style::properties::PropertyId;
 
     use super::{
-        computed_longhand_count, computed_longhand_first_vendor_index, computed_longhand_name_at,
-        computed_property_is_queryable,
+        computed_longhand_count, computed_longhand_name_at, computed_property_is_queryable,
     };
 
     #[test]
@@ -144,7 +139,10 @@ mod tests {
             "every enumerated computed longhand must be queryable"
         );
 
-        let first_vendor = computed_longhand_first_vendor_index();
+        let first_vendor = names
+            .iter()
+            .position(|name| name.starts_with('-'))
+            .unwrap_or(names.len());
         assert!(
             first_vendor > 250,
             "ordinary longhands must precede the vendor tail: {first_vendor}"

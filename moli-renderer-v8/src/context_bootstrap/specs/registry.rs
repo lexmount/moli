@@ -49,6 +49,11 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        name: "DOMRectList",
+        parent: None,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         name: "PluginArray",
         parent: None,
         kind: ConstructorKind::Illegal,
@@ -104,12 +109,42 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        name: "SVGAngle",
+        parent: None,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         name: "SVGNumber",
         parent: None,
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        name: "SVGAnimatedString",
+        parent: None,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         name: "SVGAnimatedLength",
+        parent: None,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        name: "SVGAnimatedAngle",
+        parent: None,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        name: "SVGAnimatedRect",
+        parent: None,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        name: "SVGPreserveAspectRatio",
+        parent: None,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        name: "SVGAnimatedPreserveAspectRatio",
         parent: None,
         kind: ConstructorKind::Illegal,
     },
@@ -129,7 +164,22 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        name: "SVGAnimatedInteger",
+        parent: None,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         name: "SVGNumberList",
+        parent: None,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        name: "SVGPointList",
+        parent: None,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        name: "SVGStringList",
         parent: None,
         kind: ConstructorKind::Illegal,
     },
@@ -139,7 +189,17 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        name: "SVGAnimatedBoolean",
+        parent: None,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         name: "SVGAnimatedEnumeration",
+        parent: None,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        name: "SVGUnitTypes",
         parent: None,
         kind: ConstructorKind::Illegal,
     },
@@ -160,7 +220,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         name: "SVGMatrix",
-        parent: None,
+        parent: Some("DOMMatrix"),
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
@@ -681,7 +741,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         name: "Location",
         parent: None,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::Location,
     },
     ConstructorSpec {
         name: "Navigation",
@@ -1139,7 +1199,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         name: "FileList",
         parent: None,
-        kind: ConstructorKind::FileList,
+        kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
         name: "FileSystem",
@@ -1179,7 +1239,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         name: "DOMRectReadOnly",
         parent: None,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::DomRectReadOnly,
     },
     ConstructorSpec {
         name: "DOMRect",
@@ -1189,7 +1249,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         name: "DOMPointReadOnly",
         parent: None,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::DomPointReadOnly,
     },
     ConstructorSpec {
         name: "DOMPoint",
@@ -1204,12 +1264,12 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         name: "DOMQuad",
         parent: None,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::DomQuad,
     },
     ConstructorSpec {
         name: "DOMMatrixReadOnly",
         parent: None,
-        kind: ConstructorKind::DomMatrix,
+        kind: ConstructorKind::DomMatrixReadOnly,
     },
     ConstructorSpec {
         name: "DOMMatrix",

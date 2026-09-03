@@ -1,11 +1,3 @@
-cookiestore/serviceworker_cookieStore_cross_origin.https.sub.html
-css/selectors/invalidation/has-complexity.html
-dom/ranges/Range-insertNode.html
-dom/ranges/Range-mutations-dataChange.html
-dom/ranges/Range-surroundContents.html
-html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-1.html
-html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-2.html
-html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-3.html
 infrastructure/expected-fail/user-prompt.html?type=alert
 infrastructure/expected-fail/user-prompt.html?type=alert&wait
 infrastructure/expected-fail/user-prompt.html?type=confirm

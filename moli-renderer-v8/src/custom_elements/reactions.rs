@@ -57,6 +57,17 @@ pub(crate) fn push_parser_custom_element_reaction_queue(host_ptr: *mut JsContext
         .push_element_queue();
 }
 
+pub(crate) fn discard_empty_parser_custom_element_reaction_queue(
+    host_ptr: *mut JsContextHost,
+) -> bool {
+    let reactions = unsafe { &mut *host_ptr }.custom_element_reactions_mut();
+    if !reactions.current_element_queue_is_empty() {
+        return false;
+    }
+    reactions.pop_element_queue();
+    true
+}
+
 pub(super) fn flush_current_custom_element_reaction_queue(
     scope: &mut v8::PinScope<'_, '_>,
     host_ptr: *mut JsContextHost,

@@ -1,4 +1,3 @@
-use super::super::performance_runtime::PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES;
 use super::delivery::{enqueue_buffered_performance_entries, queue_performance_observer_delivery};
 use super::*;
 use crate::observer_runtime::ObserverCallbackId;
@@ -76,14 +75,40 @@ pub(in crate::context_bootstrap) fn performance_observer_constructor_callback<'s
     else {
         return;
     };
-    let host_ptr = context_host_ptr_from_global_bridge(scope)
-        .expect("PerformanceObserver constructor must execute in a Window realm");
-    let registered_callback =
-        crate::observer_runtime::register_callback(scope, host_ptr, args.this(), parsed.callback);
     let (callback_id, callback, relevant_global, incumbent_global) =
-        registered_callback.into_parts();
+        if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+            let registered_callback = crate::observer_runtime::register_callback(
+                scope,
+                host_ptr,
+                args.this(),
+                parsed.callback,
+            );
+            let (callback_id, callback, relevant_global, incumbent_global) =
+                registered_callback.into_parts();
+            (
+                callback_id.as_u32(),
+                callback,
+                relevant_global,
+                incumbent_global,
+            )
+        } else {
+            if crate::worker::get_worker_state(scope).is_none() {
+                throw_type_error(
+                    scope,
+                    "PerformanceObserver is unavailable outside a Window or Worker realm.",
+                );
+                return;
+            }
+            let callback = v8::Local::<v8::Object>::try_from(parsed.callback.value(scope))
+                .expect("a Web IDL callback function must be an object");
+            let relevant_global = parsed.callback.relevant_context(scope).global(scope);
+            let incumbent_global = parsed.callback.incumbent_context(scope).global(scope);
+            // Worker observers do not need a Window execution-context binding.
+            // Zero is deliberately outside ObserverCallbackId's valid range.
+            (0, callback, relevant_global, incumbent_global)
+        };
     PerformanceObserverObjectDeclaration::new(
-        callback_id.as_u32(),
+        callback_id,
         callback,
         relevant_global,
         incumbent_global,
@@ -148,7 +173,7 @@ pub(in crate::context_bootstrap) fn performance_observer_observe_callback<'s>(
     }
 
     let observed_entry_types = if let Some(observed_type) = init.observed_type.as_deref() {
-        if !performance_observer_entry_type_supported(observed_type) {
+        if !performance_observer_entry_type_supported(scope, observed_type) {
             rv.set_undefined();
             return;
         }
@@ -162,13 +187,13 @@ pub(in crate::context_bootstrap) fn performance_observer_observe_callback<'s>(
         }
         entry_types
     } else {
-        performance_entry_types_array_from_strings(
-            scope,
-            init.entry_types
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|entry_type| performance_observer_entry_type_supported(entry_type)),
-        )
+        let supported_entry_types = init
+            .entry_types
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|entry_type| performance_observer_entry_type_supported(scope, entry_type))
+            .collect::<Vec<_>>();
+        performance_entry_types_array_from_strings(scope, supported_entry_types)
     };
     if observed_entry_types.length() == 0 {
         rv.set_undefined();
@@ -197,27 +222,33 @@ pub(in crate::context_bootstrap) fn performance_observer_observe_callback<'s>(
             .unwrap_or_else(|| v8::null(scope).into()),
     );
     set_performance_observer_entry_types(scope, args.this(), observed_entry_types);
-    let Some(callback_id) = performance_observer_callback_id(scope, args.this()) else {
-        rv.set_undefined();
-        return;
-    };
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        rv.set_undefined();
-        return;
-    };
-    // Blink keeps a PerformanceObserver alive only while it is registered
-    // (`HasPendingActivity() == is_registered_`). The exact callback binding
-    // owns the same active root so disconnect and Realm retirement can release
-    // it without a parallel global JS registry.
-    if !crate::observer_runtime::activate_performance_observer_callback(
-        scope,
-        host_ptr,
-        callback_id,
-        args.this(),
-    ) {
-        set_performance_observer_active(scope, args.this(), false);
-        let pending = v8::Array::new(scope, 0);
-        set_performance_observer_pending(scope, args.this(), pending);
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let Some(callback_id) = performance_observer_callback_id(scope, args.this()) else {
+            rv.set_undefined();
+            return;
+        };
+        // Blink keeps a PerformanceObserver alive only while it is registered
+        // (`HasPendingActivity() == is_registered_`). The exact callback binding
+        // owns the same active root so disconnect and Realm retirement can release
+        // it without a parallel global JS registry.
+        if !crate::observer_runtime::activate_performance_observer_callback(
+            scope,
+            host_ptr,
+            callback_id,
+            args.this(),
+        ) {
+            set_performance_observer_active(scope, args.this(), false);
+            let pending = v8::Array::new(scope, 0);
+            set_performance_observer_pending(scope, args.this(), pending);
+            rv.set_undefined();
+            return;
+        }
+    } else if crate::worker::get_worker_state(scope).is_some() {
+        // A worker has one Realm for the lifetime of its isolate run, so its
+        // active observer set can live on that Realm without Window generation
+        // authorization.
+        push_object_to_global_registry(scope, PERFORMANCE_OBSERVER_REGISTRY_SLOT, args.this());
+    } else {
         rv.set_undefined();
         return;
     }
@@ -294,8 +325,18 @@ fn performance_observer_type_slot_is_set<'s>(
         .is_some_and(|value| !value.is_null_or_undefined())
 }
 
-fn performance_observer_entry_type_supported(entry_type: &str) -> bool {
-    PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES.contains(&entry_type)
+fn performance_observer_entry_type_supported(
+    scope: &mut v8::PinScope<'_, '_>,
+    entry_type: &str,
+) -> bool {
+    let global = scope.get_current_context().global(scope);
+    get_private_value(
+        scope,
+        global,
+        PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES_SLOT,
+    )
+    .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+    .is_some_and(|entry_types| array_contains_string(scope, entry_types, entry_type))
 }
 
 pub(super) fn array_contains_string(
@@ -347,6 +388,35 @@ pub(super) fn performance_observer_callback_residence<'s>(
             relevant_global,
             incumbent_global,
         ),
+    )
+}
+
+pub(super) fn prepare_worker_performance_observer_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    observer: v8::Local<'s, v8::Object>,
+) -> Option<moli_webidl_callback::PreparedWebIdlCallbackFunction> {
+    let callback =
+        performance_observer_slot_value(scope, observer, PERFORMANCE_OBSERVER_CALLBACK_VALUE_SLOT)
+            .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let relevant_global = performance_observer_slot_value(
+        scope,
+        observer,
+        PERFORMANCE_OBSERVER_CALLBACK_RELEVANT_GLOBAL_SLOT,
+    )
+    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let incumbent_global = performance_observer_slot_value(
+        scope,
+        observer,
+        PERFORMANCE_OBSERVER_CALLBACK_INCUMBENT_GLOBAL_SLOT,
+    )
+    .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    let relevant_context = relevant_global.get_creation_context(scope)?;
+    let incumbent_context = incumbent_global.get_creation_context(scope)?;
+    moli_webidl_callback::PreparedWebIdlCallbackFunction::try_new(
+        scope,
+        callback,
+        relevant_context,
+        incumbent_context,
     )
 }
 

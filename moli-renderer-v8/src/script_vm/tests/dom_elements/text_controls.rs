@@ -1144,6 +1144,77 @@ async fn text_control_selectionchange_bubbles_across_shadow_and_exec_delete_targ
         "0|document"
     );
 }
+
+#[test]
+fn exec_command_insert_html_enforces_maxlength_in_utf16_units() {
+    let mut vm = new_storage_test_vm("https://exec-command-insert-html-maxlength.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const input = document.createElement('input');
+  input.setAttribute('maxlength', ' +10tail');
+  body.append(input);
+  const events = [];
+  input.addEventListener('beforeinput', () => events.push('beforeinput'));
+  input.addEventListener('input', () => events.push('input'));
+
+  const supported = document.queryCommandSupported('InsertHTML');
+  const enabledBeforeFocus = document.queryCommandEnabled('InsertHTML');
+  input.focus();
+  const enabled = document.queryCommandEnabled('InsertHTML');
+  const returned = document.execCommand('InsertHTML', false, '👨‍👩‍👧‍👦');
+
+  const markupInput = document.createElement('input');
+  body.append(markupInput);
+  markupInput.focus();
+  const markupReturned = document.execCommand(
+    'InsertHTML',
+    false,
+    '<b>A</b><br>B<script>C</script>&amp;'
+  );
+
+  const rangeInput = document.createElement('input');
+  rangeInput.value = 'A😀B';
+  body.append(rangeInput);
+  rangeInput.setRangeText('x', 1, 3, 'end');
+
+  input.readOnly = true;
+  input.focus();
+  const enabledReadonly = document.queryCommandEnabled('InsertHTML');
+  const readonlyReturned = document.execCommand('InsertHTML', false, 'x');
+
+  return JSON.stringify({
+    supported,
+    enabledBeforeFocus,
+    enabled,
+    returned,
+    value: input.value,
+    valueLength: input.value.length,
+    selectionStart: input.selectionStart,
+    selectionEnd: input.selectionEnd,
+    events,
+    markupReturned,
+    markupValue: markupInput.value,
+    rangeValue: rangeInput.value,
+    rangeSelection: [rangeInput.selectionStart, rangeInput.selectionEnd],
+    enabledReadonly,
+    readonlyReturned
+  });
+})()
+"#,
+        )
+        .expect("execCommand InsertHTML maxlength probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"supported":true,"enabledBeforeFocus":false,"enabled":true,"returned":true,"value":"👨‍👩‍👧‍","valueLength":9,"selectionStart":9,"selectionEnd":9,"events":["beforeinput","input"],"markupReturned":true,"markupValue":"A BC&","rangeValue":"AxB","rangeSelection":[2,2],"enabledReadonly":false,"readonlyReturned":false}"#
+    );
+}
+
 #[test]
 fn input_file_value_setter_rejects_non_empty_values() {
     let mut vm = new_storage_test_vm("https://forms-input-file-value.test/");
@@ -1187,6 +1258,50 @@ fn input_file_value_setter_rejects_non_empty_values() {
         "ok::null|ok::null|throw:InvalidStateError::null|throw:InvalidStateError::null|throw:InvalidStateError::null|ok::bar"
     );
 }
+
+#[test]
+fn input_type_change_preserves_clean_default_value_source() {
+    let mut vm = new_storage_test_vm("https://forms-input-type-clean-value.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              if (!document.documentElement) {
+                document.appendChild(document.createElement('html'));
+              }
+              if (!document.body) {
+                document.documentElement.appendChild(document.createElement('body'));
+              }
+              function run(focus) {
+                const input = document.createElement('input');
+                input.type = 'color';
+                document.body.appendChild(input);
+                if (focus) {
+                  input.focus();
+                }
+                const colorDefault = input.value;
+                input.type = 'text';
+                const cleanTextValue = input.value;
+                input.type = 'color';
+                input.value = '#ffffff';
+                input.type = 'text';
+                return [
+                  colorDefault,
+                  cleanTextValue,
+                  input.value,
+                  !focus || document.activeElement === input
+                ].join(':');
+              }
+              return [run(false), run(true)].join('|');
+            })()
+            "#,
+        )
+        .expect("input type clean-value transition should evaluate");
+
+    assert_eq!(result, "#000000::#ffffff:true|#000000::#ffffff:true");
+}
+
 #[test]
 fn input_color_value_parses_css_colors_across_value_sources() {
     let mut vm = new_storage_test_vm("https://forms-input-color-css.test/");

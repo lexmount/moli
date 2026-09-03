@@ -15,6 +15,8 @@ use crate::{
     },
     util::{get_private_value, serialize_v8_iter_array, set_private_value, v8_string, v8str},
 };
+use moli_v8_util::object_own_static_property_as_object;
+use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::rc::Rc;
 
@@ -167,6 +169,67 @@ pub(super) fn finish_font_face_owner_projections<'s>(
         return;
     };
     rebuild_connected_font_faces(scope, fonts, host, document);
+}
+
+pub(crate) fn load_font_faces_used_by_subtrees(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &JsContextHost,
+    roots: &[DomHandle],
+) {
+    let mut visited = HashSet::new();
+    for root in roots.iter().copied() {
+        if !host.dom_host().is_connected(root) {
+            continue;
+        }
+        let Some(document) = host.dom_host().owner_document_handle(root) else {
+            continue;
+        };
+        let Some(holder) = crate::util::node_wrapper_from_handle(scope, document) else {
+            continue;
+        };
+        let Some(fonts) = object_own_static_property_as_object(scope, holder, FONTS_SLOT) else {
+            continue;
+        };
+        for family in inline_font_families_in_subtree(host, root, &mut visited) {
+            crate::context_bootstrap::load_font_faces_for_family(scope, fonts, &family);
+        }
+    }
+}
+
+fn inline_font_families_in_subtree(
+    host: &JsContextHost,
+    root: DomHandle,
+    visited: &mut HashSet<DomHandle>,
+) -> Vec<String> {
+    let mut families = Vec::new();
+    let mut stack = vec![root];
+    while let Some(handle) = stack.pop() {
+        if !visited.insert(handle) {
+            continue;
+        }
+        if let Some(style) = host.dom_host().get_attribute(handle, "style")
+            && let Some(value) =
+                moli_css_parse::parse_declaration_block(&style).property_value("font-family")
+            && let Some(components) =
+                crate::css_style::top_level_comma_separated_component_values(&value)
+        {
+            for family in components {
+                let family = moli_css_parse::unquote_css_string(family.trim());
+                if !family.is_empty()
+                    && !families
+                        .iter()
+                        .any(|existing: &String| existing.eq_ignore_ascii_case(&family))
+                {
+                    families.push(family);
+                }
+            }
+        }
+        if let Some(shadow_root) = host.dom_host().shadow_root_handle(handle) {
+            stack.push(shadow_root);
+        }
+        stack.extend(host.dom_host().child_handles(handle));
+    }
+    families
 }
 
 fn set_owner_font_face_contribution<'s>(

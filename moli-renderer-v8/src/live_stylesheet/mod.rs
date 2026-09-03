@@ -496,11 +496,20 @@ pub(crate) struct StylesheetRuleWrapperBinding {
     path: Vec<usize>,
     rule: NativeStylesheetRule,
     shared_lock: SharedRwLock,
+    source_declaration_override: LiveStylesheetSourceDeclarationOverrideState,
+    detached_source_declaration_override: Option<String>,
 }
 
 impl StylesheetRuleWrapperBinding {
     fn snapshot(&self) -> CssRuleSnapshot {
-        self.rule.snapshot(&self.shared_lock)
+        let mut snapshot = self.rule.snapshot(&self.shared_lock);
+        if let Some(declaration_text) = self.source_declaration_override() {
+            snapshot.declaration_text = Some(declaration_text.clone());
+            if let Some(selector_text) = snapshot.selector_text.as_deref() {
+                snapshot.css_text = format!("{selector_text} {{ {declaration_text} }}");
+            }
+        }
+        snapshot
     }
 
     pub(crate) fn rule_type(&self) -> CssRuleType {
@@ -508,7 +517,23 @@ impl StylesheetRuleWrapperBinding {
     }
 
     pub(crate) fn css_text(&self) -> String {
+        if let Some(declaration_text) = self.source_declaration_override()
+            && let Some(selector_text) = self.rule.style_selector_text(&self.shared_lock)
+        {
+            return format!("{selector_text} {{ {declaration_text} }}");
+        }
         self.rule.css_text(&self.shared_lock)
+    }
+
+    fn source_declaration_override(&self) -> Option<String> {
+        if self.stylesheet_id.is_none() {
+            return self.detached_source_declaration_override.clone();
+        }
+        let source_override = self.source_declaration_override.borrow();
+        source_override
+            .as_ref()
+            .filter(|source_override| source_override.rule_path == self.path)
+            .map(|source_override| source_override.declaration_text.clone())
     }
 
     pub(crate) fn style_selector_text(&self) -> Option<String> {
@@ -558,6 +583,7 @@ impl StylesheetRuleWrapperBinding {
     }
 
     fn mark_detached(&mut self) {
+        self.detached_source_declaration_override = self.source_declaration_override();
         self.stylesheet_id = None;
         self.path.clear();
     }
@@ -957,6 +983,15 @@ struct StylesheetContentsCacheKey {
     allow_import_rules: bool,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LiveStylesheetSourceDeclarationOverride {
+    rule_path: Vec<usize>,
+    declaration_text: String,
+}
+
+type LiveStylesheetSourceDeclarationOverrideState =
+    Rc<RefCell<Option<LiveStylesheetSourceDeclarationOverride>>>;
+
 impl StylesheetContentsCacheKey {
     fn new(
         css_text: &str,
@@ -983,6 +1018,7 @@ pub(crate) struct SharedStylesheetContents {
     base_url: url::Url,
     quirks_mode: QuirksMode,
     allow_import_rules: AllowImportRules,
+    source_declaration_override: Option<LiveStylesheetSourceDeclarationOverride>,
 }
 
 /// Renderer-owned identity for one authoritative parsed stylesheet.
@@ -1016,6 +1052,7 @@ pub(crate) struct LiveStylesheet {
     next_font_face_rule_identity: Cell<u64>,
     font_face_rule_identities: RefCell<Vec<FontFaceRuleIdentity>>,
     shared_initial_contents: RefCell<Option<StdArc<SharedStylesheetContents>>>,
+    source_declaration_override: LiveStylesheetSourceDeclarationOverrideState,
     rule_wrapper_leases: RefCell<
         HashMap<
             StylesheetRuleWrapperLeaseId,
@@ -1216,6 +1253,8 @@ impl LiveStylesheet {
             quirks_mode,
             allow_import_rules,
         ));
+        let source_declaration_override =
+            stylesheet_eof_open_var_declaration_override(&stylesheet, css_text);
         Self::from_stylesheet(
             id,
             stylesheet,
@@ -1224,6 +1263,7 @@ impl LiveStylesheet {
             allow_import_rules,
             runtime_state_kind,
             None,
+            source_declaration_override,
         )
     }
 
@@ -1232,6 +1272,7 @@ impl LiveStylesheet {
         shared_lock: SharedRwLock,
         shared_contents: StdArc<SharedStylesheetContents>,
     ) -> Self {
+        let source_declaration_override = shared_contents.source_declaration_override.clone();
         let media = ServoArc::new(shared_lock.wrap(MediaList::empty()));
         let stylesheet = ServoArc::new(Stylesheet {
             contents: shared_lock.wrap(shared_contents.contents.clone()),
@@ -1247,6 +1288,7 @@ impl LiveStylesheet {
             shared_contents.allow_import_rules,
             LiveStylesheetRuntimeStateKind::Cascade,
             Some(shared_contents),
+            source_declaration_override,
         )
     }
 
@@ -1258,6 +1300,7 @@ impl LiveStylesheet {
         allow_import_rules: AllowImportRules,
         runtime_state_kind: LiveStylesheetRuntimeStateKind,
         shared_initial_contents: Option<StdArc<SharedStylesheetContents>>,
+        source_declaration_override: Option<LiveStylesheetSourceDeclarationOverride>,
     ) -> Self {
         let cssom_runtime_state = match runtime_state_kind {
             LiveStylesheetRuntimeStateKind::Cascade => LiveStylesheetCssomRuntimeState::Cascade,
@@ -1288,6 +1331,7 @@ impl LiveStylesheet {
             next_font_face_rule_identity: Cell::new(0),
             font_face_rule_identities: RefCell::new(Vec::new()),
             shared_initial_contents: RefCell::new(shared_initial_contents),
+            source_declaration_override: Rc::new(RefCell::new(source_declaration_override)),
             rule_wrapper_leases: RefCell::new(HashMap::new()),
         };
         stylesheet.reconcile_import_edges();
@@ -1313,6 +1357,7 @@ impl LiveStylesheet {
             base_url: self.base_url.clone(),
             quirks_mode: self.quirks_mode,
             allow_import_rules: self.allow_import_rules,
+            source_declaration_override: self.source_declaration_override.borrow().clone(),
         });
         *self.shared_initial_contents.borrow_mut() = Some(StdArc::clone(&shared_contents));
         shared_contents
@@ -1490,9 +1535,16 @@ impl LiveStylesheet {
         Some(match native_rule {
             NativeStylesheetRule::Css(CssRule::Style(rule)) => {
                 let rule = rule.read_with(&guard);
+                let declaration_text = self
+                    .source_declaration_override
+                    .borrow()
+                    .as_ref()
+                    .filter(|source_override| source_override.rule_path == path)
+                    .map(|source_override| source_override.declaration_text.clone())
+                    .unwrap_or_else(|| serialize_declaration_block(&rule.block, &guard));
                 LiveStylesheetRuleWrapperSeed::Style {
                     selector_text: cssparser::ToCss::to_css_string(&rule.selectors),
-                    declaration_text: serialize_declaration_block(&rule.block, &guard),
+                    declaration_text,
                 }
             }
             NativeStylesheetRule::Keyframe(rule) => {
@@ -1922,6 +1974,42 @@ impl LiveStylesheet {
             }
         }
     }
+}
+
+fn stylesheet_eof_open_var_declaration_override(
+    stylesheet: &ServoArc<Stylesheet>,
+    css_text: &str,
+) -> Option<LiveStylesheetSourceDeclarationOverride> {
+    let guard = stylesheet.shared_lock.read();
+    let contents = stylesheet.contents.read_with(&guard);
+    let rules = contents.rules.read_with(&guard);
+    let mut rule_path = vec![rules.0.len().checked_sub(1)?];
+    let mut rule = rules.0.last()?.clone();
+
+    loop {
+        let children = rule.children(&guard);
+        let Some(child_index) = children.len().checked_sub(1) else {
+            break;
+        };
+        rule_path.push(child_index);
+        rule = children[child_index].clone();
+    }
+
+    let CssRule::Style(rule) = rule else {
+        return None;
+    };
+    let serialized_declaration_text = {
+        let rule = rule.read_with(&guard);
+        serialize_declaration_block(&rule.block, &guard)
+    };
+    let declaration_text = moli_css_parse::recover_stylesheet_eof_open_var_declaration_text(
+        css_text,
+        &serialized_declaration_text,
+    )?;
+    Some(LiveStylesheetSourceDeclarationOverride {
+        rule_path,
+        declaration_text,
+    })
 }
 
 mod import_graph;

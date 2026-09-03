@@ -1217,6 +1217,69 @@ location.href
 }
 
 #[tokio::test]
+async fn javascript_location_navigation_honors_enforced_trusted_types() {
+    run_page_vm_async_test(async move {
+        let mut page_vm = test_page_vm_with_document_url(
+            Url::parse("https://javascript-location-trusted-types.test/start.html").unwrap(),
+        );
+        page_vm
+            .vm_mut()
+            .set_response_content_security_policies(&[
+                "require-trusted-types-for 'script'".to_owned(),
+            ]);
+        let local_executor = page_vm.local_executor.clone();
+
+        let observed = local_executor
+            .run(async move {
+                page_vm.vm_mut().eval(
+                    r#"
+globalThis.__jsUrlRan = false;
+globalThis.__jsUrlViolations = [];
+document.addEventListener("securitypolicyviolation", event => {
+  globalThis.__jsUrlViolations.push({
+    sample: event.sample,
+    disposition: event.disposition,
+  });
+});
+location.href = "javascript:globalThis.__jsUrlRan=true";
+"queued"
+"#,
+                )?;
+                assert!(page_vm.vm().has_pending_location_navigation());
+
+                let mut pending_document_lifecycle_turn = None;
+                let outcome = page_vm
+                    .follow_pending_location_navigation_one_turn_async(
+                        &mut pending_document_lifecycle_turn,
+                        PageVmInitStage::Load,
+                    )
+                    .await?;
+                assert!(matches!(
+                    outcome,
+                    crate::runtime::PageVmFollowNavigationTurnOutcome::Completed
+                ));
+                assert_eq!(
+                    page_vm
+                        .vm_mut()
+                        .drain_pre_domcontentloaded_content_security_policy_violation_tasks_for_test(),
+                    1
+                );
+                page_vm.vm_mut().eval(
+                    "JSON.stringify({ ran: globalThis.__jsUrlRan, violations: globalThis.__jsUrlViolations, href: location.href })",
+                )
+            })
+            .await
+            .expect("Trusted Types javascript location navigation should settle");
+
+        assert_eq!(
+            observed,
+            r#"{"ran":false,"violations":[{"sample":"Location href|globalThis.__jsUrlRan=true","disposition":"enforce"}],"href":"https://javascript-location-trusted-types.test/start.html"}"#
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn javascript_string_completion_restarts_renderer_lifecycle_on_same_document_token() {
     run_page_vm_async_test(async move {
         let page_vm = test_page_vm_with_document_url(
@@ -4054,6 +4117,139 @@ fn drive_post_parse_lifecycle_loop_returns_at_domcontentloaded_before_trailing_t
         assert!(
             trailing_task_remained,
             "DCL-stage post-parse loop must not overrun trailing post-DCL work"
+        );
+    });
+}
+
+#[test]
+fn defer_queued_timer_runs_before_domcontentloaded_without_draining_nested_timer() {
+    run_page_vm_local_runtime_async_test("page-vm-defer-timer-before-dcl", || async move {
+        let mut page_vm = test_page_vm();
+        let local_executor = page_vm.local_executor.clone();
+
+        let (completion, before_later_timers, after_outside_timer, after_nested_timer) =
+            local_executor
+                .run(async move {
+                    page_vm.vm_mut().eval(
+                        r#"
+                    globalThis.__deferDclTaskOrder = [];
+                    setTimeout(() => {
+                        globalThis.__deferDclTaskOrder.push("timer-outside-defer");
+                    }, 0);
+                    document.addEventListener("DOMContentLoaded", () => {
+                        globalThis.__deferDclTaskOrder.push("dcl");
+                    });
+                    "installed";
+                    "#,
+                    )?;
+                    let body = page_vm
+                        .vm()
+                        .document_runtime
+                        .snapshot_document()
+                        .document_body_handle()
+                        .expect("test document should have a body");
+                    let defer_script_node = page_vm
+                        .vm_mut()
+                        .document_runtime
+                        .dom_host_mut()
+                        .create_parser_element_without_attributes(
+                            "script".to_owned(),
+                            "http://www.w3.org/1999/xhtml".to_owned(),
+                            None,
+                        );
+                    assert!(
+                        page_vm
+                            .vm_mut()
+                            .document_runtime
+                            .dom_host_mut()
+                            .append_child(body, defer_script_node),
+                        "defer script test node should attach to the document"
+                    );
+                    let mut defer_script = prepared_loaded_classic_for_page_vm_test(
+                        &page_vm,
+                        9100,
+                        r#"
+                    globalThis.__deferDclTaskOrder.push("defer");
+                    setTimeout(() => {
+                        globalThis.__deferDclTaskOrder.push("timer-before-dcl");
+                        setTimeout(() => {
+                            globalThis.__deferDclTaskOrder.push("timer-after-dcl");
+                        }, 0);
+                    }, 0);
+                    "#,
+                    );
+                    defer_script.mode = ScriptMode::Defer;
+                    defer_script.source_kind = ScriptSourceKind::External;
+                    defer_script.node_id = defer_script_node;
+
+                    let lifecycle_driver = {
+                        let PageVm {
+                            vm,
+                            page_task_queue,
+                            report,
+                            ..
+                        } = &mut page_vm;
+                        vm.as_mut()
+                            .expect("page vm must retain a live ScriptVm until drop")
+                            .start_post_parse_lifecycle_round(
+                                PageVmInitStage::DomContentLoaded,
+                                page_task_queue,
+                                report,
+                                vec![classic_defer_work(defer_script)],
+                            )
+                            .await
+                    };
+                    let completion = page_vm
+                        .drive_post_parse_lifecycle_loop_on_named_owner_lane(
+                            PageVmInitStage::DomContentLoaded,
+                            lifecycle_driver,
+                        )
+                        .await?;
+                    let before_later_timers = page_vm
+                        .vm_mut()
+                        .eval("JSON.stringify(globalThis.__deferDclTaskOrder)")?;
+
+                    let loader = page_vm.request_client.clone();
+                    assert!(
+                        page_vm
+                            .run_one_due_timer_selected_task_for_test(&loader)
+                            .await?,
+                        "the timer queued outside defer must remain runnable after DCL"
+                    );
+                    let after_outside_timer = page_vm
+                        .vm_mut()
+                        .eval("JSON.stringify(globalThis.__deferDclTaskOrder)")?;
+                    assert!(
+                        page_vm
+                            .run_one_due_timer_selected_task_for_test(&loader)
+                            .await?,
+                        "the timer queued by the first timer must remain runnable after DCL"
+                    );
+                    let after_nested_timer = page_vm
+                        .vm_mut()
+                        .eval("JSON.stringify(globalThis.__deferDclTaskOrder)")?;
+                    Ok::<_, anyhow::Error>((
+                        completion,
+                        before_later_timers,
+                        after_outside_timer,
+                        after_nested_timer,
+                    ))
+                })
+                .await
+                .expect("driver loop should preserve the DCL task boundary");
+
+        assert!(matches!(
+            completion,
+            PostParseLifecycleCompletionAction::ReturnAtStage("DOMContentLoaded")
+        ));
+        assert_eq!(before_later_timers, r#"["defer","timer-before-dcl","dcl"]"#);
+        assert_eq!(
+            after_outside_timer,
+            r#"["defer","timer-before-dcl","dcl","timer-outside-defer"]"#
+        );
+        assert_eq!(
+            after_nested_timer,
+            r#"["defer","timer-before-dcl","dcl","timer-outside-defer","timer-after-dcl"]"#
         );
     });
 }

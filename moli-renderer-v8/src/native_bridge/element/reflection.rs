@@ -1,6 +1,6 @@
 use crate::custom_elements;
 use crate::document_runtime::DomHandle;
-use crate::util::v8_string;
+use crate::util::{string_from_utf16_units_lossy, v8_string, v8_value_to_dom_string_u16};
 use crate::webidl;
 
 use super::super::node::{node_is_element, node_runtime_and_handle_from_object_or_detached};
@@ -8,6 +8,7 @@ use super::{
     element_attribute, element_has_attribute,
     remove_live_element_attribute_appending_to_current_reaction_queue,
     set_live_element_attribute_appending_to_current_reaction_queue,
+    set_live_element_attribute_utf16_units_appending_to_current_reaction_queue,
 };
 
 macro_rules! impl_reflection_callback_data {
@@ -173,23 +174,26 @@ pub(super) enum DomStringReflection {
     AreaAlt,
     AreaCoords,
     AreaDownload,
-    AreaHreflang,
     AreaReferrerPolicy,
     AreaShape,
-    AreaType,
     BrClear,
     DataValue,
     EmbedHeight,
     EmbedType,
     EmbedWidth,
+    FontFace,
     FontSize,
     FrameFrameBorder,
     FrameScrolling,
+    FrameSetCols,
+    FrameSetRows,
     HrColor,
     HrSize,
     HrWidth,
     HtmlTimeDateTime,
     HtmlVersion,
+    IframeAllow,
+    IframeCsp,
     IframeFrameBorder,
     IframeHeight,
     IframeLoading,
@@ -206,13 +210,17 @@ pub(super) enum DomStringReflection {
     LinkCharset,
     LinkFetchPriority,
     LinkHreflang,
+    LinkIntegrity,
     LinkMedia,
     LinkReferrerPolicy,
+    LinkRev,
+    LinkType,
     LiType,
     MarqueeBgColor,
     MarqueeHeight,
     MarqueeWidth,
     MetaMedia,
+    MetaScheme,
     ModDateTime,
     ObjectArchive,
     ObjectCode,
@@ -235,6 +243,9 @@ pub(super) enum DomStringReflection {
     StyleMedia,
     StyleType,
     TableBorder,
+    TableFrame,
+    TableRules,
+    TableSummary,
     TableCellAbbr,
     TableCellAxis,
     TableCellCh,
@@ -345,10 +356,6 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
             DomStringReflectionDescriptor::new("HTMLAreaElement", "download", "download"),
         ),
         (
-            DomStringReflection::AreaHreflang,
-            DomStringReflectionDescriptor::new("HTMLAreaElement", "hreflang", "hreflang"),
-        ),
-        (
             DomStringReflection::AreaReferrerPolicy,
             DomStringReflectionDescriptor::new(
                 "HTMLAreaElement",
@@ -359,10 +366,6 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
         (
             DomStringReflection::AreaShape,
             DomStringReflectionDescriptor::new("HTMLAreaElement", "shape", "shape"),
-        ),
-        (
-            DomStringReflection::AreaType,
-            DomStringReflectionDescriptor::new("HTMLAreaElement", "type", "type"),
         ),
         (
             DomStringReflection::BrClear,
@@ -390,6 +393,15 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
             DomStringReflectionDescriptor::new("HTMLEmbedElement", "width", "width"),
         ),
         (
+            DomStringReflection::FontFace,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLFontElement",
+                "font",
+                "face",
+                "face",
+            ),
+        ),
+        (
             DomStringReflection::FontSize,
             DomStringReflectionDescriptor::new("HTMLFontElement", "size", "size"),
         ),
@@ -400,6 +412,24 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
         (
             DomStringReflection::FrameScrolling,
             DomStringReflectionDescriptor::new("HTMLFrameElement", "scrolling", "scrolling"),
+        ),
+        (
+            DomStringReflection::FrameSetCols,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLFrameSetElement",
+                "frameset",
+                "cols",
+                "cols",
+            ),
+        ),
+        (
+            DomStringReflection::FrameSetRows,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLFrameSetElement",
+                "frameset",
+                "rows",
+                "rows",
+            ),
         ),
         (
             DomStringReflection::HrColor,
@@ -420,6 +450,14 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
         (
             DomStringReflection::HtmlVersion,
             DomStringReflectionDescriptor::new("HTMLHtmlElement", "version", "version"),
+        ),
+        (
+            DomStringReflection::IframeAllow,
+            DomStringReflectionDescriptor::new("HTMLIFrameElement", "allow", "allow"),
+        ),
+        (
+            DomStringReflection::IframeCsp,
+            DomStringReflectionDescriptor::new("HTMLIFrameElement", "csp", "csp"),
         ),
         (
             DomStringReflection::IframeFrameBorder,
@@ -504,6 +542,15 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
             DomStringReflectionDescriptor::new("HTMLLinkElement", "hreflang", "hreflang"),
         ),
         (
+            DomStringReflection::LinkIntegrity,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLLinkElement",
+                "link",
+                "integrity",
+                "integrity",
+            ),
+        ),
+        (
             DomStringReflection::LinkMedia,
             DomStringReflectionDescriptor::new("HTMLLinkElement", "media", "media"),
         ),
@@ -513,6 +560,24 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
                 "HTMLLinkElement",
                 "referrerpolicy",
                 "referrerPolicy",
+            ),
+        ),
+        (
+            DomStringReflection::LinkRev,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLLinkElement",
+                "link",
+                "rev",
+                "rev",
+            ),
+        ),
+        (
+            DomStringReflection::LinkType,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLLinkElement",
+                "link",
+                "type",
+                "type",
             ),
         ),
         (
@@ -534,6 +599,15 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
         (
             DomStringReflection::MetaMedia,
             DomStringReflectionDescriptor::new("HTMLMetaElement", "media", "media"),
+        ),
+        (
+            DomStringReflection::MetaScheme,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLMetaElement",
+                "meta",
+                "scheme",
+                "scheme",
+            ),
         ),
         (
             DomStringReflection::ModDateTime,
@@ -636,6 +710,33 @@ const DOM_STRING_REFLECTION_DESCRIPTORS: &[(DomStringReflection, DomStringReflec
         (
             DomStringReflection::TableBorder,
             DomStringReflectionDescriptor::new("HTMLTableElement", "border", "border"),
+        ),
+        (
+            DomStringReflection::TableFrame,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLTableElement",
+                "table",
+                "frame",
+                "frame",
+            ),
+        ),
+        (
+            DomStringReflection::TableRules,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLTableElement",
+                "table",
+                "rules",
+                "rules",
+            ),
+        ),
+        (
+            DomStringReflection::TableSummary,
+            DomStringReflectionDescriptor::new_html_element(
+                "HTMLTableElement",
+                "table",
+                "summary",
+                "summary",
+            ),
         ),
         (
             DomStringReflection::TableCellAbbr,
@@ -823,7 +924,11 @@ impl_reflection_callback_data!(UsvStringReflection);
 #[derive(Clone, Copy)]
 #[repr(u32)]
 pub(super) enum NullToEmptyDomStringReflection {
+    BodyALink,
     BodyBgColor,
+    BodyLink,
+    BodyText,
+    BodyVLink,
     FontColor,
     FrameMarginHeight,
     FrameMarginWidth,
@@ -832,6 +937,8 @@ pub(super) enum NullToEmptyDomStringReflection {
     ImageBorder,
     ObjectBorder,
     TableBgColor,
+    TableCellPadding,
+    TableCellSpacing,
     TableCellBgColor,
     TableRowBgColor,
     Count,
@@ -842,8 +949,24 @@ const NULL_TO_EMPTY_DOM_STRING_REFLECTION_DESCRIPTORS: &[(
     ReflectedAttributeDescriptor,
 )] = &[
     (
+        NullToEmptyDomStringReflection::BodyALink,
+        ReflectedAttributeDescriptor::new_html_element("HTMLBodyElement", "body", "alink", "aLink"),
+    ),
+    (
         NullToEmptyDomStringReflection::BodyBgColor,
         ReflectedAttributeDescriptor::new("HTMLBodyElement", "bgcolor", "bgColor"),
+    ),
+    (
+        NullToEmptyDomStringReflection::BodyLink,
+        ReflectedAttributeDescriptor::new_html_element("HTMLBodyElement", "body", "link", "link"),
+    ),
+    (
+        NullToEmptyDomStringReflection::BodyText,
+        ReflectedAttributeDescriptor::new_html_element("HTMLBodyElement", "body", "text", "text"),
+    ),
+    (
+        NullToEmptyDomStringReflection::BodyVLink,
+        ReflectedAttributeDescriptor::new_html_element("HTMLBodyElement", "body", "vlink", "vLink"),
     ),
     (
         NullToEmptyDomStringReflection::FontColor,
@@ -876,6 +999,24 @@ const NULL_TO_EMPTY_DOM_STRING_REFLECTION_DESCRIPTORS: &[(
     (
         NullToEmptyDomStringReflection::TableBgColor,
         ReflectedAttributeDescriptor::new("HTMLTableElement", "bgcolor", "bgColor"),
+    ),
+    (
+        NullToEmptyDomStringReflection::TableCellPadding,
+        ReflectedAttributeDescriptor::new_html_element(
+            "HTMLTableElement",
+            "table",
+            "cellpadding",
+            "cellPadding",
+        ),
+    ),
+    (
+        NullToEmptyDomStringReflection::TableCellSpacing,
+        ReflectedAttributeDescriptor::new_html_element(
+            "HTMLTableElement",
+            "table",
+            "cellspacing",
+            "cellSpacing",
+        ),
     ),
     (
         NullToEmptyDomStringReflection::TableCellBgColor,
@@ -1035,7 +1176,7 @@ impl CrossOriginReflection {
 
 impl_reflection_callback_data!(CrossOriginReflection);
 
-pub(super) fn set_reflected_attribute(
+pub(in crate::native_bridge) fn set_reflected_attribute(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut super::super::JsContextHost,
     handle: DomHandle,
@@ -1075,6 +1216,26 @@ pub(super) fn set_reflected_style_attribute_with_inline_base_url(
         if let Some(inline_base_url) = inline_base_url {
             runtime.set_element_inline_style_base_url(handle, inline_base_url.clone());
         }
+    });
+}
+
+fn set_reflected_attribute_utf16_units(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut super::super::JsContextHost,
+    handle: DomHandle,
+    name: &str,
+    value: &str,
+    units: Vec<u16>,
+) {
+    custom_elements::with_custom_element_reaction_scope(scope, runtime_ptr, |scope| {
+        let _ = set_live_element_attribute_utf16_units_appending_to_current_reaction_queue(
+            scope,
+            runtime_ptr,
+            handle,
+            name,
+            value,
+            units,
+        );
     });
 }
 
@@ -1156,11 +1317,10 @@ pub(super) fn set_dom_string_attribute_property_on_object<'s>(
     owner: &'static str,
     property: &'static str,
 ) {
-    let Some(value) = property_dom_string_value(scope, value, owner, property) else {
+    let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, object) else {
         return;
     };
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
-    else {
+    let Some(value) = property_dom_string_value(scope, value, owner, property) else {
         return;
     };
     set_reflected_attribute(scope, runtime_ptr, handle, name, &value);
@@ -1187,21 +1347,33 @@ pub(super) fn set_nullable_dom_string_attribute_property_on_object<'s>(
     set_reflected_attribute(scope, runtime_ptr, handle, name, &value);
 }
 
+pub(super) fn set_dom_string_attribute_property_utf16_on_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &str,
+    value: v8::Local<'s, v8::Value>,
+) {
+    let Some(units) = v8_value_to_dom_string_u16(scope, value, false) else {
+        return;
+    };
+    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
+    else {
+        return;
+    };
+    let units = units.into_vec();
+    let value = string_from_utf16_units_lossy(&units);
+    set_reflected_attribute_utf16_units(scope, runtime_ptr, handle, name, &value, units);
+}
+
 pub(super) fn attribute_property_getter_from_object_or_detached<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
     name: &str,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
-    else {
-        rv.set_null();
+    let Some((runtime_ptr, handle)) = element_reflection_receiver_or_throw(scope, object) else {
         return;
     };
-    if !node_is_element(unsafe { &*runtime_ptr }, handle) {
-        rv.set_undefined();
-        return;
-    }
     let value = element_attribute(unsafe { &*runtime_ptr }, handle, name).unwrap_or_default();
     let Some(value) = v8_string(scope, &value) else {
         rv.set_null();

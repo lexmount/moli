@@ -3,7 +3,7 @@ use anyhow::Result;
 use super::ScriptVm;
 use crate::{
     document_runtime::DomHandle,
-    dom::native::Node,
+    dom::{forms::InputType, native::Node},
     native_bridge::element::{
         autocomplete_field_name, autofill_related_form_control_elements, construct_simple_event,
         dispatch_public_event, form_control_is_effectively_disabled,
@@ -189,7 +189,7 @@ fn fill_credit_card_control(
         if form_control_is_effectively_disabled(runtime, handle)
             || element.has_attribute("readonly")
             || (element.is_html_input()
-                && matches!(element.input_type().as_str(), "file" | "hidden"))
+                && matches!(element.input_type(), InputType::File | InputType::Hidden))
         {
             return None;
         }
@@ -203,7 +203,7 @@ fn fill_credit_card_control(
     };
 
     if is_select {
-        let _ = unsafe { &mut *runtime_ptr }.set_select_value(handle, &value);
+        let _ = unsafe { &mut *runtime_ptr }.set_select_value(scope, runtime_ptr, handle, &value);
     } else {
         let _ = unsafe { &mut *runtime_ptr }.set_input_value(handle, &value);
     }

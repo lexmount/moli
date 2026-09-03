@@ -277,6 +277,30 @@ fn table_elements_use_table_user_agent_display_defaults() {
 }
 
 #[test]
+fn marquee_user_agent_overflow_overrides_author_styles() {
+    let mut vm = new_parsed_test_vm(
+        "https://marquee-user-agent-overflow.test/",
+        r#"<!doctype html>
+<marquee style="overflow: visible"></marquee>
+<marquee style="overflow: scroll"></marquee>
+<marquee style="overflow: clip"></marquee>
+<marquee style="overflow: auto"></marquee>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+[...document.querySelectorAll('marquee')]
+  .map(element => getComputedStyle(element).overflow)
+  .join('|')
+"#,
+        )
+        .expect("marquee user-agent overflow should evaluate");
+
+    assert_eq!(result, "hidden|hidden|hidden|hidden");
+}
+
+#[test]
 fn dialog_user_agent_display_tracks_open_state() {
     let mut vm = new_parsed_test_vm(
         "https://dialog-user-agent-display.test/",
@@ -326,6 +350,109 @@ fn popover_user_agent_display_tracks_open_state() {
         .expect("popover user-agent display should evaluate");
 
     assert_eq!(result, "none|block|none");
+}
+
+#[test]
+fn dialog_user_agent_colors_follow_its_color_scheme() {
+    let mut vm = new_parsed_test_vm(
+        "https://dialog-user-agent-colors.test/",
+        r#"<!doctype html>
+<style>:root { color: CanvasText; background-color: Canvas }</style>
+<dialog id="default" open></dialog>
+<dialog id="light" open style="color-scheme: only light"></dialog>
+<dialog id="dark" open style="color-scheme: only dark"></dialog>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = getComputedStyle(document.documentElement);
+  const fallback = getComputedStyle(document.getElementById('default'));
+  const light = getComputedStyle(document.getElementById('light'));
+  const dark = getComputedStyle(document.getElementById('dark'));
+  return JSON.stringify({
+    defaultMatchesRoot:
+      fallback.color === root.color && fallback.backgroundColor === root.backgroundColor,
+    schemesDiffer:
+      light.color !== dark.color && light.backgroundColor !== dark.backgroundColor
+  });
+})()
+"#,
+        )
+        .expect("dialog user-agent colors should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"defaultMatchesRoot":true,"schemesDiffer":true}"#
+    );
+}
+
+#[test]
+fn modal_dialog_user_agent_visibility_overrides_inheritance() {
+    let mut vm = new_parsed_test_vm(
+        "https://modal-dialog-user-agent-visibility.test/",
+        r#"<!doctype html>
+<div style="visibility: hidden"><dialog id="target">Dialog</dialog></div>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const dialog = document.getElementById('target');
+  dialog.show();
+  const values = [getComputedStyle(dialog).visibility];
+  dialog.close();
+
+  dialog.showModal();
+  values.push(getComputedStyle(dialog).visibility);
+  dialog.close();
+
+  dialog.style.visibility = 'hidden';
+  dialog.showModal();
+  values.push(getComputedStyle(dialog).visibility);
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("modal dialog user-agent visibility should evaluate");
+
+    assert_eq!(result, "hidden|visible|hidden");
+}
+
+#[test]
+fn modal_dialog_top_layer_adjusts_non_absolute_positions() {
+    let mut vm = new_parsed_test_vm(
+        "https://modal-dialog-top-layer-position.test/",
+        r#"<!doctype html><dialog id="target"></dialog>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const dialog = document.getElementById('target');
+  const values = [];
+  for (const position of ['static', 'relative', 'sticky', 'absolute', 'fixed']) {
+    dialog.style.position = position;
+    values.push(getComputedStyle(dialog).position);
+    dialog.showModal();
+    values.push(getComputedStyle(dialog).position);
+    dialog.close();
+    values.push(getComputedStyle(dialog).position);
+  }
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("modal dialog top-layer position should evaluate");
+
+    assert_eq!(
+        result,
+        "static|absolute|static|relative|absolute|relative|sticky|absolute|sticky|\
+         absolute|absolute|absolute|fixed|fixed|fixed"
+    );
 }
 
 #[test]
@@ -421,6 +548,54 @@ fn computed_style_exposes_non_inherited_touch_action() {
     assert_eq!(
         result,
         "true|true|true|none|auto|manipulation|manipulation|manipulation|none"
+    );
+}
+
+#[test]
+fn heading_offset_and_modal_reset_invalidate_live_computed_styles() {
+    let mut vm = new_parsed_test_vm(
+        "https://heading-state-invalidation.test/",
+        r#"<!doctype html>
+<html><head><style>
+  :heading(1) { color: rgb(1, 2, 3); }
+  :heading(4) { color: rgb(4, 5, 6); }
+  :heading(9) { color: rgb(9, 10, 11); }
+</style></head><body>
+  <div id="parent"><h1 id="target"></h1></div>
+  <div headingoffset="8"><dialog id="modal"><h1 id="modal-heading"></h1></dialog></div>
+</body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parent = document.getElementById('parent');
+  const target = document.getElementById('target');
+  const modal = document.getElementById('modal');
+  const modalHeading = document.getElementById('modal-heading');
+  const targetStyle = getComputedStyle(target);
+  const modalStyle = getComputedStyle(modalHeading);
+  const values = [targetStyle.color, modalStyle.color];
+
+  parent.headingOffset = 3;
+  values.push(targetStyle.color);
+  target.headingReset = true;
+  values.push(targetStyle.color);
+
+  modal.showModal();
+  values.push(modalStyle.color);
+  modal.close();
+  values.push(modalStyle.color);
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("heading state invalidation probe should evaluate");
+
+    assert_eq!(
+        result,
+        "rgb(1, 2, 3)|rgb(9, 10, 11)|rgb(4, 5, 6)|rgb(1, 2, 3)|rgb(1, 2, 3)|rgb(9, 10, 11)"
     );
 }
 
@@ -3207,6 +3382,73 @@ getComputedStyle(document.querySelector('.nested-journal-target')).color;
 }
 
 #[test]
+fn nested_declaration_mutations_invalidate_their_ancestor_style_selector() {
+    let mut vm = new_storage_test_vm("https://nested-declaration-invalidation.test/");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+const style = document.createElement('style');
+style.textContent = 'div { z-index: 1; &.test { } }';
+(document.head || document.documentElement || document).appendChild(style);
+const target = document.createElement('div');
+target.className = 'test';
+(document.body || document.documentElement || document).appendChild(target);
+globalThis.__nestedDeclarationRule = style.sheet.cssRules[0];
+globalThis.__nestedDeclarationTarget = target;
+getComputedStyle(target).zIndex;
+"#,
+        )
+        .expect("nested declaration invalidation setup should evaluate"),
+        "1"
+    );
+    crate::style_engine::reset_live_stylesheet_update_counts_for_test();
+
+    assert_eq!(
+        vm.eval(
+            r#"
+const rule = globalThis.__nestedDeclarationRule;
+const mutationTarget = globalThis.__nestedDeclarationTarget;
+const states = [];
+
+rule.insertRule('z-index: 3;', 0);
+const declarations = rule.cssRules[0];
+states.push(declarations instanceof CSSNestedDeclarations);
+states.push(getComputedStyle(mutationTarget).zIndex);
+
+declarations.style.zIndex = '4';
+states.push(getComputedStyle(mutationTarget).zIndex);
+
+rule.deleteRule(0);
+states.push(getComputedStyle(mutationTarget).zIndex);
+
+rule.insertRule('@media all { a { } }', 1);
+const media = rule.cssRules[1];
+media.insertRule('z-index: 5;', 0);
+states.push(media.cssRules[0] instanceof CSSNestedDeclarations);
+states.push(getComputedStyle(mutationTarget).zIndex);
+
+media.deleteRule(0);
+states.push(getComputedStyle(mutationTarget).zIndex);
+states.join('|');
+"#,
+        )
+        .expect("nested declaration mutations should invalidate ancestor selectors"),
+        "true|3|4|1|true|5|1"
+    );
+    assert_eq!(
+        crate::style_engine::exact_rule_change_notification_count_for_test(),
+        6,
+        "nested declaration changes should remain exact journal updates",
+    );
+    assert_eq!(
+        crate::style_engine::full_cascade_update_fallback_count_for_test(),
+        0,
+        "nested declaration changes must not rebuild an entire stylesheet",
+    );
+}
+
+#[test]
 fn computed_style_wrapper_reflects_style_element_media_mutations() {
     let mut vm = new_storage_test_vm("https://style-media-computed-wrapper-refresh.test/");
     let document = vm.document_handle_for_test();
@@ -3899,6 +4141,66 @@ fn text_value_change_invalidates_validity_computed_style() {
         "rgb(0, 128, 0),rgb(255, 0, 0)|rgb(255, 0, 0),rgb(0, 0, 255)"
     );
 }
+
+#[test]
+fn child_list_change_invalidates_form_and_fieldset_validity_computed_style() {
+    let mut vm = new_parsed_test_vm(
+        "https://computed-style-validity-child-list-invalidation.test/",
+        r#"<!doctype html><html><head><style>
+          form, fieldset { background-color: rgb(0, 128, 0); }
+          form:invalid, fieldset:invalid { background-color: rgb(0, 255, 0); }
+          .target { color: rgb(255, 0, 0); }
+          #form:invalid + #form-target { color: rgb(0, 0, 255); }
+          #fieldset:invalid + #fieldset-target { color: rgb(1, 2, 3); }
+        </style></head><body>
+          <form id="form"></form><span id="form-target" class="target"></span>
+          <fieldset id="fieldset"></fieldset><span id="fieldset-target" class="target"></span>
+        </body></html>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const form = document.getElementById('form');
+  const fieldset = document.getElementById('fieldset');
+  const formTarget = document.getElementById('form-target');
+  const fieldsetTarget = document.getElementById('fieldset-target');
+  const invalid = document.createElement('input');
+  invalid.type = 'number';
+  invalid.min = '8';
+  invalid.value = '4';
+  const state = () => [
+    getComputedStyle(form).backgroundColor,
+    getComputedStyle(formTarget).color,
+    getComputedStyle(fieldset).backgroundColor,
+    getComputedStyle(fieldsetTarget).color
+  ].join(',');
+
+  const initial = state();
+  form.append(invalid);
+  const inForm = state();
+  fieldset.append(invalid);
+  const inFieldset = state();
+  invalid.remove();
+  const removed = state();
+  return [initial, inForm, inFieldset, removed].join('|');
+})()
+"#,
+        )
+        .expect("child-list validity invalidation should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            "rgb(0, 128, 0),rgb(255, 0, 0),rgb(0, 128, 0),rgb(255, 0, 0)|",
+            "rgb(0, 255, 0),rgb(0, 0, 255),rgb(0, 128, 0),rgb(255, 0, 0)|",
+            "rgb(0, 128, 0),rgb(255, 0, 0),rgb(0, 255, 0),rgb(1, 2, 3)|",
+            "rgb(0, 128, 0),rgb(255, 0, 0),rgb(0, 128, 0),rgb(255, 0, 0)"
+        )
+    );
+}
+
 #[test]
 fn text_value_change_invalidates_range_computed_style() {
     let mut vm = new_storage_test_vm("https://computed-style-range-invalidation.test/");
@@ -4810,6 +5112,7 @@ fn computed_style_child_document_media_queries_use_iframe_viewport() {
   childDocument.open();
   childDocument.write('<style>body { color: red } @media all and (min-width: 101px) { body { color: green } }</style><body>text</body>');
   childDocument.close();
+  document.body.offsetTop;
   const before = getComputedStyle(childDocument.body).color;
   frame.style.width = '200px';
   const after = getComputedStyle(childDocument.body).color;
@@ -6778,6 +7081,47 @@ fn computed_display_treats_hidden_attribute_as_none() {
 }
 
 #[test]
+fn computed_style_distinguishes_hidden_and_until_found_states() {
+    let mut vm = new_storage_test_vm("https://hidden-until-found-computed-style.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.createElement('div');
+  (document.body || document.documentElement || document).appendChild(target);
+  const read = () => [
+    getComputedStyle(target).display,
+    getComputedStyle(target).contentVisibility
+  ].join(':');
+  const values = [read()];
+  for (const value of ['', 'asdf', 'until-found', 'UNTIL-FOUND', 'UnTiL-FoUnD', '0']) {
+    target.setAttribute('hidden', value);
+    values.push(read());
+  }
+  target.setAttribute('hidden', 'until-found');
+  target.style.contentVisibility = 'visible';
+  values.push(`${target.style.contentVisibility}/${read()}`);
+  target.style.removeProperty('content-visibility');
+  values.push(read());
+  target.removeAttribute('hidden');
+  target.style.contentVisibility = 'hidden';
+  values.push(`${target.style.contentVisibility}/${read()}`);
+  target.style.contentVisibility = 'bogus';
+  values.push(`${target.style.contentVisibility}/${read()}`);
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("hidden presentation states should affect computed style");
+
+    assert_eq!(
+        result,
+        "block:visible|none:visible|none:visible|block:hidden|block:hidden|block:hidden|none:visible|visible/block:visible|block:hidden|hidden/block:hidden|hidden/block:hidden"
+    );
+}
+
+#[test]
 fn detached_nested_iframe_window_get_computed_style_uses_iframe_width() {
     let mut vm = new_storage_test_vm("https://nested-computed-width.test/");
 
@@ -7459,7 +7803,7 @@ fn computed_absolute_logical_inline_insets_resolve_physical_sides() {
     assert_eq!(result, "0px|140px|140px|0px");
 }
 #[test]
-fn computed_style_property_names_are_sorted() {
+fn computed_style_property_names_follow_cssom_order() {
     let mut vm = new_storage_test_vm("https://computed-style-order.test/");
 
     let result = vm
@@ -7486,7 +7830,7 @@ fn computed_style_property_names_are_sorted() {
   const style = getComputedStyle(target);
   const properties = Array.from(style);
   const sorted = properties.slice().sort((left, right) => {
-    const segment = name => name.startsWith('--') ? 1 : name.startsWith('-') ? 2 : 0;
+    const segment = name => name.startsWith('--') ? 2 : name.startsWith('-') ? 1 : 0;
     if (segment(left) !== segment(right)) {
       return segment(left) - segment(right);
     }
@@ -8163,6 +8507,47 @@ fn computed_style_enumerates_registered_custom_properties() {
         r#"{"innerRegistered":true,"innerInherited":true,"innerOwn":true,"innerNoInitial":false,"siblingInherited":true,"siblingOwnNoInitial":true,"siblingInnerAbsent":false}"#
     );
 }
+
+#[test]
+fn computed_style_property_names_place_custom_properties_after_longhands() {
+    let mut vm = new_storage_test_vm("https://computed-style-custom-property-order.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.body || document.documentElement ||
+    document.appendChild(document.createElement('html'));
+  const target = document.createElement('div');
+  const plain = document.createElement('div');
+  target.style.cssText = '--z-token: z; --a-token: a;';
+  root.append(target, plain);
+
+  const computed = getComputedStyle(target);
+  const names = Array.from(
+    { length: computed.length },
+    (_, index) => computed.item(index)
+  );
+  const customStart = names.indexOf('--a-token');
+  const lastVendor = names.findLastIndex(
+    name => name.startsWith('-') && !name.startsWith('--')
+  );
+  return [
+    computed.getPropertyValue('--a-token'),
+    computed.length - getComputedStyle(plain).length,
+    names.slice(-2).join(','),
+    computed.item(computed.length - 1),
+    computed[computed.length - 1],
+    customStart > lastVendor
+  ].join('|');
+})()
+"#,
+        )
+        .expect("computed custom property order should evaluate");
+
+    assert_eq!(result, "a|2|--a-token,--z-token|--z-token|--z-token|true");
+}
+
 #[test]
 fn css_register_property_validates_and_updates_computed_style() {
     let mut vm = new_storage_test_vm("https://css-register-property.test/");
@@ -9974,6 +10359,55 @@ fn shadow_dir_pseudo_styles_slotted_nodes_from_document_direction() {
 }
 
 #[test]
+fn slotted_nodes_inherit_css_direction_from_slot_without_changing_html_directionality() {
+    let mut vm = new_storage_test_vm("https://slotted-direction-inheritance.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  if (!document.documentElement) {
+    document.appendChild(document.createElement('html'));
+  }
+  if (!document.body) {
+    document.documentElement.appendChild(document.createElement('body'));
+  }
+
+  const host = document.createElement('div');
+  const slotted = document.createElement('span');
+  host.appendChild(slotted);
+  const shadow = host.attachShadow({ mode: 'open' });
+  const style = document.createElement('style');
+  style.textContent = 'slot { color: rgb(1, 2, 3); }';
+  const slot = document.createElement('slot');
+  slot.dir = 'rtl';
+  shadow.append(style, slot);
+  document.body.appendChild(host);
+
+  const inherited = `${slotted.matches(':dir(ltr)')}:${getComputedStyle(slotted).direction}:${getComputedStyle(slotted).color}`;
+
+  const overriddenHost = document.createElement('div');
+  const overriddenSlotted = document.createElement('span');
+  overriddenHost.appendChild(overriddenSlotted);
+  const overriddenShadow = overriddenHost.attachShadow({ mode: 'open' });
+  const overriddenStyle = document.createElement('style');
+  overriddenStyle.textContent = 'slot { direction: ltr; }';
+  const overriddenSlot = document.createElement('slot');
+  overriddenSlot.dir = 'rtl';
+  overriddenShadow.append(overriddenStyle, overriddenSlot);
+  document.body.appendChild(overriddenHost);
+
+  const authorOverride = `${overriddenSlot.matches(':dir(rtl)')}:${getComputedStyle(overriddenSlot).direction}:${getComputedStyle(overriddenSlotted).direction}`;
+  return `${inherited}|${authorOverride}`;
+})()
+"#,
+        )
+        .expect("slotted direction inheritance should evaluate");
+
+    assert_eq!(result, "true:rtl:rgb(1, 2, 3)|true:ltr:ltr");
+}
+
+#[test]
 fn computed_direction_tracks_input_html_directionality() {
     let mut vm = new_storage_test_vm("https://input-direction-computed-style.test/");
 
@@ -10013,6 +10447,82 @@ fn computed_direction_tracks_input_html_directionality() {
         .expect("input direction computed style should evaluate");
 
     assert_eq!(result, "true:ltr|true:rtl|true:ltr|true:rtl|true:ltr");
+}
+
+#[test]
+fn computed_direction_tracks_textarea_auto_value() {
+    let mut vm = new_storage_test_vm("https://textarea-auto-direction.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  if (!document.documentElement) {
+    document.appendChild(document.createElement('html'));
+  }
+  if (!document.body) {
+    document.documentElement.appendChild(document.createElement('body'));
+  }
+
+  const textarea = document.createElement('textarea');
+  textarea.dir = 'auto';
+  document.body.appendChild(textarea);
+  const empty = `${textarea.matches(':dir(ltr)')}:${getComputedStyle(textarea).direction}`;
+  textarea.value = '\u05ea';
+  const rtl = `${textarea.matches(':dir(rtl)')}:${getComputedStyle(textarea).direction}`;
+  textarea.value = 'A';
+  const ltr = `${textarea.matches(':dir(ltr)')}:${getComputedStyle(textarea).direction}`;
+
+  return `${empty}|${rtl}|${ltr}`;
+})()
+"#,
+        )
+        .expect("textarea dir=auto value direction should evaluate");
+
+    assert_eq!(result, "true:ltr|true:rtl|true:ltr");
+}
+
+#[test]
+fn computed_direction_tracks_dir_auto_tree_mutations() {
+    let mut vm = new_storage_test_vm("https://dir-auto-tree-mutation.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  if (!document.documentElement) {
+    document.appendChild(document.createElement('html'));
+  }
+  if (!document.head) {
+    document.documentElement.appendChild(document.createElement('head'));
+  }
+  if (!document.body) {
+    document.documentElement.appendChild(document.createElement('body'));
+  }
+  document.head.appendChild(document.createElement('style')).textContent =
+    '#source:dir(rtl) + #target { display: none; }';
+
+  const source = document.createElement('div');
+  source.id = 'source';
+  source.dir = 'auto';
+  const target = document.createElement('div');
+  target.id = 'target';
+  document.body.append(source, target);
+
+  const before = `${getComputedStyle(source).direction}:${getComputedStyle(target).display}`;
+  const text = document.createTextNode('\u0627\u062e\u062a\u0628\u0631');
+  source.appendChild(text);
+  const afterAppend = `${getComputedStyle(source).direction}:${getComputedStyle(target).display}`;
+  text.data = 'A';
+  const afterText = `${getComputedStyle(source).direction}:${getComputedStyle(target).display}`;
+
+  return `${before}|${afterAppend}|${afterText}`;
+})()
+"#,
+        )
+        .expect("dir=auto tree mutation direction should evaluate");
+
+    assert_eq!(result, "ltr:block|rtl:none|ltr:block");
 }
 
 #[test]
@@ -12186,6 +12696,240 @@ fn computed_style_resolves_valid_typed_css_math_and_rejects_invalid_unit_algebra
     assert_eq!(
         result,
         "50px|52px|16px|100px|60px|100px|5px|40px|7px::13px|13px|13px|13px|13px|13px"
+    );
+}
+
+#[test]
+fn object_dimension_attributes_participate_in_the_css_cascade() {
+    let mut vm = new_parsed_test_vm(
+        "https://object-dimension-presentation-hints.test/",
+        r#"<!doctype html>
+        <style>#author-rule { width: 70px; height: 80px; }</style>
+        <object id="target" width="100" height="50"></object>
+        <object id="author-rule" width="200" height="210"></object>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.getElementById('target');
+  const authorRule = document.getElementById('author-rule');
+  const size = element => {
+    const computed = getComputedStyle(element);
+    return [computed.width, computed.height];
+  };
+  const values = [...size(target)];
+
+  target.setAttribute('width', '12.5px');
+  target.setAttribute('height', '25%ignored');
+  values.push(...size(target));
+
+  target.style.width = '9px';
+  target.removeAttribute('width');
+  values.push(...size(target));
+  target.style.removeProperty('width');
+  target.removeAttribute('height');
+  values.push(...size(target));
+  values.push(...size(authorRule));
+  return JSON.stringify(values);
+})()
+"#,
+        )
+        .expect("object dimension presentation hints should evaluate");
+
+    assert_eq!(
+        result,
+        r#"["100px","50px","12.5px","25%","9px","25%","auto","auto","70px","80px"]"#
+    );
+}
+
+#[test]
+fn svg_generic_presentation_attributes_apply_to_every_svg_element() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-generic-presentation-attributes.test/",
+        r#"<!doctype html><svg id="svg"></svg>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const namespace = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('svg');
+  const attributes = [
+    ['font-size-adjust', '0.5'],
+    ['text-overflow', 'ellipsis'],
+    ['white-space', 'pre'],
+  ];
+  const values = [];
+
+  for (const localName of ['text', 'rect', 'unknown']) {
+    const element = document.createElementNS(namespace, localName);
+    svg.append(element);
+    const before = getComputedStyle(element);
+    values.push(...attributes.map(([property]) => before.getPropertyValue(property)));
+    for (const [attribute, value] of attributes)
+      element.setAttribute(attribute, value);
+    const after = getComputedStyle(element);
+    values.push(...attributes.map(([property]) => after.getPropertyValue(property)));
+    for (const [attribute] of attributes)
+      element.removeAttribute(attribute);
+    const removed = getComputedStyle(element);
+    values.push(...attributes.map(([property]) => removed.getPropertyValue(property)));
+  }
+
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("generic SVG presentation attributes should evaluate");
+
+    assert_eq!(
+        result,
+        "none|clip|normal|0.5|ellipsis|pre|none|clip|normal|none|clip|normal|0.5|ellipsis|pre|none|clip|normal|none|clip|normal|0.5|ellipsis|pre|none|clip|normal"
+    );
+}
+
+#[test]
+fn computed_mask_serializes_from_computed_longhands() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-mask-computed-shorthand.test/path/page.html",
+        r#"<!doctype html>
+        <style>
+          #stylesheet { mask: url(#stylesheet-mask); }
+          #layered {
+            mask: url(#layered-mask) center / contain no-repeat content-box exclude luminance;
+          }
+          #cascade { mask: url(#rule-mask); }
+        </style>
+        <svg id="svg">
+          <g id="stylesheet"></g>
+          <g id="attribute" mask="url(#attribute-mask)"></g>
+          <g id="layered"></g>
+          <g id="cascade" mask="url(#attribute-loses)"></g>
+        </svg>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const namespace = 'http://www.w3.org/2000/svg';
+  const svg = document.getElementById('svg');
+  const value = element => getComputedStyle(element).getPropertyValue('mask');
+  const dynamic = document.createElementNS(namespace, 'unknown');
+  svg.append(dynamic);
+  const values = [
+    CSS.supports('mask', 'url(#supported)'),
+    value(dynamic),
+    value(document.getElementById('stylesheet')),
+    value(document.getElementById('attribute')),
+    value(document.getElementById('layered')),
+    value(document.getElementById('cascade')),
+  ];
+
+  dynamic.setAttribute('mask', 'url(#dynamic-mask)');
+  values.push(value(dynamic));
+  dynamic.removeAttribute('mask');
+  values.push(value(dynamic));
+
+  dynamic.style.mask =
+    'url(#inline-mask) center / contain no-repeat content-box exclude luminance';
+  values.push(value(dynamic));
+  dynamic.style.mask = 'none';
+  dynamic.style.maskImage = 'url(#longhand-mask)';
+  dynamic.style.maskMode = 'luminance';
+  values.push(value(dynamic));
+
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("computed mask shorthand should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            "true|none|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#stylesheet-mask\")|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#attribute-mask\")|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#layered-mask\") ",
+            "50% 50% / contain no-repeat content-box exclude luminance|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#rule-mask\")|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#dynamic-mask\")|none|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#inline-mask\") ",
+            "50% 50% / contain no-repeat content-box exclude luminance|",
+            "url(\"https://svg-mask-computed-shorthand.test/path/page.html#longhand-mask\") luminance",
+        )
+    );
+}
+
+#[test]
+fn svg_special_presentation_attributes_follow_element_scopes_and_cascade() {
+    let mut vm = new_parsed_test_vm(
+        "https://svg-special-presentation-attributes.test/",
+        r#"<!doctype html>
+        <style>#cascade { transform: scale(3); }</style>
+        <svg id="root" width="40" height="20">
+          <use id="positioned" x="1" y="2" width="3" height="4"></use>
+          <g id="group" transform="translate(200, 0)"></g>
+          <symbol id="symbol" transform="translate(100, 0)"></symbol>
+          <g id="group-alias" transform="scale(2)" patternTransform="scale(9)"></g>
+          <pattern id="pattern" patternTransform="scale(2)" transform="scale(9)"></pattern>
+          <linearGradient id="linear" gradientTransform="scale(4)" transform="scale(9)"></linearGradient>
+          <radialGradient id="radial" gradientTransform="scale(5)" transform="scale(9)"></radialGradient>
+          <g id="irrelevant" x="9" y="10" width="11" height="12"></g>
+          <g id="irrelevant-control"></g>
+          <path id="path" d="M0,0 L1,1"></path>
+          <path id="path-control"></path>
+          <animate id="animation" fill="blue"></animate>
+          <animate id="animation-control"></animate>
+          <svg id="nested" width="1" height="2"></svg>
+          <svg id="nested-control"></svg>
+          <g id="cascade" transform="scale(2)"></g>
+        </svg>"#,
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const get = id => document.getElementById(id);
+  const value = (id, property) =>
+    getComputedStyle(get(id)).getPropertyValue(property);
+  const sameProperties = (left, right, properties) =>
+    properties.every(property => value(left, property) === value(right, property));
+
+  const values = [
+    value('positioned', 'x'),
+    value('positioned', 'y'),
+    value('positioned', 'width'),
+    value('positioned', 'height'),
+    value('group', 'transform'),
+    value('symbol', 'transform'),
+    value('group-alias', 'transform'),
+    value('pattern', 'transform'),
+    value('linear', 'transform'),
+    value('radial', 'transform'),
+    sameProperties('irrelevant', 'irrelevant-control', ['x', 'y', 'width', 'height']),
+    value('path', 'd') !== value('path-control', 'd'),
+    value('animation', 'fill') === value('animation-control', 'fill'),
+    sameProperties('nested', 'nested-control', ['width', 'height']),
+    value('cascade', 'transform')
+  ];
+
+  get('group').setAttribute('transform', 'translate(12, 3)');
+  values.push(value('group', 'transform'));
+  return JSON.stringify(values);
+})()
+"#,
+        )
+        .expect("SVG presentation attributes should evaluate");
+
+    assert_eq!(
+        result,
+        r#"["1px","2px","3px","4px","matrix(1, 0, 0, 1, 200, 0)","matrix(1, 0, 0, 1, 100, 0)","matrix(2, 0, 0, 2, 0, 0)","matrix(2, 0, 0, 2, 0, 0)","matrix(4, 0, 0, 4, 0, 0)","matrix(5, 0, 0, 5, 0, 0)",true,true,true,true,"matrix(3, 0, 0, 3, 0, 0)","matrix(1, 0, 0, 1, 12, 3)"]"#
     );
 }
 

@@ -1,15 +1,19 @@
 use super::super::{
-    CollectionKind, LiveCollectionQueryKind, collections, encode_tag_name_ns_query,
+    CollectionKind, DomHandle, JsContextHost, LiveCollectionQueryKind, collections,
+    encode_tag_name_ns_query,
     node::{
-        node_is_document, node_runtime_and_handle_from_args,
+        node_is_document, node_owner_document_relevant_context, node_runtime_and_handle_from_args,
         node_runtime_and_handle_from_args_or_detached,
         node_runtime_and_handle_from_object_or_detached, receiver_has_detached_state,
         require_element_method_receiver, require_parent_node_receiver, set_wrapped_node_or_null,
         throw_incompatible_method_receiver, throw_native_selector_error_for_selector,
     },
 };
-use super::forms::control_matches_validity_pseudo;
+use std::collections::HashMap;
+
+use super::forms::{control_matches_validity_pseudo, control_validity_pseudo_state};
 use crate::{
+    dom::native::Node,
     util::{
         call_object_method, object_number_property, object_property_as_object, v8_string, v8str,
     },
@@ -118,7 +122,16 @@ pub(in crate::native_bridge) fn node_query_selector_callback<'s>(
     let Some(parsed) = webidl::parse_args::<ElementQuerySelectorArgs>(scope, &args) else {
         return;
     };
-    match unsafe { &*runtime_ptr }.query_selector(Some(handle), &parsed.selectors) {
+    let validity_states = selector_validity_states(scope, runtime_ptr, &parsed.selectors);
+    let result = match validity_states.as_ref() {
+        Some(states) => unsafe { &*runtime_ptr }.query_selector_with_validity_states(
+            Some(handle),
+            &parsed.selectors,
+            states,
+        ),
+        None => unsafe { &*runtime_ptr }.query_selector(Some(handle), &parsed.selectors),
+    };
+    match result {
         Ok(handle) => set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, handle),
         Err(error) => throw_native_selector_error_for_selector(scope, &parsed.selectors, &error),
     }
@@ -168,9 +181,23 @@ pub(in crate::native_bridge) fn node_query_selector_all_callback<'s>(
     let Some(parsed) = webidl::parse_args::<ElementQuerySelectorAllArgs>(scope, &args) else {
         return;
     };
-    match unsafe { &*runtime_ptr }.query_selector_all(Some(handle), &parsed.selectors) {
+    let validity_states = selector_validity_states(scope, runtime_ptr, &parsed.selectors);
+    let result = match validity_states.as_ref() {
+        Some(states) => unsafe { &*runtime_ptr }.query_selector_all_with_validity_states(
+            Some(handle),
+            &parsed.selectors,
+            states,
+        ),
+        None => unsafe { &*runtime_ptr }.query_selector_all(Some(handle), &parsed.selectors),
+    };
+    match result {
         Ok(handles) => {
-            let list = collections::build_node_list_from_handles(scope, runtime_ptr, &handles);
+            let relevant_context = node_owner_document_relevant_context(scope, runtime_ptr, handle)
+                .or_else(|| args.this().get_creation_context(scope))
+                .unwrap_or_else(|| scope.get_current_context());
+            let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+            let list =
+                collections::build_node_list_from_handles(target_scope, runtime_ptr, &handles);
             rv.set(list.into());
         }
         Err(error) => throw_native_selector_error_for_selector(scope, &parsed.selectors, &error),
@@ -222,8 +249,13 @@ pub(in crate::native_bridge) fn node_matches_callback<'s>(
         rv.set_bool(is_match);
         return;
     }
+    let validity_states = selector_validity_states(scope, runtime_ptr, &parsed.selectors);
     let runtime = unsafe { &*runtime_ptr };
-    match runtime.matches(handle, &parsed.selectors) {
+    let result = match validity_states.as_ref() {
+        Some(states) => runtime.matches_with_validity_states(handle, &parsed.selectors, states),
+        None => runtime.matches(handle, &parsed.selectors),
+    };
+    match result {
         Ok(true) => rv.set_bool(true),
         Ok(false) if node_matches_needs_owner_document_query(scope, args.this()) => rv.set_bool(
             node_matches_owner_document_query(scope, args.this(), &parsed.selectors),
@@ -308,7 +340,14 @@ pub(in crate::native_bridge) fn node_closest_callback<'s>(
     let Some(parsed) = webidl::parse_args::<ElementClosestArgs>(scope, &args) else {
         return;
     };
-    match unsafe { &*runtime_ptr }.closest(handle, &parsed.selectors) {
+    let validity_states = selector_validity_states(scope, runtime_ptr, &parsed.selectors);
+    let result = match validity_states.as_ref() {
+        Some(states) => {
+            unsafe { &*runtime_ptr }.closest_with_validity_states(handle, &parsed.selectors, states)
+        }
+        None => unsafe { &*runtime_ptr }.closest(handle, &parsed.selectors),
+    };
+    match result {
         Ok(Some(handle)) if receiver_is_detached => {
             match super::super::document::detached_native_object_for_handle(
                 scope,
@@ -322,6 +361,35 @@ pub(in crate::native_bridge) fn node_closest_callback<'s>(
         Ok(handle) => set_wrapped_node_or_null(scope, &mut rv, runtime_ptr, handle),
         Err(error) => throw_native_selector_error_for_selector(scope, &parsed.selectors, &error),
     }
+}
+
+fn selector_validity_states(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    selector: &str,
+) -> Option<HashMap<DomHandle, bool>> {
+    if !crate::selector::dom_api_selector_uses_validity_pseudo(
+        unsafe { &*runtime_ptr }.dom_host(),
+        selector,
+    ) {
+        return None;
+    }
+    let handles = unsafe { &*runtime_ptr }
+        .dom_host()
+        .dom()
+        .nodes()
+        .filter(|node| node.is_element())
+        .map(Node::id)
+        .collect::<Vec<_>>();
+    Some(
+        handles
+            .into_iter()
+            .filter_map(|handle| {
+                control_validity_pseudo_state(scope, runtime_ptr, handle)
+                    .map(|invalid| (handle, invalid))
+            })
+            .collect(),
+    )
 }
 
 pub(in crate::native_bridge) fn node_get_elements_by_tag_name_callback<'s>(

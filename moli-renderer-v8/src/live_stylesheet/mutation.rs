@@ -912,7 +912,7 @@ impl LiveStylesheet {
             return None;
         };
         let ancestor_path_len = rule_path.len().saturating_sub(1);
-        Some(LiveStylesheetRuleMutation::new(
+        Some(Self::rule_mutation_for_cascade(
             rule,
             self.css_rule_ancestors_at_path(&rule_path[..ancestor_path_len])?,
             change_kind,
@@ -925,11 +925,34 @@ impl LiveStylesheet {
         parent_path: &[usize],
         change_kind: RuleChangeKind,
     ) -> Option<LiveStylesheetRuleMutation> {
-        Some(LiveStylesheetRuleMutation::new(
+        Some(Self::rule_mutation_for_cascade(
             rule,
             self.css_rule_ancestors_at_path(parent_path)?,
             change_kind,
         ))
+    }
+
+    fn rule_mutation_for_cascade(
+        rule: CssRule,
+        ancestors: Vec<CssRule>,
+        change_kind: RuleChangeKind,
+    ) -> LiveStylesheetRuleMutation {
+        if matches!(&rule, CssRule::NestedDeclarations(_))
+            && let Some(style_index) = ancestors
+                .iter()
+                .rposition(|ancestor| matches!(ancestor, CssRule::Style(_)))
+        {
+            // Nested declarations inherit their selector from the nearest
+            // enclosing style rule. Stylo therefore does not collect ordinary
+            // element invalidations from the declaration rule itself. Report
+            // the effective declaration change on that selector-bearing rule.
+            return LiveStylesheetRuleMutation::new(
+                ancestors[style_index].clone(),
+                ancestors[..style_index].to_vec(),
+                RuleChangeKind::StyleRuleDeclarations,
+            );
+        }
+        LiveStylesheetRuleMutation::new(rule, ancestors, change_kind)
     }
 
     fn css_rule_ancestors_at_path(&self, path: &[usize]) -> Option<Vec<CssRule>> {
@@ -1166,6 +1189,8 @@ impl LiveStylesheet {
             self.quirks_mode,
             self.allow_import_rules,
         ));
+        let source_declaration_override =
+            stylesheet_eof_open_var_declaration_override(&replacement, css_text);
         let replacement_contents = {
             let guard = replacement.shared_lock.read();
             replacement.contents.read_with(&guard).clone()
@@ -1182,9 +1207,11 @@ impl LiveStylesheet {
         self.reconcile_import_edges();
         self.font_face_rule_identities.borrow_mut().clear();
         self.note_contents_mutation();
+        *self.source_declaration_override.borrow_mut() = source_declaration_override;
     }
 
     pub(crate) fn note_contents_mutation(&self) {
+        self.source_declaration_override.borrow_mut().take();
         self.contents_revision
             .set(self.contents_revision.get().saturating_add(1));
         self.note_cascade_mutation();

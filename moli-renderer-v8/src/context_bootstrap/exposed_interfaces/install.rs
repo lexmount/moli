@@ -16,6 +16,14 @@ use crate::util::{
     registered_public_interface_object, v8str,
 };
 
+const LEGACY_WINDOW_INTERFACE_ALIASES: &[(&str, &str)] = &[
+    ("SVGPoint", "DOMPoint"),
+    ("SVGRect", "DOMRect"),
+    ("SVGMatrix", "DOMMatrix"),
+    ("webkitAudioContext", "AudioContext"),
+    ("WebKitCSSMatrix", "DOMMatrix"),
+];
+
 pub(in crate::context_bootstrap) fn install_window_exposed_interfaces<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     global_template: v8::Local<'s, v8::ObjectTemplate>,
@@ -36,10 +44,13 @@ pub(in crate::context_bootstrap) fn install_window_exposed_interfaces<'s>(
                 .getter_side_effect_type(v8::SideEffectType::HasNoSideEffect),
         );
     }
-    if let Some(audio_context_id) = registry.id_by_name("AudioContext") {
-        let data = v8::Integer::new_from_unsigned(scope, audio_context_id.callback_data());
+    for &(alias, interface) in LEGACY_WINDOW_INTERFACE_ALIASES {
+        let Some(interface_id) = registry.id_by_name(interface) else {
+            continue;
+        };
+        let data = v8::Integer::new_from_unsigned(scope, interface_id.callback_data());
         global_template.set_lazy_data_property_with_configuration(
-            v8str(scope, "webkitAudioContext").into(),
+            v8str(scope, alias).into(),
             v8::LazyDataPropertyConfiguration::new(exposed_interface_lazy_getter)
                 .data(data.into())
                 .property_attribute(v8::PropertyAttribute::DONT_ENUM)
@@ -240,6 +251,7 @@ pub(in crate::context_bootstrap) fn install_interface_template_metadata<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     name: &'static str,
 ) {
+    moli_webapi_declare::mark_web_api_platform_object_template_instances(scope, template);
     if name == "WebSocket" {
         // WebSocket exposes a legacy dynamic @@toStringTag accessor which
         // distinguishes the prototype object from ordinary instances.
@@ -323,6 +335,9 @@ pub(crate) fn lazy_window_interface_names(scope: &mut v8::PinScope<'_, '_>) -> V
         .filter(|metadata| {
             metadata.installation == GlobalInstallation::Lazy
                 && metadata.is_exposed(RealmKind::Window, true)
+                && !LEGACY_WINDOW_INTERFACE_ALIASES
+                    .iter()
+                    .any(|(alias, _)| *alias == metadata.name)
         })
         .map(|metadata| metadata.name)
         .collect()

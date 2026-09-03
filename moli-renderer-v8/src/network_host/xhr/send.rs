@@ -109,6 +109,17 @@ pub(super) fn xhr_send_callback<'s>(
     }
 
     let owner = prepared.owner;
+    if !async_request
+        && !host
+            .document_permissions_policy_for_owner(owner)
+            .is_some_and(
+                crate::permissions_policy::DocumentPermissionsPolicy::synchronous_xhr_enabled,
+            )
+    {
+        set_xhr_state_bool(scope, xhr, XHR_SEND_FLAG_SLOT, false);
+        throw_synchronous_xhr_failure(scope, xhr, prepared.resolved_url.as_str(), "NetworkError");
+        return;
+    }
     if let Some(violation) = host
         .check_document_connect_csp_for_owner(
             scope,
@@ -417,6 +428,15 @@ fn send_synchronous_network_xhr(
 
     match result {
         Ok(response) => {
+            crate::context_bootstrap::record_resource_performance_entry(
+                scope,
+                crate::context_bootstrap::ResourcePerformanceEntry::from_fetch_response(
+                    prepared.resolved_url.as_str(),
+                    "xmlhttprequest",
+                    None,
+                    &response,
+                ),
+            );
             let observable_headers = crate::network_host::filter_cors_exposed_response_headers(
                 &prepared.document_url,
                 &response.final_url,

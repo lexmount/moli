@@ -12,8 +12,13 @@ use html5ever::{
 };
 use url::Url;
 
+use moli_script::script_element_nonce_is_nonceable;
 use parking_lot::Mutex;
 
+use crate::modulepreload::{
+    ModulepreloadAsState, modulepreload_as_state_from_attribute,
+    modulepreload_media_attribute_matches, resolve_parser_network_resource_url,
+};
 use crate::network::ResourceRequestClient;
 use crate::page_task_queue::RendererOwnerWakeSender;
 use crate::parser::{PreparedScript, ScriptSource};
@@ -500,7 +505,17 @@ impl BufferedDocumentPreloadState {
             .iter()
             .filter_map(|input| match input.signature() {
                 DocumentBlockingStylesheetSignature::Link { url, options } => {
-                    Some(options.resource_key(url.clone()))
+                    // The scanner runs ahead of the parser and cannot know the
+                    // Document's final quirks mode. MIME compatibility changes
+                    // response processing, not the request metadata, so claim
+                    // the buffered descriptor using the scanner's neutral
+                    // processing mode before it starts a duplicate fetch.
+                    Some(
+                        options
+                            .clone()
+                            .with_quirks_mode_mime_compatibility(false)
+                            .resource_key(url.clone()),
+                    )
                 }
                 DocumentBlockingStylesheetSignature::ParserCreatedStyleImport { .. } => None,
             })
@@ -1249,6 +1264,7 @@ struct HtmlPreloadScannerSink {
     meta_csp_mode: MetaCspScannerMode,
     seen_meta_csp_count: Cell<usize>,
     reported_meta_csp_count: Cell<usize>,
+    seen_import_map: Cell<bool>,
     template_depth: Cell<usize>,
     picture_depth: Cell<usize>,
 }
@@ -1264,6 +1280,7 @@ impl HtmlPreloadScannerSink {
             meta_csp_mode,
             seen_meta_csp_count: Cell::new(0),
             reported_meta_csp_count: Cell::new(0),
+            seen_import_map: Cell::new(false),
             template_depth: Cell::new(0),
             picture_depth: Cell::new(0),
         }
@@ -1298,6 +1315,9 @@ impl HtmlPreloadScannerSink {
 
         let kind_hint =
             buffered_script_kind_from_type(html_attr_value(&tag.attrs, "type").as_deref());
+        if matches!(kind_hint, crate::types::ScriptKind::Module) && self.seen_import_map.get() {
+            return;
+        }
         if html_attr_present(&tag.attrs, "nomodule")
             && matches!(kind_hint, crate::types::ScriptKind::Classic)
         {
@@ -1316,13 +1336,23 @@ impl HtmlPreloadScannerSink {
         if url.scheme() == "data" {
             return;
         }
+        let nonce = html_attr_value(&tag.attrs, "nonce");
+        let nonce = script_element_nonce_is_nonceable(
+            nonce.as_deref(),
+            tag.had_duplicate_attributes,
+            tag.attrs
+                .iter()
+                .map(|attribute| (attribute.name.local.as_ref(), attribute.value.as_ref())),
+        )
+        .then_some(nonce.as_deref())
+        .flatten();
         let mut requests = self.requests.borrow_mut();
         let fetch_metadata = crate::planning::ScriptFetchMetadata::from_script_attributes(
             html_attr_value(&tag.attrs, "crossorigin").as_deref(),
             html_attr_value(&tag.attrs, "referrerpolicy").as_deref(),
             html_attr_value(&tag.attrs, "charset").as_deref(),
             html_attr_value(&tag.attrs, "integrity").as_deref(),
-            html_attr_value(&tag.attrs, "nonce").as_deref(),
+            nonce,
             html_attr_value(&tag.attrs, "fetchpriority").as_deref(),
         );
         let Some(key) = BufferedScriptPreloadKey::new(url.clone(), kind_hint, &fetch_metadata)
@@ -1345,6 +1375,67 @@ impl HtmlPreloadScannerSink {
                     mode_hint,
                     self.image_fetched.get(),
                 ),
+                fetch_metadata,
+            });
+        }
+    }
+
+    fn maybe_note_import_map(&self, tag: &Tag) {
+        if matches!(
+            buffered_script_kind_from_type(html_attr_value(&tag.attrs, "type").as_deref()),
+            crate::types::ScriptKind::ImportMap
+        ) {
+            self.seen_import_map.set(true);
+        }
+    }
+
+    fn maybe_collect_modulepreload(&self, tag: &Tag) {
+        if self.seen_import_map.get()
+            || (matches!(self.meta_csp_mode, MetaCspScannerMode::StopAfterMeta)
+                && self.seen_meta_csp_count.get() != 0)
+        {
+            return;
+        }
+        let Some(rel) = html_attr_value(&tag.attrs, "rel") else {
+            return;
+        };
+        if !link_rel_includes_token(&rel, "modulepreload")
+            || modulepreload_as_state_from_attribute(html_attr_value(&tag.attrs, "as").as_deref())
+                != ModulepreloadAsState::ScriptLike
+            || !modulepreload_media_attribute_matches(
+                html_attr_value(&tag.attrs, "media").as_deref(),
+            )
+        {
+            return;
+        }
+        let Some(href) = html_attr_value(&tag.attrs, "href") else {
+            return;
+        };
+        let Some(url) = resolve_parser_network_resource_url(&self.base_url.borrow(), &href) else {
+            return;
+        };
+        let kind_hint = crate::types::ScriptKind::Module;
+        let mode_hint = crate::types::ScriptMode::ModuleInOrder;
+        let fetch_metadata = crate::planning::ScriptFetchMetadata::from_script_attributes(
+            html_attr_value(&tag.attrs, "crossorigin").as_deref(),
+            html_attr_value(&tag.attrs, "referrerpolicy").as_deref(),
+            None,
+            html_attr_value(&tag.attrs, "integrity").as_deref(),
+            html_attr_value(&tag.attrs, "nonce").as_deref(),
+            html_attr_value(&tag.attrs, "fetchpriority").as_deref(),
+        );
+        let Some(key) = BufferedScriptPreloadKey::new(url.clone(), kind_hint, &fetch_metadata)
+        else {
+            return;
+        };
+        let mut requests = self.requests.borrow_mut();
+        if requests.seen.insert(BufferedPreloadKey::Script(key)) {
+            requests.script_requests.push(BufferedScriptPreloadRequest {
+                url,
+                initiator_url: self.final_url.clone(),
+                kind_hint,
+                mode_hint,
+                resource_type_hint: moli_fetch::RequestResourceType::Script,
                 fetch_metadata,
             });
         }
@@ -1565,10 +1656,12 @@ impl TokenSink for HtmlPreloadScannerSink {
                 TokenSinkResult::Continue
             }
             "script" => {
+                self.maybe_note_import_map(&tag);
                 self.maybe_collect_script_preload(&tag);
                 TokenSinkResult::RawData(ScriptData)
             }
             "link" => {
+                self.maybe_collect_modulepreload(&tag);
                 self.maybe_collect_stylesheet_preload(&tag);
                 TokenSinkResult::Continue
             }

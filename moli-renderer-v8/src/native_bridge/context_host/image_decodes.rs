@@ -105,9 +105,8 @@ impl JsContextHost {
             self.pending_image_load_events
                 .iter()
                 .any(|(pending_element, pending)| {
-                    self.pending_image_load_event_is_current(*pending_element, *pending)
-                        && image_selected_request_key(self, *pending_element).as_ref()
-                            == Some(&request.request_key)
+                    self.pending_image_load_event_is_current(*pending_element, pending)
+                        && pending.request_key() == Some(&request.request_key)
                 });
         if waits_for_current_load {
             request.state = PendingImageDecodeRequestState::PendingLoad;
@@ -343,5 +342,8 @@ fn image_source_can_decode(runtime: &JsContextHost, handle: DomHandle, source: &
     {
         return false;
     }
-    runtime.image_resource_is_ready(handle) && image_intrinsic_dimensions(runtime, handle).is_some()
+    (runtime.image_resource_is_ready(handle)
+        && image_intrinsic_dimensions(runtime, handle).is_some())
+        || image_selected_request_key(runtime, handle)
+            .is_some_and(|request_key| runtime.has_ready_image_request(&request_key))
 }

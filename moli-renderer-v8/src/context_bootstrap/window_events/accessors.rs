@@ -36,14 +36,15 @@ fn window_event_handler_value<'s>(
 ) -> Option<v8::Local<'s, v8::Value>> {
     let host_ptr = context_host_ptr_from_window_object(scope, receiver)
         .or_else(|| context_host_ptr_from_global_bridge(scope))?;
-    let host = unsafe { &*host_ptr };
     match window_child_context_handle(scope, receiver) {
-        Some(handle) => {
-            host.child_window_event_handler_property_value(scope, handle, property_name)
-        }
-        None => host.registered_event_handler_property_value(
+        Some(handle) => unsafe { &*host_ptr }.child_window_event_handler_property_value(
             scope,
-            EventTargetHandle::Window,
+            handle,
+            property_name,
+        ),
+        None => crate::native_bridge::element::resolve_window_event_handler_content_attribute(
+            scope,
+            host_ptr,
             property_name.strip_prefix("on").unwrap_or(property_name),
         ),
     }
@@ -141,10 +142,35 @@ pub(in crate::context_bootstrap) fn window_event_getter<'s>(
     if !require_window_receiver(scope, &args) {
         return;
     }
-    match global_hidden_value(scope, WINDOW_EVENT_SLOT) {
+    match window_event_value_for_receiver(scope, args.this()) {
         Some(value) => rv.set(value),
         None => rv.set(v8::undefined(scope).into()),
     }
+}
+
+pub(in crate::context_bootstrap) fn window_event_value_for_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let target_event = context_host_ptr_from_window_object(scope, receiver)
+        .or_else(|| context_host_ptr_from_global_bridge(scope))
+        .and_then(|host_ptr| {
+            let dispatch_scope = if let Some(popup_id) =
+                crate::native_bridge::lightweight_popup_id_from_window(scope, receiver)
+            {
+                crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id)
+            } else if let Some(handle) = window_child_context_handle(scope, receiver) {
+                crate::native_bridge::OwnerDispatchScope::Child(handle)
+            } else {
+                crate::native_bridge::OwnerDispatchScope::Top
+            };
+            let host = unsafe { &*host_ptr };
+            let owner = host.current_window_execution_context_owner(dispatch_scope)?;
+            let (_, context) = host.window_execution_context(scope, owner, dispatch_scope)?;
+            let global = context.global(scope);
+            object_own_hidden_value(scope, global, WINDOW_EVENT_SLOT)
+        });
+    target_event.or_else(|| global_hidden_value(scope, WINDOW_EVENT_SLOT))
 }
 
 pub(in crate::context_bootstrap) fn window_event_setter<'s>(
@@ -203,7 +229,10 @@ pub(in crate::context_bootstrap) fn window_onerror_getter_function<'s>(
         return;
     }
     super::error::ensure_window_reflecting_body_onerror_handler(scope);
-    rv.set(window_event_handler_slot_value(scope, WINDOW_ONERROR_SLOT));
+    rv.set(
+        window_event_handler_value(scope, args.this(), "onerror")
+            .unwrap_or_else(|| v8::null(scope).into()),
+    );
 }
 
 pub(in crate::context_bootstrap) fn window_onerror_setter_function<'s>(
@@ -214,41 +243,8 @@ pub(in crate::context_bootstrap) fn window_onerror_setter_function<'s>(
     if !require_window_receiver(scope, &args) {
         return;
     }
-    if window_child_context_handle(scope, args.this()).is_some() {
-        set_window_event_handler_value(scope, args.this(), "onerror", args.get(0));
-        rv.set_undefined();
-        return;
-    }
-    set_window_body_onerror_handler_compiled(scope, true);
-    set_window_onerror_handler_value(scope, args.get(0));
+    set_window_event_handler_value(scope, args.this(), "onerror", args.get(0));
     rv.set_undefined();
-}
-
-pub(crate) fn set_window_onerror_handler_value(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-) {
-    set_window_event_handler_slot(scope, WINDOW_ONERROR_SLOT, value);
-}
-
-pub(crate) fn window_body_onerror_handler_is_compiled(scope: &mut v8::PinScope<'_, '_>) -> bool {
-    let global = scope.get_current_context().global(scope);
-    get_private_value(scope, global, WINDOW_BODY_ONERROR_COMPILED_SLOT)
-        .is_some_and(|value| value.boolean_value(scope))
-}
-
-pub(crate) fn set_window_body_onerror_handler_compiled(
-    scope: &mut v8::PinScope<'_, '_>,
-    compiled: bool,
-) {
-    let global = scope.get_current_context().global(scope);
-    let compiled = v8::Boolean::new(scope, compiled);
-    set_private_value(
-        scope,
-        global,
-        WINDOW_BODY_ONERROR_COMPILED_SLOT,
-        compiled.into(),
-    );
 }
 
 pub(in crate::context_bootstrap) fn window_onunhandledrejection_getter_function<'s>(
@@ -259,17 +255,10 @@ pub(in crate::context_bootstrap) fn window_onunhandledrejection_getter_function<
     if !require_window_receiver(scope, &args) {
         return;
     }
-    if window_child_context_handle(scope, args.this()).is_some() {
-        rv.set(
-            window_event_handler_value(scope, args.this(), "onunhandledrejection")
-                .unwrap_or_else(|| v8::null(scope).into()),
-        );
-        return;
-    }
-    rv.set(window_event_handler_slot_value(
-        scope,
-        WINDOW_ONUNHANDLEDREJECTION_SLOT,
-    ));
+    rv.set(
+        window_event_handler_value(scope, args.this(), "onunhandledrejection")
+            .unwrap_or_else(|| v8::null(scope).into()),
+    );
 }
 
 pub(in crate::context_bootstrap) fn window_onunhandledrejection_setter_function<'s>(
@@ -280,12 +269,7 @@ pub(in crate::context_bootstrap) fn window_onunhandledrejection_setter_function<
     if !require_window_receiver(scope, &args) {
         return;
     }
-    if window_child_context_handle(scope, args.this()).is_some() {
-        set_window_event_handler_value(scope, args.this(), "onunhandledrejection", args.get(0));
-        rv.set_undefined();
-        return;
-    }
-    set_window_event_handler_slot(scope, WINDOW_ONUNHANDLEDREJECTION_SLOT, args.get(0));
+    set_window_event_handler_value(scope, args.this(), "onunhandledrejection", args.get(0));
     rv.set_undefined();
 }
 
@@ -297,17 +281,10 @@ pub(in crate::context_bootstrap) fn window_onrejectionhandled_getter_function<'s
     if !require_window_receiver(scope, &args) {
         return;
     }
-    if window_child_context_handle(scope, args.this()).is_some() {
-        rv.set(
-            window_event_handler_value(scope, args.this(), "onrejectionhandled")
-                .unwrap_or_else(|| v8::null(scope).into()),
-        );
-        return;
-    }
-    rv.set(window_event_handler_slot_value(
-        scope,
-        WINDOW_ONREJECTIONHANDLED_SLOT,
-    ));
+    rv.set(
+        window_event_handler_value(scope, args.this(), "onrejectionhandled")
+            .unwrap_or_else(|| v8::null(scope).into()),
+    );
 }
 
 pub(in crate::context_bootstrap) fn window_onrejectionhandled_setter_function<'s>(
@@ -318,42 +295,6 @@ pub(in crate::context_bootstrap) fn window_onrejectionhandled_setter_function<'s
     if !require_window_receiver(scope, &args) {
         return;
     }
-    if window_child_context_handle(scope, args.this()).is_some() {
-        set_window_event_handler_value(scope, args.this(), "onrejectionhandled", args.get(0));
-        rv.set_undefined();
-        return;
-    }
-    set_window_event_handler_slot(scope, WINDOW_ONREJECTIONHANDLED_SLOT, args.get(0));
+    set_window_event_handler_value(scope, args.this(), "onrejectionhandled", args.get(0));
     rv.set_undefined();
-}
-
-fn set_window_event_handler_slot(
-    scope: &mut v8::PinScope<'_, '_>,
-    slot_name: &'static str,
-    value: v8::Local<'_, v8::Value>,
-) {
-    let global = scope.get_current_context().global(scope);
-    let key = v8str(scope, slot_name);
-
-    if value.is_null_or_undefined() {
-        let _ = global.set(scope, key.into(), v8::null(scope).into());
-        return;
-    }
-
-    if value.is_function() {
-        let _ = global.set(scope, key.into(), value);
-        return;
-    }
-
-    let _ = global.set(scope, key.into(), v8::null(scope).into());
-}
-
-fn window_event_handler_slot_value<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    slot_name: &'static str,
-) -> v8::Local<'s, v8::Value> {
-    match global_hidden_value(scope, slot_name) {
-        Some(value) if !value.is_undefined() => value,
-        _ => v8::null(scope).into(),
-    }
 }

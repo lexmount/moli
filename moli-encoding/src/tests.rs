@@ -483,6 +483,12 @@ fn classic_script_bom_wins_over_labels() {
 }
 
 #[test]
+fn utf8_decode_removes_only_a_utf8_bom() {
+    assert_eq!(decode_utf8(b"\xef\xbb\xbfdiv {}"), "div {}");
+    assert_eq!(decode_utf8(b"\xff\xfed\0i\0v\0"), "��d\0i\0v\0");
+}
+
+#[test]
 fn url_query_encoder_uses_selected_legacy_encoding() {
     let encoded =
         encode_url_query_for_legacy_web("/search?q=家居&safe=a+b%20c#frag", encoding_rs::GBK);
@@ -711,6 +717,89 @@ fn bom_less_utf16be_xml_declaration_is_detected() {
 
     assert_eq!(encoding, "UTF-16BE");
     assert!(text.contains("hi"), "decoded as {text:?}");
+}
+
+#[test]
+fn ascii_xml_declaration_selects_its_encoding_after_meta_prescan() {
+    let mut input = br#"<?xml version="1.0" encoding="windows-1251"?><p>"#.to_vec();
+    input.extend_from_slice(&encoding_rs::WINDOWS_1251.encode("ж").0);
+    let (text, encoding) = decode_html_document(&input, &[]);
+
+    assert_eq!(encoding, "windows-1251");
+    assert!(text.ends_with("ж"), "decoded as {text:?}");
+}
+
+#[test]
+fn ascii_xml_declaration_uses_the_compatibility_grammar() {
+    for declaration in [
+        b"<?xml encoding='cp1251'>".as_slice(),
+        b"<?xmlencoding=\"windows-1251\">",
+        b"<?xmla<encoding=\"windows-1251\">",
+        b"<?xml encoding\x01=\x00\"windows-1251\">",
+    ] {
+        assert_eq!(
+            decode_html_document(declaration, &[]).1,
+            "windows-1251",
+            "declaration={declaration:?}"
+        );
+    }
+}
+
+#[test]
+fn ascii_xml_declaration_rejects_near_misses() {
+    for declaration in [
+        b"<?XML encoding=\"windows-1251\">".as_slice(),
+        b"<?xml ENCODING=\"windows-1251\">",
+        b"<?xml encodingencoding=\"windows-1251\">",
+        b"<?xml encoding=encoding=\"windows-1251\">",
+        b"<?xml encoding=windows-1251>",
+        b"<?xml encoding=\" windows-1251\">",
+        b"<?xml>encoding=\"windows-1251\">",
+        b"<?xml encoding=\"windows-1251'>",
+    ] {
+        assert_eq!(
+            decode_html_document(declaration, &[]).1,
+            "windows-1252",
+            "declaration={declaration:?}"
+        );
+    }
+}
+
+#[test]
+fn meta_and_transport_encodings_precede_ascii_xml_declarations() {
+    let input = br#"<?xml encoding="windows-1251"?><meta charset="windows-1253">"#;
+    assert_eq!(decode_html_document(input, &[]).1, "windows-1253");
+
+    let headers = vec![(
+        "Content-Type".to_owned(),
+        "text/html; charset=UTF-8".to_owned(),
+    )];
+    assert_eq!(decode_html_document(input, &headers).1, "UTF-8");
+}
+
+#[test]
+fn ascii_xml_declaration_rewrites_utf16_and_preserves_replacement() {
+    assert_eq!(
+        decode_html_document(br#"<?xml encoding="UTF-16">"#, &[]).1,
+        "UTF-8"
+    );
+    assert_eq!(
+        decode_html_document(br#"<?xml encoding="ISO-2022-KR">"#, &[]).1,
+        "replacement"
+    );
+}
+
+#[test]
+fn ascii_xml_declaration_can_finish_after_the_prescan_boundary() {
+    let mut input = br#"<?xml version="1.0" "#.to_vec();
+    input.resize(HTML_META_CHARSET_PRESCAN_LIMIT + 1, b' ');
+    input.extend_from_slice(br#"encoding="windows-1251"><p>"#);
+    input.extend_from_slice(&encoding_rs::WINDOWS_1251.encode("ж").0);
+
+    let (text, encoding) = decode_html_document(&input, &[]);
+
+    assert_eq!(encoding, "windows-1251");
+    assert!(text.ends_with("ж"), "decoded as {text:?}");
 }
 
 #[test]

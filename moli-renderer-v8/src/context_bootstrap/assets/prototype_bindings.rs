@@ -14,8 +14,11 @@ use super::super::{
     crypto::install_crypto_template_bindings,
     css_runtime::install_css_typed_om_template_bindings,
     css_stylesheet_runtime::install_css_stylesheet_template_bindings,
+    dom_quad::install_dom_quad_template_bindings,
     dom_rect::install_dom_rect_template_bindings,
+    dom_rect_list::install_dom_rect_list_template_bindings,
     event_template::install_event_template_bindings,
+    exposed_interfaces::TemplateBuildProfile,
     file_api::install_file_api_template_bindings,
     geometry_runtime::install_geometry_template_bindings,
     idle_detection::install_idle_detector_template_bindings,
@@ -402,18 +405,21 @@ pub(super) fn install_constructor_template_bindings<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     template: v8::Local<'s, v8::FunctionTemplate>,
     spec: ConstructorSpec,
+    profile: TemplateBuildProfile,
 ) {
     install_node_mixin_unscopables(scope, template, spec.name);
     install_constructor_constant_template_bindings(scope, template, spec.name);
     install_css_style_declaration_template_accessors(scope, template, spec.name);
     install_abort_template_bindings(scope, template, spec.name);
     install_attr_template_bindings(scope, template, spec.name);
+    install_dom_quad_template_bindings(scope, template, spec.name);
     install_dom_rect_template_bindings(scope, template, spec.name);
+    install_dom_rect_list_template_bindings(scope, template, spec.name);
     install_dom_exception_template_bindings(scope, template, spec.name);
     install_dom_implementation_template_bindings(scope, template, spec.name);
     install_custom_element_registry_template_bindings(scope, template, spec.name);
     install_text_codec_template_bindings(scope, template, spec.name);
-    install_geometry_template_bindings(scope, template, spec.name);
+    install_geometry_template_bindings(scope, template, spec.name, profile);
     if spec.name == "ImageData" {
         install_image_data_template_bindings(scope, template);
     }
@@ -431,6 +437,9 @@ pub(super) fn install_constructor_template_bindings<'s>(
     }
     if spec.name == "IdleDetector" {
         install_idle_detector_template_bindings(scope, template);
+    }
+    if spec.name == "IdleDeadline" {
+        crate::window_host::install_idle_deadline_template_bindings(scope, template);
     }
     if spec.name == "Notification" {
         install_notification_template_bindings(scope, template);

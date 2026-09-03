@@ -20,18 +20,43 @@ use crate::{
 impl JsContextHost {
     pub(crate) fn plan_and_commit_current_main_runtime_script_start(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         node: crate::document_runtime::DomHandle,
         host_script_handle: &str,
     ) -> std::result::Result<Option<CommittedInlineClassicScript>, String> {
-        let runtime = unsafe { &mut *self.runtime };
+        let requires_trusted_types = self.requires_trusted_types_for_script(scope);
+        let host_ptr: *mut JsContextHost = self;
+        let runtime_ptr = self.runtime;
+        if requires_trusted_types {
+            let Some(reservation) = (unsafe { &mut *runtime_ptr })
+                .begin_runtime_script_text_preparation(node, host_script_handle)
+            else {
+                return Ok(None);
+            };
+            let source = unsafe { &*runtime_ptr }
+                .dom_host()
+                .dom()
+                .direct_text_content(node)
+                .unwrap_or_default();
+            let prepared = crate::native_bridge::element::prepare_trusted_script_text(
+                scope, host_ptr, node, &source,
+            );
+            unsafe { &mut *runtime_ptr }.release_runtime_script_text_preparation(reservation);
+            if prepared.is_none() {
+                return Ok(None);
+            }
+        }
+
+        let runtime = unsafe { &mut *runtime_ptr };
         let Some(plan) = runtime.host_plan_script_start(node, host_script_handle) else {
             return Ok(None);
         };
-        self.commit_current_main_runtime_script_start(runtime, plan)
+        self.commit_current_main_runtime_script_start(scope, runtime, plan)
     }
 
     pub(crate) fn commit_current_main_runtime_script_start(
         &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
         runtime: &mut DocumentRuntime,
         plan: RuntimeScriptStartPlan,
     ) -> std::result::Result<Option<CommittedInlineClassicScript>, String> {
@@ -81,6 +106,30 @@ impl JsContextHost {
                     host_script_handle,
                     source,
                 )))
+            }
+            PreparedRuntimeScriptStartCommit::InlineImportMap {
+                node,
+                base_url,
+                source,
+            } => {
+                debug_assert!(load_delay_binding.is_none());
+                let nonce = crate::host::script_element_nonce_for_csp(runtime.dom_host(), node)
+                    .map(str::to_owned);
+                let request =
+                    crate::content_security_policy::ContentSecurityPolicyScriptElementRequest {
+                        nonce: nonce.as_deref(),
+                        integrity: None,
+                        parser_inserted: false,
+                    };
+                let host_ptr: *mut JsContextHost = self;
+                if let Some(source) =
+                    crate::native_bridge::element::inline_script_source_for_execution(
+                        scope, host_ptr, node, &source, request,
+                    )
+                {
+                    runtime.register_runtime_owned_import_map_source(&source, &base_url);
+                }
+                Ok(None)
             }
             PreparedRuntimeScriptStartCommit::Admission {
                 reservation,

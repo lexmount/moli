@@ -301,7 +301,7 @@ pub(super) fn notify_font_face_set_owners_of_load<'s>(
     }
     let loaded_faces = v8::Array::new(scope, 1);
     let _ = loaded_faces.set_index(scope, 0, face.into());
-    let completion_event_type = if font_face_load_failed(scope, face) {
+    let completion_event_type = if super::font_face::font_face_load_failed(scope, face) {
         "loadingerror"
     } else {
         "loadingdone"
@@ -314,13 +314,4 @@ pub(super) fn notify_font_face_set_owners_of_load<'s>(
         let _ =
             dispatch_font_face_set_event(scope, owner, completion_event_type, Some(loaded_faces));
     }
-}
-
-fn font_face_load_failed<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    face: v8::Local<'s, v8::Object>,
-) -> bool {
-    get_private_value(scope, face, FONT_FACE_STATUS_SLOT)
-        .and_then(|value| v8::Local::<v8::String>::try_from(value).ok())
-        .is_some_and(|status| status.to_rust_string_lossy(scope) == "error")
 }

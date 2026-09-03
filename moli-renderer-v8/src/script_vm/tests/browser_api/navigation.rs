@@ -380,6 +380,13 @@ fn performance_entries_hide_backing_slots_and_ignore_spoofing() {
                 __moliPerformanceNavigationTimingType: "reload",
                 __moliPerformanceNavigationTimingLoadEventEnd: 99
               };
+              const getterResult = (getter, receiver) => {
+                try {
+                  return stringify(getter.call(receiver));
+                } catch (error) {
+                  return error.name;
+                }
+              };
               return JSON.stringify({
                 initialNavigationNames,
                 initialMarkNames,
@@ -427,10 +434,10 @@ fn performance_entries_hide_backing_slots_and_ignore_spoofing() {
                 navigationDuration: navigation.duration,
                 byRealMark: performance.getEntriesByName("real-mark", "mark").length,
                 bySpoofMark: performance.getEntriesByName("spoof", "resource").length,
-                fakeName: String(entryNameGetter.call(fake)),
+                fakeName: getterResult(entryNameGetter, fake),
                 fakeNavigationType: String(navTypeGetter.call(fake)),
                 fakeLoadEventEnd: String(navLoadGetter.call(fake)),
-                fakeResourceValues: resourceGetters.map(getter => getter.call({})).map(stringify).join("|")
+                fakeResourceValues: resourceGetters.map(getter => getterResult(getter, {})).join("|")
               });
             })()
             "#,
@@ -439,7 +446,217 @@ fn performance_entries_hide_backing_slots_and_ignore_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"initialNavigationNames":[],"initialMarkNames":[],"initialMeasureNames":[],"markName":"real-mark","markEntryType":"mark","markStartSpoofIgnored":true,"markDuration":0,"markDetailNull":true,"measureDetail":"real","entryDescriptors":["name:true:function:get name:0:undefined:true:true:false","entryType:true:function:get entryType:0:undefined:true:true:false","startTime:true:function:get startTime:0:undefined:true:true:false","duration:true:function:get duration:0:undefined:true:true:false"],"detailDescriptors":["detail:true:function:get detail:0:undefined:true:true:false","detail:true:function:get detail:0:undefined:true:true:false"],"resourceDescriptors":["initiatorType:true:function:get initiatorType:0:undefined:true:true:false","nextHopProtocol:true:function:get nextHopProtocol:0:undefined:true:true:false","workerStart:true:function:get workerStart:0:undefined:true:true:false","redirectStart:true:function:get redirectStart:0:undefined:true:true:false","redirectEnd:true:function:get redirectEnd:0:undefined:true:true:false","fetchStart:true:function:get fetchStart:0:undefined:true:true:false","domainLookupStart:true:function:get domainLookupStart:0:undefined:true:true:false","domainLookupEnd:true:function:get domainLookupEnd:0:undefined:true:true:false","connectStart:true:function:get connectStart:0:undefined:true:true:false","connectEnd:true:function:get connectEnd:0:undefined:true:true:false","secureConnectionStart:true:function:get secureConnectionStart:0:undefined:true:true:false","requestStart:true:function:get requestStart:0:undefined:true:true:false","responseStart:true:function:get responseStart:0:undefined:true:true:false","responseEnd:true:function:get responseEnd:0:undefined:true:true:false","transferSize:true:function:get transferSize:0:undefined:true:true:false","encodedBodySize:true:function:get encodedBodySize:0:undefined:true:true:false","decodedBodySize:true:function:get decodedBodySize:0:undefined:true:true:false","renderBlockingStatus:true:function:get renderBlockingStatus:0:undefined:true:true:false","responseStatus:true:function:get responseStatus:0:undefined:true:true:false","contentType:true:function:get contentType:0:undefined:true:true:false"],"navigationType":"navigate","navigationLoadEventEnd":0,"navigationDuration":0,"byRealMark":1,"bySpoofMark":0,"fakeName":"undefined","fakeNavigationType":"undefined","fakeLoadEventEnd":"undefined","fakeResourceValues":"undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined|undefined"}"#
+        r#"{"initialNavigationNames":[],"initialMarkNames":[],"initialMeasureNames":[],"markName":"real-mark","markEntryType":"mark","markStartSpoofIgnored":true,"markDuration":0,"markDetailNull":true,"measureDetail":"real","entryDescriptors":["name:true:function:get name:0:undefined:true:true:false","entryType:true:function:get entryType:0:undefined:true:true:false","startTime:true:function:get startTime:0:undefined:true:true:false","duration:true:function:get duration:0:undefined:true:true:false"],"detailDescriptors":["detail:true:function:get detail:0:undefined:true:true:false","detail:true:function:get detail:0:undefined:true:true:false"],"resourceDescriptors":["initiatorType:true:function:get initiatorType:0:undefined:true:true:false","nextHopProtocol:true:function:get nextHopProtocol:0:undefined:true:true:false","workerStart:true:function:get workerStart:0:undefined:true:true:false","redirectStart:true:function:get redirectStart:0:undefined:true:true:false","redirectEnd:true:function:get redirectEnd:0:undefined:true:true:false","fetchStart:true:function:get fetchStart:0:undefined:true:true:false","domainLookupStart:true:function:get domainLookupStart:0:undefined:true:true:false","domainLookupEnd:true:function:get domainLookupEnd:0:undefined:true:true:false","connectStart:true:function:get connectStart:0:undefined:true:true:false","connectEnd:true:function:get connectEnd:0:undefined:true:true:false","secureConnectionStart:true:function:get secureConnectionStart:0:undefined:true:true:false","requestStart:true:function:get requestStart:0:undefined:true:true:false","responseStart:true:function:get responseStart:0:undefined:true:true:false","responseEnd:true:function:get responseEnd:0:undefined:true:true:false","transferSize:true:function:get transferSize:0:undefined:true:true:false","encodedBodySize:true:function:get encodedBodySize:0:undefined:true:true:false","decodedBodySize:true:function:get decodedBodySize:0:undefined:true:true:false","renderBlockingStatus:true:function:get renderBlockingStatus:0:undefined:true:true:false","responseStatus:true:function:get responseStatus:0:undefined:true:true:false","contentType:true:function:get contentType:0:undefined:true:true:false"],"navigationType":"navigate","navigationLoadEventEnd":0,"navigationDuration":0,"byRealMark":1,"bySpoofMark":0,"fakeName":"TypeError","fakeNavigationType":"undefined","fakeLoadEventEnd":"undefined","fakeResourceValues":"TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError|TypeError"}"#
+    );
+}
+
+#[test]
+fn performance_entry_ids_follow_the_current_navigation() {
+    let mut vm = new_storage_test_vm("https://performance-entry-identity.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const navigation = performance.getEntriesByType("navigation")[0];
+              const mark = performance.mark("identity-mark", { startTime: 1 });
+              const measure = performance.measure("identity-measure", {
+                start: 1,
+                duration: 2
+              });
+              const detached = new PerformanceMark("detached", { startTime: 3 });
+              const markJson = mark.toJSON();
+              const descriptors = ["id", "navigationId"].map(name => {
+                const descriptor = Object.getOwnPropertyDescriptor(
+                  PerformanceEntry.prototype,
+                  name
+                );
+                return [
+                  name,
+                  typeof descriptor?.get,
+                  descriptor?.get?.name,
+                  descriptor?.get?.length,
+                  typeof descriptor?.set,
+                  descriptor?.enumerable,
+                  descriptor?.configurable
+                ].join(":");
+              });
+              return JSON.stringify({
+                descriptors,
+                navigation:
+                  Number.isSafeInteger(navigation.id)
+                  && navigation.id > 0
+                  && navigation.navigationId === navigation.id,
+                queued:
+                  Number.isSafeInteger(mark.id)
+                  && Number.isSafeInteger(measure.id)
+                  && navigation.id < mark.id
+                  && mark.id < measure.id
+                  && mark.navigationId === navigation.id
+                  && measure.navigationId === navigation.id,
+                detached: detached.id === 0 && detached.navigationId === 0,
+                json:
+                  Object.keys(markJson).join(",") ===
+                    "id,name,entryType,startTime,duration,navigationId"
+                  && markJson.id === mark.id
+                  && markJson.navigationId === navigation.id
+              });
+            })()
+            "#,
+        )
+        .expect("PerformanceEntry identity probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptors":["id:function:get id:0:undefined:true:true","navigationId:function:get navigationId:0:undefined:true:true"],"navigation":true,"queued":true,"detached":true,"json":true}"#
+    );
+}
+
+#[test]
+fn performance_user_timing_enforces_mark_and_measure_boundaries() {
+    let mut vm = new_storage_test_vm("https://performance-user-timing-boundaries.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const capture = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return `${error.name}:${error.code}`;
+                }
+              };
+              performance.mark("later", { startTime: 5 });
+              const sourceDetail = { value: 1 };
+              const cloned = performance.measure("cloned", {
+                start: 1,
+                duration: 2,
+                detail: sourceDetail
+              });
+              sourceDetail.value = 9;
+              const negative = performance.measure(
+                "negative-duration",
+                "later",
+                "navigationStart"
+              );
+              const legacyPendingNames = [
+                "unloadEventStart",
+                "unloadEventEnd",
+                "redirectStart",
+                "redirectEnd",
+                "secureConnectionStart",
+                "domInteractive",
+                "domContentLoadedEventStart",
+                "domContentLoadedEventEnd",
+                "domComplete",
+                "loadEventStart",
+                "loadEventEnd"
+              ];
+              return JSON.stringify({
+                reservedMark: capture(() => performance.mark("navigationStart")),
+                missingMark: capture(() => performance.measure("missing", "does-not-exist")),
+                numericLegacyMark: capture(() => performance.measure("number", 51.15, "later")),
+                unavailableTiming: capture(() => performance.measure("pending", "redirectStart")),
+                detailOnlyOptions: capture(() => performance.measure("detail-only", { detail: 1 })),
+                overSpecifiedOptions: capture(() => performance.measure("all", {
+                  start: 1,
+                  duration: 2,
+                  end: 3
+                })),
+                negativeMark: capture(() => performance.mark("bad-mark", { startTime: -1 })),
+                infiniteMark: capture(() => performance.mark("bad-infinite", { startTime: Infinity })),
+                negativeBoundary: capture(() => performance.measure("bad-boundary", { start: -1 })),
+                negativeDuration: negative.duration,
+                navigationStartTime: performance.measure("from-navigation", "navigationStart").startTime,
+                pendingTimingStartsAtZero: legacyPendingNames.every(name => performance.timing[name] === 0),
+                clonedDetail: `${cloned.detail.value}:${cloned.detail === sourceDetail}`,
+                navigationEntryIsNotMark: capture(() => performance.measure("entry-name", location.href))
+              });
+            })()
+            "#,
+        )
+        .expect("User Timing boundary probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"reservedMark":"SyntaxError:12","missingMark":"SyntaxError:12","numericLegacyMark":"SyntaxError:12","unavailableTiming":"InvalidAccessError:15","detailOnlyOptions":"TypeError:undefined","overSpecifiedOptions":"TypeError:undefined","negativeMark":"TypeError:undefined","infiniteMark":"TypeError:undefined","negativeBoundary":"TypeError:undefined","negativeDuration":-5,"navigationStartTime":0,"pendingTimingStartsAtZero":true,"clonedDetail":"1:false","navigationEntryIsNotMark":"SyntaxError:12"}"#
+    );
+}
+
+#[test]
+fn performance_mark_constructor_creates_detached_structured_entries() {
+    let mut vm = new_storage_test_vm("https://performance-mark-constructor.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const capture = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return `${error.name}:${error.code}`;
+                }
+              };
+              const sourceDetail = { state: "before" };
+              const entry = new PerformanceMark("detached", {
+                startTime: 2,
+                detail: sourceDetail
+              });
+              sourceDetail.state = "after";
+              class DerivedPerformanceMark extends PerformanceMark {}
+              const derived = new DerivedPerformanceMark("derived", { startTime: 3 });
+              return JSON.stringify({
+                shape: [
+                  entry instanceof PerformanceEntry,
+                  entry instanceof PerformanceMark,
+                  Object.prototype.toString.call(entry),
+                  entry.name,
+                  entry.entryType,
+                  entry.startTime,
+                  entry.duration
+                ].join(":"),
+                detail: `${entry.detail.state}:${entry.detail === entry.detail}:${entry.detail === sourceDetail}`,
+                timelineEntries: performance.getEntriesByName("detached", "mark").length,
+                derived: [
+                  derived instanceof DerivedPerformanceMark,
+                  derived instanceof PerformanceMark,
+                  Object.getPrototypeOf(derived) === DerivedPerformanceMark.prototype,
+                  derived.name,
+                  derived.startTime
+                ].join(":"),
+                constructorInheritance:
+                  Object.getPrototypeOf(PerformanceMark) === PerformanceEntry
+                  && Object.getPrototypeOf(PerformanceMeasure) === PerformanceEntry,
+                detailBrand: capture(() =>
+                  Object.getOwnPropertyDescriptor(PerformanceMark.prototype, "detail")
+                    .get.call(PerformanceMark.prototype)),
+                methodBrands: [
+                  performance.mark,
+                  performance.clearMarks,
+                  performance.measure,
+                  performance.clearMeasures
+                ].map(method => capture(() => method.call(null, "unbound"))).join("|"),
+                withoutNew: capture(() => PerformanceMark("call")),
+                missingName: capture(() => new PerformanceMark()),
+                negativeStart: capture(() => new PerformanceMark("negative", { startTime: -1 })),
+                infiniteStart: capture(() => new PerformanceMark("infinite", { startTime: Infinity })),
+                reservedName: capture(() => new PerformanceMark("navigationStart")),
+                cloneError: capture(() => new PerformanceMark("clone", {
+                  detail: { value: Symbol() }
+                }))
+              });
+            })()
+            "#,
+        )
+        .expect("PerformanceMark constructor probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"shape":"true:true:[object PerformanceMark]:detached:mark:2:0","detail":"before:true:false","timelineEntries":0,"derived":"true:true:true:derived:3","constructorInheritance":true,"detailBrand":"TypeError:undefined","methodBrands":"TypeError:undefined|TypeError:undefined|TypeError:undefined|TypeError:undefined","withoutNew":"TypeError:undefined","missingName":"TypeError:undefined","negativeStart":"TypeError:undefined","infiniteStart":"TypeError:undefined","reservedName":"SyntaxError:12","cloneError":"DataCloneError:25"}"#
     );
 }
 
@@ -470,6 +687,17 @@ fn performance_entry_to_json_returns_native_base_snapshot() {
               } catch (error) {
                 fakeError = error.name;
               }
+              const markJson = mark.toJSON();
+              const measureJson = measure.toJSON();
+              const identities =
+                markJson.id === mark.id
+                && markJson.navigationId === mark.navigationId
+                && measureJson.id === measure.id
+                && measureJson.navigationId === measure.navigationId;
+              delete markJson.id;
+              delete markJson.navigationId;
+              delete measureJson.id;
+              delete measureJson.navigationId;
               return JSON.stringify({
                 descriptor: [
                   descriptor.value.name,
@@ -482,8 +710,9 @@ fn performance_entry_to_json_returns_native_base_snapshot() {
                   && PerformanceMeasure.prototype.toJSON === descriptor.value
                   && !Object.prototype.hasOwnProperty.call(PerformanceMark.prototype, "toJSON")
                   && !Object.prototype.hasOwnProperty.call(PerformanceMeasure.prototype, "toJSON"),
-                mark: mark.toJSON(),
-                measure: measure.toJSON(),
+                mark: markJson,
+                measure: measureJson,
+                identities,
                 fakeError
               });
             })()
@@ -493,7 +722,7 @@ fn performance_entry_to_json_returns_native_base_snapshot() {
 
     assert_eq!(
         result,
-        r#"{"descriptor":"toJSON:0:true:true:true","inherited":true,"mark":{"name":"json-mark","entryType":"mark","startTime":12,"duration":0},"measure":{"name":"json-measure","entryType":"measure","startTime":3,"duration":4},"fakeError":"TypeError"}"#
+        r#"{"descriptor":"toJSON:0:true:true:true","inherited":true,"mark":{"name":"json-mark","entryType":"mark","startTime":12,"duration":0},"measure":{"name":"json-measure","entryType":"measure","startTime":3,"duration":4},"identities":true,"fakeError":"TypeError"}"#
     );
 }
 
@@ -542,10 +771,12 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
                 fakeToJSONError = error.name;
               }
               const expectedJsonKeys = [
+                "id",
                 "name",
                 "entryType",
                 "startTime",
                 "duration",
+                "navigationId",
                 "initiatorType",
                 "nextHopProtocol",
                 "workerStart",
@@ -581,6 +812,11 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
                 transferSizePositive: entry.transferSize > entry.encodedBodySize,
                 encodedBodySize: entry.encodedBodySize,
                 decodedBodySize: entry.decodedBodySize,
+                identity:
+                  Number.isSafeInteger(entry.id)
+                  && entry.id > 0
+                  && entry.navigationId ===
+                    performance.getEntriesByType("navigation")[0].id,
                 jsonOwnKeys: expectedJsonKeys.every(key =>
                   Object.prototype.hasOwnProperty.call(json, key)),
                 jsonMatchesEntry: expectedJsonKeys.every(key => json[key] === entry[key]),
@@ -600,7 +836,7 @@ fn parser_script_network_results_populate_buffered_resource_timing_snapshots() {
 
     assert_eq!(
         result,
-        r#"{"length":1,"name":"https://resource-timing-script.test/app.js","entryType":"resource","initiatorType":"script","instance":true,"responseStatus":200,"contentType":"application/javascript","renderBlockingStatusValid":true,"transferSizePositive":true,"encodedBodySize":7,"decodedBodySize":7,"jsonOwnKeys":true,"jsonMatchesEntry":true,"toJSONDescriptor":"toJSON:0:true:true:true","fakeToJSONError":"TypeError"}"#
+        r#"{"length":1,"name":"https://resource-timing-script.test/app.js","entryType":"resource","initiatorType":"script","instance":true,"responseStatus":200,"contentType":"application/javascript","renderBlockingStatusValid":true,"transferSizePositive":true,"encodedBodySize":7,"decodedBodySize":7,"identity":true,"jsonOwnKeys":true,"jsonMatchesEntry":true,"toJSONDescriptor":"toJSON:0:true:true:true","fakeToJSONError":"TypeError"}"#
     );
 }
 
@@ -625,6 +861,13 @@ fn performance_root_slots_ignore_reflection_and_spoofing() {
                   && descriptor.enumerable === enumerable
                   && descriptor.configurable === true
                   && !Object.prototype.hasOwnProperty.call(receiver, name);
+              };
+              const capture = callback => {
+                try {
+                  return String(callback());
+                } catch (error) {
+                  return error.name;
+                }
               };
               const timing = performance.timing;
               const navigation = performance.navigation;
@@ -689,8 +932,8 @@ fn performance_root_slots_ignore_reflection_and_spoofing() {
                 eventCountsFirstEntry: `${firstEntry[0]}:${firstEntry[1]}`,
                 jsonTimeOriginStable: json.timeOrigin === timeOrigin,
                 jsonNavigationType: json.navigation.type,
-                fakeTimeOrigin: String(timeOriginGetter.call(fakePerformance)),
-                fakeTiming: String(timingGetter.call(fakePerformance)),
+                fakeTimeOrigin: capture(() => timeOriginGetter.call(fakePerformance)),
+                fakeTiming: capture(() => timingGetter.call(fakePerformance)),
                 fakeNavigationType: String(navigationTypeGetter.call(fakeNavigation)),
                 fakeEventCountsGet: String(eventCountsPrototype.get.call(fakeEventCounts, "click")),
                 fakeEventCountsValue: String(eventCountsPrototype.values.call(fakeEventCounts).next().value)
@@ -702,7 +945,7 @@ fn performance_root_slots_ignore_reflection_and_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"initialPerformanceNames":[],"initialNavigationNames":[],"initialEventCountsNames":[],"timeOriginSpoofIgnored":true,"timingStable":true,"navigationStable":true,"eventCountsStable":true,"performanceDescriptorsStable":true,"entriesSpoofIgnored":1,"navigationType":0,"navigationRedirectCount":0,"navigationDescriptorsStable":true,"eventCountsClick":0,"eventCountsFirstValue":0,"eventCountsFirstEntry":"auxclick:0","jsonTimeOriginStable":true,"jsonNavigationType":0,"fakeTimeOrigin":"undefined","fakeTiming":"undefined","fakeNavigationType":"undefined","fakeEventCountsGet":"0","fakeEventCountsValue":"0"}"#
+        r#"{"initialPerformanceNames":[],"initialNavigationNames":[],"initialEventCountsNames":[],"timeOriginSpoofIgnored":true,"timingStable":true,"navigationStable":true,"eventCountsStable":true,"performanceDescriptorsStable":true,"entriesSpoofIgnored":1,"navigationType":0,"navigationRedirectCount":0,"navigationDescriptorsStable":true,"eventCountsClick":0,"eventCountsFirstValue":0,"eventCountsFirstEntry":"auxclick:0","jsonTimeOriginStable":true,"jsonNavigationType":0,"fakeTimeOrigin":"TypeError","fakeTiming":"TypeError","fakeNavigationType":"undefined","fakeEventCountsGet":"0","fakeEventCountsValue":"0"}"#
     );
 }
 
@@ -1051,6 +1294,61 @@ fn performance_navigation_timing_updates_at_load_event_end() {
     assert_eq!(
         after,
         r#"{"durationMatchesLoadEnd":true,"durationPositive":true,"legacyLoadMatches":true,"domOrder":true}"#
+    );
+}
+
+#[test]
+fn performance_navigation_lifecycle_timestamps_are_write_once_per_navigation() {
+    let mut vm = new_storage_test_vm("https://performance-navigation-write-once.test/");
+
+    vm.dispatch_document_lifecycle_event("DOMContentLoaded")
+        .expect("first DOMContentLoaded should update navigation timing");
+    vm.dispatch_window_load_event()
+        .expect("first load should update navigation timing");
+    vm.eval(
+        r#"
+        globalThis.__initialNavigationLifecycleTiming = (() => {
+          const navigation = performance.getEntriesByType("navigation")[0];
+          return [
+            navigation.domInteractive,
+            navigation.domContentLoadedEventStart,
+            navigation.domContentLoadedEventEnd,
+            navigation.domComplete,
+            navigation.loadEventStart,
+            navigation.loadEventEnd
+          ];
+        })();
+        "#,
+    )
+    .expect("initial navigation lifecycle timing should be captured");
+
+    vm.dispatch_document_lifecycle_event("DOMContentLoaded")
+        .expect("repeated DOMContentLoaded should remain dispatchable");
+    vm.dispatch_window_load_event()
+        .expect("repeated load should remain dispatchable");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              const navigation = performance.getEntriesByType("navigation")[0];
+              const current = [
+                navigation.domInteractive,
+                navigation.domContentLoadedEventStart,
+                navigation.domContentLoadedEventEnd,
+                navigation.domComplete,
+                navigation.loadEventStart,
+                navigation.loadEventEnd
+              ];
+              return current.every(
+                (value, index) =>
+                  value === globalThis.__initialNavigationLifecycleTiming[index]
+              );
+            })()
+            "#,
+        )
+        .expect("repeated navigation lifecycle timing should be compared"),
+        "true"
     );
 }
 
@@ -1663,9 +1961,16 @@ fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer()
             r##"
             (() => {
               const log = [];
-              addEventListener("beforeunload", () => log.push("beforeunload"));
-              addEventListener("pagehide", event => log.push(`pagehide:${event.persisted}`));
-              addEventListener("unload", () => log.push("unload"));
+              addEventListener("beforeunload", event => log.push(`beforeunload:${event.isTrusted}`));
+              addEventListener("pagehide", event => log.push([
+                "pagehide",
+                event instanceof PageTransitionEvent,
+                event.persisted,
+                event.bubbles,
+                event.cancelable,
+                event.isTrusted
+              ].join(":")));
+              addEventListener("unload", event => log.push(`unload:${event.isTrusted}`));
               navigation.navigate("/next-document");
               return log.join("|");
             })()
@@ -1673,10 +1978,66 @@ fn cross_document_unload_lifecycle_orders_pagehide_before_unload_without_timer()
         )
         .expect("cross-document unload lifecycle should evaluate");
 
-    assert_eq!(lifecycle, "beforeunload|pagehide:false|unload");
+    assert_eq!(
+        lifecycle,
+        "beforeunload:true|pagehide:true:false:true:true:true|unload:true"
+    );
     assert!(
         !vm.has_ready_timeout(),
         "pagehide is part of the unload step and must not create an independent timer task"
+    );
+}
+
+#[test]
+fn before_unload_handler_coerces_its_result_while_window_event_is_current() {
+    let mut vm = new_storage_test_vm("https://example.com/base");
+
+    let result = vm
+        .eval(
+            r##"
+            (() => {
+              let customCurrent = false;
+              onbeforeunload = event => ({
+                toString() {
+                  customCurrent = window.event === event;
+                  return "custom";
+                }
+              });
+              const custom = new CustomEvent("beforeunload", { cancelable: true });
+              const customDispatchResult = dispatchEvent(custom);
+
+              let realEvent;
+              const realSteps = [];
+              onbeforeunload = event => {
+                realEvent = event;
+                realSteps.push([
+                  event instanceof BeforeUnloadEvent,
+                  event.cancelable,
+                  event.returnValue,
+                  window.event === event
+                ]);
+                return {
+                  toString() {
+                    realSteps.push(["coerce", window.event === event]);
+                    return "leave";
+                  }
+                };
+              };
+              navigation.navigate("/next-document");
+
+              return JSON.stringify({
+                custom: [customCurrent, custom.defaultPrevented, customDispatchResult],
+                realSteps,
+                real: [realEvent.defaultPrevented, realEvent.returnValue]
+              });
+            })()
+            "##,
+        )
+        .expect("beforeunload handler return processing should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"custom":[true,false,true],"realSteps":[[true,true,"",true],["coerce",true]],"real":[true,"leave"]}"#
     );
 }
 #[test]

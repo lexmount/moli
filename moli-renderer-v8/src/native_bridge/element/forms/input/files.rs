@@ -76,7 +76,7 @@ fn input_files_getter_from_object<'s>(
         rv.set_null();
         return;
     };
-    if !element.is_html_input() || element.input_type() != "file" {
+    if !element.is_html_input() || element.input_type() != InputType::File {
         rv.set_null();
         return;
     }
@@ -123,7 +123,7 @@ fn input_files_setter_on_object<'s>(
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
         return;
     };
-    if !element.is_html_input() || element.input_type() != "file" {
+    if !element.is_html_input() || element.input_type() != InputType::File {
         return;
     }
     if value.is_null_or_undefined() {

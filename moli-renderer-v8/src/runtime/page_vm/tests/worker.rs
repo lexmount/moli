@@ -2910,6 +2910,88 @@ async fn worker_pending_activity_diagnostics_split_loading_and_running_worker_is
 }
 
 #[tokio::test]
+async fn external_dedicated_module_worker_retains_creator_csp_for_static_imports() {
+    run_page_vm_async_test(async move {
+        let (dependency_base_url, dependency_server) = spawn_path_response_http_server(vec![(
+            "/dependency.js",
+            "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *",
+            "export const value = 'unexpected';".to_owned(),
+            Duration::ZERO,
+        )])
+        .await;
+        let dependency_url = format!("{dependency_base_url}/dependency.js");
+        let worker_source = format!(
+            r#"
+            import {dependency_url:?};
+            postMessage("unexpected");
+        "#
+        );
+        let (base_url, server) = spawn_path_response_http_server(vec![(
+            "/worker.js",
+            "HTTP/1.1 200 OK",
+            worker_source,
+            Duration::ZERO,
+        )])
+        .await;
+        let document_url = Url::parse(&format!("{base_url}/page.html")).expect("document url");
+        let mut page_vm = test_page_vm_with_document_url(document_url.clone());
+        page_vm.vm_mut().set_main_navigation_policy_container(
+            crate::document_runtime::DocumentPolicyContainer::from_navigation_response_headers(
+                &[(
+                    "Content-Security-Policy".to_owned(),
+                    "worker-src 'self'; script-src data:".to_owned(),
+                )],
+                &document_url,
+            ),
+        );
+        let local_executor = page_vm.local_executor.clone();
+
+        local_executor
+            .run(async move {
+                page_vm.vm_mut().eval(
+                    r#"
+                    (() => {
+                        globalThis.__moduleWorkerCspResult = null;
+                        globalThis.__moduleWorkerCspDone = false;
+                        const worker = new Worker("/worker.js", { type: "module" });
+                        worker.onmessage = event => {
+                            globalThis.__moduleWorkerCspResult = "message:" + event.data;
+                            globalThis.__moduleWorkerCspDone = true;
+                        };
+                        worker.onerror = event => {
+                            event.preventDefault();
+                            globalThis.__moduleWorkerCspResult = "error:" + event.message;
+                            globalThis.__moduleWorkerCspDone = true;
+                        };
+                    })()
+                    "#,
+                )?;
+                drive_websocket_until_done(
+                    &mut page_vm,
+                    "String(globalThis.__moduleWorkerCspDone === true)",
+                    "creator CSP should settle the external module worker",
+                )
+                .await?;
+                let result = page_vm
+                    .vm_mut()
+                    .eval("globalThis.__moduleWorkerCspResult")?;
+                assert!(
+                    result.starts_with("error:") && result.contains("Content Security Policy"),
+                    "static module import should be blocked by creator worker-src: {result:?}"
+                );
+                anyhow::Ok(())
+            })
+            .await
+            .expect("external module worker creator CSP test should run on owner lane");
+        server
+            .await
+            .expect("external module worker CSP server should finish");
+        dependency_server.abort();
+    })
+    .await;
+}
+
+#[tokio::test]
 async fn service_worker_register_starts_module_worker_global() {
     run_page_vm_async_test(async move {
         let (base_url, finished_rx, server) =

@@ -64,7 +64,13 @@ pub(crate) fn modulepreload_href(element: &Element) -> Option<&str> {
 }
 
 pub(crate) fn modulepreload_as_state(element: &Element) -> ModulepreloadAsState {
-    match link_as_destination(element.attribute("as")) {
+    modulepreload_as_state_from_attribute(element.attribute("as"))
+}
+
+pub(crate) fn modulepreload_as_state_from_attribute(
+    as_attribute: Option<&str>,
+) -> ModulepreloadAsState {
+    match link_as_destination(as_attribute) {
         LinkAsDestination::None
         | LinkAsDestination::Script
         | LinkAsDestination::AudioWorklet
@@ -126,7 +132,11 @@ fn modulepreload_attributes_for_state(state: ModulepreloadAsState) -> Option<Mod
 }
 
 pub(crate) fn modulepreload_media_matches(element: &Element) -> bool {
-    let Some(media) = element.attribute("media").map(str::trim) else {
+    modulepreload_media_attribute_matches(element.attribute("media"))
+}
+
+pub(crate) fn modulepreload_media_attribute_matches(media: Option<&str>) -> bool {
+    let Some(media) = media.map(str::trim) else {
         return true;
     };
     if media.is_empty() {

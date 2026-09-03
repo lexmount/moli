@@ -1,6 +1,6 @@
 use moli_v8_util::{
     define_static_symbol_to_string_tag, get_private_value, global_constructor_prototype,
-    set_private_value,
+    private_key, set_private_value,
 };
 
 use crate::{__private, BindError, WebApiValue, v8};
@@ -8,6 +8,45 @@ use crate::{__private, BindError, WebApiValue, v8};
 /// Native-only marker copied from `EventTarget.prototype` to Web API objects
 /// while their declared interface prototype is installed.
 pub const EVENT_TARGET_INTERFACE_BRAND_SLOT: &str = "__moliEventTargetInterfaceBrand";
+
+/// Native-only marker carried by genuine Web API platform objects. Unlike an
+/// interface prototype check, this cannot be forged by JavaScript with
+/// `Object.create()` or `Object.setPrototypeOf()`.
+pub const WEB_API_PLATFORM_OBJECT_BRAND_SLOT: &str = "__moliWebApiPlatformObjectBrand";
+
+pub fn mark_web_api_platform_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) {
+    let marker = v8::Boolean::new(scope, true);
+    set_private_value(
+        scope,
+        object,
+        WEB_API_PLATFORM_OBJECT_BRAND_SLOT,
+        marker.into(),
+    );
+}
+
+pub fn mark_web_api_platform_object_template_instances<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    let Some(key) = private_key(scope, WEB_API_PLATFORM_OBJECT_BRAND_SLOT) else {
+        return;
+    };
+    let marker = v8::Boolean::new(scope, true);
+    template
+        .instance_template(scope)
+        .set_private(key, marker.into());
+}
+
+pub fn is_web_api_platform_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, object, WEB_API_PLATFORM_OBJECT_BRAND_SLOT)
+        .is_some_and(|value| value.is_true())
+}
 
 pub fn set_interface_prototype<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -22,6 +61,7 @@ pub fn set_interface_prototype<'s>(
             .set_prototype(scope, prototype.into())
             .unwrap_or(false);
         if installed {
+            mark_web_api_platform_object(scope, object);
             copy_event_target_interface_brand(scope, object, prototype);
         }
         installed
@@ -48,6 +88,7 @@ pub fn set_required_interface_prototype<'s>(
             "failed to set `{interface}` prototype"
         )));
     }
+    mark_web_api_platform_object(scope, object);
     copy_event_target_interface_brand(scope, object, prototype);
     Ok(())
 }

@@ -1137,10 +1137,6 @@ impl Isolate {
     assert!(prev.is_none());
   }
 
-  pub(crate) fn get_finalizer_map(&self) -> &FinalizerMap {
-    &self.get_annex().finalizer_map
-  }
-
   pub(crate) fn get_finalizer_map_mut(&mut self) -> &mut FinalizerMap {
     &mut self.get_annex_mut().finalizer_map
   }

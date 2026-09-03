@@ -1,5 +1,8 @@
 use super::super::JsContextHost;
-use super::{WorkerConnectionState, WorkerExecutionState, WorkerRelayTerminalState};
+use super::{
+    WorkerConnectionState, WorkerExecutionState, WorkerModuleStaticImportPolicySnapshot,
+    WorkerRelayTerminalState,
+};
 use crate::RendererSyntheticResponseBody;
 use crate::network::loads::{ResourceLoadDisposition, ResourceLoadKind, ResourceLoadLease};
 use crate::page_task_queue::{
@@ -217,6 +220,7 @@ impl JsContextHost {
                     outside_settings_load,
                     name,
                     module_credentials_mode,
+                    module_static_import_policy: None,
                     storage_key_top_level_site,
                     creator_storage_key,
                     reserved_service_worker_client_id,
@@ -236,6 +240,7 @@ impl JsContextHost {
         script_kind: WorkerScriptKind,
         module_credentials_mode: moli_fetch::RequestCredentialsMode,
         document_referrer_policy: Option<String>,
+        document_content_security_policies: Vec<String>,
         name: String,
         reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
     ) -> bool {
@@ -261,6 +266,10 @@ impl JsContextHost {
         let cancel_handle = moli_fetch::FetchCancelHandle::new();
         outside_settings_load.attach_cancel_handle(cancel_handle.clone());
         let creator_secure_context = moli_url::is_potentially_trustworthy_url(&initiator_url);
+        let module_static_import_policy = Box::new(WorkerModuleStaticImportPolicySnapshot {
+            initiator_url: initiator_url.clone(),
+            content_security_policies: document_content_security_policies,
+        });
         let task_runner = outside_settings_load.task_runner();
         let fetch_task_runner = task_runner.clone();
         let load_task = task_runner.spawn_abortable(async move {
@@ -325,6 +334,7 @@ impl JsContextHost {
                     load_task: slot,
                     terminated,
                     name: loading_name,
+                    module_static_import_policy: loading_module_static_import_policy,
                     ..
                 } => {
                     if *terminated {
@@ -332,6 +342,7 @@ impl JsContextHost {
                         return false;
                     }
                     *loading_name = name;
+                    *loading_module_static_import_policy = Some(module_static_import_policy);
                     *slot = Some(load_task);
                     true
                 }
@@ -420,18 +431,21 @@ impl JsContextHost {
         content_security_reporting_endpoints:
             crate::content_security_policy::ContentSecurityPolicyReportingEndpoints,
     ) -> bool {
+        struct FinishLoadingWorkerSpawn {
+            pending_messages: Vec<V8StructuredClonePayload>,
+            name: String,
+            storage_key_top_level_site: String,
+            creator_storage_key: MoliStorageKey,
+            reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
+            module_credentials_mode: moli_fetch::RequestCredentialsMode,
+            module_static_import_policy: Option<Box<WorkerModuleStaticImportPolicySnapshot>>,
+            request_client: crate::network::ResourceRequestClient,
+        }
+
         enum FinishLoadingAction {
             MissingOrRunning,
             DiscardTerminated,
-            Spawn {
-                pending_messages: Vec<V8StructuredClonePayload>,
-                name: String,
-                storage_key_top_level_site: String,
-                creator_storage_key: MoliStorageKey,
-                reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
-                module_credentials_mode: moli_fetch::RequestCredentialsMode,
-                request_client: crate::network::ResourceRequestClient,
-            },
+            Spawn(Box<FinishLoadingWorkerSpawn>),
         }
 
         let action = match self.workers.get_mut(&worker_id) {
@@ -442,6 +456,7 @@ impl JsContextHost {
                     terminated,
                     name,
                     module_credentials_mode,
+                    module_static_import_policy,
                     storage_key_top_level_site,
                     creator_storage_key,
                     reserved_service_worker_client_id,
@@ -451,7 +466,7 @@ impl JsContextHost {
                     if *terminated {
                         FinishLoadingAction::DiscardTerminated
                     } else {
-                        FinishLoadingAction::Spawn {
+                        FinishLoadingAction::Spawn(Box::new(FinishLoadingWorkerSpawn {
                             pending_messages: std::mem::take(pending_messages),
                             name: name.clone(),
                             storage_key_top_level_site: storage_key_top_level_site.clone(),
@@ -459,45 +474,31 @@ impl JsContextHost {
                             reserved_service_worker_client_id: reserved_service_worker_client_id
                                 .take(),
                             module_credentials_mode: *module_credentials_mode,
+                            module_static_import_policy: module_static_import_policy.take(),
                             request_client: outside_settings_load.request_client(),
-                        }
+                        }))
                     }
                 }
                 WorkerExecutionState::Running { .. } => FinishLoadingAction::MissingOrRunning,
             },
             None => FinishLoadingAction::MissingOrRunning,
         };
-        let (
+        let FinishLoadingWorkerSpawn {
             pending_messages,
             name,
             storage_key_top_level_site,
             creator_storage_key,
             reserved_service_worker_client_id,
             module_credentials_mode,
+            module_static_import_policy,
             request_client,
-        ) = match action {
+        } = match action {
             FinishLoadingAction::MissingOrRunning => return false,
             FinishLoadingAction::DiscardTerminated => {
                 self.forget_worker(worker_id);
                 return false;
             }
-            FinishLoadingAction::Spawn {
-                pending_messages,
-                name,
-                storage_key_top_level_site,
-                creator_storage_key,
-                reserved_service_worker_client_id,
-                module_credentials_mode,
-                request_client,
-            } => (
-                pending_messages,
-                name,
-                storage_key_top_level_site,
-                creator_storage_key,
-                reserved_service_worker_client_id,
-                module_credentials_mode,
-                request_client,
-            ),
+            FinishLoadingAction::Spawn(spawn) => *spawn,
         };
         let network_policy = WorkerNetworkPolicy {
             secure_context,
@@ -534,6 +535,13 @@ impl JsContextHost {
             self.browser_context_runtime()
                 .dedicated_worker_pause_on_start_for_devtools(),
         );
+        if let Some(policy) = module_static_import_policy {
+            spawn_options = spawn_options
+                .with_module_static_import_initiator_url(policy.initiator_url)
+                .with_module_static_import_content_security_policies(
+                    policy.content_security_policies,
+                );
+        }
         if let Some(client_id) = reserved_service_worker_client_id {
             spawn_options = spawn_options.with_reserved_service_worker_client_id(client_id);
         }

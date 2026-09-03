@@ -41,7 +41,7 @@ pub fn set_symbol_to_string_tag(
     define_symbol_to_string_tag(scope, object, tag, PropertyAttribute::DONT_ENUM);
 }
 
-pub fn private_key<'s>(scope: &mut PinScope<'s, '_>, name: &str) -> Option<Local<'s, Private>> {
+pub fn private_key<'s>(scope: &mut PinScope<'s, '_, ()>, name: &str) -> Option<Local<'s, Private>> {
     let name = v8_string(scope, name)?;
     // V8 named API private symbols are isolate-wide, not context-local. They
     // are still invisible to JavaScript reflection, but native code must treat

@@ -31,6 +31,73 @@ fn object_set_custom_validity_updates_validity_state() {
 }
 
 #[test]
+fn input_type_enumerated_attribute_preserves_raw_value_and_exposes_canonical_state() {
+    let mut vm = new_storage_test_vm("https://input-type-enumerated-attribute.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const input = document.createElement('input');
+  const results = [];
+  for (const value of ['EMAIL', ' datetime-local ', 'unknown', 'datetime-local']) {
+    input.type = value;
+    results.push(`${input.type}/${input.getAttribute('type')}`);
+  }
+  input.removeAttribute('type');
+  results.push(`${input.type}/${input.getAttribute('type')}`);
+  return results.join('|');
+})()
+"#,
+        )
+        .expect("input type enumerated attribute should evaluate");
+
+    assert_eq!(
+        result,
+        "email/EMAIL|text/ datetime-local |text/unknown|datetime-local/datetime-local|text/null"
+    );
+}
+
+#[test]
+fn email_multiple_value_sanitization_tracks_attribute_state() {
+    let mut vm = new_storage_test_vm("https://email-multiple-sanitization.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const input = document.createElement('input');
+  input.type = 'email';
+  input.multiple = true;
+  input.value = '  first@example.com  , second@example.test  ';
+  const multipleValue = input.value;
+
+  input.multiple = false;
+  input.value = 'first@example.com , second@example.test';
+  const singleValue = input.value;
+
+  input.multiple = true;
+  const multipleAfterToggle = input.value;
+
+  const idn = document.createElement('input');
+  idn.setAttribute('value', 'test@exämle.com');
+  idn.type = 'email';
+  const idnSingle = idn.value;
+  idn.multiple = true;
+  idn.value = 'test@exämle.com, user@お.com';
+  return [multipleValue, singleValue, multipleAfterToggle, idnSingle, idn.value].join('|');
+})()
+"#,
+        )
+        .expect("email multiple sanitizer probe should evaluate");
+
+    assert_eq!(
+        result,
+        "first@example.com,second@example.test|first@example.com , second@example.test|first@example.com,second@example.test|test@xn--exmle-hra.com|test@xn--exmle-hra.com,user@xn--t8j.com"
+    );
+}
+
+#[test]
 fn readonly_controls_match_validity_pseudo_without_will_validate() {
     let mut vm = new_storage_test_vm("https://readonly-validity-pseudo.test/");
 
@@ -451,6 +518,61 @@ fn live_input_pattern_uses_native_regexp_after_global_mutation() {
 
     assert_eq!(result, "false/true|true/false|false/true");
 }
+
+#[test]
+fn live_input_pattern_drives_dom_selector_apis() {
+    let mut vm = new_storage_test_vm("https://live-pattern-selectors.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.createElement('div');
+  root.id = 'patterns';
+  root.innerHTML =
+    '<input id="bad" value="AAA" pattern="[0-9][A-Z]{3}">' +
+    '<input id="good" value="0AAA" pattern="[0-9][A-Z]{3}">';
+  const ids = selector =>
+    [...root.querySelectorAll(selector)].map(element => element.id).join(',');
+  const bad = root.querySelector('#bad');
+  const good = root.querySelector('#good');
+  const initial = [
+    ids(':valid'),
+    ids(String.raw`:\76 alid`),
+    ids(':invalid'),
+    root.querySelector('input:invalid').id,
+    bad.matches('input#bad:invalid'),
+    good.matches('#good:valid'),
+    bad.closest('div:has(> input#bad:invalid)').id
+  ];
+
+  bad.value = '0BBB';
+  good.value = 'BBB';
+
+  const advanced = document.createElement('input');
+  advanced.id = 'advanced';
+  advanced.pattern = '([a-z])\\1';
+  advanced.value = 'ab';
+  root.append(advanced);
+
+  return [
+    ...initial,
+    ids(':valid'),
+    ids(':invalid'),
+    advanced.matches('#advanced:invalid'),
+    root.querySelector('#advanced:invalid').id
+  ].join('|');
+})()
+"#,
+        )
+        .expect("live input patterns should drive DOM selector APIs");
+
+    assert_eq!(
+        result,
+        "good|good|bad|bad|true|true|patterns|bad|good,advanced|true|advanced"
+    );
+}
+
 #[test]
 fn detached_select_and_option_track_selection_state() {
     let mut vm = new_storage_test_vm("https://detached-select-state.test/path/page.html");
@@ -493,6 +615,80 @@ fn detached_select_and_option_track_selection_state() {
     assert_eq!(
         result,
         "1:b:false,true,false|2:Three Text:false,false,true|0:a:true,false,false|0:a:true,false,false|1:b:false,true,false:false:true|-1::false,false,false"
+    );
+}
+
+#[test]
+fn option_nearest_ancestor_select_controls_list_form_index_and_selectedness() {
+    let mut vm = new_storage_test_vm("https://option-nearest-select.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const form = document.createElement('form');
+  const parentSelect = document.createElement('select');
+  const childSelect = document.createElement('select');
+  form.append(parentSelect);
+  parentSelect.append(childSelect);
+  body.append(form);
+
+  const normalOption = document.createElement('option');
+  childSelect.append(normalOption);
+  const nestedOption = document.createElement('option');
+  normalOption.append(nestedOption);
+
+  const div = document.createElement('div');
+  childSelect.append(div);
+  const divOption = document.createElement('option');
+  div.append(divOption);
+
+  const hr = document.createElement('hr');
+  childSelect.append(hr);
+  const hrOption = document.createElement('option');
+  hr.append(hrOption);
+
+  const datalist = document.createElement('datalist');
+  childSelect.append(datalist);
+  const datalistOption = document.createElement('option');
+  datalist.append(datalistOption);
+
+  const optgroup = document.createElement('optgroup');
+  childSelect.append(optgroup);
+  const optgroupOption = document.createElement('option');
+  optgroup.append(optgroupOption);
+  const nestedOptgroup = document.createElement('optgroup');
+  optgroup.append(nestedOptgroup);
+  const nestedOptgroupOption = document.createElement('option');
+  nestedOptgroup.append(nestedOptgroupOption);
+
+  normalOption.selected = true;
+  datalistOption.selected = true;
+
+  return JSON.stringify({
+    parentLength: parentSelect.length,
+    childLength: childSelect.length,
+    options: Array.from(childSelect.options, option =>
+      option === normalOption ? 'normal' :
+      option === divOption ? 'div' :
+      option === optgroupOption ? 'optgroup' : 'unexpected'),
+    validForms: [normalOption, divOption, optgroupOption].map(option => option.form === form),
+    invalidForms: [nestedOption, hrOption, datalistOption, nestedOptgroupOption]
+      .map(option => option.form === null),
+    indices: [normalOption, divOption, optgroupOption, nestedOption, hrOption,
+      datalistOption, nestedOptgroupOption].map(option => option.index),
+    normalStillSelected: normalOption.selected
+  });
+})()
+"#,
+        )
+        .expect("option nearest ancestor select behavior should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"parentLength":0,"childLength":3,"options":["normal","div","optgroup"],"validForms":[true,true,true],"invalidForms":[true,true,true,true],"indices":[0,1,2,0,0,0,0],"normalStillSelected":true}"#
     );
 }
 
@@ -2344,6 +2540,89 @@ fn url_like_href_resolution_does_not_legacy_encode_fragment_question_mark() {
         "https://href-fragment-gbk.test/search#frag?q=%E5%AE%B6%E5%B1%85"
     );
 }
+
+#[test]
+fn form_submission_returns_while_constructing_entry_list() {
+    let mut vm = new_storage_test_vm("https://form-entry-list-reentrant.test/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parent = document.body || document.documentElement || document;
+  const form = document.createElement('form');
+  form.action = '/submitted';
+  form.innerHTML = '<input name=n value=v>';
+  parent.appendChild(form);
+
+  const outcomes = [];
+  let submitEvents = 0;
+  form.addEventListener('submit', event => {
+    submitEvents++;
+    event.preventDefault();
+  });
+  form.addEventListener('formdata', () => {
+    for (const submit of [
+      () => form.submit(),
+      () => form.requestSubmit()
+    ]) {
+      try {
+        submit();
+        outcomes.push('returned');
+      } catch (error) {
+        outcomes.push(`threw:${error.name}`);
+      }
+    }
+  });
+
+  form.submit();
+  return JSON.stringify({ outcomes, submitEvents });
+})()
+"#,
+        )
+        .expect("form submission entry-list reentrancy probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"outcomes":["returned","returned"],"submitEvents":0}"#
+    );
+    assert_eq!(
+        vm.take_pending_location_navigation_with_seed()
+            .expect("outer form submission should still queue navigation")
+            .url
+            .as_str(),
+        "https://form-entry-list-reentrant.test/submitted?n=v"
+    );
+}
+
+#[test]
+fn form_submission_aborts_when_formdata_listener_disconnects_form() {
+    let mut vm = new_storage_test_vm("https://form-disconnected-after-entry-list.test/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parent = document.body || document.documentElement || document;
+  const form = document.createElement('form');
+  form.action = '/submitted';
+  form.innerHTML = '<input name=n value=v>';
+  parent.appendChild(form);
+  form.addEventListener('formdata', () => form.remove());
+  form.submit();
+  return String(form.isConnected);
+})()
+"#,
+        )
+        .expect("formdata disconnect submission probe should evaluate");
+
+    assert_eq!(result, "false");
+    assert!(
+        vm.take_pending_location_navigation_with_seed().is_none(),
+        "a form disconnected while constructing its entry list must not navigate"
+    );
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn formdata_event_appended_entries_are_submitted_to_named_iframe() {
     let server = StaticHttpServer::spawn(1).await;
@@ -2827,6 +3106,68 @@ fn live_form_request_submit_dispatches_submit_event_with_submitter() {
 
     assert_eq!(result, "true:true:submit:true:true:true|true:true:true");
 }
+
+#[test]
+fn eof_unclosed_form_control_dispatches_error_before_validation_or_submit() {
+    let mut vm = new_storage_test_vm("https://dangling-markup-form.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const parent = document.body || document.documentElement || document;
+  const form = document.createElement('form');
+  form.id = 'dangling-form';
+  const required = document.createElement('input');
+  required.required = true;
+  const select = document.createElement('select');
+  select.id = 'unclosed-select';
+  form.append(required, select);
+  parent.appendChild(form);
+
+  globalThis.__danglingFormEvents = [];
+  form.addEventListener('error', event => {
+    __danglingFormEvents.push([
+      event.type,
+      event.target === form,
+      event.bubbles,
+      event.cancelable
+    ].join(':'));
+  });
+  required.addEventListener('invalid', () => __danglingFormEvents.push('invalid'));
+  form.addEventListener('submit', () => __danglingFormEvents.push('submit'));
+})()
+"#,
+    )
+    .expect("dangling-markup form setup should evaluate");
+
+    let select = vm
+        .document_runtime
+        .dom_host()
+        .element_handle_by_id("unclosed-select")
+        .expect("select should exist");
+    assert!(
+        vm.document_runtime
+            .dom_host_mut()
+            .set_blocks_form_submission(select, true),
+        "parser EOF state should be recorded on the select"
+    );
+
+    let result = vm
+        .eval(
+            r#"
+document.getElementById('dangling-form').requestSubmit();
+JSON.stringify(__danglingFormEvents)
+"#,
+        )
+        .expect("blocked form submission should evaluate");
+
+    assert_eq!(result, r#"["error:true:false:false"]"#);
+    assert!(
+        vm.take_pending_location_navigation_with_seed().is_none(),
+        "blocked form submission must not queue navigation"
+    );
+}
+
 #[test]
 fn live_form_request_submit_parses_webidl_submitter_argument() {
     let mut vm = new_storage_test_vm("https://request-submit-webidl.test/");
@@ -4410,7 +4751,7 @@ picker.click();
             .and_then(crate::dom::native::Node::as_element)
             .expect("the detached source input should retain its native node identity");
         assert!(retained_picker.is_html_input());
-        assert_eq!(retained_picker.input_type(), expected_type);
+        assert_eq!(retained_picker.input_type().as_ref(), expected_type);
         assert_eq!(
             retained_picker.attribute("multiple").is_some(),
             expected_multiple
@@ -4754,6 +5095,79 @@ fn empty_get_form_submit_replaces_existing_action_query() {
         .expect("empty GET form submit should queue a pending location navigation");
     assert_eq!(pending.url.as_str(), "https://form-empty-get.test/submit?");
 }
+
+#[test]
+fn textarea_hard_wrap_is_ascii_case_insensitive_in_form_entries() {
+    let mut vm = new_storage_test_vm("https://textarea-hard-wrap.test/path/index.html");
+
+    let form_data_values = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const form = document.createElement('form');
+  form.action = '/submit';
+  const add = (name, wrap, cols, value) => {
+    const textarea = document.createElement('textarea');
+    textarea.name = name;
+    textarea.setAttribute('wrap', wrap);
+    textarea.setAttribute('cols', cols);
+    textarea.value = value;
+    form.append(textarea);
+    return textarea;
+  };
+  const lower = add('lower', 'hard', '7', 'hello world');
+  add('mixed', 'HaRd', '7', 'hello world');
+  add('soft', 'SoFt', '7', 'hello world');
+  add('invalid', 'ſoft', '7', 'hello world');
+  add('existing', 'HARD', '3', 'ab\ncdef');
+  body.append(form);
+  const data = new FormData(form);
+  const visible = value => value.replaceAll('\n', '<LF>');
+  const result = [
+    lower.value.includes('\n'),
+    ...['lower', 'mixed', 'soft', 'invalid', 'existing'].map(name => visible(data.get(name)))
+  ].join('|');
+  form.submit();
+  return result;
+})()
+"#,
+        )
+        .expect("textarea hard-wrap form submission should evaluate");
+
+    assert_eq!(
+        form_data_values,
+        "false|hello w<LF>orld|hello w<LF>orld|hello world|hello world|ab<LF>cde<LF>f"
+    );
+
+    let pending = vm
+        .take_pending_location_navigation_with_seed()
+        .expect("textarea GET submission should queue a pending navigation");
+    let values = pending
+        .url
+        .query_pairs()
+        .into_owned()
+        .collect::<std::collections::HashMap<_, _>>();
+    assert_eq!(
+        values.get("lower").map(String::as_str),
+        Some("hello w\r\norld")
+    );
+    assert_eq!(
+        values.get("mixed").map(String::as_str),
+        Some("hello w\r\norld")
+    );
+    assert_eq!(values.get("soft").map(String::as_str), Some("hello world"));
+    assert_eq!(
+        values.get("invalid").map(String::as_str),
+        Some("hello world")
+    );
+    assert_eq!(
+        values.get("existing").map(String::as_str),
+        Some("ab\r\ncde\r\nf")
+    );
+}
+
 #[test]
 fn get_form_submit_dispatches_cancelable_navigate_event_with_source_element() {
     let mut vm = new_storage_test_vm("https://form-get-navigate.test/path/index.html");

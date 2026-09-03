@@ -55,14 +55,19 @@ fn create_native_detached_document_handle_with_url(
     scope: &mut v8::PinScope<'_, '_>,
     kind: &str,
     url: Url,
+    scripting_enabled: bool,
 ) -> Option<DomHandle> {
     let runtime_ptr = context_host_ptr_from_global_bridge(scope)?;
     let runtime = unsafe { &mut *runtime_ptr };
-    Some(if kind == "html" {
-        runtime.create_detached_html_document_with_url(url)
+    let handle = if kind == "html" {
+        runtime.create_detached_html_document_with_url_and_scripting(url, scripting_enabled)
     } else {
         runtime.create_detached_xml_document_with_url(url)
-    })
+    };
+    let _ = runtime
+        .dom_host_mut()
+        .set_document_scripting_enabled_for_handle(handle, scripting_enabled);
+    Some(handle)
 }
 
 fn detached_document_url(parsed: &DomHost) -> Url {
@@ -89,6 +94,7 @@ fn new_detached_document_shell<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     kind: &str,
     url: Url,
+    scripting_enabled: bool,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let to_string_tag = if kind == "html" {
         Some("HTMLDocument")
@@ -111,7 +117,9 @@ fn new_detached_document_shell<'s>(
     );
     set_detached_document_url_state(scope, state, &url)?;
     define_detached_state(scope, document, state);
-    if let Some(handle) = create_native_detached_document_handle_with_url(scope, kind, url) {
+    if let Some(handle) =
+        create_native_detached_document_handle_with_url(scope, kind, url, scripting_enabled)
+    {
         define_detached_native_handle(scope, document, handle);
     }
     install_detached_document_instance_properties(scope, document, kind);
@@ -195,8 +203,20 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
     character_set: Option<&str>,
 ) -> Option<v8::Local<'s, v8::Object>> {
     let url = detached_document_url(&parsed);
-    let document = new_detached_document_shell(scope, kind, url)?;
+    let quirks_mode = parsed.dom().document()?.quirks_mode();
+    let scripting_enabled = parsed.dom().document()?.scripting_enabled();
+    let compat_mode = if quirks_mode == selectors::matching::QuirksMode::Quirks {
+        "BackCompat"
+    } else {
+        "CSS1Compat"
+    };
+    let document = new_detached_document_shell(scope, kind, url, scripting_enabled)?;
     if let Some(state) = detached_state_object(scope, document) {
+        let _ = state.set(
+            scope,
+            v8str(scope, "compatMode").into(),
+            v8_string(scope, compat_mode)?.into(),
+        );
         if let Some(content_type) = content_type {
             let _ = state.set(
                 scope,
@@ -211,6 +231,13 @@ pub(crate) fn build_detached_document_object_from_dom_host_with_content_type<'s>
                 v8_string(scope, character_set)?.into(),
             );
         }
+    }
+    if let Some(document_handle) = detached_native_handle(scope, document)
+        && let Some(runtime_ptr) = context_host_ptr_from_global_bridge(scope)
+    {
+        let _ = unsafe { &mut *runtime_ptr }
+            .dom_host_mut()
+            .set_document_quirks_mode_for_handle(document_handle, quirks_mode);
     }
     import_detached_document_children_from_host(scope, document, &parsed)?;
     Some(document)
@@ -305,6 +332,7 @@ pub(in crate::native_bridge::document) fn build_detached_html_document_object<'s
         scope,
         "html",
         Url::parse("about:blank").expect("static about:blank parses"),
+        false,
     )?;
     populate_native_html_document_shell(scope, document, title)?;
     Some(document)
@@ -324,6 +352,7 @@ pub(in crate::native_bridge::document) fn build_detached_document_object<'s>(
         scope,
         kind,
         Url::parse("about:blank").expect("static about:blank parses"),
+        false,
     )?;
     if kind == "xml"
         && let Some(namespace_uri) = namespace_uri.as_deref()

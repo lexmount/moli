@@ -79,6 +79,7 @@ mod page_task_queue;
 mod parser_module_evaluation;
 mod parser_module_pending;
 mod parser_script;
+mod permissions_policy;
 mod queue_microtask;
 mod range_boundary;
 mod referrer_policy;

@@ -43,7 +43,7 @@ impl WorkerIsolateState {
             worker_dynamic_import_with_phase_callback,
         );
         isolate.set_modify_code_generation_from_strings_callback(
-            crate::context_bootstrap::trusted_types_code_generation_check_callback,
+            crate::script_vm::string_code_generation_check_callback,
         );
         let runtime_inspector = WorkerRuntimeInspector::new(
             &mut isolate,

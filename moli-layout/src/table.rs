@@ -684,7 +684,7 @@ fn collect_rows<N>(
                 }
                 let data = table_data(world, cell);
                 let column_span = usize::from(data.column_span.max(1));
-                let row_span = usize::from(data.row_span.max(1));
+                let row_span = usize::from(data.row_span);
                 let mut cell_style = world.boxes[cell.index()].style.taffy.clone();
                 cell_style.margin = Rect::ZERO.map(style_helpers::length);
                 cells.push(TableCell {
@@ -728,10 +728,12 @@ fn place_table_cells(cells: &mut [TableCell], rows: &[TableRow], max_columns: &m
                     .all(|occupied| *occupied <= row.index)
                 {
                     cell.column = cursor;
-                    cell.row_span = cell
-                        .row_span
-                        .min(section_end.saturating_sub(row.index))
-                        .max(1);
+                    let row_span = if cell.row_span == 0 {
+                        section_end.saturating_sub(row.index)
+                    } else {
+                        cell.row_span
+                    };
+                    cell.row_span = row_span.min(section_end.saturating_sub(row.index)).max(1);
                     for occupied in &mut occupied_until[cursor..end] {
                         *occupied = row.index.saturating_add(cell.row_span);
                     }

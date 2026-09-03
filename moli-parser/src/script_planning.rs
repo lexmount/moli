@@ -9,7 +9,7 @@ use moli_fetch::FetchPriorityHint;
 use moli_page_types::{ScriptKind, ScriptMode, ScriptSourceKind};
 use moli_script::{
     ScriptElementClassificationInput, ScriptPreparationClassificationInput,
-    ScriptPreparationDisposition, classify_script_preparation,
+    ScriptPreparationDisposition, classify_script_preparation, script_element_nonce_is_nonceable,
 };
 
 pub struct ParserScriptRead {
@@ -45,6 +45,19 @@ fn parser_script_read_from_node(
     // make a harmless `nomodule` suppress execution or make `defer` change the
     // parser lane.
     let is_html_script = element.is_html_script();
+    let nonce = element
+        .cryptographic_nonce()
+        .or_else(|| element.attribute("nonce"));
+    let nonce = script_element_nonce_is_nonceable(
+        nonce,
+        false,
+        element
+            .attributes()
+            .iter()
+            .map(|attribute| (attribute.local_name(), attribute.value())),
+    )
+    .then_some(nonce)
+    .flatten();
     Some(ParserScriptRead {
         parser_inserted: node.flags().parser_created(),
         parser_inserted_for_prepare: element.script_parser_inserted_for_prepare(),
@@ -76,9 +89,7 @@ fn parser_script_read_from_node(
             element.attribute("referrerpolicy"),
             element.attribute("charset"),
             element.attribute("integrity"),
-            element
-                .cryptographic_nonce()
-                .or_else(|| element.attribute("nonce")),
+            nonce,
             element.attribute("fetchpriority"),
         )
         .with_parser_inserted(node.flags().parser_created()),
@@ -252,6 +263,7 @@ pub struct PreparedImportMap {
     pub position: usize,
     pub node_id: NodeId,
     pub source: PreparedImportMapSource,
+    pub nonce: Option<String>,
     pub base_url: Url,
     pub initiator_url: Url,
 }
@@ -290,7 +302,9 @@ impl ScriptFetchMetadata {
             cross_origin: normalize_cross_origin(cross_origin),
             referrer_policy: normalize_referrer_policy(referrer_policy),
             charset: normalize_attr_token(charset),
-            integrity: normalize_non_empty_attr(integrity),
+            // Attribute presence is significant for module scripts: an explicit
+            // empty value suppresses integrity metadata supplied by an import map.
+            integrity: integrity.map(str::trim).map(str::to_owned),
             nonce: normalize_non_empty_attr(nonce),
             fetch_priority: FetchPriorityHint::from_attribute(fetch_priority),
             parser_inserted: false,
@@ -557,6 +571,7 @@ pub fn build_prepared_import_map(
         position,
         node_id: NodeId::new(node_id.index()),
         source,
+        nonce: classification.script.fetch_metadata.nonce.clone(),
         base_url: document_base_url,
         initiator_url: document_url,
     })
@@ -585,6 +600,14 @@ mod tests {
         );
 
         assert_eq!(metadata.referrer_policy, None);
+    }
+
+    #[test]
+    fn script_fetch_metadata_preserves_explicit_empty_integrity() {
+        let metadata =
+            ScriptFetchMetadata::from_script_attributes(None, None, None, Some("   "), None, None);
+
+        assert_eq!(metadata.integrity.as_deref(), Some(""));
     }
 
     #[test]

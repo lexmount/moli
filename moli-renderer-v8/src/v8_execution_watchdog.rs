@@ -32,6 +32,30 @@ pub(crate) enum V8ExecutionWatchdogKind {
     LifecycleEvent,
 }
 
+#[cfg(test)]
+impl V8ExecutionWatchdogKind {
+    const fn override_index(self) -> usize {
+        match self {
+            Self::ScriptTurn => 0,
+            Self::TimerCallback => 1,
+            Self::LifecycleEvent => 2,
+        }
+    }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static V8_EXECUTION_WATCHDOG_TIMEOUT_OVERRIDES:
+        std::cell::Cell<[Option<Duration>; 3]> =
+            const { std::cell::Cell::new([None, None, None]) };
+}
+
+#[cfg(test)]
+fn v8_execution_watchdog_timeout(kind: V8ExecutionWatchdogKind, fallback: Duration) -> Duration {
+    V8_EXECUTION_WATCHDOG_TIMEOUT_OVERRIDES
+        .with(|overrides| overrides.get()[kind.override_index()].unwrap_or(fallback))
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum V8ExecutionWatchdogOutcome {
     Completed,
@@ -209,6 +233,7 @@ fn run_v8_execution_watchdog_service(shared: Arc<V8ExecutionWatchdogServiceShare
 pub(crate) struct V8ExecutionWatchdog {
     key: V8ExecutionWatchdogRegistrationKey,
     registration: Option<Arc<V8ExecutionWatchdogRegistration>>,
+    timeout: Duration,
 }
 
 impl V8ExecutionWatchdog {
@@ -217,12 +242,34 @@ impl V8ExecutionWatchdog {
         isolate: v8::IsolateHandle,
         timeout: Duration,
     ) -> Self {
+        #[cfg(test)]
+        let timeout = v8_execution_watchdog_timeout(kind, timeout);
         let (key, registration) =
             V8ExecutionWatchdogService::global().register(kind, isolate, timeout);
         Self {
             key,
             registration: Some(registration),
+            timeout,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn override_timeout_for_test(
+        kind: V8ExecutionWatchdogKind,
+        timeout: Duration,
+    ) -> V8ExecutionWatchdogTimeoutOverride {
+        assert!(!timeout.is_zero(), "watchdog timeout must be non-zero");
+        let previous = V8_EXECUTION_WATCHDOG_TIMEOUT_OVERRIDES.with(|overrides| {
+            let mut values = overrides.get();
+            let previous = values[kind.override_index()].replace(timeout);
+            overrides.set(values);
+            previous
+        });
+        V8ExecutionWatchdogTimeoutOverride { kind, previous }
+    }
+
+    pub(crate) fn timeout(&self) -> Duration {
+        self.timeout
     }
 
     pub(crate) fn disarm(mut self) -> V8ExecutionWatchdogOutcome {
@@ -245,12 +292,72 @@ impl Drop for V8ExecutionWatchdog {
 }
 
 #[cfg(test)]
+pub(crate) struct V8ExecutionWatchdogTimeoutOverride {
+    kind: V8ExecutionWatchdogKind,
+    previous: Option<Duration>,
+}
+
+#[cfg(test)]
+impl Drop for V8ExecutionWatchdogTimeoutOverride {
+    fn drop(&mut self) {
+        V8_EXECUTION_WATCHDOG_TIMEOUT_OVERRIDES.with(|overrides| {
+            let mut values = overrides.get();
+            values[self.kind.override_index()] = self.previous;
+            overrides.set(values);
+        });
+    }
+}
+
+#[cfg(test)]
 static V8_EXECUTION_WATCHDOG_SERVICE_THREAD_STARTS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeout_override_is_kind_scoped_and_restored() {
+        let fallback = Duration::from_secs(8);
+        assert_eq!(
+            v8_execution_watchdog_timeout(V8ExecutionWatchdogKind::ScriptTurn, fallback),
+            fallback
+        );
+
+        {
+            let _outer = V8ExecutionWatchdog::override_timeout_for_test(
+                V8ExecutionWatchdogKind::ScriptTurn,
+                Duration::from_millis(500),
+            );
+            assert_eq!(
+                v8_execution_watchdog_timeout(V8ExecutionWatchdogKind::ScriptTurn, fallback),
+                Duration::from_millis(500)
+            );
+            assert_eq!(
+                v8_execution_watchdog_timeout(V8ExecutionWatchdogKind::TimerCallback, fallback),
+                fallback
+            );
+            {
+                let _inner = V8ExecutionWatchdog::override_timeout_for_test(
+                    V8ExecutionWatchdogKind::ScriptTurn,
+                    Duration::from_millis(250),
+                );
+                assert_eq!(
+                    v8_execution_watchdog_timeout(V8ExecutionWatchdogKind::ScriptTurn, fallback),
+                    Duration::from_millis(250)
+                );
+            }
+            assert_eq!(
+                v8_execution_watchdog_timeout(V8ExecutionWatchdogKind::ScriptTurn, fallback),
+                Duration::from_millis(500)
+            );
+        }
+
+        assert_eq!(
+            v8_execution_watchdog_timeout(V8ExecutionWatchdogKind::ScriptTurn, fallback),
+            fallback
+        );
+    }
 
     fn evaluate_script(isolate: &mut v8::OwnedIsolate, source: &str) -> Option<String> {
         let scope = std::pin::pin!(v8::HandleScope::new(isolate));

@@ -222,7 +222,32 @@ impl DocumentRuntime {
         plan
     }
 
-    fn queue_image_relevant_mutation_loads(
+    pub(super) fn image_relevant_mutation_plan_before_remove(
+        &self,
+        parent: DomHandle,
+        root: DomHandle,
+    ) -> ImageRelevantMutationPlan {
+        if !self.dom_host.is_html_element_named(parent, "picture") {
+            return ImageRelevantMutationPlan::default();
+        }
+        if self.dom_host.is_html_element_named(root, "source") {
+            return ImageRelevantMutationPlan {
+                pictures: vec![parent],
+                images: Vec::new(),
+            };
+        }
+        ImageRelevantMutationPlan {
+            pictures: Vec::new(),
+            images: self
+                .dom_host
+                .is_html_element_named(root, "img")
+                .then_some(root)
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    pub(super) fn queue_image_relevant_mutation_loads(
         &self,
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,

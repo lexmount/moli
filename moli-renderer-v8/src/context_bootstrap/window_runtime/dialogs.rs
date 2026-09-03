@@ -6,7 +6,7 @@ use crate::{
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{DocumentPolicyContainer, DomHandle},
     native_bridge::{
-        InputNavigationPolicy, child_window_handle_from_marker_data,
+        InputNavigationPolicy, OwnerDispatchScope, child_window_handle_from_marker_data,
         element::{
             SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
             navigate_named_iframe_target,
@@ -20,9 +20,8 @@ use crate::{
     util::{context_host_ptr_from_global_bridge, get_private_value},
     webidl,
 };
+use moli_window_features::WindowOpenFeatures;
 use url::Url;
-
-use super::window_features::WindowOpenFeatures;
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "Window dialog")]
@@ -67,6 +66,39 @@ pub(crate) fn window_noop_callback(
     _args: v8::FunctionCallbackArguments<'_>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+}
+
+pub(crate) fn window_focus_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let receiver = args.this();
+    if !crate::context_bootstrap::is_window_receiver(scope, receiver) {
+        webidl::throw_type_error(scope, "Window.focus called on incompatible receiver.");
+        return;
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    if let Some(crate::native_bridge::OwnerDispatchScope::Child(handle)) =
+        super::super::navigation_window::runtime_window_dispatch_scope(scope, receiver)
+    {
+        crate::native_bridge::element::focus_element(scope, host_ptr, handle);
+    }
+    rv.set_undefined();
+}
+
+pub(crate) fn window_blur_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        webidl::throw_type_error(scope, "Window.blur called on incompatible receiver.");
+        return;
+    }
+    rv.set_undefined();
 }
 
 pub(crate) fn window_stop_callback<'s>(
@@ -306,13 +338,31 @@ pub(in crate::context_bootstrap) fn entered_window_api_base_url(
     scope: &mut v8::PinScope<'_, '_>,
     host: &crate::native_bridge::JsContextHost,
 ) -> Url {
-    if let Some(handle) = entered_child_window_handle(scope)
-        && let Some(url) = host.child_browsing_context_base_url(handle)
-    {
-        return url;
-    }
-    if let Some(url) = host.active_lightweight_popup_base_url(scope) {
-        return url;
+    // The HTML entry settings object follows the context that entered the
+    // script or microtask, not the borrowed Window method's native realm.
+    let ambient_scope = host.entered_owner_dispatch_scope(scope);
+    let entry_scope = match ambient_scope {
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => ambient_scope,
+        crate::native_bridge::OwnerDispatchScope::Top
+        | crate::native_bridge::OwnerDispatchScope::Child(_) => {
+            let entry_context = scope.get_entered_or_microtask_context();
+            host.window_execution_context_identity_for_access_check(entry_context)
+                .map(|identity| identity.dispatch_scope())
+                .unwrap_or(ambient_scope)
+        }
+    };
+    match entry_scope {
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+            if let Some(url) = host.child_browsing_context_base_url(handle) {
+                return url;
+            }
+        }
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
+            if let Some(url) = host.lightweight_popup_request_base_url(scope, popup_id) {
+                return url;
+            }
+        }
+        crate::native_bridge::OwnerDispatchScope::Top => {}
     }
     host.dom_host()
         .document_base_url()
@@ -431,6 +481,18 @@ fn open_dialog(
     // Page/Document source. A standalone or stale realm uses the headless
     // default result instead of claiming a dialog that cannot be emitted.
     let (target, source_document, source) = host.current_renderer_window_document_source(scope)?;
+    let allows_modals = match target.dispatch_scope() {
+        OwnerDispatchScope::Top => host.document_policy_container().sandbox.allows_modals,
+        OwnerDispatchScope::Child(handle) => host
+            .child_browsing_context_policy_container_snapshot(handle)
+            .is_some_and(|policy| policy.sandbox.allows_modals),
+        OwnerDispatchScope::LightweightPopup(popup_id) => host
+            .lightweight_popup_policy_container(popup_id)
+            .is_some_and(|policy| policy.sandbox.allows_modals),
+    };
+    if !allows_modals {
+        return None;
+    }
     let source_url = window_open_entered_document_url(scope, host).to_string();
     let dialog_id = host.allocate_javascript_dialog_id();
     host.open_modal_javascript_dialog(

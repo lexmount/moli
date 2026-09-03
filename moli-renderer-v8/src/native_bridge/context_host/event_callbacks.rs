@@ -17,6 +17,55 @@ pub(crate) struct PreparedEventCallback {
     relevant_identity: Option<WindowExecutionContextIdentity>,
 }
 
+pub(crate) struct WindowErrorReportingScope {
+    host_ptr: *mut JsContextHost,
+    owner: WindowExecutionContextOwner,
+}
+
+pub(crate) struct ExplicitEventDispatchScope {
+    host_ptr: *mut JsContextHost,
+}
+
+pub(crate) struct EventCallbackInvocationScope {
+    host_ptr: *mut JsContextHost,
+    outermost: bool,
+}
+
+impl EventCallbackInvocationScope {
+    pub(crate) fn is_outermost(&self) -> bool {
+        self.outermost
+    }
+}
+
+impl Drop for EventCallbackInvocationScope {
+    fn drop(&mut self) {
+        let host = unsafe { &mut *self.host_ptr };
+        host.event_callback_invocation_depth = host
+            .event_callback_invocation_depth
+            .checked_sub(1)
+            .expect("event callback invocation scope must be active");
+    }
+}
+
+impl Drop for ExplicitEventDispatchScope {
+    fn drop(&mut self) {
+        let host = unsafe { &mut *self.host_ptr };
+        host.explicit_event_dispatch_depth = host
+            .explicit_event_dispatch_depth
+            .checked_sub(1)
+            .expect("explicit EventTarget dispatch scope must be active");
+    }
+}
+
+impl Drop for WindowErrorReportingScope {
+    fn drop(&mut self) {
+        let removed = unsafe { &mut *self.host_ptr }
+            .active_window_error_report_owners
+            .remove(&self.owner);
+        debug_assert!(removed, "Window error reporting scope must be active");
+    }
+}
+
 impl PreparedEventCallback {
     pub(crate) fn callback<'s>(
         &self,
@@ -80,6 +129,36 @@ impl EventCallbackRegistry {
 }
 
 impl JsContextHost {
+    pub(crate) fn enter_event_callback_invocation_scope(&mut self) -> EventCallbackInvocationScope {
+        let outermost = self.event_callback_invocation_depth == 0;
+        self.event_callback_invocation_depth += 1;
+        EventCallbackInvocationScope {
+            host_ptr: self,
+            outermost,
+        }
+    }
+
+    pub(crate) fn enter_explicit_event_dispatch_scope(&mut self) -> ExplicitEventDispatchScope {
+        self.explicit_event_dispatch_depth += 1;
+        ExplicitEventDispatchScope { host_ptr: self }
+    }
+
+    pub(crate) fn explicit_event_dispatch_is_active(&self) -> bool {
+        self.explicit_event_dispatch_depth != 0
+    }
+
+    pub(crate) fn enter_window_error_reporting_scope(
+        &mut self,
+        owner: WindowExecutionContextOwner,
+    ) -> Option<WindowErrorReportingScope> {
+        self.active_window_error_report_owners
+            .insert(owner)
+            .then(|| WindowErrorReportingScope {
+                host_ptr: self,
+                owner,
+            })
+    }
+
     pub(crate) fn register_target_event_listener<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -220,14 +299,14 @@ impl JsContextHost {
         handler: Option<v8::Local<'s, v8::Function>>,
         target_context: v8::Local<'s, v8::Context>,
     ) {
-        self.set_registered_event_handler_property_with_contexts(
-            scope,
-            target,
-            event_type,
-            handler,
-            target_context,
-            target_context,
-        );
+        let callback_id = handler.map(|handler| {
+            self.register_event_callback(scope, handler.into(), target_context, target_context)
+        });
+        if let Some(previous) =
+            self.set_compiled_event_handler_property(target, event_type, callback_id)
+        {
+            self.release_event_callback(previous);
+        }
     }
 
     fn set_registered_event_handler_property_with_contexts<'s>(

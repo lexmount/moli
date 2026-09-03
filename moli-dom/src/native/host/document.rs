@@ -22,8 +22,19 @@ impl DomHost {
     }
 
     pub fn create_detached_html_document_with_url(&mut self, url: Url) -> DomHandle {
+        self.create_detached_html_document_with_url_and_scripting(url, true)
+    }
+
+    pub fn create_detached_html_document_with_url_and_scripting(
+        &mut self,
+        url: Url,
+        scripting_enabled: bool,
+    ) -> DomHandle {
         self.dom.create_node(
-            NodeData::Document(Box::new(Document::new_html(url))),
+            NodeData::Document(Box::new(Document::new_html_with_scripting(
+                url,
+                scripting_enabled,
+            ))),
             None,
             false,
             false,
@@ -510,6 +521,33 @@ impl DomHost {
             .is_some_and(|node| node.flags().connected())
     }
 
+    /// Returns whether the node's shadow-including root is a `Document`.
+    ///
+    /// This is the DOM Standard's connectedness test. It intentionally also
+    /// counts nodes in secondary documents, whose internal lifecycle
+    /// `connected` flag is false because they are not part of the host
+    /// document tree.
+    pub fn is_connected_to_document(&self, handle: DomHandle) -> bool {
+        let Some(mut root) = self.root_node_handle(handle) else {
+            return false;
+        };
+        loop {
+            if self.node(root).is_some_and(Node::is_document) {
+                return true;
+            }
+            if !self.is_shadow_root(root) {
+                return false;
+            }
+            let Some(host) = self.shadow_root_host(root) else {
+                return false;
+            };
+            let Some(outer_root) = self.root_node_handle(host) else {
+                return false;
+            };
+            root = outer_root;
+        }
+    }
+
     pub fn active_element_handle(&self) -> Option<DomHandle> {
         self.active_element.get().filter(|handle| {
             self.node(*handle)
@@ -945,6 +983,24 @@ impl DomHost {
             .map(Document::quirks_mode)
     }
 
+    pub fn document_scripting_enabled_for_handle(
+        &self,
+        document_handle: DomHandle,
+    ) -> Option<bool> {
+        self.node(document_handle)
+            .and_then(Node::as_document)
+            .map(Document::scripting_enabled)
+    }
+
+    pub fn document_design_mode_enabled_for_handle(
+        &self,
+        document_handle: DomHandle,
+    ) -> Option<bool> {
+        self.node(document_handle)
+            .and_then(Node::as_document)
+            .map(Document::design_mode_enabled)
+    }
+
     pub fn document_base_url(&self) -> Option<Url> {
         self.document_base_url_for_handle(self.document_handle())
     }
@@ -1103,6 +1159,63 @@ impl DomHost {
         }
         document.set_content_type(content_type);
         self.record_mutation(MutationScope::LocalState);
+        true
+    }
+
+    pub fn set_document_scripting_enabled_for_handle(
+        &mut self,
+        document_handle: DomHandle,
+        scripting_enabled: bool,
+    ) -> bool {
+        let Some(document) = self
+            .node_mut(document_handle)
+            .and_then(|node| node.data_mut().as_document_mut())
+        else {
+            return false;
+        };
+        if document.scripting_enabled() == scripting_enabled {
+            return false;
+        }
+        document.set_scripting_enabled(scripting_enabled);
+        self.record_mutation(MutationScope::LocalState);
+        true
+    }
+
+    pub fn set_document_design_mode_enabled_for_handle(
+        &mut self,
+        document_handle: DomHandle,
+        design_mode_enabled: bool,
+    ) -> bool {
+        let Some(document) = self
+            .node_mut(document_handle)
+            .and_then(|node| node.data_mut().as_document_mut())
+        else {
+            return false;
+        };
+        if document.design_mode_enabled() == design_mode_enabled {
+            return false;
+        }
+        document.set_design_mode_enabled(design_mode_enabled);
+        self.record_mutation(MutationScope::QueryState);
+        true
+    }
+
+    pub fn set_document_quirks_mode_for_handle(
+        &mut self,
+        document_handle: DomHandle,
+        quirks_mode: selectors::matching::QuirksMode,
+    ) -> bool {
+        let Some(document) = self
+            .node_mut(document_handle)
+            .and_then(|node| node.data_mut().as_document_mut())
+        else {
+            return false;
+        };
+        if document.quirks_mode() == quirks_mode {
+            return false;
+        }
+        document.set_quirks_mode(quirks_mode);
+        self.record_mutation(MutationScope::QueryState);
         true
     }
 
@@ -1584,6 +1697,7 @@ impl DomHost {
             return None;
         }
         let root = self.create_document_fragment();
+        self.dom.set_document_fragment_host(root, host);
         let owner_document = self.node(host).and_then(Node::owner_document);
         let connected = self.is_connected(host);
         self.dom.register_stylesheet_candidate_tree_scope(root);
@@ -2151,6 +2265,7 @@ impl DomHost {
                 continue;
             }
             self.dom.register_stylesheet_candidate_tree_scope(root);
+            self.dom.set_document_fragment_host(root, host);
             self.shadow_roots_by_host.borrow_mut().insert(
                 host,
                 ShadowRootState {

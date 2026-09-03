@@ -800,6 +800,7 @@ mod tests {
             SharedWorkerDescriptor::new(
                 SharedWorkerScriptType::Module,
                 SharedWorkerCredentialsMode::SameOrigin,
+                false,
                 SharedWorkerCreationContextType::Secure,
             ),
         );
@@ -811,6 +812,40 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn extended_lifetime_mismatch_rejects_client_not_another_instance() {
+        let registry = SharedWorkerRegistry::<u64>::default();
+        let key = key("a");
+        let first = registry.connect(key.clone(), SharedWorkerDescriptor::default());
+        let instance_id = match first {
+            SharedWorkerConnectAction::StartLoading { instance_id, .. } => instance_id,
+            other => panic!("expected StartLoading, got {other:?}"),
+        };
+        registry.finish_loading(&key, instance_id, 1);
+
+        let rejected = registry.connect(
+            key,
+            SharedWorkerDescriptor::new(
+                SharedWorkerScriptType::Classic,
+                SharedWorkerCredentialsMode::SameOrigin,
+                true,
+                SharedWorkerCreationContextType::Secure,
+            ),
+        );
+
+        assert!(matches!(
+            rejected,
+            SharedWorkerConnectAction::RejectClient {
+                error: SharedWorkerCompatibilityError::ExtendedLifetime {
+                    existing: false,
+                    requested: true,
+                },
+                ..
+            }
+        ));
+        assert_eq!(registry.diagnostics().entry_count, 1);
     }
 
     #[test]
@@ -829,6 +864,7 @@ mod tests {
             SharedWorkerDescriptor::new(
                 SharedWorkerScriptType::Classic,
                 SharedWorkerCredentialsMode::SameOrigin,
+                false,
                 SharedWorkerCreationContextType::Nonsecure,
             ),
         );

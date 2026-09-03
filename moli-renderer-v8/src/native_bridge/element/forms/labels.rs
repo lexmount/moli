@@ -7,7 +7,7 @@ fn is_labelable_element(element: &Element) -> bool {
     }
     match element.local_name() {
         "button" | "meter" | "output" | "progress" | "select" | "textarea" => true,
-        "input" => element.input_type() != "hidden",
+        "input" => element.input_type() != InputType::Hidden,
         _ => false,
     }
 }
@@ -28,7 +28,7 @@ fn is_label_interactive_content(element: &Element) -> bool {
         "a" | "area" => element.has_attribute("href"),
         "audio" | "video" => element.has_attribute("controls"),
         "img" => element.has_attribute("usemap"),
-        "input" => element.input_type() != "hidden",
+        "input" => element.input_type() != InputType::Hidden,
         "label" => true,
         _ => false,
     }

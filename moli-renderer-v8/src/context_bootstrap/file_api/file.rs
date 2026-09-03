@@ -71,6 +71,10 @@ fn file_name_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !file_receiver_branded(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let name = file_name_from_object(scope, args.this()).unwrap_or_default();
     if let Some(value) = v8_string(scope, &name) {
         rv.set(value.into());
@@ -91,10 +95,21 @@ fn file_last_modified_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !file_receiver_branded(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     let last_modified = get_private_value(scope, args.this(), FILE_LAST_MODIFIED_SLOT)
         .and_then(|value| value.number_value(scope))
         .unwrap_or_else(unix_epoch_millis);
     rv.set(v8::Number::new(scope, last_modified).into());
+}
+
+fn file_receiver_branded<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, receiver, FILE_NAME_SLOT).is_some()
 }
 
 fn private_string_value<'s>(

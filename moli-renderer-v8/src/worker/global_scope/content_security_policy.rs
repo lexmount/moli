@@ -5,9 +5,11 @@ use url::Url;
 
 use crate::RendererSyntheticResponseBody;
 use crate::content_security_policy::{
-    ContentSecurityPolicyDisposition, ContentSecurityPolicyRedirectStatus,
-    ContentSecurityPolicyResourceKind, ContentSecurityPolicyUrlViolation,
-    ContentSecurityPolicyViolationEventFields, content_security_policy_report_requests,
+    ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
+    ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyResourceKind,
+    ContentSecurityPolicyUrlViolation, ContentSecurityPolicyViolationEventFields,
+    content_security_policy_non_url_violation_with_source, content_security_policy_report_requests,
+    content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_for_checked_url_with_redirect_status_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints,
@@ -105,6 +107,49 @@ pub(super) fn dispatch_worker_trusted_types_sink_violation_event_for_state<'s>(
     if let Some(violation) = violation {
         dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
     }
+}
+
+pub(super) fn allows_worker_trusted_type_policy_name_for_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    state: &Rc<RefCell<WorkerGlobalState>>,
+    policy_name: &str,
+    is_duplicate: bool,
+) -> bool {
+    let (report_only_violation, enforced_violation) = {
+        let state_ref = state.borrow();
+        let Some(protected_url) = state_ref.current_script_url.as_ref() else {
+            return true;
+        };
+        let report_only_violation =
+            content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
+                &state_ref.content_security_report_only_policies,
+                protected_url,
+                policy_name,
+                is_duplicate,
+                ContentSecurityPolicyDisposition::Report,
+                &state_ref.content_security_reporting_endpoints,
+            );
+        let enforced_violation =
+            content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
+                &state_ref.content_security_policies,
+                protected_url,
+                policy_name,
+                is_duplicate,
+                ContentSecurityPolicyDisposition::Enforce,
+                &state_ref.content_security_reporting_endpoints,
+            );
+        (report_only_violation, enforced_violation)
+    };
+    let allowed = enforced_violation.is_none();
+    // Match window policy creation reporting: enforce response policies are
+    // modeled before report-only policies in the partitioned policy state.
+    if let Some(violation) = enforced_violation {
+        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
+    }
+    if let Some(violation) = report_only_violation {
+        dispatch_worker_content_security_policy_violation_event_for_state(scope, state, &violation);
+    }
+    allowed
 }
 
 fn create_worker_content_security_policy_violation_event<'s>(
@@ -785,6 +830,34 @@ pub(super) fn worker_content_security_policy_violation(
         kind,
         ContentSecurityPolicyRedirectStatus::NoRedirect,
     )
+}
+
+pub(super) fn worker_eval_content_security_policy_violation(
+    state: &WorkerGlobalState,
+    protected_url: &Url,
+    allow_trusted_types_eval: bool,
+    source: Option<&str>,
+    disposition: ContentSecurityPolicyDisposition,
+) -> Option<ContentSecurityPolicyUrlViolation> {
+    let policies = match disposition {
+        ContentSecurityPolicyDisposition::Enforce => &state.content_security_policies,
+        ContentSecurityPolicyDisposition::Report => &state.content_security_report_only_policies,
+    };
+    let kind = if allow_trusted_types_eval {
+        ContentSecurityPolicyNonUrlKind::TrustedTypesEval
+    } else {
+        ContentSecurityPolicyNonUrlKind::Eval
+    };
+    policies.iter().find_map(|policy| {
+        content_security_policy_non_url_violation_with_source(
+            policy,
+            protected_url,
+            kind,
+            source,
+            disposition,
+            &state.content_security_reporting_endpoints,
+        )
+    })
 }
 
 pub(super) fn worker_content_security_policy_violation_with_redirect_status(

@@ -129,7 +129,7 @@ async fn idle_deadline_declared_shape_keeps_state_private() {
 
     assert_eq!(
         result,
-        r#"{"ctor":"IdleDeadline","didTimeout":false,"typeofTimeRemaining":"function","firstFinite":true,"secondFinite":true,"spoofIgnored":true,"leaksStateField":false,"leaksInternalSlotNameBefore":false,"initialInternalOwnNames":"","spoofedInternalOwnNames":"__moliIdleDeadlineMs","keys":["didTimeout","timeRemaining"],"ownNames":["didTimeout","timeRemaining"]}"#
+        r#"{"ctor":"IdleDeadline","didTimeout":false,"typeofTimeRemaining":"function","firstFinite":true,"secondFinite":true,"spoofIgnored":true,"leaksStateField":false,"leaksInternalSlotNameBefore":false,"initialInternalOwnNames":"","spoofedInternalOwnNames":"__moliIdleDeadlineMs","keys":[],"ownNames":[]}"#
     );
 }
 
@@ -157,6 +157,9 @@ async fn idle_callback_uses_webidl_callback_function_semantics() {
             return new Proxy(
               function(deadline) {
                 "use strict";
+                const ownRemaining = deadline.timeRemaining();
+                const borrowedRemaining =
+                  IdleDeadline.prototype.timeRemaining.call(deadline);
                 parent.__idleCallbackFacts = {
                   callbackRealm:
                     globalThis === parent.__idleCallbackFrame.contentWindow,
@@ -164,6 +167,8 @@ async fn idle_callback_uses_webidl_callback_function_semantics() {
                   argumentCount: arguments.length,
                   deadlineRealm: deadline instanceof parent.IdleDeadline,
                   hasTimeRemaining: typeof deadline.timeRemaining === "function",
+                  crossRealmTimeRemaining:
+                    Math.abs(ownRemaining - borrowedRemaining) <= 5,
                   proxyCalls: parent.__idleCallbackProxyCalls
                 };
               },
@@ -190,7 +195,7 @@ async fn idle_callback_uses_webidl_callback_function_semantics() {
     assert_eq!(
         vm.eval("JSON.stringify(__idleCallbackFacts)")
             .expect("idle Web IDL callback facts"),
-        r#"{"callbackRealm":true,"receiverUndefined":true,"argumentCount":1,"deadlineRealm":true,"hasTimeRemaining":true,"proxyCalls":1}"#
+        r#"{"callbackRealm":true,"receiverUndefined":true,"argumentCount":1,"deadlineRealm":true,"hasTimeRemaining":true,"crossRealmTimeRemaining":true,"proxyCalls":1}"#
     );
 }
 
@@ -304,5 +309,47 @@ fn animation_frame_and_idle_callbacks_require_callable_webidl_values() {
         )
         .expect("Window scheduled callback conversion result"),
         "TypeError|TypeError"
+    );
+}
+
+#[test]
+fn animation_frame_and_idle_cancellation_use_required_unsigned_long_handles() {
+    let mut vm = new_storage_test_vm("https://window-cancel-callback-conversion.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              const probe = callback => {
+                try {
+                  return `return:${String(callback())}`;
+                } catch (error) {
+                  return `throw:${error && error.name}`;
+                }
+              };
+              const facts = {};
+              for (const [label, cancel] of [
+                ["animation", cancelAnimationFrame],
+                ["idle", cancelIdleCallback]
+              ]) {
+                let conversions = 0;
+                facts[label] = {
+                  missing: probe(() => cancel.call(window)),
+                  wrongReceiver: probe(() => cancel.call({}, 0)),
+                  symbol: probe(() => cancel.call(window, Symbol("handle"))),
+                  object: probe(() => cancel.call(window, {
+                    valueOf() {
+                      conversions++;
+                      return 0;
+                    }
+                  })),
+                  conversions
+                };
+              }
+              return JSON.stringify(facts);
+            })()
+            "#,
+        )
+        .expect("Window cancellation callback Web IDL conversion result"),
+        r#"{"animation":{"missing":"throw:TypeError","wrongReceiver":"throw:TypeError","symbol":"throw:TypeError","object":"return:undefined","conversions":1},"idle":{"missing":"throw:TypeError","wrongReceiver":"throw:TypeError","symbol":"throw:TypeError","object":"return:undefined","conversions":1}}"#
     );
 }

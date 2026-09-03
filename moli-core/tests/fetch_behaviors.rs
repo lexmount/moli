@@ -601,11 +601,14 @@ async fn fetch_with_domcontentloaded_stops_before_runtime_owned_script_load_even
 
     let page = browser
         .fetch_with_wait_until(
-            &server.url("/compat/runtime-owned-external-in-order-load-after-domcontentloaded"),
+            &server.url(
+                "/compat/runtime-owned-external-in-order-load-after-domcontentloaded?manual-release",
+            ),
             RenderedDomWaitUntil::DomContentLoaded,
             Duration::from_secs(5),
         )
         .await?;
+    server.release_runtime_owned_in_order_load_after_dcl();
 
     assert_eq!(
         diagnostic_global(&page, "runtimeOwnedInOrderLoadAfterDcl"),

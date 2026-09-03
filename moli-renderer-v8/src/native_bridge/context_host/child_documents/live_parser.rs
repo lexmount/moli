@@ -72,13 +72,36 @@ impl<'a, 'scope, 'pin> ChildFrameLiveParserOwner<'a, 'scope, 'pin> {
         }
     }
 
-    fn sync_child_parser_side_effects(&mut self, effects: Option<&DomMutationEffects>) {
-        if effects.is_none_or(|effects| effects.did_change()) {
-            self.host
-                .sync_owner_style_sheet_texts_for_document_tree_scopes(self.child_document_handle);
-            self.host
-                .sync_child_browsing_context_subtree(self.scope, self.child_document_handle);
+    fn sync_child_parser_side_effects(&mut self) {
+        self.host
+            .sync_owner_style_sheet_texts_for_document_tree_scopes(self.child_document_handle);
+        self.host
+            .sync_child_browsing_context_subtree(self.scope, self.child_document_handle);
+    }
+}
+
+impl JsContextHost {
+    fn with_live_child_parser_step<R>(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        child_document_handle: DomHandle,
+        step: impl FnOnce(&mut ChildFrameLiveParserOwner<'_, '_, '_>) -> R,
+    ) -> R {
+        struct FinishParserStepOnDrop {
+            host: *mut JsContextHost,
         }
+
+        impl Drop for FinishParserStepOnDrop {
+            fn drop(&mut self) {
+                unsafe { &mut *self.host }.finish_dom_host_parse_step();
+            }
+        }
+
+        self.begin_dom_host_parse_step();
+        let host_ptr = self as *mut JsContextHost;
+        let _guard = FinishParserStepOnDrop { host: host_ptr };
+        let mut owner = ChildFrameLiveParserOwner::new(self, scope, child_document_handle);
+        step(&mut owner)
     }
 }
 
@@ -119,6 +142,14 @@ impl StylesheetBlockingReadView for ChildFrameLiveParserOwner<'_, '_, '_> {
         self.child_document_handle
     }
 
+    fn document_is_quirks_mode(&self) -> bool {
+        self.host
+            .dom_host()
+            .node(self.child_document_handle)
+            .and_then(Node::as_document)
+            .is_some_and(|document| document.is_quirks_mode())
+    }
+
     fn document_order_stylesheet_candidate_ids_before(
         &self,
         target_node_id: Option<crate::dom::NodeId>,
@@ -134,7 +165,15 @@ impl StylesheetBlockingReadView for ChildFrameLiveParserOwner<'_, '_, '_> {
 
 impl ParserMutationEffectConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
     fn consume_parser_mutation_effects(&mut self, effects: DomMutationEffects) {
-        self.sync_child_parser_side_effects(Some(&effects));
+        let did_change = effects.did_change();
+        let host_ptr = self.host as *mut JsContextHost;
+        self.host
+            .apply_child_parser_stream_mutation_effects_to_live_dom_host(
+                self.scope, host_ptr, effects,
+            );
+        if did_change {
+            self.sync_child_parser_side_effects();
+        }
     }
 }
 
@@ -257,8 +296,10 @@ impl ParserDomReadConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
 
 impl ParserDomMutationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
     fn apply_parser_dom_mutation(&mut self, mutation: ParserDomMutation) {
-        let effects = mutation.apply_to_dom_host(self.host.dom_host_mut());
-        self.sync_child_parser_side_effects(Some(&effects));
+        let host_ptr = self.host as *mut JsContextHost;
+        self.host
+            .apply_child_parser_dom_mutation_to_live_dom_host(self.scope, host_ptr, mutation);
+        self.sync_child_parser_side_effects();
     }
 
     fn create_parser_element_without_attributes(
@@ -381,6 +422,13 @@ impl ParserDomMutationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
             .set_script_already_started(node_id, true);
     }
 
+    fn mark_unclosed_form_control_for_parser(&mut self, node_id: DomHandle) {
+        let _ = self
+            .host
+            .dom_host_mut()
+            .set_blocks_form_submission(node_id, true);
+    }
+
     fn finish_parsing_script_children(&mut self, node_id: DomHandle) {
         let _ = self
             .host
@@ -393,6 +441,13 @@ impl ParserDomMutationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
             .host
             .dom_host_mut()
             .finish_parsing_link_children(node_id);
+    }
+
+    fn maybe_clone_an_option_into_selectedcontent(&mut self, node_id: DomHandle) {
+        let host_ptr = self.host as *mut JsContextHost;
+        let _ = self
+            .host
+            .sync_selectedcontents_after_parser_option_finished(self.scope, host_ptr, node_id);
     }
 
     fn attach_declarative_shadow_for_parser(
@@ -416,9 +471,29 @@ impl ParserDomMutationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
 impl ParserElementCreationConsumer for ChildFrameLiveParserOwner<'_, '_, '_> {
     fn create_parser_element(
         &mut self,
-        _request: ParserElementCreationRequest<'_>,
+        request: ParserElementCreationRequest<'_>,
     ) -> Option<DomHandle> {
-        None
+        let host_ptr: *mut JsContextHost = self.host;
+        crate::custom_elements::create_and_construct_parser_custom_element_direct_for_document(
+            self.scope,
+            host_ptr,
+            request.document_handle,
+            request.local_name,
+            request.namespace,
+            request.prefix,
+            request.attributes,
+            request.intended_parent,
+            |document_handle, local_name, namespace, prefix| {
+                unsafe { &mut *host_ptr }
+                    .dom_host_mut()
+                    .create_parser_element_without_attributes_for_document(
+                        document_handle,
+                        local_name,
+                        namespace,
+                        prefix,
+                    )
+            },
+        )
     }
 }
 
@@ -511,10 +586,11 @@ impl JsContextHost {
                 parser.stop(ParserStopReason::DocumentReplacement);
                 return ParserProgress::Stopped;
             }
-            let outcome = {
-                let mut owner = ChildFrameLiveParserOwner::new(self, scope, document_handle);
-                parser.advance_queued_or_resume_step(&mut owner)
-            };
+            let outcome = self.with_live_child_parser_step(scope, document_handle, |owner| {
+                parser.advance_queued_or_resume_step(owner)
+            });
+            let host_ptr = self as *mut JsContextHost;
+            self.run_pending_child_parser_post_step_runtime_work(scope, host_ptr);
             let discovery_signals = parser.take_discovery_signals();
             self.queue_live_child_parser_discovery_signals(
                 child_handle,
@@ -839,10 +915,18 @@ impl JsContextHost {
     ) -> Option<crate::frame_owner_model::FrameDocumentInteractiveLifecycleAction> {
         parser.request_finish();
         let _ = parser.admit_delayed_finish_at_local_owner_boundary();
-        let finish_signals = {
-            let mut owner = ChildFrameLiveParserOwner::new(self, scope, document_handle);
-            parser.finish(&mut owner)
-        };
+        let finish_signals =
+            self.with_live_child_parser_step(scope, document_handle, |owner| parser.finish(owner));
+        if self
+            .dom_host()
+            .document_content_type_for_handle(document_handle)
+            .is_some_and(|mime| mime.eq_ignore_ascii_case("text/plain"))
+        {
+            self.dom_host_mut()
+                .set_html_quirks_mode_for_parser_document(document_handle, QuirksMode::NoQuirks);
+        }
+        let host_ptr = self as *mut JsContextHost;
+        self.run_pending_child_parser_post_step_runtime_work(scope, host_ptr);
         self.queue_live_child_parser_discovery_signals(
             child_handle,
             document_handle,
@@ -1110,10 +1194,11 @@ impl JsContextHost {
                 entry.stop(ParserStopReason::DocumentReplacement);
                 return false;
             }
-            let outcome = {
-                let mut parser_owner = ChildFrameLiveParserOwner::new(self, scope, document_handle);
-                entry.advance_queued_or_resume_step(&mut parser_owner)
-            };
+            let outcome = self.with_live_child_parser_step(scope, document_handle, |owner| {
+                entry.advance_queued_or_resume_step(owner)
+            });
+            let host_ptr = self as *mut JsContextHost;
+            self.run_pending_child_parser_post_step_runtime_work(scope, host_ptr);
             let discovery_signals = entry.take_discovery_signals();
             self.queue_live_child_parser_discovery_signals(
                 child_handle,

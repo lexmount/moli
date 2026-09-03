@@ -1,3 +1,4 @@
+use super::super::constructors::illegal_constructor_callback;
 use super::super::navigation_window::{
     navigation_document_has_opaque_origin, runtime_window_owner,
 };
@@ -11,9 +12,10 @@ use super::methods::{
 };
 use super::slots::{location_href_slot, sync_location_object_fields};
 use super::*;
+use crate::context_bootstrap::exposed_interfaces::build_intrinsic_interface_instance;
 use crate::util::{callback_data_index_value, callback_data_item};
 use anyhow::{Result, anyhow};
-use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use moli_webapi_declare::WebApiObject;
 
 #[derive(Clone, Copy)]
 enum LocationAttribute {
@@ -158,54 +160,21 @@ struct LocationOwnSurfaceDeclaration {
     to_string: (),
 }
 
-#[derive(WebApiFunctionTemplate)]
-#[webapi(name = "Location", constructor = "illegal", constructor_length = 0)]
-struct LocationConstructorTemplateDeclaration {}
-
-#[derive(WebApiObject)]
-#[webapi(interface = "Object")]
-struct LocationConstructorGlobalDeclaration<'scope> {
-    #[webapi(data_property = "Location")]
-    constructor: v8::Local<'scope, v8::Function>,
+pub(in crate::context_bootstrap) fn build_location_constructor_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+) -> v8::Local<'s, v8::FunctionTemplate> {
+    let template = v8::FunctionTemplate::builder(illegal_constructor_callback)
+        .length(0)
+        .build(scope);
+    let instance = template.instance_template(scope);
+    configure_location_instance_template(scope, instance);
+    template
 }
 
-#[derive(Default, WebApiObject)]
-#[webapi(interface = "Location")]
-struct LocationPrototypeMetadataDeclaration {
-    #[webapi(to_string_tag, init = string("Location"))]
-    to_string_tag: (),
-}
-
-pub(in crate::context_bootstrap) fn ensure_location_constructor_runtime_state<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    global: v8::Local<'s, v8::Object>,
-) -> Result<()> {
-    if global_constructor_prototype(scope, "Location").is_some() {
-        return Ok(());
-    }
-
-    let template = LocationConstructorTemplateDeclaration::build(scope);
-    let constructor = template
-        .get_function(scope)
-        .ok_or_else(|| anyhow!("failed to build Location constructor"))?;
-    LocationConstructorGlobalDeclaration::new(constructor)
-        .initialize(scope, global)
-        .map_err(|error| anyhow!("failed to initialize Location constructor global: {error}"))?;
-
-    let prototype = constructor
-        .get(scope, v8str(scope, "prototype").into())
-        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        .ok_or_else(|| anyhow!("failed to extract Location.prototype"))?;
-    LocationPrototypeMetadataDeclaration::default()
-        .initialize(scope, prototype)
-        .map_err(|error| anyhow!("failed to initialize Location prototype metadata: {error}"))?;
-    Ok(())
-}
-
-pub(in crate::context_bootstrap) fn build_location_runtime_object<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-) -> Result<v8::Local<'s, v8::Object>> {
-    let template = v8::ObjectTemplate::new(scope);
+fn configure_location_instance_template(
+    scope: &mut v8::PinScope<'_, '_, ()>,
+    template: v8::Local<'_, v8::ObjectTemplate>,
+) {
     let locked_property_attributes = || {
         v8::PropertyAttribute::READ_ONLY
             | v8::PropertyAttribute::DONT_ENUM
@@ -231,9 +200,13 @@ pub(in crate::context_bootstrap) fn build_location_runtime_object<'s>(
             .getter(location_same_origin_named_property_getter)
             .flags(v8::PropertyHandlerFlags::ONLY_INTERCEPT_STRINGS),
     );
-    template
-        .new_instance(scope)
-        .ok_or_else(|| anyhow!("failed to instantiate Location object template"))
+    template.set_immutable_proto();
+}
+
+pub(in crate::context_bootstrap) fn build_location_runtime_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Result<v8::Local<'s, v8::Object>> {
+    build_intrinsic_interface_instance(scope, "Location")
 }
 
 fn location_same_origin_named_property_getter(
@@ -250,9 +223,6 @@ pub(in crate::context_bootstrap) fn install_location_runtime_state<'s>(
     location: v8::Local<'s, v8::Object>,
     href: &str,
 ) -> Result<()> {
-    if let Some(prototype) = global_constructor_prototype(scope, "Location") {
-        let _ = location.set_prototype(scope, prototype.into());
-    }
     sync_location_object_fields(scope, location, href);
     // Location's legacy-unforgeable own properties are non-configurable.
     // Window resets refresh the backing slots on the existing object without

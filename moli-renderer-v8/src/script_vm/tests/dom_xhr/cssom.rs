@@ -986,7 +986,45 @@ fn css_variable_specified_values_preserve_cssom_shorthand_boundaries() {
 
     assert_eq!(
         result,
-        "margin: var(--prop);,var(--prop),|margin-right: ; margin-bottom: ; margin-left: ; margin-top: 10px;,,,10px|var(--prop),|,,var(--prop)  /* keep */ var(--prop),color: var(--prop)  /* keep */ var(--prop);|var(--open)|3px,1px,1px,1px"
+        "margin: var(--prop);,var(--prop),|margin-right: ; margin-bottom: ; margin-left: ; margin-top: 10px;,,,10px|var(--prop),|,,var(--prop)  /* keep */ var(--prop),color: var(--prop)  /* keep */ var(--prop);|var(--open|3px,1px,1px,1px"
+    );
+}
+
+#[test]
+fn stylesheet_eof_open_var_preserves_cssom_text_views() {
+    let mut vm = new_storage_test_vm("https://css-var-stylesheet-eof.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const style = document.createElement('style');
+  style.textContent = 'div { width: var(--open';
+  (document.head || document.documentElement || document).appendChild(style);
+  const rule = style.sheet.cssRules[0];
+
+  const constructed = new CSSStyleSheet();
+  constructed.replaceSync('span { height: var(--retained');
+  const retained = constructed.cssRules[0];
+  constructed.replaceSync('span { height: 1px; }');
+  constructed.cssRules[0].style.width = 'var(--written';
+
+  return [
+    rule.style.getPropertyValue('width'),
+    rule.style.cssText,
+    rule.cssText,
+    retained.style.getPropertyValue('height'),
+    retained.cssText,
+    constructed.cssRules[0].style.width
+  ].join('|');
+})()
+"#,
+        )
+        .expect("stylesheet EOF-open var CSSOM views should evaluate");
+
+    assert_eq!(
+        result,
+        "var(--open|width: var(--open;|div { width: var(--open; }|var(--retained|span { height: var(--retained; }|var(--written"
     );
 }
 
@@ -4997,6 +5035,40 @@ fn computed_css_style_declaration_is_read_only() {
         "true|NoModificationAllowedError:7|NoModificationAllowedError:7|NoModificationAllowedError:7|NoModificationAllowedError:7|NoModificationAllowedError:7"
     );
 }
+
+#[test]
+fn computed_flex_flow_serializes_direction_and_wrap() {
+    let mut vm = new_storage_test_vm("https://computed-flex-flow.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.createElement('div');
+  (document.body || document.documentElement || document).appendChild(target);
+  const values = [
+    'initial',
+    'column',
+    'wrap',
+    'column wrap-reverse',
+    'row-reverse wrap'
+  ];
+  return values.map(value => {
+    target.style.flexFlow = value;
+    const computed = getComputedStyle(target);
+    return [computed.flexFlow, computed.flexDirection, computed.flexWrap].join('|');
+  }).join('/');
+})()
+"#,
+        )
+        .expect("computed flex-flow serialization should evaluate");
+
+    assert_eq!(
+        result,
+        "row nowrap|row|nowrap/column nowrap|column|nowrap/row wrap|row|wrap/column wrap-reverse|column|wrap-reverse/row-reverse wrap|row-reverse|wrap"
+    );
+}
+
 #[test]
 fn css_media_rule_exposes_mutable_media_list() {
     let mut vm = new_storage_test_vm("https://css-media-list.test/");
@@ -7304,6 +7376,39 @@ fn css_font_face_descriptor_setter_uses_cssom_value_fragment_eof() {
 }
 
 #[test]
+fn css_font_face_unicode_range_setter_accepts_comments_between_tokens() {
+    let mut vm = new_storage_test_vm("https://css-font-face-unicode-range-comments.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const sheet = new CSSStyleSheet();
+  sheet.replaceSync('@font-face { font-family: Foo; src: local(Foo); unicode-range: U+1357; }');
+  const style = sheet.cssRules[0].style;
+  const values = [
+    'u/**/+/**/a/**/?',
+    'u/**/+0a/**/?',
+    'u/**/+0/**/?',
+    'u/**/+0/**/-0a',
+    'u/**/+0/**/-1',
+    'u/**/+/**/?'
+  ].map(value => {
+    style.setProperty('unicode-range', value);
+    return style.getPropertyValue('unicode-range');
+  });
+  style.setProperty('unicode-range', 'u/**/+a/**/b');
+  values.push(style.getPropertyValue('unicode-range'));
+  return values.join('|');
+})()
+"#,
+        )
+        .expect("CSSFontFaceRule unicode-range setter should accept comments between tokens");
+
+    assert_eq!(result, "U+A0-AF|U+A0-AF|U+0-F|U+0-A|U+0-1|U+0-F|U+0-F");
+}
+
+#[test]
 fn css_font_face_descriptor_dot_accessors_cover_stylo_descriptors() {
     let mut vm = new_storage_test_vm("https://css-font-face-descriptor-dot-accessors.test/");
 
@@ -9074,6 +9179,67 @@ fn cssom_rejects_terminal_pseudo_element_chains() {
 }
 
 #[test]
+fn webkit_autofill_alias_uses_stylo_across_selector_surfaces() {
+    let mut vm = new_storage_test_vm("https://webkit-autofill-selector.test/");
+
+    let setup = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const head = document.head || root.appendChild(document.createElement('head'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const input = document.createElement('input');
+  input.id = 'autofill-target';
+  body.append(input);
+
+  const style = document.createElement('style');
+  style.textContent = '#autofill-target:-webkit-autofill { color: rgb(1, 2, 3); }';
+  head.append(style);
+
+  const sheet = new CSSStyleSheet();
+  const index = sheet.insertRule('#autofill-target:-WeBkIt-AuToFiLl {}');
+  globalThis.__webkitAutofillSheet = sheet;
+  return [
+    document.querySelector(':-webkit-autofill') === null,
+    style.sheet.cssRules.length,
+    style.sheet.cssRules[0].selectorText,
+    index,
+    sheet.cssRules[0].selectorText,
+    CSS.supports('selector(:-webkit-autofill)')
+  ].join('|');
+})()
+"#,
+        )
+        .expect("webkit autofill selector setup should evaluate");
+
+    assert_eq!(
+        setup,
+        "true|1|#autofill-target:autofill|0|#autofill-target:autofill|true"
+    );
+
+    let input = cssom_element_handle_by_id(&vm, "autofill-target");
+    assert!(
+        vm.document_runtime
+            .dom_host_mut()
+            .set_autofilled_state(input, true)
+    );
+
+    let result = vm
+        .eval(
+            r#"[
+  document.querySelector(':-webkit-autofill') === document.getElementById('autofill-target'),
+  document.getElementById('autofill-target').matches(':-WeBkIt-AuToFiLl'),
+  getComputedStyle(document.getElementById('autofill-target')).color,
+  __webkitAutofillSheet.cssRules[0].selectorText
+].join('|')"#,
+        )
+        .expect("webkit autofill selector state should evaluate");
+
+    assert_eq!(result, "true|true|rgb(1, 2, 3)|#autofill-target:autofill");
+}
+
+#[test]
 fn cssom_stylesheet_text_uses_prior_namespace_rules_for_attribute_case_flags() {
     let mut vm = new_storage_test_vm("https://cssom-attribute-case-namespace.test/");
 
@@ -9469,6 +9635,36 @@ fn live_inline_style_css_text_getter_serializes_declaration_block() {
     assert_eq!(
         result,
         "background-color: blue !important; color: red !important;"
+    );
+}
+
+#[test]
+fn live_inline_font_family_getter_normalizes_quoted_family_names() {
+    let mut vm = new_storage_test_vm("https://inline-font-family-serialization.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const target = document.createElement('div');
+  const read = value => {
+    target.setAttribute('style', `font-family: ${value}`);
+    return [target.style.fontFamily, target.style.getPropertyValue('font-family')];
+  };
+  return JSON.stringify([
+    read("'Twisty Tie'"),
+    read("'Veronica'"),
+    read("'34J'"),
+    read("'serif'")
+  ]);
+})()
+"#,
+        )
+        .expect("inline font-family serialization should evaluate");
+
+    assert_eq!(
+        result,
+        r#"[["Twisty Tie","Twisty Tie"],["Veronica","Veronica"],["\"34J\"","\"34J\""],["\"serif\"","\"serif\""]]"#
     );
 }
 
@@ -12972,6 +13168,66 @@ fn css_style_declaration_parses_content_and_bookmark_properties() {
 }
 
 #[test]
+fn css_style_declaration_accepts_counters_in_content_alt_text() {
+    let mut vm = new_storage_test_vm("https://css-style-content-alt-counter.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const live = document.createElement('div').style;
+  const values = [
+    `"" / counter(cnt)`,
+    `"regular text" / "alt text 1" counter(cnt) "alt text 2"`,
+    `"regular text" / counter(cnt) "alt text"`,
+    `"regular text" / counters(chapter, ".", DECIMAL)`
+  ];
+  const serialized = values.map(value => {
+    live.content = value;
+    const read = live.getPropertyValue('content');
+    live.content = read;
+    return live.getPropertyValue('content');
+  });
+  live.content = `"regular text" / counter()`;
+  const afterInvalid = live.getPropertyValue('content');
+
+  live.cssText = `color: red; content: "" / counter(css-text)`;
+  const cssTextContent = live.getPropertyValue('content');
+  const cssTextColor = live.getPropertyValue('color');
+
+  const sheet = new CSSStyleSheet();
+  sheet.insertRule('div {}');
+  const rule = sheet.cssRules[0].style;
+  rule.setProperty('content', `"rule" / counter(rule-counter) "alt"`, 'important');
+  const ruleValue = rule.getPropertyValue('content');
+  const rulePriority = rule.getPropertyPriority('content');
+  rule.setProperty('content', `"rule" / url(alt.svg) counter(rule-counter)`);
+  const ruleAfterInvalid = rule.getPropertyValue('content');
+
+  return [
+    CSS.supports('content', `"" / counter(cnt)`),
+    CSS.supports('content', `"" / counters(cnt, ".")`),
+    CSS.supports('content', `"" / counter()`),
+    serialized.join('~'),
+    afterInvalid,
+    cssTextContent,
+    cssTextColor,
+    ruleValue,
+    rulePriority,
+    ruleAfterInvalid
+  ].join('|');
+})()
+"#,
+        )
+        .expect("content alt counter CSSOM should evaluate");
+
+    assert_eq!(
+        result,
+        "true|true|false|\"\" / counter(cnt)~\"regular text\" / \"alt text 1\" counter(cnt) \"alt text 2\"~\"regular text\" / counter(cnt) \"alt text\"~\"regular text\" / counters(chapter, \".\")|\"regular text\" / counters(chapter, \".\")|\"\" / counter(css-text)|red|\"rule\" / counter(rule-counter) \"alt\"|important|\"rule\" / counter(rule-counter) \"alt\""
+    );
+}
+
+#[test]
 fn css_style_declaration_supports_will_change() {
     let mut vm = new_storage_test_vm("https://css-style-will-change.test/");
 
@@ -13267,6 +13523,37 @@ fn css_style_declaration_serializes_animation_shorthand_from_longhands() {
     assert_eq!(
         result,
         "1s cubic-bezier(0, -2, 1, 3) -3s 4 reverse both paused anim|1s cubic-bezier(0, -2, 1, 3) -3s 4 reverse both paused anim|reverse both paused anim, 1s cubic-bezier(0, -2, 1, 3) -3s 4|reverse both paused anim, 1s cubic-bezier(0, -2, 1, 3) -3s 4"
+    );
+}
+
+#[test]
+fn css_style_declaration_serializes_white_space_shorthand() {
+    let mut vm = new_storage_test_vm("https://css-style-white-space-shorthand.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const element = document.createElement('div');
+  const values = ['normal', 'pre', 'nowrap', 'pre-wrap', 'pre-line', 'inherit'];
+  const attributeValues = values.map(value => {
+    element.setAttribute('style', `white-space: ${value}`);
+    return [element.style.whiteSpace, element.style.getPropertyValue('white-space')].join('|');
+  });
+  const propertyValues = values.map(value => {
+    element.style.cssText = '';
+    element.style.whiteSpace = value;
+    return [element.style.whiteSpace, element.style.getPropertyValue('white-space')].join('|');
+  });
+  return [attributeValues.join(','), propertyValues.join(',')].join('/');
+})()
+"#,
+        )
+        .expect("white-space shorthand serialization should evaluate");
+
+    assert_eq!(
+        result,
+        "normal|normal,pre|pre,nowrap|nowrap,pre-wrap|pre-wrap,pre-line|pre-line,inherit|inherit/normal|normal,pre|pre,nowrap|nowrap,pre-wrap|pre-wrap,pre-line|pre-line,inherit|inherit"
     );
 }
 

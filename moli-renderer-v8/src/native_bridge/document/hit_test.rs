@@ -1,7 +1,8 @@
 use std::collections::HashSet;
 
 use super::super::element::{
-    ClientRect, observable_caret_position, observable_hit_test, observable_hit_test_all,
+    ClientRect, element_is_inert_for_hit_testing, observable_caret_position, observable_hit_test,
+    observable_hit_test_all,
 };
 use super::super::node::{node_is_document, node_runtime_and_handle_from_args};
 use crate::document_runtime::DomHandle;
@@ -537,8 +538,36 @@ fn element_at_point(
     if !point_is_inside_viewport(metrics, x, y) {
         return Ok(None);
     }
-    Ok(hit
+    let element = hit
         .and_then(|hit| element_for_hit_source(runtime, hit.source))
+        .filter(|element| !element_is_inert_for_hit_testing(runtime.dom_host(), *element));
+    if let Some(element) = element {
+        return Ok(retarget_element_to_tree_scope(runtime, element, tree_scope));
+    }
+
+    if hit.is_some() {
+        let (_, hits) = observable_hit_test_all(
+            runtime,
+            document,
+            moli_layout::LayoutPoint::new(x as f32, y as f32),
+            false,
+            moli_layout::LayoutFlushReason::HitTest,
+        )?;
+        if let Some(element) = hits.into_iter().find_map(|hit| {
+            let element = element_for_hit_source(runtime, hit.source)?;
+            if element_is_inert_for_hit_testing(runtime.dom_host(), element) {
+                return None;
+            }
+            retarget_element_to_tree_scope(runtime, element, tree_scope)
+        }) {
+            return Ok(Some(element));
+        }
+    }
+
+    Ok(runtime
+        .dom_host()
+        .dom()
+        .document_element_handle_for_document(document)
         .and_then(|element| retarget_element_to_tree_scope(runtime, element, tree_scope)))
 }
 
@@ -563,9 +592,13 @@ fn elements_at_point(
     let mut seen = HashSet::new();
     let mut elements = Vec::new();
     for hit in hits {
-        let Some(element) = element_for_list_hit_source(runtime, hit.source)
-            .and_then(|element| retarget_element_to_tree_scope(runtime, element, tree_scope))
-        else {
+        let Some(element) = element_for_list_hit_source(runtime, hit.source) else {
+            continue;
+        };
+        if element_is_inert_for_hit_testing(runtime.dom_host(), element) {
+            continue;
+        }
+        let Some(element) = retarget_element_to_tree_scope(runtime, element, tree_scope) else {
             continue;
         };
         if seen.insert(element) {

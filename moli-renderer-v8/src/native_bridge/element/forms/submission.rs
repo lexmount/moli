@@ -88,6 +88,7 @@ pub(in crate::native_bridge) fn submit_form_with_submit_event(
     let form_can_dispatch_submit_event = {
         let runtime = unsafe { &*runtime_ptr };
         form_is_connected_or_in_detached_document(runtime, form_handle)
+            && !runtime.is_constructing_form_data_for(form_handle)
     };
     if !form_can_dispatch_submit_event {
         return false;
@@ -127,6 +128,25 @@ fn submit_form_with_submit_event_inner(
     submitter_handle: Option<DomHandle>,
     user_initiated: bool,
 ) -> bool {
+    let blocked_by_unclosed_form_control = {
+        let runtime = unsafe { &*runtime_ptr };
+        form_control_elements(runtime, form_handle)
+            .into_iter()
+            .any(|handle| {
+                runtime
+                    .dom_host()
+                    .node(handle)
+                    .and_then(Node::as_element)
+                    .is_some_and(Element::blocks_form_submission)
+            })
+    };
+    if blocked_by_unclosed_form_control {
+        if let Some(event) = construct_simple_event(scope, "error", false, false, false) {
+            let _ = dispatch_public_event(scope, runtime_ptr, form_handle, event);
+        }
+        return false;
+    }
+
     let skips_constraint_validation = {
         let runtime = unsafe { &*runtime_ptr };
         form_submission_skips_constraint_validation(runtime, form_handle, submitter_handle)
@@ -400,6 +420,11 @@ pub(in crate::native_bridge) fn reset_form_default_action(
                 did_change |= runtime
                     .dom_host_mut()
                     .set_select_explicit_none_state(handle, false);
+                did_change |= runtime.sync_selectedcontents_for_select_in_reaction_scope(
+                    scope,
+                    runtime_ptr,
+                    handle,
+                );
             }
             FormResetPlan::Output { handle, value } => {
                 did_change |= runtime.dom_host_mut().set_text_content(handle, &value);
@@ -435,6 +460,15 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     submitter: Option<DomHandle>,
     user_initiated: bool,
 ) -> bool {
+    let form_can_submit = {
+        let runtime = unsafe { &*runtime_ptr };
+        form_is_connected_or_in_detached_document(runtime, form_handle)
+            && !runtime.is_constructing_form_data_for(form_handle)
+    };
+    if !form_can_submit {
+        return false;
+    }
+
     let method = {
         let runtime = unsafe { &*runtime_ptr };
         resolve_form_submission_method(runtime, form_handle, submitter)
@@ -463,6 +497,9 @@ pub(in crate::native_bridge) fn submit_form_default_action(
     else {
         return false;
     };
+    if !form_is_connected_or_in_detached_document(unsafe { &*runtime_ptr }, form_handle) {
+        return false;
+    }
 
     let special_target = target_name
         .as_deref()
@@ -629,7 +666,7 @@ fn dialog_submission_result(
         return Some(String::new());
     };
     let element = runtime.dom_host().node(submitter)?.as_element()?;
-    if element.is_html_input() && element.input_type() == "image" {
+    if element.is_html_input() && element.input_type() == InputType::Image {
         let (x, y) = runtime
             .active_image_submitter_coordinate(submitter)
             .unwrap_or((0, 0));
@@ -1044,7 +1081,7 @@ fn build_form_reset_plan(runtime: &JsContextHost, handle: DomHandle) -> Option<F
     match element.local_name() {
         "input" => {
             let input_type = element.input_type();
-            if matches!(input_type.as_str(), "checkbox" | "radio") {
+            if input_type.is_checkable() {
                 Some(FormResetPlan::Checked {
                     handle,
                     checked: element.attribute("checked").is_some(),

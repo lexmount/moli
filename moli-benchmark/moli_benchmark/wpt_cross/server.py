@@ -67,6 +67,7 @@ DEFAULT_TESTHARNESS_TIMEOUT_SECONDS = 10.0
 MAX_REQUEST_BODY_BYTES = 16 * 1024 * 1024
 MAX_REQUEST_BODY_LINE_BYTES = 64 * 1024
 BENCH_TIMEOUT_MULTIPLIER_QUERY = "__moli_bench_timeout_multiplier"
+FORM_ECHO_PATH = "/html/semantics/forms/form-submission-0/form-echo.py"
 BENCH_REPORT_BRIDGE_SRC_RE = re.compile(
     rb"(?P<prefix>\bsrc\s*=\s*)(?P<quote>['\"])"
     rb"/resources/testharnessreport\.js(?P=quote)",
@@ -458,7 +459,7 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
   }
 
   function dispatchKey(target, type, key, modifiers) {
-    target.dispatchEvent(new KeyboardEvent(type, {
+    return target.dispatchEvent(new KeyboardEvent(type, {
       key: key,
       altKey: !!modifiers.Alt,
       ctrlKey: !!modifiers.Control,
@@ -467,6 +468,29 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
       cancelable: true,
       composed: true,
     }));
+  }
+
+  function insertSendKeyText(target, key, modifiers) {
+    if (!target || key.length !== 1 || modifiers.Alt || modifiers.Control) {
+      return;
+    }
+    var codePoint = key.codePointAt(0);
+    if (codePoint >= 0xE000 && codePoint <= 0xF8FF) {
+      return;
+    }
+    var localName = String(target.localName || '').toLowerCase();
+    var type = localName === 'input' ? String(target.type || '').toLowerCase() : '';
+    var isTextControl =
+      localName === 'textarea' ||
+      (localName === 'input' &&
+       ['text', 'search', 'tel', 'url', 'email', 'password'].includes(type));
+    if (!isTextControl && !target.isContentEditable) {
+      return;
+    }
+    var doc = target.ownerDocument || document;
+    try {
+      doc.execCommand('insertText', false, key);
+    } catch (e) {}
   }
 
   async function action_sequence(actions, context) {
@@ -527,12 +551,19 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
   }
 
   async function sendKeys(element, keys) {
+    var wasFocused = document.activeElement === element;
     if (
       element &&
       typeof element.focus === 'function' &&
       String(element.localName || '').toLowerCase() !== 'body'
     ) {
       element.focus();
+    }
+    if (!wasFocused && element && typeof element.setSelectionRange === 'function') {
+      try {
+        var end = String(element.value || '').length;
+        element.setSelectionRange(end, end);
+      } catch (e) {}
     }
     var modifiers = { Alt: false, Control: false, Shift: false };
     for (var keyValue of String(keys || '')) {
@@ -543,7 +574,10 @@ BENCH_TESTDRIVER_VENDOR_BRIDGE = b"""\
         dispatchKey(target, 'keydown', key, modifiers);
         continue;
       }
-      dispatchKey(target, 'keydown', key, modifiers);
+      var keyAllowed = dispatchKey(target, 'keydown', key, modifiers);
+      if (keyAllowed) {
+        insertSendKeyText(document.activeElement || target, key, modifiers);
+      }
       dispatchKey(document.activeElement || target, 'keyup', key, modifiers);
     }
     for (var modifier in modifiers) {
@@ -1050,6 +1084,23 @@ def _wpt_delay_seconds(query: str) -> float | None:
     return delay_ms / 1_000.0
 
 
+def _workers_url_encoding_response(query: str) -> bytes:
+    """Model workers/semantics/encodings/003-1.py's UTF-8 query check."""
+    value = next(
+        (
+            value
+            for name, value in parse_qsl(query, keep_blank_values=True)
+            if name == "x"
+        ),
+        None,
+    )
+    return b"PASS" if value == "å" else b"FAIL"
+
+
+def _form_echo_response(body: bytes) -> bytes:
+    return b" ".join(f"{byte:02x}".encode("ascii") for byte in body)
+
+
 def _redirect_fixture_response(query: str) -> tuple[int, str] | None:
     """Return the shared redirect response used by static WPT fixture handlers."""
 
@@ -1086,6 +1137,79 @@ def _workers_modules_export_on_load_script_response() -> tuple[bytes, list[tuple
             ("Access-Control-Allow-Headers", "Service-Worker"),
         ],
     )
+
+
+def _inspect_headers_response_headers(
+    query: str,
+    request_headers: list[tuple[str, str]],
+) -> list[tuple[str, str]]:
+    """Model fetch/api/resources/inspect-headers.py's response headers."""
+
+    params = parse_qsl(query, keep_blank_values=True)
+    checked_headers_value = next(
+        (value for name, value in params if name == "headers"),
+        None,
+    )
+    checked_headers = (
+        checked_headers_value.split("|") if checked_headers_value is not None else []
+    )
+    request_headers_by_name: dict[str, str] = {}
+    for name, value in request_headers:
+        request_headers_by_name.setdefault(name.lower(), value)
+
+    response_headers = []
+    for name in checked_headers:
+        value = request_headers_by_name.get(name.lower())
+        if value is not None:
+            response_headers.append((f"x-request-{name}", value))
+
+    if any(name == "cors" for name, _ in params):
+        response_headers.extend(
+            [
+                (
+                    "Access-Control-Allow-Origin",
+                    request_headers_by_name.get("origin", "*"),
+                ),
+                ("Access-Control-Allow-Credentials", "true"),
+                ("Access-Control-Allow-Methods", "GET, POST, HEAD"),
+                (
+                    "Access-Control-Expose-Headers",
+                    ", ".join(f"x-request-{name}" for name in checked_headers),
+                ),
+            ]
+        )
+        allow_headers = next(
+            (value for name, value in params if name == "allow_headers"),
+            None,
+        )
+        response_headers.append(
+            (
+                "Access-Control-Allow-Headers",
+                allow_headers
+                if allow_headers is not None
+                else ", ".join(name for name, _ in request_headers),
+            )
+        )
+
+    return response_headers
+
+
+def _nosniff_javascript_response(query: str) -> tuple[str | None, bytes]:
+    """Model fetch/nosniff/resources/js.py's MIME-controlled script body."""
+
+    params = parse_qsl(query, keep_blank_values=True)
+    outcome = next(
+        (value for name, value in params if name == "outcome"),
+        "f",
+    )
+    content_type = next(
+        (value for name, value in params if name == "type"),
+        None,
+    )
+    type_label = content_type if content_type is not None else "Content-Type missing"
+    result_call = "log('FAIL: " + type_label + "')" if outcome == "f" else "p()"
+    body = ("// nothing to see here\n" + result_call).encode()
+    return content_type, body
 
 
 def _url_host_literal(hostname: str) -> str:
@@ -1572,6 +1696,15 @@ def _make_handler(
         def do_POST(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
             path = unquote(parsed.path)
+            if path == FORM_ECHO_PATH:
+                raw = self._read_content_length_request_body()
+                if raw is not None:
+                    self._send_bytes(
+                        "text/plain",
+                        _form_echo_response(raw),
+                        emit_body=True,
+                    )
+                return
             if path == "/xhr/resources/delay.py":
                 if self._consume_request_body():
                     self._serve_xhr_delay(parsed.query, emit_body=True)
@@ -1750,8 +1883,33 @@ def _make_handler(
             if path == "/resources/testdriver-vendor.js":
                 self._send_bytes("application/javascript; charset=utf-8", BENCH_TESTDRIVER_VENDOR_BRIDGE, emit_body=emit_body)
                 return
+            if path == FORM_ECHO_PATH:
+                self._send_bytes("text/plain", b"", emit_body=emit_body)
+                return
             if path == "/xhr/resources/delay.py":
                 self._serve_xhr_delay(parsed.query, emit_body=emit_body)
+                return
+            if path == "/workers/semantics/encodings/003-1.py":
+                self._send_bytes(
+                    "text/plain; charset=utf-8",
+                    _workers_url_encoding_response(parsed.query),
+                    emit_body=emit_body,
+                )
+                return
+            if path == "/fetch/api/resources/inspect-headers.py":
+                self._send_bytes(
+                    "text/plain",
+                    b"",
+                    emit_body=emit_body,
+                    extra_headers=_inspect_headers_response_headers(
+                        parsed.query,
+                        list(self.headers.items()),
+                    ),
+                    status_code=pipe_status_code or 200,
+                )
+                return
+            if path == "/fetch/nosniff/resources/js.py":
+                self._serve_nosniff_javascript(parsed.query, emit_body=emit_body)
                 return
             if path == (
                 "/html/semantics/scripting-1/the-script-element/module/"
@@ -2100,6 +2258,34 @@ def _make_handler(
                 return self._reject_request_body(413)
             return self._discard_request_body_bytes(length)
 
+        def _read_content_length_request_body(self) -> bytes | None:
+            if self.headers.get("Transfer-Encoding") is not None:
+                self._reject_request_body(400)
+                return None
+            length_str = self.headers.get("Content-Length")
+            if length_str is None:
+                return b""
+            try:
+                length = int(length_str)
+            except ValueError:
+                self._reject_request_body(400)
+                return None
+            if length < 0:
+                self._reject_request_body(400)
+                return None
+            if length > MAX_REQUEST_BODY_BYTES:
+                self._reject_request_body(413)
+                return None
+            try:
+                raw = self.rfile.read(length)
+            except (BrokenPipeError, ConnectionResetError, OSError):
+                self.close_connection = True
+                return None
+            if len(raw) != length:
+                self.close_connection = True
+                return None
+            return raw
+
         def _consume_chunked_request_body(self) -> bool:
             total = 0
             try:
@@ -2194,6 +2380,20 @@ def _make_handler(
                 b"export let delayedLoaded = true;",
                 emit_body=emit_body,
             )
+
+        def _serve_nosniff_javascript(self, query: str, *, emit_body: bool) -> None:
+            content_type, body = _nosniff_javascript_response(query)
+            self.send_response(200)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            self.send_header("Content-Length", str(len(body)))
+            if content_type is not None:
+                self.send_header("Content-Type", content_type)
+            self.end_headers()
+            if emit_body:
+                try:
+                    self.wfile.write(body)
+                except (BrokenPipeError, ConnectionResetError):
+                    return
 
         def _send_bytes(
             self,

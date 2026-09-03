@@ -1,4 +1,7 @@
-use super::helpers::{window_child_context_handle, window_host_ptr};
+use super::helpers::{
+    window_child_context_handle, window_document_handle, window_host_ptr,
+    window_owner_dispatch_scope,
+};
 use crate::native_bridge::named_access::{
     build_window_named_items_collection, window_named_item_handles,
 };
@@ -11,24 +14,34 @@ fn is_reserved_window_name(name: &str) -> bool {
 
 fn window_indexed_child_handle<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    holder: v8::Local<'s, v8::Object>,
+    receiver: v8::Local<'s, v8::Object>,
     index: u32,
 ) -> Option<(
     *mut crate::native_bridge::JsContextHost,
     crate::document_runtime::DomHandle,
+    crate::native_bridge::OwnerDispatchScope,
 )> {
-    let host_ptr = window_host_ptr(scope, holder)?;
+    let host_ptr = window_host_ptr(scope, receiver)?;
     let host = unsafe { &mut *host_ptr };
-    let handle = if let Some(parent) = window_child_context_handle(scope, holder) {
-        if let Some(document) = host.child_browsing_context_document_handle(parent) {
-            host.sync_child_browsing_context_subtree(scope, document);
-        }
-        host.child_browsing_context_child_frame_handle_by_index(parent, index as usize)
+    let owner_scope = window_owner_dispatch_scope(scope, receiver)?;
+    let document = window_document_handle(scope, receiver, host)?;
+    host.sync_child_browsing_context_subtree(scope, document);
+    let handle =
+        host.child_browsing_context_handle_by_index_for_document(document, index as usize)?;
+    Some((host_ptr, handle, owner_scope))
+}
+
+fn window_child_projection_for_owner<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    host: &mut crate::native_bridge::JsContextHost,
+    handle: crate::document_runtime::DomHandle,
+    owner_scope: crate::native_bridge::OwnerDispatchScope,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if owner_scope == crate::native_bridge::OwnerDispatchScope::Top {
+        host.child_browsing_context_window_proxy_for_top(scope, handle)
     } else {
-        host.sync_child_browsing_context_subtree(scope, host.document_handle());
-        host.child_browsing_context_handle_by_index(index as usize)
-    }?;
-    Some((host_ptr, handle))
+        host.child_browsing_context_window_wrapper(scope, handle)
+    }
 }
 
 pub(in crate::context_bootstrap) fn window_indexed_property_getter<'s>(
@@ -37,16 +50,13 @@ pub(in crate::context_bootstrap) fn window_indexed_property_getter<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
-    let holder = args.holder();
-    let Some((host_ptr, handle)) = window_indexed_child_handle(scope, holder, index) else {
+    let Some((host_ptr, handle, owner_scope)) =
+        window_indexed_child_handle(scope, args.holder(), index)
+    else {
         return v8::Intercepted::kNo;
     };
     let host = unsafe { &mut *host_ptr };
-    let window = if window_child_context_handle(scope, holder).is_none() {
-        host.child_browsing_context_window_proxy_for_top(scope, handle)
-    } else {
-        host.child_browsing_context_window_wrapper(scope, handle)
-    };
+    let window = window_child_projection_for_owner(scope, host, handle, owner_scope);
     let Some(window) = window else {
         return v8::Intercepted::kNo;
     };
@@ -72,22 +82,18 @@ pub(in crate::context_bootstrap) fn window_indexed_property_enumerator<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Array>,
 ) {
-    let holder = args.holder();
-    let Some(host_ptr) = window_host_ptr(scope, holder) else {
+    let receiver = args.holder();
+    let Some(host_ptr) = window_host_ptr(scope, receiver) else {
         rv.set(v8::Array::new(scope, 0));
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let count = if let Some(parent) = window_child_context_handle(scope, holder) {
-        if let Some(document) = host.child_browsing_context_document_handle(parent) {
+    let count = window_document_handle(scope, receiver, host)
+        .map(|document| {
             host.sync_child_browsing_context_subtree(scope, document);
-        }
-        host.child_browsing_context_child_frame_handles(parent)
-            .len()
-    } else {
-        host.sync_child_browsing_context_subtree(scope, host.document_handle());
-        host.child_browsing_context_count()
-    };
+            host.child_browsing_context_count_for_document(document)
+        })
+        .unwrap_or(0);
     let array = serialize_v8_iter_array(scope, (0..count).map(|index| index as u32))
         .unwrap_or_else(|| v8::Array::new(scope, 0));
     rv.set(array);
@@ -99,16 +105,13 @@ pub(in crate::context_bootstrap) fn window_indexed_property_descriptor<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
-    let Some((host_ptr, handle)) = window_indexed_child_handle(scope, args.holder(), index) else {
+    let Some((host_ptr, handle, owner_scope)) =
+        window_indexed_child_handle(scope, args.holder(), index)
+    else {
         return v8::Intercepted::kNo;
     };
-    let holder = args.holder();
     let host = unsafe { &mut *host_ptr };
-    let window = if window_child_context_handle(scope, holder).is_none() {
-        host.child_browsing_context_window_proxy_for_top(scope, handle)
-    } else {
-        host.child_browsing_context_window_wrapper(scope, handle)
-    };
+    let window = window_child_projection_for_owner(scope, host, handle, owner_scope);
     let Some(window) = window else {
         return v8::Intercepted::kNo;
     };
@@ -140,6 +143,42 @@ pub(in crate::context_bootstrap) fn window_named_property_query<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Integer>,
 ) -> v8::Intercepted {
+    if window_named_access_value(scope, key, args.holder()).is_none() {
+        return v8::Intercepted::kNo;
+    }
+    rv.set_int32(v8::PropertyAttribute::DONT_ENUM.as_u32() as i32);
+    v8::Intercepted::kYes
+}
+
+pub(in crate::context_bootstrap) fn window_named_properties_indexed_property_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) -> v8::Intercepted {
+    let index = index.to_string();
+    let Some(key) = crate::util::v8_string(scope, &index) else {
+        return v8::Intercepted::kNo;
+    };
+    let key: v8::Local<'s, v8::Name> = key.into();
+    let Some(value) = window_named_access_value(scope, key, args.holder()) else {
+        return v8::Intercepted::kNo;
+    };
+    rv.set(value);
+    v8::Intercepted::kYes
+}
+
+pub(in crate::context_bootstrap) fn window_named_properties_indexed_property_query<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Integer>,
+) -> v8::Intercepted {
+    let index = index.to_string();
+    let Some(key) = crate::util::v8_string(scope, &index) else {
+        return v8::Intercepted::kNo;
+    };
+    let key: v8::Local<'s, v8::Name> = key.into();
     if window_named_access_value(scope, key, args.holder()).is_none() {
         return v8::Intercepted::kNo;
     }
@@ -180,7 +219,7 @@ fn window_named_access_value<'s>(
         return None;
     }
     let key_name = key.to_rust_string_lossy(scope);
-    if key_name.is_empty() || key_name.parse::<u32>().is_ok() {
+    if key_name.is_empty() {
         return None;
     }
     if is_reserved_window_name(&key_name) {

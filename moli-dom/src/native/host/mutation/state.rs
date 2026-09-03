@@ -1,7 +1,134 @@
 use super::*;
+use crate::forms::InputType;
 use crate::native::{CustomElementState, SelectedFile};
 
 impl DomHost {
+    // The HTML parser can associate a control with its form-element pointer
+    // even when that form is not an ancestor. That exception survives moves
+    // which keep the control and form in one subtree, but the reset-the-form-
+    // owner algorithm must discard it as soon as a mutation separates them.
+    pub(super) fn parser_form_owner_resets_for_removed_subtrees(
+        &self,
+        roots: &[DomHandle],
+    ) -> Vec<DomHandle> {
+        let removed_forms = roots
+            .iter()
+            .flat_map(|root| {
+                self.collect_matching_elements(*root, true, |handle| {
+                    self.is_html_element_named(handle, "form")
+                })
+            })
+            .collect::<Vec<_>>();
+        if removed_forms.is_empty() {
+            return Vec::new();
+        }
+
+        let mut search_roots = Vec::new();
+        for root in roots.iter().filter_map(|root| self.root_node_handle(*root)) {
+            if !search_roots.contains(&root) {
+                search_roots.push(root);
+            }
+        }
+        search_roots
+            .into_iter()
+            .flat_map(|search_root| {
+                self.collect_matching_elements(search_root, true, |handle| {
+                    self.parser_associated_form_owner(handle)
+                        .is_some_and(|owner| removed_forms.contains(&owner))
+                        && !roots.iter().any(|root| self.contains(*root, handle))
+                })
+            })
+            .collect()
+    }
+
+    pub(super) fn reset_parser_form_owners_after_subtree_removal(
+        &mut self,
+        removed_root: DomHandle,
+        controls_outside_removed_subtree: &[DomHandle],
+    ) {
+        let controls_in_removed_subtree =
+            self.parser_associated_form_controls_in_subtrees(&[removed_root]);
+        for &control in controls_outside_removed_subtree {
+            self.clear_parser_associated_form_owner(control);
+        }
+        for control in controls_in_removed_subtree {
+            let Some(owner) = self.parser_associated_form_owner(control) else {
+                continue;
+            };
+            if self.root_node_handle(control) != self.root_node_handle(owner) {
+                self.clear_parser_associated_form_owner(control);
+            }
+        }
+    }
+
+    pub(super) fn reset_parser_form_owners_after_subtree_insertion(
+        &mut self,
+        inserted_roots: &[DomHandle],
+        had_implicit_removal: bool,
+        controls_outside_inserted_subtrees: &[DomHandle],
+    ) {
+        for &control in controls_outside_inserted_subtrees {
+            self.clear_parser_associated_form_owner(control);
+        }
+
+        for control in self.parser_associated_form_controls_in_subtrees(inserted_roots) {
+            let Some(owner) = self.parser_associated_form_owner(control) else {
+                continue;
+            };
+            let preserves_parser_owner = if had_implicit_removal {
+                inserted_roots
+                    .iter()
+                    .any(|root| self.contains(*root, owner))
+            } else {
+                self.root_node_handle(control) == self.root_node_handle(owner)
+            };
+            if !preserves_parser_owner {
+                self.clear_parser_associated_form_owner(control);
+            }
+        }
+    }
+
+    pub(super) fn reset_parser_form_owner_for_form_attribute_mutation(
+        &mut self,
+        handle: DomHandle,
+    ) {
+        if !self
+            .node(handle)
+            .and_then(Node::as_element)
+            .is_some_and(is_builtin_reassociateable_form_associated_element)
+        {
+            return;
+        }
+        self.clear_parser_associated_form_owner(handle);
+    }
+
+    fn parser_associated_form_controls_in_subtrees(&self, roots: &[DomHandle]) -> Vec<DomHandle> {
+        roots
+            .iter()
+            .flat_map(|root| {
+                self.collect_matching_elements(*root, true, |handle| {
+                    self.parser_associated_form_owner(handle).is_some()
+                })
+            })
+            .collect()
+    }
+
+    fn parser_associated_form_owner(&self, handle: DomHandle) -> Option<DomHandle> {
+        self.node(handle)
+            .and_then(Node::as_element)
+            .and_then(Element::parser_associated_form_owner)
+    }
+
+    fn clear_parser_associated_form_owner(&mut self, handle: DomHandle) {
+        let Some(element) = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+        else {
+            return;
+        };
+        let _ = element.set_parser_associated_form_owner(None);
+    }
+
     pub fn set_element_prefix(&mut self, handle: DomHandle, prefix: Option<String>) -> bool {
         let (previous_qualified_name, current_qualified_name) = {
             let Some(element) = self
@@ -360,6 +487,26 @@ impl DomHost {
         did_change
     }
 
+    pub fn set_dialog_previously_focused_element(
+        &mut self,
+        handle: DomHandle,
+        focused: Option<DomHandle>,
+    ) -> bool {
+        let did_change = {
+            let Some(element) = self
+                .node_mut(handle)
+                .and_then(|node| node.data_mut().as_element_mut())
+            else {
+                return false;
+            };
+            element.set_dialog_previously_focused_element(focused)
+        };
+        if did_change {
+            self.record_mutation(MutationScope::LocalState);
+        }
+        did_change
+    }
+
     pub fn set_dialog_return_value(&mut self, handle: DomHandle, value: &str) -> bool {
         let did_change = {
             let Some(element) = self
@@ -642,7 +789,7 @@ impl DomHost {
                         .and_then(Node::as_element)
                         .is_some_and(|element| {
                             element.is_html_input()
-                                && element.input_type() == "radio"
+                                && element.input_type() == InputType::Radio
                                 && element.checked()
                         })
                 })
@@ -662,7 +809,7 @@ impl DomHost {
                     .and_then(Node::as_element)
                     .is_some_and(|element| {
                         element.is_html_input()
-                            && element.input_type() == "radio"
+                            && element.input_type() == InputType::Radio
                             && element.checked()
                     });
             if !is_still_checked_radio || self.form_control_owner(radio) == previous_form_owner {
@@ -781,6 +928,22 @@ impl DomHost {
                 return false;
             };
             element.set_script_already_started(already_started)
+        };
+        if did_change {
+            self.record_mutation(MutationScope::LocalState);
+        }
+        did_change
+    }
+
+    pub fn set_blocks_form_submission(&mut self, handle: DomHandle, blocks: bool) -> bool {
+        let did_change = {
+            let Some(element) = self
+                .node_mut(handle)
+                .and_then(|node| node.data_mut().as_element_mut())
+            else {
+                return false;
+            };
+            element.set_blocks_form_submission(blocks)
         };
         if did_change {
             self.record_mutation(MutationScope::LocalState);

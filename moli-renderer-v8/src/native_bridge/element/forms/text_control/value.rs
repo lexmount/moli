@@ -1,5 +1,6 @@
 use super::*;
 use crate::native_bridge::document::detached_native_handle_for_runtime;
+use crate::util::utf16_len;
 
 pub(crate) fn text_control_value(runtime: &JsContextHost, handle: DomHandle) -> String {
     let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
@@ -39,7 +40,7 @@ pub(super) fn clamp_text_control_offset(
     handle: DomHandle,
     offset: u32,
 ) -> u32 {
-    let len = text_control_value(runtime, handle).chars().count() as u32;
+    let len = utf16_len(&text_control_value(runtime, handle)) as u32;
     offset.min(len)
 }
 
@@ -52,8 +53,14 @@ pub(crate) fn is_text_control(runtime: &JsContextHost, handle: DomHandle) -> boo
             element.is_html_textarea()
                 || (element.is_html_input()
                     && !matches!(
-                        element.input_type().as_str(),
-                        "hidden" | "checkbox" | "radio" | "button" | "submit" | "reset" | "image"
+                        element.input_type(),
+                        InputType::Hidden
+                            | InputType::Checkbox
+                            | InputType::Radio
+                            | InputType::Button
+                            | InputType::Submit
+                            | InputType::Reset
+                            | InputType::Image
                     ))
         })
 }
@@ -69,21 +76,8 @@ pub(super) fn supports_variable_length_selection(
         .is_some_and(|element| {
             element.is_html_textarea()
                 || (element.is_html_input()
-                    && matches!(
-                        element.input_type().as_str(),
-                        "text" | "search" | "tel" | "url" | "password"
-                    ))
+                    && element.input_type().supports_variable_length_selection())
         })
-}
-
-pub(crate) fn char_offset_to_byte_index(value: &str, offset: u32) -> usize {
-    if offset == 0 {
-        return 0;
-    }
-    value
-        .char_indices()
-        .nth(offset as usize)
-        .map_or(value.len(), |(index, _)| index)
 }
 
 pub(in crate::native_bridge) fn textarea_value_getter_function<'s>(
@@ -146,7 +140,7 @@ pub(in crate::native_bridge) fn textarea_value_setter_function<'s>(
     let _ = runtime.set_input_value(handle, &next_value);
     let current_value = text_control_value(runtime, handle);
     if current_value != previous_value {
-        let end = current_value.chars().count() as u32;
+        let end = utf16_len(&current_value) as u32;
         let _ = runtime.set_selection_range(handle, end, end);
     }
     rv.set_undefined();

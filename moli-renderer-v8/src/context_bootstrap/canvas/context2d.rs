@@ -1852,6 +1852,18 @@ pub(crate) fn canvas_context_measure_text_callback<'s>(
     rv.set(metrics.into());
 }
 
+fn canvas_context_relevant_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Context>> {
+    canvas_owner_from_context(scope, context)
+        .and_then(|canvas| {
+            crate::context_bootstrap::shared::node_owner_document_or_self(scope, canvas)
+        })
+        .and_then(|document| crate::native_bridge::node_relevant_context(scope, document))
+        .or_else(|| context.get_creation_context(scope))
+}
+
 pub(crate) fn canvas_context_create_image_data_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -1867,10 +1879,13 @@ pub(crate) fn canvas_context_create_image_data_callback<'s>(
         rv.set(v8::undefined(scope).into());
         return;
     };
-    if let Some(image_data) = build_image_data_object(scope, width, height) {
+    let relevant_context = canvas_context_relevant_context(scope, args.this())
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+    if let Some(image_data) = build_image_data_object(target_scope, width, height) {
         rv.set(image_data.into());
     } else {
-        rv.set(v8::undefined(scope).into());
+        rv.set(v8::undefined(target_scope).into());
     }
 }
 
@@ -1980,10 +1995,13 @@ pub(crate) fn canvas_context_get_image_data_callback<'s>(
     } else {
         blank_image_data(width, height)
     };
-    let Some(image_data) = build_image_data_object_with_bytes(scope, width, height, bytes)
-        .or_else(|| build_image_data_object(scope, width, height))
-    else {
-        rv.set(v8::undefined(scope).into());
+    let relevant_context = canvas_context_relevant_context(scope, args.this())
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+    let image_data = build_image_data_object_with_bytes(target_scope, width, height, bytes)
+        .or_else(|| build_image_data_object(target_scope, width, height));
+    let Some(image_data) = image_data else {
+        rv.set(v8::undefined(target_scope).into());
         return;
     };
     rv.set(image_data.into());

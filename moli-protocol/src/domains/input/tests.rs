@@ -1764,7 +1764,7 @@ async fn coordinate_drag_event_completes_through_pending_layout_dispatch() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn insert_text_marks_text_controls_user_edited_for_length_validity() {
+async fn insert_text_enforces_maxlength_and_marks_short_values_user_edited() {
     let mut ctx = TestContext::new();
     with_loaded_document(
         &mut ctx,
@@ -1834,7 +1834,7 @@ async fn insert_text_marks_text_controls_user_edited_for_length_validity() {
             "JSON.stringify({value: field.value, tooLong: field.validity.tooLong, valid: field.validity.valid})"
         )
         .await,
-        r#"{"value":"abcde","tooLong":true,"valid":false}"#
+        r#"{"value":"abcd","tooLong":false,"valid":true}"#
     );
 
     assert_eq!(
@@ -1864,7 +1864,7 @@ async fn insert_text_marks_text_controls_user_edited_for_length_validity() {
             "JSON.stringify({value: bio.value, tooLong: bio.validity.tooLong, valid: bio.validity.valid})"
         )
         .await,
-        r#"{"value":"abcd","tooLong":true,"valid":false}"#
+        r#"{"value":"abc","tooLong":false,"valid":true}"#
     );
 
     evaluate_string(
@@ -1885,7 +1885,7 @@ async fn insert_text_marks_text_controls_user_edited_for_length_validity() {
             "JSON.stringify({value: emoji.value, tooLong: emoji.validity.tooLong, valid: emoji.validity.valid})"
         )
         .await,
-        r#"{"value":"😀","tooLong":true,"valid":false}"#
+        r#"{"value":"","tooLong":false,"valid":true}"#
     );
 }
 

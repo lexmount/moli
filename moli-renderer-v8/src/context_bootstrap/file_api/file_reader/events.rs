@@ -23,6 +23,10 @@ pub(in crate::context_bootstrap) fn file_reader_add_event_listener_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !file_reader_receiver_branded(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     simple_object_event_target_add_listener(scope, &args, FILE_READER_LISTENERS_SLOT);
     rv.set_undefined();
 }
@@ -32,6 +36,10 @@ pub(in crate::context_bootstrap) fn file_reader_remove_event_listener_callback<'
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !file_reader_receiver_branded(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
     simple_object_event_target_remove_listener(scope, &args, FILE_READER_LISTENERS_SLOT);
     rv.set_undefined();
 }

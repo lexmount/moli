@@ -683,6 +683,40 @@ impl JsContextHost {
         credentialless.then(|| self.ensure_top_document_credentialless_storage_nonce())
     }
 
+    pub(in crate::native_bridge::context_host) fn child_browsing_context_permissions_policy_for_navigation(
+        &self,
+        handle: DomHandle,
+        bootstrap: &ChildBrowsingContextBootstrap,
+    ) -> crate::permissions_policy::DocumentPermissionsPolicy {
+        let parent_document = self
+            .dom_host()
+            .node(handle)
+            .and_then(crate::dom::native::Node::owner_document)
+            .unwrap_or_else(|| self.document_handle());
+        let parent_url = self.document_url_for_handle(parent_document);
+        let parent_policy = self
+            .document_permissions_policy_for_document_handle(parent_document)
+            .unwrap_or_else(|| self.document_policy_container().permissions_policy);
+        let child_url = Self::child_browsing_context_bootstrap_url(bootstrap)
+            .unwrap_or_else(|| parent_url.clone());
+        let is_iframe = self.dom_host().is_html_element_named(handle, "iframe");
+        let allow = is_iframe
+            .then(|| self.dom_host().get_attribute(handle, "allow"))
+            .flatten();
+        let allow_fullscreen = is_iframe
+            && self
+                .dom_host()
+                .get_attribute(handle, "allowfullscreen")
+                .is_some();
+        parent_policy.delegated_to_child(
+            &parent_url,
+            &child_url,
+            bootstrap.security_origin_inherited(),
+            allow.as_deref(),
+            allow_fullscreen,
+        )
+    }
+
     pub(crate) fn child_browsing_context_is_same_origin_with_top(&self, handle: DomHandle) -> bool {
         self.top_window_can_access_child(handle)
     }
@@ -731,6 +765,10 @@ impl JsContextHost {
         }
         self.child_browsing_context_host_for_document_handle(document_handle)
             .map(|handle| self.child_browsing_context_scripting_enabled(handle))
+            .or_else(|| {
+                self.dom_host()
+                    .document_scripting_enabled_for_handle(document_handle)
+            })
             // DOMParser and document.implementation documents have no browsing
             // context, so scripting is disabled for their fragment parsers too.
             .unwrap_or(false)
@@ -879,6 +917,7 @@ pub(in crate::native_bridge::context_host) fn document_sandbox_policy_from_attri
     crate::document_runtime::DocumentSandboxPolicy {
         forces_opaque_origin: sandbox_attribute_forces_opaque_origin(value),
         allows_scripts: sandbox_attribute_allows_scripts(value),
+        allows_modals: sandbox_attribute_allows_modals(value),
         allows_popups_to_escape: sandbox_attribute_allows_popups_to_escape(value),
         sandboxes_document_domain: sandbox_attribute_sets_document_domain_flag(value),
     }
@@ -900,6 +939,12 @@ fn sandbox_attribute_allows_scripts(value: &str) -> bool {
     value
         .split_ascii_whitespace()
         .any(|token| token.eq_ignore_ascii_case("allow-scripts"))
+}
+
+fn sandbox_attribute_allows_modals(value: &str) -> bool {
+    value
+        .split_ascii_whitespace()
+        .any(|token| token.eq_ignore_ascii_case("allow-modals"))
 }
 
 fn sandbox_attribute_allows_top_navigation(value: &str) -> bool {
@@ -964,5 +1009,44 @@ mod tests {
         assert!(sandbox_attribute_sets_document_domain_flag(
             "allow-scripts ALLOW-SAME-ORIGIN"
         ));
+    }
+
+    #[test]
+    fn sandbox_attribute_allows_modals_only_with_the_escape_token() {
+        assert!(!document_sandbox_policy_from_attribute(Some("")).allows_modals);
+        assert!(
+            document_sandbox_policy_from_attribute(Some("allow-scripts allow-modals"))
+                .allows_modals
+        );
+        assert!(document_sandbox_policy_from_attribute(Some("ALLOW-MODALS")).allows_modals);
+        assert!(document_sandbox_policy_from_attribute(None).allows_modals);
+    }
+
+    #[test]
+    fn iframe_and_response_sandboxes_must_both_allow_modals() {
+        let response_without_modals =
+            crate::document_runtime::DocumentSandboxPolicy::from_response_content_security_policies(
+                &["sandbox allow-scripts".to_owned()],
+            );
+        let response_with_modals =
+            crate::document_runtime::DocumentSandboxPolicy::from_response_content_security_policies(
+                &["sandbox allow-scripts allow-modals".to_owned()],
+            );
+
+        assert!(
+            document_sandbox_policy_from_attribute(Some("allow-modals"))
+                .with_response_content_security_policy(response_with_modals)
+                .allows_modals
+        );
+        assert!(
+            !document_sandbox_policy_from_attribute(Some("allow-modals"))
+                .with_response_content_security_policy(response_without_modals)
+                .allows_modals
+        );
+        assert!(
+            !document_sandbox_policy_from_attribute(Some("allow-scripts"))
+                .with_response_content_security_policy(response_with_modals)
+                .allows_modals
+        );
     }
 }

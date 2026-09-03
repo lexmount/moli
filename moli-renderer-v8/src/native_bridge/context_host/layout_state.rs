@@ -59,6 +59,13 @@ pub(super) struct DocumentLayoutState {
 }
 
 impl DocumentLayoutState {
+    /// Both conditions are required: a request can own a slot before its
+    /// stylesheet generation is published, while an empty published manifest
+    /// still records reconciliation state that later mutations must advance.
+    pub(super) fn web_font_sidecar_is_pristine(&self) -> bool {
+        self.web_font_resource_generation.is_none() && self.web_fonts.is_empty()
+    }
+
     pub(super) fn web_font_resources_are_current(
         &self,
         generation: StylesheetResourceGeneration,

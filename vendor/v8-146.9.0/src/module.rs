@@ -211,6 +211,7 @@ where
 }
 
 unsafe extern "C" {
+  fn v8__Module__GetResourceName(this: *const Module) -> *const Value;
   fn v8__Module__GetStatus(this: *const Module) -> ModuleStatus;
   fn v8__Module__GetException(this: *const Module) -> *const Value;
   fn v8__Module__GetModuleRequests(this: *const Module) -> *const FixedArray;
@@ -314,6 +315,21 @@ pub enum ModuleStatus {
 }
 
 impl Module {
+  /// If this is a source text module, returns the resource name passed to its
+  /// [`ScriptOrigin`](crate::ScriptOrigin). If this is a synthetic module,
+  /// returns the name passed to [`Module::create_synthetic_module`].
+  #[inline(always)]
+  pub fn get_resource_name<'s>(
+    &self,
+    scope: &PinScope<'s, '_>,
+  ) -> Local<'s, Value> {
+    unsafe {
+      scope
+        .cast_local(|_| v8__Module__GetResourceName(self))
+        .unwrap()
+    }
+  }
+
   /// Returns the module's current status.
   #[inline(always)]
   pub fn get_status(&self) -> ModuleStatus {

@@ -163,8 +163,14 @@ pub(crate) fn start_image_element_resource_fetch(
         .pending_image_load_event(image_handle)
         .filter(|pending| pending.id() == sequence)
         .ok_or_else(|| "image lifecycle sequence is no longer pending".to_owned())?;
-    if !host.pending_image_load_event_is_current(image_handle, pending) {
+    if !host.pending_image_load_event_is_current(image_handle, &pending) {
         return Err("image lifecycle sequence owner is stale".to_owned());
+    }
+    if pending
+        .request_key()
+        .is_none_or(|request_key| request_key.url() != request_url.as_str())
+    {
+        return Err("image lifecycle request identity changed before fetch".to_owned());
     }
     let (owner, frame_id, document_url) = match pending.owner() {
         PendingImageLoadEventOwner::Main(binding)

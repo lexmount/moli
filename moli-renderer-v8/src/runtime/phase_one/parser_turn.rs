@@ -319,6 +319,14 @@ impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
             .mark_script_already_started_for_parser_in_live_dom_host(node_id);
     }
 
+    fn mark_unclosed_form_control_for_parser(&mut self, node_id: NativeNodeId) {
+        let _ = self
+            .vm
+            .document_runtime
+            .dom_host_mut()
+            .set_blocks_form_submission(node_id, true);
+    }
+
     fn finish_parsing_script_children(&mut self, node_id: NativeNodeId) {
         let _ = self
             .vm
@@ -333,6 +341,12 @@ impl ParserDomMutationConsumer for PhaseOneParserOwner<'_> {
             .document_runtime
             .dom_host_mut()
             .finish_parsing_link_children(node_id);
+    }
+
+    fn maybe_clone_an_option_into_selectedcontent(&mut self, node_id: NativeNodeId) {
+        let _ = self
+            .vm
+            .sync_selectedcontents_after_parser_option_finished_in_default_context(node_id);
     }
 
     fn attach_declarative_shadow_for_parser(
@@ -358,13 +372,9 @@ impl ParserElementCreationConsumer for PhaseOneParserOwner<'_> {
         &mut self,
         request: ParserElementCreationRequest<'_>,
     ) -> Option<NativeNodeId> {
-        let document_has_body = self
-            .document_body_handle_for_document(request.document_handle)
-            .is_some();
         self.vm
             .create_and_construct_parser_custom_element_direct_in_default_context(
                 request.document_handle,
-                document_has_body,
                 request.local_name,
                 request.namespace,
                 request.prefix,
@@ -374,6 +384,15 @@ impl ParserElementCreationConsumer for PhaseOneParserOwner<'_> {
             .ok()
             .flatten()
     }
+}
+
+#[cfg(test)]
+pub(super) fn finish_parser_session_for_test(
+    parser_session: &mut DocumentParserSession,
+    vm: &mut ScriptVm,
+) {
+    let mut parser_owner = PhaseOneParserOwner { vm };
+    let _ = parser_session.finish(&mut parser_owner);
 }
 
 pub(super) enum PageTaskTurnResult {

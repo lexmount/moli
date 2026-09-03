@@ -83,6 +83,7 @@ addEventListener("error", () => {
             position: 0,
             node_id: script,
             source: PreparedImportMapSource::Inline("{ invalid json".to_owned()),
+            nonce: None,
             base_url: document_url.clone(),
             initiator_url: document_url,
         },
@@ -93,5 +94,74 @@ addEventListener("error", () => {
             .expect("import-map completion order should be readable"),
         "error|microtask",
         "the synchronous parser import-map failure algorithm must finish its error reaction before returning"
+    );
+}
+
+#[test]
+fn parser_import_map_registration_obeys_inline_script_csp() {
+    fn append_parser_script(vm: &mut ScriptVm) -> DomHandle {
+        let document = vm.document_runtime.document_handle();
+        let html = vm.document_runtime.dom_host_mut().create_element("html");
+        assert!(
+            vm.document_runtime
+                .dom_host_mut()
+                .append_child(document, html)
+        );
+        let script = vm
+            .document_runtime
+            .dom_host_mut()
+            .create_parser_element_without_attributes(
+                "script".to_owned(),
+                "http://www.w3.org/1999/xhtml".to_owned(),
+                None,
+            );
+        assert!(
+            vm.document_runtime
+                .dom_host_mut()
+                .append_child(html, script)
+        );
+        script
+    }
+
+    fn accept_import_map(vm: &mut ScriptVm, nonce: Option<&str>) {
+        let script = append_parser_script(vm);
+        let document_url = Url::parse("https://script-terminal.test/import-map.html").unwrap();
+        crate::module_runtime::accept_parser_owned_import_map_handoff(
+            vm,
+            script,
+            1,
+            1,
+            PreparedImportMap {
+                position: 0,
+                node_id: script,
+                source: PreparedImportMapSource::Inline(
+                    r#"{"imports":{"fixture":"/mapped.mjs"}}"#.to_owned(),
+                ),
+                nonce: nonce.map(str::to_owned),
+                base_url: document_url.clone(),
+                initiator_url: document_url,
+            },
+        );
+    }
+
+    let base_url = Url::parse("https://script-terminal.test/import-map.html").unwrap();
+
+    let mut blocked = new_storage_test_vm(base_url.as_str());
+    blocked.set_response_content_security_policies(&["script-src 'nonce-allowed'".to_owned()]);
+    accept_import_map(&mut blocked, None);
+    assert!(
+        crate::module_runtime::resolve_module_specifier(&mut blocked, "fixture", &base_url)
+            .is_err(),
+        "a parser import map without the required nonce must not register"
+    );
+
+    let mut allowed = new_storage_test_vm(base_url.as_str());
+    allowed.set_response_content_security_policies(&["script-src 'nonce-allowed'".to_owned()]);
+    accept_import_map(&mut allowed, Some("allowed"));
+    assert_eq!(
+        crate::module_runtime::resolve_module_specifier(&mut allowed, "fixture", &base_url)
+            .expect("a parser import map with a matching nonce should register")
+            .as_str(),
+        "https://script-terminal.test/mapped.mjs"
     );
 }

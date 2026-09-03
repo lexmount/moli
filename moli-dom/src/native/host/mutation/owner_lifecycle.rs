@@ -72,7 +72,9 @@ impl NativeDom {
         mut reference_child: Option<NativeNodeId>,
         commit_candidate_registration: bool,
     ) -> Option<OwnerLifecycleChanges> {
-        if !self.can_have_children(parent) || parent == child || self.is_ancestor(child, parent) {
+        if !self.can_have_children(parent)
+            || self.is_host_including_inclusive_ancestor(child, parent)
+        {
             return None;
         }
         let parent_type = self.node(parent)?.node_type();
@@ -97,8 +99,7 @@ impl NativeDom {
         {
             let fragment_children = self.child_ids(child).collect::<Vec<_>>();
             let all_children_are_insertable = fragment_children.iter().all(|fragment_child| {
-                parent != *fragment_child
-                    && !self.is_ancestor(*fragment_child, parent)
+                !self.is_host_including_inclusive_ancestor(*fragment_child, parent)
                     && self.node(*fragment_child).is_some_and(|node| {
                         !node.data().is_document_fragment()
                             && Self::can_insert_child_type(parent_type, node.node_type())
@@ -427,7 +428,17 @@ impl NativeDom {
         traversal: &mut OwnerLifecycleTraversal,
     ) {
         let mut stack = vec![root];
+        let mut template_contents_to_adopt = Vec::new();
         while let Some(handle) = stack.pop() {
+            let previous_owner_document = self.node(handle).and_then(Node::owner_document);
+            let template_contents = (previous_owner_document != owner_document)
+                .then(|| {
+                    self.node(handle)
+                        .and_then(Node::as_element)
+                        .filter(|element| element.is_html_element("template"))
+                        .and_then(|element| element.template_contents())
+                })
+                .flatten();
             let maintains_candidates = traversal.collect_stylesheet_owners
                 || !matches!(
                     traversal.registry_mutation,
@@ -464,6 +475,43 @@ impl NativeDom {
             let node = self.node_mut(handle).expect("node must exist");
             node.set_tree_scope(owner_document, connected, in_document_tree);
             stack.extend(self.child_ids_reversed(handle));
+            if let (Some(template_contents), Some(document)) = (template_contents, owner_document) {
+                template_contents_to_adopt.push((template_contents, document));
+            }
+        }
+        self.retarget_adopted_template_contents(template_contents_to_adopt, traversal);
+    }
+
+    fn retarget_adopted_template_contents(
+        &mut self,
+        mut pending: Vec<(NativeNodeId, NativeNodeId)>,
+        traversal: &mut OwnerLifecycleTraversal,
+    ) {
+        while let Some((contents, template_document)) = pending.pop() {
+            let contents_document =
+                self.appropriate_template_contents_owner_document(template_document);
+            let mut stack = vec![contents];
+            while let Some(handle) = stack.pop() {
+                let previous_owner_document = self.node(handle).and_then(Node::owner_document);
+                let nested_template_contents = (previous_owner_document != Some(contents_document))
+                    .then(|| {
+                        self.node(handle)
+                            .and_then(Node::as_element)
+                            .filter(|element| element.is_html_element("template"))
+                            .and_then(|element| element.template_contents())
+                    })
+                    .flatten();
+                if traversal.collect_stylesheet_owners && self.is_stylesheet_candidate(handle) {
+                    traversal.changes.stylesheet_owners.push(handle);
+                }
+                self.node_mut(handle)
+                    .expect("template content node must exist")
+                    .set_tree_scope(Some(contents_document), false, false);
+                stack.extend(self.child_ids_reversed(handle));
+                if let Some(nested_template_contents) = nested_template_contents {
+                    pending.push((nested_template_contents, contents_document));
+                }
+            }
         }
     }
 }

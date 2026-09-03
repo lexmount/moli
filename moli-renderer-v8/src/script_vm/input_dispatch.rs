@@ -11,7 +11,10 @@ use super::inspector::{
 };
 use super::{ActiveDragSession, ActiveScrollbarDrag, ActiveTouchPoint, ScriptVm};
 use crate::document_runtime::DomHandle;
-use crate::dom::native::{Node, SelectedFile};
+use crate::dom::{
+    forms::InputType,
+    native::{Node, SelectedFile},
+};
 use crate::native_bridge::element::{
     TouchEventPoint, activate_handle_via_click,
     activate_handle_via_click_with_detail_and_modifiers, cache_input_files_from_selected_files,
@@ -21,12 +24,13 @@ use crate::native_bridge::element::{
     construct_pointer_event_with_modifiers, construct_pointer_event_with_related_target,
     construct_pointer_event_with_related_target_and_modifiers, construct_simple_event,
     construct_touch_event, construct_touch_event_with_points, construct_wheel_event,
-    contenteditable_editing_host, dispatch_public_event, observable_input_hit_test,
-    observable_input_surface_hit_test, perform_auxiliary_link_default_action,
-    perform_drop_default_action, perform_mouse_focus_default_action,
-    perform_scrollbar_scroll_default_action, perform_wheel_scroll_default_action,
-    replace_contenteditable_selection, replace_text_control_selection,
-    select_contenteditable_contents, text_control_set_selection_range_internal,
+    contenteditable_editing_host, dispatch_public_event, is_text_control,
+    observable_input_hit_test, observable_input_surface_hit_test,
+    perform_auxiliary_link_default_action, perform_drop_default_action,
+    perform_mouse_focus_default_action, perform_scrollbar_scroll_default_action,
+    perform_wheel_scroll_default_action, replace_contenteditable_selection,
+    replace_text_control_selection, select_contenteditable_contents,
+    text_control_set_selection_range_internal,
     text_control_set_selection_range_with_direction_internal, text_control_value, update_focus,
 };
 use crate::native_bridge::{
@@ -36,7 +40,7 @@ use crate::runtime::{
     RendererDragData, RendererInputDispatchOutcome, RendererPointerEventProperties,
     RendererTouchPoint,
 };
-use crate::util::node_wrapper_from_handle;
+use crate::util::{node_wrapper_from_handle, utf16_len};
 
 fn related_target_value<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -1723,7 +1727,7 @@ impl ScriptVm {
             let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
                 return Ok(false);
             };
-            if !element.is_html_input() || element.input_type() != "file" {
+            if !element.is_html_input() || element.input_type() != InputType::File {
                 return Ok(false);
             }
             let multiple = element.attribute("multiple").is_some();
@@ -1767,7 +1771,8 @@ impl ScriptVm {
         };
 
         let result = self.with_default_context_scope(|scope, runtime_ptr| {
-            if replace_text_control_selection(scope, runtime_ptr, handle, text) {
+            if is_text_control(unsafe { &*runtime_ptr }, handle) {
+                let _ = replace_text_control_selection(scope, runtime_ptr, handle, text);
                 return Ok(true);
             }
             let runtime = unsafe { &*runtime_ptr };
@@ -2036,7 +2041,7 @@ impl ScriptVm {
             }
 
             if target.is_text_control && key_lower == "delete" {
-                let value_len = text_control_value(runtime, handle).chars().count() as u32;
+                let value_len = utf16_len(&text_control_value(runtime, handle)) as u32;
                 let (start, end) = current_selection_range(runtime, handle);
                 let (from, to) = if start != end {
                     (start, end)
@@ -2056,7 +2061,7 @@ impl ScriptVm {
             }
 
             if target.is_text_control && (ctrl || meta) && key_lower == "a" {
-                let value_len = text_control_value(runtime, handle).chars().count() as u32;
+                let value_len = utf16_len(&text_control_value(runtime, handle)) as u32;
                 let _ = text_control_set_selection_range_internal(
                     scope,
                     runtime_ptr,
@@ -2094,7 +2099,7 @@ impl ScriptVm {
                     "arrowleft" | "left" | "arrowright" | "right" | "home" | "end"
                 )
             {
-                let value_len = text_control_value(runtime, handle).chars().count() as u32;
+                let value_len = utf16_len(&text_control_value(runtime, handle)) as u32;
                 let (start, end, direction) = current_selection_state(runtime, handle);
                 if shift {
                     let (anchor, focus) = match direction.as_str() {

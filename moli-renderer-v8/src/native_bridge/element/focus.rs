@@ -11,6 +11,7 @@ use super::styles::{StyleMode, style_property_value};
 use super::{
     construct_click_event, construct_focus_event, construct_interest_event,
     dispatch_popover_show_events, dispatch_public_event,
+    resolved_reflected_element_attribute_handle,
 };
 use super::{
     element_attribute, element_has_attribute, label_control_handle,
@@ -18,9 +19,7 @@ use super::{
 };
 use crate::document_runtime::{DomHandle, EventTargetHandle};
 use crate::runtime::RendererDomFocusOutcome;
-use crate::util::{get_private_value, node_wrapper_from_handle, v8_string, v8str};
-
-const BUTTON_INTEREST_FOR_ELEMENT_SLOT: &str = "__moliButtonInterestForElement";
+use crate::util::{node_wrapper_from_handle, v8_string, v8str};
 
 struct SequentialFocusEntry {
     tab_index: i32,
@@ -83,15 +82,42 @@ pub(super) fn is_focusable(runtime: &JsContextHost, handle: DomHandle) -> bool {
         .node(handle)
         .is_some_and(Node::is_connected)
         || is_disabled_form_control(runtime, handle)
+        || element_focus_is_suppressed(runtime, handle)
     {
         return false;
     }
     matches!(
         element.local_name(),
-        "body" | "input" | "button" | "select" | "textarea" | "a" | "iframe" | "frame"
+        "body" | "input" | "button" | "select" | "textarea" | "a" | "iframe" | "frame" | "dialog"
     ) || element.has_attribute("tabindex")
         || contenteditable_editing_host(runtime, handle) == Some(handle)
         || element_is_scrollable(runtime, handle)
+}
+
+fn element_focus_is_suppressed(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    let visibility = style_property_value(runtime, handle, StyleMode::Computed, "visibility");
+    if matches!(
+        visibility.trim().to_ascii_lowercase().as_str(),
+        "hidden" | "collapse"
+    ) {
+        return true;
+    }
+
+    let mut current = Some(handle);
+    while let Some(candidate) = current {
+        if let Some(element) = runtime
+            .dom_host()
+            .node(candidate)
+            .and_then(Node::as_element)
+            && (element.has_attribute("inert")
+                || element.has_attribute("hidden")
+                || computed_display(runtime, candidate) == "none")
+        {
+            return true;
+        }
+        current = flat_tree_parent(runtime, candidate);
+    }
+    false
 }
 
 fn overflow_makes_scroll_container(value: &str) -> bool {
@@ -161,11 +187,17 @@ fn shadow_including_contains(
     false
 }
 
-fn first_delegates_focus_descendant(
-    runtime: &JsContextHost,
-    root: DomHandle,
-    autofocus_only: bool,
-) -> Option<DomHandle> {
+fn focusable_area_for_element(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
+    if is_focusable(runtime, handle) {
+        return Some(handle);
+    }
+    let shadow_root = runtime.dom_host().shadow_root_handle(handle)?;
+    (runtime.dom_host().shadow_root_delegates_focus(shadow_root) == Some(true))
+        .then(|| first_delegates_focus_target(runtime, shadow_root))
+        .flatten()
+}
+
+fn first_autofocus_delegate(runtime: &JsContextHost, root: DomHandle) -> Option<DomHandle> {
     let mut stack = runtime.dom_host().child_handles(root).collect::<Vec<_>>();
     stack.reverse();
     while let Some(handle) = stack.pop() {
@@ -174,14 +206,41 @@ fn first_delegates_focus_descendant(
             .node(handle)
             .and_then(Node::as_element)
             .is_some_and(|element| element.has_attribute("autofocus"));
-        if (!autofocus_only || autofocus) && is_focusable(runtime, handle) {
+        if autofocus && let Some(target) = focusable_area_for_element(runtime, handle) {
+            return Some(target);
+        }
+
+        let mut children = runtime.dom_host().child_handles(handle).collect::<Vec<_>>();
+        children.reverse();
+        stack.extend(children);
+    }
+    None
+}
+
+fn first_focus_delegate(
+    runtime: &JsContextHost,
+    root: DomHandle,
+    require_sequential_focus: bool,
+) -> Option<DomHandle> {
+    if let Some(target) = first_autofocus_delegate(runtime, root) {
+        return Some(target);
+    }
+
+    let mut stack = runtime.dom_host().child_handles(root).collect::<Vec<_>>();
+    stack.reverse();
+    while let Some(handle) = stack.pop() {
+        let is_direct_delegate = if require_sequential_focus {
+            sequential_tab_index(runtime, handle, None).is_some()
+        } else {
+            is_focusable(runtime, handle)
+        };
+        if is_direct_delegate {
             return Some(handle);
         }
 
         if let Some(shadow_root) = runtime.dom_host().shadow_root_handle(handle)
             && runtime.dom_host().shadow_root_delegates_focus(shadow_root) == Some(true)
-            && let Some(target) =
-                first_delegates_focus_descendant(runtime, shadow_root, autofocus_only)
+            && let Some(target) = first_delegates_focus_target(runtime, shadow_root)
         {
             return Some(target);
         }
@@ -194,8 +253,11 @@ fn first_delegates_focus_descendant(
 }
 
 fn first_delegates_focus_target(runtime: &JsContextHost, root: DomHandle) -> Option<DomHandle> {
-    first_delegates_focus_descendant(runtime, root, true)
-        .or_else(|| first_delegates_focus_descendant(runtime, root, false))
+    first_focus_delegate(runtime, root, false)
+}
+
+fn first_dialog_focus_target(runtime: &JsContextHost, dialog: DomHandle) -> Option<DomHandle> {
+    first_focus_delegate(runtime, dialog, true)
 }
 
 fn delegated_focus_target(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
@@ -241,7 +303,9 @@ fn first_autofocus_candidate(runtime: &JsContextHost) -> Option<DomHandle> {
 /// the candidate again because script can move focus or mutate the Document
 /// between publication and execution.
 pub(crate) fn post_parse_autofocus_is_pending(runtime: &JsContextHost) -> bool {
-    runtime.active_element_handle().is_none() && first_autofocus_candidate(runtime).is_some()
+    !runtime.autofocus_processed()
+        && runtime.active_element_handle().is_none()
+        && first_autofocus_candidate(runtime).is_some()
 }
 
 pub(crate) fn process_post_parse_autofocus(
@@ -249,7 +313,7 @@ pub(crate) fn process_post_parse_autofocus(
     runtime_ptr: *mut JsContextHost,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
-    if runtime.active_element_handle().is_some() {
+    if runtime.autofocus_processed() || runtime.active_element_handle().is_some() {
         return false;
     }
     let Some(candidate) = first_autofocus_candidate(runtime) else {
@@ -260,7 +324,106 @@ pub(crate) fn process_post_parse_autofocus(
     } else {
         update_focus(scope, runtime_ptr, Some(candidate));
     }
+    unsafe { &mut *runtime_ptr }.mark_autofocus_processed();
     true
+}
+
+pub(super) fn run_dialog_focusing_steps(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    dialog: DomHandle,
+) {
+    let target = {
+        let runtime = unsafe { &*runtime_ptr };
+        if element_has_attribute(runtime, dialog, "autofocus") {
+            dialog
+        } else {
+            first_dialog_focus_target(runtime, dialog).unwrap_or(dialog)
+        }
+    };
+    focus_element(scope, runtime_ptr, target);
+
+    let should_mark_top_document_processed = {
+        let runtime = unsafe { &*runtime_ptr };
+        let owner_document = runtime.dom_host().owner_document_handle(target);
+        owner_document == Some(runtime.document_handle())
+            || owner_document
+                .and_then(|document| {
+                    runtime.child_browsing_context_host_for_document_handle(document)
+                })
+                .is_some_and(|child| {
+                    runtime.child_window_has_same_origin_with_its_top_level_origin(child)
+                })
+    };
+    if should_mark_top_document_processed {
+        unsafe { &mut *runtime_ptr }.mark_autofocus_processed();
+    }
+}
+
+pub(super) fn apply_modal_dialog_focus_fixup(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    dialog: DomHandle,
+) {
+    let should_clear_focus = {
+        let runtime = unsafe { &*runtime_ptr };
+        runtime
+            .active_element_handle()
+            .is_some_and(|active| !shadow_including_contains(runtime, dialog, active))
+    };
+    if should_clear_focus {
+        update_focus(scope, runtime_ptr, None);
+    }
+}
+
+pub(super) fn remember_dialog_previously_focused_element(
+    runtime_ptr: *mut JsContextHost,
+    dialog: DomHandle,
+) {
+    let focused = unsafe { &*runtime_ptr }.active_element_handle();
+    let _ = unsafe { &mut *runtime_ptr }
+        .dom_host_mut()
+        .set_dialog_previously_focused_element(dialog, focused);
+}
+
+pub(super) fn restore_dialog_focus_after_close(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    dialog: DomHandle,
+    was_modal: bool,
+) {
+    let (previously_focused, should_restore) = {
+        let runtime = unsafe { &*runtime_ptr };
+        let previously_focused = runtime
+            .dom_host()
+            .node(dialog)
+            .and_then(Node::as_element)
+            .and_then(|element| element.dialog_previously_focused_element());
+        let focus_is_inside_dialog = runtime
+            .active_element_handle()
+            .is_some_and(|active| flat_tree_contains(runtime, dialog, active));
+        (previously_focused, was_modal || focus_is_inside_dialog)
+    };
+    let _ = unsafe { &mut *runtime_ptr }
+        .dom_host_mut()
+        .set_dialog_previously_focused_element(dialog, None);
+    let Some(previously_focused) = previously_focused.filter(|_| should_restore) else {
+        return;
+    };
+    if let Err(error) = focus_element_with_options(scope, runtime_ptr, previously_focused, true) {
+        tracing::warn!(?previously_focused, %error, "failed to restore focus after closing dialog");
+    }
+}
+
+fn flat_tree_contains(runtime: &JsContextHost, ancestor: DomHandle, node: DomHandle) -> bool {
+    let mut current = Some(node);
+    while let Some(candidate) = current {
+        if candidate == ancestor {
+            return true;
+        }
+        current = flat_tree_parent(runtime, candidate);
+    }
+    false
 }
 
 fn focused_chain_requires_async_blur(runtime: &JsContextHost, active: DomHandle) -> bool {
@@ -554,7 +717,7 @@ fn dispatch_interest_event_if_needed(
     source_handle: DomHandle,
     event_type: &str,
 ) -> Option<DomHandle> {
-    let target = interest_for_element_target(scope, runtime_ptr, source_handle)?;
+    let target = interest_for_element_target(runtime_ptr, source_handle)?;
     let source = node_wrapper_from_handle(scope, source_handle)?;
     let event = construct_interest_event(scope, event_type, source.into())?;
     let _ = dispatch_public_event(scope, runtime_ptr, target, event);
@@ -1216,52 +1379,10 @@ fn show_interest_popover_if_needed(
 }
 
 fn interest_for_element_target(
-    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
-    if let Some(target) =
-        unsafe { &*runtime_ptr }.button_element_target(handle, BUTTON_INTEREST_FOR_ELEMENT_SLOT)
-    {
-        return unsafe { &*runtime_ptr }
-            .dom_host()
-            .resolve_reference_target_chain(target);
-    }
-    if let Some(wrapper) = node_wrapper_from_handle(scope, handle)
-        && let Some(value) = get_private_value(scope, wrapper, BUTTON_INTEREST_FOR_ELEMENT_SLOT)
-        && !value.is_null_or_undefined()
-    {
-        if let Ok(big) = v8::Local::<v8::BigInt>::try_from(value) {
-            let (index, lossless) = big.u64_value();
-            if lossless {
-                let target = DomHandle::new(index as usize);
-                if unsafe { &*runtime_ptr }.dom_host().node(target).is_some() {
-                    return unsafe { &*runtime_ptr }
-                        .dom_host()
-                        .resolve_reference_target_chain(target);
-                }
-            }
-        } else if let Some(index) = value.uint32_value(scope) {
-            let target = DomHandle::new(index as usize);
-            if unsafe { &*runtime_ptr }.dom_host().node(target).is_some() {
-                return unsafe { &*runtime_ptr }
-                    .dom_host()
-                    .resolve_reference_target_chain(target);
-            }
-        }
-    }
-    let runtime = unsafe { &*runtime_ptr };
-    let interest_for = runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .and_then(|element| element.attribute("interestfor"))
-        .filter(|value| !value.is_empty())?;
-    let root = runtime.dom_host().root_node_handle(handle)?;
-    let candidate = runtime
-        .dom_host()
-        .element_handle_by_id_in_subtree(root, interest_for)?;
-    runtime.dom_host().resolve_reference_target_chain(candidate)
+    resolved_reflected_element_attribute_handle(unsafe { &*runtime_ptr }, handle, "interestfor")
 }
 
 pub(crate) fn focus_element(

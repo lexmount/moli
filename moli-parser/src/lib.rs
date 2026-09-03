@@ -11,6 +11,7 @@ mod session;
 mod stream;
 mod stylesheet_blocking;
 mod xml;
+mod xml_preprocess;
 mod xml_stream;
 mod xml_tree_viewer;
 
@@ -79,6 +80,7 @@ struct HtmlTreeSinkState {
     captured_blocking_stylesheet_nodes: HashSet<NativeNodeId>,
     captured_blocking_stylesheet_signatures: HashSet<DocumentBlockingStylesheetSignature>,
     finishing_tree_builder: bool,
+    non_nonceable_parser_scripts: HashSet<NativeNodeId>,
     current_position: ParserSourcePosition,
     script_start_positions: HashMap<NativeNodeId, ParserSourcePosition>,
 }
@@ -99,6 +101,7 @@ impl Default for HtmlTreeSinkState {
             captured_blocking_stylesheet_nodes: HashSet::new(),
             captured_blocking_stylesheet_signatures: HashSet::new(),
             finishing_tree_builder: false,
+            non_nonceable_parser_scripts: HashSet::new(),
             current_position: ParserSourcePosition::default(),
             script_start_positions: HashMap::new(),
         }

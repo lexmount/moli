@@ -25,6 +25,14 @@ void v8__Template__SetLazyDataProperty(
       getter_side_effect_type, setter_side_effect_type);
 }
 
+void v8__Template__SetPrivate(const v8::Template& self,
+                              const v8::Private& key,
+                              const v8::Data& value,
+                              v8::PropertyAttribute attr) {
+  ptr_to_local(&self)->SetPrivate(ptr_to_local(&key), ptr_to_local(&value),
+                                  attr);
+}
+
 void v8__ObjectTemplate__SetCallAsFunctionHandler(
     const v8::ObjectTemplate& self, v8::FunctionCallback callback,
     const v8::Value* data_or_null) {

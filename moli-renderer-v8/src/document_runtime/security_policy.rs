@@ -6,18 +6,18 @@ use crate::content_security_policy::{
     ContentSecurityPolicyResourceKind, ContentSecurityPolicyScriptElementRequest,
     ContentSecurityPolicyStyleElementRequest, ContentSecurityPolicyUrlViolation,
     ContentSecurityPolicyViolationEventFields, TrustedTypesForScriptRequirements,
-    content_security_policy_allows_trusted_type_policy_name,
     content_security_policy_allows_trusted_types_eval,
     content_security_policy_frame_ancestors_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_headers,
     content_security_policy_inline_script_element_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_inline_source_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_inline_style_element_violation_with_disposition_and_reporting_endpoints,
-    content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints,
+    content_security_policy_non_url_violation_with_source,
     content_security_policy_report_only_headers,
     content_security_policy_requires_trusted_types_for_script,
     content_security_policy_script_element_url_violation_with_redirect_status_disposition_reporting_endpoints_and_request,
     content_security_policy_style_element_url_violation_with_redirect_status_disposition_reporting_endpoints_and_request,
+    content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_trusted_types_sink_violation_with_disposition_and_reporting_endpoints,
     content_security_policy_url_violation_with_redirect_status_disposition_and_reporting_endpoints,
     create_security_policy_violation_event,
@@ -159,6 +159,11 @@ impl DocumentPolicyContainer {
                 response_content_security_report_only_policies_from_headers(headers),
             content_security_reporting_endpoints:
                 crate::content_security_policy::content_security_policy_reporting_endpoints_from_headers(
+                    headers,
+                    final_url,
+                ),
+            permissions_policy:
+                crate::permissions_policy::DocumentPermissionsPolicy::from_navigation_response_headers(
                     headers,
                     final_url,
                 ),
@@ -1019,6 +1024,7 @@ impl DocumentRuntime {
         response_report_only_policies: &[String],
         response_reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
         kind: ContentSecurityPolicyNonUrlKind,
+        source: Option<&str>,
     ) -> DocumentContentSecurityPolicyCheck {
         let enforced_policies = self
             .document_content_security_policy_strings_for_optional_document(
@@ -1030,6 +1036,7 @@ impl DocumentRuntime {
             enforced_policies,
             document_url,
             kind,
+            source,
             ContentSecurityPolicyDisposition::Enforce,
         );
         let report_only_policies = document_response_content_security_policy_strings(
@@ -1040,6 +1047,7 @@ impl DocumentRuntime {
             report_only_policies,
             document_url,
             kind,
+            source,
             ContentSecurityPolicyDisposition::Report,
         );
         DocumentContentSecurityPolicyCheck {
@@ -1241,6 +1249,7 @@ impl DocumentRuntime {
             policies,
             document_url,
             ContentSecurityPolicyNonUrlKind::DocumentInlineScript,
+            None,
             ContentSecurityPolicyDisposition::Enforce,
         )
     }
@@ -1259,6 +1268,7 @@ impl DocumentRuntime {
             policies,
             document_url,
             ContentSecurityPolicyNonUrlKind::DocumentInlineScript,
+            None,
             ContentSecurityPolicyDisposition::Report,
         )
     }
@@ -1267,6 +1277,7 @@ impl DocumentRuntime {
     pub(crate) fn wasm_eval_csp_violation(&self) -> Option<DocumentContentSecurityPolicyViolation> {
         self.non_url_csp_violation(
             ContentSecurityPolicyNonUrlKind::WasmEval,
+            None,
             ContentSecurityPolicyDisposition::Enforce,
         )
     }
@@ -1275,6 +1286,7 @@ impl DocumentRuntime {
     fn non_url_csp_violation(
         &self,
         kind: ContentSecurityPolicyNonUrlKind,
+        source: Option<&str>,
         disposition: ContentSecurityPolicyDisposition,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
         let document_url = self.document_url();
@@ -1287,6 +1299,7 @@ impl DocumentRuntime {
             policies,
             document_url,
             kind,
+            source,
             disposition,
         )
     }
@@ -1295,6 +1308,7 @@ impl DocumentRuntime {
     fn non_url_csp_report_only_violation(
         &self,
         kind: ContentSecurityPolicyNonUrlKind,
+        source: Option<&str>,
         disposition: ContentSecurityPolicyDisposition,
     ) -> Option<DocumentContentSecurityPolicyViolation> {
         let document_url = self.document_url();
@@ -1308,6 +1322,7 @@ impl DocumentRuntime {
             policies,
             document_url,
             kind,
+            source,
             disposition,
         )
     }
@@ -1318,6 +1333,7 @@ impl DocumentRuntime {
     ) -> Option<DocumentContentSecurityPolicyViolation> {
         self.non_url_csp_report_only_violation(
             ContentSecurityPolicyNonUrlKind::WasmEval,
+            None,
             ContentSecurityPolicyDisposition::Report,
         )
     }
@@ -1445,19 +1461,43 @@ impl DocumentRuntime {
         document_policies_allow_trusted_types_eval(&policies)
     }
 
-    pub(crate) fn allows_trusted_type_policy_name_for_document(
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn trusted_type_policy_name_csp_check_for_document(
         &self,
         document_handle: Option<DomHandle>,
+        document_url: &Url,
         response_policies: &[String],
+        response_report_only_policies: &[String],
         response_reporting_endpoints: &ContentSecurityPolicyReportingEndpoints,
         policy_name: &str,
-    ) -> bool {
-        let policies = self.document_content_security_policy_strings_for_optional_document(
-            document_handle,
-            response_policies,
+        is_duplicate: bool,
+    ) -> DocumentContentSecurityPolicyCheck {
+        let enforced_policies = self
+            .document_content_security_policy_strings_for_optional_document(
+                document_handle,
+                response_policies,
+                response_reporting_endpoints,
+            );
+        let report_only_policies = document_response_content_security_policy_strings(
+            response_report_only_policies,
             response_reporting_endpoints,
         );
-        document_policies_allow_trusted_type_policy_name(policies, policy_name)
+        DocumentContentSecurityPolicyCheck {
+            report_only_violation: document_trusted_types_policy_violation_from_document_policies(
+                report_only_policies,
+                document_url,
+                policy_name,
+                is_duplicate,
+                ContentSecurityPolicyDisposition::Report,
+            ),
+            enforced_violation: document_trusted_types_policy_violation_from_document_policies(
+                enforced_policies,
+                document_url,
+                policy_name,
+                is_duplicate,
+                ContentSecurityPolicyDisposition::Enforce,
+            ),
+        }
     }
 
     pub(crate) fn queue_content_security_policy_violation_event_best_effort<'s>(
@@ -1639,7 +1679,7 @@ impl DocumentRuntime {
         policies
     }
 
-    fn meta_content_security_policy_strings_for_document(
+    pub(crate) fn meta_content_security_policy_strings_for_document(
         &self,
         document_handle: DomHandle,
     ) -> Vec<String> {
@@ -1938,17 +1978,18 @@ fn document_non_url_policy_violation_from_document_policies(
     policies: Vec<DocumentContentSecurityPolicyString>,
     document_url: &Url,
     kind: ContentSecurityPolicyNonUrlKind,
+    source: Option<&str>,
     disposition: ContentSecurityPolicyDisposition,
 ) -> Option<DocumentContentSecurityPolicyViolation> {
     policies.into_iter().find_map(|policy| {
-        let mut violation =
-            content_security_policy_non_url_violation_with_disposition_and_reporting_endpoints(
-                &policy.policy,
-                document_url,
-                kind,
-                disposition,
-                &policy.reporting_endpoints,
-            )?;
+        let mut violation = content_security_policy_non_url_violation_with_source(
+            &policy.policy,
+            document_url,
+            kind,
+            source,
+            disposition,
+            &policy.reporting_endpoints,
+        )?;
         apply_document_policy_reporting_flags(&mut violation, &policy);
         Some(violation)
     })
@@ -2058,12 +2099,26 @@ fn iter_document_trusted_types_sink_policy_violations<'a>(
     })
 }
 
-fn document_policies_allow_trusted_type_policy_name(
+fn document_trusted_types_policy_violation_from_document_policies(
     policies: Vec<DocumentContentSecurityPolicyString>,
+    document_url: &Url,
     policy_name: &str,
-) -> bool {
-    policies.into_iter().all(|policy| {
-        content_security_policy_allows_trusted_type_policy_name(&[policy.policy], policy_name)
+    is_duplicate: bool,
+    disposition: ContentSecurityPolicyDisposition,
+) -> Option<DocumentContentSecurityPolicyViolation> {
+    policies.into_iter().find_map(|policy| {
+        let single_policy = [policy.policy.clone()];
+        let mut violation =
+            content_security_policy_trusted_types_policy_violation_with_disposition_and_reporting_endpoints(
+                &single_policy,
+                document_url,
+                policy_name,
+                is_duplicate,
+                disposition,
+                &policy.reporting_endpoints,
+            )?;
+        apply_document_policy_reporting_flags(&mut violation, &policy);
+        Some(violation)
     })
 }
 
@@ -2229,26 +2284,28 @@ mod tests {
             DocumentSandboxPolicy {
                 forces_opaque_origin: true,
                 allows_scripts: false,
+                allows_modals: false,
                 allows_popups_to_escape: false,
                 sandboxes_document_domain: true,
             }
         );
 
         runtime.set_response_content_security_policies(&[String::from(
-            "sandbox allow-scripts allow-same-origin allow-popups-to-escape-sandbox",
+            "sandbox allow-scripts allow-same-origin allow-modals allow-popups-to-escape-sandbox",
         )]);
         assert_eq!(
             runtime.document_sandbox_policy(),
             DocumentSandboxPolicy {
                 forces_opaque_origin: false,
                 allows_scripts: true,
+                allows_modals: true,
                 allows_popups_to_escape: true,
                 sandboxes_document_domain: true,
             }
         );
 
         runtime.set_response_content_security_policies(&[
-            String::from("sandbox allow-scripts allow-popups-to-escape-sandbox"),
+            String::from("sandbox allow-scripts allow-modals allow-popups-to-escape-sandbox"),
             String::from("sandbox allow-same-origin"),
         ]);
         assert_eq!(
@@ -2256,6 +2313,7 @@ mod tests {
             DocumentSandboxPolicy {
                 forces_opaque_origin: true,
                 allows_scripts: false,
+                allows_modals: false,
                 allows_popups_to_escape: false,
                 sandboxes_document_domain: true,
             }

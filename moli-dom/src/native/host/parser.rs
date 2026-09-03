@@ -86,7 +86,7 @@ impl DomHost {
         if is_template {
             let template_contents = self
                 .dom
-                .create_template_contents_fragment_for_document(document_handle);
+                .create_template_contents_fragment_for_document(document_handle, Some(node_id));
             if let Some(element) = self
                 .node_mut(node_id)
                 .and_then(|node| node.data_mut().as_element_mut())
@@ -114,12 +114,7 @@ impl DomHost {
         else {
             return false;
         };
-        if element.namespace() != "http://www.w3.org/1999/xhtml"
-            || !matches!(
-                element.local_name(),
-                "button" | "fieldset" | "input" | "object" | "output" | "select" | "textarea"
-            )
-        {
+        if !is_parser_form_association_candidate(element) {
             return false;
         }
         element.set_parser_associated_form_owner(Some(form))
@@ -255,6 +250,7 @@ impl DomHost {
                 changed |= attribute_changed;
             }
         }
+        changed |= element.resanitize_input_value_after_parser_attributes();
         changed |= element.mark_undefined_custom_element_candidate_from_identity();
 
         if changed {
@@ -310,6 +306,37 @@ mod tests {
         );
 
         assert_eq!(host.get_attribute(element, "id").as_deref(), Some("card"));
+    }
+
+    #[test]
+    fn parser_input_value_sanitization_observes_the_complete_token_attribute_set() {
+        let mut host = test_host();
+        let input = host.create_parser_element_without_attributes(
+            "input".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+        let attribute = |name: &str, value: &str| {
+            Attribute::new(name.to_owned(), String::new(), None, value.to_owned())
+        };
+
+        host.add_attrs_if_missing_for_parser(
+            input,
+            vec![
+                attribute("type", "range"),
+                attribute("id", "range"),
+                attribute("min", "2"),
+                attribute("max", "6"),
+            ],
+        );
+
+        assert_eq!(
+            host.node(input)
+                .and_then(Node::as_element)
+                .map(Element::input_value)
+                .as_deref(),
+            Some("4")
+        );
     }
 
     #[test]

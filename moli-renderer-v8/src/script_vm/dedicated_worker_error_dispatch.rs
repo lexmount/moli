@@ -27,19 +27,20 @@ pub(super) fn dispatch_script_load_failure<'s>(
     );
 }
 
-pub(super) struct DedicatedWorkerRuntimeError<'a> {
+pub(super) struct DedicatedWorkerError<'a> {
     pub(super) message: &'a str,
     pub(super) filename: &'a str,
     pub(super) lineno: u32,
     pub(super) colno: u32,
     pub(super) event_kind: crate::worker::WorkerParentErrorEventKind,
+    pub(super) phase: crate::worker::WorkerErrorPhase,
 }
 
-pub(super) fn dispatch_runtime_error_and_propagate<'s>(
+pub(super) fn dispatch_error_and_maybe_propagate<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut crate::native_bridge::JsContextHost,
     worker: v8::Local<'s, v8::Object>,
-    error: DedicatedWorkerRuntimeError<'_>,
+    error: DedicatedWorkerError<'_>,
 ) -> Result<()> {
     let worker_error = v8::null(scope).into();
     let unhandled = crate::context_bootstrap::dispatch_worker_error_event_with_kind(
@@ -52,7 +53,10 @@ pub(super) fn dispatch_runtime_error_and_propagate<'s>(
         worker_error,
         error.event_kind,
     );
-    if unhandled {
+    // A failure while creating the worker's initial script only fires an
+    // `error` event at the Worker object. Runtime script errors additionally
+    // propagate to the owning Window when that Worker event is not canceled.
+    if unhandled && error.phase == crate::worker::WorkerErrorPhase::Runtime {
         crate::context_bootstrap::dispatch_window_error_event_with_details(
             scope,
             host_ptr,

@@ -482,7 +482,7 @@ fn layout_element_metadata(
             match role {
                 LayoutTableRole::Cell => {
                     table.column_span = positive_u16_attribute(element, "colspan", 1, 1000);
-                    table.row_span = positive_u16_attribute(element, "rowspan", 1, 65_534);
+                    table.row_span = non_negative_u16_attribute(element, "rowspan", 1, 65_534);
                 }
                 LayoutTableRole::Column | LayoutTableRole::ColumnGroup => {
                     table.span = positive_u16_attribute(element, "span", 1, 1000);
@@ -541,6 +541,19 @@ fn positive_u16_attribute(
     maximum: u16,
 ) -> u16 {
     optional_positive_u16_attribute(element, name, 1, maximum).unwrap_or(default)
+}
+
+fn non_negative_u16_attribute(
+    element: &crate::dom::native::Element,
+    name: &str,
+    default: u16,
+    maximum: u16,
+) -> u16 {
+    element
+        .attribute(name)
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .map(|value| value.min(u32::from(maximum)) as u16)
+        .unwrap_or(default)
 }
 
 fn optional_positive_u16_attribute(
@@ -846,6 +859,14 @@ mod tests {
                 ..LayoutElementMetadata::default()
             }
         );
+
+        assert!(host.set_attribute(cell, "rowspan", "0"));
+        let zero_row_span = layout_element_semantics_for_source(
+            &host,
+            cell,
+            host.node(cell).unwrap().as_element().unwrap(),
+        );
+        assert_eq!(zero_row_span.metadata.table.unwrap().row_span, 0);
 
         let list = host.create_element("ol");
         assert!(host.set_attribute(list, "start", "-3"));

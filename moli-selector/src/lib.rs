@@ -56,11 +56,13 @@ pub use stylo::{
     StyloSourceStyleInvalidationTargetResultRecord, StyloStateInvalidationRoot,
     StyloStyleInvalidationQuery, StyloStyleInvalidationSnapshot,
     StyloStyleInvalidationSnapshotAttribute, StyloStyleSourceScope,
-    StyloStylesheetSourceScopeFallbackInput, is_svg_presentation_attribute_name,
+    StyloStylesheetSourceScopeFallbackInput, dom_api_selector_uses_validity_pseudo,
+    is_svg_presentation_attribute_name,
     stylo_attribute_change_can_skip_fallback_without_dependency,
     stylo_attribute_change_can_use_retained_invalidator, stylo_element_dependency_snapshot,
-    stylo_fallback_roots_plan, stylo_focus_change_invalidation_roots,
-    stylo_focus_state_matches_handle, stylo_focus_within_state_matches_handle,
+    stylo_fallback_roots_plan, stylo_flat_tree_heading_descendants,
+    stylo_focus_change_invalidation_roots, stylo_focus_state_matches_handle,
+    stylo_focus_within_state_matches_handle,
     stylo_merge_retained_source_invalidation_fallback_kind,
     stylo_merge_retained_source_invalidation_kind,
     stylo_merge_source_dependency_request_requirement, stylo_removed_element_dependency_snapshots,
@@ -79,7 +81,7 @@ pub use stylo::{
 
 use moli_dom::native::DomHost;
 use moli_dom::{NodeId, native::NativeDom};
-use std::sync::OnceLock;
+use std::{collections::HashMap, sync::OnceLock};
 
 // Temporary self-alias so the extracted module tree can keep compiling while
 // `moli` keeps its historical `crate::selector::*` references.
@@ -146,7 +148,17 @@ impl QueryEngine {
         host: &DomHost,
         selector: &str,
     ) -> Result<Option<NodeId>, SelectorError> {
-        self.adapter().query_selector(host, selector)
+        self.adapter().query_selector(host, selector, None)
+    }
+
+    pub fn query_selector_host_with_validity_states(
+        &self,
+        host: &DomHost,
+        selector: &str,
+        validity_states: &HashMap<NodeId, bool>,
+    ) -> Result<Option<NodeId>, SelectorError> {
+        self.adapter()
+            .query_selector(host, selector, Some(validity_states))
     }
 
     pub fn query_selector_all_host(
@@ -154,7 +166,17 @@ impl QueryEngine {
         host: &DomHost,
         selector: &str,
     ) -> Result<Vec<NodeId>, SelectorError> {
-        self.adapter().query_selector_all(host, selector)
+        self.adapter().query_selector_all(host, selector, None)
+    }
+
+    pub fn query_selector_all_host_with_validity_states(
+        &self,
+        host: &DomHost,
+        selector: &str,
+        validity_states: &HashMap<NodeId, bool>,
+    ) -> Result<Vec<NodeId>, SelectorError> {
+        self.adapter()
+            .query_selector_all(host, selector, Some(validity_states))
     }
 
     pub fn query_selector_in_host(
@@ -163,7 +185,18 @@ impl QueryEngine {
         root: NodeId,
         selector: &str,
     ) -> Result<Option<NodeId>, SelectorError> {
-        self.adapter().query_selector_in(host, root, selector)
+        self.adapter().query_selector_in(host, root, selector, None)
+    }
+
+    pub fn query_selector_in_host_with_validity_states(
+        &self,
+        host: &DomHost,
+        root: NodeId,
+        selector: &str,
+        validity_states: &HashMap<NodeId, bool>,
+    ) -> Result<Option<NodeId>, SelectorError> {
+        self.adapter()
+            .query_selector_in(host, root, selector, Some(validity_states))
     }
 
     pub fn query_selector_all_in_host(
@@ -172,7 +205,19 @@ impl QueryEngine {
         root: NodeId,
         selector: &str,
     ) -> Result<Vec<NodeId>, SelectorError> {
-        self.adapter().query_selector_all_in(host, root, selector)
+        self.adapter()
+            .query_selector_all_in(host, root, selector, None)
+    }
+
+    pub fn query_selector_all_in_host_with_validity_states(
+        &self,
+        host: &DomHost,
+        root: NodeId,
+        selector: &str,
+        validity_states: &HashMap<NodeId, bool>,
+    ) -> Result<Vec<NodeId>, SelectorError> {
+        self.adapter()
+            .query_selector_all_in(host, root, selector, Some(validity_states))
     }
 
     pub fn matches_host(
@@ -181,7 +226,18 @@ impl QueryEngine {
         node_id: NodeId,
         selector: &str,
     ) -> Result<bool, SelectorError> {
-        self.adapter().matches(host, node_id, selector)
+        self.adapter().matches(host, node_id, selector, None)
+    }
+
+    pub fn matches_host_with_validity_states(
+        &self,
+        host: &DomHost,
+        node_id: NodeId,
+        selector: &str,
+        validity_states: &HashMap<NodeId, bool>,
+    ) -> Result<bool, SelectorError> {
+        self.adapter()
+            .matches(host, node_id, selector, Some(validity_states))
     }
 
     pub fn matches_with_scope_host(
@@ -192,7 +248,7 @@ impl QueryEngine {
         scope_root: NodeId,
     ) -> Result<bool, SelectorError> {
         self.adapter()
-            .matches_with_scope(host, node_id, selector, scope_root)
+            .matches_with_scope(host, node_id, selector, scope_root, None)
     }
 
     pub fn closest_host(
@@ -201,7 +257,18 @@ impl QueryEngine {
         start: NodeId,
         selector: &str,
     ) -> Result<Option<NodeId>, SelectorError> {
-        self.adapter().closest(host, start, selector)
+        self.adapter().closest(host, start, selector, None)
+    }
+
+    pub fn closest_host_with_validity_states(
+        &self,
+        host: &DomHost,
+        start: NodeId,
+        selector: &str,
+        validity_states: &HashMap<NodeId, bool>,
+    ) -> Result<Option<NodeId>, SelectorError> {
+        self.adapter()
+            .closest(host, start, selector, Some(validity_states))
     }
 
     pub fn query_selector(
@@ -276,6 +343,10 @@ impl QueryEngine {
 
 pub fn html_directionality(host: &DomHost, handle: NodeId) -> CssDirection {
     stylo::html_directionality(host, handle)
+}
+
+pub fn html_auto_directionality_invalidation_root(host: &DomHost, start: NodeId) -> Option<NodeId> {
+    stylo::html_auto_directionality_invalidation_root(host, start)
 }
 
 pub fn validate_supports_selector_condition_argument(selector: &str) -> Result<(), SelectorError> {
@@ -361,10 +432,14 @@ fn serialize_cssom_style_rule_selector_text(
 ) -> String {
     let prefixes_matching_default_namespace =
         namespace_context.prefixes_matching_default_namespace();
-    cssom_selector::serialize_cssom_selector_text(
+    cssom_selector::serialize_cssom_selector_text_preserving_invalid_forgiving_items(
         selector,
         namespace_context.has_default_namespace(),
         &prefixes_matching_default_namespace,
+        |candidate| {
+            stylo::validate_supports_selector_list_with_namespaces(candidate, namespace_context)
+                .is_ok()
+        },
     )
     .unwrap_or_else(|| selector.to_owned())
 }
@@ -373,8 +448,9 @@ fn serialize_cssom_style_rule_selector_text(
 mod tests {
     use super::{
         QueryEngine, StyleRuleNamespaceContext, StyleRuleSelectorContext, StyloDomStyleAdapter,
-        canonicalize_cssom_style_rule_selector_text, normalize_scope_end_selector_list,
-        normalize_scope_selector_list, validate_supports_selector_condition_argument,
+        canonicalize_cssom_style_rule_selector_text, html_auto_directionality_invalidation_root,
+        normalize_scope_end_selector_list, normalize_scope_selector_list,
+        validate_supports_selector_condition_argument,
     };
     use crate::dom::native::{DomHost, NativeDom};
     use crate::stylo::{
@@ -400,6 +476,12 @@ mod tests {
         assert!(validate_style_rule_selector_list(".one, main > .two").is_ok());
         assert!(validate_style_rule_selector_list("::part(mypart):lang(en)").is_ok());
         assert!(validate_style_rule_selector_list("::part(mypart):dir(ltr)").is_ok());
+        assert!(
+            validate_style_rule_selector_list("span::-webkit-something-invalid:active").is_ok()
+        );
+        assert!(
+            validate_style_rule_selector_list("span::-webkit-something-invalid::before").is_err()
+        );
         assert!(validate_style_rule_selector_list("").is_err());
         assert!(validate_style_rule_selector_list("div[").is_err());
         assert!(validate_style_rule_selector_list(".one,").is_err());
@@ -413,6 +495,7 @@ mod tests {
         assert!(validate_supports_selector_list("::part(mypart):is(:hover)").is_ok());
         assert!(validate_supports_selector_list("::part(mypart):is(:first-child)").is_err());
         assert!(validate_supports_selector_list("::part(mypart):where(:first-child)").is_err());
+        assert!(validate_supports_selector_list("span::-webkit-something-invalid").is_err());
     }
 
     #[test]
@@ -425,6 +508,15 @@ mod tests {
         assert!(validate_supports_selector_condition_argument("div, div").is_err());
         assert!(validate_supports_selector_condition_argument("div[attr=',']").is_ok());
         assert!(validate_supports_selector_condition_argument("div:is(.a, .b), span").is_err());
+    }
+
+    #[test]
+    fn webkit_autofill_alias_uses_standard_autofill_selector_semantics() {
+        for selector in ["input:-webkit-autofill", "input:-WeBkIt-AuToFiLl"] {
+            assert!(validate_style_rule_selector_list(selector).is_ok());
+            assert!(validate_supports_selector_list(selector).is_ok());
+            assert!(validate_supports_selector_condition_argument(selector).is_ok());
+        }
     }
 
     #[test]
@@ -773,10 +865,33 @@ mod tests {
         let ancestor = host.create_element("section");
         let nested_h1 = host.create_element("h1");
         let subject = host.create_element("div");
+        let offset_parent = host.create_element("section");
+        let offset_h1 = host.create_element("h1");
+        let reset_boundary = host.create_element("section");
+        let nested_offset = host.create_element("div");
+        let reset_h1 = host.create_element("h1");
+        let shadow_host = host.create_element("section");
+        let shadow_h1 = host.create_element("h1");
+        let slot_container = host.create_element("div");
+        let slot = host.create_element("slot");
+        let slotted_h2 = host.create_element("h2");
+        let modal_parent = host.create_element("div");
+        let modal = host.create_element("dialog");
+        let modal_h1 = host.create_element("h1");
+        let aria_h1 = host.create_element("h1");
         assert!(host.set_attribute(role_heading, "role", "heading"));
         assert!(host.set_attribute(role_heading, "aria-level", "1"));
         assert!(host.set_attribute(ancestor, "id", "ancestor"));
         assert!(host.set_attribute(subject, "id", "subject"));
+        assert!(host.set_attribute(offset_parent, "headingoffset", "3"));
+        assert!(host.set_attribute(reset_boundary, "headingoffset", "2"));
+        assert!(host.set_attribute(reset_boundary, "headingreset", ""));
+        assert!(host.set_attribute(nested_offset, "headingoffset", "2"));
+        assert!(host.set_attribute(shadow_host, "headingoffset", "1"));
+        assert!(host.set_attribute(slot_container, "headingoffset", "1"));
+        assert!(host.set_attribute(modal_parent, "headingoffset", "8"));
+        assert!(host.set_attribute(aria_h1, "headingoffset", "8"));
+        assert!(host.set_attribute(aria_h1, "aria-level", "3"));
         assert!(host.append_child(body, h1));
         assert!(host.append_child(body, h2));
         assert!(host.append_child(body, h7));
@@ -784,6 +899,22 @@ mod tests {
         assert!(host.append_child(body, ancestor));
         assert!(host.append_child(ancestor, nested_h1));
         assert!(host.append_child(body, subject));
+        assert!(host.append_child(body, offset_parent));
+        assert!(host.append_child(offset_parent, offset_h1));
+        assert!(host.append_child(body, reset_boundary));
+        assert!(host.append_child(reset_boundary, nested_offset));
+        assert!(host.append_child(nested_offset, reset_h1));
+        assert!(host.append_child(body, shadow_host));
+        let shadow_root = host.attach_shadow_root(shadow_host, "open").unwrap();
+        assert!(host.append_child(shadow_root, shadow_h1));
+        assert!(host.append_child(shadow_root, slot_container));
+        assert!(host.append_child(slot_container, slot));
+        assert!(host.append_child(shadow_host, slotted_h2));
+        assert!(host.append_child(body, modal_parent));
+        assert!(host.append_child(modal_parent, modal));
+        assert!(host.append_child(modal, modal_h1));
+        assert!(host.set_dialog_modal(modal, true));
+        assert!(host.append_child(body, aria_h1));
 
         let engine = QueryEngine;
         assert!(engine.matches_host(&host, h1, ":heading").unwrap());
@@ -809,6 +940,30 @@ mod tests {
                 .matches_host(&host, subject, "#ancestor:has(:heading(1)) ~ #subject")
                 .unwrap()
         );
+        assert!(
+            engine
+                .matches_host(&host, offset_h1, ":heading(4)")
+                .unwrap()
+        );
+        assert!(host.set_attribute(offset_parent, "headingoffset", "5"));
+        assert!(
+            engine
+                .matches_host(&host, offset_h1, ":heading(6)")
+                .unwrap()
+        );
+        assert!(engine.matches_host(&host, reset_h1, ":heading(5)").unwrap());
+        assert!(
+            engine
+                .matches_host(&host, shadow_h1, ":heading(2)")
+                .unwrap()
+        );
+        assert!(
+            engine
+                .matches_host(&host, slotted_h2, ":heading(4)")
+                .unwrap()
+        );
+        assert!(engine.matches_host(&host, modal_h1, ":heading(1)").unwrap());
+        assert!(engine.matches_host(&host, aria_h1, ":heading(9)").unwrap());
         assert!(engine.query_selector_host(&host, ":heading()").is_err());
         assert!(engine.query_selector_host(&host, ":heading(2n)").is_err());
     }
@@ -1182,6 +1337,39 @@ mod tests {
                 .unwrap(),
             None
         );
+        for selector in [
+            "::slotted(*)::checkmark",
+            "::slotted(*)::picker-icon",
+            "::slotted(*)::picker(select)",
+        ] {
+            assert_eq!(
+                engine.query_selector_host(&host, selector).unwrap(),
+                None,
+                "valid pseudo-element selector `{selector}` should return no element"
+            );
+        }
+        for selector in [
+            "::slotted()",
+            "::slotted(",
+            "::slotted(0)",
+            ":slotted(foo)",
+            "::slotted(foo) + ::slotted(bar)",
+            "::slotted(foo):hover",
+            "::slotted(foo):focus",
+            "::slotted(foo):lang(en)",
+            "::slotted(foo):dir(ltr)",
+            ":part()",
+            "::part(",
+            ":part(0)",
+            ":part('foo')",
+            ":part([foo])",
+            "::part(foo) + ::part(bar)",
+        ] {
+            assert!(
+                engine.query_selector_host(&host, selector).is_err(),
+                "invalid pseudo-element selector `{selector}` should be rejected"
+            );
+        }
         assert!(
             engine
                 .query_selector_host(&host, "::part(label):first-child")
@@ -1205,6 +1393,23 @@ mod tests {
         assert!(
             engine
                 .query_selector_host(&host, "invalid# ::before")
+                .is_err()
+        );
+        assert_eq!(
+            engine
+                .query_selector_host(&host, "span::-webkit-something-invalid")
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            engine
+                .query_selector_host(&host, "span::-webkit-something-invalid:active")
+                .unwrap(),
+            None
+        );
+        assert!(
+            engine
+                .query_selector_host(&host, "span::-webkit-something-invalid::before")
                 .is_err()
         );
     }
@@ -1357,6 +1562,33 @@ mod tests {
     }
 
     #[test]
+    fn dom_api_selectors_design_mode_marks_connected_elements_read_write() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+        let paragraph = host.create_element("p");
+        let blocked = host.create_element("div");
+        assert!(host.set_attribute(blocked, "contenteditable", "false"));
+        let detached = host.create_element("section");
+        assert!(host.append_child(body, paragraph));
+        assert!(host.append_child(body, blocked));
+        assert!(host.set_document_design_mode_enabled_for_handle(host.document_handle(), true));
+
+        let engine = QueryEngine;
+        assert!(
+            engine
+                .matches_host(&host, paragraph, ":read-write")
+                .unwrap()
+        );
+        assert!(!engine.matches_host(&host, paragraph, ":read-only").unwrap());
+        assert!(!engine.matches_host(&host, blocked, ":read-write").unwrap());
+        assert!(engine.matches_host(&host, blocked, ":read-only").unwrap());
+        assert!(!engine.matches_host(&host, detached, ":read-write").unwrap());
+        assert!(engine.matches_host(&host, detached, ":read-only").unwrap());
+    }
+
+    #[test]
     fn dom_api_selectors_lang_uses_nearest_language_attribute() {
         let url = url::Url::parse("https://example.test/").unwrap();
         let mut host = DomHost::from_dom(NativeDom::new_html(url));
@@ -1461,6 +1693,46 @@ mod tests {
     }
 
     #[test]
+    fn dir_auto_mutation_root_stops_at_contained_text_boundaries() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+
+        let auto = host.create_element("div");
+        let transparent = host.create_element("span");
+        let explicit = host.create_element("section");
+        let explicit_child = host.create_element("span");
+        let bdi = host.create_element("bdi");
+        let script = host.create_element("script");
+        assert!(host.set_attribute(auto, "dir", "auto"));
+        assert!(host.set_attribute(explicit, "dir", "rtl"));
+        assert!(host.append_child(body, auto));
+        assert!(host.append_child(auto, transparent));
+        assert!(host.append_child(auto, explicit));
+        assert!(host.append_child(explicit, explicit_child));
+        assert!(host.append_child(auto, bdi));
+        assert!(host.append_child(auto, script));
+
+        assert_eq!(
+            html_auto_directionality_invalidation_root(&host, transparent),
+            Some(auto)
+        );
+        assert_eq!(
+            html_auto_directionality_invalidation_root(&host, explicit_child),
+            None
+        );
+        assert_eq!(
+            html_auto_directionality_invalidation_root(&host, bdi),
+            Some(bdi)
+        );
+        assert_eq!(
+            html_auto_directionality_invalidation_root(&host, script),
+            None
+        );
+    }
+
+    #[test]
     fn dom_api_selectors_dir_on_input_uses_html_directionality_rules() {
         let url = url::Url::parse("https://example.test/").unwrap();
         let mut host = DomHost::from_dom(NativeDom::new_html(url));
@@ -1507,6 +1779,71 @@ mod tests {
         assert!(host.set_attribute(auto, "type", "hidden"));
         assert!(!engine.matches_host(&host, auto, ":dir(ltr)").unwrap());
         assert!(engine.matches_host(&host, auto, ":dir(rtl)").unwrap());
+
+        let textarea = host.create_element("textarea");
+        assert!(host.set_attribute(textarea, "dir", "auto"));
+        let textarea_text = host.create_text_node("\u{05ea}");
+        assert!(host.append_child(textarea, textarea_text));
+        assert!(host.append_child(body, textarea));
+        assert!(!engine.matches_host(&host, textarea, ":dir(ltr)").unwrap());
+        assert!(engine.matches_host(&host, textarea, ":dir(rtl)").unwrap());
+
+        assert!(host.set_text_content(textarea, "A"));
+        assert!(engine.matches_host(&host, textarea, ":dir(ltr)").unwrap());
+        assert!(!engine.matches_host(&host, textarea, ":dir(rtl)").unwrap());
+
+        assert!(host.set_input_value(textarea, "\u{05ea}"));
+        assert!(host.set_text_content(textarea, "A"));
+        assert!(!engine.matches_host(&host, textarea, ":dir(ltr)").unwrap());
+        assert!(engine.matches_host(&host, textarea, ":dir(rtl)").unwrap());
+
+        assert!(host.set_input_value(textarea, "A"));
+        assert!(engine.matches_host(&host, textarea, ":dir(ltr)").unwrap());
+        assert!(!engine.matches_host(&host, textarea, ":dir(rtl)").unwrap());
+    }
+
+    #[test]
+    fn dom_api_selectors_dir_auto_resolves_slot_directionality_boundaries() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+        let engine = QueryEngine;
+
+        let assigned_host = host.create_element("div");
+        assert!(host.append_child(body, assigned_host));
+        let assigned_text = host.create_text_node("\u{0627}\u{062e}\u{062a}\u{0628}\u{0631}");
+        assert!(host.append_child(assigned_host, assigned_text));
+        let assigned_shadow = host.attach_shadow_root(assigned_host, "open").unwrap();
+        let auto_slot = host.create_element("slot");
+        assert!(host.set_attribute(auto_slot, "dir", "auto"));
+        assert!(host.append_child(assigned_shadow, auto_slot));
+
+        assert!(engine.matches_host(&host, auto_slot, ":dir(rtl)").unwrap());
+        assert!(!engine.matches_host(&host, auto_slot, ":dir(ltr)").unwrap());
+
+        let inherited_host = host.create_element("div");
+        assert!(host.set_attribute(inherited_host, "dir", "rtl"));
+        assert!(host.append_child(body, inherited_host));
+        let inherited_shadow = host.attach_shadow_root(inherited_host, "open").unwrap();
+        let auto_container = host.create_element("div");
+        assert!(host.set_attribute(auto_container, "dir", "auto"));
+        let inherited_slot = host.create_element("slot");
+        let later_ltr_text = host.create_text_node("A");
+        assert!(host.append_child(auto_container, inherited_slot));
+        assert!(host.append_child(auto_container, later_ltr_text));
+        assert!(host.append_child(inherited_shadow, auto_container));
+
+        assert!(
+            engine
+                .matches_host(&host, auto_container, ":dir(rtl)")
+                .unwrap()
+        );
+        assert!(
+            !engine
+                .matches_host(&host, auto_container, ":dir(ltr)")
+                .unwrap()
+        );
     }
 
     #[test]
@@ -1702,6 +2039,38 @@ mod tests {
     }
 
     #[test]
+    fn dom_api_webkit_autofill_alias_matches_autofilled_state() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+        let input = host.create_element("input");
+        assert!(host.append_child(body, input));
+
+        let engine = QueryEngine;
+        assert_eq!(
+            engine
+                .query_selector_host(&host, ":-webkit-autofill")
+                .unwrap(),
+            None
+        );
+
+        assert!(host.set_autofilled_state(input, true));
+        assert_eq!(
+            engine
+                .query_selector_host(&host, ":-webkit-autofill")
+                .unwrap(),
+            Some(input)
+        );
+        assert!(
+            engine
+                .matches_host(&host, input, ":-WeBkIt-AuToFiLl")
+                .unwrap()
+        );
+        assert!(engine.matches_host(&host, input, ":autofill").unwrap());
+    }
+
+    #[test]
     fn dom_api_selectors_disabled_select_disables_option_descendants() {
         let url = url::Url::parse("https://example.test/").unwrap();
         let mut host = DomHost::from_dom(NativeDom::new_html(url));
@@ -1735,6 +2104,70 @@ mod tests {
         assert!(host.remove_attribute(select, "disabled"));
         assert!(!engine.matches_host(&host, optgroup, ":disabled").unwrap());
         assert!(!engine.matches_host(&host, option, ":disabled").unwrap());
+    }
+
+    #[test]
+    fn dom_api_selectors_option_disabledness_respects_association_boundaries() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+        let engine = QueryEngine;
+
+        let select = host.create_element("select");
+        let optgroup = host.create_element("optgroup");
+        let div = host.create_element("div");
+        let option = host.create_element("option");
+        assert!(host.append_child(body, select));
+        assert!(host.append_child(select, optgroup));
+        assert!(host.append_child(optgroup, div));
+        assert!(host.append_child(div, option));
+        assert!(host.set_attribute(optgroup, "disabled", ""));
+        assert!(engine.matches_host(&host, option, ":disabled").unwrap());
+
+        let disabled_select = host.create_element("select");
+        let valid_optgroup = host.create_element("optgroup");
+        let valid_option = host.create_element("option");
+        let nested_optgroup = host.create_element("optgroup");
+        let nested_optgroup_option = host.create_element("option");
+        let parent_option = host.create_element("option");
+        let nested_option = host.create_element("option");
+        let hr = host.create_element("hr");
+        let hr_option = host.create_element("option");
+        let datalist = host.create_element("datalist");
+        let datalist_option = host.create_element("option");
+        assert!(host.set_attribute(disabled_select, "disabled", ""));
+        assert!(host.append_child(body, disabled_select));
+        assert!(host.append_child(disabled_select, valid_optgroup));
+        assert!(host.append_child(valid_optgroup, valid_option));
+        assert!(host.append_child(valid_optgroup, nested_optgroup));
+        assert!(host.append_child(nested_optgroup, nested_optgroup_option));
+        assert!(host.append_child(disabled_select, parent_option));
+        assert!(host.append_child(parent_option, nested_option));
+        assert!(host.append_child(disabled_select, hr));
+        assert!(host.append_child(hr, hr_option));
+        assert!(host.append_child(disabled_select, datalist));
+        assert!(host.append_child(datalist, datalist_option));
+
+        assert!(
+            engine
+                .matches_host(&host, valid_optgroup, ":disabled")
+                .unwrap()
+        );
+        assert!(
+            engine
+                .matches_host(&host, valid_option, ":disabled")
+                .unwrap()
+        );
+        for handle in [
+            nested_optgroup,
+            nested_optgroup_option,
+            nested_option,
+            hr_option,
+            datalist_option,
+        ] {
+            assert!(!engine.matches_host(&host, handle, ":disabled").unwrap());
+        }
     }
 
     #[test]

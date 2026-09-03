@@ -50,6 +50,10 @@ input, textarea, select, button {
   display: inline-block;
 }
 
+marquee {
+  overflow: hidden !important;
+}
+
 pre, xmp, plaintext, listing {
   font-family: monospace;
   white-space: pre;
@@ -500,12 +504,22 @@ slot {
   display: contents;
 }
 
+dialog {
+  color: CanvasText;
+  background-color: Canvas;
+}
+
 dialog:not([open]), [popover]:where(:not(:popover-open)) {
   display: none;
 }
 
 dialog[open], [popover]:popover-open {
   display: block;
+}
+
+dialog:modal {
+  -servo-top-layer: top;
+  visibility: visible;
 }
 
 u, ins {

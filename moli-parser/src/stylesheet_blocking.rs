@@ -43,6 +43,12 @@ impl StylesheetBlockingReadView for ParserStreamDocumentSnapshot {
         self.document_node_id()
     }
 
+    fn document_is_quirks_mode(&self) -> bool {
+        self.node(self.document_node_id())
+            .and_then(moli_dom::native::Node::as_document)
+            .is_some_and(|document| document.is_quirks_mode())
+    }
+
     fn document_order_stylesheet_candidate_ids_before(
         &self,
         target_node_id: Option<NodeId>,
@@ -158,6 +164,34 @@ mod tests {
             disposition.url().as_str(),
             "https://example.com/assets/app.css"
         );
+        assert!(!disposition.options().quirks_mode_mime_compatibility());
+    }
+
+    #[test]
+    fn stylesheet_link_captures_quirks_mode_mime_compatibility() {
+        let parser = HtmlParser::SCRIPTING_ENABLED;
+        let document = parser.parse(
+            url::Url::parse("https://example.com/page.html").unwrap(),
+            "<html><head><link rel=stylesheet href=app.css></head></html>".to_owned(),
+        );
+        let link = document
+            .document_head_handle()
+            .and_then(|head| document.child_nodes(head))
+            .and_then(|children| {
+                children.into_iter().find(|handle| {
+                    document
+                        .node(*handle)
+                        .and_then(Node::as_element)
+                        .is_some_and(|element| element.is_html_element("link"))
+                })
+            })
+            .expect("stylesheet link");
+
+        let disposition =
+            stylesheet_link_disposition(&document, moli_dom::NodeId::new(link.index()))
+                .expect("stylesheet disposition");
+
+        assert!(disposition.options().quirks_mode_mime_compatibility());
     }
 
     #[test]

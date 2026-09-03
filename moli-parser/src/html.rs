@@ -370,6 +370,27 @@ pub(super) struct DocumentSink {
     // lines from the original document tail, so location fidelity only
     // degrades and never recovers for this parser session.
     source_positions_known: Cell<bool>,
+    current_script_nonceable: Cell<Option<bool>>,
+    html4_empty_system_id_quirks_override_pending: Cell<bool>,
+}
+
+const HTML4_QUIRKS_PUBLIC_ID_PREFIXES: [&str; 2] = [
+    "-//W3C//DTD HTML 4.01 Frameset//",
+    "-//W3C//DTD HTML 4.01 Transitional//",
+];
+
+fn html4_doctype_without_nonempty_system_id_requires_quirks(
+    name: &str,
+    public_id: &str,
+    system_id: &str,
+) -> bool {
+    name.eq_ignore_ascii_case("html")
+        && system_id.is_empty()
+        && HTML4_QUIRKS_PUBLIC_ID_PREFIXES.iter().any(|prefix| {
+            public_id
+                .get(..prefix.len())
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(prefix))
+        })
 }
 
 impl HtmlParser {
@@ -390,7 +411,14 @@ impl HtmlParser {
     }
 
     pub fn parse_dom_host(&self, final_url: Url, html: String) -> DomHost {
-        let mut stream = self.start_document(final_url);
+        let target =
+            ParserStreamHtmlTreeSinkTarget::new_with_declarative_shadow_roots_and_scripting(
+                final_url,
+                true,
+                self.scripting_enabled,
+            );
+        let mut stream =
+            HtmlTreeSinkStream::from_target_with_scripting(target, self.scripting_enabled);
         for chunk in html_chunks(&html) {
             stream.feed(chunk);
         }
@@ -403,7 +431,11 @@ impl HtmlParser {
         html: String,
     ) -> NativeDom {
         let target =
-            ParserStreamHtmlTreeSinkTarget::new_with_declarative_shadow_roots(final_url, false);
+            ParserStreamHtmlTreeSinkTarget::new_with_declarative_shadow_roots_and_scripting(
+                final_url,
+                false,
+                self.scripting_enabled,
+            );
         let mut stream =
             HtmlTreeSinkStream::from_target_with_scripting(target, self.scripting_enabled);
         for chunk in html_chunks(&html) {
@@ -450,10 +482,12 @@ impl HtmlParser {
         allow_declarative_shadow_roots: bool,
         scripting_enabled: bool,
     ) -> NativeDom {
-        let target = ParserStreamHtmlTreeSinkTarget::new_with_declarative_shadow_roots(
-            final_url,
-            allow_declarative_shadow_roots,
-        );
+        let target =
+            ParserStreamHtmlTreeSinkTarget::new_with_declarative_shadow_roots_and_scripting(
+                final_url,
+                allow_declarative_shadow_roots,
+                scripting_enabled,
+            );
         let context = QualName::new(
             None,
             Namespace::from(context_namespace),
@@ -1379,6 +1413,12 @@ impl ParseHandle {
         })
     }
 
+    fn is_html_option_element(&self) -> bool {
+        self.element_name.as_ref().is_some_and(|name| {
+            name.local.as_ref() == "option" && name.ns.as_ref() == "http://www.w3.org/1999/xhtml"
+        })
+    }
+
     pub(super) fn node_id(&self) -> NativeNodeId {
         self.dom_node_id()
             .expect("parser operation requires a real DOM node handle")
@@ -1417,7 +1457,13 @@ impl DocumentSink {
         Self {
             target: RefCell::new(target),
             source_positions_known: Cell::new(true),
+            current_script_nonceable: Cell::new(None),
+            html4_empty_system_id_quirks_override_pending: Cell::new(false),
         }
+    }
+
+    pub(super) fn replace_current_script_nonceable(&self, nonceable: Option<bool>) -> Option<bool> {
+        self.current_script_nonceable.replace(nonceable)
     }
 
     pub(super) fn snapshot_parser_stream_document(&self) -> NativeDom {
@@ -1539,8 +1585,10 @@ impl DocumentSink {
             .pop_pending_blocking_stylesheet_pause()
     }
 
-    pub(super) fn begin_tree_builder_finish(&self) {
-        self.target.borrow_mut().begin_tree_builder_finish();
+    pub(super) fn begin_tree_builder_finish(&self, unclosed_form_controls: &[NativeNodeId]) {
+        self.target
+            .borrow_mut()
+            .begin_tree_builder_finish(unclosed_form_controls);
     }
 
     pub(super) fn drain_discovered_blocking_stylesheet_inputs(
@@ -1602,6 +1650,20 @@ impl TreeSink for DocumentSink {
     }
 
     fn set_quirks_mode(&self, mode: QuirksMode) {
+        // html5ever 0.39 distinguishes `Some("")` from a missing system ID
+        // when selecting HTML 4.01 limited-quirks mode. The HTML Standard now
+        // puts both in quirks mode. Keep the token and its parse-error state
+        // intact, and only correct the mode reported immediately after the
+        // initial doctype callback.
+        let mode = if self
+            .html4_empty_system_id_quirks_override_pending
+            .replace(false)
+            && mode == QuirksMode::LimitedQuirks
+        {
+            QuirksMode::Quirks
+        } else {
+            mode
+        };
         self.target.borrow_mut().set_html_quirks_mode(mode);
     }
 
@@ -1626,7 +1688,12 @@ impl TreeSink for DocumentSink {
         attrs: Vec<Attribute>,
         flags: ElementFlags,
     ) -> Self::Handle {
-        self.target.borrow_mut().create_element(name, attrs, flags)
+        self.target.borrow_mut().create_element(
+            name,
+            attrs,
+            flags,
+            self.current_script_nonceable.get(),
+        )
     }
 
     fn create_comment(&self, text: StrTendril) -> Self::Handle {
@@ -1664,6 +1731,16 @@ impl TreeSink for DocumentSink {
         public_id: StrTendril,
         system_id: StrTendril,
     ) {
+        // TreeSink receives an empty tendril for both a missing and an explicit
+        // empty system identifier. Those cases intentionally share the same
+        // quirks-mode outcome for these two HTML 4.01 public identifiers.
+        self.html4_empty_system_id_quirks_override_pending.set(
+            html4_doctype_without_nonempty_system_id_requires_quirks(
+                name.as_ref(),
+                public_id.as_ref(),
+                system_id.as_ref(),
+            ),
+        );
         self.mutate_target(|target| {
             target.append_doctype(
                 name.to_string(),
@@ -1749,10 +1826,23 @@ impl TreeSink for DocumentSink {
         }
     }
 
+    fn maybe_clone_an_option_into_selectedcontent(&self, option: &Self::Handle) {
+        if let Some(option_id) = option.dom_node_id() {
+            self.target
+                .borrow_mut()
+                .maybe_clone_an_option_into_selectedcontent(option_id);
+        }
+    }
+
     fn pop(&self, node: &Self::Handle) {
         // html5ever calls `pop()` when the element has been fully closed by the parser. For
         // classic parser-inserted scripts that is the earliest safe moment to hand execution back
         // to the runtime without risking partial inline source or a half-built element subtree.
+        // Its explicit `</option>` path invokes the selectedcontent hook itself, but implicit
+        // stack pops (including EOF) only arrive here, so route those through the same hook.
+        if node.is_html_option_element() {
+            self.maybe_clone_an_option_into_selectedcontent(node);
+        }
         if let Some(node_id) = node.dom_node_id() {
             self.target
                 .borrow_mut()
@@ -1879,6 +1969,59 @@ mod tests {
     }
 
     #[test]
+    fn html4_empty_system_identifiers_trigger_quirks_mode() {
+        let mode = |html: &str| {
+            parse_test_document(html)
+                .document()
+                .expect("parsed document")
+                .quirks_mode()
+        };
+        let quirks = mode("<html></html>");
+        let no_quirks = mode("<!doctype html><html></html>");
+        let limited_quirks = mode(concat!(
+            "<!doctype html PUBLIC \"-//W3C//DTD HTML 4.01 Frameset//\" ",
+            "\"https://www.w3.org/TR/html4/frameset.dtd\"><html></html>",
+        ));
+
+        assert_ne!(quirks, no_quirks, "test must distinguish quirks mode");
+        assert_ne!(
+            quirks, limited_quirks,
+            "test must distinguish quirks from limited-quirks mode"
+        );
+        assert_ne!(
+            no_quirks, limited_quirks,
+            "test must distinguish no-quirks from limited-quirks mode"
+        );
+
+        for public_id in [
+            "-//W3C//DTD HTML 4.01 Frameset//",
+            "-//w3c//dtd html 4.01 transitional//",
+        ] {
+            let missing = format!("<!doctype html PUBLIC \"{public_id}\"><html></html>");
+            let empty = format!("<!doctype html PUBLIC \"{public_id}\" \"\"><html></html>");
+            let nonempty =
+                format!("<!doctype html PUBLIC \"{public_id}\" \"legacy.dtd\"><html></html>");
+
+            assert_eq!(mode(&missing), quirks, "missing system ID for {public_id}");
+            assert_eq!(mode(&empty), quirks, "empty system ID for {public_id}");
+            assert_eq!(
+                mode(&nonempty),
+                limited_quirks,
+                "nonempty system ID for {public_id}"
+            );
+        }
+
+        assert_eq!(
+            mode(concat!(
+                "<!doctype html PUBLIC \"-//W3C//DTD XHTML 1.0 Frameset//\" ",
+                "\"\"><html></html>",
+            )),
+            limited_quirks,
+            "an empty XHTML system ID must remain limited-quirks"
+        );
+    }
+
+    #[test]
     fn fragment_scripting_flag_controls_noscript_tokenization() {
         let parse = |scripting_enabled| {
             HtmlParser::with_scripting_enabled(scripting_enabled)
@@ -1930,6 +2073,25 @@ mod tests {
     }
 
     #[test]
+    fn standalone_html_parser_preserves_the_requested_scripting_mode() {
+        let document = HtmlParser::SCRIPTING_DISABLED.parse_without_declarative_shadow_roots(
+            Url::parse("https://example.test/").expect("test url"),
+            "<body><noscript>&amp;&nbsp;&lt;&gt;</noscript></body>".to_owned(),
+        );
+        assert_eq!(
+            document
+                .document()
+                .map(|document| document.scripting_enabled()),
+            Some(false)
+        );
+        let noscript = first_element_by_ns(&document, HTML_NS, "noscript");
+        assert_eq!(
+            document.inner_html(noscript).as_deref(),
+            Some("&amp;&nbsp;&lt;&gt;")
+        );
+    }
+
+    #[test]
     fn mathml_annotation_xml_text_html_is_html_integration_point() {
         let document = parse_test_document(concat!(
             "<!doctype html>",
@@ -1962,6 +2124,78 @@ mod tests {
             "plain annotation-xml must not opt into HTML integration point parsing"
         );
     }
+    #[test]
+    fn customizable_select_preserves_option_wrapper_elements() {
+        let document = parse_test_document(concat!(
+            "<!doctype html>",
+            "<select>",
+            "<option>one</option>",
+            "<div id='wrapper'><option>two</option>",
+            "<div id='nested'><option>three</option></div></div>",
+            "</select>"
+        ));
+        let select = first_element_by_ns(&document, HTML_NS, "select");
+        let divs = document.elements_by_tag_name_ns(
+            document.document_node_id(),
+            Some(HTML_NS),
+            "div",
+            true,
+        );
+        let wrapper = divs
+            .iter()
+            .copied()
+            .find(|handle| document.get_attribute(*handle, "id").as_deref() == Some("wrapper"))
+            .expect("select wrapper div");
+        let nested = divs
+            .iter()
+            .copied()
+            .find(|handle| document.get_attribute(*handle, "id").as_deref() == Some("nested"))
+            .expect("nested select wrapper div");
+
+        assert_eq!(
+            document
+                .node(wrapper)
+                .and_then(|node| node.parent_node_id()),
+            Some(select)
+        );
+        assert_eq!(
+            document.node(nested).and_then(|node| node.parent_node_id()),
+            Some(wrapper)
+        );
+        assert_eq!(document.select_option_elements(select).len(), 3);
+
+        let fragment = HtmlParser::SCRIPTING_ENABLED
+            .parse_fragment_without_declarative_shadow_roots(
+                Url::parse("https://example.test/").expect("test url"),
+                HTML_NS,
+                "select",
+                "<div id='fragment-wrapper'><option>value</option></div>".to_owned(),
+            );
+        let fragment_wrapper = first_element_by_ns(&fragment, HTML_NS, "div");
+        let fragment_option = first_element_by_ns(&fragment, HTML_NS, "option");
+        assert_eq!(
+            fragment
+                .node(fragment_option)
+                .and_then(|node| node.parent_node_id()),
+            Some(fragment_wrapper),
+            "select innerHTML parsing should preserve option wrapper elements"
+        );
+    }
+
+    #[test]
+    fn decoded_parser_continues_after_meta_encoding_indicator() {
+        let document = parse_test_document(concat!(
+            "<!doctype html><meta charset='windows-1252'>",
+            "<div id='after-meta'></div>"
+        ));
+        let div = first_element_by_ns(&document, HTML_NS, "div");
+
+        assert_eq!(
+            document.get_attribute(div, "id").as_deref(),
+            Some("after-meta")
+        );
+    }
+
     #[test]
     fn parser_input_session_keeps_nested_pending_buffers_on_a_stack() {
         let queue = ParserInputQueue::default();

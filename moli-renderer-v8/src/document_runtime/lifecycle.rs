@@ -252,11 +252,13 @@ impl DocumentRuntime {
         self.script_lifecycle.clear_for_document_replacement();
         self.post_parse_schedule_invalidated = true;
         self.dom_content_loaded_dispatched = false;
+        self.autofocus_processed = false;
         self.pending_inspector_issues.clear();
         self.quirks_mode_issue_reported = false;
         self.document_write_script_preload_scanner = None;
         self.main_document_script_preloads = Default::default();
         self.document_write_script_preloads.clear();
+        self.clear_classic_defer_timer_schedule_ranges();
         self.pending_document_write_external_script_load = None;
         self.pending_document_write_stylesheet_blocked_script = None;
         self.pending_document_write_stylesheet_parser_pause = None;
@@ -354,6 +356,7 @@ impl DocumentRuntime {
 
     pub(crate) fn note_dom_content_loaded_dispatched(&mut self) {
         self.dom_content_loaded_dispatched = true;
+        self.clear_classic_defer_timer_schedule_ranges();
     }
 
     pub(crate) fn dom_content_loaded_dispatched(&self) -> bool {

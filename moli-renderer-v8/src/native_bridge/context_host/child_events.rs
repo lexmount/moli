@@ -2,19 +2,20 @@ use super::{
     JsContextHost, OwnerDispatchScope, child_frame_runtime::WINDOW_EVENT_HANDLER_PROPERTIES,
 };
 use crate::{
+    context_bootstrap::{EventHandlerType, apply_event_handler_return_value, event_is_error_event},
     document_runtime::DomHandle,
     document_runtime::EventTargetHandle,
     exception_reporting::invoke_event_handler,
     frame_owner_model::{FrameDocumentTaskOwner, LocalWindowId},
     host::{
         ChildWindowEventTarget, DispatchStatus, create_host_event, event_dispatch_status,
-        invoke_prepared_event_callback,
+        invoke_prepared_before_unload_event_handler, invoke_prepared_event_callback,
     },
     native_bridge::{
         ACTIVE_CHILD_WINDOW_HANDLE_SLOT, EventCallbackId, PreparedEventCallback,
         element::EventAttributeHandlerScope, element::compile_event_attribute_handler_for_owner,
     },
-    util::{get_private_value, object_bool_property, set_private_value, v8_string, v8str},
+    util::{get_private_value, set_private_value, v8_string, v8str},
 };
 use std::{collections::HashSet, convert::TryFrom};
 
@@ -618,6 +619,21 @@ impl JsContextHost {
         if !self.child_window_event_target_is_current(ready.target) {
             return (false, None);
         }
+        if ready.registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty
+            && event_type == "beforeunload"
+        {
+            invoke_prepared_before_unload_event_handler(
+                scope,
+                self as *mut JsContextHost,
+                EventTargetHandle::ChildWindow(ready.target),
+                false,
+                event_type,
+                &format!("child window {event_type} listener"),
+                ready.callback,
+                event,
+            );
+            return (true, None);
+        }
         let arguments = child_window_event_callback_arguments(
             scope,
             ready.registration_kind,
@@ -747,6 +763,7 @@ fn child_window_event_callback_arguments<'s>(
 ) -> Vec<v8::Local<'s, v8::Value>> {
     if registration_kind == ChildWindowEventRegistrationKind::EventHandlerProperty
         && event_type == "error"
+        && event_is_error_event(scope, event)
     {
         vec![
             event
@@ -770,28 +787,22 @@ fn child_window_event_callback_arguments<'s>(
     }
 }
 
-fn apply_child_window_event_handler_return(
-    scope: &mut v8::PinScope<'_, '_>,
+fn apply_child_window_event_handler_return<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
     event_type: &str,
-    event: v8::Local<'_, v8::Object>,
+    event: v8::Local<'s, v8::Object>,
     returned: Option<v8::Global<v8::Value>>,
 ) {
     let Some(returned) = returned else {
         return;
     };
     let returned = v8::Local::new(scope, returned);
-    let should_cancel = if event_type == "error" {
-        returned.is_boolean() && returned.boolean_value(scope)
+    let handler_type = if event_type == "error" && event_is_error_event(scope, event) {
+        EventHandlerType::OnErrorEventHandler
     } else {
-        returned.is_boolean() && !returned.boolean_value(scope)
+        EventHandlerType::EventHandler
     };
-    if should_cancel && object_bool_property(scope, event, "cancelable").unwrap_or(false) {
-        let _ = event.set(
-            scope,
-            v8str(scope, "defaultPrevented").into(),
-            v8::Boolean::new(scope, true).into(),
-        );
-    }
+    apply_event_handler_return_value(scope, event, returned, handler_type);
 }
 
 fn install_child_body_load_attribute_handler_if_needed<'s>(

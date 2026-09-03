@@ -22,8 +22,6 @@ struct FileApiRuntimeQueuesDeclaration {
     resize_observer_queue: (),
     #[webapi(slot = RESIZE_OBSERVER_REGISTRY_SLOT, init = "array")]
     resize_observer_registry: (),
-    #[webapi(slot = PERFORMANCE_OBSERVER_QUEUE_SLOT, init = "array")]
-    performance_observer_queue: (),
 }
 
 pub(in crate::context_bootstrap) fn install_file_api_template_bindings<'s>(

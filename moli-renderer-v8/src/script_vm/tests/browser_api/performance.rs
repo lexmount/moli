@@ -44,6 +44,29 @@ fn record_failed_script_resource(vm: &mut ScriptVm, document_url: &Url, resource
 }
 
 #[test]
+fn resource_timing_ignores_non_http_resources() {
+    let mut vm = new_storage_test_vm("https://resource-scheme.test/");
+    install_test_resource_recorder(&mut vm);
+
+    vm.eval(
+        r#"
+        __recordResourceTiming("data:image/gif;base64,R0lGODlhAQABAIAAAAUEBA==");
+        __recordResourceTiming("blob:https://resource-scheme.test/id");
+        __recordResourceTiming("https://resource-scheme.test/image.png");
+        "#,
+    )
+    .expect("resource timing scheme records should evaluate");
+
+    assert_eq!(
+        vm.eval(
+            r#"JSON.stringify(performance.getEntriesByType("resource").map(entry => entry.name))"#
+        )
+        .expect("resource timing scheme entries should evaluate"),
+        r#"["https://resource-scheme.test/image.png"]"#
+    );
+}
+
+#[test]
 fn resource_timing_default_buffer_is_finite_and_fires_event_handler() {
     let document_url = Url::parse("https://resource-buffer-default.test/").expect("document URL");
     let mut vm = new_storage_test_vm(document_url.as_str());

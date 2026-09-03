@@ -1,4 +1,5 @@
 use super::*;
+use crate::util::context_host_ptr_from_global_bridge;
 
 pub(crate) fn simple_event_target_add_event_listener_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -37,5 +38,7 @@ pub(crate) fn simple_event_target_dispatch_event_callback<'s>(
         rv.set(v8::Boolean::new(scope, true).into());
         return;
     };
+    let _explicit_dispatch_scope = context_host_ptr_from_global_bridge(scope)
+        .map(|host_ptr| unsafe { &mut *host_ptr }.enter_explicit_event_dispatch_scope());
     simple_object_event_target_dispatch(scope, &args, slot_name, &mut rv);
 }

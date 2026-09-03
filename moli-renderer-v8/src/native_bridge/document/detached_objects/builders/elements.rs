@@ -619,25 +619,6 @@ pub(in crate::native_bridge::document) fn build_detached_element_object<'s>(
         }
     }
 
-    // HTMLTemplateElement spec: a template's `content` is a DocumentFragment
-    // owned by the template's *template contents owner document*, not by the
-    // surrounding document. The standard `HTMLTemplateElement.prototype.content`
-    // getter reads this native handle for both live and detached wrappers.
-    if html_like
-        && local_name == "template"
-        && let Some((runtime_ptr, template_handle)) = native_handle
-        && let Some(contents_owner) =
-            build_detached_document_object(scope, "plain", None, None, None)
-        && let Some(fragment) = build_detached_document_fragment_object(scope, contents_owner)
-        && let Some(fragment_handle) = detached_native_handle(scope, fragment)
-        && let Some(element) = unsafe { &mut *runtime_ptr }
-            .dom_host_mut()
-            .node_mut(template_handle)
-            .and_then(|node| node.data_mut().as_element_mut())
-    {
-        element.set_template_contents(Some(fragment_handle));
-    }
-
     // Run custom-element upgrade only after the detached wrapper has its own
     // DOM surface installed. The HTML constructor returns this object from the
     // construction stack, so constructor code must not observe a half-built

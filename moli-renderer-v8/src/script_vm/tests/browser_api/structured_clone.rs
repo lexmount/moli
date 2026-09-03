@@ -1,6 +1,83 @@
 use super::*;
 
 #[test]
+fn structured_clone_deserializes_in_the_receiver_realm() {
+    let mut vm = new_storage_test_vm("https://structured-clone-receiver-realm.test/");
+
+    vm.eval(
+        r#"
+        (() => {
+          const frame = document.createElement("iframe");
+          (document.body || document.documentElement || document).appendChild(frame);
+          globalThis.__structuredCloneRealmFrame = frame;
+          return "ready";
+        })()
+        "#,
+    )
+    .expect("structuredClone receiver Realm setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const frame = globalThis.__structuredCloneRealmFrame;
+              const child = frame.contentWindow;
+              const constructors = ["Object", "Array", "Date", "RegExp"];
+              const intoTop = constructors.map(name => {
+                const clone = child.structuredClone.call(window, new child[name]);
+                return Object.getPrototypeOf(clone) === window[name].prototype;
+              });
+              const intoChild = constructors.map(name => {
+                const clone = window.structuredClone.call(child, new window[name]);
+                return Object.getPrototypeOf(clone) === child[name].prototype;
+              });
+
+              const buffer = new child.ArrayBuffer(8);
+              const transferred = child.structuredClone.call(window, buffer, {
+                transfer: [buffer]
+              });
+
+              const exceptionRealm = callback => {
+                try {
+                  callback();
+                  return "missing";
+                } catch (error) {
+                  return error instanceof child.TypeError ? "child" : "other";
+                }
+              };
+              const illegalInvocation = exceptionRealm(() =>
+                child.structuredClone.call({}, 1));
+              const missingArgument = exceptionRealm(() =>
+                child.structuredClone.call(window));
+
+              frame.remove();
+              const detached = child.structuredClone("detached") === undefined;
+
+              return JSON.stringify({
+                intoTop,
+                intoChild,
+                transfer: [
+                  buffer.byteLength,
+                  transferred.byteLength,
+                  transferred instanceof window.ArrayBuffer
+                ],
+                illegalInvocation,
+                missingArgument,
+                detached
+              });
+            })()
+            "#,
+        )
+        .expect("cross-Realm structuredClone probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"intoTop":[true,true,true,true],"intoChild":[true,true,true,true],"transfer":[0,8,true],"illegalInvocation":"child","missingArgument":"child","detached":true}"#,
+    );
+}
+
+#[test]
 fn structured_clone_preserves_webassembly_module() {
     let mut vm = new_storage_test_vm("https://example.com/wasm-clone");
 
@@ -24,6 +101,75 @@ fn structured_clone_preserves_webassembly_module() {
         .expect("WebAssembly.Module structuredClone should evaluate");
 
     assert_eq!(result, "true|false|0");
+}
+
+#[test]
+fn structured_clone_preserves_file_list_brand_contents_and_graph_identity() {
+    let mut vm = new_storage_test_vm("https://file-list-structured-clone.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const transfer = new DataTransfer();
+              const file = new File(["file bytes"], "note.txt", {
+                type: "text/custom",
+                lastModified: 42
+              });
+              file.expando = "not serialized";
+              transfer.items.add(file);
+              const list = transfer.files;
+              list.expando = "not serialized";
+
+              let indexedGetterHits = 0;
+              Object.defineProperty(list, "0", {
+                configurable: true,
+                get() {
+                  indexedGetterHits++;
+                  throw new Error("FileList serialization invoked an indexed getter");
+                }
+              });
+
+              const listFirst = structuredClone({ list, alias: list, file });
+              const fileFirst = structuredClone({ file, list });
+              const empty = structuredClone(new DataTransfer().files);
+
+              return JSON.stringify({
+                listBrand: listFirst.list instanceof FileList,
+                listPrototype: Object.getPrototypeOf(listFirst.list) === FileList.prototype,
+                listDistinct: listFirst.list !== list,
+                listAlias: listFirst.list === listFirst.alias,
+                listLength: listFirst.list.length,
+                itemMatchesFile: listFirst.list.item(0) === listFirst.file,
+                indexedMatchesFile: listFirst.list[0] === listFirst.file,
+                fileFirstIdentity: fileFirst.list[0] === fileFirst.file,
+                fileBrand: listFirst.file instanceof File && listFirst.file instanceof Blob,
+                fileDistinct: listFirst.file !== file,
+                fileMetadata: [
+                  listFirst.file.name,
+                  listFirst.file.type,
+                  listFirst.file.lastModified,
+                  listFirst.file.size
+                ],
+                expandosExcluded:
+                  listFirst.list.expando === undefined && listFirst.file.expando === undefined,
+                indexedGetterHits,
+                empty: [
+                  empty instanceof FileList,
+                  Object.getPrototypeOf(empty) === FileList.prototype,
+                  empty.length,
+                  empty.item(0) === null
+                ]
+              });
+            })()
+            "#,
+        )
+        .expect("FileList structuredClone probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"listBrand":true,"listPrototype":true,"listDistinct":true,"listAlias":true,"listLength":1,"itemMatchesFile":true,"indexedMatchesFile":true,"fileFirstIdentity":true,"fileBrand":true,"fileDistinct":true,"fileMetadata":["note.txt","text/custom",42,10],"expandosExcluded":true,"indexedGetterHits":0,"empty":[true,true,0,true]}"#,
+    );
 }
 
 #[test]
@@ -62,6 +208,104 @@ fn structured_clone_rejects_native_dom_nodes() {
 }
 
 #[test]
+fn structured_clone_rejects_non_serializable_platform_objects_without_prototype_spoofing() {
+    let mut vm = new_storage_test_vm("https://platform-object-structured-clone.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const probe = value => {
+                try {
+                  structuredClone(value);
+                  return "ok";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
+
+              const fakeResponse = Object.create(Response.prototype);
+              fakeResponse.value = 7;
+              const fakeResponseClone = structuredClone(fakeResponse);
+              const fakeEvent = Object.create(Event.prototype);
+              fakeEvent.value = 9;
+              const fakeEventClone = structuredClone(fakeEvent);
+
+              return JSON.stringify({
+                response: probe(new Response()),
+                event: probe(new Event("event")),
+                messageChannel: probe(new MessageChannel()),
+                fakeResponse: [
+                  fakeResponseClone.value,
+                  fakeResponseClone instanceof Response
+                ],
+                fakeEvent: [fakeEventClone.value, fakeEventClone instanceof Event]
+              });
+            })()
+            "#,
+        )
+        .expect("non-serializable platform object structuredClone probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"response":"DataCloneError","event":"DataCloneError","messageChannel":"DataCloneError","fakeResponse":[7,false],"fakeEvent":[9,false]}"#
+    );
+}
+
+#[test]
+fn structured_clone_rejects_real_performance_entries_without_prototype_spoofing() {
+    let mut vm = new_storage_test_vm("https://performance-entry-clone.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const probe = callback => {
+                try {
+                  callback();
+                  return "ok";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
+              const navigation = performance.getEntriesByType("navigation")[0];
+              const mark = performance.mark("clone-mark");
+              const measure = performance.measure("clone-measure", {
+                start: 1,
+                duration: 2
+              });
+              navigation.expando = "still not clonable";
+
+              const fake = Object.create(PerformanceEntry.prototype);
+              fake.value = 7;
+              const fakeClone = structuredClone(fake);
+              const plainClone = structuredClone({
+                name: navigation.name,
+                entryType: navigation.entryType,
+                startTime: navigation.startTime,
+                duration: navigation.duration
+              });
+
+              return JSON.stringify({
+                navigation: probe(() => structuredClone(navigation)),
+                mark: probe(() => structuredClone(mark)),
+                measure: probe(() => structuredClone(measure)),
+                postMessage: probe(() => window.postMessage(navigation, "*")),
+                fake: [fakeClone.value, fakeClone instanceof PerformanceEntry],
+                plain: [plainClone.entryType, typeof plainClone.startTime]
+              });
+            })()
+            "#,
+        )
+        .expect("PerformanceEntry structured clone probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"navigation":"DataCloneError","mark":"DataCloneError","measure":"DataCloneError","postMessage":"DataCloneError","fake":[7,false],"plain":["navigation","number"]}"#
+    );
+}
+
+#[test]
 fn structured_clone_preserves_dom_exception_fields_and_brand() {
     let mut vm = new_storage_test_vm("https://dom-exception-clone.test/");
 
@@ -89,6 +333,90 @@ fn structured_clone_preserves_dom_exception_fields_and_brand() {
         result,
         "true|true|DataCloneError|chunk could not be cloned|25|true"
     );
+}
+
+#[test]
+fn structured_clone_preserves_geometry_interfaces_and_internal_values() {
+    let mut vm = new_storage_test_vm("https://geometry-structured-clone.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const same = (actual, expected) => Object.is(actual, expected);
+              const check = (name, source, attrs, expected, nested = false) => {
+                const originals = nested ? attrs.map(attr => source[attr]) : [];
+                source.expando = "not serialized";
+                for (const attr of attrs) {
+                  Object.defineProperty(source, attr, {
+                    get() { throw new Error(`unexpected ${name}.${attr} getter`); }
+                  });
+                }
+                const clone = structuredClone(source);
+                const valuesMatch = attrs.every((attr, index) => {
+                  if (!nested) return same(clone[attr], expected[index]);
+                  return clone[attr] !== originals[index]
+                    && expected[index].every((value, component) =>
+                      same(clone[attr][["x", "y", "z", "w"][component]], value));
+                });
+                return Object.prototype.toString.call(clone) === `[object ${name}]`
+                  && Object.getPrototypeOf(clone) === self[name].prototype
+                  && !("expando" in clone)
+                  && valuesMatch;
+              };
+
+              const pointAttrs = ["x", "y", "z", "w"];
+              const rectAttrs = ["x", "y", "width", "height"];
+              const quadAttrs = ["p1", "p2", "p3", "p4"];
+              const pointValues = [1, -0, Infinity, NaN];
+              const quadValues = [
+                [1, 2, 3, 4],
+                [-0, -0, -0, -0],
+                [Infinity, Infinity, Infinity, Infinity],
+                [NaN, NaN, NaN, NaN]
+              ];
+              const matrixAttrs = [
+                "a", "b", "c", "d", "e", "f",
+                "m11", "m12", "m13", "m14",
+                "m21", "m22", "m23", "m24",
+                "m31", "m32", "m33", "m34",
+                "m41", "m42", "m43", "m44", "is2D"
+              ];
+              const normalized2DAttrs = new Set([
+                "m13", "m14", "m23", "m24",
+                "m31", "m32", "m34", "m43"
+              ]);
+              const matrixCheck = (name, values) => {
+                const source = new self[name](values);
+                if (values.length === 6) {
+                  for (const attr of normalized2DAttrs) source[attr] = -0;
+                }
+                const expected = matrixAttrs.map(attr =>
+                  normalized2DAttrs.has(attr) && values.length === 6 ? 0 : source[attr]);
+                return check(name, source, matrixAttrs, expected);
+              };
+
+              return [
+                check("DOMPointReadOnly", new DOMPointReadOnly(...pointValues),
+                  pointAttrs, pointValues),
+                check("DOMPoint", new DOMPoint(...pointValues), pointAttrs, pointValues),
+                check("DOMRectReadOnly", new DOMRectReadOnly(...pointValues),
+                  rectAttrs, pointValues),
+                check("DOMRect", new DOMRect(...pointValues), rectAttrs, pointValues),
+                check("DOMQuad", new DOMQuad(...quadValues.map(
+                  ([x, y, z, w]) => ({x, y, z, w}))), quadAttrs, quadValues, true),
+                matrixCheck("DOMMatrixReadOnly", [1, -0, Infinity, NaN, 5, 6]),
+                matrixCheck("DOMMatrix", [
+                  11, -0, Infinity, NaN, 21, 22, 23, 24,
+                  31, 32, 33, 34, 41, 42, 43, 44
+                ])
+              ].join("|");
+            })()
+            "#,
+        )
+        .expect("Geometry structuredClone probe should evaluate");
+
+    assert_eq!(result, "true|true|true|true|true|true|true");
 }
 
 #[test]

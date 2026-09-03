@@ -252,6 +252,7 @@ impl DomHost {
                     available_to_element_internals,
                 } => {
                     self.dom.register_stylesheet_candidate_tree_scope(clone);
+                    self.dom.set_document_fragment_host(clone, host);
                     self.shadow_roots_by_host.borrow_mut().insert(
                         host,
                         ShadowRootState {
@@ -399,6 +400,7 @@ impl DomHost {
                     available_to_element_internals,
                 } => {
                     self.dom.register_stylesheet_candidate_tree_scope(clone);
+                    self.dom.set_document_fragment_host(clone, host);
                     self.shadow_roots_by_host.borrow_mut().insert(
                         host,
                         ShadowRootState {
@@ -554,8 +556,12 @@ impl DomHost {
         let _ = clone_element
             .set_custom_element_is_name(element.custom_element_is_name().map(str::to_owned));
         let _ = clone_element.mark_undefined_custom_element_candidate_from_identity();
-        let _ = clone_element
-            .set_input_value_with_dirty(&element.input_value(), element.input_value_dirty());
+        let input_value = element.input_value();
+        let _ = if element.input_value_user_edited() {
+            clone_element.set_input_value_from_user_edit(&input_value)
+        } else {
+            clone_element.set_input_value_with_dirty(&input_value, element.input_value_dirty())
+        };
         let _ = clone_element.set_checked_with_dirty(element.checked(), element.checked_dirty());
         let _ = clone_element.set_selected(element.selected());
         let _ = clone_element.set_indeterminate(element.indeterminate());
@@ -641,6 +647,25 @@ mod tests {
     }
 
     #[test]
+    fn text_control_clone_preserves_user_edited_value_provenance() {
+        let mut host = test_host();
+        for tag in ["input", "textarea"] {
+            let source = host.create_element(tag);
+            assert!(host.set_input_value_from_user_edit(source, "something"));
+
+            let clone = host.clone_node(source, true).expect("text control clone");
+            let clone = host
+                .node(clone)
+                .and_then(Node::as_element)
+                .expect("cloned text control");
+
+            assert_eq!(clone.input_value(), "something");
+            assert!(clone.input_value_dirty());
+            assert!(clone.input_value_user_edited());
+        }
+    }
+
+    #[test]
     fn deep_clone_and_is_equal_node_walk_iteratively() {
         let mut host = test_host();
         let (root, _) = append_deep_element_chain(&mut host, DEEP_TREE_DEPTH);
@@ -696,6 +721,68 @@ mod tests {
             Some(target_document)
         );
         assert_eq!(element_chain_depth(&host, root), DEEP_TREE_DEPTH);
+    }
+
+    #[test]
+    fn template_adoption_retargets_nested_contents_to_the_shared_inert_document() {
+        let mut host = test_host();
+        let target_document = host.create_detached_html_document();
+        let template = host.create_element("template");
+        let contents = host
+            .node(template)
+            .and_then(Node::as_element)
+            .and_then(Element::template_contents)
+            .expect("template contents");
+        let source_contents_document = host
+            .node(contents)
+            .and_then(Node::owner_document)
+            .expect("source contents document");
+        let nested_template = host.create_element("template");
+        let nested_contents = host
+            .node(nested_template)
+            .and_then(Node::as_element)
+            .and_then(Element::template_contents)
+            .expect("nested template contents");
+
+        assert!(host.append_child(contents, nested_template));
+        assert_eq!(
+            host.node(nested_template).and_then(Node::owner_document),
+            Some(source_contents_document)
+        );
+        assert_eq!(
+            host.node(nested_contents).and_then(Node::owner_document),
+            Some(source_contents_document)
+        );
+
+        assert_eq!(host.adopt_node(target_document, template), Some(template));
+        let target_contents_document = host
+            .node(contents)
+            .and_then(Node::owner_document)
+            .expect("target contents document");
+        assert_ne!(target_contents_document, source_contents_document);
+        assert_ne!(target_contents_document, target_document);
+        assert_eq!(
+            host.node(nested_template).and_then(Node::owner_document),
+            Some(target_contents_document)
+        );
+        assert_eq!(
+            host.node(nested_contents).and_then(Node::owner_document),
+            Some(target_contents_document)
+        );
+
+        let sibling_template = host.create_element("template");
+        assert_eq!(
+            host.adopt_node(target_document, sibling_template),
+            Some(sibling_template)
+        );
+        let sibling_contents_document = host
+            .node(sibling_template)
+            .and_then(Node::as_element)
+            .and_then(Element::template_contents)
+            .and_then(|contents| host.node(contents))
+            .and_then(Node::owner_document)
+            .expect("sibling contents document");
+        assert_eq!(sibling_contents_document, target_contents_document);
     }
 
     #[test]

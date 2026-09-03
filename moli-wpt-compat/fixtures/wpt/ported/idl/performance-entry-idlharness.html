@@ -45,7 +45,10 @@ test(function () {
   assert_equals(mark.entryType, "mark");
   assert_equals(mark.detail, null);
 
-  const measure = performance.measure("moli-performance-entry-idl-sample-measure", { detail: "measure-detail" });
+  const measure = performance.measure("moli-performance-entry-idl-sample-measure", {
+    start: 0,
+    detail: "measure-detail"
+  });
   assert_true(measure instanceof PerformanceEntry);
   assert_true(measure instanceof PerformanceMeasure);
   assert_equals(Object.prototype.toString.call(measure), "[object PerformanceMeasure]");

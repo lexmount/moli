@@ -2,7 +2,7 @@
 
 use std::{borrow::Cow, sync::Once};
 
-use cssparser::{Parser, ParserInput};
+use cssparser::{Parser, ParserInput, ToCss, Token, TokenSerializationType};
 pub use style::moli_rule_tree::{
     CssConditionRuleView, CssCounterStyleRuleView, CssFontFaceRuleView,
     CssFontFeatureValueEntryView, CssFontFeatureValuesRuleView, CssImportRuleView,
@@ -82,11 +82,77 @@ pub fn parse_font_face_descriptor_entry_with_stylo(
     {
         return None;
     }
+    let normalized_value = (name == "unicode-range")
+        .then(|| remove_css_comments_without_retokenizing(value))
+        .flatten();
+    let value = normalized_value.as_deref().unwrap_or(value);
     let entry = style::moli_rule_tree::parse_font_face_cssom_descriptor_entry(&name, value)?;
     Some(CssFontFaceDescriptorEntryView {
         name: entry.name,
         value: entry.value,
     })
+}
+
+/// Work around cssparser's raw-slice `<urange>` parser, which cannot parse
+/// comments between otherwise adjacent range tokens. Refuse the rewrite when
+/// removing a comment would merge two tokens, so invalid input stays invalid.
+fn remove_css_comments_without_retokenizing(value: &str) -> Option<String> {
+    let mut input = ParserInput::new(value);
+    let mut input = Parser::new(&mut input);
+    let mut output = String::with_capacity(value.len());
+    let mut original_tokens = Vec::new();
+    let mut removed_comment = false;
+
+    loop {
+        let token_start = input.position();
+        let Ok(token) = input.next_including_whitespace_and_comments().cloned() else {
+            break;
+        };
+        match token {
+            Token::Comment(_) => {
+                removed_comment = true;
+            }
+            Token::Function(_)
+            | Token::ParenthesisBlock
+            | Token::SquareBracketBlock
+            | Token::CurlyBracketBlock => return None,
+            token => {
+                original_tokens.push(css_token_fingerprint(&token)?);
+                output.push_str(input.slice_from(token_start));
+            }
+        }
+    }
+
+    if !removed_comment || original_tokens != css_token_fingerprints(&output)? {
+        return None;
+    }
+    Some(output)
+}
+
+fn css_token_fingerprints(value: &str) -> Option<Vec<(TokenSerializationType, String)>> {
+    let mut input = ParserInput::new(value);
+    let mut input = Parser::new(&mut input);
+    let mut tokens = Vec::new();
+    loop {
+        let Ok(token) = input.next_including_whitespace_and_comments().cloned() else {
+            break;
+        };
+        match token {
+            Token::Comment(_) => {}
+            Token::Function(_)
+            | Token::ParenthesisBlock
+            | Token::SquareBracketBlock
+            | Token::CurlyBracketBlock => return None,
+            token => tokens.push(css_token_fingerprint(&token)?),
+        }
+    }
+    Some(tokens)
+}
+
+fn css_token_fingerprint(token: &Token<'_>) -> Option<(TokenSerializationType, String)> {
+    let mut serialized = String::new();
+    token.to_css(&mut serialized).ok()?;
+    Some((token.serialization_type(), serialized))
 }
 
 /// Parse and serialize a CSSOM `@font-face` descriptor block through Stylo.
@@ -207,6 +273,23 @@ pub fn parse_font_feature_values_rule_view_with_stylo(
 
 pub fn parse_property_rule_view_with_stylo(css_text: &str) -> Option<CssPropertyRuleView> {
     style::moli_rule_tree::parse_property_rule_view(css_text)
+        .map(normalize_css_property_rule_view_name)
+}
+
+fn normalize_css_property_rule_view_name(mut view: CssPropertyRuleView) -> CssPropertyRuleView {
+    let decoded_name = {
+        let mut input = ParserInput::new(&view.name);
+        let mut parser = Parser::new(&mut input);
+        parser
+            .expect_ident_cloned()
+            .ok()
+            .filter(|name| parser.expect_exhausted().is_ok() && name.starts_with("--"))
+            .map(|name| name.to_string())
+    };
+    if let Some(decoded_name) = decoded_name {
+        view.name = decoded_name;
+    }
+    view
 }
 
 pub fn native_stylesheet_css_text_with_stylo(stylesheet: &CssNativeStylesheet) -> String {
@@ -273,6 +356,7 @@ pub fn native_stylesheet_property_rule_read_with_stylo(
     rule_path: &[usize],
 ) -> Option<CssPropertyRuleView> {
     style::moli_rule_tree::stylesheet_rule_tree_property_rule_view(stylesheet, rule_path)
+        .map(normalize_css_property_rule_view_name)
 }
 
 pub fn native_stylesheet_font_feature_values_rule_read_with_stylo(
@@ -405,6 +489,7 @@ mod tests {
         parse_page_rule_view_with_stylo, parse_property_rule_view_with_stylo,
         parse_stylesheet_rule_snapshot_for_insert_with_stylo,
         parse_stylesheet_rule_snapshots_with_stylo, parse_stylesheet_rule_texts_with_stylo,
+        remove_css_comments_without_retokenizing,
     };
     use style::stylesheets::CssRuleType;
 
@@ -594,6 +679,22 @@ mod tests {
     }
 
     #[test]
+    fn property_rule_views_decode_escaped_names_without_changing_css_text() {
+        let property_rule = r#"@property --tab\9 tab { syntax: "*"; inherits: true; }"#;
+        let parsed = parse_property_rule_view_with_stylo(property_rule)
+            .expect("escaped @property name should produce a CSSOM view");
+
+        assert_eq!(parsed.name, "--tab\ttab");
+        assert_eq!(parsed.css_text, property_rule);
+
+        let stylesheet = parse_native_stylesheet(property_rule);
+        assert_eq!(
+            native_stylesheet_property_rule_read_with_stylo(&stylesheet, &[0]),
+            Some(parsed),
+        );
+    }
+
+    #[test]
     fn native_stylesheet_adapter_exposes_stylo_counter_style_rules() {
         let counter_style_rule =
             r#"@counter-style thumbs { system: cyclic; symbols: "*"; suffix: " "; }"#;
@@ -712,6 +813,44 @@ mod tests {
             .is_none(),
             "CSSOM value fragment parsing must still reject declaration injection"
         );
+    }
+
+    #[test]
+    fn font_face_unicode_range_descriptor_accepts_comments_between_tokens() {
+        for (value, compacted, expected) in [
+            ("u/**/+/**/a/**/?", "u+a?", "U+A0-AF"),
+            ("u/**/+0a/**/?", "u+0a?", "U+A0-AF"),
+            ("u/**/+0/**/?", "u+0?", "U+0-F"),
+            ("u/**/+0/**/-0a", "u+0-0a", "U+0-A"),
+            ("u/**/+0/**/-1", "u+0-1", "U+0-1"),
+            ("u/**/+/**/?", "u+?", "U+0-F"),
+        ] {
+            assert_eq!(
+                remove_css_comments_without_retokenizing(value).as_deref(),
+                Some(compacted)
+            );
+            let entry = parse_font_face_descriptor_entry_with_stylo("unicode-range", value)
+                .unwrap_or_else(|| panic!("comments may occur between tokens in {value}"));
+
+            assert_eq!(entry.value, expected);
+        }
+
+        let entry = parse_font_face_descriptor_entry_with_stylo(
+            "unicode-range",
+            "u/**/+a/**/?, u/**/+0/**/-1",
+        )
+        .expect("commented unicode ranges may occur in a list");
+        assert_eq!(entry.value, "U+A0-AF, U+0-1");
+    }
+
+    #[test]
+    fn font_face_unicode_range_comment_recovery_does_not_merge_tokens() {
+        for invalid in ["u/**/0", "u/**/+a/**/b", "u/**/+0000000"] {
+            assert!(
+                parse_font_face_descriptor_entry_with_stylo("unicode-range", invalid).is_none(),
+                "{invalid} must remain invalid"
+            );
+        }
     }
 
     #[test]

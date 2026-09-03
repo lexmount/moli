@@ -337,7 +337,7 @@ impl ImageResourceStore {
 }
 
 pub(super) fn intrinsic_dimensions(resource: &ReadyImageResource) -> (f32, f32) {
-    let density = if resource.density.is_finite() && resource.density > 0.0 {
+    let density = if resource.density > 0.0 {
         resource.density as f32
     } else {
         1.0
@@ -385,5 +385,11 @@ mod tests {
             ..resource
         };
         assert_eq!(intrinsic_dimensions(&high_density_resource), (150.0, 18.75));
+
+        let infinite_density_resource = ReadyImageResource {
+            density: f64::INFINITY,
+            ..high_density_resource
+        };
+        assert_eq!(intrinsic_dimensions(&infinite_density_resource), (0.0, 0.0));
     }
 }

@@ -2,10 +2,13 @@ use crate::context_bootstrap::{
     LocationNavigationKind, navigate_location_object_with_source_element,
     selection_value_for_window,
 };
-use crate::dom::native::{Element, Node, SelectedFile};
+use crate::dom::{
+    forms::{ButtonTypeState, InputType},
+    native::{Element, Node, SelectedFile},
+};
 use crate::util::{
-    call_object_method, get_private_value, node_wrapper_from_handle, object_bool_property,
-    object_number_property, object_property_as_object, utf16_len, v8_string, v8str,
+    call_object_method, node_wrapper_from_handle, object_bool_property, object_number_property,
+    object_property_as_object, utf16_len, v8_string, v8str,
 };
 use crate::{
     RendererInputDispatchOutcome, RendererPendingDownloadActivation,
@@ -18,26 +21,27 @@ use crate::{
 };
 
 use super::super::super::JsContextHost;
-use super::super::forms::{FormAssociatedResetCallbackTiming, reset_form_default_action};
+use super::super::forms::{
+    FormAssociatedResetCallbackTiming, normalized_button_command, reset_form_default_action,
+};
 use super::super::{
     NodePublicEventDispatchOutcome, cache_input_files_from_selected_files,
-    construct_click_event_with_detail_and_modifiers, construct_command_event,
-    construct_simple_event, contenteditable_editing_host, dispatch_popover_toggle_events,
+    closed_details_ancestors_to_reveal, construct_click_event_with_detail_and_modifiers,
+    construct_command_event, construct_simple_event, contenteditable_editing_host,
+    dispatch_popover_hide_events, dispatch_popover_show_events, dispatch_popover_toggle_events,
     dispatch_public_event, element_attribute, element_has_attribute, form_associated_form_owner,
     is_disabled_form_control, is_focusable, is_valid_submit_button,
     label_activation_control_handle, observable_bounding_client_rect,
     perform_popover_invoker_default_action, perform_summary_click_default_action,
-    replace_text_control_selection, resolve_url_like_attribute, scroll_node_into_view_at_start,
-    submit_form_with_submit_event, update_focus,
+    replace_text_control_selection, resolve_url_like_attribute,
+    resolved_reflected_element_attribute_handle, scroll_node_into_view_at_start,
+    set_reflected_boolean_attribute, submit_form_with_submit_event, update_focus,
 };
 use super::targets::{
     SpecialBrowsingContextTarget, named_iframe_target_handle_for_navigation,
     navigate_hyperlink_source_browsing_context, navigate_hyperlink_target_browsing_context,
     navigate_target_browsing_context,
 };
-
-const BUTTON_COMMAND_FOR_ELEMENT_SLOT: &str = "__moliButtonCommandForElement";
-const BUTTON_POPOVER_TARGET_ELEMENT_SLOT: &str = "__moliButtonPopoverTargetElement";
 
 fn array_like_length(scope: &mut v8::PinScope<'_, '_>, object: v8::Local<'_, v8::Object>) -> u32 {
     object
@@ -159,8 +163,14 @@ fn is_text_drop_target(element: &Element) -> bool {
         return false;
     }
     matches!(
-        element.input_type().as_str(),
-        "" | "text" | "search" | "url" | "tel" | "email" | "password" | "number"
+        element.input_type(),
+        InputType::Text
+            | InputType::Search
+            | InputType::Url
+            | InputType::Tel
+            | InputType::Email
+            | InputType::Password
+            | InputType::Number
     )
 }
 
@@ -652,7 +662,7 @@ fn is_radio_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .is_some_and(|element| element.is_html_input() && element.input_type() == "radio")
+        .is_some_and(|element| element.is_html_input() && element.input_type() == InputType::Radio)
 }
 
 fn is_checkbox_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
@@ -660,7 +670,17 @@ fn is_checkbox_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .is_some_and(|element| element.is_html_input() && element.input_type() == "checkbox")
+        .is_some_and(|element| {
+            element.is_html_input() && element.input_type() == InputType::Checkbox
+        })
+}
+
+fn is_button_input(runtime: &JsContextHost, handle: DomHandle) -> bool {
+    runtime
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .is_some_and(|element| element.is_html_input() && element.input_type() == InputType::Button)
 }
 
 fn radio_group_members(runtime: &JsContextHost, handle: DomHandle) -> Vec<DomHandle> {
@@ -686,7 +706,7 @@ fn radio_group_members(runtime: &JsContextHost, handle: DomHandle) -> Vec<DomHan
                 .and_then(Node::as_element)
                 .is_some_and(|candidate_element| {
                     candidate_element.is_html_input()
-                        && candidate_element.input_type() == "radio"
+                        && candidate_element.input_type() == InputType::Radio
                         && candidate_element.attribute("name") == Some(name)
                         && form_associated_form_owner(runtime, *candidate) == form_owner
                 })
@@ -1036,6 +1056,7 @@ fn element_has_click_activation_behavior(runtime: &JsContextHost, handle: DomHan
         || is_html_option_element(runtime, handle)
         || is_valid_submit_button(runtime, handle)
         || is_valid_reset_button(runtime, handle)
+        || is_button_input(runtime, handle)
         || runtime.dom_host().is_html_element_named(handle, "button")
         || runtime.dom_host().is_html_element_named(handle, "summary")
 }
@@ -1383,9 +1404,9 @@ fn perform_click_default_action(
         );
         return None;
     }
-    dispatch_button_command_event_if_needed(scope, runtime_ptr, handle);
+    let form_handle = form_associated_form_owner(runtime, handle);
     if is_valid_submit_button(runtime, handle)
-        && let Some(form_handle) = form_associated_form_owner(runtime, handle)
+        && let Some(form_handle) = form_handle
     {
         let previous = if is_image_submit_button(runtime, handle) {
             let (local_x, local_y) = match image_submitter_coordinate(runtime, handle, x, y) {
@@ -1412,7 +1433,7 @@ fn perform_click_default_action(
         return None;
     }
     if is_valid_reset_button(runtime, handle)
-        && let Some(form_handle) = form_associated_form_owner(runtime, handle)
+        && let Some(form_handle) = form_handle
     {
         if let Some(event) = construct_simple_event(scope, "reset", true, true, false)
             && dispatch_public_event(scope, runtime_ptr, form_handle, event).allows_default()
@@ -1426,7 +1447,18 @@ fn perform_click_default_action(
         }
         return None;
     }
-    if dispatch_button_popover_toggle_events_if_needed(scope, runtime_ptr, handle) {
+    if form_handle.is_some()
+        && runtime
+            .dom_host()
+            .node(handle)
+            .and_then(Node::as_element)
+            .is_some_and(|element| {
+                element.is_html_button() && element.button_type_state() == ButtonTypeState::Auto
+            })
+    {
+        return None;
+    }
+    if perform_button_command_default_action(scope, runtime_ptr, handle) {
         return None;
     }
     if perform_popover_invoker_default_action(scope, runtime_ptr, handle) {
@@ -1441,7 +1473,7 @@ fn perform_option_click_default_action(
     handle: DomHandle,
 ) -> bool {
     let runtime = unsafe { &*runtime_ptr };
-    let Some(select_handle) = owner_select_for_option(runtime, handle) else {
+    let Some(select_handle) = runtime.dom_host().option_nearest_ancestor_select(handle) else {
         return false;
     };
     if is_disabled_form_control(runtime, handle) || is_disabled_form_control(runtime, select_handle)
@@ -1476,25 +1508,6 @@ fn perform_option_click_default_action(
     true
 }
 
-fn owner_select_for_option(runtime: &JsContextHost, handle: DomHandle) -> Option<DomHandle> {
-    if !is_html_option_element(runtime, handle) {
-        return None;
-    }
-    let mut current = runtime.dom_host().parent_node(handle);
-    while let Some(parent) = current {
-        if runtime
-            .dom_host()
-            .node(parent)
-            .and_then(Node::as_element)
-            .is_some_and(Element::is_html_select)
-        {
-            return Some(parent);
-        }
-        current = runtime.dom_host().parent_node(parent);
-    }
-    None
-}
-
 fn is_html_option_element(runtime: &JsContextHost, handle: DomHandle) -> bool {
     runtime
         .dom_host()
@@ -1516,144 +1529,75 @@ fn element_is_anchor_with_href(runtime: &JsContextHost, handle: DomHandle) -> bo
     )
 }
 
-fn dispatch_button_command_event_if_needed(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    handle: DomHandle,
-) {
-    let runtime = unsafe { &*runtime_ptr };
-    if !runtime.dom_host().is_html_element_named(handle, "button") {
-        return;
-    }
-    let Some(command) =
-        element_attribute(runtime, handle, "command").filter(|value| !value.is_empty())
-    else {
-        return;
-    };
-    let Some(target) = command_for_element_target(scope, runtime_ptr, handle) else {
-        return;
-    };
-    let Some(source) = node_wrapper_from_handle(scope, handle) else {
-        return;
-    };
-    let Some(event) = construct_command_event(scope, &command, source.into()) else {
-        return;
-    };
-    if dispatch_public_event(scope, runtime_ptr, target, event).allows_default()
-        && command.eq_ignore_ascii_case("toggle-popover")
-    {
-        dispatch_popover_toggle_events(scope, runtime_ptr, target, handle);
-    }
-}
-
-fn dispatch_button_popover_toggle_events_if_needed(
+fn perform_button_command_default_action(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) -> bool {
-    let runtime = unsafe { &*runtime_ptr };
-    if !runtime.dom_host().is_html_element_named(handle, "button") {
-        return false;
-    }
-    let Some(target) = popover_target_element_target(scope, runtime_ptr, handle) else {
+    let (command, target) = {
+        let runtime = unsafe { &*runtime_ptr };
+        if !runtime.dom_host().is_html_element_named(handle, "button") {
+            return false;
+        }
+        let command = normalized_button_command(element_attribute(runtime, handle, "command"));
+        if command.is_empty() {
+            return false;
+        }
+        let Some(target) = command_for_element_target(runtime_ptr, handle) else {
+            return false;
+        };
+        let Some(target_element) = runtime.dom_host().node(target).and_then(Node::as_element)
+        else {
+            return false;
+        };
+        let compatible = if command.starts_with("--") {
+            true
+        } else {
+            match command.as_str() {
+                "show-popover" | "hide-popover" | "toggle-popover" => {
+                    target_element.namespace() == "http://www.w3.org/1999/xhtml"
+                }
+                "show-modal" | "close" | "request-close" => {
+                    target_element.is_html_element("dialog")
+                }
+                _ => false,
+            }
+        };
+        if !compatible {
+            return false;
+        }
+        (command, target)
+    };
+    let Some(source) = node_wrapper_from_handle(scope, handle) else {
         return false;
     };
-    dispatch_popover_toggle_events(scope, runtime_ptr, target, handle);
+    let Some(event) = construct_command_event(scope, &command, source.into()) else {
+        return false;
+    };
+    let outcome = dispatch_public_event(scope, runtime_ptr, target, event);
+    if !outcome.allows_default() {
+        return true;
+    }
+    let runtime = unsafe { &*runtime_ptr };
+    if !runtime.dom_host().is_connected(target)
+        || !element_has_attribute(runtime, target, "popover")
+    {
+        return true;
+    }
+    match command.as_str() {
+        "show-popover" => dispatch_popover_show_events(scope, runtime_ptr, target, handle),
+        "hide-popover" => dispatch_popover_hide_events(scope, runtime_ptr, target, handle),
+        "toggle-popover" => dispatch_popover_toggle_events(scope, runtime_ptr, target, handle),
+        _ => {}
+    }
     true
 }
 
-fn popover_target_element_target(
-    scope: &mut v8::PinScope<'_, '_>,
-    runtime_ptr: *mut JsContextHost,
-    handle: DomHandle,
-) -> Option<DomHandle> {
-    if let Some(target) =
-        unsafe { &*runtime_ptr }.button_element_target(handle, BUTTON_POPOVER_TARGET_ELEMENT_SLOT)
-    {
-        return unsafe { &*runtime_ptr }
-            .dom_host()
-            .resolve_reference_target_chain(target);
-    }
-    if let Some(wrapper) = node_wrapper_from_handle(scope, handle)
-        && let Some(value) = get_private_value(scope, wrapper, BUTTON_POPOVER_TARGET_ELEMENT_SLOT)
-        && !value.is_null_or_undefined()
-    {
-        if let Ok(big) = v8::Local::<v8::BigInt>::try_from(value) {
-            let (index, lossless) = big.u64_value();
-            if lossless {
-                let target = DomHandle::new(index as usize);
-                if unsafe { &*runtime_ptr }.dom_host().node(target).is_some() {
-                    return unsafe { &*runtime_ptr }
-                        .dom_host()
-                        .resolve_reference_target_chain(target);
-                }
-            }
-        } else if let Some(index) = value.uint32_value(scope) {
-            let target = DomHandle::new(index as usize);
-            if unsafe { &*runtime_ptr }.dom_host().node(target).is_some() {
-                return unsafe { &*runtime_ptr }
-                    .dom_host()
-                    .resolve_reference_target_chain(target);
-            }
-        }
-    }
-    let runtime = unsafe { &*runtime_ptr };
-    let popover_target = element_attribute(runtime, handle, "popovertarget")?;
-    if popover_target.is_empty() {
-        return None;
-    }
-    reference_target_for_id(runtime, handle, &popover_target)
-}
-
 fn command_for_element_target(
-    scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
     handle: DomHandle,
 ) -> Option<DomHandle> {
-    if let Some(target) =
-        unsafe { &*runtime_ptr }.button_element_target(handle, BUTTON_COMMAND_FOR_ELEMENT_SLOT)
-    {
-        return unsafe { &*runtime_ptr }
-            .dom_host()
-            .resolve_reference_target_chain(target);
-    }
-    if let Some(wrapper) = node_wrapper_from_handle(scope, handle)
-        && let Some(value) = get_private_value(scope, wrapper, BUTTON_COMMAND_FOR_ELEMENT_SLOT)
-        && !value.is_null_or_undefined()
-    {
-        if let Ok(big) = v8::Local::<v8::BigInt>::try_from(value) {
-            let (index, lossless) = big.u64_value();
-            if lossless {
-                let target = DomHandle::new(index as usize);
-                if unsafe { &*runtime_ptr }.dom_host().node(target).is_some() {
-                    return Some(target);
-                }
-            }
-        } else if let Some(index) = value.uint32_value(scope) {
-            let target = DomHandle::new(index as usize);
-            if unsafe { &*runtime_ptr }.dom_host().node(target).is_some() {
-                return Some(target);
-            }
-        }
-    }
-    let runtime = unsafe { &*runtime_ptr };
-    let command_for = element_attribute(runtime, handle, "commandfor")?;
-    if command_for.is_empty() {
-        return None;
-    }
-    reference_target_for_id(runtime, handle, &command_for)
-}
-
-fn reference_target_for_id(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-    id: &str,
-) -> Option<DomHandle> {
-    let root = runtime.dom_host().root_node_handle(handle)?;
-    let candidate = runtime
-        .dom_host()
-        .element_handle_by_id_in_subtree(root, id)?;
-    runtime.dom_host().resolve_reference_target_chain(candidate)
+    resolved_reflected_element_attribute_handle(unsafe { &*runtime_ptr }, handle, "commandfor")
 }
 
 fn is_valid_reset_button(runtime: &JsContextHost, handle: DomHandle) -> bool {
@@ -1662,8 +1606,9 @@ fn is_valid_reset_button(runtime: &JsContextHost, handle: DomHandle) -> bool {
         .node(handle)
         .and_then(Node::as_element)
         .is_some_and(|element| {
-            (element.is_html_input() && element.input_type() == "reset")
-                || (element.is_html_element("button") && element.attribute("type") == Some("reset"))
+            (element.is_html_input() && element.input_type() == InputType::Reset)
+                || (element.is_html_element("button")
+                    && element.button_type_state() == ButtonTypeState::Reset)
         })
 }
 
@@ -1672,7 +1617,7 @@ fn is_image_submit_button(runtime: &JsContextHost, handle: DomHandle) -> bool {
         .dom_host()
         .node(handle)
         .and_then(Node::as_element)
-        .is_some_and(|element| element.is_html_input() && element.input_type() == "image")
+        .is_some_and(|element| element.is_html_input() && element.input_type() == InputType::Image)
 }
 
 fn image_submitter_coordinate(
@@ -1789,7 +1734,7 @@ fn perform_file_chooser_default_action_with_source(
     let (allow_multiple, should_auto_cancel) = {
         let runtime = unsafe { &*runtime_ptr };
         let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
-        if !element.is_html_input() || element.input_type() != "file" {
+        if !element.is_html_input() || element.input_type() != InputType::File {
             return None;
         }
         (
@@ -1868,14 +1813,22 @@ fn anchor_click_default_action(
             None,
         );
     }
-    let declared_target_name =
-        element_attribute(runtime, handle, "target").filter(|value| !value.is_empty());
+    let effective_target_name = element_attribute(runtime, handle, "target")
+        .filter(|value| !value.is_empty())
+        .or_else(|| {
+            let document = runtime.dom_host().owner_document_handle(handle)?;
+            runtime
+                .dom_host()
+                .document_base_target_for_handle(document)
+                .filter(|target| !target.is_empty())
+                .map(str::to_owned)
+        });
     let (target_name, popup_disposition) = match navigation_policy {
         HyperlinkNavigationPolicy::Auxiliary(disposition) => {
             (Some("_blank".to_owned()), disposition)
         }
         HyperlinkNavigationPolicy::Current => {
-            (declared_target_name, RendererPopupDisposition::Foreground)
+            (effective_target_name, RendererPopupDisposition::Foreground)
         }
         HyperlinkNavigationPolicy::Download => {
             unreachable!("download hyperlink policy returned before target selection")
@@ -1920,7 +1873,7 @@ fn anchor_click_default_action(
         && let Ok(url) = url::Url::parse(&resolved)
         && same_document_fragment_target(runtime.host_document().url(), &url)
     {
-        if let Err(error) = scroll_to_document_fragment_target(scope, runtime_ptr, runtime, &url) {
+        if let Err(error) = scroll_to_document_fragment_target(scope, runtime_ptr, &url) {
             throw_activation_layout_error(scope, "scrolling to fragment", error);
             return None;
         }
@@ -2138,7 +2091,6 @@ pub(crate) fn scroll_to_url_fragment_or_top(
     runtime_ptr: *mut JsContextHost,
     target_url: &str,
 ) -> Result<(), moli_layout::LayoutError> {
-    let runtime = unsafe { &*runtime_ptr };
     let Ok(target_url) = url::Url::parse(target_url) else {
         return Ok(());
     };
@@ -2146,7 +2098,7 @@ pub(crate) fn scroll_to_url_fragment_or_top(
         crate::window_host::scroll_window_to(scope, runtime_ptr, 0.0, 0.0);
         return Ok(());
     }
-    if !scroll_to_document_fragment_target(scope, runtime_ptr, runtime, &target_url)? {
+    if !scroll_to_document_fragment_target(scope, runtime_ptr, &target_url)? {
         crate::window_host::scroll_window_to(scope, runtime_ptr, 0.0, 0.0);
     }
     Ok(())
@@ -2155,7 +2107,6 @@ pub(crate) fn scroll_to_url_fragment_or_top(
 fn scroll_to_document_fragment_target(
     scope: &mut v8::PinScope<'_, '_>,
     runtime_ptr: *mut JsContextHost,
-    runtime: &JsContextHost,
     target_url: &url::Url,
 ) -> Result<bool, moli_layout::LayoutError> {
     let Some(fragment) = target_url.fragment() else {
@@ -2164,11 +2115,29 @@ fn scroll_to_document_fragment_target(
     let fragment = percent_encoding::percent_decode_str(fragment)
         .decode_utf8_lossy()
         .into_owned();
-    let Some(target) = document_tree_fragment_target(runtime, &fragment) else {
+    let Some(target) = document_tree_fragment_target(unsafe { &*runtime_ptr }, &fragment) else {
         return Ok(false);
     };
+    reveal_details_ancestors_for_fragment_target(scope, runtime_ptr, target);
     let _ = scroll_node_into_view_at_start(scope, runtime_ptr, target)?;
     Ok(true)
+}
+
+fn reveal_details_ancestors_for_fragment_target(
+    scope: &mut v8::PinScope<'_, '_>,
+    runtime_ptr: *mut JsContextHost,
+    target: DomHandle,
+) {
+    let ancestors = closed_details_ancestors_to_reveal(unsafe { &*runtime_ptr }, target);
+    for details in ancestors {
+        let runtime = unsafe { &*runtime_ptr };
+        if !runtime.dom_host().is_connected(details)
+            || element_has_attribute(runtime, details, "open")
+        {
+            return;
+        }
+        set_reflected_boolean_attribute(scope, runtime_ptr, details, "open", true);
+    }
 }
 
 fn document_tree_fragment_target(runtime: &JsContextHost, fragment: &str) -> Option<DomHandle> {
@@ -2218,7 +2187,7 @@ pub(crate) fn perform_drop_default_action(
         let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
             return false;
         };
-        let is_file_input = element.is_html_input() && element.input_type() == "file";
+        let is_file_input = element.is_html_input() && element.input_type() == InputType::File;
         let is_text_target = is_text_drop_target(element);
         let editing_host = (!is_text_target && !is_file_input)
             .then(|| contenteditable_editing_host(runtime, handle))

@@ -5773,6 +5773,25 @@ fn embedded_frame_owners_create_child_contexts_only_for_document_content() {
         vm.eval(
             r#"
 (() => {
+  const object = document.getElementById("accepted-object");
+  const contentDocument = object.contentDocument;
+  const contentWindow = object.contentWindow;
+  return [
+    contentDocument !== null,
+    contentWindow !== null,
+    contentDocument === contentWindow.document
+  ].join("|");
+})()
+"#,
+        )
+        .expect("object child browsing context accessors should evaluate"),
+        "true|true|true"
+    );
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
   document.getElementById("accepted-embed").type = "image/png";
   document.getElementById("accepted-object").data = "/image.png";
   return "reclassified";
@@ -5806,6 +5825,226 @@ fn embedded_frame_owners_create_child_contexts_only_for_document_content() {
         4,
         "switching back to document content must create fresh child contexts"
     );
+}
+
+#[test]
+fn frame_owner_content_accessors_live_on_exact_owner_prototypes() {
+    let mut vm = new_storage_test_vm("https://frame-owner-content-accessors.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.body || document.documentElement || document;
+  const frame = document.createElement("frame");
+  frame.src = "about:blank";
+  const iframe = document.createElement("iframe");
+  iframe.src = "about:blank";
+  const object = document.createElement("object");
+  object.type = "text/html";
+  object.data = "about:blank";
+
+  const owners = [
+    [HTMLFrameElement.prototype, frame],
+    [HTMLIFrameElement.prototype, iframe],
+    [HTMLObjectElement.prototype, object]
+  ];
+  for (const [, element] of owners) {
+    root.appendChild(element);
+  }
+
+  const properties = ["contentDocument", "contentWindow"];
+  const descriptors = owners.map(([prototype]) =>
+    Object.fromEntries(properties.map(property => {
+      const descriptor = Object.getOwnPropertyDescriptor(prototype, property);
+      return [property, {
+        get: typeof descriptor.get,
+        set: typeof descriptor.set,
+        enumerable: descriptor.enumerable,
+        configurable: descriptor.configurable
+      }];
+    }))
+  );
+  const sameOriginValues = owners.map(([, element]) =>
+    element.contentDocument !== null &&
+      element.contentWindow !== null &&
+      element.contentDocument === element.contentWindow.document
+  );
+  const brandErrors = owners.map(([prototype], index) =>
+    properties.map(property => {
+      const getter = Object.getOwnPropertyDescriptor(prototype, property).get;
+      try {
+        getter.call(owners[(index + 1) % owners.length][1]);
+        return "accepted";
+      } catch (error) {
+        return error.name;
+      }
+    })
+  );
+
+  return JSON.stringify({
+    descriptors,
+    sameOriginValues,
+    brandErrors,
+    absentFromBase: properties.every(property =>
+      !Object.hasOwn(HTMLElement.prototype, property))
+  });
+})()
+"#,
+        )
+        .expect("frame owner content accessors should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptors":[{"contentDocument":{"get":"function","set":"undefined","enumerable":true,"configurable":true},"contentWindow":{"get":"function","set":"undefined","enumerable":true,"configurable":true}},{"contentDocument":{"get":"function","set":"undefined","enumerable":true,"configurable":true},"contentWindow":{"get":"function","set":"undefined","enumerable":true,"configurable":true}},{"contentDocument":{"get":"function","set":"undefined","enumerable":true,"configurable":true},"contentWindow":{"get":"function","set":"undefined","enumerable":true,"configurable":true}}],"sameOriginValues":[true,true,true],"brandErrors":[["TypeError","TypeError"],["TypeError","TypeError"],["TypeError","TypeError"]],"absentFromBase":true}"#
+    );
+}
+
+#[test]
+fn frame_owner_get_svg_document_methods_share_content_document_semantics_and_enforce_brands() {
+    let mut vm = new_storage_test_vm("https://frame-owner-get-svg-document.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.body || document.documentElement || document;
+  const iframe = document.createElement("iframe");
+  iframe.srcdoc = "<body>iframe child</body>";
+  const embed = document.createElement("embed");
+  embed.type = "text/html";
+  embed.src = "about:blank";
+  const object = document.createElement("object");
+  object.type = "text/html";
+  object.data = "about:blank";
+  root.appendChild(iframe);
+  root.appendChild(embed);
+  root.appendChild(object);
+
+  const interfaces = [
+    [HTMLIFrameElement.prototype, iframe, "HTMLIFrameElement"],
+    [HTMLEmbedElement.prototype, embed, "HTMLEmbedElement"],
+    [HTMLObjectElement.prototype, object, "HTMLObjectElement"]
+  ];
+  const descriptors = interfaces.map(([prototype]) => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, "getSVGDocument");
+    return {
+      type: typeof descriptor.value,
+      name: descriptor.value.name,
+      length: descriptor.value.length,
+      writable: descriptor.writable,
+      enumerable: descriptor.enumerable,
+      configurable: descriptor.configurable
+    };
+  });
+  const brandErrors = interfaces.map(([prototype], index) => {
+    try {
+      prototype.getSVGDocument.call(interfaces[(index + 1) % interfaces.length][1]);
+      return "accepted";
+    } catch (error) {
+      return error.name;
+    }
+  });
+
+  return JSON.stringify({
+    descriptors,
+    iframeMatches: iframe.getSVGDocument() !== null &&
+      iframe.getSVGDocument() === iframe.contentDocument,
+    embedHasDocument: embed.getSVGDocument() !== null,
+    objectMatches: object.getSVGDocument() !== null &&
+      object.getSVGDocument() === object.contentDocument,
+    brandErrors,
+    absentFromBase: !("getSVGDocument" in HTMLElement.prototype)
+  });
+})()
+"#,
+        )
+        .expect("frame owner getSVGDocument methods should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptors":[{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true},{"type":"function","name":"getSVGDocument","length":0,"writable":true,"enumerable":true,"configurable":true}],"iframeMatches":true,"embedHasDocument":true,"objectMatches":true,"brandErrors":["TypeError","TypeError","TypeError"],"absentFromBase":true}"#
+    );
+}
+
+#[tokio::test]
+async fn failed_object_attribute_navigation_enters_fallback_without_recreating_child_context() {
+    let (object_url, request_rx, release_tx, server) =
+        spawn_gated_child_document_resource_server(404).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        &object_url.replace("/child.html", "/page"),
+        &loader,
+    );
+
+    assert_eq!(
+        vm.eval(&format!(
+            r#"
+(() => {{
+  const root = document.body || document.documentElement || document;
+  const object = document.createElement('object');
+  object.type = 'text/html';
+  object.data = {object_url:?};
+  globalThis.__failedObjectEvents = [];
+  object.addEventListener('load', () => __failedObjectEvents.push('load'));
+  object.addEventListener('error', event => __failedObjectEvents.push(
+    `error:${{event.isTrusted}}:${{object.contentWindow === null}}`
+  ));
+  const fallback = document.createElement('span');
+  fallback.id = 'object-fallback';
+  fallback.textContent = 'fallback';
+  object.appendChild(fallback);
+  root.appendChild(object);
+  globalThis.__failedObject = object;
+  return [object.contentWindow !== null, window.length].join('|');
+}})()
+"#
+        ))
+        .expect("failed object setup should evaluate"),
+        "true|1",
+        "the object should expose its initial child browsing context while loading"
+    );
+    run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
+        &mut vm,
+        &loader,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "object attribute navigation should start from its frame-lane commit",
+    )
+    .await;
+    request_rx
+        .await
+        .expect("failed object document request should arrive");
+    release_tx
+        .send(())
+        .expect("release failed object document response");
+    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
+        &mut vm,
+        &loader,
+        "failed object document completion",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"
+JSON.stringify({
+  contentWindowIsNull: __failedObject.contentWindow === null,
+  contentDocumentIsNull: __failedObject.contentDocument === null,
+  childCount: window.length,
+  fallbackConnected: document.getElementById('object-fallback').isConnected,
+  events: __failedObjectEvents
+})
+"#,
+        )
+        .expect("failed object fallback state should evaluate"),
+        r#"{"contentWindowIsNull":true,"contentDocumentIsNull":true,"childCount":0,"fallbackConnected":true,"events":["error:true:true"]}"#
+    );
+    assert_eq!(
+        vm._context_host.borrow().child_browsing_context_count(),
+        0,
+        "contentWindow and contentDocument getters must not recreate a failed object context"
+    );
+    server.await.expect("failed object server should finish");
 }
 
 #[tokio::test]
@@ -8629,7 +8868,9 @@ async fn child_inline_parser_module_executes_from_registered_pending_script() {
   frame.srcdoc = `
     <script>parent.__childInlineParserModuleEvents.push("before");<\/script>
     <script type="module">
-      parent.__childInlineParserModuleEvents.push("module:" + (globalThis === self));
+      parent.__childInlineParserModuleEvents.push(
+        "module:" + (globalThis === self) + ":" + import.meta.url + ":" + import.meta.resolve("./x")
+      );
       globalThis.__childInlineParserModuleValue = 42;
     <\/script>
     <script>parent.__childInlineParserModuleEvents.push("after:" + String(globalThis.__childInlineParserModuleValue));<\/script>
@@ -8708,7 +8949,7 @@ async fn child_inline_parser_module_executes_from_registered_pending_script() {
     assert_eq!(
         vm.eval("__childInlineParserModuleEvents.join('|')")
             .expect("child inline parser module events should evaluate"),
-        "before|after:undefined|module:true"
+        "before|after:undefined|module:true:http://child-inline-module.test/:http://child-inline-module.test/x"
     );
 }
 
@@ -9489,6 +9730,65 @@ async fn spawn_gated_media_resource_server(
     });
     (
         format!("http://{addr}/media"),
+        request_rx,
+        release_tx,
+        server,
+    )
+}
+
+async fn spawn_gated_child_document_resource_server(
+    status: u16,
+) -> (
+    String,
+    tokio::sync::oneshot::Receiver<String>,
+    tokio::sync::oneshot::Sender<()>,
+    tokio::task::JoinHandle<()>,
+) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind gated child document resource server");
+    let addr = listener
+        .local_addr()
+        .expect("gated child document resource server addr");
+    let (request_tx, request_rx) = tokio::sync::oneshot::channel();
+    let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+    let server = tokio::spawn(async move {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (mut stream, _) = listener
+            .accept()
+            .await
+            .expect("accept gated child document resource request");
+        let mut request = Vec::new();
+        let mut buffer = [0_u8; 1024];
+        loop {
+            let read = stream
+                .read(&mut buffer)
+                .await
+                .expect("read gated child document resource request");
+            if read == 0 {
+                break;
+            }
+            request.extend_from_slice(&buffer[..read]);
+            if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                break;
+            }
+        }
+        let _ = request_tx.send(String::from_utf8_lossy(&request).into_owned());
+        let _ = release_rx.await;
+        let (status_text, body) = if status == 200 {
+            ("OK", "<!doctype html><p>child document</p>")
+        } else {
+            ("Not Found", "<!doctype html><p>missing child document</p>")
+        };
+        let response = format!(
+            "HTTP/1.1 {status} {status_text}\r\nContent-Type: text/html\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes()).await;
+    });
+    (
+        format!("http://{addr}/child.html"),
         request_rx,
         release_tx,
         server,
@@ -11978,6 +12278,119 @@ async fn main_document_replacement_retires_pending_image_request_sequence() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn web_font_reconciliation_keeps_style_world_lazy_without_active_author_sources() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_optional_resource_fetch_mask(crate::protocol_types::OptionalResourceFetchMask::FONT);
+    let (mut vm, _resource_completions) =
+        new_parsed_test_vm_with_loader_and_resource_completion_queue(
+            "https://font-reconciliation-fast-path.test/",
+            concat!(
+                "<!doctype html><html><head>",
+                "<link rel='author' href='/not-a-stylesheet.css'>",
+                "</head><body></body></html>",
+            ),
+            &loader,
+        );
+    let document = vm._context_host.borrow().document_handle();
+
+    let rebuilds = vm.retained_style_system_rebuild_count_for_document_for_test(document);
+    let materializations = vm
+        ._context_host
+        .borrow()
+        .style_world_update_materializations_for_test();
+    assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
+    vm.reconcile_document_web_fonts_for_layout();
+    assert_eq!(
+        vm.retained_style_system_rebuild_count_for_document_for_test(document),
+        rebuilds,
+        "font reconciliation must not build retained styles without an active author source",
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .style_world_update_materializations_for_test(),
+        materializations,
+        "font reconciliation must not materialize a style-world update without an active author source",
+    );
+    assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
+
+    assert_eq!(
+        vm.eval(
+            r#"
+const host = document.createElement('div');
+host.attachShadow({mode: 'open'}).innerHTML = '<style>div { color: red }</style><div></div>';
+document.body.appendChild(host);
+const target = host.shadowRoot.querySelector('div');
+const initial = getComputedStyle(target).color;
+host.remove();
+host.shadowRoot.querySelector('style').remove();
+globalThis.__fontReconciliationDetachedShadow = {host, target};
+initial;
+"#,
+        )
+        .expect("detached shadow style fixture should evaluate"),
+        "rgb(255, 0, 0)",
+    );
+    let materializations = vm
+        ._context_host
+        .borrow()
+        .style_world_update_materializations_for_test();
+    vm.reconcile_document_web_fonts_for_layout();
+    assert!(
+        vm._context_host
+            .borrow()
+            .style_world_update_materializations_for_test()
+            > materializations,
+        "an existing style world must still reconcile after its active sources disappear",
+    );
+    assert_ne!(
+        vm.eval(
+            r#"
+document.body.appendChild(__fontReconciliationDetachedShadow.host);
+getComputedStyle(__fontReconciliationDetachedShadow.target).color;
+"#,
+        )
+        .expect("reconnected shadow style should evaluate"),
+        "rgb(255, 0, 0)",
+    );
+}
+
+#[test]
+fn web_font_active_author_stylesheet_probe_includes_connected_shadow_adopted_sheets() {
+    let mut vm = new_parsed_test_vm(
+        "https://shadow-adopted-font-source.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let document = vm._context_host.borrow().document_handle();
+    vm.eval(
+        r#"
+const host = document.createElement('div');
+const shadow = host.attachShadow({mode: 'open'});
+const sheet = new CSSStyleSheet();
+sheet.replaceSync(':host { color: red; }');
+shadow.adoptedStyleSheets = [sheet];
+globalThis.__detachedShadowStylesheetHost = host;
+"#,
+    )
+    .expect("detached shadow adopted stylesheet fixture should evaluate");
+
+    assert!(
+        !vm._context_host
+            .borrow()
+            .document_has_active_author_stylesheet_sources(document),
+        "a detached shadow scope must not count as an active document source",
+    );
+    vm.eval("document.body.appendChild(__detachedShadowStylesheetHost)")
+        .expect("shadow stylesheet host should connect");
+    assert!(
+        vm._context_host
+            .borrow()
+            .document_has_active_author_stylesheet_sources(document),
+        "a connected shadow adopted stylesheet must prevent the font fast path",
+    );
+}
+
 #[tokio::test]
 async fn web_font_requests_and_registration_follow_effective_stylesheet_media() {
     let (font_url, mut request_rx, release_tx, server) = spawn_gated_font_resource_server().await;
@@ -14266,7 +14679,7 @@ async fn in_flight_connected_modulepreload_does_not_delay_window_load() {
         "the module-map terminal must publish its joined link-client notification"
     );
     assert!(
-        vm.run_one_oldest_ready_page_task_executor_turn(&loader)
+        vm.run_one_native_module_owner_event_task_executor_turn(&loader)
             .await
             .expect("modulepreload owner-notification turn"),
         "the joined link client must be notified in a later selected task"
@@ -14889,6 +15302,11 @@ fn eval_probe_fixture_output(url: &str, markup: &str) -> serde_json::Value {
 
 #[test]
 fn script_turn_watchdog_terminates_runaway_script_and_recovers_isolate() {
+    let _watchdog_timeout =
+        crate::v8_execution_watchdog::V8ExecutionWatchdog::override_timeout_for_test(
+            crate::v8_execution_watchdog::V8ExecutionWatchdogKind::ScriptTurn,
+            std::time::Duration::from_millis(500),
+        );
     let mut vm = new_parsed_test_vm("https://example.test/", "<!doctype html><body></body>");
     let started = Instant::now();
     let error = vm
@@ -14912,6 +15330,11 @@ fn script_turn_watchdog_terminates_runaway_script_and_recovers_isolate() {
 
 #[test]
 fn microtask_checkpoint_watchdog_terminates_runaway_queue_and_recovers_isolate() {
+    let _watchdog_timeout =
+        crate::v8_execution_watchdog::V8ExecutionWatchdog::override_timeout_for_test(
+            crate::v8_execution_watchdog::V8ExecutionWatchdogKind::ScriptTurn,
+            std::time::Duration::from_millis(500),
+        );
     let mut vm = new_parsed_test_vm("https://example.test/", "<!doctype html><body></body>");
     let started = Instant::now();
     let error = vm
@@ -15079,6 +15502,11 @@ fn runtime_await_promise_sync_result_survives_queued_allocation_gc() {
 
 #[tokio::test]
 async fn timer_callback_watchdog_terminates_runaway_timer_and_recovers_isolate() {
+    let _watchdog_timeout =
+        crate::v8_execution_watchdog::V8ExecutionWatchdog::override_timeout_for_test(
+            crate::v8_execution_watchdog::V8ExecutionWatchdogKind::TimerCallback,
+            std::time::Duration::from_millis(500),
+        );
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_parsed_test_vm("https://example.test/", "<!doctype html><body></body>");
     vm.exec(

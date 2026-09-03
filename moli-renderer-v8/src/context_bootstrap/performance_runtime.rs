@@ -24,12 +24,15 @@ pub(in crate::context_bootstrap) const PERFORMANCE_NAVIGATION_REDIRECT_COUNT_SLO
     "__moliPerformanceNavigationRedirectCount";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_NAME_SLOT: &str =
     "__moliPerformanceEntryName";
+pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_ID_SLOT: &str = "__moliPerformanceEntryId";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_TYPE_SLOT: &str =
     "__moliPerformanceEntryType";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_START_TIME_SLOT: &str =
     "__moliPerformanceEntryStartTime";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_DURATION_SLOT: &str =
     "__moliPerformanceEntryDuration";
+pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_NAVIGATION_ID_SLOT: &str =
+    "__moliPerformanceEntryNavigationId";
 pub(in crate::context_bootstrap) const PERFORMANCE_ENTRY_DETAIL_SLOT: &str =
     "__moliPerformanceEntryDetail";
 pub(in crate::context_bootstrap) const PERFORMANCE_RESOURCE_INITIATOR_TYPE_SLOT: &str =
@@ -77,6 +80,7 @@ pub(in crate::context_bootstrap) const PERFORMANCE_EVENT_COUNTS_SLOT: &str =
 pub(in crate::context_bootstrap) const PERFORMANCE_EVENT_COUNTS_VALUES_SLOT: &str =
     "__moliPerformanceEventCountsValues";
 pub(super) const PERFORMANCE_NAVIGATION_ENTRY_SLOT: &str = "__moliPerformanceNavigationEntry";
+pub(super) const PERFORMANCE_LAST_ENTRY_ID_SLOT: &str = "__moliPerformanceLastEntryId";
 pub(super) const PERFORMANCE_NAVIGATION_TYPE_SEED_SLOT: &str =
     "__moliPerformanceNavigationTypeSeed";
 pub(super) const PERFORMANCE_NAVIGATION_NAME_SEED_SLOT: &str =
@@ -85,8 +89,10 @@ pub(super) const PERFORMANCE_LIFECYCLE_TIMESTAMPS_SLOT: &str =
     "__moliPerformanceLifecycleTimestamps";
 pub(super) const PERFORMANCE_PENDING_EVENT_COUNTS_SLOT: &str =
     "__moliPerformancePendingEventCounts";
-pub(in crate::context_bootstrap) const PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES: &[&str] =
-    &["mark", "measure", "navigation", "resource"];
+pub(in crate::context_bootstrap) const WINDOW_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES:
+    &[&str] = &["mark", "measure", "navigation", "resource"];
+pub(in crate::context_bootstrap) const WORKER_PERFORMANCE_OBSERVER_SUPPORTED_ENTRY_TYPES:
+    &[&str] = &["mark", "measure", "resource"];
 
 pub(super) use super::performance_observer_runtime::{
     performance_entry_list_get_entries_by_name_callback,
@@ -95,6 +101,7 @@ pub(super) use super::performance_observer_runtime::{
     performance_observer_disconnect_callback, performance_observer_observe_callback,
     performance_observer_take_records_callback,
 };
+pub(crate) use entries::is_performance_entry_object;
 use entries::{
     append_performance_entry, create_performance_entry, initialize_resource_timing_slots,
     push_performance_entry,
@@ -107,9 +114,13 @@ pub(in crate::context_bootstrap) use entries::{
     performance_entry_slot_number, performance_entry_slot_string, performance_entry_slot_value,
     set_performance_entry_slot_number,
 };
-pub(crate) use install::finalize_performance_observer_realm_bindings;
 pub(crate) use install::increment_performance_event_count;
-pub(super) use install::install_performance_template_bindings;
+pub(crate) use install::{
+    finalize_performance_observer_realm_bindings, finalize_window_performance_realm_bindings,
+};
+pub(super) use install::{
+    install_performance_template_bindings, install_worker_performance_runtime_state,
+};
 pub(crate) use install::{
     record_performance_dom_content_loaded_event_end,
     record_performance_dom_content_loaded_event_start, record_performance_load_event_end,
@@ -117,7 +128,7 @@ pub(crate) use install::{
 };
 pub(super) use marks_measures::{
     performance_clear_marks_callback, performance_clear_measures_callback,
-    performance_mark_callback, performance_measure_callback,
+    performance_mark_callback, performance_mark_constructor_callback, performance_measure_callback,
 };
 pub(crate) use resource_buffer::run_resource_timing_buffer_full_task;
 pub(crate) use window_state::bind_window_performance_seed;
@@ -144,7 +155,7 @@ pub(super) fn ensure_current_performance_for_api<'s>(
 pub(in crate::context_bootstrap) fn ensure_navigation_performance_entry_for_api<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
-) -> v8::Local<'s, v8::Object> {
+) {
     install::ensure_navigation_performance_entry(scope, performance)
 }
 
@@ -160,6 +171,44 @@ pub(crate) fn current_performance_time_origin(scope: &mut v8::PinScope<'_, '_>) 
             performance_slot_number(scope, performance, PERFORMANCE_TIME_ORIGIN_SLOT)
         })
         .unwrap_or(0.0)
+}
+
+pub(crate) fn record_performance_load_event_start_for_window(
+    scope: &mut v8::PinScope<'_, '_>,
+    window: v8::Local<'_, v8::Object>,
+) {
+    record_performance_load_event_for_window(
+        scope,
+        window,
+        install::record_performance_load_event_start,
+    );
+}
+
+pub(crate) fn record_performance_load_event_end_for_window(
+    scope: &mut v8::PinScope<'_, '_>,
+    window: v8::Local<'_, v8::Object>,
+) {
+    record_performance_load_event_for_window(
+        scope,
+        window,
+        install::record_performance_load_event_end,
+    );
+}
+
+fn record_performance_load_event_for_window(
+    scope: &mut v8::PinScope<'_, '_>,
+    window: v8::Local<'_, v8::Object>,
+    record: fn(&mut v8::PinScope<'_, '_>),
+) {
+    let Some(relevant_context) = window.get_creation_context(scope) else {
+        return;
+    };
+    if relevant_context == scope.get_current_context() {
+        record(scope);
+        return;
+    }
+    let scope = &mut v8::ContextScope::new(scope, relevant_context);
+    record(scope);
 }
 
 pub(crate) struct ResourcePerformanceEntry {
@@ -196,12 +245,62 @@ impl ResourcePerformanceEntry {
         response: &crate::protocol_types::NavigationResponse,
     ) -> Self {
         let body_size = response.body_bytes().len() as f64;
-        let header_size = response
-            .headers
+        Self::from_response_parts(
+            name,
+            initiator_type,
+            start_unix_millis,
+            response.status,
+            &response.headers,
+            body_size,
+        )
+    }
+
+    pub(crate) fn from_streaming_network_response(
+        name: impl Into<String>,
+        initiator_type: &'static str,
+        start_unix_millis: Option<f64>,
+        response: &moli_fetch::ResponseHead,
+        body_size: usize,
+    ) -> Self {
+        Self::from_response_parts(
+            name,
+            initiator_type,
+            start_unix_millis,
+            response.status,
+            &response.headers,
+            body_size as f64,
+        )
+    }
+
+    pub(crate) fn from_fetch_response(
+        name: impl Into<String>,
+        initiator_type: &'static str,
+        start_unix_millis: Option<f64>,
+        response: &moli_fetch::Response,
+    ) -> Self {
+        Self::from_response_parts(
+            name,
+            initiator_type,
+            start_unix_millis,
+            response.status,
+            &response.headers,
+            response.body_bytes().len() as f64,
+        )
+    }
+
+    fn from_response_parts(
+        name: impl Into<String>,
+        initiator_type: &'static str,
+        start_unix_millis: Option<f64>,
+        response_status: u16,
+        response_headers: &[(String, String)],
+        body_size: f64,
+    ) -> Self {
+        let header_size = response_headers
             .iter()
             .map(|(name, value)| name.len() + value.len() + 4)
             .sum::<usize>() as f64;
-        let content_type = moli_web_mime::response_content_type(&response.headers)
+        let content_type = moli_web_mime::response_content_type(response_headers)
             .and_then(|value| moli_web_mime::mime_essence(&value))
             .unwrap_or_default();
         Self {
@@ -214,7 +313,7 @@ impl ResourcePerformanceEntry {
             // The fetch lifecycle does not yet retain render-blocking metadata.
             // Avoid claiming that a resource blocked rendering until it does.
             render_blocking_status: "non-blocking".to_owned(),
-            response_status: f64::from(response.status),
+            response_status: f64::from(response_status),
             content_type,
         }
     }
@@ -278,6 +377,9 @@ pub(crate) fn record_resource_performance_entry(
     scope: &mut v8::PinScope<'_, '_>,
     entry: ResourcePerformanceEntry,
 ) {
+    if !url::Url::parse(&entry.name).is_ok_and(|url| matches!(url.scheme(), "http" | "https")) {
+        return;
+    }
     let Some(performance) = window_performance_value(scope) else {
         window_state::queue_pending_resource_entry(scope, entry);
         return;

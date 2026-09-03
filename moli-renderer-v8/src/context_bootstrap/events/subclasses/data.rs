@@ -165,26 +165,17 @@ struct InputEventInitDeclaration<'scope> {
 
 #[derive(WebApiObject)]
 #[webapi(interface = "Object", data_properties, enumerable)]
-struct CommandEventInitDeclaration<'scope> {
-    source: v8::Local<'scope, v8::Value>,
-    command: String,
-}
-
-#[derive(WebApiObject)]
-#[webapi(interface = "Object", data_properties, enumerable)]
 struct InterestEventInitDeclaration<'scope> {
     source: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
 #[webapi(interface = "Object")]
-struct ToggleEventStateDeclaration<'scope> {
+struct ToggleEventStateDeclaration {
     #[webapi(data_property = "oldState", readonly, dont_delete)]
     old_state: String,
     #[webapi(data_property = "newState", readonly, dont_delete)]
     new_state: String,
-    #[webapi(data_property, readonly, dont_delete)]
-    source: v8::Local<'scope, v8::Value>,
 }
 
 #[derive(WebApiObject)]
@@ -193,6 +184,15 @@ struct PopStateEventInitDeclaration<'scope> {
     state: v8::Local<'scope, v8::Value>,
     #[webapi(data_property = "hasUAVisualTransition")]
     has_ua_visual_transition: bool,
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "PopStateEventInit")]
+struct PopStateEventInitMembers<'s> {
+    #[webidl(name = "hasUAVisualTransition", default = false)]
+    has_ua_visual_transition: bool,
+    #[webidl(converter = "raw")]
+    state: Option<v8::Local<'s, v8::Value>>,
 }
 
 #[derive(WebApiObject)]
@@ -288,6 +288,15 @@ struct ToggleEventInitMembers<'s> {
     #[webidl(default = "")]
     new_state: String,
     #[webidl(with = toggle_event_source_member)]
+    source: Option<v8::Local<'s, v8::Value>>,
+}
+
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "CommandEventInit")]
+struct CommandEventInitMembers<'s> {
+    #[webidl(default = "")]
+    command: String,
+    #[webidl(converter = "raw")]
     source: Option<v8::Local<'s, v8::Value>>,
 }
 
@@ -506,11 +515,24 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_pop_state_eve
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     init: Option<v8::Local<'s, v8::Object>>,
-) {
-    let state = init_value_property(scope, init, "state").unwrap_or_else(|| v8::null(scope).into());
-    PopStateEventInitDeclaration::new(state, false)
+) -> bool {
+    let parsed = match init {
+        Some(init) => {
+            match webidl::parse_dictionary_object::<PopStateEventInitMembers>(scope, init) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    webidl::throw_error(scope, &error);
+                    return false;
+                }
+            }
+        }
+        None => PopStateEventInitMembers::default(),
+    };
+    let state = parsed.state.unwrap_or_else(|| v8::null(scope).into());
+    PopStateEventInitDeclaration::new(state, parsed.has_ua_visual_transition)
         .initialize(scope, event)
         .expect("PopStateEvent init declaration should initialize");
+    true
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_page_transition_event<'s>(
@@ -546,8 +568,9 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_toggle_event<
         },
     };
     let source = parsed.source.unwrap_or_else(|| v8::null(scope).into());
-    let _ = ToggleEventStateDeclaration::new(parsed.old_state, parsed.new_state, source)
+    let _ = ToggleEventStateDeclaration::new(parsed.old_state, parsed.new_state)
         .initialize(scope, event);
+    set_private_value(scope, event, TOGGLE_EVENT_SOURCE_SLOT, source);
     true
 }
 
@@ -1381,11 +1404,41 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_command_event
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
     init: Option<v8::Local<'s, v8::Object>>,
-) {
-    let source =
-        init_value_property(scope, init, "source").unwrap_or_else(|| v8::null(scope).into());
-    let command = init_string_property(scope, init, "command", "");
-    let _ = CommandEventInitDeclaration::new(source, command).initialize(scope, event);
+) -> bool {
+    let parsed = match init {
+        Some(init) => match webidl::parse_dictionary_object::<CommandEventInitMembers>(scope, init)
+        {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                webidl::throw_error(scope, &error);
+                return false;
+            }
+        },
+        None => CommandEventInitMembers::default(),
+    };
+    let source = parsed.source.unwrap_or_else(|| v8::null(scope).into());
+    if !source.is_null() {
+        let Ok(object) = v8::Local::<v8::Object>::try_from(source) else {
+            throw_type_error(
+                scope,
+                "Failed to construct 'CommandEvent': source must be an Element.",
+            );
+            return false;
+        };
+        if !event_init_value_is_element(scope, object) {
+            throw_type_error(
+                scope,
+                "Failed to construct 'CommandEvent': source must be an Element.",
+            );
+            return false;
+        }
+    }
+    let Some(command) = v8_string(scope, &parsed.command) else {
+        return false;
+    };
+    set_private_value(scope, event, COMMAND_EVENT_SOURCE_SLOT, source);
+    set_private_value(scope, event, COMMAND_EVENT_COMMAND_SLOT, command.into());
+    true
 }
 
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_track_event<'s>(
@@ -1424,7 +1477,7 @@ fn submit_event_submitter<'s>(
         );
         return None;
     };
-    if !submitter_is_html_element(scope, object) {
+    if !event_init_value_is_element(scope, object) {
         throw_type_error(
             scope,
             "Failed to construct 'SubmitEvent': submitter must be an HTMLElement.",
@@ -1434,7 +1487,7 @@ fn submit_event_submitter<'s>(
     Some(value)
 }
 
-fn submitter_is_html_element(
+fn event_init_value_is_element(
     scope: &mut v8::PinScope<'_, '_>,
     object: v8::Local<'_, v8::Object>,
 ) -> bool {

@@ -21,10 +21,48 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         mutation: ParserDomMutation,
     ) {
+        self.apply_parser_dom_mutation_to_live_dom_host_with_options(
+            scope,
+            host_ptr,
+            mutation,
+            RuntimeMutationOptions::parser_tree_sink(),
+            TreeMutationSourceProfile::parser_tree_sink(),
+        );
+    }
+
+    pub(crate) fn apply_child_parser_dom_mutation_to_live_dom_host(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        mutation: ParserDomMutation,
+    ) {
+        self.apply_parser_dom_mutation_to_live_dom_host_with_options(
+            scope,
+            host_ptr,
+            mutation,
+            RuntimeMutationOptions::child_parser_tree_sink(),
+            TreeMutationSourceProfile::child_parser_tree_sink(),
+        );
+    }
+
+    fn apply_parser_dom_mutation_to_live_dom_host_with_options(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        mutation: ParserDomMutation,
+        mutation_options: RuntimeMutationOptions,
+        source_profile: TreeMutationSourceProfile,
+    ) {
         match mutation {
-            ParserDomMutation::AppendChild { parent, child } => {
-                self.apply_parser_append_child_to_live_dom_host(scope, host_ptr, parent, child)
-            }
+            ParserDomMutation::AppendChild { parent, child } => self
+                .apply_parser_append_child_to_live_dom_host(
+                    scope,
+                    host_ptr,
+                    parent,
+                    child,
+                    mutation_options,
+                    source_profile,
+                ),
             ParserDomMutation::InsertBefore {
                 parent,
                 child,
@@ -35,10 +73,18 @@ impl DocumentRuntime {
                 parent,
                 child,
                 reference_child,
+                mutation_options,
+                source_profile,
             ),
-            ParserDomMutation::RemoveChild { parent, child } => {
-                self.apply_parser_remove_child_to_live_dom_host(scope, host_ptr, parent, child)
-            }
+            ParserDomMutation::RemoveChild { parent, child } => self
+                .apply_parser_remove_child_to_live_dom_host(
+                    scope,
+                    host_ptr,
+                    parent,
+                    child,
+                    mutation_options,
+                    source_profile,
+                ),
         }
     }
 
@@ -48,6 +94,8 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         parent: DomHandle,
         child: DomHandle,
+        mutation_options: RuntimeMutationOptions,
+        source_profile: TreeMutationSourceProfile,
     ) {
         let fragment_children = self.fragment_insertion_children(child);
         let insertion_roots: &[DomHandle] = match fragment_children.as_deref() {
@@ -80,7 +128,14 @@ impl DocumentRuntime {
                 );
             }
         }
-        self.apply_parser_tree_mutation_followups(scope, host_ptr, insertion_plan, effects);
+        self.apply_parser_tree_mutation_followups(
+            scope,
+            host_ptr,
+            insertion_plan,
+            effects,
+            mutation_options,
+            source_profile,
+        );
     }
 
     fn apply_parser_insert_before_to_live_dom_host(
@@ -90,6 +145,8 @@ impl DocumentRuntime {
         parent: DomHandle,
         child: DomHandle,
         reference_child: Option<DomHandle>,
+        mutation_options: RuntimeMutationOptions,
+        source_profile: TreeMutationSourceProfile,
     ) {
         let fragment_children = self.fragment_insertion_children(child);
         let insertion_roots: &[DomHandle] = match fragment_children.as_deref() {
@@ -123,7 +180,14 @@ impl DocumentRuntime {
                 );
             }
         }
-        self.apply_parser_tree_mutation_followups(scope, host_ptr, insertion_plan, effects);
+        self.apply_parser_tree_mutation_followups(
+            scope,
+            host_ptr,
+            insertion_plan,
+            effects,
+            mutation_options,
+            source_profile,
+        );
     }
 
     fn apply_parser_tree_mutation_followups(
@@ -132,6 +196,8 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         insertion_plan: TreeInsertionPlan<'_>,
         effects: DomMutationEffects,
+        mutation_options: RuntimeMutationOptions,
+        source_profile: TreeMutationSourceProfile,
     ) {
         if effects.did_change() {
             self.apply_node_iterator_pre_remove_plans(host_ptr, &insertion_plan.node_iterator_plan);
@@ -148,18 +214,19 @@ impl DocumentRuntime {
                 host_ptr,
                 dom_host,
                 effects,
-                RuntimeMutationOptions::parser_tree_sink(),
+                mutation_options,
             )
         };
         let changed = finish_runtime_mutation_effects(self, scope, host_ptr, result);
         if !changed {
             return;
         }
+        self.run_parser_tree_insertion_post_connection_steps(scope, host_ptr, &insertion_plan);
         self.dispatch_tree_insertion_side_effects_after_change(
             scope,
             host_ptr,
             &insertion_plan,
-            TreeMutationSourceProfile::parser_tree_sink(),
+            source_profile,
         );
     }
 
@@ -189,12 +256,14 @@ impl DocumentRuntime {
             host_ptr,
             insertion_plan,
         );
-        self.queue_tree_insertion_resource_followups(
-            scope,
-            host_ptr,
-            insertion_plan,
-            profile.subresource_request_initiator_type(),
-        );
+        if profile.queue_resource_followups {
+            self.queue_tree_insertion_resource_followups(
+                scope,
+                host_ptr,
+                insertion_plan,
+                profile.subresource_request_initiator_type(),
+            );
+        }
         if !insertion_plan.adoption.crosses_documents() {
             custom_elements::apply_registry_association_retargets(
                 host_ptr,
@@ -307,6 +376,8 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         parent: DomHandle,
         child: DomHandle,
+        mutation_options: RuntimeMutationOptions,
+        source_profile: TreeMutationSourceProfile,
     ) {
         let removal_plan = self.tree_removal_plan(scope, host_ptr, parent, child);
         let effects = self.parser_remove_child_effects_in_structural_scope(parent, child);
@@ -323,7 +394,7 @@ impl DocumentRuntime {
                 host_ptr,
                 dom_host,
                 effects,
-                RuntimeMutationOptions::parser_tree_sink(),
+                mutation_options,
             )
         };
         let changed = finish_runtime_mutation_effects(self, scope, host_ptr, result);
@@ -332,7 +403,7 @@ impl DocumentRuntime {
                 scope,
                 host_ptr,
                 &removal_plan,
-                TreeMutationSourceProfile::parser_tree_sink(),
+                source_profile,
             );
         }
     }

@@ -1365,6 +1365,69 @@ document.head.appendChild(style);
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn connected_modulepreload_event_primes_a_link_appended_by_its_listener() {
+    run_page_vm_async_test(async move {
+        let (base_url, server) = spawn_path_response_http_server(vec![(
+            "/listener-appended.mjs",
+            "HTTP/1.1 200 OK",
+            "export const appended = true;".to_owned(),
+            Duration::ZERO,
+        )])
+        .await;
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse(&format!("{base_url}/page.html"))?;
+        let (mut page_vm, _resource_source, mut wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(&format!(
+            r#"
+globalThis.__modulepreloadListenerEvents = [];
+const first = document.createElement("link");
+first.rel = "modulepreload";
+first.as = "image";
+first.href = "/invalid.bin";
+first.addEventListener("error", () => {{
+  __modulepreloadListenerEvents.push("first-error");
+  const second = document.createElement("link");
+  second.rel = "modulepreload";
+  second.href = "{base_url}/listener-appended.mjs";
+  document.head.append(second);
+}});
+document.head.append(first);
+"queued"
+"#,
+        ))?;
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+
+        wait_for_stylesheet_source(&mut wake_rx, RendererOwnerWakeSource::DomManipulationTask)
+            .await;
+        let event = take_next_link_element_event_task_for_test(&mut page_vm)
+            .expect("the invalid modulepreload must publish one error event");
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(event),
+                &loader,
+            )
+            .await?;
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("__modulepreloadListenerEvents.join('|')")?,
+            "first-error"
+        );
+        tokio::time::timeout(Duration::from_secs(2), server)
+            .await
+            .expect("the listener-appended modulepreload request must start at task completion")
+            .expect("listener-appended modulepreload server should finish");
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("connected modulepreload listener follow-up test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn failed_inline_import_transitions_from_null_to_an_empty_child_stylesheet() {
     run_page_vm_async_test(async move {
         let (base_url, server) = spawn_path_response_http_server(vec![(
@@ -2707,11 +2770,14 @@ document.head.append(dynamicStyle);
             "a dynamic non-parser-owned stylesheet must not manufacture parser work"
         );
         assert!(page_vm.has_ready_dom_manipulation_task_for_test());
-        assert!(
-            page_vm
-                .run_one_oldest_ready_page_task_on_owner_lane_for_test(&loader)
-                .await?
-        );
+        let event = take_next_link_element_event_task_for_test(&mut page_vm)
+            .expect("the dynamic link event must be independently selectable");
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ConnectedStyleEvent(event),
+                &loader,
+            )
+            .await?;
         assert_eq!(
             page_vm.vm_mut().eval("__dynamicStyleEvents.join('|')")?,
             "load"

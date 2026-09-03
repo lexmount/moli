@@ -92,11 +92,7 @@ impl NativeDomBridge {
         runtime_ptr: *mut JsContextHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        self.wrap_bridge_handle(
-            scope,
-            runtime_ptr,
-            BridgeHandle::ClassList(handle, DomTokenListKind::Class),
-        )
+        self.wrap_dom_token_list(scope, runtime_ptr, handle, DomTokenListKind::Class)
     }
 
     pub(crate) fn wrap_part_list<'s, 'i>(
@@ -105,24 +101,17 @@ impl NativeDomBridge {
         runtime_ptr: *mut JsContextHost,
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        self.wrap_bridge_handle(
-            scope,
-            runtime_ptr,
-            BridgeHandle::ClassList(handle, DomTokenListKind::Part),
-        )
+        self.wrap_dom_token_list(scope, runtime_ptr, handle, DomTokenListKind::Part)
     }
 
-    pub(crate) fn wrap_rel_list<'s, 'i>(
+    pub(in crate::native_bridge) fn wrap_dom_token_list<'s, 'i>(
         &mut self,
         scope: &mut v8::PinScope<'s, 'i>,
         runtime_ptr: *mut JsContextHost,
         handle: DomHandle,
+        kind: DomTokenListKind,
     ) -> Option<v8::Local<'s, v8::Object>> {
-        self.wrap_bridge_handle(
-            scope,
-            runtime_ptr,
-            BridgeHandle::ClassList(handle, DomTokenListKind::Rel),
-        )
+        self.wrap_bridge_handle(scope, runtime_ptr, BridgeHandle::ClassList(handle, kind))
     }
 
     pub(crate) fn wrap_dataset<'s, 'i>(

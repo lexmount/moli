@@ -8,11 +8,13 @@ use crate::{
     util::{utf16_split_units_lossy, utf16_units},
 };
 use moli_dom::native::{Element, Node, NodeType};
+use moli_selector::stylo_flat_tree_heading_descendants;
 
 use super::dom_facade::sync_style_sources_from_dom_mutation_effects;
 use super::*;
 
 mod details;
+mod selectedcontent;
 mod tree;
 
 #[cfg(test)]
@@ -211,6 +213,48 @@ impl DocumentRuntime {
             return host.break_on_dom_debugger_will_remove_dom_node(child);
         }
         Vec::new()
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn handle_builtin_element_attribute_change(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        handle: DomHandle,
+        namespace: Option<&str>,
+        local_name: &str,
+        old_value: Option<&str>,
+        new_value: Option<&str>,
+        reaction_policy: AttributeChangedReactionPolicy,
+    ) {
+        self.handle_details_attribute_change(
+            scope,
+            host_ptr,
+            handle,
+            namespace,
+            local_name,
+            old_value,
+            new_value,
+            reaction_policy,
+        );
+        crate::native_bridge::element::handle_popover_attribute_change(
+            scope, host_ptr, handle, namespace, local_name, old_value, new_value,
+        );
+        if namespace.is_none()
+            && local_name.eq_ignore_ascii_case("inert")
+            && old_value.is_none()
+            && new_value.is_some()
+            && self
+                .dom_host
+                .node(handle)
+                .and_then(Node::as_element)
+                .is_some_and(|element| {
+                    element.namespace() == crate::native_bridge::document::XHTML_NS
+                })
+            && let Some(active) = self.active_element_handle()
+        {
+            crate::native_bridge::element::schedule_focus_blur_if_needed(scope, host_ptr, active);
+        }
     }
 
     pub(crate) fn set_text_content(
@@ -647,7 +691,120 @@ impl DocumentRuntime {
         let changed =
             self.apply_runtime_mutation_effects(scope, host_ptr, effects, mutation_options);
         if changed {
-            self.handle_details_attribute_change(
+            self.handle_builtin_element_attribute_change(
+                scope,
+                host_ptr,
+                handle,
+                None,
+                name,
+                old_value.as_deref(),
+                Some(value),
+                reaction_policy,
+            );
+            self.note_attribute_state_style_activity_if_needed(
+                host_ptr,
+                handle,
+                state,
+                old_style_state,
+            );
+            self.note_derived_element_state_style_activity(host_ptr, &derived_old_style_states);
+            if name.eq_ignore_ascii_case("style") {
+                unsafe { &mut *host_ptr }.clear_element_inline_style_declaration_state(handle);
+            }
+        }
+        if should_dispatch_attribute_changed_for_set(changed, old_value.as_deref(), value) {
+            self.apply_attribute_changed_reaction_policy(
+                scope,
+                host_ptr,
+                handle,
+                name,
+                None,
+                old_value.as_deref(),
+                Some(value),
+                reaction_policy,
+            );
+        }
+        if changed {
+            self.dispatch_custom_element_form_state_attribute_change(scope, host_ptr, handle, name);
+        }
+        if changed && name == "disabled" && self.dom_host.is_html_element_named(handle, "link") {
+            let _ = self.dom_host.set_link_explicitly_enabled(handle, false);
+        }
+        if changed
+            && !Self::apply_frame_owner_attribute_mutation_followup(
+                scope, host_ptr, handle, name, false,
+            )
+        {
+            return changed;
+        }
+        record_dom_binding_timing(
+            attribute_operation_for_handle(&self.dom_host, "dom.setAttribute", handle, name),
+            started,
+        );
+        changed
+    }
+
+    pub(crate) fn set_attribute_utf16_units_appending_to_current_reaction_queue(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        handle: DomHandle,
+        name: &str,
+        value: &str,
+        units: Vec<u16>,
+    ) -> bool {
+        self.set_attribute_utf16_units_with_reaction_policy(
+            scope,
+            host_ptr,
+            handle,
+            name,
+            value,
+            units,
+            AttributeChangedReactionPolicy::EnqueueInCurrentQueue,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn set_attribute_utf16_units_with_reaction_policy(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        handle: DomHandle,
+        name: &str,
+        value: &str,
+        units: Vec<u16>,
+        reaction_policy: AttributeChangedReactionPolicy,
+    ) -> bool {
+        let started = dom_binding_timing_started();
+        unsafe { &mut *host_ptr }.break_on_dom_debugger_will_modify_dom_attribute(handle);
+        trace_resource_dom_mutation(
+            &self.dom_host,
+            "setAttribute",
+            handle,
+            Some(name),
+            Some(value),
+        );
+        let style_impact = StyleAttributeImpact::for_attribute_name(name);
+        let state = style_state_impact_for_attribute_mutation(&self.dom_host, handle, None, name);
+        let old_style_state = self.retained_old_style_state_for_impact(host_ptr, handle, state);
+        let derived_old_style_states = self.retained_derived_old_style_states_for_attribute_impact(
+            host_ptr, handle, None, name, state,
+        );
+        let (effects, old_value) = self
+            .dom_host
+            .set_attribute_utf16_units_mutation_outcome(handle, name, value, units)
+            .into_parts();
+        if style_impact.affects_layout_metric() && old_value.as_deref() != Some(value) {
+            self.note_attribute_layout_activity(host_ptr, handle, name);
+        }
+        let changed = self.apply_runtime_mutation_effects(
+            scope,
+            host_ptr,
+            effects,
+            RuntimeMutationOptions::js_dom_api(),
+        );
+        if changed {
+            self.handle_builtin_element_attribute_change(
                 scope,
                 host_ptr,
                 handle,
@@ -721,6 +878,7 @@ impl DocumentRuntime {
             return false;
         }
         let runtime = unsafe { &mut *host_ptr };
+        runtime.clear_object_fallback_for_attribute_change(handle, name);
         let is_navigation_attribute =
             runtime.frame_owner_navigation_attribute_matches(handle, name);
         if is_srcdoc {
@@ -821,7 +979,7 @@ impl DocumentRuntime {
             RuntimeMutationOptions::js_dom_api(),
         );
         if changed {
-            self.handle_details_attribute_change(
+            self.handle_builtin_element_attribute_change(
                 scope,
                 host_ptr,
                 handle,
@@ -956,7 +1114,7 @@ impl DocumentRuntime {
             RuntimeMutationOptions::js_dom_api(),
         );
         if changed {
-            self.handle_details_attribute_change(
+            self.handle_builtin_element_attribute_change(
                 scope,
                 host_ptr,
                 handle,
@@ -1096,7 +1254,7 @@ impl DocumentRuntime {
             RuntimeMutationOptions::js_dom_api(),
         );
         if changed {
-            self.handle_details_attribute_change(
+            self.handle_builtin_element_attribute_change(
                 scope,
                 host_ptr,
                 handle,
@@ -1273,12 +1431,8 @@ impl DocumentRuntime {
         new_value: Option<&str>,
         policy: AttributeChangedReactionPolicy,
     ) {
-        let retired_event_callback = self.sync_body_window_messageerror_content_attribute(
-            handle,
-            name,
-            namespace,
-            new_value.is_some(),
-        );
+        let retired_event_callback =
+            self.sync_event_handler_content_attribute(handle, name, namespace, new_value.is_some());
         if let Some(callback_id) = retired_event_callback {
             unsafe { &mut *host_ptr }.release_event_callback(callback_id);
         }
@@ -1355,6 +1509,17 @@ impl DocumentRuntime {
                         | StyloElementState::VALIDITY_STATES,
                 );
                 self.push_validity_container_impacts(descendant, &mut impacts);
+            }
+        }
+        if matches!(attribute_name, "headingoffset" | "headingreset")
+            && state.intersects(StyloElementState::HEADING_LEVEL_BITS)
+        {
+            for descendant in stylo_flat_tree_heading_descendants(&self.dom_host, handle) {
+                push_state_impact(
+                    &mut impacts,
+                    descendant,
+                    StyloElementState::HEADING_LEVEL_BITS,
+                );
             }
         }
         impacts
@@ -1641,8 +1806,15 @@ impl DocumentRuntime {
             .set_select_explicit_none_state(handle, explicit_none)
     }
 
-    pub(crate) fn set_select_value(&mut self, handle: DomHandle, value: &str) -> bool {
-        self.dom_host.set_select_value(handle, value)
+    pub(crate) fn set_select_value(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        handle: DomHandle,
+        value: &str,
+    ) -> bool {
+        let changed = self.dom_host.set_select_value(handle, value);
+        self.sync_selectedcontents_for_select_in_reaction_scope(scope, host_ptr, handle) || changed
     }
 
     pub(crate) fn set_script_async(
@@ -1682,6 +1854,24 @@ impl DocumentRuntime {
         options: RuntimeMutationOptions,
         prepublished_removals: Vec<devtools_mutations::DevToolsDomPrepublishedRemoval>,
     ) -> bool {
+        let result = self.apply_runtime_mutation_effects_before_runtime_followups(
+            scope,
+            host_ptr,
+            effects,
+            options,
+            prepublished_removals,
+        );
+        finish_runtime_mutation_effects(self, scope, host_ptr, result)
+    }
+
+    pub(super) fn apply_runtime_mutation_effects_before_runtime_followups(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        host_ptr: *mut JsContextHost,
+        effects: DomMutationEffects,
+        options: RuntimeMutationOptions,
+        prepublished_removals: Vec<devtools_mutations::DevToolsDomPrepublishedRemoval>,
+    ) -> RuntimeMutationApplyResult {
         let mut result = apply_runtime_mutation_effects_to_dom_host(
             &mut self.mutations,
             &self.document,
@@ -1697,12 +1887,13 @@ impl DocumentRuntime {
             &mut result.devtools_dom_mutations,
             prepublished_removals,
         );
-        finish_runtime_mutation_effects(self, scope, host_ptr, result)
+        result
     }
 }
 
 pub(super) struct RuntimeMutationApplyResult {
     changed: bool,
+    document_followups_deferred_to_parser_owner: bool,
     meta_refresh_candidates: Vec<MetaRefreshNavigation>,
     devtools_dom_mutations: Vec<super::devtools_mutations::DevToolsDomMutationFact>,
     runtime_script_start_candidates: Vec<crate::mutation_coordinator::RuntimeScriptStartCandidate>,
@@ -1711,6 +1902,13 @@ pub(super) struct RuntimeMutationApplyResult {
     stylesheet_owner_changes: Vec<crate::dom::native::DomStylesheetOwnerChange>,
     inline_style_attribute_csp_mutations: Vec<InlineStyleAttributeCspMutation>,
     connected_style_csp_roots: Vec<DomHandle>,
+    font_face_use_roots: Vec<DomHandle>,
+}
+
+impl RuntimeMutationApplyResult {
+    pub(super) fn did_change(&self) -> bool {
+        self.changed
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1739,6 +1937,7 @@ pub(super) fn finish_runtime_mutation_effects(
 ) -> bool {
     let RuntimeMutationApplyResult {
         changed,
+        document_followups_deferred_to_parser_owner,
         meta_refresh_candidates,
         devtools_dom_mutations,
         runtime_script_start_candidates,
@@ -1747,11 +1946,14 @@ pub(super) fn finish_runtime_mutation_effects(
         stylesheet_owner_changes,
         inline_style_attribute_csp_mutations,
         connected_style_csp_roots,
+        font_face_use_roots,
     } = result;
 
     runtime.queue_devtools_dom_mutations(devtools_dom_mutations);
 
-    if let Some(scheduled) = runtime.note_top_level_meta_refresh_candidates(meta_refresh_candidates)
+    if !document_followups_deferred_to_parser_owner
+        && let Some(scheduled) =
+            runtime.note_top_level_meta_refresh_candidates(meta_refresh_candidates)
     {
         let delay_ms = scheduled.navigation.delay_ms;
         let url = scheduled.navigation.url.clone();
@@ -1774,22 +1976,7 @@ pub(super) fn finish_runtime_mutation_effects(
     }
 
     for candidate in runtime_script_start_candidates {
-        let (node, host_script_handle) = candidate.into_parts();
-        let Some(plan) = runtime.host_plan_script_start(node, &host_script_handle) else {
-            continue;
-        };
-        match unsafe { &mut *host_ptr }.commit_current_main_runtime_script_start(runtime, plan) {
-            Ok(Some(committed)) => {
-                execute_committed_inline_classic_script(runtime, scope, host_ptr, committed);
-            }
-            Ok(None) => {}
-            Err(message) => {
-                if let Some(message) = v8::String::new(scope, &message) {
-                    let exception = v8::Exception::error(scope, message);
-                    scope.throw_exception(exception);
-                }
-            }
-        }
+        finish_runtime_script_start_candidate(runtime, scope, host_ptr, candidate);
     }
 
     for popover in removed_open_popovers {
@@ -1797,17 +1984,19 @@ pub(super) fn finish_runtime_mutation_effects(
     }
     unsafe { &mut *host_ptr }.queue_slotchange_events(scope, &changed_slots);
 
-    if changed {
-        runtime.apply_style_csp_mutation_followups(
-            scope,
-            host_ptr,
-            &inline_style_attribute_csp_mutations,
-            &connected_style_csp_roots,
-            &stylesheet_owner_changes,
-        );
+    if !document_followups_deferred_to_parser_owner {
+        if changed {
+            runtime.apply_style_csp_mutation_followups(
+                scope,
+                host_ptr,
+                &inline_style_attribute_csp_mutations,
+                &connected_style_csp_roots,
+                &stylesheet_owner_changes,
+            );
+        }
+        runtime.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
     }
-    runtime.apply_pending_stylesheet_source_css_projections(scope, host_ptr);
-    if changed {
+    if changed && !document_followups_deferred_to_parser_owner {
         let mut prime_result = ConnectedStyleLoadPrimeResult::default();
         let prepared_owner_changes =
             runtime.prepare_stylesheet_owner_runtime_changes(&stylesheet_owner_changes);
@@ -1858,6 +2047,11 @@ pub(super) fn finish_runtime_mutation_effects(
             unsafe { &*host_ptr },
             &stylesheet_owner_changes,
         );
+        crate::native_bridge::document::load_font_faces_used_by_subtrees(
+            scope,
+            unsafe { &*host_ptr },
+            &font_face_use_roots,
+        );
         let completed_clients = prime_result.take_completed_stylesheet_clients();
         runtime.settle_stylesheet_link_clients_in_current_scope(scope, host_ptr, completed_clients);
         runtime
@@ -1867,6 +2061,31 @@ pub(super) fn finish_runtime_mutation_effects(
     changed
 }
 
+pub(super) fn finish_runtime_script_start_candidate(
+    runtime: &mut DocumentRuntime,
+    scope: &mut v8::PinScope<'_, '_>,
+    host_ptr: *mut JsContextHost,
+    candidate: crate::mutation_coordinator::RuntimeScriptStartCandidate,
+) {
+    let (node, host_script_handle) = candidate.into_parts();
+    match unsafe { &mut *host_ptr }.plan_and_commit_current_main_runtime_script_start(
+        scope,
+        node,
+        &host_script_handle,
+    ) {
+        Ok(Some(committed)) => {
+            execute_committed_inline_classic_script(runtime, scope, host_ptr, committed);
+        }
+        Ok(None) => {}
+        Err(message) => {
+            if let Some(message) = v8::String::new(scope, &message) {
+                let exception = v8::Exception::error(scope, message);
+                scope.throw_exception(exception);
+            }
+        }
+    }
+}
+
 fn execute_committed_inline_classic_script(
     runtime: &mut DocumentRuntime,
     scope: &mut v8::PinScope<'_, '_>,
@@ -1874,16 +2093,8 @@ fn execute_committed_inline_classic_script(
     committed: crate::host::CommittedInlineClassicScript,
 ) {
     let (node, host_script_handle, source) = committed.into_parts();
-    let nonce = runtime
-        .dom_host
-        .node(node)
-        .and_then(Node::as_element)
-        .and_then(|element| {
-            element
-                .cryptographic_nonce()
-                .or_else(|| element.attribute("nonce"))
-        })
-        .map(str::to_owned);
+    let nonce =
+        crate::host::script_element_nonce_for_csp(&runtime.dom_host, node).map(str::to_owned);
     let request = crate::content_security_policy::ContentSecurityPolicyScriptElementRequest {
         nonce: nonce.as_deref(),
         integrity: None,
@@ -1925,12 +2136,22 @@ pub(super) fn apply_runtime_mutation_effects_to_dom_host(
     let cpu_profile_enabled = moli_trace::cpu_profile_enabled();
     let total_started = cpu_profile_enabled.then(Instant::now);
     let style_sources_started = cpu_profile_enabled.then(Instant::now);
-    let stylesheet_owner_changes = effects.stylesheet_owners().changes().to_vec();
-    let meta_refresh_candidates = super::meta_refresh::meta_refresh_navigations_from_mutation(
-        dom_host,
-        &effects,
-        document.url(),
-    );
+    let document_followups_deferred_to_parser_owner =
+        options.defer_document_followups_to_parser_owner;
+    let stylesheet_owner_changes = if document_followups_deferred_to_parser_owner {
+        Vec::new()
+    } else {
+        effects.stylesheet_owners().changes().to_vec()
+    };
+    let meta_refresh_candidates = if document_followups_deferred_to_parser_owner {
+        Vec::new()
+    } else {
+        super::meta_refresh::meta_refresh_navigations_from_mutation(
+            dom_host,
+            &effects,
+            document.url(),
+        )
+    };
     let inline_style_attribute_csp_mutations = if options.check_inline_style_csp {
         effects
             .style()
@@ -1968,7 +2189,19 @@ pub(super) fn apply_runtime_mutation_effects_to_dom_host(
     };
     let devtools_dom_mutations =
         super::devtools_mutations::capture_devtools_dom_mutation_facts(dom_host, &effects);
-    if effects.did_change() {
+    let mut font_face_use_roots = Vec::new();
+    if !document_followups_deferred_to_parser_owner {
+        font_face_use_roots = effects.tree().connected_roots().to_vec();
+        for mutation in effects.style().attribute_mutations() {
+            if mutation.namespace().is_none()
+                && mutation.local_name().eq_ignore_ascii_case("style")
+                && !font_face_use_roots.contains(&mutation.target())
+            {
+                font_face_use_roots.push(mutation.target());
+            }
+        }
+    }
+    if effects.did_change() && !document_followups_deferred_to_parser_owner {
         sync_style_sources_from_dom_mutation_effects(host_ptr, &effects);
     }
     let style_sources_us = style_sources_started
@@ -1993,6 +2226,7 @@ pub(super) fn apply_runtime_mutation_effects_to_dom_host(
     record_dom_binding_timing("mutation.apply", started);
     RuntimeMutationApplyResult {
         changed: mutation_result.changed,
+        document_followups_deferred_to_parser_owner,
         meta_refresh_candidates,
         devtools_dom_mutations,
         runtime_script_start_candidates: mutation_result.runtime_script_start_candidates,
@@ -2001,6 +2235,7 @@ pub(super) fn apply_runtime_mutation_effects_to_dom_host(
         stylesheet_owner_changes,
         inline_style_attribute_csp_mutations,
         connected_style_csp_roots,
+        font_face_use_roots,
     }
 }
 
@@ -2095,6 +2330,9 @@ fn style_state_impact_for_attribute(name: &str) -> StyloElementState {
             | StyloElementState::HAS_DIR_ATTR_LTR
             | StyloElementState::HAS_DIR_ATTR_RTL
             | StyloElementState::HAS_DIR_ATTR_LIKE_AUTO;
+    }
+    if name == "headingoffset" || name == "headingreset" {
+        return StyloElementState::HEADING_LEVEL_BITS;
     }
     StyloElementState::empty()
 }

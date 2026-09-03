@@ -2,8 +2,8 @@ use super::observer::{
     array_contains_string, performance_observer_active, performance_observer_callback_id,
     performance_observer_callback_residence, performance_observer_entry_types,
     performance_observer_observed_type, performance_observer_pending,
-    performance_observer_scheduled, set_performance_observer_pending,
-    set_performance_observer_scheduled,
+    performance_observer_scheduled, prepare_worker_performance_observer_callback,
+    set_performance_observer_pending, set_performance_observer_scheduled,
 };
 use super::*;
 use crate::host::report_event_callback_exception;
@@ -36,19 +36,6 @@ fn performance_observer_flush_callback<'s>(
     if pending.length() == 0 {
         return;
     }
-    let Some(callback_residence) = performance_observer_callback_residence(scope, observer) else {
-        return;
-    };
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
-    let Some(callback) =
-        crate::observer_runtime::prepare_callback(scope, host_ptr, callback_residence)
-    else {
-        let pending = v8::Array::new(scope, 0);
-        set_performance_observer_pending(scope, observer, pending);
-        return;
-    };
     let list = PerformanceObserverEntryListObjectDeclaration::new(pending)
         .bind(scope)
         .expect("PerformanceObserverEntryList declaration should bind");
@@ -60,26 +47,61 @@ fn performance_observer_flush_callback<'s>(
     // droppedEntriesCount when a drop count exists.
     let options = v8::Object::new(scope);
     let observer_value: v8::Local<'_, v8::Value> = observer.into();
-    match callback.invoke(
-        scope,
-        host_ptr,
-        "PerformanceObserver callback",
-        observer_value,
-        &[list.into(), observer_value, options.into()],
-    ) {
-        WindowWebIdlCallbackFunctionOutcome::Threw(report) => {
-            report_event_callback_exception(
-                scope,
-                host_ptr,
-                "performanceobserver",
-                callback.relevant_identity(),
-                None,
-                &report,
-            );
+    let callback_arguments = [list.into(), observer_value, options.into()];
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let Some(callback_residence) = performance_observer_callback_residence(scope, observer)
+        else {
+            return;
+        };
+        let Some(callback) =
+            crate::observer_runtime::prepare_callback(scope, host_ptr, callback_residence)
+        else {
+            return;
+        };
+        match callback.invoke(
+            scope,
+            host_ptr,
+            "PerformanceObserver callback",
+            observer_value,
+            &callback_arguments,
+        ) {
+            WindowWebIdlCallbackFunctionOutcome::Threw(report) => {
+                report_event_callback_exception(
+                    scope,
+                    host_ptr,
+                    "performanceobserver",
+                    callback.relevant_identity(),
+                    None,
+                    &report,
+                );
+            }
+            WindowWebIdlCallbackFunctionOutcome::Returned
+            | WindowWebIdlCallbackFunctionOutcome::Retired => {}
         }
-        WindowWebIdlCallbackFunctionOutcome::Returned
-        | WindowWebIdlCallbackFunctionOutcome::Retired => {}
+        return;
     }
+
+    if crate::worker::get_worker_state(scope).is_none() {
+        return;
+    }
+    let Some(callback) = prepare_worker_performance_observer_callback(scope, observer) else {
+        return;
+    };
+    let _ = moli_webidl_callback::invoke_webidl_callback_function(
+        scope,
+        &callback,
+        observer_value,
+        &callback_arguments,
+        |scope, callback, receiver, arguments| {
+            crate::exception_reporting::invoke_callback(
+                scope,
+                "PerformanceObserver callback",
+                callback,
+                receiver,
+                arguments,
+            )
+        },
+    );
 }
 
 pub(super) fn enqueue_buffered_performance_entries<'s>(
@@ -116,18 +138,30 @@ pub(in crate::context_bootstrap) fn queue_matching_performance_observers<'s>(
     entry: v8::Local<'s, v8::Object>,
     entry_type: &str,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+    let host_ptr = context_host_ptr_from_global_bridge(scope);
+    let observers = if let Some(host_ptr) = host_ptr {
+        crate::observer_runtime::active_performance_observer_callbacks(scope, host_ptr)
+    } else if crate::worker::get_worker_state(scope).is_some() {
+        let Some(registry) = global_queue_array(scope, PERFORMANCE_OBSERVER_REGISTRY_SLOT) else {
+            return;
+        };
+        (0..registry.length())
+            .filter_map(|index| registry.get_index(scope, index))
+            .filter_map(|value| v8::Local::<v8::Object>::try_from(value).ok())
+            .collect()
+    } else {
         return;
     };
-    let observers = crate::observer_runtime::active_performance_observer_callbacks(scope, host_ptr);
     for observer in observers {
-        let Some(callback_id) = performance_observer_callback_id(scope, observer) else {
-            continue;
-        };
-        if !crate::observer_runtime::callback_is_current(host_ptr, callback_id) {
-            let pending = v8::Array::new(scope, 0);
-            set_performance_observer_pending(scope, observer, pending);
-            continue;
+        if let Some(host_ptr) = host_ptr {
+            let Some(callback_id) = performance_observer_callback_id(scope, observer) else {
+                continue;
+            };
+            if !crate::observer_runtime::callback_is_current(host_ptr, callback_id) {
+                let pending = v8::Array::new(scope, 0);
+                set_performance_observer_pending(scope, observer, pending);
+                continue;
+            }
         }
         if !performance_observer_active(scope, observer) {
             continue;
@@ -150,21 +184,21 @@ pub(super) fn queue_performance_observer_delivery<'s>(
     if performance_observer_scheduled(scope, observer) {
         return;
     }
-    let Some(callback_id) = performance_observer_callback_id(scope, observer) else {
-        return;
-    };
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
-    if !crate::observer_runtime::callback_is_current(host_ptr, callback_id) {
-        let pending = v8::Array::new(scope, 0);
-        set_performance_observer_pending(scope, observer, pending);
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let Some(callback_id) = performance_observer_callback_id(scope, observer) else {
+            return;
+        };
+        if !crate::observer_runtime::callback_is_current(host_ptr, callback_id) {
+            let pending = v8::Array::new(scope, 0);
+            set_performance_observer_pending(scope, observer, pending);
+            return;
+        }
+    } else if crate::worker::get_worker_state(scope).is_none() {
         return;
     }
     set_performance_observer_scheduled(scope, observer, true);
     push_object_to_global_queue(scope, PERFORMANCE_OBSERVER_QUEUE_SLOT, observer);
-    let host = unsafe { &mut *host_ptr };
-    schedule_host_callback(scope, host, performance_observer_flush_callback);
+    schedule_scope_callback(scope, performance_observer_flush_callback, None);
 }
 
 fn performance_observer_matches_entry_type<'s>(

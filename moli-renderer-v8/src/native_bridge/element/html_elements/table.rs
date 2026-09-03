@@ -18,7 +18,8 @@ use super::super::super::{
     set_wrapped_handle_or_null, throw_dom_exception,
 };
 use super::super::set_reflected_attribute;
-use super::{DomHandle, JsContextHost, parse_i32_attribute_or};
+use super::super::{element_attribute, global_attributes::parse_non_negative_integer};
+use super::{DomHandle, JsContextHost};
 
 #[derive(webidl::WebIdlArgs)]
 #[webidl(prefix = "HTMLTableElement.insertRow")]
@@ -84,6 +85,7 @@ enum TableReceiverKind {
     Table,
     Section,
     Row,
+    Col,
     Cell,
 }
 
@@ -96,6 +98,9 @@ fn table_receiver_matches(
         TableReceiverKind::Table => runtime.dom_host().is_html_element_named(handle, "table"),
         TableReceiverKind::Section => is_html_table_section(runtime, handle),
         TableReceiverKind::Row => runtime.dom_host().is_html_element_named(handle, "tr"),
+        TableReceiverKind::Col => ["col", "colgroup"]
+            .into_iter()
+            .any(|name| runtime.dom_host().is_html_element_named(handle, name)),
         TableReceiverKind::Cell => is_html_table_cell(runtime, handle),
     }
 }
@@ -272,20 +277,83 @@ fn html_table_cell_setter_receiver<'s>(
     )
 }
 
-fn clamp_col_span(value: i32) -> i32 {
-    value.clamp(1, 1000)
+fn html_table_col_getter_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    member: &'static str,
+) -> Option<(*mut JsContextHost, DomHandle)> {
+    table_getter_receiver(
+        scope,
+        receiver,
+        "HTMLTableColElement",
+        member,
+        TableReceiverKind::Col,
+    )
 }
 
-fn parse_col_span(runtime: &JsContextHost, handle: DomHandle) -> i32 {
-    clamp_col_span(parse_i32_attribute_or(runtime, handle, "colspan", 1))
+fn html_table_col_setter_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    member: &'static str,
+) -> Option<(*mut JsContextHost, DomHandle)> {
+    table_setter_receiver(
+        scope,
+        receiver,
+        "HTMLTableColElement",
+        member,
+        TableReceiverKind::Col,
+    )
 }
 
-fn clamp_row_span(value: i32) -> i32 {
-    if value == 0 { 0 } else { value.clamp(1, 65534) }
+fn parse_clamped_table_span(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+    attribute: &str,
+    default: u32,
+    min: u32,
+    max: u32,
+) -> u32 {
+    let Some(raw) = element_attribute(runtime, handle, attribute) else {
+        return default;
+    };
+    parse_non_negative_integer(&raw)
+        .map(|value| value.clamp(min, max))
+        .unwrap_or(default)
 }
 
-fn parse_row_span(runtime: &JsContextHost, handle: DomHandle) -> i32 {
-    clamp_row_span(parse_i32_attribute_or(runtime, handle, "rowspan", 1))
+fn set_table_unsigned_long_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    runtime_ptr: *mut JsContextHost,
+    handle: DomHandle,
+    attribute: &str,
+    value: v8::Local<'s, v8::Value>,
+    default: u32,
+    interface: &'static str,
+    member: &'static str,
+) {
+    let value = match webidl::convert::<webidl::UnsignedLong>(
+        scope,
+        value,
+        webidl::Context::member(interface, member),
+    ) {
+        Ok(value) => value.0,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return;
+        }
+    };
+    let reflected = if value <= i32::MAX as u32 {
+        value
+    } else {
+        default
+    };
+    set_reflected_attribute(
+        scope,
+        runtime_ptr,
+        handle,
+        attribute,
+        &reflected.to_string(),
+    );
 }
 
 pub(in crate::native_bridge::element) fn table_cell_col_span_getter_function<'s>(
@@ -296,18 +364,40 @@ pub(in crate::native_bridge::element) fn table_cell_col_span_getter_function<'s>
     let Some((runtime_ptr, handle)) =
         html_table_cell_getter_receiver(scope, args.this(), "colSpan")
     else {
-        rv.set_int32(1);
+        rv.set_uint32(1);
         return;
     };
-    rv.set_int32(parse_col_span(unsafe { &*runtime_ptr }, handle));
+    rv.set_uint32(parse_clamped_table_span(
+        unsafe { &*runtime_ptr },
+        handle,
+        "colspan",
+        1,
+        1,
+        1000,
+    ));
 }
 
 pub(in crate::native_bridge::element) fn table_cell_col_span_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    table_cell_i32_attribute_setter(scope, args.this(), "colspan", args.get(0), 1, "colSpan", rv);
+    let Some((runtime_ptr, handle)) =
+        html_table_cell_setter_receiver(scope, args.this(), "colSpan")
+    else {
+        return;
+    };
+    set_table_unsigned_long_attribute(
+        scope,
+        runtime_ptr,
+        handle,
+        "colspan",
+        args.get(0),
+        1,
+        "HTMLTableCellElement",
+        "colSpan",
+    );
+    rv.set_undefined();
 }
 
 pub(in crate::native_bridge::element) fn table_cell_row_span_getter_function<'s>(
@@ -318,18 +408,82 @@ pub(in crate::native_bridge::element) fn table_cell_row_span_getter_function<'s>
     let Some((runtime_ptr, handle)) =
         html_table_cell_getter_receiver(scope, args.this(), "rowSpan")
     else {
-        rv.set_int32(1);
+        rv.set_uint32(1);
         return;
     };
-    rv.set_int32(parse_row_span(unsafe { &*runtime_ptr }, handle));
+    rv.set_uint32(parse_clamped_table_span(
+        unsafe { &*runtime_ptr },
+        handle,
+        "rowspan",
+        1,
+        0,
+        65534,
+    ));
 }
 
 pub(in crate::native_bridge::element) fn table_cell_row_span_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    rv: v8::ReturnValue<'s, v8::Value>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    table_cell_i32_attribute_setter(scope, args.this(), "rowspan", args.get(0), 1, "rowSpan", rv);
+    let Some((runtime_ptr, handle)) =
+        html_table_cell_setter_receiver(scope, args.this(), "rowSpan")
+    else {
+        return;
+    };
+    set_table_unsigned_long_attribute(
+        scope,
+        runtime_ptr,
+        handle,
+        "rowspan",
+        args.get(0),
+        1,
+        "HTMLTableCellElement",
+        "rowSpan",
+    );
+    rv.set_undefined();
+}
+
+pub(in crate::native_bridge::element) fn table_col_span_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = html_table_col_getter_receiver(scope, args.this(), "span")
+    else {
+        rv.set_uint32(1);
+        return;
+    };
+    rv.set_uint32(parse_clamped_table_span(
+        unsafe { &*runtime_ptr },
+        handle,
+        "span",
+        1,
+        1,
+        1000,
+    ));
+}
+
+pub(in crate::native_bridge::element) fn table_col_span_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) = html_table_col_setter_receiver(scope, args.this(), "span")
+    else {
+        return;
+    };
+    set_table_unsigned_long_attribute(
+        scope,
+        runtime_ptr,
+        handle,
+        "span",
+        args.get(0),
+        1,
+        "HTMLTableColElement",
+        "span",
+    );
+    rv.set_undefined();
 }
 
 pub(in crate::native_bridge::element) fn table_caption_getter_function<'s>(
@@ -829,28 +983,6 @@ enum TableSlotPlacement {
     FirstChild,
     Head,
     LastChild,
-}
-
-fn table_cell_i32_attribute_setter<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    object: v8::Local<'s, v8::Object>,
-    attribute: &str,
-    value: v8::Local<'s, v8::Value>,
-    default: i32,
-    member: &'static str,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
-) {
-    let Some((runtime_ptr, handle)) = html_table_cell_setter_receiver(scope, object, member) else {
-        rv.set_undefined();
-        return;
-    };
-    let number = match attribute {
-        "colspan" => clamp_col_span(value.int32_value(scope).unwrap_or(default)),
-        "rowspan" => clamp_row_span(value.int32_value(scope).unwrap_or(default)),
-        _ => value.int32_value(scope).unwrap_or(default),
-    };
-    set_reflected_attribute(scope, runtime_ptr, handle, attribute, &number.to_string());
-    rv.set_undefined();
 }
 
 fn set_table_slot_for_object<'s>(

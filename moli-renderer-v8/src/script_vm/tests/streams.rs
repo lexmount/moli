@@ -3362,7 +3362,7 @@ fn transform_stream_writer_abort_reason_wins_over_following_readable_cancel() {
 }
 
 #[test]
-fn transform_stream_controller_error_after_readable_cancel_rejects_shared_finish_promise() {
+fn transform_stream_controller_error_after_readable_cancel_preserves_cancel_result() {
     let mut vm = stream_test_vm();
 
     vm.eval(
@@ -3400,7 +3400,7 @@ fn transform_stream_controller_error_after_readable_cancel_rejects_shared_finish
 
     assert_eq!(
         result,
-        r#"["cancel:controllerReason","closed:true:controllerReason"]"#
+        r#"["cancel:fulfilled","closed:true:controllerReason"]"#
     );
 }
 
@@ -5453,5 +5453,189 @@ fn readable_stream_pipe_options_getter_errors_keep_entrypoint_semantics_and_orde
     assert_eq!(
         events,
         r#"["pipeThrough:preventAbort:threw:preventAbort:preventAbort","pipeThrough:preventCancel:threw:preventCancel:preventAbort,preventCancel","pipeThrough:preventClose:threw:preventClose:preventAbort,preventCancel,preventClose","pipeThrough:signal:threw:signal:preventAbort,preventCancel,preventClose,signal","pipeTo:preventAbort:rejected:preventAbort:preventAbort","pipeTo:preventAbort:returned:true","pipeTo:preventCancel:rejected:preventCancel:preventAbort,preventCancel","pipeTo:preventCancel:returned:true","pipeTo:preventClose:rejected:preventClose:preventAbort,preventCancel,preventClose","pipeTo:preventClose:returned:true","pipeTo:signal:rejected:signal:preventAbort,preventCancel,preventClose,signal","pipeTo:signal:returned:true"]"#
+    );
+}
+
+#[test]
+fn readable_stream_from_preserves_async_sequence_and_cancellation_semantics() {
+    let mut vm = stream_test_vm();
+
+    vm.eval(
+        r#"
+globalThis.__readableStreamFromResult = "";
+(async () => {
+  const descriptor = Object.getOwnPropertyDescriptor(ReadableStream, "from");
+  const facts = {
+    surface: [
+      typeof descriptor.value,
+      descriptor.value.name,
+      descriptor.value.length,
+      descriptor.enumerable,
+      descriptor.writable,
+      descriptor.configurable
+    ]
+  };
+
+  let nullError = "none";
+  try {
+    ReadableStream.from(null);
+  } catch (error) {
+    nullError = error.name;
+  }
+  facts.nullError = nullError;
+
+  const openMarker = new Error("open marker");
+  let openIdentity = false;
+  try {
+    ReadableStream.from({
+      [Symbol.asyncIterator]() {
+        throw openMarker;
+      }
+    });
+  } catch (error) {
+    openIdentity = error === openMarker;
+  }
+  facts.openIdentity = openIdentity;
+
+  const syncReader = ReadableStream.from([
+    Promise.resolve("a"),
+    "b"
+  ]).getReader();
+  facts.syncValues = [
+    (await syncReader.read()).value,
+    (await syncReader.read()).value,
+    (await syncReader.read()).done
+  ];
+
+  let nextCalls = 0;
+  const asyncIterator = {
+    async next() {
+      nextCalls += 1;
+      return nextCalls === 1
+        ? { value: "async", done: false }
+        : { value: undefined, done: true };
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+  };
+  const asyncReader = ReadableStream.from(asyncIterator).getReader();
+  facts.asyncValues = [
+    (await asyncReader.read()).value,
+    (await asyncReader.read()).done,
+    nextCalls
+  ];
+
+  const finishedReader = ReadableStream.from({
+    next() {
+      return Promise.resolve({
+        done: true,
+        get value() {
+          throw new Error("finished iteration value must not be read");
+        }
+      });
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+  }).getReader();
+  facts.finishedSkipsValue = (await finishedReader.read()).done;
+
+  const nextMarker = new Error("next marker");
+  const rejectedReader = ReadableStream.from({
+    next() {
+      throw nextMarker;
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+  }).getReader();
+  facts.nextIdentity = await rejectedReader.read().then(
+    () => false,
+    error => error === nextMarker
+  );
+
+  const cancelReason = new Error("cancel reason");
+  let returnReason;
+  let releaseReturn;
+  const cancelReader = ReadableStream.from({
+    next() {
+      throw new Error("next must not run");
+    },
+    return(reason) {
+      returnReason = reason;
+      return new Promise(resolve => {
+        releaseReturn = () => resolve({ done: true });
+      });
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+  }).getReader();
+  let cancelSettled = false;
+  const cancelPromise = cancelReader.cancel(cancelReason).then(() => {
+    cancelSettled = true;
+  });
+  await Promise.resolve();
+  facts.cancelPending = !cancelSettled && returnReason === cancelReason;
+  releaseReturn();
+  await cancelPromise;
+  facts.cancelSettled = cancelSettled;
+
+  const undefinedReturnReader = ReadableStream.from({
+    next() {
+      throw new Error("next must not run");
+    },
+    return() {},
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+  }).getReader();
+  facts.undefinedReturnRejects = await undefinedReturnReader.cancel().then(
+    () => false,
+    error => error instanceof TypeError
+  );
+
+  let reentrantReader;
+  let reentrantReturns = 0;
+  const reentrantStream = ReadableStream.from({
+    async next() {
+      await reentrantReader.cancel();
+      return { value: "ignored", done: false };
+    },
+    async return() {
+      reentrantReturns += 1;
+    },
+    [Symbol.asyncIterator]() {
+      return this;
+    }
+  });
+  reentrantReader = reentrantStream.getReader();
+  facts.reentrant = [
+    (await reentrantReader.read()).done,
+    reentrantReturns
+  ];
+
+  globalThis.__readableStreamFromResult = JSON.stringify(facts);
+})().catch(error => {
+  globalThis.__readableStreamFromResult = `ERROR:${error && error.stack || error}`;
+});
+"#,
+    )
+    .expect("ReadableStream.from setup should evaluate");
+
+    let mut result = String::new();
+    for _ in 0..32 {
+        result = vm
+            .eval("globalThis.__readableStreamFromResult")
+            .expect("ReadableStream.from reactions should drain");
+        if !result.is_empty() {
+            break;
+        }
+    }
+
+    assert_eq!(
+        result,
+        r#"{"surface":["function","from",1,true,true,true],"nullError":"TypeError","openIdentity":true,"syncValues":["a","b",true],"asyncValues":["async",true,2],"finishedSkipsValue":true,"nextIdentity":true,"cancelPending":true,"cancelSettled":true,"undefinedReturnRejects":true,"reentrant":[true,1]}"#
     );
 }

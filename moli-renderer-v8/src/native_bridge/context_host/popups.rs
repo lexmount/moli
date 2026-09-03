@@ -38,8 +38,9 @@ use crate::{
         PopupDocumentLoadCompletion, PopupDocumentLoadOutcome,
     },
     util::{
-        context_host_ptr_from_global_bridge, get_private_value, set_private_value,
-        throw_type_error, v8_string, v8str,
+        context_host_ptr_from_global_bridge, define_non_enumerable_static_property,
+        get_private_value, global_constructor_object, set_private_value, throw_type_error,
+        v8_string, v8str,
     },
     window_document_identity::{
         LightweightPopupDocumentId, LightweightPopupDocumentOwner, LightweightPopupLocalWindowId,
@@ -438,6 +439,7 @@ fn inherit_lightweight_popup_opener_sandbox(
     };
     target.forces_opaque_origin |= opener.forces_opaque_origin;
     target.allows_scripts &= opener.allows_scripts;
+    target.allows_modals &= opener.allows_modals;
     target.allows_popups_to_escape &= opener.allows_popups_to_escape;
     target.sandboxes_document_domain |= opener.sandboxes_document_domain;
 }
@@ -626,8 +628,7 @@ impl JsContextHost {
         creator_base_url: Url,
         creator_policy_container: DocumentPolicyContainer,
     ) -> Option<OpenedLightweightPopup<'s>> {
-        if opener.is_some()
-            && let Some(name) = trackable_lightweight_popup_window_name(target_name)
+        if let Some(name) = trackable_lightweight_popup_window_name(target_name)
             && let Some(popup_id) = self.lightweight_popup_window_names.get(&name).copied()
             && self.lightweight_popup_is_open(popup_id)
             && let Some(window) = self.reopen_lightweight_popup_window(
@@ -711,6 +712,17 @@ impl JsContextHost {
             .bridge
             .bindings
             .instantiate_window_shell(scope, host_ptr);
+        if let Some(dom_exception) = global_constructor_object(scope, "DOMException") {
+            // Lightweight popups share the opener's V8 realm, so their
+            // synthetic Window shell must expose the same realm constructor
+            // used by DOM exceptions thrown from popup-owned callbacks.
+            define_non_enumerable_static_property(
+                scope,
+                window,
+                "DOMException",
+                dom_exception.into(),
+            );
+        }
         let popup_id_private_value = v8::BigInt::new_from_u64(scope, popup_id);
         set_private_value(
             scope,

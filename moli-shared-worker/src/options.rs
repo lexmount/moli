@@ -60,6 +60,7 @@ impl SharedWorkerSameSiteCookies {
 pub struct SharedWorkerDescriptor {
     script_type: SharedWorkerScriptType,
     credentials_mode: SharedWorkerCredentialsMode,
+    extended_lifetime: bool,
     creation_context_type: SharedWorkerCreationContextType,
 }
 
@@ -69,11 +70,13 @@ impl SharedWorkerDescriptor {
     pub fn new(
         script_type: SharedWorkerScriptType,
         credentials_mode: SharedWorkerCredentialsMode,
+        extended_lifetime: bool,
         creation_context_type: SharedWorkerCreationContextType,
     ) -> Self {
         Self {
             script_type,
             credentials_mode,
+            extended_lifetime,
             creation_context_type,
         }
     }
@@ -86,6 +89,11 @@ impl SharedWorkerDescriptor {
     /// Return the requested credentials mode.
     pub fn credentials_mode(&self) -> SharedWorkerCredentialsMode {
         self.credentials_mode
+    }
+
+    /// Return whether the constructor requested an extended worker lifetime.
+    pub fn extended_lifetime(&self) -> bool {
+        self.extended_lifetime
     }
 
     /// Return the secure-context class of the constructor environment.
@@ -110,6 +118,12 @@ impl SharedWorkerDescriptor {
                 requested: requested.credentials_mode,
             });
         }
+        if self.extended_lifetime != requested.extended_lifetime {
+            return Err(SharedWorkerCompatibilityError::ExtendedLifetime {
+                existing: self.extended_lifetime,
+                requested: requested.extended_lifetime,
+            });
+        }
         if self.creation_context_type != requested.creation_context_type {
             return Err(SharedWorkerCompatibilityError::CreationContextType {
                 existing: self.creation_context_type,
@@ -125,6 +139,7 @@ impl Default for SharedWorkerDescriptor {
         Self::new(
             SharedWorkerScriptType::Classic,
             SharedWorkerCredentialsMode::SameOrigin,
+            false,
             SharedWorkerCreationContextType::Secure,
         )
     }
@@ -140,6 +155,10 @@ pub enum SharedWorkerCompatibilityError {
     CredentialsMode {
         existing: SharedWorkerCredentialsMode,
         requested: SharedWorkerCredentialsMode,
+    },
+    ExtendedLifetime {
+        existing: bool,
+        requested: bool,
     },
     CreationContextType {
         existing: SharedWorkerCreationContextType,
@@ -163,6 +182,13 @@ impl fmt::Display for SharedWorkerCompatibilityError {
             } => write!(
                 f,
                 "existing SharedWorker credentials mode {existing:?} is incompatible with requested {requested:?}"
+            ),
+            Self::ExtendedLifetime {
+                existing,
+                requested,
+            } => write!(
+                f,
+                "existing SharedWorker extended lifetime {existing} is incompatible with requested {requested}"
             ),
             Self::CreationContextType {
                 existing,

@@ -1,7 +1,10 @@
 use std::{collections::HashMap, sync::Arc};
 
 use dom::ElementState as StyloElementState;
-use moli_selector::StyloStyleSourceScope as StyleSourceScope;
+use indexmap::IndexSet;
+use moli_selector::{
+    StyloStyleSourceScope as StyleSourceScope, html_auto_directionality_invalidation_root,
+};
 
 use crate::{
     document_runtime::DomHandle, dom::native::DomHost, protocol_types::EmulatedMediaOverrides,
@@ -28,6 +31,13 @@ use super::{
 const IMMEDIATE_STRUCTURAL_MUTATION_EFFECT_LIMIT: usize = 256;
 
 impl MoliStyleEngine {
+    pub(crate) fn document_has_style_state(&self, document: DomHandle) -> bool {
+        let Some(world) = self.document_worlds.active_world(document) else {
+            return false;
+        };
+        world_has_style_state(self, &world)
+    }
+
     #[cfg(test)]
     pub(crate) fn invalidate_for_mutations(
         &mut self,
@@ -50,6 +60,12 @@ impl MoliStyleEngine {
         emulated_media: &EmulatedMediaOverrides,
         viewport: StyleViewport,
     ) {
+        self.invalidate_html_auto_directionality_for_mutations(
+            host,
+            effects,
+            emulated_media,
+            viewport,
+        );
         let profile_enabled = moli_trace::cpu_profile_enabled();
         let total_started = profile_enabled.then(std::time::Instant::now);
         let grouping_started = profile_enabled.then(std::time::Instant::now);
@@ -122,6 +138,44 @@ impl MoliStyleEngine {
                     total_us,
                 );
             }
+        }
+    }
+
+    fn invalidate_html_auto_directionality_for_mutations(
+        &mut self,
+        host: &DomHost,
+        effects: &[StyleMutationEffect],
+        emulated_media: &EmulatedMediaOverrides,
+        viewport: StyleViewport,
+    ) {
+        for root in html_auto_directionality_roots_for_mutations(host, effects) {
+            let Some(document) = owner_document_for_handle(host, root) else {
+                continue;
+            };
+            let world = self.world_for_document(document);
+            if !world_has_style_state(self, &world) {
+                continue;
+            }
+            // Tree and character-data mutation effects do not retain the old
+            // resolved direction. Present the retained invalidator with the
+            // conservative opposite direction so it checks both sides of
+            // :dir() dependencies; the scoped cache cleanup below separately
+            // rebuilds the HTML directionality presentation hint.
+            let old_state = self
+                .retained_current_element_state(host, root)
+                .map(synthetic_opposite_directionality_state);
+            if let Some(old_state) = old_state {
+                self.invalidate_for_element_state_change_with_old_state_and_viewport(
+                    host,
+                    root,
+                    StyloElementState::LTR | StyloElementState::RTL,
+                    Some(old_state),
+                    emulated_media,
+                    viewport,
+                );
+            }
+            self.invalidation_cleanup_for_world(&world)
+                .invalidate_subtrees(host, [root]);
         }
     }
 
@@ -695,6 +749,50 @@ fn owner_document_for_mutation_effect(
         StyleMutationEffect::ConnectedSubtrees { .. }
         | StyleMutationEffect::DisconnectedSubtrees { .. } => None,
     }
+}
+
+fn html_auto_directionality_roots_for_mutations(
+    host: &DomHost,
+    effects: &[StyleMutationEffect],
+) -> IndexSet<DomHandle> {
+    let mut roots = IndexSet::new();
+    let mut record_root = |start| {
+        if let Some(root) = html_auto_directionality_invalidation_root(host, start) {
+            roots.insert(root);
+        }
+    };
+    for effect in effects {
+        match effect {
+            StyleMutationEffect::ChildList { parent, .. } => record_root(*parent),
+            StyleMutationEffect::CharacterData { node } => {
+                if let Some(parent) = host.parent_node(*node) {
+                    record_root(parent);
+                }
+            }
+            StyleMutationEffect::SlotAssignment { slot, .. } => record_root(*slot),
+            StyleMutationEffect::Attribute { element, name, .. } if name == "dir" => {
+                record_root(*element);
+                if let Some(parent) = host.parent_node(*element) {
+                    record_root(parent);
+                }
+            }
+            StyleMutationEffect::Attribute { .. }
+            | StyleMutationEffect::ConnectedSubtrees { .. }
+            | StyleMutationEffect::DisconnectedSubtrees { .. } => {}
+        }
+    }
+    roots
+}
+
+fn synthetic_opposite_directionality_state(mut state: StyloElementState) -> StyloElementState {
+    let opposite = if state.contains(StyloElementState::RTL) {
+        StyloElementState::LTR
+    } else {
+        StyloElementState::RTL
+    };
+    state.remove(StyloElementState::LTR | StyloElementState::RTL);
+    state.insert(opposite);
+    state
 }
 
 fn owner_document_for_handle(host: &DomHost, handle: DomHandle) -> Option<DomHandle> {

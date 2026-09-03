@@ -1,14 +1,18 @@
+mod button_type;
 mod input_type;
 mod numeric;
+mod option;
 mod text;
 mod validity;
 
+pub use button_type::ButtonTypeState;
+pub(crate) use input_type::{
+    InputValueSanitizationContext, sanitize_input_value_for_type_with_context,
+};
 pub use input_type::{
-    canonical_input_type, email_value_type_mismatch,
-    form_control_type_supports_intrinsic_validation, input_type_has_value_sanitization,
-    input_type_supports_pattern, input_type_supports_text_length_validation,
-    input_type_supports_value_as_number, input_type_suppresses_immutable_required,
-    input_type_value_mismatch, is_valid_email_address, sanitize_input_value_for_type,
+    email_value_type_mismatch, form_control_type_supports_intrinsic_validation,
+    input_type_has_value_sanitization, input_type_value_mismatch, is_valid_email_address,
+    sanitize_input_value_for_type, sanitize_input_value_for_type_with_multiple,
     url_value_type_mismatch,
 };
 pub use moli_html_input_temporal::{
@@ -21,6 +25,7 @@ pub use moli_html_input_temporal::{
     time_input_value_from_milliseconds, week_input_milliseconds,
     week_input_value_from_milliseconds,
 };
+pub use moli_html_input_type::InputType;
 pub use numeric::{
     InputStepDirection, InputStepError, InputStepOutcome, InputStepState, MeterElementValues,
     MeterGaugeRegion, ProgressElementValues, input_number_to_value_string, input_range_overflow,
@@ -29,11 +34,15 @@ pub use numeric::{
     parse_html_floating_point_prefix, parse_input_numeric_value, progress_element_values,
     step_input_value,
 };
+pub use option::{
+    OptionDisabledAncestorStep, OptionNearestSelectStep, OptionNearestSelectTraversal,
+    option_disabled_ancestor_step,
+};
 pub use text::{
-    normalize_custom_validation_message, normalize_form_submission_newlines,
-    parse_non_negative_integer_prefix, parse_non_negative_length_attribute,
-    parse_positive_integer_prefix, text_control_suffers_too_long, text_control_suffers_too_short,
-    text_control_value_length,
+    apply_textarea_wrapping_transformation, normalize_custom_validation_message,
+    normalize_form_submission_newlines, parse_non_negative_integer_prefix,
+    parse_non_negative_length_attribute, parse_positive_integer_prefix,
+    text_control_suffers_too_long, text_control_suffers_too_short, text_control_value_length,
 };
 pub use validity::FormControlValidity;
 

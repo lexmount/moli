@@ -10,25 +10,16 @@ pub(crate) fn form_associated_form_owner(
     if is_form_associated_custom_element_handle(runtime, handle) {
         return custom_element_form_owner(runtime, handle, element);
     }
-    if !is_builtin_form_associated_element(element) {
-        return None;
-    }
-    if let Some(form_id) = element.attribute("form") {
-        if form_id.is_empty() {
-            return None;
-        }
-        return runtime
-            .dom_host()
-            .form_control_owner(handle)
-            .filter(|candidate| {
-                runtime
-                    .dom_host()
-                    .node(*candidate)
-                    .and_then(Node::as_element)
-                    .is_some_and(|form| form.is_html_element("form"))
-            });
-    }
-    runtime.dom_host().form_control_owner(handle)
+    runtime
+        .dom_host()
+        .builtin_form_associated_owner(handle)
+        .filter(|candidate| {
+            runtime
+                .dom_host()
+                .node(*candidate)
+                .and_then(Node::as_element)
+                .is_some_and(|form| form.is_html_element("form"))
+        })
 }
 
 fn custom_element_form_owner(
@@ -36,16 +27,13 @@ fn custom_element_form_owner(
     handle: DomHandle,
     element: &crate::dom::native::Element,
 ) -> Option<DomHandle> {
-    if let Some(form_id) = element.attribute("form") {
+    if let Some(form_id) = element.attribute("form")
+        && runtime.dom_host().is_connected_to_document(handle)
+    {
         if form_id.is_empty() {
             return None;
         }
         let tree_root = runtime.dom_host().root_node_handle(handle)?;
-        if runtime.dom_host().is_shadow_root(tree_root)
-            && !runtime.dom_host().is_connected(tree_root)
-        {
-            return None;
-        }
         let candidate = runtime
             .dom_host()
             .element_handle_by_id_in_subtree(tree_root, form_id)?;
@@ -68,7 +56,7 @@ fn custom_element_form_owner(
     None
 }
 
-fn is_builtin_form_associated_element(element: &crate::dom::native::Element) -> bool {
+fn has_reflected_builtin_form_owner(element: &crate::dom::native::Element) -> bool {
     element.namespace() == "http://www.w3.org/1999/xhtml"
         && matches!(
             element.local_name(),
@@ -81,19 +69,16 @@ fn form_associated_reflected_form_owner(
     handle: DomHandle,
 ) -> Option<DomHandle> {
     let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
-    if !is_builtin_form_associated_element(element) {
+    if !has_reflected_builtin_form_owner(element) {
         return None;
     }
-    if let Some(form_id) = element.attribute("form") {
+    if let Some(form_id) = element.attribute("form")
+        && runtime.dom_host().is_connected_to_document(handle)
+    {
         if form_id.is_empty() {
             return None;
         }
         let tree_root = runtime.dom_host().root_node_handle(handle)?;
-        if runtime.dom_host().is_shadow_root(tree_root)
-            && !runtime.dom_host().is_connected(tree_root)
-        {
-            return None;
-        }
         let candidate = runtime
             .dom_host()
             .element_handle_by_id_in_subtree(tree_root, form_id)?;
@@ -115,9 +100,9 @@ pub(crate) fn is_valid_submit_button(runtime: &JsContextHost, handle: DomHandle)
         .and_then(Node::as_element)
         .is_some_and(|element| {
             if element.is_html_input() {
-                matches!(element.input_type().as_str(), "submit" | "image")
+                element.input_type().is_submit_button()
             } else if element.is_html_element("button") {
-                !matches!(element.attribute("type"), Some("reset" | "button"))
+                runtime.dom_host().button_is_submit_button(handle)
             } else {
                 false
             }
@@ -136,7 +121,7 @@ pub(crate) fn form_control_is_effectively_disabled(
     {
         return true;
     }
-    if option_is_disabled_by_optgroup(runtime, handle) {
+    if runtime.dom_host().option_is_disabled(handle) {
         return true;
     }
 
@@ -170,33 +155,6 @@ fn disabled_attribute_applies_to_control(
                 element.local_name(),
                 "button" | "input" | "select" | "textarea" | "option" | "optgroup" | "fieldset"
             ))
-}
-
-fn option_is_disabled_by_optgroup(runtime: &JsContextHost, handle: DomHandle) -> bool {
-    if !runtime
-        .dom_host()
-        .node(handle)
-        .and_then(Node::as_element)
-        .is_some_and(|element| element.is_html_element("option"))
-    {
-        return false;
-    }
-
-    let mut current = runtime.dom_host().parent_node(handle);
-    while let Some(parent) = current {
-        let Some(parent_element) = runtime.dom_host().node(parent).and_then(Node::as_element)
-        else {
-            current = runtime.dom_host().parent_node(parent);
-            continue;
-        };
-        match parent_element.local_name() {
-            "optgroup" => return parent_element.has_attribute("disabled"),
-            "select" | "hr" | "datalist" | "option" => return false,
-            _ => {}
-        }
-        current = runtime.dom_host().parent_node(parent);
-    }
-    false
 }
 
 fn control_is_in_first_legend(

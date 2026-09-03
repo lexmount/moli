@@ -2447,16 +2447,16 @@ fn stylo_list_marker_type(computed: &ComputedValues) -> LayoutListMarkerType {
             _ => LayoutListMarkerType::Fallback,
         },
         CounterStyle::String(value) => LayoutListMarkerType::String(Arc::from(value.as_ref())),
-        CounterStyle::Symbols { symbols, .. } => LayoutListMarkerType::Symbols(
-            symbols
-                .0
-                .iter()
-                .map(|symbol| match symbol {
-                    Symbol::String(value) => Arc::from(value.as_ref()),
-                    Symbol::Ident(value) => Arc::from(value.0.as_ref()),
-                })
-                .collect(),
-        ),
+        CounterStyle::Symbols { symbols, .. } => {
+            let mut text_symbols = Vec::with_capacity(symbols.0.len());
+            for symbol in symbols.0.iter() {
+                match symbol {
+                    Symbol::String(value) => text_symbols.push(Arc::from(value.as_ref())),
+                    Symbol::Ident(value) => text_symbols.push(Arc::from(value.0.as_ref())),
+                }
+            }
+            LayoutListMarkerType::Symbols(text_symbols)
+        }
     }
 }
 

@@ -7,7 +7,7 @@ mod node;
 mod queries;
 mod scripts;
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 pub use document::{
     Document, DocumentFragment, DocumentReadyState, DocumentTitleSetterTarget, DocumentType,
@@ -142,6 +142,7 @@ impl std::iter::FusedIterator for NativeDomNodes<'_> {}
 pub struct NativeDom {
     nodes: NativeNodeStorage,
     document_node_id: NativeNodeId,
+    inert_template_documents: HashMap<NativeNodeId, NativeNodeId>,
     stylesheet_candidate_registries: StylesheetCandidateRegistries,
     parse_errors: Vec<String>,
 }
@@ -158,17 +159,25 @@ impl NativeDom {
     }
 
     pub fn new_html(final_url: url::Url) -> Self {
+        Self::new_html_with_scripting(final_url, true)
+    }
+
+    pub fn new_html_with_scripting(final_url: url::Url, scripting_enabled: bool) -> Self {
         let document_node_id = NativeNodeId::new(0);
         let document_node = Node::new(
             document_node_id,
             None,
             None,
             NodeFlags::new(true),
-            NodeData::Document(Box::new(Document::new_html(final_url))),
+            NodeData::Document(Box::new(Document::new_html_with_scripting(
+                final_url,
+                scripting_enabled,
+            ))),
         );
         Self {
             nodes: NativeNodeStorage::from_node(document_node),
             document_node_id,
+            inert_template_documents: HashMap::new(),
             stylesheet_candidate_registries: StylesheetCandidateRegistries::default(),
             parse_errors: Vec::new(),
         }
@@ -186,6 +195,7 @@ impl NativeDom {
         Self {
             nodes: NativeNodeStorage::from_node(document_node),
             document_node_id,
+            inert_template_documents: HashMap::new(),
             stylesheet_candidate_registries: StylesheetCandidateRegistries::default(),
             parse_errors: Vec::new(),
         }
@@ -342,7 +352,7 @@ impl NativeDom {
             false,
         );
         if local_name.eq_ignore_ascii_case("template") {
-            let fragment = self.create_template_contents_fragment();
+            let fragment = self.create_template_contents_fragment(handle);
             if let Some(element) = self
                 .node_mut(handle)
                 .and_then(|node| node.data_mut().as_element_mut())
@@ -381,7 +391,7 @@ impl NativeDom {
             false,
         );
         if local_name.eq_ignore_ascii_case("template") {
-            let fragment = self.create_template_contents_fragment();
+            let fragment = self.create_template_contents_fragment(handle);
             if let Some(element) = self
                 .node_mut(handle)
                 .and_then(|node| node.data_mut().as_element_mut())
@@ -485,33 +495,91 @@ impl NativeDom {
         owner_document: NativeNodeId,
     ) -> NativeNodeId {
         self.create_node(
-            NodeData::DocumentFragment(DocumentFragment),
+            NodeData::DocumentFragment(DocumentFragment::default()),
             Some(owner_document),
             false,
             false,
         )
     }
 
-    pub fn create_template_contents_fragment(&mut self) -> NativeNodeId {
-        self.create_template_contents_fragment_for_document(self.document_node_id)
+    pub fn create_template_contents_fragment(&mut self, host: NativeNodeId) -> NativeNodeId {
+        self.create_template_contents_fragment_for_document(self.document_node_id, Some(host))
+    }
+
+    pub fn is_inert_template_document(&self, document_handle: NativeNodeId) -> bool {
+        self.inert_template_documents.get(&document_handle) == Some(&document_handle)
     }
 
     pub fn create_template_contents_fragment_for_document(
         &mut self,
         document_handle: NativeNodeId,
+        host: Option<NativeNodeId>,
     ) -> NativeNodeId {
-        let url = self
-            .node(document_handle)
-            .and_then(Node::as_document)
-            .map(|document| document.url().clone())
-            .unwrap_or_else(|| url::Url::parse("about:blank").expect("about:blank is valid"));
-        let owner_document = self.create_node(
-            NodeData::Document(Box::new(Document::new_html(url))),
-            None,
+        let owner_document = self.appropriate_template_contents_owner_document(document_handle);
+        self.create_node(
+            NodeData::DocumentFragment(DocumentFragment::new(host)),
+            Some(owner_document),
             false,
             false,
-        );
-        self.create_document_fragment_for_document(owner_document)
+        )
+    }
+
+    pub fn set_document_fragment_host(
+        &mut self,
+        fragment: NativeNodeId,
+        host: NativeNodeId,
+    ) -> bool {
+        let Some(fragment) = self
+            .node_mut(fragment)
+            .and_then(|node| node.data_mut().as_document_fragment_mut())
+        else {
+            return false;
+        };
+        if fragment.host() == Some(host) {
+            return false;
+        }
+        fragment.set_host(host);
+        true
+    }
+
+    pub(crate) fn appropriate_template_contents_owner_document(
+        &mut self,
+        document_handle: NativeNodeId,
+    ) -> NativeNodeId {
+        if let Some(owner_document) = self.inert_template_documents.get(&document_handle).copied() {
+            owner_document
+        } else {
+            let (url, is_html_document) = self
+                .node(document_handle)
+                .and_then(Node::as_document)
+                .map(|document| (document.url().clone(), document.is_html_document()))
+                .unwrap_or_else(|| {
+                    (
+                        url::Url::parse("about:blank").expect("about:blank is valid"),
+                        true,
+                    )
+                });
+            let inert_document = if is_html_document {
+                Document::new_html_with_scripting(url, false)
+            } else {
+                let mut document = Document::new_xml(url);
+                document.set_scripting_enabled(false);
+                document
+            };
+            let owner_document = self.create_node(
+                NodeData::Document(Box::new(inert_document)),
+                None,
+                false,
+                false,
+            );
+            self.inert_template_documents
+                .insert(document_handle, owner_document);
+            // Documents created by this algorithm reuse themselves for nested
+            // template contents instead of allocating another inert document.
+            self.inert_template_documents
+                .insert(owner_document, owner_document);
+            owner_document
+        }
     }
 
     pub fn create_processing_instruction(&mut self, target: &str, data: &str) -> NativeNodeId {
@@ -551,6 +619,28 @@ impl NativeDom {
                 return true;
             }
             current = self.parent_node(parent);
+        }
+        false
+    }
+
+    pub fn is_host_including_inclusive_ancestor(
+        &self,
+        candidate_ancestor: NativeNodeId,
+        node_id: NativeNodeId,
+    ) -> bool {
+        let mut current = Some(node_id);
+        while let Some(handle) = current {
+            if handle == candidate_ancestor {
+                return true;
+            }
+            let Some(node) = self.node(handle) else {
+                return false;
+            };
+            current = node.parent_node().or_else(|| {
+                node.data()
+                    .as_document_fragment()
+                    .and_then(DocumentFragment::host)
+            });
         }
         false
     }
@@ -1311,6 +1401,192 @@ mod tests {
     }
 
     #[test]
+    fn parser_form_owner_resets_when_the_control_moves_without_its_owner() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let first_form = host.create_element("form");
+        let parser_form = host.create_element("form");
+        let input = host.create_parser_element_without_attributes(
+            "input".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+
+        assert!(host.append_child(body, first_form));
+        assert!(host.append_child(body, parser_form));
+        assert!(host.associate_parser_form_owner(input, parser_form));
+        assert!(host.append_child(parser_form, input));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+
+        assert!(host.append_child(first_form, input));
+        assert_eq!(host.form_control_owner(input), Some(first_form));
+        assert_eq!(
+            host.node(input)
+                .and_then(Node::as_element)
+                .and_then(Element::parser_associated_form_owner),
+            None
+        );
+    }
+
+    #[test]
+    fn parser_form_owner_survives_only_while_control_and_owner_move_together() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let destination = host.create_element("div");
+        let subtree = host.create_element("section");
+        let parser_form = host.create_element("form");
+        let control_container = host.create_element("div");
+        let input = host.create_parser_element_without_attributes(
+            "input".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+
+        assert!(host.append_child(body, destination));
+        assert!(host.append_child(body, subtree));
+        assert!(host.append_child(subtree, parser_form));
+        assert!(host.append_child(subtree, control_container));
+        assert!(host.associate_parser_form_owner(input, parser_form));
+        assert!(host.append_child(control_container, input));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+
+        assert!(host.remove_child(body, subtree));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+        assert!(host.append_child(destination, subtree));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+
+        assert!(host.append_child(destination, input));
+        assert_eq!(host.form_control_owner(input), None);
+    }
+
+    #[test]
+    fn moving_parser_form_without_its_control_resets_the_external_control() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let destination = host.create_element("div");
+        let parser_form = host.create_element("form");
+        let input = host.create_parser_element_without_attributes(
+            "input".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+
+        assert!(host.append_child(body, destination));
+        assert!(host.append_child(body, parser_form));
+        assert!(host.associate_parser_form_owner(input, parser_form));
+        assert!(host.append_child(body, input));
+        assert_eq!(host.form_control_owner(input), Some(parser_form));
+
+        assert!(host.append_child(destination, parser_form));
+        assert_eq!(host.form_control_owner(input), None);
+        assert_eq!(
+            host.node(input)
+                .and_then(Node::as_element)
+                .and_then(Element::parser_associated_form_owner),
+            None
+        );
+    }
+
+    #[test]
+    fn disconnected_form_attribute_uses_only_a_nearest_ancestor_form() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let form = host.create_element("form");
+        let outside = host.create_element("div");
+        let outside_input = host.create_element("input");
+        let nested_input = host.create_element("input");
+
+        assert!(host.set_attribute(form, "id", "owner"));
+        assert!(host.set_attribute(outside_input, "form", "owner"));
+        assert!(host.set_attribute(nested_input, "form", "missing"));
+        assert!(host.append_child(body, form));
+        assert!(host.append_child(body, outside));
+        assert!(host.append_child(outside, outside_input));
+        assert!(host.append_child(form, nested_input));
+        assert_eq!(host.form_control_owner(outside_input), Some(form));
+
+        assert!(host.remove_child(body, outside));
+        assert!(!host.is_connected_to_document(outside_input));
+        assert_eq!(host.form_control_owner(outside_input), None);
+        assert!(host.remove_child(body, form));
+        assert!(!host.is_connected_to_document(nested_input));
+        assert_eq!(host.form_control_owner(nested_input), Some(form));
+    }
+
+    #[test]
+    fn image_form_owner_tracks_parser_and_ancestor_without_becoming_listed() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().expect("document body");
+        let parser_form = host.create_element("form");
+        let ancestor_form = host.create_element("form");
+        let image = host.create_parser_element_without_attributes(
+            "img".to_owned(),
+            "http://www.w3.org/1999/xhtml".to_owned(),
+            None,
+        );
+
+        assert!(host.set_attribute(ancestor_form, "id", "attribute-owner"));
+        assert!(host.append_child(body, parser_form));
+        assert!(host.append_child(body, ancestor_form));
+        assert!(host.associate_parser_form_owner(image, parser_form));
+        assert!(host.append_child(body, image));
+        assert_eq!(host.builtin_form_associated_owner(image), Some(parser_form));
+        assert_eq!(host.form_control_owner(image), None);
+        assert!(host.form_control_elements(parser_form).is_empty());
+
+        assert!(host.set_attribute(image, "form", "attribute-owner"));
+        assert_eq!(host.builtin_form_associated_owner(image), Some(parser_form));
+
+        assert!(host.append_child(ancestor_form, image));
+        assert_eq!(
+            host.builtin_form_associated_owner(image),
+            Some(ancestor_form)
+        );
+        assert_eq!(
+            host.node(image)
+                .and_then(Node::as_element)
+                .and_then(Element::parser_associated_form_owner),
+            None
+        );
+        assert!(host.form_control_elements(ancestor_form).is_empty());
+    }
+
+    #[test]
+    fn secondary_document_form_attribute_remains_authoritative() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let document = host.create_detached_html_document();
+        let mut create_element = |local_name: &str| {
+            host.create_parser_element_without_attributes_for_document(
+                document,
+                local_name.to_owned(),
+                "http://www.w3.org/1999/xhtml".to_owned(),
+                None,
+            )
+        };
+        let root = create_element("html");
+        let form = create_element("form");
+        let external_input = create_element("input");
+        let nested_input = create_element("input");
+
+        assert!(host.set_attribute(form, "id", "owner"));
+        assert!(host.set_attribute(external_input, "form", "owner"));
+        assert!(host.set_attribute(nested_input, "form", ""));
+        assert!(host.append_child(document, root));
+        assert!(host.append_child(root, form));
+        assert!(host.append_child(root, external_input));
+        assert!(host.append_child(form, nested_input));
+
+        assert!(host.is_connected_to_document(external_input));
+        assert_eq!(host.form_control_owner(external_input), Some(form));
+        assert_eq!(host.form_control_owner(nested_input), None);
+    }
+
+    #[test]
     fn native_dom_select_queries_use_effective_selectedness() {
         let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
         let document = host.document_node_id();
@@ -1379,6 +1655,163 @@ mod tests {
             host.dom()
                 .select_selected_option_elements(listbox)
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn select_option_list_uses_option_nearest_ancestor_select() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let document = host.document_node_id();
+        let parent_select = host.create_element("select");
+        let child_select = host.create_element("select");
+        assert!(host.append_child(document, parent_select));
+        assert!(host.append_child(parent_select, child_select));
+
+        let normal_option = host.create_element("option");
+        let nested_option = host.create_element("option");
+        assert!(host.append_child(child_select, normal_option));
+        assert!(host.append_child(normal_option, nested_option));
+
+        let div = host.create_element("div");
+        let div_option = host.create_element("option");
+        assert!(host.append_child(child_select, div));
+        assert!(host.append_child(div, div_option));
+
+        let hr = host.create_element("hr");
+        let hr_option = host.create_element("option");
+        assert!(host.append_child(child_select, hr));
+        assert!(host.append_child(hr, hr_option));
+
+        let datalist = host.create_element("datalist");
+        let datalist_option = host.create_element("option");
+        assert!(host.append_child(child_select, datalist));
+        assert!(host.append_child(datalist, datalist_option));
+
+        let optgroup = host.create_element("optgroup");
+        let optgroup_div = host.create_element("div");
+        let optgroup_option = host.create_element("option");
+        let nested_optgroup = host.create_element("optgroup");
+        let nested_optgroup_option = host.create_element("option");
+        assert!(host.append_child(child_select, optgroup));
+        assert!(host.append_child(optgroup, optgroup_div));
+        assert!(host.append_child(optgroup_div, optgroup_option));
+        assert!(host.append_child(optgroup, nested_optgroup));
+        assert!(host.append_child(nested_optgroup, nested_optgroup_option));
+
+        assert!(host.select_option_elements(parent_select).is_empty());
+        assert_eq!(
+            host.select_option_elements(child_select),
+            vec![normal_option, div_option, optgroup_option]
+        );
+        for option in [normal_option, div_option, optgroup_option] {
+            assert_eq!(
+                host.option_nearest_ancestor_select(option),
+                Some(child_select)
+            );
+        }
+        for option in [
+            nested_option,
+            hr_option,
+            datalist_option,
+            nested_optgroup_option,
+        ] {
+            assert_eq!(host.option_nearest_ancestor_select(option), None);
+        }
+
+        assert!(host.set_attribute(optgroup, "disabled", ""));
+        assert!(host.option_is_disabled(optgroup_option));
+        for option in [
+            normal_option,
+            nested_option,
+            hr_option,
+            datalist_option,
+            nested_optgroup_option,
+        ] {
+            assert!(!host.option_is_disabled(option));
+        }
+    }
+
+    #[test]
+    fn selectedcontent_owner_rejects_recursive_clone_boundaries() {
+        let url = url::Url::parse("https://selectedcontent-owner.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+
+        let select = host.create_element("select");
+        assert!(host.append_child(body, select));
+        assert!(host.select_selectedcontent_elements(select).is_empty());
+
+        let button = host.create_element("button");
+        let selectedcontent = host.create_element("selectedcontent");
+        assert!(host.append_child(select, button));
+        assert!(host.append_child(button, selectedcontent));
+        assert_eq!(
+            host.selectedcontent_nearest_ancestor_select(selectedcontent),
+            Some(select)
+        );
+
+        let option = host.create_element("option");
+        let option_selectedcontent = host.create_element("selectedcontent");
+        assert!(host.append_child(select, option));
+        assert!(host.append_child(option, option_selectedcontent));
+
+        let nested_selectedcontent = host.create_element("selectedcontent");
+        assert!(host.append_child(selectedcontent, nested_selectedcontent));
+
+        let nested_select = host.create_element("select");
+        let nested_select_selectedcontent = host.create_element("selectedcontent");
+        assert!(host.append_child(select, nested_select));
+        assert!(host.append_child(nested_select, nested_select_selectedcontent));
+
+        for rejected in [
+            option_selectedcontent,
+            nested_selectedcontent,
+            nested_select_selectedcontent,
+        ] {
+            assert_eq!(host.selectedcontent_nearest_ancestor_select(rejected), None);
+        }
+        assert_eq!(
+            host.select_selectedcontent_elements(select),
+            vec![selectedcontent]
+        );
+
+        assert!(host.remove_child(button, selectedcontent));
+        assert!(host.select_selectedcontent_elements(select).is_empty());
+        assert!(host.append_child(button, selectedcontent));
+        assert_eq!(
+            host.select_selectedcontent_elements(select),
+            vec![selectedcontent]
+        );
+    }
+
+    #[test]
+    fn selectedcontent_query_index_preserves_detached_subtree_order_and_namespace() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let select = host.create_element("select");
+        assert!(host.select_selectedcontent_elements(select).is_empty());
+
+        let first_button = host.create_element("button");
+        let first = host.create_element("selectedcontent");
+        let second_button = host.create_element("button");
+        let second = host.create_element("selectedcontent");
+        let foreign = host
+            .create_element_ns(Some("urn:selectedcontent-test"), "selectedcontent")
+            .expect("foreign selectedcontent element");
+        assert!(host.append_child(select, first_button));
+        assert!(host.append_child(first_button, first));
+        assert!(host.append_child(select, second_button));
+        assert!(host.append_child(second_button, second));
+        assert!(host.append_child(select, foreign));
+
+        assert_eq!(
+            host.select_selectedcontent_elements(select),
+            vec![first, second]
+        );
+        assert!(host.insert_before(select, second_button, Some(first_button)));
+        assert_eq!(
+            host.select_selectedcontent_elements(select),
+            vec![second, first]
         );
     }
 
@@ -2280,6 +2713,30 @@ mod tests {
             .and_then(Node::owner_document)
             .expect("template content owner document");
         assert_ne!(content_owner, dom.document_node_id());
+        assert_eq!(
+            dom.node(content_owner)
+                .and_then(Node::as_document)
+                .map(Document::scripting_enabled),
+            Some(false)
+        );
+        assert!(dom.is_inert_template_document(content_owner));
+
+        let second_template = dom.create_element("template");
+        let second_content_owner = dom
+            .node(second_template)
+            .and_then(Node::as_element)
+            .and_then(Element::template_contents)
+            .and_then(|contents| dom.node(contents))
+            .and_then(Node::owner_document)
+            .expect("second template content owner document");
+        assert_eq!(second_content_owner, content_owner);
+
+        let nested_content =
+            dom.create_template_contents_fragment_for_document(content_owner, None);
+        assert_eq!(
+            dom.node(nested_content).and_then(Node::owner_document),
+            Some(content_owner)
+        );
 
         let child = dom.create_element("span");
         assert_eq!(
@@ -2300,6 +2757,46 @@ mod tests {
             dom.node(child).and_then(Node::owner_document),
             Some(dom.document_node_id())
         );
+    }
+
+    #[test]
+    fn template_content_host_participates_in_hierarchy_checks() {
+        let mut dom = NativeDom::new_html(test_url());
+        let document = dom.document_node_id();
+        let parent = dom.create_element("div");
+        let template = dom.create_element("template");
+        let content = dom
+            .node(template)
+            .and_then(Node::as_element)
+            .and_then(Element::template_contents)
+            .expect("template content");
+        let span = dom.create_element("span");
+
+        assert!(dom.append_child(document, parent));
+        assert!(dom.append_child(parent, template));
+        assert!(dom.append_child(content, span));
+        assert_eq!(
+            dom.node(content)
+                .map(Node::data)
+                .and_then(NodeData::as_document_fragment)
+                .and_then(DocumentFragment::host),
+            Some(template)
+        );
+        assert!(dom.is_host_including_inclusive_ancestor(template, span));
+        assert!(dom.is_host_including_inclusive_ancestor(parent, span));
+
+        for (insertion_parent, child) in [
+            (content, parent),
+            (content, template),
+            (span, parent),
+            (span, template),
+        ] {
+            assert!(!dom.append_child(insertion_parent, child));
+        }
+
+        assert_eq!(dom.parent_node(parent), Some(document));
+        assert_eq!(dom.parent_node(template), Some(parent));
+        assert_eq!(dom.parent_node(span), Some(content));
     }
 
     #[test]

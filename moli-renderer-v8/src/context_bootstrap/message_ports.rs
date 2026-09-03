@@ -33,7 +33,7 @@ pub(super) use event_target::{
 pub(super) use methods::{
     message_port_close_callback, message_port_post_message_callback, message_port_start_callback,
 };
-pub(super) use scheduling::schedule_host_callback;
+pub(super) use scheduling::{schedule_host_callback, schedule_scope_callback};
 pub(in crate::context_bootstrap) use state::install_message_port_template_bindings;
 pub(crate) use state::{
     MessagePortRealmBinding, detach_message_port_owner_for_transfer,

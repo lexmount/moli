@@ -1,4 +1,3 @@
-use super::input_type::{canonical_input_type, input_type_supports_value_as_number};
 use moli_html_input_temporal::{
     MS_PER_DAY, MS_PER_SECOND, MS_PER_WEEK, WEEK_INPUT_STEP_BASE, date_input_milliseconds,
     date_input_value_from_milliseconds, datetime_local_input_milliseconds,
@@ -6,6 +5,7 @@ use moli_html_input_temporal::{
     month_input_value_from_number, time_input_milliseconds, time_input_value_from_milliseconds,
     week_input_milliseconds, week_input_value_from_milliseconds,
 };
+use moli_html_input_type::InputType;
 
 pub fn is_valid_number_input_value(value: &str) -> bool {
     if value.is_empty() {
@@ -175,31 +175,31 @@ pub fn parse_html_floating_point_prefix(value: &str) -> Option<f64> {
     value[..end].parse::<f64>().ok()
 }
 
-pub fn parse_input_numeric_value(input_type: &str, value: &str) -> Option<f64> {
-    match canonical_input_type(input_type) {
-        "number" | "range" => parse_finite_number(value),
-        "date" => date_input_milliseconds(value),
-        "time" => time_input_milliseconds(value),
-        "datetime-local" => datetime_local_input_milliseconds(value),
-        "month" => month_input_number(value),
-        "week" => week_input_milliseconds(value),
+pub fn parse_input_numeric_value(input_type: InputType, value: &str) -> Option<f64> {
+    match input_type {
+        InputType::Number | InputType::Range => parse_finite_number(value),
+        InputType::Date => date_input_milliseconds(value),
+        InputType::Time => time_input_milliseconds(value),
+        InputType::DatetimeLocal => datetime_local_input_milliseconds(value),
+        InputType::Month => month_input_number(value),
+        InputType::Week => week_input_milliseconds(value),
         _ => None,
     }
 }
 
-pub fn input_number_to_value_string(input_type: &str, value: f64) -> Option<String> {
-    match canonical_input_type(input_type) {
-        "number" | "range" => Some(value.to_string()),
-        "date" => date_input_value_from_milliseconds(value),
-        "time" => time_input_value_from_milliseconds(value),
-        "datetime-local" => datetime_local_input_value_from_milliseconds(value),
-        "month" => month_input_value_from_number(value),
-        "week" => week_input_value_from_milliseconds(value),
+pub fn input_number_to_value_string(input_type: InputType, value: f64) -> Option<String> {
+    match input_type {
+        InputType::Number | InputType::Range => Some(value.to_string()),
+        InputType::Date => date_input_value_from_milliseconds(value),
+        InputType::Time => time_input_value_from_milliseconds(value),
+        InputType::DatetimeLocal => datetime_local_input_value_from_milliseconds(value),
+        InputType::Month => month_input_value_from_number(value),
+        InputType::Week => week_input_value_from_milliseconds(value),
         _ => None,
     }
 }
 
-pub fn input_step(input_type: &str, step: Option<&str>) -> Option<f64> {
+pub fn input_step(input_type: InputType, step: Option<&str>) -> Option<f64> {
     let Some(step) = step else {
         return Some(default_input_step(input_type));
     };
@@ -214,35 +214,33 @@ pub fn input_step(input_type: &str, step: Option<&str>) -> Option<f64> {
     )
 }
 
-fn default_input_step(input_type: &str) -> f64 {
-    match canonical_input_type(input_type) {
-        "date" => MS_PER_DAY,
-        "time" => 60.0 * MS_PER_SECOND,
-        "datetime-local" => 60.0 * MS_PER_SECOND,
-        "week" => MS_PER_WEEK,
+fn default_input_step(input_type: InputType) -> f64 {
+    match input_type {
+        InputType::Date => MS_PER_DAY,
+        InputType::Time | InputType::DatetimeLocal => 60.0 * MS_PER_SECOND,
+        InputType::Week => MS_PER_WEEK,
         _ => 1.0,
     }
 }
 
-fn input_step_scale(input_type: &str) -> f64 {
-    match canonical_input_type(input_type) {
-        "date" => MS_PER_DAY,
-        "time" => MS_PER_SECOND,
-        "datetime-local" => MS_PER_SECOND,
-        "week" => MS_PER_WEEK,
+fn input_step_scale(input_type: InputType) -> f64 {
+    match input_type {
+        InputType::Date => MS_PER_DAY,
+        InputType::Time | InputType::DatetimeLocal => MS_PER_SECOND,
+        InputType::Week => MS_PER_WEEK,
         _ => 1.0,
     }
 }
 
-pub fn input_step_base(input_type: &str, min: Option<&str>, value: Option<&str>) -> f64 {
+pub fn input_step_base(input_type: InputType, min: Option<&str>, value: Option<&str>) -> f64 {
     min.and_then(|value| parse_input_numeric_value(input_type, value))
         .or_else(|| value.and_then(|value| parse_input_numeric_value(input_type, value)))
         .unwrap_or_else(|| default_input_step_base(input_type))
 }
 
-fn default_input_step_base(input_type: &str) -> f64 {
-    match canonical_input_type(input_type) {
-        "week" => WEEK_INPUT_STEP_BASE,
+fn default_input_step_base(input_type: InputType) -> f64 {
+    match input_type {
+        InputType::Week => WEEK_INPUT_STEP_BASE,
         _ => 0.0,
     }
 }
@@ -254,7 +252,7 @@ pub fn number_aligns_to_step(value: f64, base: f64, step: f64) -> bool {
 }
 
 pub fn input_range_underflow(
-    input_type: &str,
+    input_type: InputType,
     value: f64,
     min: Option<&str>,
     max: Option<&str>,
@@ -267,7 +265,7 @@ pub fn input_range_underflow(
 }
 
 pub fn input_range_overflow(
-    input_type: &str,
+    input_type: InputType,
     value: f64,
     min: Option<&str>,
     max: Option<&str>,
@@ -280,11 +278,11 @@ pub fn input_range_overflow(
 }
 
 fn reversed_time_range(
-    input_type: &str,
+    input_type: InputType,
     min: Option<&str>,
     max: Option<&str>,
 ) -> Option<(f64, f64)> {
-    if canonical_input_type(input_type) != "time" {
+    if input_type != InputType::Time {
         return None;
     }
     let min = min.and_then(|min| parse_input_numeric_value(input_type, min))?;
@@ -328,7 +326,7 @@ pub enum InputStepError {
 
 #[derive(Clone, Copy, Debug)]
 pub struct InputStepState<'a> {
-    pub input_type: &'a str,
+    pub input_type: InputType,
     pub value: &'a str,
     pub min: Option<&'a str>,
     pub max: Option<&'a str>,
@@ -341,7 +339,7 @@ pub fn step_input_value(
     direction: InputStepDirection,
     n: f64,
 ) -> Result<InputStepOutcome, InputStepError> {
-    if !input_type_supports_value_as_number(state.input_type) {
+    if !state.input_type.supports_value_as_number() {
         return Err(InputStepError::Unsupported);
     }
     let Some(step) = input_step(state.input_type, state.step) else {

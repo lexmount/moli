@@ -6,7 +6,7 @@
       window.runtimeOwnedInOrderLoadOrder = [];
       const script = document.createElement("script");
       script.async = false;
-      script.src = "/assets/runtime_owned_in_order_load_slow.js";
+      script.src = "/assets/runtime_owned_in_order_load_after_dcl_gated.js";
       script.onload = () => {
         window.runtimeOwnedInOrderLoadOrder.push("load");
         queueMicrotask(() => {
@@ -21,6 +21,11 @@
         window.runtimeOwnedInOrderLoadOrder.push("dcl");
         window.runtimeOwnedInOrderLoadAfterDcl =
           window.runtimeOwnedInOrderLoadOrder.join(",");
+        if (!location.search.includes("manual-release")) {
+          void fetch(
+            "/compat/runtime-owned-external-in-order-load-after-domcontentloaded-release",
+          );
+        }
       });
       window.addEventListener("load", () => {
         window.runtimeOwnedInOrderLoadOrder.push("window-load");

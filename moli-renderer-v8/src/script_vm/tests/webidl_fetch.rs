@@ -2180,7 +2180,7 @@ fn transform_stream_controller_terminate_closes_readable_and_errors_writable() {
 }
 
 #[test]
-fn transform_stream_controller_terminate_after_readable_cancel_errors_writable_with_type_error() {
+fn transform_stream_controller_terminate_after_readable_cancel_preserves_cancel_result() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
     let initial = vm
@@ -2220,7 +2220,7 @@ fn transform_stream_controller_terminate_after_readable_cancel_errors_writable_w
         .expect("TransformStream terminate after cancel promises should settle");
     assert_eq!(
         settled,
-        r#"["cancel:TypeError","writer:TypeError:true:The transform stream has been terminated"]"#
+        r#"["cancel:resolved","writer:TypeError:true:The transform stream has been terminated"]"#
     );
 }
 

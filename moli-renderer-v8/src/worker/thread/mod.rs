@@ -73,9 +73,10 @@ use super::global_scope::{
     continue_pending_worker_fetch, continue_pending_worker_fetch_response,
     continue_pending_worker_xhr, continue_pending_worker_xhr_response,
     dispatch_nested_worker_event, dispatch_worker_csp_violation_event,
-    dispatch_worker_websocket_event, drain_service_worker_client_focus_result,
-    drain_service_worker_client_navigate_result, drain_service_worker_client_query_result,
-    drain_service_worker_clients_open_window_result, drain_service_worker_get_notifications_result,
+    dispatch_worker_csp_violation_event_for_state, dispatch_worker_websocket_event,
+    drain_service_worker_client_focus_result, drain_service_worker_client_navigate_result,
+    drain_service_worker_client_query_result, drain_service_worker_clients_open_window_result,
+    drain_service_worker_get_notifications_result,
     drain_service_worker_periodic_sync_get_tags_result,
     drain_service_worker_periodic_sync_registration_result,
     drain_service_worker_periodic_sync_unregistration_result,
@@ -610,7 +611,7 @@ fn start_worker_module_graph_fetch(
             worker_global_content_security_policies,
             worker_global_content_security_report_only_policies,
             worker_global_content_security_reporting_endpoints,
-            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerScript,
+            crate::content_security_policy::ContentSecurityPolicyResourceKind::WorkerDynamicModuleImport,
         ),
     };
     let initial_csp_report_only_violation =
@@ -755,7 +756,7 @@ fn start_worker_module_graph_fetch(
                     .elapsed()
                     .as_millis()
                     .min(u64::MAX as u128) as u64;
-                let (head, body, body_bytes) = response.into_parts();
+                let (head, _body, body_bytes) = response.into_parts();
                 let response_referrer_policy =
                     crate::referrer_policy::response_referrer_policy_from_headers(&head.headers);
                 let resource = WorkerScriptResource::from_response_parts(
@@ -769,7 +770,7 @@ fn start_worker_module_graph_fetch(
                 let source = if requested_kind == WorkerModuleKind::WebAssembly {
                     WorkerModuleSource::binary(body_bytes)
                 } else {
-                    WorkerModuleSource::text(body)
+                    WorkerModuleSource::text(moli_encoding::decode_utf8(&body_bytes))
                 };
                 Ok(WorkerModuleFetchedSource::new(final_url, source)
                     .with_resource(resource)
@@ -2618,6 +2619,23 @@ async fn worker_main(
                 let ctx = v8::Local::new(scope, &context);
                 let scope = &mut v8::ContextScope::new(scope, ctx);
                 dispatch_queued_worker_promise_rejections(scope);
+                perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
+                drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
+            }
+            WorkerLoopWake::Message(Some(
+                WorkerMessage::DispatchContentSecurityPolicyViolation(violation),
+            )) => {
+                if pending_module_bootstrap.is_some() {
+                    pending_bootstrap_messages.push_back(
+                        WorkerMessage::DispatchContentSecurityPolicyViolation(violation),
+                    );
+                    continue;
+                }
+                let scope = pin!(v8::HandleScope::new(worker_isolate.worker_isolate_mut()));
+                let scope = &mut scope.init();
+                let ctx = v8::Local::new(scope, &context);
+                let scope = &mut v8::ContextScope::new(scope, ctx);
+                dispatch_worker_csp_violation_event_for_state(scope, &state, &violation);
                 perform_worker_microtask_checkpoint_and_report_pending_promise_rejections(scope);
                 drain_worker_dynamic_module_imports(scope, &state, &module_graph_fetch_tx);
             }

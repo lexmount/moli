@@ -12,6 +12,7 @@ use axum::{
     response::Response,
 };
 use moli_core::page::RendererDocumentLifecycleMilestone;
+use moli_html_input_type::InputType;
 use moli_protocol::{
     DevToolsPageResidenceIdentity,
     devtools_runtime::{
@@ -3862,7 +3863,7 @@ pub(super) async fn webdriver_classic_is_element_selected(
                 Ok(value) => value.as_str().unwrap_or_default().to_ascii_lowercase(),
                 Err(error) => return classic_error_into_response(error),
             };
-            if input_type == "checkbox" || input_type == "radio" {
+            if InputType::from_attribute_value(Some(&input_type)).is_checkable() {
                 match webdriver_classic_element_property_value(
                     &state,
                     &binding,

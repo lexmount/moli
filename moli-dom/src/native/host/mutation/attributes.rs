@@ -3,6 +3,33 @@ use std::sync::Arc;
 use super::*;
 
 impl DomHost {
+    pub fn explicit_element_references(
+        &self,
+        handle: DomHandle,
+        attribute: &str,
+    ) -> Option<Vec<DomHandle>> {
+        self.node(handle)?
+            .as_element()?
+            .explicit_element_references(attribute)
+            .map(<[DomHandle]>::to_vec)
+    }
+
+    pub fn set_explicit_element_references(
+        &mut self,
+        handle: DomHandle,
+        attribute: &str,
+        references: Vec<DomHandle>,
+    ) -> bool {
+        let Some(element) = self
+            .node_mut(handle)
+            .and_then(|node| node.data_mut().as_element_mut())
+        else {
+            return false;
+        };
+        element.set_explicit_element_references(attribute, references);
+        true
+    }
+
     pub fn get_attribute(&self, handle: DomHandle, name: &str) -> Option<String> {
         self.dom.get_attribute(handle, name)
     }
@@ -27,6 +54,17 @@ impl DomHost {
 
     pub fn set_attribute(&mut self, handle: DomHandle, name: &str, value: &str) -> bool {
         self.set_attribute_effects(handle, name, value).did_change()
+    }
+
+    pub fn set_attribute_utf16_units(
+        &mut self,
+        handle: DomHandle,
+        name: &str,
+        value: &str,
+        units: Vec<u16>,
+    ) -> bool {
+        self.set_attribute_utf16_units_effects(handle, name, value, units)
+            .did_change()
     }
 
     pub fn set_attribute_ns(
@@ -57,6 +95,40 @@ impl DomHost {
         name: &str,
         value: &str,
     ) -> DomAttributeMutationOutcome {
+        self.set_attribute_mutation_outcome_with_utf16_units(handle, name, value, None)
+    }
+
+    pub fn set_attribute_utf16_units_effects(
+        &mut self,
+        handle: DomHandle,
+        name: &str,
+        value: &str,
+        units: Vec<u16>,
+    ) -> DomMutationEffects {
+        self.set_attribute_utf16_units_mutation_outcome(handle, name, value, units)
+            .into_effects()
+    }
+
+    pub fn set_attribute_utf16_units_mutation_outcome(
+        &mut self,
+        handle: DomHandle,
+        name: &str,
+        value: &str,
+        units: Vec<u16>,
+    ) -> DomAttributeMutationOutcome {
+        self.set_attribute_mutation_outcome_with_utf16_units(handle, name, value, Some(units))
+    }
+
+    fn set_attribute_mutation_outcome_with_utf16_units(
+        &mut self,
+        handle: DomHandle,
+        name: &str,
+        value: &str,
+        units: Option<Vec<u16>>,
+    ) -> DomAttributeMutationOutcome {
+        if name.eq_ignore_ascii_case("form") {
+            self.reset_parser_form_owner_for_form_attribute_mutation(handle);
+        }
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self.get_attribute(handle, name).map(Arc::from);
         let prior_slot_name = if name.eq_ignore_ascii_case("slot") {
@@ -91,7 +163,12 @@ impl DomHost {
                 )
             })
             .unwrap_or_default();
-        let changed = self.dom.set_attribute(handle, name, value);
+        let changed = if let Some(units) = units {
+            self.dom
+                .set_attribute_utf16_units(handle, name, value, units)
+        } else {
+            self.dom.set_attribute(handle, name, value)
+        };
         if changed {
             self.invalidate_shadow_slot_name_index_for_attribute(handle, None, name);
             self.sync_select_state_after_option_selected_attribute(handle, name);
@@ -177,7 +254,7 @@ impl DomHost {
         if !name.eq_ignore_ascii_case("selected") || !self.is_html_element_named(handle, "option") {
             return;
         }
-        let Some(select) = self.owner_select_for_option(handle) else {
+        let Some(select) = self.option_nearest_ancestor_select(handle) else {
             return;
         };
         if self
@@ -220,6 +297,9 @@ impl DomHost {
         local_name: &str,
         value: &str,
     ) -> DomAttributeMutationOutcome {
+        if namespace.is_none() && local_name.eq_ignore_ascii_case("form") {
+            self.reset_parser_form_owner_for_form_attribute_mutation(handle);
+        }
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self
             .get_attribute_ns(handle, namespace, local_name)
@@ -273,6 +353,9 @@ impl DomHost {
     ) -> DomAttributeMutationOutcome {
         let records_enabled = self.mutation_records_enabled();
         let prior_value = self.get_attribute(handle, name).map(Arc::from);
+        if prior_value.is_some() && name.eq_ignore_ascii_case("form") {
+            self.reset_parser_form_owner_for_form_attribute_mutation(handle);
+        }
         let prior_slot_name = if name.eq_ignore_ascii_case("slot") {
             self.node(handle)
                 .and_then(Node::as_element)
@@ -369,6 +452,9 @@ impl DomHost {
         let prior_value = self
             .get_attribute_ns(handle, namespace, local_name)
             .map(Arc::from);
+        if prior_value.is_some() && namespace.is_none() && local_name.eq_ignore_ascii_case("form") {
+            self.reset_parser_form_owner_for_form_attribute_mutation(handle);
+        }
         let removed = self.dom.remove_attribute_ns(handle, namespace, local_name);
         if removed {
             self.invalidate_shadow_slot_name_index_for_attribute(handle, namespace, local_name);

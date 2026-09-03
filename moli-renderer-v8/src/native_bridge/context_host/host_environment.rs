@@ -872,6 +872,15 @@ impl JsContextHost {
             .adopted_style_sheet_sources_for_document(document)
     }
 
+    pub(crate) fn document_has_adopted_style_sheet_sources(&self, document: DomHandle) -> bool {
+        self.style_engine
+            .document_has_adopted_style_sheet_sources(document)
+    }
+
+    pub(crate) fn document_has_style_state(&self, document: DomHandle) -> bool {
+        self.style_engine.document_has_style_state(document)
+    }
+
     pub(crate) fn sync_owner_style_sheet_text(&mut self, owner: DomHandle) {
         let css_text = self.dom_host().text_content(owner).unwrap_or_default();
         let dom_host = self.dom_host() as *const _;
@@ -1267,6 +1276,11 @@ impl JsContextHost {
         let dom_host = self.dom_host() as *const _;
         self.style_engine
             .shadow_root_adopted_style_sheet_sources_with_host(unsafe { &*dom_host }, root)
+    }
+
+    pub(crate) fn shadow_root_has_adopted_style_sheet_sources(&self, root: DomHandle) -> bool {
+        self.style_engine
+            .shadow_root_has_adopted_style_sheet_sources(self.dom_host(), root)
     }
 
     pub(crate) fn register_css_custom_property_for_document(
@@ -2111,6 +2125,16 @@ impl JsContextHost {
                 | StyloElementState::VALIDITY_STATES,
             old_state,
         );
+        if self
+            .dom_host()
+            .get_attribute(handle, "dir")
+            .is_some_and(|value| value.eq_ignore_ascii_case("auto"))
+        {
+            // The resolved direction is also synthesized into the CSS cascade as
+            // a presentation hint, so changing the value must rebuild the input's
+            // style even when no selector depends on :dir().
+            self.note_style_subtree_context_change(handle);
+        }
         for (container, old_state) in container_old_states {
             self.note_element_state_style_activity_with_old_state(
                 *container,
@@ -2201,10 +2225,42 @@ impl JsContextHost {
             .collect()
     }
 
+    fn validity_containers_for_child_list_mutations(
+        &self,
+        effects: &[StyleMutationEffect],
+    ) -> Vec<DomHandle> {
+        let mut containers = Vec::new();
+        for effect in effects {
+            let StyleMutationEffect::ChildList { parent, .. } = effect else {
+                continue;
+            };
+            let mut current = Some(*parent);
+            while let Some(handle) = current {
+                if self.dom_host().is_html_element_named(handle, "form")
+                    || self.dom_host().is_html_element_named(handle, "fieldset")
+                {
+                    push_unique_handle(&mut containers, handle);
+                }
+                current = self.dom_host().parent_node(handle);
+            }
+        }
+        containers
+    }
+
     pub(crate) fn note_style_mutation_effects(&mut self, effects: &[StyleMutationEffect]) {
         if style_mutation_effects_affect_layout_metric(effects) {
             self.clear_layout_rect_cache();
         }
+        let changed_iframe_attributes = effects.iter().filter_map(|effect| {
+            let StyleMutationEffect::Attribute { element, name, .. } = effect else {
+                return None;
+            };
+            (StyleAttributeImpact::for_attribute_name(name).affects_layout_metric()
+                && self.dom_host().is_html_element_named(*element, "iframe"))
+            .then_some(*element)
+        });
+        self.invalidate_published_frame_viewports(changed_iframe_attributes);
+        let validity_containers = self.validity_containers_for_child_list_mutations(effects);
         let dom_host = self.dom_host() as *const _;
         let emulated_media = self.emulated_media().clone();
         let viewport = self.style_viewport();
@@ -2214,6 +2270,16 @@ impl JsContextHost {
             &emulated_media,
             viewport,
         );
+        for container in validity_containers {
+            // Child-list effects are produced after the tree splice, so the
+            // previous aggregate validity is unavailable. An absent old state
+            // deliberately selects the conservative state invalidation path.
+            self.note_element_state_style_activity_with_old_state(
+                container,
+                StyloElementState::VALIDITY_STATES,
+                None,
+            );
+        }
     }
 
     pub(crate) fn note_element_inline_style_subtree_activity(&mut self, root: DomHandle) {
