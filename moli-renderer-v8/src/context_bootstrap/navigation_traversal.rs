@@ -39,9 +39,10 @@ use super::navigation_traversal_plan::{
     navigation_index_traversal_plan,
 };
 use super::navigation_window::{
-    navigation_document_can_update_current_entry, navigation_document_is_active,
-    navigation_unload_event_active, runtime_window_is_global, runtime_window_owner,
-    window_history_for_holder, window_location_for_holder, window_navigation_for_holder,
+    history_owner_if_fully_active, navigation_document_can_update_current_entry,
+    navigation_document_is_active, navigation_unload_event_active, runtime_window_is_global,
+    runtime_window_owner, window_history_for_holder, window_location_for_holder,
+    window_navigation_for_holder,
 };
 use super::*;
 use crate::webidl;
@@ -69,14 +70,19 @@ pub(super) fn history_go_callback<'s>(
         );
         return;
     }
-    let delta = if args.length() == 0 {
+    let action = if args.length() == 0 {
         Some(HistoryGoAction::Reload)
     } else {
         coerce_history_go_delta(scope, args.get(0))
     };
-    match delta {
-        Some(HistoryGoAction::Reload) => {
-            let owner = runtime_window_owner(scope, args.this());
+    let Some(action) = action else {
+        return;
+    };
+    let Some(owner) = history_owner_if_fully_active(scope, args.this()) else {
+        return;
+    };
+    match action {
+        HistoryGoAction::Reload => {
             let Some(location) = window_location_for_holder(scope, owner) else {
                 return;
             };
@@ -87,9 +93,8 @@ pub(super) fn history_go_callback<'s>(
                 None,
             );
         }
-        Some(HistoryGoAction::Traverse(delta)) => history_traverse(scope, args.this(), delta),
-        Some(HistoryGoAction::Noop) => {}
-        None => {}
+        HistoryGoAction::Traverse(delta) => history_traverse(scope, args.this(), delta),
+        HistoryGoAction::Noop => {}
     }
 }
 
@@ -98,6 +103,9 @@ pub(super) fn history_back_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if history_owner_if_fully_active(scope, args.this()).is_none() {
+        return;
+    }
     history_traverse(scope, args.this(), -1);
 }
 
@@ -106,6 +114,9 @@ pub(super) fn history_forward_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if history_owner_if_fully_active(scope, args.this()).is_none() {
+        return;
+    }
     history_traverse(scope, args.this(), 1);
 }
 
