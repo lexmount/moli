@@ -1,6 +1,7 @@
 use super::super::ChildBrowsingContextNavigationRequest;
 use super::*;
 use crate::dom::native::Node;
+use crate::native_bridge::element::parse_url_with_document_query_encoding;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChildFrameOwnerElementKind {
@@ -166,6 +167,12 @@ impl JsContextHost {
             .unwrap_or_else(|_| Url::parse("about:blank").expect("static about:blank should parse"))
     }
 
+    fn resolve_child_frame_owner_attribute_url(&self, handle: DomHandle, raw: &str) -> Url {
+        let base = self.document_base_url_for_child_context(handle);
+        parse_url_with_document_query_encoding(self, handle, &base, raw)
+            .unwrap_or_else(|_| Url::parse("about:blank").expect("static about:blank should parse"))
+    }
+
     pub(in crate::native_bridge::context_host) fn child_browsing_context_bootstrap_for_handle(
         &self,
         handle: DomHandle,
@@ -206,7 +213,7 @@ impl JsContextHost {
                 .then_some(ChildBrowsingContextBootstrap::AboutBlank);
         }
 
-        let url = self.resolve_child_browsing_context_url(handle, raw_url);
+        let url = self.resolve_child_frame_owner_attribute_url(handle, raw_url);
         if !kind.always_hosts_document()
             && (self.embedded_content_is_inside_media_element(handle)
                 || !self.embedded_content_selects_nested_document(handle, raw_url, &url))

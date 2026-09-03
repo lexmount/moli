@@ -11257,6 +11257,51 @@ return [
 }
 
 #[test]
+fn iframe_src_navigation_uses_owner_document_encoding_for_query() {
+    let mut vm = new_storage_test_vm("https://iframe-src-encoding.test/page.html");
+    vm.document_runtime
+        .set_document_character_set("windows-1252");
+
+    let reflected_src = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.id = "encoded-src-frame";
+  frame.src = "resources/frame.html?\u00DF";
+  (document.body || document.documentElement || document).appendChild(frame);
+  return frame.src;
+})()
+"#,
+        )
+        .expect("legacy-encoded iframe src setup should evaluate");
+    assert_eq!(
+        reflected_src,
+        "https://iframe-src-encoding.test/resources/frame.html?%DF"
+    );
+
+    let child_handle = vm
+        .document_runtime
+        .dom_host()
+        .element_handle_by_id("encoded-src-frame")
+        .expect("encoded src iframe owner");
+    let attribute_bootstrap = vm
+        ._context_host
+        .borrow()
+        .child_browsing_context_attribute_bootstrap_for_test(child_handle)
+        .expect("encoded src attribute bootstrap should exist");
+    assert!(
+        matches!(
+            attribute_bootstrap,
+            crate::native_bridge::ChildBrowsingContextBootstrap::Url(ref url)
+                if url.as_str()
+                    == "https://iframe-src-encoding.test/resources/frame.html?%DF"
+        ),
+        "iframe navigation must use the same owner-document encoding as its reflected src: {attribute_bootstrap:?}"
+    );
+}
+
+#[test]
 fn no_src_iframe_initial_about_blank_load_is_synchronous_at_connection() {
     let mut vm = new_storage_test_vm("https://iframe-initial-load-timing.test/");
 
