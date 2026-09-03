@@ -1,5 +1,4 @@
 use super::devtools_session::DevToolsNetworkSessionState;
-use super::emulation::EmulatedMediaOverrides;
 use super::javascript_dialog::TargetJavaScriptDialogState;
 use super::page_target_host::PageTargetHost;
 use crate::domains::audits_output_state::TargetAuditsSessionState;
@@ -159,11 +158,12 @@ impl PageTargetHost {
         self.devtools_sessions.clear_network_state(session_key);
     }
 
-    pub(crate) fn clear_devtools_emulation_state(
+    pub(crate) fn clear_devtools_emulation_policy_state(
         &mut self,
         session_key: &moli_page_types::DevToolsSessionKey,
     ) {
-        self.devtools_sessions.clear_emulation_state(session_key);
+        self.devtools_sessions
+            .clear_emulation_policy_state(session_key);
     }
 
     pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
@@ -184,17 +184,9 @@ impl PageTargetHost {
             || self.tls_verify_host_override.is_some()
             || self.base_locale_override.is_some()
             || self.base_timezone_override.is_some()
-            || self.network_conditions.is_some()
-            || self.geolocation_override.is_some()
-            || self.emulated_media != EmulatedMediaOverrides::default()
-            || self.emulated_device_metrics.is_some()
-            || self.cpu_throttling_rate != 1.0
+            || self.effective_emulation_state != super::EffectiveTargetEmulationState::default()
             || self.input_intercept_drags_enabled
             || self.input_drag_intercepted
-            || self.touch_emulation_enabled
-            || self.emit_touch_events_for_mouse
-            || self.focus_emulation_enabled
-            || self.script_execution_disabled
             || self.css_enabled
             || self.fetch_owner.config_snapshot() != super::fetch::TargetFetchConfig::default()
     }
@@ -209,15 +201,8 @@ impl PageTargetHost {
         self.http_proxy_override = None;
         self.http_no_proxy_override = None;
         self.tls_verify_host_override = None;
-        self.network_conditions = None;
-        self.geolocation_override = None;
-        self.emulated_device_metrics = None;
         self.input_intercept_drags_enabled = false;
         self.input_drag_intercepted = false;
-        self.touch_emulation_enabled = false;
-        self.emit_touch_events_for_mouse = false;
-        self.focus_emulation_enabled = false;
-        self.script_execution_disabled = false;
         self.css_enabled = false;
     }
 }
@@ -746,6 +731,11 @@ mod tests {
                 None,
             ),
         );
+        state
+            .devtools_sessions
+            .primary_mut()
+            .emulation_session_state
+            .cpu_throttling_rate = 4.0;
         let effective = state.effective_policy();
         assert_eq!(effective.locale_override(), Some("fr-FR"));
         assert_eq!(effective.timezone_override(), Some("Europe/Paris"));
@@ -757,10 +747,19 @@ mod tests {
         );
 
         state.clear_devtools_network_state(&DevToolsSessionKey::Primary);
-        state.clear_devtools_emulation_state(&DevToolsSessionKey::Primary);
+        state.clear_devtools_emulation_policy_state(&DevToolsSessionKey::Primary);
         let effective = state.effective_policy();
         assert_eq!(effective.locale_override(), Some("en-GB"));
         assert_eq!(effective.timezone_override(), Some("Europe/London"));
+        assert_eq!(
+            state
+                .devtools_sessions
+                .primary()
+                .emulation_session_state
+                .cpu_throttling_rate,
+            4.0,
+            "clearing policy contributions must leave the handler's renderer state intact"
+        );
         assert_eq!(
             effective
                 .browser_identity_override()

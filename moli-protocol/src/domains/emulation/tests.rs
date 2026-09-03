@@ -274,6 +274,7 @@ async fn script_execution_disabled_completes_through_io_pending_dispatch() {
             .as_ref()
             .unwrap()
             .active_page_target()
+            .effective_emulation_state
             .script_execution_disabled
     );
 }
@@ -317,6 +318,7 @@ async fn attached_session_first_io_emulation_response_uses_its_session_host() {
             .as_ref()
             .expect("browser context")
             .active_page_target()
+            .effective_emulation_state
             .script_execution_disabled
     );
 }
@@ -390,6 +392,7 @@ async fn emulated_media_can_complete_through_pending_command_dispatch() {
         .as_ref()
         .unwrap()
         .active_page_target()
+        .effective_emulation_state
         .emulated_media;
     assert_eq!(media.media.as_deref(), Some("screen"));
     assert_eq!(media.color_scheme.as_deref(), Some("dark"));
@@ -829,15 +832,29 @@ async fn pure_state_emulation_commands_complete_through_command_dispatch() {
     }
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(browser_context.active_page_target().focus_emulation_enabled);
-    assert!(browser_context.active_page_target().touch_emulation_enabled);
     assert!(
         browser_context
             .active_page_target()
+            .effective_emulation_state
+            .focus_emulation_enabled
+    );
+    assert!(
+        browser_context
+            .active_page_target()
+            .effective_emulation_state
+            .touch_emulation_enabled
+    );
+    assert!(
+        browser_context
+            .active_page_target()
+            .effective_emulation_state
             .emit_touch_events_for_mouse
     );
     assert_eq!(
-        browser_context.active_page_target().cpu_throttling_rate,
+        browser_context
+            .active_page_target()
+            .effective_emulation_state
+            .cpu_throttling_rate,
         1.0
     );
 }
@@ -865,6 +882,7 @@ async fn set_cpu_throttling_rate_rejects_invalid_params() {
             .as_ref()
             .expect("browser context")
             .active_page_target()
+            .effective_emulation_state
             .cpu_throttling_rate,
         1.0
     );
@@ -935,6 +953,7 @@ async fn live_apply_emulation_commands_without_loaded_page_do_not_use_legacy_fal
             .as_ref()
             .expect("browser context")
             .active_page_target()
+            .effective_emulation_state
             .cpu_throttling_rate,
         2.5
     );
@@ -1070,6 +1089,7 @@ async fn live_cpu_throttling_rate_uses_pending_command_dispatch() {
             .as_ref()
             .expect("browser context")
             .active_page_target()
+            .effective_emulation_state
             .cpu_throttling_rate,
         3.0
     );
@@ -1296,6 +1316,141 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn multi_session_emulation_separates_handler_input_from_target_effective_state() {
+    let mut ctx = TestContext::new();
+    install_multi_session_page_state(&mut ctx);
+
+    expect_session_command_result(
+        &mut ctx,
+        71_101,
+        "SID-primary",
+        "Emulation.setCPUThrottlingRate",
+        json!({ "rate": 4 }),
+    )
+    .await;
+    expect_session_command_result(
+        &mut ctx,
+        71_102,
+        "SID-attached",
+        "Emulation.setCPUThrottlingRate",
+        json!({ "rate": 2 }),
+    )
+    .await;
+    expect_session_command_result(
+        &mut ctx,
+        71_103,
+        "SID-primary",
+        "Emulation.setDeviceMetricsOverride",
+        json!({
+            "width": 800,
+            "height": 600,
+            "deviceScaleFactor": 1,
+            "mobile": false
+        }),
+    )
+    .await;
+    expect_session_command_result(
+        &mut ctx,
+        71_104,
+        "SID-attached",
+        "Emulation.setDeviceMetricsOverride",
+        json!({
+            "width": 640,
+            "height": 480,
+            "deviceScaleFactor": 2,
+            "mobile": false
+        }),
+    )
+    .await;
+    expect_session_command_result(
+        &mut ctx,
+        71_105,
+        "SID-primary",
+        "Emulation.setFocusEmulationEnabled",
+        json!({ "enabled": true }),
+    )
+    .await;
+
+    let primary = ctx
+        .conn
+        .emulation_session_state_for_session_owner(Some("SID-primary"))
+        .expect("primary Emulation handler state");
+    let attached = ctx
+        .conn
+        .emulation_session_state_for_session_owner(Some("SID-attached"))
+        .expect("attached Emulation handler state");
+    assert_eq!(primary.cpu_throttling_rate, 4.0);
+    assert_eq!(attached.cpu_throttling_rate, 2.0);
+    assert_eq!(
+        primary
+            .emulated_device_metrics
+            .as_ref()
+            .map(|metrics| (metrics.width, metrics.height)),
+        Some((800, 600))
+    );
+    assert_eq!(
+        attached
+            .emulated_device_metrics
+            .as_ref()
+            .map(|metrics| (metrics.width, metrics.height)),
+        Some((640, 480))
+    );
+    assert!(primary.focus_emulation_enabled);
+    assert!(!attached.focus_emulation_enabled);
+
+    let target = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .expect("browser context")
+        .active_page_target();
+    assert_eq!(target.effective_emulation_state.cpu_throttling_rate, 2.0);
+    assert_eq!(
+        target
+            .effective_emulation_state
+            .emulated_device_metrics
+            .as_ref()
+            .map(|metrics| (metrics.width, metrics.height)),
+        Some((640, 480))
+    );
+    assert!(target.effective_emulation_state.focus_emulation_enabled);
+
+    super::dispose_page_session_async(&mut ctx.conn, "SID-attached")
+        .await
+        .expect("attached Emulation handler disposal");
+    let target = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .expect("browser context")
+        .active_page_target();
+    assert_eq!(target.effective_emulation_state.cpu_throttling_rate, 1.0);
+    assert!(
+        target
+            .effective_emulation_state
+            .emulated_device_metrics
+            .is_none()
+    );
+    assert!(
+        target.effective_emulation_state.focus_emulation_enabled,
+        "disposing an untouched handler must not clear another session's focus input"
+    );
+    let primary = ctx
+        .conn
+        .emulation_session_state_for_session_owner(Some("SID-primary"))
+        .expect("primary Emulation handler state survives attached disposal");
+    assert_eq!(primary.cpu_throttling_rate, 4.0);
+    assert!(primary.emulated_device_metrics.is_some());
+    assert!(primary.focus_emulation_enabled);
+    assert_eq!(
+        ctx.conn
+            .emulation_session_state_for_session_owner(Some("SID-attached"))
+            .expect("disposed handler remains addressable until session detach commits"),
+        crate::conn::DevToolsEmulationSessionState::default()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn async_emulation_device_state_updates_browser_context() {
     let mut ctx = TestContext::new();
     ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
@@ -1313,6 +1468,7 @@ async fn async_emulation_device_state_updates_browser_context() {
             .as_ref()
             .unwrap()
             .active_page_target()
+            .effective_emulation_state
             .focus_emulation_enabled
     );
 
@@ -1329,6 +1485,7 @@ async fn async_emulation_device_state_updates_browser_context() {
             .as_ref()
             .unwrap()
             .active_page_target()
+            .effective_emulation_state
             .touch_emulation_enabled
     );
 
@@ -1345,6 +1502,7 @@ async fn async_emulation_device_state_updates_browser_context() {
             .as_ref()
             .unwrap()
             .active_page_target()
+            .effective_emulation_state
             .emit_touch_events_for_mouse
     );
 
@@ -1359,7 +1517,12 @@ async fn async_emulation_device_state_updates_browser_context() {
         .conn
         .browser_context
         .as_ref()
-        .and_then(|bc| bc.active_page_target().geolocation_override.as_ref())
+        .and_then(|bc| {
+            bc.active_page_target()
+                .effective_emulation_state
+                .geolocation_override
+                .as_ref()
+        })
         .and_then(EmulatedGeolocationOverrideState::position)
         .expect("geolocation override should be set");
     assert_eq!(geolocation.latitude, 37.33182);
@@ -1377,7 +1540,12 @@ async fn async_emulation_device_state_updates_browser_context() {
         .conn
         .browser_context
         .as_ref()
-        .and_then(|bc| bc.active_page_target().emulated_device_metrics.as_ref())
+        .and_then(|bc| {
+            bc.active_page_target()
+                .effective_emulation_state
+                .emulated_device_metrics
+                .as_ref()
+        })
         .expect("device metrics should be set");
     assert_eq!(metrics.width, 800);
     assert_eq!(metrics.height, 600);
@@ -1395,6 +1563,7 @@ async fn async_emulation_device_state_updates_browser_context() {
             .as_ref()
             .unwrap()
             .active_page_target()
+            .effective_emulation_state
             .emulated_device_metrics
             .is_none()
     );
@@ -2344,6 +2513,7 @@ async fn clear_geolocation_override_restores_default_after_explicit_unavailable(
             .as_ref()
             .and_then(|browser_context| browser_context
                 .active_page_target()
+                .effective_emulation_state
                 .geolocation_override
                 .as_ref()),
         Some(EmulatedGeolocationOverrideState::PositionUnavailable)
@@ -2366,6 +2536,7 @@ async fn clear_geolocation_override_restores_default_after_explicit_unavailable(
             .as_ref()
             .expect("browser context")
             .active_page_target()
+            .effective_emulation_state
             .geolocation_override
             .is_none()
     );
@@ -3009,6 +3180,7 @@ async fn session_emulation_routes_to_loaded_background_owner_without_activation(
     assert!(
         browser_context
             .active_page_target()
+            .effective_emulation_state
             .emulated_media
             .color_scheme
             .is_none(),
@@ -3027,7 +3199,11 @@ async fn session_emulation_routes_to_loaded_background_owner_without_activation(
         .filter(|target| target.has_non_default_session_state())
         .expect("background target state");
     assert_eq!(
-        background.emulated_media.color_scheme.as_deref(),
+        background
+            .effective_emulation_state
+            .emulated_media
+            .color_scheme
+            .as_deref(),
         Some("dark")
     );
     assert_eq!(
@@ -3036,6 +3212,7 @@ async fn session_emulation_routes_to_loaded_background_owner_without_activation(
     );
     assert_eq!(
         background
+            .effective_emulation_state
             .geolocation_override
             .as_ref()
             .and_then(EmulatedGeolocationOverrideState::position)
@@ -3234,9 +3411,9 @@ async fn target_session_detach_disposes_non_aggregated_emulation_state_before_re
         .as_ref()
         .and_then(|browser_context| browser_context.page_target("TID-1"))
         .expect("detached target remains addressable");
-    assert_eq!(target.cpu_throttling_rate, 1.0);
+    assert_eq!(target.effective_emulation_state.cpu_throttling_rate, 1.0);
     assert_eq!(
-        target.emulated_media,
+        target.effective_emulation_state.emulated_media,
         crate::conn::EmulatedMediaOverrides::default()
     );
 

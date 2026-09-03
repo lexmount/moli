@@ -51,8 +51,9 @@ pub(crate) use dedicated_worker_target::{
 };
 pub(crate) use devtools_session::{
     DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
-    DevToolsLogViolationThreshold, DevToolsNetworkSessionState, DevToolsSessionState,
-    PreparedRendererCallReplacements, SessionRendererCallReplay, SessionRendererCallTermination,
+    DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DevToolsNetworkSessionState,
+    DevToolsSessionState, PreparedRendererCallReplacements, SessionRendererCallReplay,
+    SessionRendererCallTermination,
 };
 pub(crate) use document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
@@ -117,12 +118,13 @@ pub(crate) use browser_context::{
 
 pub use navigation::{PageNavigationHistoryEntry, PendingNavigationHistoryUpdate};
 
+pub(crate) use emulation::{
+    EffectiveTargetEmulationState, EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions,
+    EmulatedViewportSurface, viewport_surface_install_script,
+};
 pub use emulation::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
     EmulatedMediaOverrides,
-};
-pub(crate) use emulation::{
-    EmulatedNetworkConditions, EmulatedViewportSurface, viewport_surface_install_script,
 };
 pub use page_target_host::PageTargetHost;
 pub(crate) use target_state::{

@@ -76,7 +76,7 @@ pub(crate) use bidi_channel_work::{
 pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter};
 pub(crate) use browser_context::{
     PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
-    SessionOwnerRuntimeFrontendEnableResult, TargetEmulationSessionStateMut,
+    SessionOwnerRuntimeFrontendEnableResult, TargetEmulationStateUpdate,
     TargetNavigationLoadInputs,
 };
 pub(crate) use command_owner_scope::CommandOwnerScope;
@@ -557,14 +557,16 @@ pub(crate) use state::{
     CommittedRendererDocumentBinding, CompletedDownloadBody, CompletedDownloadBodyArtifact,
     DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot,
     DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
-    DevToolsLogViolationThreshold, DocumentNavigationToken, DuplicatePendingRendererCommand,
-    EmulatedNetworkConditions, EmulatedViewportSurface, InspectorCommandDispatch,
-    NETWORK_ERROR_PAGE_URL, NavigationEngineHandoff, NavigationResultProjection,
-    NavigationSourceDocumentSecurityContext, NetworkErrorPageNavigation, PageScreencastConfig,
-    PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait,
-    PendingRendererCommandKey, PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction,
-    ProfilerInspectorCommand, RendererCommandCorrelation, RendererCommandDescriptor,
-    RendererCommandReplay, RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
+    DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DocumentNavigationToken,
+    DuplicatePendingRendererCommand, EffectiveTargetEmulationState,
+    EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions, EmulatedViewportSurface,
+    InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationEngineHandoff,
+    NavigationResultProjection, NavigationSourceDocumentSecurityContext,
+    NetworkErrorPageNavigation, PageScreencastConfig, PageScreencastFormat,
+    PendingBidiChannelListener, PendingInspectorAwait, PendingRendererCommandKey,
+    PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,
+    RendererCommandCorrelation, RendererCommandDescriptor, RendererCommandReplay,
+    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
     RendererMainDocumentCommitSeed, RendererPageResidenceIdentity,
     ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
     SiteDataClearOptions, TargetIdentityState, TargetInitialEmptyDocumentCreator, TargetOwnerState,

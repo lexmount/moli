@@ -391,9 +391,12 @@ impl DevToolsSessionRegistry {
         }
     }
 
-    pub(crate) fn clear_emulation_state(&mut self, session_key: &DevToolsSessionKey) {
+    pub(crate) fn clear_emulation_policy_state(&mut self, session_key: &DevToolsSessionKey) {
         if let Some(state) = self.states.get_mut(session_key) {
-            state.emulation_session_state = DevToolsEmulationSessionState::default();
+            let emulation = &mut state.emulation_session_state;
+            emulation.browser_identity_override = None;
+            emulation.locale_override = None;
+            emulation.timezone_override = None;
         }
     }
 
@@ -658,13 +661,41 @@ pub(crate) struct DevToolsNetworkSessionState {
     pub(crate) service_worker_fetch_diagnostic_entries: usize,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DevToolsEmulationSessionState {
     // UA, Accept-Language, and platform are independent handler contributions.
     pub(crate) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
     // Locale and timezone are exclusive controller claims, unlike UA fields.
     pub(crate) locale_override: Option<String>,
     pub(crate) timezone_override: Option<String>,
+    pub(crate) network_conditions: Option<super::EmulatedNetworkConditions>,
+    pub(crate) geolocation_override: Option<super::EmulatedGeolocationOverrideState>,
+    pub(crate) emulated_media: super::EmulatedMediaOverrides,
+    pub(crate) emulated_device_metrics: Option<super::EmulatedDeviceMetrics>,
+    pub(crate) cpu_throttling_rate: f64,
+    pub(crate) touch_emulation_enabled: bool,
+    pub(crate) emit_touch_events_for_mouse: bool,
+    pub(crate) focus_emulation_enabled: bool,
+    pub(crate) script_execution_disabled: bool,
+}
+
+impl Default for DevToolsEmulationSessionState {
+    fn default() -> Self {
+        Self {
+            browser_identity_override: None,
+            locale_override: None,
+            timezone_override: None,
+            network_conditions: None,
+            geolocation_override: None,
+            emulated_media: super::EmulatedMediaOverrides::default(),
+            emulated_device_metrics: None,
+            cpu_throttling_rate: 1.0,
+            touch_emulation_enabled: false,
+            emit_touch_events_for_mouse: false,
+            focus_emulation_enabled: false,
+            script_execution_disabled: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

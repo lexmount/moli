@@ -265,10 +265,12 @@ impl TargetNavigationLoadInputs {
         ));
 
         let effective_network_conditions = page_state
+            .effective_emulation_state
             .network_conditions
             .or(browser_context.default_network_conditions)
             .or(browser_context.global_network_conditions);
         let emulated_device_metrics = page_state
+            .effective_emulation_state
             .emulated_device_metrics
             .clone()
             .or_else(|| browser_context.default_emulated_device_metrics.clone());
@@ -322,10 +324,12 @@ impl TargetNavigationLoadInputs {
                 .timezone_override()
                 .map(str::to_owned)
                 .or_else(|| browser_context.default_timezone_override.clone()),
-            script_execution_disabled: page_state.script_execution_disabled,
+            script_execution_disabled: page_state
+                .effective_emulation_state
+                .script_execution_disabled,
             bypass_content_security_policy: page_state.devtools_sessions.page_bypass_csp_enabled(),
-            cpu_throttling_rate: page_state.cpu_throttling_rate,
-            emulated_media: (&page_state.emulated_media).into(),
+            cpu_throttling_rate: page_state.effective_emulation_state.cpu_throttling_rate,
+            emulated_media: (&page_state.effective_emulation_state.emulated_media).into(),
             viewport_surface: emulated_device_metrics
                 .as_ref()
                 .map(|metrics| metrics.viewport_surface().to_page_viewport_surface()),
@@ -590,6 +594,7 @@ impl<'a> TargetSessionOwnerRef<'a> {
 
     pub(super) fn emulated_device_metrics(&self) -> Option<EmulatedDeviceMetrics> {
         self.target()
+            .effective_emulation_state
             .emulated_device_metrics
             .clone()
             .or_else(|| self.browser_context.default_emulated_device_metrics.clone())
@@ -3112,7 +3117,7 @@ mod tests {
             state.http_proxy_override = Some("http://proxy.example:8080".to_owned());
             state.http_no_proxy_override = Some("localhost,127.0.0.1".to_owned());
             state.tls_verify_host_override = Some(false);
-            state.script_execution_disabled = true;
+            state.effective_emulation_state.script_execution_disabled = true;
             state
                 .network_policy
                 .set_user_agent_override("OwnerUA/1.0".to_owned());
@@ -3123,7 +3128,7 @@ mod tests {
             state
                 .network_policy
                 .push_extra_header(("X-Owner".to_owned(), "background".to_owned()));
-            state.emulated_media.media = Some("print".to_owned());
+            state.effective_emulation_state.emulated_media.media = Some("print".to_owned());
             state.fetch_owner.configure(
                 Some("SID-background".to_owned()),
                 false,

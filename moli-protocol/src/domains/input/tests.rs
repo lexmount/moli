@@ -1692,6 +1692,7 @@ async fn coordinate_touch_commands_complete_through_pending_layout_dispatch() {
         .as_mut()
         .expect("loaded browser context")
         .active_page_target_mut()
+        .effective_emulation_state
         .emit_touch_events_for_mouse = true;
     for (id, event_type, buttons) in [(4107, "mousePressed", 1), (4108, "mouseReleased", 0)] {
         ctx.process_async(json!({

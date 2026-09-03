@@ -105,6 +105,7 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
             .as_ref()
             .expect("active browser context")
             .active_page_target()
+            .effective_emulation_state
             .script_execution_disabled
     );
 
@@ -154,6 +155,7 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
             .as_ref()
             .expect("active browser context")
             .active_page_target()
+            .effective_emulation_state
             .script_execution_disabled
     );
 

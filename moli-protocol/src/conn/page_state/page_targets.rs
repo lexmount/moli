@@ -372,7 +372,7 @@ impl BrowserContext {
             return Ok(false);
         };
         let previous = target.effective_policy();
-        target.clear_devtools_emulation_state(session_key);
+        target.clear_devtools_emulation_policy_state(session_key);
         self.apply_effective_devtools_policy_delta_async(target_id, previous)
             .await
     }

@@ -1,11 +1,11 @@
-use crate::conn::{CdpConnection, TargetEmulationSessionStateMut};
+use crate::conn::{CdpConnection, TargetEmulationStateUpdate};
 
-pub(super) fn mutate_page_session_state(
+pub(super) fn update_page_emulation_state(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
-    f: impl FnOnce(TargetEmulationSessionStateMut<'_>),
+    f: impl FnOnce(TargetEmulationStateUpdate<'_>),
 ) -> Result<(), String> {
-    if conn.mutate_emulation_session_state_for_session_owner(session_id, |state| {
+    if conn.update_emulation_state_for_session_owner(session_id, |state| {
         if let Some(state) = state {
             f(state);
         }

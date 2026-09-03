@@ -256,8 +256,8 @@ fn focus_emulation_enabled_command_output_plan(
     if conn.browser_context.is_none() {
         return CommandOutputPlan::result(json!({}));
     }
-    match page_session::mutate_page_session_state(conn, cmd.session_id, |state| {
-        *state.focus_emulation_enabled = params.enabled;
+    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
+        state.set_focus_emulation_enabled(params.enabled);
     }) {
         Ok(()) => CommandOutputPlan::result(json!({})),
         Err(message) if message == "BrowserContextNotLoaded" => {
@@ -278,8 +278,8 @@ fn touch_emulation_enabled_command_output_plan(
     if conn.browser_context.is_none() {
         return CommandOutputPlan::result(json!({}));
     }
-    match page_session::mutate_page_session_state(conn, cmd.session_id, |state| {
-        *state.touch_emulation_enabled = params.enabled;
+    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
+        state.set_touch_emulation_enabled(params.enabled);
     }) {
         Ok(()) => CommandOutputPlan::result(json!({})),
         Err(message) if message == "BrowserContextNotLoaded" => {
@@ -306,9 +306,9 @@ fn start_cpu_throttling_rate_command(
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.mutate_emulation_session_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(state) = state {
-            *state.cpu_throttling_rate = params.rate;
+    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
+        if let Some(mut state) = state {
+            state.set_cpu_throttling_rate(params.rate);
         }
     }) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -345,8 +345,8 @@ fn emit_touch_events_for_mouse_command_output_plan(
     if conn.browser_context.is_none() {
         return CommandOutputPlan::result(json!({}));
     }
-    match page_session::mutate_page_session_state(conn, cmd.session_id, |state| {
-        *state.emit_touch_events_for_mouse = params.enabled;
+    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
+        state.set_emit_touch_events_for_mouse(params.enabled);
     }) {
         Ok(()) => CommandOutputPlan::result(json!({})),
         Err(message) if message == "BrowserContextNotLoaded" => {
@@ -372,9 +372,9 @@ fn start_script_execution_disabled_command(
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.mutate_emulation_session_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(state) = state {
-            *state.script_execution_disabled = params.value;
+    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
+        if let Some(mut state) = state {
+            state.set_script_execution_disabled(params.value);
         }
     }) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -668,9 +668,9 @@ fn start_update_geolocation_override_command(
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.mutate_emulation_session_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(state) = state {
-            *state.geolocation_override = override_state.clone();
+    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
+        if let Some(mut state) = state {
+            state.set_geolocation_override(override_state.clone());
         }
     }) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -711,9 +711,9 @@ fn start_emulated_media_command(
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
     let overrides = media::emulated_media_overrides_from_params(params);
-    if !conn.mutate_emulation_session_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(state) = state {
-            *state.emulated_media = overrides.clone();
+    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
+        if let Some(mut state) = state {
+            state.set_emulated_media(overrides.clone());
         }
     }) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -876,9 +876,9 @@ fn start_clear_device_metrics_override_command(
     {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.mutate_emulation_session_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(state) = state {
-            *state.emulated_device_metrics = None;
+    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
+        if let Some(mut state) = state {
+            state.set_emulated_device_metrics(None);
         }
     }) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -947,9 +947,9 @@ fn start_devtools_set_viewport_command(
     let had_existing_device_metrics = conn
         .target_session_owner_emulated_device_metrics_for_owner(&owner_scope)
         .is_some();
-    if !conn.mutate_emulation_session_state_for_owner(&owner_scope, |state| {
-        if let Some(state) = state {
-            *state.emulated_device_metrics = Some(metrics.clone());
+    if !conn.update_emulation_state_for_owner(&owner_scope, |state| {
+        if let Some(mut state) = state {
+            state.set_emulated_device_metrics(Some(metrics.clone()));
         }
     }) {
         return Err(DevToolsError::new(
@@ -1252,9 +1252,9 @@ fn start_geolocation_override_for_current_route(
     override_state: Option<EmulatedGeolocationOverrideState>,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let owner = CommandOwnerScope::for_route(route.clone());
-    if !conn.mutate_emulation_session_state_for_owner(&owner, |state| {
-        if let Some(state) = state {
-            *state.geolocation_override = override_state;
+    if !conn.update_emulation_state_for_owner(&owner, |state| {
+        if let Some(mut state) = state {
+            state.set_geolocation_override(override_state);
         }
     }) {
         return Err(devtools_emulation_owner_error(
@@ -1339,9 +1339,9 @@ fn start_network_conditions_for_current_route(
     network_conditions: Option<DevToolsNetworkConditions>,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let owner = CommandOwnerScope::for_route(route.clone());
-    if !conn.mutate_emulation_session_state_for_owner(&owner, |state| {
-        if let Some(state) = state {
-            *state.network_conditions = network_conditions.map(emulated_network_conditions);
+    if !conn.update_emulation_state_for_owner(&owner, |state| {
+        if let Some(mut state) = state {
+            state.set_network_conditions(network_conditions.map(emulated_network_conditions));
         }
     }) {
         return Err(devtools_emulation_owner_error(
@@ -2259,7 +2259,13 @@ fn browser_context_default_device_metrics_runtime_command_count(
     browser_context
         .page_targets
         .iter()
-        .filter(|target| target.emulated_device_metrics.is_none() && target.loaded_page().is_some())
+        .filter(|target| {
+            target
+                .effective_emulation_state
+                .emulated_device_metrics
+                .is_none()
+                && target.loaded_page().is_some()
+        })
         .count()
 }
 
@@ -2275,7 +2281,10 @@ fn start_browser_context_default_device_metrics_page_commands(
     let viewport_surface = Some(metrics.viewport_surface().to_page_viewport_surface());
     if let Some(active_target_id) = active_target_id
         && let Some(active_target) = browser_context.page_targets.active_mut()
-        && active_target.emulated_device_metrics.is_none()
+        && active_target
+            .effective_emulation_state
+            .emulated_device_metrics
+            .is_none()
         && let Some(page) = active_target.runtime_slot.loaded_page_mut()
     {
         pending.push(PendingEmulationPageCommand {
@@ -2317,7 +2326,12 @@ fn start_browser_context_default_device_metrics_page_commands(
             .to_owned();
         let has_target_override = browser_context
             .page_target(&target_id)
-            .is_some_and(|state| state.emulated_device_metrics.is_some());
+            .is_some_and(|state| {
+                state
+                    .effective_emulation_state
+                    .emulated_device_metrics
+                    .is_some()
+            });
         if has_target_override {
             continue;
         }
@@ -2588,52 +2602,107 @@ pub(crate) async fn dispose_page_session_async(
         .await
         .err();
 
-    // InspectorEmulationAgent::disable resets media and CPU throttling for
-    // every renderer session, even though both settings are target-visible.
-    // Keep that intentionally non-aggregated Chromium behavior here.
-    let media = crate::conn::EmulatedMediaOverrides::default();
-    let mut media_changed = false;
-    let mut cpu_changed = false;
-    if !conn.mutate_emulation_session_state_for_session_owner(Some(session_id), |state| {
-        if let Some(state) = state {
-            media_changed = *state.emulated_media != media;
-            cpu_changed = *state.cpu_throttling_rate != 1.0;
-            *state.emulated_media = media.clone();
-            *state.cpu_throttling_rate = 1.0;
-        }
-    }) {
-        return match first_error {
-            Some(error) => Err(error),
-            None => Ok(()),
-        };
-    }
-    if !media_changed && !cpu_changed {
-        return match first_error {
-            Some(error) => Err(error),
-            None => Ok(()),
-        };
-    }
-
-    let page_media: moli_core::page::EmulatedMediaOverrides = (&media).into();
-    let Some(page) = loaded_page_mut_for_target_configuration(conn, Some(session_id)) else {
-        return match first_error {
-            Some(error) => Err(error),
-            None => Ok(()),
-        };
+    let Some(delta) = conn.disable_emulation_session_handler_for_session_owner(session_id) else {
+        return first_error.map_or(Ok(()), Err);
     };
-    if media_changed && let Err(error) = page.set_emulated_media_async(&page_media).await {
-        first_error.get_or_insert_with(|| {
-            anyhow::anyhow!("failed to clear detached session emulated media: {error}")
-        });
+    let owner = CommandOwnerScope::capture(conn, Some(session_id));
+    let load_inputs = conn.navigation_load_inputs_for_owner(&owner);
+    if let Some(page) = loaded_page_mut_for_target_configuration(conn, Some(session_id)) {
+        if delta.script_execution_disabled {
+            record_emulation_disposal_result(
+                &mut first_error,
+                "script execution",
+                page.set_script_execution_disabled_async(load_inputs.script_execution_disabled)
+                    .await,
+            );
+        }
+        if delta.emulated_media {
+            record_emulation_disposal_result(
+                &mut first_error,
+                "emulated media",
+                page.set_emulated_media_async(&load_inputs.emulated_media)
+                    .await,
+            );
+        }
+        if delta.cpu_throttling_rate {
+            record_emulation_disposal_result(
+                &mut first_error,
+                "CPU throttling",
+                page.set_cpu_throttling_rate_async(load_inputs.cpu_throttling_rate)
+                    .await,
+            );
+        }
+        if delta.network_conditions {
+            record_emulation_disposal_result(
+                &mut first_error,
+                "network conditions",
+                page.set_network_offline_async(load_inputs.network_offline)
+                    .await,
+            );
+        }
+        if delta.emulated_device_metrics {
+            record_emulation_disposal_result(
+                &mut first_error,
+                "device metrics viewport",
+                page.set_viewport_surface_async(load_inputs.viewport_surface)
+                    .await,
+            );
+            record_emulation_disposal_result(
+                &mut first_error,
+                "device metrics script",
+                page.run_page_surface_override_script_async(
+                    device::LIVE_DEVICE_METRICS_CLEAR_SCRIPT,
+                )
+                .await,
+            );
+        }
     }
-    if cpu_changed && let Err(error) = page.set_cpu_throttling_rate_async(1.0).await {
-        first_error.get_or_insert_with(|| {
-            anyhow::anyhow!("failed to clear detached session CPU throttling: {error}")
-        });
+    if delta.surface_changed() {
+        record_emulation_disposal_result(
+            &mut first_error,
+            "page surfaces",
+            apply_session_surface_state_async(conn, session_id).await,
+        );
     }
-    match first_error {
-        Some(error) => Err(error),
-        None => Ok(()),
+    first_error.map_or(Ok(()), Err)
+}
+
+async fn apply_session_surface_state_async(
+    conn: &mut CdpConnection,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let Some(CdpSessionRoute::PageTarget {
+        browser_context_id,
+        target_id,
+        ..
+    }) = conn.session_route(Some(session_id))
+    else {
+        return Ok(());
+    };
+    let Some(browser_context) = conn.browser_context_by_id_mut(&browser_context_id) else {
+        return Ok(());
+    };
+    if browser_context.is_active_target(&target_id) {
+        browser_context
+            .apply_surface_overrides_to_loaded_page_async()
+            .await
+    } else {
+        browser_context
+            .apply_background_target_surface_overrides_async(&target_id)
+            .await
+            .map(|_applied| ())
+    }
+}
+
+fn record_emulation_disposal_result(
+    first_error: &mut Option<anyhow::Error>,
+    surface: &'static str,
+    result: anyhow::Result<()>,
+) {
+    if let Err(error) = result {
+        first_error.get_or_insert_with(|| {
+            anyhow::anyhow!("failed to clear detached session {surface}: {error}")
+        });
     }
 }
 

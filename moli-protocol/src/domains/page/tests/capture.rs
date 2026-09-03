@@ -515,6 +515,7 @@ async fn capture_screenshot_targets_loaded_background_owner_without_activation()
         .expect("browser context")
         .background_target_mut("TID-background")
         .expect("background target must exist")
+        .effective_emulation_state
         .emulated_device_metrics = Some(EmulatedDeviceMetrics {
         width: 320,
         height: 240,
@@ -560,7 +561,10 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
     let mut inactive = BrowserContext::new("BID-inactive-screenshot".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
-    inactive.active_page_target_mut().emulated_device_metrics = Some(EmulatedDeviceMetrics {
+    inactive
+        .active_page_target_mut()
+        .effective_emulation_state
+        .emulated_device_metrics = Some(EmulatedDeviceMetrics {
         width: 500,
         height: 300,
         device_scale_factor: 1.5,

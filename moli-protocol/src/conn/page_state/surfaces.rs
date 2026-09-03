@@ -25,8 +25,14 @@ impl SurfaceOverrideInputs {
             network_conditions: browser_context.effective_active_network_conditions(),
             geolocation_override: browser_context.effective_active_geolocation_override(),
             emulated_device_metrics: browser_context.effective_active_emulated_device_metrics(),
-            touch_emulation_enabled: browser_context.active_page_target().touch_emulation_enabled,
-            focus_emulation_enabled: browser_context.active_page_target().focus_emulation_enabled,
+            touch_emulation_enabled: browser_context
+                .active_page_target()
+                .effective_emulation_state
+                .touch_emulation_enabled,
+            focus_emulation_enabled: browser_context
+                .active_page_target()
+                .effective_emulation_state
+                .focus_emulation_enabled,
             active_target_surface: true,
             window_document_hidden: browser_context
                 .active_page_target()
@@ -46,17 +52,22 @@ impl SurfaceOverrideInputs {
         default_emulated_device_metrics: Option<EmulatedDeviceMetrics>,
     ) -> Self {
         Self {
-            network_conditions: state.network_conditions.or(default_network_conditions),
+            network_conditions: state
+                .effective_emulation_state
+                .network_conditions
+                .or(default_network_conditions),
             geolocation_override: state
+                .effective_emulation_state
                 .geolocation_override
                 .clone()
                 .or(default_geolocation_override),
             emulated_device_metrics: state
+                .effective_emulation_state
                 .emulated_device_metrics
                 .clone()
                 .or(default_emulated_device_metrics),
-            touch_emulation_enabled: state.touch_emulation_enabled,
-            focus_emulation_enabled: state.focus_emulation_enabled,
+            touch_emulation_enabled: state.effective_emulation_state.touch_emulation_enabled,
+            focus_emulation_enabled: state.effective_emulation_state.focus_emulation_enabled,
             active_target_surface: false,
             window_document_hidden: false,
             window_fullscreen: false,
@@ -327,7 +338,11 @@ impl BrowserContext {
     }
 
     pub fn max_touch_points(&self) -> u32 {
-        if self.active_page_target().touch_emulation_enabled {
+        if self
+            .active_page_target()
+            .effective_emulation_state
+            .touch_emulation_enabled
+        {
             1
         } else {
             0

@@ -5955,6 +5955,7 @@ async fn playwright_over_cdp_context_profile_surfaces_permissions_tls_and_metric
     assert_eq!(
         active
             .active_page_target()
+            .effective_emulation_state
             .emulated_device_metrics
             .as_ref()
             .map(|metrics| (metrics.width, metrics.height, metrics.device_scale_factor)),
@@ -6154,7 +6155,12 @@ async fn playwright_over_cdp_script_execution_disabled_blocks_page_scripts_but_n
         .browser_context
         .as_ref()
         .expect("active browser context");
-    assert!(active.active_page_target().script_execution_disabled);
+    assert!(
+        active
+            .active_page_target()
+            .effective_emulation_state
+            .script_execution_disabled
+    );
     let script_runs = active
         .active_page_target()
         .runtime_slot
