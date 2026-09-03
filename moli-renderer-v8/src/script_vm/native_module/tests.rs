@@ -340,6 +340,41 @@ fn reaction_data_slots_preserve_u64_values_above_js_safe_integer() {
 }
 
 #[test]
+fn native_module_instantiate_errors_use_stage_appropriate_constructors() {
+    let javascript_error = super::native_module_instantiate_load_error(
+        "javascript link failed".to_owned(),
+        None,
+        false,
+    );
+    assert_eq!(javascript_error.stage(), ModuleLoadStage::Instantiate);
+    assert_eq!(
+        javascript_error.error_constructor(),
+        Some(ScriptErrorConstructorKind::SyntaxError)
+    );
+
+    let wasm_error = super::native_module_instantiate_load_error(
+        "WebAssembly link failed".to_owned(),
+        None,
+        true,
+    );
+    assert_eq!(
+        wasm_error.error_constructor(),
+        Some(ScriptErrorConstructorKind::WebAssemblyLinkError)
+    );
+
+    let caught_syntax_error = super::native_module_instantiate_load_error(
+        "mixed graph failed".to_owned(),
+        Some(ScriptErrorConstructorKind::SyntaxError),
+        true,
+    );
+    assert_eq!(
+        caught_syntax_error.error_constructor(),
+        Some(ScriptErrorConstructorKind::SyntaxError),
+        "an exact V8 exception constructor must win over the module-kind fallback"
+    );
+}
+
+#[test]
 fn dynamic_import_fetch_completion_requires_owner_facade() {
     let mut vm = new_test_vm("https://app.example.test/page.html");
     let document_owner = vm
