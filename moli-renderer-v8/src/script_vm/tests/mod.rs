@@ -12286,6 +12286,119 @@ async fn main_document_replacement_retires_pending_image_request_sequence() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn web_font_reconciliation_keeps_style_world_lazy_without_active_author_sources() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    loader.set_optional_resource_fetch_mask(crate::protocol_types::OptionalResourceFetchMask::FONT);
+    let (mut vm, _resource_completions) =
+        new_parsed_test_vm_with_loader_and_resource_completion_queue(
+            "https://font-reconciliation-fast-path.test/",
+            concat!(
+                "<!doctype html><html><head>",
+                "<link rel='author' href='/not-a-stylesheet.css'>",
+                "</head><body></body></html>",
+            ),
+            &loader,
+        );
+    let document = vm._context_host.borrow().document_handle();
+
+    let rebuilds = vm.retained_style_system_rebuild_count_for_document_for_test(document);
+    let materializations = vm
+        ._context_host
+        .borrow()
+        .style_world_update_materializations_for_test();
+    assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
+    vm.reconcile_document_web_fonts_for_layout();
+    assert_eq!(
+        vm.retained_style_system_rebuild_count_for_document_for_test(document),
+        rebuilds,
+        "font reconciliation must not build retained styles without an active author source",
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .style_world_update_materializations_for_test(),
+        materializations,
+        "font reconciliation must not materialize a style-world update without an active author source",
+    );
+    assert_eq!(vm.document_web_font_counts_for_test(), (0, 0, 0));
+
+    assert_eq!(
+        vm.eval(
+            r#"
+const host = document.createElement('div');
+host.attachShadow({mode: 'open'}).innerHTML = '<style>div { color: red }</style><div></div>';
+document.body.appendChild(host);
+const target = host.shadowRoot.querySelector('div');
+const initial = getComputedStyle(target).color;
+host.remove();
+host.shadowRoot.querySelector('style').remove();
+globalThis.__fontReconciliationDetachedShadow = {host, target};
+initial;
+"#,
+        )
+        .expect("detached shadow style fixture should evaluate"),
+        "rgb(255, 0, 0)",
+    );
+    let materializations = vm
+        ._context_host
+        .borrow()
+        .style_world_update_materializations_for_test();
+    vm.reconcile_document_web_fonts_for_layout();
+    assert!(
+        vm._context_host
+            .borrow()
+            .style_world_update_materializations_for_test()
+            > materializations,
+        "an existing style world must still reconcile after its active sources disappear",
+    );
+    assert_ne!(
+        vm.eval(
+            r#"
+document.body.appendChild(__fontReconciliationDetachedShadow.host);
+getComputedStyle(__fontReconciliationDetachedShadow.target).color;
+"#,
+        )
+        .expect("reconnected shadow style should evaluate"),
+        "rgb(255, 0, 0)",
+    );
+}
+
+#[test]
+fn web_font_active_author_stylesheet_probe_includes_connected_shadow_adopted_sheets() {
+    let mut vm = new_parsed_test_vm(
+        "https://shadow-adopted-font-source.test/",
+        "<!doctype html><html><head></head><body></body></html>",
+    );
+    let document = vm._context_host.borrow().document_handle();
+    vm.eval(
+        r#"
+const host = document.createElement('div');
+const shadow = host.attachShadow({mode: 'open'});
+const sheet = new CSSStyleSheet();
+sheet.replaceSync(':host { color: red; }');
+shadow.adoptedStyleSheets = [sheet];
+globalThis.__detachedShadowStylesheetHost = host;
+"#,
+    )
+    .expect("detached shadow adopted stylesheet fixture should evaluate");
+
+    assert!(
+        !vm._context_host
+            .borrow()
+            .document_has_active_author_stylesheet_sources(document),
+        "a detached shadow scope must not count as an active document source",
+    );
+    vm.eval("document.body.appendChild(__detachedShadowStylesheetHost)")
+        .expect("shadow stylesheet host should connect");
+    assert!(
+        vm._context_host
+            .borrow()
+            .document_has_active_author_stylesheet_sources(document),
+        "a connected shadow adopted stylesheet must prevent the font fast path",
+    );
+}
+
 #[tokio::test]
 async fn web_font_requests_and_registration_follow_effective_stylesheet_media() {
     let (font_url, mut request_rx, release_tx, server) = spawn_gated_font_resource_server().await;

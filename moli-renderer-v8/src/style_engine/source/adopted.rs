@@ -269,6 +269,11 @@ impl AdoptedStyleSheetSources {
             .len()
     }
 
+    pub(in crate::style_engine) fn shadow_root_source_count(&self, root: DomHandle) -> usize {
+        self.sources_or_empty(AdoptedStyleSheetOwner::ShadowRoot(root))
+            .len()
+    }
+
     pub(in crate::style_engine) fn document_source_ids(
         &self,
         document: DomHandle,
