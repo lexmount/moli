@@ -2854,7 +2854,6 @@ html/browsers/origin/cross-origin-objects/cross-origin-due-to-document-domain-on
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-length.html
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-name.html
 html/browsers/origin/cross-origin-objects/window-location-and-location-href-cross-realm-set.html
-html/browsers/origin/relaxing-the-same-origin-restriction/document_domain.html
 html/browsers/origin/relaxing-the-same-origin-restriction/document_domain_setter.html
 html/browsers/the-window-object/accessing-other-browsing-contexts/indexed-browsing-contexts-01.html
 html/browsers/the-window-object/accessing-other-browsing-contexts/indexed-browsing-contexts-02.html
