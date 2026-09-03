@@ -33,6 +33,7 @@ pub(in crate::context_bootstrap) const WINDOW_SELF_SLOT: &str = "__moliWindowSel
 pub(in crate::context_bootstrap) const WINDOW_PARENT_SLOT: &str = "__moliWindowParent";
 pub(in crate::context_bootstrap) const WINDOW_TOP_SLOT: &str = "__moliWindowTop";
 pub(in crate::context_bootstrap) const WINDOW_FRAMES_SLOT: &str = "__moliWindowFrames";
+pub(crate) const WINDOW_DOCUMENT_SLOT: &str = "__moliWindowDocument";
 pub(crate) const SIMPLE_EVENT_TARGET_SLOT: &str = "__moliEventTargetSlot";
 pub(crate) const SIMPLE_EVENT_TARGET_ORDERED_HANDLERS_SLOT: &str =
     "__moliSimpleEventTargetOrderedHandlers";

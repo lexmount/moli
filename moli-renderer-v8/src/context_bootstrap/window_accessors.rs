@@ -20,7 +20,9 @@ pub(super) use child_context::{
     window_credentialless_getter, window_cross_origin_isolated_getter, window_document_getter,
     window_frame_element_getter, window_length_getter,
 };
-pub(super) use helpers::window_child_context_handle;
+pub(super) use helpers::{
+    window_child_context_handle, window_has_discarded_child_browsing_context,
+};
 pub(super) use interceptors::{
     window_indexed_property_descriptor, window_indexed_property_enumerator,
     window_indexed_property_getter, window_indexed_property_query,

@@ -129,6 +129,17 @@ pub(super) fn window_host_ptr(
         .or_else(|| context_host_ptr_from_global_bridge(scope))
 }
 
+pub(in crate::context_bootstrap) fn window_has_discarded_child_browsing_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(handle) = window_child_context_handle(scope, receiver) else {
+        return false;
+    };
+    window_host_ptr(scope, receiver)
+        .is_none_or(|host_ptr| !unsafe { &*host_ptr }.child_browsing_context_is_live(handle))
+}
+
 pub(super) fn window_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: &v8::FunctionCallbackArguments<'s>,
