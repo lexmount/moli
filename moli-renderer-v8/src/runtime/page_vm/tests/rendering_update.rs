@@ -2897,7 +2897,7 @@ return [
 })()"#;
         assert_eq!(
             page_vm.vm_mut().eval(read_table)?,
-            "0px|rgb(246, 246, 239)|rgb(255, 102, 0)|right|170",
+            "0px|rgb(246, 246, 239)|rgb(255, 102, 0)|-moz-right|170",
             "legacy table attributes must participate in the presentation-hint cascade",
         );
 
@@ -2928,13 +2928,125 @@ header.setAttribute('align', 'left');
             .expect("mutated legacy table fixture must retain a layout root");
         assert_eq!(
             page_vm.vm_mut().eval(read_table)?,
-            "5px|rgb(1, 2, 3)|rgb(4, 5, 6)|left|100",
+            "5px|rgb(1, 2, 3)|rgb(4, 5, 6)|-moz-left|100",
             "legacy table attribute mutations must recascade their presentation hints",
         );
         Ok::<_, anyhow::Error>(())
     })
     .await
     .expect("legacy table presentational-style fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_aligns_legacy_table_block_descendants() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/table-descendant-alignment.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r##"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+table{border-spacing:0}
+td{padding:0;width:100px;height:10px}
+.box{width:10px;height:10px}
+</style>`;
+document.body.innerHTML = `
+<table>
+  <tr><td id=right align=right><div id=right-block class=box></div></td></tr>
+  <tr><td id=left align=left style="direction:rtl"><div id=left-block class=box></div></td></tr>
+</table>`;
+'installed'
+"##,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 100, 1.0))?
+            .expect("legacy descendant-alignment fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"(() => {
+const right = document.getElementById('right').getBoundingClientRect();
+const rightBlock = document.getElementById('right-block').getBoundingClientRect();
+const left = document.getElementById('left').getBoundingClientRect();
+const leftBlock = document.getElementById('left-block').getBoundingClientRect();
+return [
+  getComputedStyle(document.getElementById('right')).textAlign,
+  right.width,
+  rightBlock.x - right.x,
+  getComputedStyle(document.getElementById('left')).textAlign,
+  left.width,
+  leftBlock.x - left.x,
+].join('|');
+})()"#,
+            )?,
+            "-moz-right|100|90|-moz-left|100|0",
+            "legacy table alignment must affect fixed-width block descendants in both directions",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("legacy table descendant-alignment fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_centers_table_headers_only_without_inherited_alignment() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/table-header-alignment.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r##"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+table{border-spacing:0}
+th{padding:0;width:100px;height:10px;font-size:0}
+.box{display:inline-block;width:10px;height:10px}
+</style>`;
+document.body.innerHTML = `
+<table><tr><th id=default-header><span id=centered class=box></span></th></tr></table>
+<table><tr align=right><th id=inherited-header><span id=right-aligned class=box></span></th></tr></table>`;
+'installed'
+"##,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 100, 1.0))?
+            .expect("table-header alignment fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"(() => {
+const centered = document.getElementById('centered').getBoundingClientRect();
+const defaultHeader = document.getElementById('default-header').getBoundingClientRect();
+const rightAligned = document.getElementById('right-aligned').getBoundingClientRect();
+const inheritedHeader = document.getElementById('inherited-header').getBoundingClientRect();
+return [
+  getComputedStyle(document.getElementById('default-header')).textAlign,
+  centered.x - defaultHeader.x,
+  getComputedStyle(document.getElementById('inherited-header')).textAlign,
+  rightAligned.x - inheritedHeader.x,
+].join('|');
+})()"#,
+            )?,
+            "center|45|-moz-right|90",
+            "table headers must center by default but inherit an explicit row alignment",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("table-header alignment fixture should run");
 }
 
 #[tokio::test(flavor = "current_thread")]

@@ -222,8 +222,8 @@ fn append_html_table_part_alignment_declarations(
         let text_align = match text_align.to_ascii_lowercase().as_str() {
             "middle" | "center" => "-moz-center",
             "absmiddle" => "center",
-            "left" => "left",
-            "right" => "right",
+            "left" => "-moz-left",
+            "right" => "-moz-right",
             _ => text_align,
         };
         append_parsed_presentation_declaration(element, "text-align", text_align, block);

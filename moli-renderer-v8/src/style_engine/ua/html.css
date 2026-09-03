@@ -139,7 +139,7 @@ th:not(table th) {
 
 th {
   font-weight: bold;
-  text-align: -moz-center;
+  text-align: -moz-center-or-inherit;
 }
 
 caption {
