@@ -83,6 +83,13 @@ impl StylesheetFetcher for RendererStylesheetFetcher {
         url: Url,
         options: StylesheetFetchOptions,
     ) -> Pin<Box<dyn Future<Output = StylesheetFetchTerminal> + Send + 'static>> {
+        if self.loader.author_styles_disabled() {
+            return Box::pin(async move {
+                StylesheetFetchTerminal::network_error(format!(
+                    "failed to fetch stylesheet `{url}`: net::ERR_BLOCKED_BY_CLIENT"
+                ))
+            });
+        }
         let loader = self.loader.clone();
         let resource_task_runner = self.task_runner.clone();
         let service_worker_context = self.service_worker_context.clone();

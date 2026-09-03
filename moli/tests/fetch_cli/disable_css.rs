@@ -11,7 +11,7 @@ use parking_lot::Mutex;
 use std::sync::Arc;
 use tokio::{net::TcpListener, task::JoinHandle};
 
-const CSS_PATHS: [&str; 12] = [
+const CSS_PATHS: [&str; 15] = [
     "/external.css",
     "/external-import.css",
     "/preload.css",
@@ -24,6 +24,9 @@ const CSS_PATHS: [&str; 12] = [
     "/srcdoc.css",
     "/rewrite.css",
     "/rewrite-import.css",
+    "/event-static.css",
+    "/event-preload.css",
+    "/event-dynamic.css",
 ];
 
 const MAIN_PAGE: &str = r#"<!doctype html>
@@ -82,6 +85,60 @@ const GRANDCHILD_PAGE: &str = r#"<!doctype html>
 <div id="grandchild-target" style="display:none; color:rgb(14,15,16)">grandchild</div>
 <script>document.documentElement.setAttribute('data-script-ran', 'yes')</script>"#;
 
+const LINK_EVENT_PAGE: &str = r#"<!doctype html>
+<script>globalThis.stylesheetEvents = [];</script>
+<link id="event-static" rel="stylesheet" href="/event-static.css"
+      onload="stylesheetEvents.push('static-load')"
+      onerror="stylesheetEvents.push('static-error')">
+<link id="event-preload" rel="preload" as="style" href="/event-preload.css"
+      onload="stylesheetEvents.push('preload-load')"
+      onerror="stylesheetEvents.push('preload-error')">
+<style id="event-inline">#event-target { display: none; color: red; }</style>
+<div id="event-target" style="display:none">event target</div>
+<script>
+  const dynamic = document.createElement('link');
+  dynamic.id = 'event-dynamic';
+  dynamic.rel = 'stylesheet';
+  dynamic.href = '/event-dynamic.css';
+  dynamic.onload = () => stylesheetEvents.push('dynamic-load');
+  dynamic.onerror = () => stylesheetEvents.push('dynamic-error');
+  document.head.appendChild(dynamic);
+</script>"#;
+
+const LINK_EVENT_READY_SCRIPT: &str = r#"(() => {
+    const events = globalThis.stylesheetEvents;
+    if (!Array.isArray(events)) return false;
+    const expected = ['static-error', 'preload-error', 'dynamic-error'];
+    if (!expected.every(event => events.includes(event))) return false;
+    if (events.some(event => event.endsWith('-load'))) return false;
+
+    const staticLink = document.getElementById('event-static');
+    const preloadLink = document.getElementById('event-preload');
+    const dynamicLink = document.getElementById('event-dynamic');
+    const inlineStyle = document.getElementById('event-inline');
+    const target = document.getElementById('event-target');
+    const failedLinksExposeSheets =
+        staticLink.sheet instanceof CSSStyleSheet &&
+        staticLink.sheet.ownerNode === staticLink &&
+        dynamicLink.sheet instanceof CSSStyleSheet &&
+        dynamicLink.sheet.ownerNode === dynamicLink;
+    const nonStylesheetPreloadHasNoSheet = preloadLink.sheet === null;
+    const inlineCssomRemainsAvailable =
+        inlineStyle.sheet instanceof CSSStyleSheet && inlineStyle.sheet.cssRules.length === 1;
+    const authorRulesRemainInactive =
+        getComputedStyle(target).display === 'block' &&
+        getComputedStyle(target).color === 'rgb(0, 0, 0)';
+    if (!failedLinksExposeSheets || !nonStylesheetPreloadHasNoSheet ||
+        !inlineCssomRemainsAvailable || !authorRulesRemainInactive) {
+        return false;
+    }
+    document.documentElement.setAttribute(
+        'data-link-event-probe',
+        events.slice().sort().join(',')
+    );
+    return true;
+})()"#;
+
 const DISABLED_READY_SCRIPT: &str = r#"(() => {
     const child = document.getElementById('child')?.contentDocument;
     const grandchild = child?.getElementById('grandchild')?.contentDocument;
@@ -136,6 +193,7 @@ impl DisableCssFixtureServer {
             .route("/page.html", get(|| async { Html(MAIN_PAGE) }))
             .route("/child.html", get(|| async { Html(CHILD_PAGE) }))
             .route("/grandchild.html", get(|| async { Html(GRANDCHILD_PAGE) }))
+            .route("/link-events.html", get(|| async { Html(LINK_EVENT_PAGE) }))
             .route("/baseline.html", get(baseline_page))
             .route("/redirect.html", get(redirect_to_page))
             .route("/document-open.html", get(document_open_page))
@@ -317,6 +375,35 @@ fn survives_http_redirect_without_losing_the_page_policy() -> Result<()> {
 
     assert!(stdout.contains("data-disable-css-probe=\"ready\""));
     assert_no_css_requests(&server, "redirected --disable-css");
+    Ok(())
+}
+
+#[test]
+fn blocked_stylesheet_links_dispatch_error_and_preserve_cssom() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(DisableCssFixtureServer::spawn())?;
+    let output = run_fetch_cli_with_args(
+        &server.url("/link-events.html"),
+        &[
+            "--disable-css",
+            "--timeout",
+            "5000",
+            "--wait-script",
+            LINK_EVENT_READY_SCRIPT,
+        ],
+    )?;
+    let stdout = assert_success(
+        &output,
+        server.requests.lock().as_slice(),
+        "disabled stylesheet link events",
+    );
+
+    assert!(
+        stdout.contains("data-link-event-probe=\"dynamic-error,preload-error,static-error\""),
+        "blocked stylesheet resources must report error without reporting load: {stdout}"
+    );
+    assert!(stdout.contains("id=\"event-inline\""));
+    assert_no_css_requests(&server, "disabled stylesheet link events");
     Ok(())
 }
 

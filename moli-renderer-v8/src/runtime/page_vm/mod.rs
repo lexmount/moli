@@ -1520,7 +1520,6 @@ impl PageVmRuntimeHooks {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum ScannedStylesheetAdmission {
     Admitted,
-    SuppressedByPagePolicy,
     DeferredToParser(ScannedStylesheetDeferral),
 }
 
@@ -4452,9 +4451,6 @@ impl PageVm {
         request_resource_type: moli_fetch::RequestResourceType,
         link_preload: bool,
     ) -> ScannedStylesheetAdmission {
-        if self.vm().document_runtime.author_styles_disabled() {
-            return ScannedStylesheetAdmission::SuppressedByPagePolicy;
-        }
         if self.vm().fetch_subresource_interception_matches(
             crate::types::SubresourceResourceType::Stylesheet,
         ) {
@@ -4494,9 +4490,6 @@ impl PageVm {
                 link_preload,
             ) {
             Ok(_) => ScannedStylesheetAdmission::Admitted,
-            Err(
-                crate::document_runtime::OwnerlessStylesheetAdmissionError::AuthorStylesDisabled,
-            ) => ScannedStylesheetAdmission::SuppressedByPagePolicy,
             Err(
                 crate::document_runtime::OwnerlessStylesheetAdmissionError::ContentSecurityPolicy,
             ) => ScannedStylesheetAdmission::DeferredToParser(

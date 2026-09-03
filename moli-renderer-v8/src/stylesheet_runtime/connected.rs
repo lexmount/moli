@@ -228,15 +228,9 @@ impl DocumentRuntime {
         if self.initial_connected_style_loads_queued {
             return Vec::new();
         }
-        self.initial_connected_style_loads_queued = true;
-        if self.author_styles_disabled() {
-            self.stylesheet_lifecycle
-                .pre_initial_scan_processed_owners
-                .clear();
-            return Vec::new();
-        }
         self.late_preload_stylesheet_handles =
             self.collect_late_preload_stylesheet_handles_for_initial_scan(self.document_handle());
+        self.initial_connected_style_loads_queued = true;
         let prepared = self.prepare_connected_style_loads(self.document_handle(), true);
         self.stylesheet_lifecycle
             .pre_initial_scan_processed_owners
@@ -315,7 +309,7 @@ impl DocumentRuntime {
         root: DomHandle,
         skip_existing: bool,
     ) -> Vec<PreparedConnectedStyleLoad> {
-        if self.author_styles_disabled() || !self.dom_host.is_connected(root) {
+        if !self.dom_host.is_connected(root) {
             return Vec::new();
         }
         let load_handles = if self.dom_host.node(root).is_some_and(Node::is_document)
@@ -1437,9 +1431,6 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         owner: DomHandle,
     ) {
-        if self.author_styles_disabled() {
-            return;
-        }
         self.queue_stylesheet_source_css_projection(owner);
         if let Some(stylesheet) = unsafe { &*host_ptr }.owner_live_stylesheet(owner) {
             self.prime_live_stylesheet_import_loads(owner, stylesheet, false, host_ptr);
@@ -1451,9 +1442,6 @@ impl DocumentRuntime {
         host_ptr: *mut JsContextHost,
         owner: DomHandle,
     ) {
-        if self.author_styles_disabled() {
-            return;
-        }
         self.queue_stylesheet_source_css_projection(owner);
         if let Some(stylesheet) = unsafe { &*host_ptr }.linked_live_stylesheet(owner) {
             self.prime_live_stylesheet_import_loads(owner, stylesheet, true, host_ptr);
@@ -1475,10 +1463,6 @@ impl DocumentRuntime {
         scope: &mut v8::PinScope<'_, '_>,
         host_ptr: *mut JsContextHost,
     ) {
-        if self.author_styles_disabled() {
-            self.pending_stylesheet_source_css_projection_owners.clear();
-            return;
-        }
         let owners = std::mem::take(&mut self.pending_stylesheet_source_css_projection_owners);
         for owner in owners {
             crate::native_bridge::document::apply_stylesheet_source_css_projection(
