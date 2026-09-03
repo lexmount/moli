@@ -14512,6 +14512,120 @@ async fn main_window_indexed_child_descriptor_matches_window_semantics() {
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn cross_origin_window_indexed_child_exposes_live_same_origin_grandchild() {
+    const TOP_HOST: &str = "top.window-indexed.test";
+    const MIDDLE_HOST: &str = "middle.window-indexed.test";
+
+    let server = StaticHttpServer::spawn(2).await;
+    let top_url = server.url_for_host(TOP_HOST, "/page.html");
+    let middle_url = server.url_for_host(MIDDLE_HOST, "/middle.html");
+    let grandchild_url = server.url_for_host(TOP_HOST, "/grandchild.html");
+    let loader = static_http_loader([
+        server.resolve_entry(TOP_HOST),
+        server.resolve_entry(MIDDLE_HOST),
+    ]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(&format!(
+        r#"
+globalThis.__middleWindowUrl = {};
+globalThis.__grandchildWindowUrl = {};
+globalThis.__middleWindowLoaded = false;
+globalThis.__nestedWindowLoaded = false;
+addEventListener("message", event => {{
+  if (event.data === "nested-window-loaded") {{
+    globalThis.__nestedWindowLoaded = true;
+  }}
+}});
+"#,
+        serde_json::to_string(middle_url.as_str()).expect("serialize middle frame URL"),
+        serde_json::to_string(grandchild_url.as_str()).expect("serialize grandchild frame URL")
+    ))
+    .expect("nested cross-origin Window URLs should install");
+    vm.eval(
+        r#"
+(() => {
+  const middle = document.createElement("iframe");
+  middle.src = globalThis.__middleWindowUrl;
+  middle.onload = () => { globalThis.__middleWindowLoaded = true; };
+  (document.body || document.documentElement || document).appendChild(middle);
+})()
+"#,
+    )
+    .expect("cross-origin middle frame should queue");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__middleWindowLoaded)",
+        "true",
+        "cross-origin middle frame should load",
+    )
+    .await;
+
+    let middle_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .map(|realm| realm.context_id)
+        .next()
+        .expect("cross-origin middle frame realm should materialize");
+    vm.eval_in_child_default_context(
+        middle_context_id,
+        &format!(
+            r#"
+(() => {{
+  const nested = document.createElement("iframe");
+  nested.name = "liveNested";
+  nested.src = {};
+  nested.onload = () => top.postMessage("nested-window-loaded", "*");
+  document.body.appendChild(nested);
+}})()
+"#,
+            serde_json::to_string(grandchild_url.as_str()).expect("serialize grandchild frame URL")
+        ),
+    )
+    .expect("same-origin-with-top grandchild should queue");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__nestedWindowLoaded)",
+        "true",
+        "same-origin-with-top grandchild should load",
+    )
+    .await;
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const middle = frames[0];
+  const grandchild = middle[0];
+  const adopted = grandchild.document.adoptNode(document.createElement("button"));
+  return JSON.stringify({
+    middleLength: middle.length,
+    grandchildIsWindow: grandchild.window === grandchild,
+    grandchildTopIsTop: grandchild.top === window,
+    adoptedIntoGrandchild: adopted.ownerDocument === grandchild.document,
+    namedVisible: "liveNested" in middle,
+    namedOwn: Object.prototype.hasOwnProperty.call(middle, "liveNested"),
+    namedMatchesIndexed: middle.liveNested === grandchild,
+    namedDescriptorMatches:
+      Object.getOwnPropertyDescriptor(middle, "liveNested").value === grandchild
+  });
+})()
+"#,
+        )
+        .expect("top should traverse the cross-origin middle Window index");
+    assert_eq!(
+        result,
+        r#"{"middleLength":1,"grandchildIsWindow":true,"grandchildTopIsTop":true,"adoptedIntoGrandchild":true,"namedVisible":true,"namedOwn":true,"namedMatchesIndexed":true,"namedDescriptorMatches":true}"#
+    );
+    assert_eq!(
+        server.finish_targets().await,
+        vec!["/middle.html", "/grandchild.html"]
+    );
+}
+
 #[test]
 fn same_origin_child_window_migration_to_cross_origin_installs_denied_surface() {
     let mut vm = new_storage_test_vm("https://child-cross-origin-migration.test/");
