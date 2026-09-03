@@ -1629,9 +1629,13 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
     .await;
     consume_main_document_navigation_start(&mut ctx);
     let promoted_navigation = take_response_by_id(&mut ctx, 10419456);
+    assert!(
+        promoted_navigation.get("error").is_none(),
+        "offline navigation must not return a protocol error; got {promoted_navigation}"
+    );
     assert_eq!(
-        promoted_navigation["error"]["message"],
-        json!("Network emulation offline")
+        promoted_navigation["result"]["errorText"],
+        json!("net::ERR_INTERNET_DISCONNECTED")
     );
 }
 

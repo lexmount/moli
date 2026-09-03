@@ -30,6 +30,7 @@ use crate::domains::network::{
 
 const BLOCKED_BY_CLIENT_ERROR_TEXT: &str = "net::ERR_BLOCKED_BY_CLIENT";
 const HTTP_RESPONSE_CODE_FAILURE_ERROR_TEXT: &str = "net::ERR_HTTP_RESPONSE_CODE_FAILURE";
+const NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT: &str = "net::ERR_INTERNET_DISCONNECTED";
 const CAPTURED_RAW_REPLAY_CHUNK_SIZE: usize = 64 * 1024;
 
 fn apply_navigation_request_load_policy(
@@ -882,7 +883,30 @@ impl BackgroundNavigationLoadJob {
 
             ensure_url_not_blocked_for_load_inputs(&self.load_inputs, &self.raw_url)?;
             if self.load_inputs.network_offline {
-                return Err("Network emulation offline".to_owned());
+                // Emulated offline is a network failure, not a protocol error.
+                // Report it like any other transport failure: commit a
+                // browser-owned error page so Page.navigate resolves with an
+                // `errorText` and the target stays responsive (Chromium
+                // reports net::ERR_INTERNET_DISCONNECTED here).
+                let requested_url = Url::parse(&self.raw_url).map_err(|error| {
+                    format!("failed to parse request url `{}`: {error}", self.raw_url)
+                })?;
+                tracing::debug!(
+                    url = %self.raw_url,
+                    network_error_text = NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT,
+                    "main document blocked by emulated offline conditions"
+                );
+                return prepare_network_error_page_navigation_with_engine_async(
+                    &mut engine,
+                    self.page_reservation,
+                    &self.load_inputs,
+                    requested_url,
+                    self.method,
+                    self.request_headers,
+                    NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT.to_owned(),
+                    RendererReplyBoundary::DocumentCommit,
+                )
+                .await;
             }
 
             let requested_url = Url::parse(&self.raw_url).map_err(|error| {
@@ -2378,7 +2402,7 @@ impl CdpConnection {
 
         ensure_url_not_blocked_for_load_inputs(&load_inputs, raw_url)?;
         if load_inputs.network_offline {
-            return Err("Network emulation offline".to_owned());
+            return Err(NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT.to_owned());
         }
 
         let requested_url = Url::parse(raw_url)
@@ -3073,7 +3097,7 @@ impl CdpConnection {
         let load_inputs = self.navigation_load_inputs_for_session_owner(None);
         ensure_url_not_blocked_for_load_inputs(&load_inputs, raw_url)?;
         if load_inputs.network_offline {
-            return Err("Network emulation offline".to_owned());
+            return Err(NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT.to_owned());
         }
         let resource_storage = load_inputs.resource_storage_handles();
         let engine = self
@@ -3113,7 +3137,7 @@ impl CdpConnection {
         );
         ensure_url_not_blocked_for_load_inputs(&load_inputs, raw_url)?;
         if load_inputs.network_offline {
-            return Err("Network emulation offline".to_owned());
+            return Err(NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT.to_owned());
         }
 
         let mut request = Request::new_bytes(method, raw_url, body, request_headers)
@@ -3194,7 +3218,7 @@ impl CdpConnection {
     ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
         ensure_url_not_blocked_for_load_inputs(load_inputs, raw_url)?;
         if load_inputs.network_offline {
-            return Err("Network emulation offline".to_owned());
+            return Err(NET_ERR_INTERNET_DISCONNECTED_ERROR_TEXT.to_owned());
         }
 
         let mut request = Request::new_bytes(method, raw_url, body, request_headers)

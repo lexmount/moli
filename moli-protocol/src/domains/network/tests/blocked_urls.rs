@@ -1322,7 +1322,7 @@ async fn emulate_network_conditions_updates_browser_context_state() {
     );
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn emulate_network_conditions_offline_navigation_fails_before_completion_events() {
+async fn emulate_network_conditions_offline_navigation_commits_error_document() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
@@ -1331,6 +1331,7 @@ async fn emulate_network_conditions_offline_navigation_fails_before_completion_e
         .runtime_slot
         .enable_primary_network_events();
     ctx.conn.browser_context = Some(bc);
+    ctx.enable_page_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
         "id": 31,
@@ -1352,16 +1353,93 @@ async fn emulate_network_conditions_offline_navigation_fails_before_completion_e
         "params": { "url": "http://example.test/offline" }
     }))
     .await;
+    wait_until_messages(
+        &mut ctx,
+        Some("SID-1"),
+        "offline error Document load",
+        |messages| {
+            messages
+                .iter()
+                .any(|message| message["method"] == json!("Page.loadEventFired"))
+        },
+    )
+    .await;
 
-    consume_main_document_navigation_start(&mut ctx);
-    let request = ctx.take_one();
-    assert_eq!(request["method"], "Network.requestWillBeSent");
-    let failed = ctx.take_one();
-    assert_eq!(failed["method"], "Network.loadingFailed");
-    assert_eq!(failed["sessionId"], "SID-1");
-    assert_eq!(failed["params"]["errorText"], "Network emulation offline");
-    ctx.expect_error(32, -32000, "Network emulation offline");
-    assert!(ctx.sent.is_empty());
+    let messages = ctx.take_all();
+    let request_index = messages
+        .iter()
+        .position(|message| {
+            message["method"] == json!("Network.requestWillBeSent")
+                && message["sessionId"] == json!("SID-1")
+        })
+        .unwrap_or_else(|| panic!("missing document request: {messages:?}"));
+    let request = &messages[request_index];
+    assert_eq!(request["params"]["frameId"], "TID-1");
+    let request_id = request["params"]["requestId"]
+        .as_str()
+        .expect("request id")
+        .to_owned();
+
+    let failed_index = messages
+        .iter()
+        .position(|message| {
+            message["method"] == json!("Network.loadingFailed")
+                && message["sessionId"] == json!("SID-1")
+                && message["params"]["requestId"] == json!(request_id)
+        })
+        .unwrap_or_else(|| panic!("missing document loadingFailed: {messages:?}"));
+    let failed = &messages[failed_index];
+    assert_eq!(failed["params"]["requestId"], request_id);
+    assert_eq!(failed["params"]["type"], "Document");
+    assert_eq!(failed["params"]["canceled"], false);
+    assert_eq!(
+        failed["params"]["errorText"],
+        "net::ERR_INTERNET_DISCONNECTED"
+    );
+    assert!(
+        request_index < failed_index,
+        "requestWillBeSent must precede loadingFailed: {messages:?}"
+    );
+
+    let response = messages
+        .iter()
+        .find(|message| message["id"] == json!(32))
+        .expect("Page.navigate response");
+    assert!(
+        response.get("error").is_none(),
+        "offline navigation must not return a protocol error; got {response}"
+    );
+    assert_eq!(response["result"]["frameId"], "TID-1");
+    assert!(response["result"]["loaderId"].is_string());
+    assert_eq!(response["result"]["isDownload"], false);
+    assert_eq!(
+        response["result"]["errorText"],
+        "net::ERR_INTERNET_DISCONNECTED"
+    );
+
+    let frame_index = messages
+        .iter()
+        .position(|message| {
+            message["method"] == json!("Page.frameNavigated")
+                && message["sessionId"] == json!("SID-1")
+        })
+        .unwrap_or_else(|| panic!("missing error Document frame commit: {messages:?}"));
+    assert!(
+        failed_index < frame_index,
+        "loadingFailed must precede the error Document frame commit: {messages:?}"
+    );
+    let finished_index = messages
+        .iter()
+        .position(|message| {
+            message["method"] == json!("Network.loadingFinished")
+                && message["sessionId"] == json!("SID-1")
+                && message["params"]["requestId"] == json!(request_id)
+        })
+        .unwrap_or_else(|| panic!("missing error Document loadingFinished: {messages:?}"));
+    assert!(
+        frame_index < finished_index,
+        "frame commit must precede error Document loadingFinished: {messages:?}"
+    );
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_offline_runtime_fetch_emits_loading_failed() {

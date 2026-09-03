@@ -343,9 +343,13 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
     .await;
     consume_main_document_navigation_start(&mut ctx);
     let second_error = take_response_by_id(&mut ctx, 104169273);
+    assert!(
+        second_error.get("error").is_none(),
+        "offline navigation must not return a protocol error; got {second_error}"
+    );
     assert_eq!(
-        second_error["error"]["message"],
-        json!("Network emulation offline")
+        second_error["result"]["errorText"],
+        json!("net::ERR_INTERNET_DISCONNECTED")
     );
 
     {

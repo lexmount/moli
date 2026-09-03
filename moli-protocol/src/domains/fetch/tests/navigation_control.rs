@@ -358,8 +358,11 @@ async fn request_paused_then_continue_request_fails_when_network_offline() {
     let failed = ctx.take_one();
     assert_eq!(failed["method"], "Network.loadingFailed");
     assert_eq!(failed["sessionId"], "SID-1");
-    assert_eq!(failed["params"]["errorText"], "Network emulation offline");
-    ctx.expect_error(16632, -32000, "Network emulation offline");
+    assert_eq!(
+        failed["params"]["errorText"],
+        "net::ERR_INTERNET_DISCONNECTED"
+    );
+    ctx.expect_error(16632, -32000, "net::ERR_INTERNET_DISCONNECTED");
 }
 
 #[tokio::test(flavor = "multi_thread")]
