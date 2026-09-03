@@ -189,7 +189,20 @@ impl DomHost {
     }
 
     pub fn select_selectedcontent_elements(&self, handle: DomHandle) -> Vec<DomHandle> {
-        self.dom.select_selectedcontent_elements(handle)
+        if !self.is_html_element_named(handle, "select") {
+            return Vec::new();
+        }
+        self.elements_by_tag_name_ns(
+            handle,
+            Some("http://www.w3.org/1999/xhtml"),
+            "selectedcontent",
+            false,
+        )
+        .into_iter()
+        .filter(|selectedcontent| {
+            self.selectedcontent_nearest_ancestor_select(*selectedcontent) == Some(handle)
+        })
+        .collect()
     }
 
     pub fn option_is_disabled(&self, handle: DomHandle) -> bool {
