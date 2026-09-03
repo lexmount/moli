@@ -51,7 +51,7 @@ async fn close_active_target_fails_only_active_owner_pending_awaits() {
         Some("SID-bg-await".to_owned()),
         "about:blank#bg-await".to_owned(),
     ));
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.conn
         .register_pending_inspector_await(1041201, Some("SID-active-await"));
     ctx.conn
@@ -158,7 +158,8 @@ async fn attach_to_target_selects_inactive_browser_context() {
     load_bc_with_target(&mut ctx, "BID-A", "TID-A");
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B");
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 6,
@@ -200,7 +201,8 @@ async fn attach_to_target_creates_attached_session_and_keeps_target_context_acti
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B");
     inactive.attach_active_session("SID-B");
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 61,
@@ -271,7 +273,7 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 20,
@@ -356,7 +358,7 @@ async fn dispose_browser_context_aborts_paused_runtime_fetch_subresource() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
     ctx.conn
@@ -688,7 +690,8 @@ async fn page_bring_to_front_on_inactive_context_restores_previous_context() {
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-active-b".to_owned());
     inactive.attach_active_session("SID-active-b".to_owned());
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 1023,

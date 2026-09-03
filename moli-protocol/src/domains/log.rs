@@ -653,7 +653,7 @@ mod tests {
             None,
             None,
         );
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({
             "id": 1,

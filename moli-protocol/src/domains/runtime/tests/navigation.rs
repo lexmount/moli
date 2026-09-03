@@ -7,7 +7,7 @@ async fn enable_with_background_event_sender_defers_initial_document_page_build(
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.set_target_url("about:blank".into());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     let (background_tx, _) = tokio::sync::mpsc::unbounded_channel();
     let (completion_tx, _) =
@@ -95,7 +95,7 @@ async fn enable_reports_no_document_without_legacy_materialization_adapter() {
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.set_target_url("about:blank".into());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 21_002,

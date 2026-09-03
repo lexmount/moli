@@ -3708,6 +3708,27 @@ mod tests {
         }
     }
 
+    fn commit_worker_attach_outputs_for_test(
+        conn: &mut CdpConnection,
+        outputs: &[WorkerTargetLifecycleOutput],
+    ) {
+        let prepared_attaches = outputs
+            .iter()
+            .filter_map(|output| match output {
+                WorkerTargetLifecycleOutput::SharedWorkerAttached {
+                    prepared_attach, ..
+                }
+                | WorkerTargetLifecycleOutput::ServiceWorkerAttached {
+                    prepared_attach, ..
+                } => Some(prepared_attach.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        for prepared_attach in prepared_attaches {
+            let _ = conn.commit_prepared_attach_event_plan(prepared_attach);
+        }
+    }
+
     fn shared_worker_info(instance_id: u64) -> RendererSharedWorkerTargetInfo {
         RendererSharedWorkerTargetInfo {
             owner_local_host_id: moli_core::RendererOwnerLocalHostId::new_for_testing(1),
@@ -3748,7 +3769,7 @@ mod tests {
             Some("TID-page".to_owned()),
             page_attachment_id,
         );
-        conn.browser_context = Some(context);
+        conn.install_browser_context_fixture_for_test(context);
         let owner_renderer_page = RendererPageResidenceIdentity::new(
             moli_core::RendererOwnerLocalHostId::new_for_testing(17),
             moli_core::PageId::new_for_testing(23),
@@ -3760,11 +3781,10 @@ mod tests {
         conn: &mut CdpConnection,
         wait_for_debugger_on_start: bool,
     ) {
-        assert!(conn.prepare_auto_attached_page_session_binding(
-            "TID-page",
-            "SID-page-base".to_owned(),
-        ).is_some());
-        conn.register_bound_session_for_test("SID-page-base");
+        let route = conn
+            .prepare_auto_attached_page_session_binding("TID-page", "SID-page-base".to_owned())
+            .expect("page session binding");
+        conn.register_session_route_for_test("SID-page-base", route);
         conn.set_auto_attach_owner(
             Some("SID-page-base"),
             true,
@@ -4009,10 +4029,9 @@ mod tests {
     #[tokio::test]
     async fn dedicated_worker_auto_attach_is_scoped_to_its_owner_page_session() {
         let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-        assert!(conn.prepare_auto_attached_page_session_binding(
-            "TID-page",
-            "SID-page-base".to_owned(),
-        ).is_some());
+        let page_route = conn
+            .prepare_auto_attached_page_session_binding("TID-page", "SID-page-base".to_owned())
+            .expect("page session binding");
         conn.browser_context
             .as_mut()
             .unwrap()
@@ -4021,8 +4040,15 @@ mod tests {
                 Some("SID-other-page".to_owned()),
                 "about:blank".to_owned(),
             ));
-        conn.register_bound_session_for_test("SID-page-base");
-        conn.register_bound_session_for_test("SID-other-page");
+        conn.register_session_route_for_test("SID-page-base", page_route);
+        conn.register_session_route_for_test(
+            "SID-other-page",
+            crate::conn::CdpSessionRoute::PageTarget {
+                browser_context_id: "BID-1".to_owned(),
+                target_id: "TID-other-page".to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            },
+        );
         for owner in [None, Some("SID-page-base"), Some("SID-other-page")] {
             conn.set_auto_attach_owner(owner, true, false, CdpTargetFilter::default_auto_attach());
         }
@@ -4448,11 +4474,10 @@ mod tests {
     #[tokio::test]
     async fn dedicated_worker_failed_load_waits_for_debugger_before_target_retirement() {
         let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-        assert!(conn.prepare_auto_attached_page_session_binding(
-            "TID-page",
-            "SID-page-base".to_owned(),
-        ).is_some());
-        conn.register_bound_session_for_test("SID-page-base");
+        let route = conn
+            .prepare_auto_attached_page_session_binding("TID-page", "SID-page-base".to_owned())
+            .expect("page session binding");
+        conn.register_session_route_for_test("SID-page-base", route);
         conn.set_target_discovery_for_owner(
             Some("SID-page-base"),
             CdpTargetFilter::default_target_discovery(),
@@ -4925,7 +4950,6 @@ mod tests {
     #[test]
     fn service_worker_target_registration_auto_attaches_when_enabled() {
         let mut conn = CdpConnection::default();
-        conn.require_committed_session_routes_for_test();
         conn.set_root_target_discovery_enabled(true);
         conn.set_auto_attach_owner(None, true, true, CdpTargetFilter::default_auto_attach());
         conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
@@ -5117,7 +5141,6 @@ mod tests {
     #[test]
     fn service_worker_target_registration_auto_attaches_related_newer_version() {
         let mut conn = CdpConnection::default();
-        conn.require_committed_session_routes_for_test();
         conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
         assert!(
             register_service_worker_target(&mut conn, "BID-1", service_worker_info(7)).is_empty()
@@ -5221,7 +5244,7 @@ mod tests {
         context.set_active_target_id("TID-page".to_owned());
         context.attach_active_session("SID-page".to_owned());
         context.set_service_worker_domain_enabled(Some("SID-page"), true);
-        conn.browser_context = Some(context);
+        conn.install_browser_context_fixture_for_test(context);
         let run = renderer_run();
 
         let outputs = register_service_worker_target_with_active_run(
@@ -5264,7 +5287,7 @@ mod tests {
         context.set_active_target_id("TID-page".to_owned());
         context.attach_active_session("SID-page".to_owned());
         context.set_service_worker_domain_enabled(Some("SID-page"), true);
-        conn.browser_context = Some(context);
+        conn.install_browser_context_fixture_for_test(context);
 
         let outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(12))
             .worker_target_lifecycle_outputs;
@@ -5371,7 +5394,7 @@ mod tests {
         context.set_active_target_id("TID-page".to_owned());
         context.attach_active_session("SID-page".to_owned());
         context.set_service_worker_domain_enabled(Some("SID-page"), true);
-        conn.browser_context = Some(context);
+        conn.install_browser_context_fixture_for_test(context);
         let _ = register_service_worker_target(&mut conn, "BID-1", service_worker_info(12));
         let _ = register_service_worker_target(&mut conn, "BID-1", service_worker_info(13));
 
@@ -5413,7 +5436,7 @@ mod tests {
         context.set_active_target_id("TID-page".to_owned());
         context.attach_active_session("SID-page".to_owned());
         context.set_service_worker_domain_enabled(Some("SID-page"), true);
-        conn.browser_context = Some(context);
+        conn.install_browser_context_fixture_for_test(context);
         let _ = register_service_worker_target(&mut conn, "BID-1", service_worker_info(13));
 
         let outputs = service_worker_target_lifecycle_outputs_for_events(
@@ -5524,6 +5547,7 @@ mod tests {
                 ))
             })
             .expect("auto-attached service worker target id");
+        commit_worker_attach_outputs_for_test(&mut conn, &outputs);
         let target = conn
             .service_worker_target_for_session_mut(Some(&attached_session_id))
             .expect("service worker target should be attached");
@@ -5623,6 +5647,7 @@ mod tests {
                     .map(|(attachment, _)| attachment.session_id().to_owned())
             })
             .expect("auto-attached service worker target id");
+        commit_worker_attach_outputs_for_test(&mut conn, &outputs);
         let target = conn
             .service_worker_target_for_session_mut(Some(&attached_session_id))
             .expect("service worker target should be attached");
@@ -5679,6 +5704,7 @@ mod tests {
                 ))
             })
             .expect("auto-attached service worker target id");
+        commit_worker_attach_outputs_for_test(&mut conn, &outputs);
         let target = conn
             .service_worker_target_for_session_mut(Some(&attached_session_id))
             .expect("service worker target should be attached");
@@ -5897,7 +5923,7 @@ mod tests {
         target.attach_session("SID-service-worker".to_owned());
         target.set_console_enabled("SID-service-worker", true);
         browser_context.insert_service_worker_target(target);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let old_run = renderer_run();
         let old_output = record_service_worker_target_console_message(
@@ -5975,7 +6001,7 @@ mod tests {
         target.attach_session("SID-reused".to_owned());
         target.set_console_enabled("SID-reused", true);
         browser_context.insert_service_worker_target(target);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let old_output = record_service_worker_target_console_message(
             &mut conn,
@@ -6008,7 +6034,6 @@ mod tests {
     #[test]
     fn shared_worker_target_registration_auto_attaches_when_enabled() {
         let mut conn = CdpConnection::default();
-        conn.require_committed_session_routes_for_test();
         conn.set_auto_attach_owner(
             None,
             true,
@@ -6039,11 +6064,10 @@ mod tests {
     #[test]
     fn shared_worker_registration_only_auto_attaches_browser_level_owners() {
         let (mut conn, owner_page, owner_renderer_page) = dedicated_worker_fixture();
-        assert!(
-            conn.prepare_auto_attached_page_session_binding("TID-page", "SID-page".to_owned(),)
-                .is_some()
-        );
-        conn.register_bound_session_for_test("SID-page");
+        let page_route = conn
+            .prepare_auto_attached_page_session_binding("TID-page", "SID-page".to_owned())
+            .expect("page session binding");
+        conn.register_session_route_for_test("SID-page", page_route);
         conn.register_browser_session("SID-browser-1".to_owned());
         conn.register_browser_session("SID-browser-2".to_owned());
 
@@ -6058,14 +6082,13 @@ mod tests {
                 "https://example.test/worker.js".to_owned(),
                 Vec::new(),
             ));
-        assert!(
-            conn.prepare_auto_attached_dedicated_worker_session_binding(
+        let dedicated_worker_route = conn
+            .prepare_auto_attached_dedicated_worker_session_binding(
                 "TID-dedicated-worker",
                 "SID-dedicated-worker".to_owned(),
             )
-            .is_some()
-        );
-        conn.register_bound_session_for_test("SID-dedicated-worker");
+            .expect("dedicated worker session binding");
+        conn.register_session_route_for_test("SID-dedicated-worker", dedicated_worker_route);
 
         let mut owner_shared_worker = SharedWorkerTargetState::new(
             moli_core::RendererOwnerLocalHostId::new_for_testing(2),
@@ -6080,7 +6103,13 @@ mod tests {
             .as_mut()
             .expect("browser context")
             .insert_shared_worker_target(owner_shared_worker);
-        conn.register_bound_session_for_test("SID-shared-worker");
+        conn.register_session_route_for_test(
+            "SID-shared-worker",
+            crate::conn::CdpSessionRoute::SharedWorkerTarget {
+                browser_context_id: "BID-1".to_owned(),
+                target_id: "TID-owner-shared-worker".to_owned(),
+            },
+        );
 
         for (owner, wait_for_debugger_on_start) in [
             (None, false),
@@ -6164,7 +6193,7 @@ mod tests {
         target.attach_session("SID-first".to_owned());
         target.attach_session("SID-second".to_owned());
         browser_context.insert_shared_worker_target(target);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let outputs = record_shared_worker_target_runtime_inspector_messages(
             &mut conn,
@@ -6217,7 +6246,7 @@ mod tests {
             "service-worker",
         ));
         browser_context.insert_service_worker_target(target);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let outputs = record_service_worker_target_console_message(
             &mut conn,
@@ -6289,7 +6318,7 @@ mod tests {
             "service-worker",
         ));
         browser_context.insert_service_worker_target(target);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let exception_message = RendererServiceWorkerExceptionMessage {
             message: "Uncaught Error: boom".to_owned(),
@@ -6390,7 +6419,7 @@ mod tests {
         target.attach_session("SID-second".to_owned());
         assert!(target.set_network_enabled("SID-second", true));
         browser_context.insert_service_worker_target(target);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let diagnostic = RendererServiceWorkerFetchDiagnostic {
             internal_id: 101,
@@ -6646,7 +6675,7 @@ mod tests {
         target.attach_session("SID-first".to_owned());
         target.attach_session("SID-second".to_owned());
         browser_context.insert_service_worker_target(target);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let messages = runtime_inspector_messages(vec![json!({
             "method": "Runtime.executionContextCreated",
@@ -6766,6 +6795,7 @@ mod tests {
                 ))
             })
             .expect("auto-attached target id");
+        commit_worker_attach_outputs_for_test(&mut conn, &outputs);
         let target = conn
             .shared_worker_target_for_session_mut(Some(&attached_session_id))
             .expect("shared worker target should be attached");
@@ -6876,7 +6906,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-1".to_owned());
         browser_context.set_active_target_id("TID-page");
         browser_context.attach_active_session("SID-page");
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let outputs =
             register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(17))

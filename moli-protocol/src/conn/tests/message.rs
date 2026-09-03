@@ -55,7 +55,7 @@ async fn session_scoped_unknown_domain_error_keeps_session_id() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    conn.browser_context = Some(bc);
+    conn.install_browser_context_fixture_for_test(bc);
 
     let unknown_domain = conn
         .process_message_messages_only_for_test(
@@ -78,7 +78,7 @@ async fn session_scoped_unknown_method_error_keeps_session_id() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    conn.browser_context = Some(bc);
+    conn.install_browser_context_fixture_for_test(bc);
 
     let unknown_method = conn
         .process_message_messages_only_for_test(
@@ -101,9 +101,13 @@ async fn browser_and_tab_sessions_do_not_fall_through_to_the_active_page() {
     conn.install_default_browser_target();
     conn.register_browser_session("SID-browser".to_owned());
     let default_tab_target_id = conn.default_tab_target_id().to_owned();
-    assert!(
-        conn.assign_session_to_tab_target(&default_tab_target_id, "SID-tab".to_owned(), false,)
-    );
+    conn.attach_tab_target_session_event_plan(
+        "SID-tab".to_owned(),
+        None,
+        &default_tab_target_id,
+        false,
+    )
+    .expect("default tab target should accept a committed session");
 
     for session_id in ["SID-browser", "SID-tab"] {
         let response = conn
@@ -131,7 +135,7 @@ async fn session_scoped_handler_error_keeps_session_id_even_when_domain_uses_pla
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    conn.browser_context = Some(bc);
+    conn.install_browser_context_fixture_for_test(bc);
 
     let invalid_dialog = conn
         .process_message_messages_only_for_test(
@@ -154,7 +158,7 @@ async fn puppeteer_bootstrap_domains_are_session_scoped_noops() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    conn.browser_context = Some(bc);
+    conn.install_browser_context_fixture_for_test(bc);
 
     let audits = conn
         .process_message_messages_only_for_test(

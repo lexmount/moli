@@ -45,7 +45,7 @@ async fn with_loaded_http_document(
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id(target_id.to_owned());
     bc.attach_active_session(session_id.to_owned());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(url, Some(session_id))
         .await;
     ctx.conn
@@ -72,7 +72,7 @@ async fn with_loaded_http_background_document(
     bc.set_active_target_id(active_target_id.to_owned());
     bc.attach_active_session(active_session_id.to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(url, Some(background_session_id))
         .await;
 }

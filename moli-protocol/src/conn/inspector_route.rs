@@ -282,7 +282,7 @@ mod tests {
             "SID-background-attached".to_owned(),
         ));
         let mut conn = CdpConnection::default();
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let filtered = conn.filter_renderer_inspector_batches_for_target_owner(
             &CommandOwnerScope::for_session("SID-active-primary"),
@@ -331,7 +331,8 @@ mod tests {
             .runtime_slot
             .current_renderer_attachment()
             .expect("installed page should have a renderer attachment");
-        ctx.conn.browser_context = Some(browser_context);
+        ctx.conn
+            .install_browser_context_fixture_for_test(browser_context);
 
         let accepted_state = V8InspectorSessionState::from_bytes(vec![1, 2, 3]);
         let mut accepted = batch(DevToolsSessionKey::Primary);

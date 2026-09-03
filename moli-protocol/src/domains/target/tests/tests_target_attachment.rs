@@ -409,10 +409,9 @@ async fn worker_target_handler_is_auto_attach_only() {
         "worker-child",
         Some("SID-worker-child"),
     );
-    ctx.conn.register_auto_attached_session_for_target(
+    ctx.conn.mark_session_auto_attached_for_test(
         "SID-worker-child".to_owned(),
         Some(&worker_session_id),
-        Some("TID-worker-child"),
     );
     assert!(
         ctx.conn
@@ -698,7 +697,13 @@ async fn attach_to_target_existing_session_creates_distinct_attached_session() {
         .as_mut()
         .unwrap()
         .attach_active_session("SID-primary");
-    ctx.conn.register_bound_session_for_test("SID-primary");
+    register_page_session_route(
+        &mut ctx,
+        "BID-9",
+        "TID-000000000B",
+        "SID-primary",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
 
     ctx.process_async(json!({"id": 12, "method": "Target.attachToTarget",
                        "params": {"targetId": "TID-000000000B"}}))
@@ -1257,8 +1262,20 @@ async fn session_route_finds_committed_browser_page_and_worker_sessions() {
         bc.attach_active_session("SID-active");
         assert!(bc.assign_attached_session_to_target("TID-000000000A", "SID-attached".to_owned()));
     }
-    ctx.conn.register_bound_session_for_test("SID-active");
-    ctx.conn.register_bound_session_for_test("SID-attached");
+    register_page_session_route(
+        &mut ctx,
+        "BID-A",
+        "TID-000000000A",
+        "SID-active",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
+    register_page_session_route(
+        &mut ctx,
+        "BID-A",
+        "TID-000000000A",
+        "SID-attached",
+        moli_page_types::DevToolsSessionKey::Attached("SID-attached".to_owned()),
+    );
     push_background_target(
         &mut ctx,
         "TID-000000000B",
@@ -1297,14 +1314,44 @@ async fn session_route_finds_committed_browser_page_and_worker_sessions() {
     );
     inactive_shared_worker.attach_session("SID-shared-inactive".to_owned());
     inactive.insert_shared_worker_target(inactive_shared_worker);
-    ctx.conn.inactive_browser_contexts.push(inactive);
-    for session_id in [
-        "SID-inactive",
-        "SID-inactive-background",
-        "SID-inactive-attached-background",
-        "SID-shared-inactive",
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
+    for (session_id, route) in [
+        (
+            "SID-inactive",
+            CdpSessionRoute::PageTarget {
+                browser_context_id: "BID-B".to_owned(),
+                target_id: "TID-000000000C".to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            },
+        ),
+        (
+            "SID-inactive-background",
+            CdpSessionRoute::PageTarget {
+                browser_context_id: "BID-B".to_owned(),
+                target_id: "TID-000000000D".to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            },
+        ),
+        (
+            "SID-inactive-attached-background",
+            CdpSessionRoute::PageTarget {
+                browser_context_id: "BID-B".to_owned(),
+                target_id: "TID-000000000D".to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Attached(
+                    "SID-inactive-attached-background".to_owned(),
+                ),
+            },
+        ),
+        (
+            "SID-shared-inactive",
+            CdpSessionRoute::SharedWorkerTarget {
+                browser_context_id: "BID-B".to_owned(),
+                target_id: "TID-shared-inactive".to_owned(),
+            },
+        ),
     ] {
-        ctx.conn.register_bound_session_for_test(session_id);
+        ctx.conn.register_session_route_for_test(session_id, route);
     }
 
     assert_eq!(
@@ -1657,10 +1704,20 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
             "SID-detach-attached".to_owned()
         ));
     }
-    ctx.conn
-        .register_bound_session_for_test("SID-detach-primary");
-    ctx.conn
-        .register_bound_session_for_test("SID-detach-attached");
+    register_page_session_route(
+        &mut ctx,
+        "BID-detach-inspector",
+        "TID-detach-inspector",
+        "SID-detach-primary",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
+    register_page_session_route(
+        &mut ctx,
+        "BID-detach-inspector",
+        "TID-detach-inspector",
+        "SID-detach-attached",
+        moli_page_types::DevToolsSessionKey::Attached("SID-detach-attached".to_owned()),
+    );
     ctx.sent.clear();
 
     let baseline_session_count =
@@ -1735,8 +1792,13 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
             "SID-detach-attached-replacement".to_owned()
         ));
     }
-    ctx.conn
-        .register_bound_session_for_test("SID-detach-attached-replacement");
+    register_page_session_route(
+        &mut ctx,
+        "BID-detach-inspector",
+        "TID-detach-inspector",
+        "SID-detach-attached-replacement",
+        moli_page_types::DevToolsSessionKey::Attached("SID-detach-attached-replacement".to_owned()),
+    );
     ctx.process_async(json!({
         "id": 120_006,
         "sessionId": "SID-detach-attached-replacement",
@@ -1869,8 +1931,13 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         .as_mut()
         .expect("browser context")
         .attach_active_session("SID-detach-diagnostic");
-    ctx.conn
-        .register_bound_session_for_test("SID-detach-diagnostic");
+    register_page_session_route(
+        &mut ctx,
+        "BID-detach-inspector",
+        "TID-detach-inspector",
+        "SID-detach-diagnostic",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
     ctx.process_async(json!({
         "id": 120_014,
         "sessionId": "SID-detach-diagnostic",
@@ -1903,10 +1970,20 @@ async fn detach_from_target_removes_only_selected_session_document_start_scripts
             "SID-preload-attached".to_owned(),
         ));
     }
-    ctx.conn
-        .register_bound_session_for_test("SID-preload-primary");
-    ctx.conn
-        .register_bound_session_for_test("SID-preload-attached");
+    register_page_session_route(
+        &mut ctx,
+        "BID-detach-preload",
+        "TID-detach-preload",
+        "SID-preload-primary",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
+    register_page_session_route(
+        &mut ctx,
+        "BID-detach-preload",
+        "TID-detach-preload",
+        "SID-preload-attached",
+        moli_page_types::DevToolsSessionKey::Attached("SID-preload-attached".to_owned()),
+    );
     ctx.sent.clear();
 
     for (id, session_id, source) in [
@@ -2082,10 +2159,20 @@ async fn detach_fail_closes_page_before_retiring_unremovable_session_scripts() {
             "SID-cleanup-attached".to_owned(),
         ));
     }
-    ctx.conn
-        .register_bound_session_for_test("SID-cleanup-primary");
-    ctx.conn
-        .register_bound_session_for_test("SID-cleanup-attached");
+    register_page_session_route(
+        &mut ctx,
+        "BID-detach-cleanup-failure",
+        "TID-detach-cleanup-failure",
+        "SID-cleanup-primary",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
+    register_page_session_route(
+        &mut ctx,
+        "BID-detach-cleanup-failure",
+        "TID-detach-cleanup-failure",
+        "SID-cleanup-attached",
+        moli_page_types::DevToolsSessionKey::Attached("SID-cleanup-attached".to_owned()),
+    );
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2200,10 +2287,20 @@ async fn detach_fail_closes_page_when_fetch_disable_cannot_reach_renderer() {
             "SID-fetch-cleanup-attached".to_owned(),
         ));
     }
-    ctx.conn
-        .register_bound_session_for_test("SID-fetch-cleanup-primary");
-    ctx.conn
-        .register_bound_session_for_test("SID-fetch-cleanup-attached");
+    register_page_session_route(
+        &mut ctx,
+        "BID-detach-fetch-cleanup-failure",
+        "TID-detach-fetch-cleanup-failure",
+        "SID-fetch-cleanup-primary",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
+    register_page_session_route(
+        &mut ctx,
+        "BID-detach-fetch-cleanup-failure",
+        "TID-detach-fetch-cleanup-failure",
+        "SID-fetch-cleanup-attached",
+        moli_page_types::DevToolsSessionKey::Attached("SID-fetch-cleanup-attached".to_owned()),
+    );
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -2302,7 +2399,13 @@ async fn detach_from_target_emits_detached_event() {
         .as_mut()
         .unwrap()
         .attach_active_session("SID-1");
-    ctx.conn.register_bound_session_for_test("SID-1");
+    register_page_session_route(
+        &mut ctx,
+        "BID-9",
+        "TID-000000000C",
+        "SID-1",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
 
     ctx.process_async(json!({
         "id": 14,
@@ -2497,8 +2600,14 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
-    ctx.conn.register_bound_session_for_test("SID-1");
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    register_page_session_route(
+        &mut ctx,
+        "BID-9",
+        "TID-000000000A",
+        "SID-1",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
 
     ctx.process_async(json!({
         "id": 40,
@@ -2600,6 +2709,7 @@ async fn set_auto_attach_false_detaches_existing_target() {
             request_stage: crate::conn::FetchRequestStage::Request,
         }],
     );
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ctx.conn.set_auto_attach_owner(
         None,
         true,
@@ -2607,7 +2717,7 @@ async fn set_auto_attach_false_detaches_existing_target() {
         crate::conn::CdpTargetFilter::default_auto_attach(),
     );
     ctx.conn
-        .register_auto_attached_session("SID-1".to_owned(), None);
+        .mark_session_auto_attached_for_test("SID-1".to_owned(), None);
 
     ctx.process_async(json!({
         "id": 16,
@@ -2710,7 +2820,7 @@ async fn set_auto_attach_false_detaches_existing_shared_worker_target() {
         crate::conn::CdpTargetFilter::default_auto_attach(),
     );
     ctx.conn
-        .register_auto_attached_session("SID-shared-worker".to_owned(), None);
+        .mark_session_auto_attached_for_test("SID-shared-worker".to_owned(), None);
 
     ctx.process_async(json!({
         "id": 16,
@@ -2759,7 +2869,7 @@ async fn set_auto_attach_false_cleans_shared_worker_runtime_state_before_detache
         crate::conn::CdpTargetFilter::default_auto_attach(),
     );
     ctx.conn
-        .register_auto_attached_session("SID-shared-worker".to_owned(), None);
+        .mark_session_auto_attached_for_test("SID-shared-worker".to_owned(), None);
     {
         let target = ctx
             .conn
@@ -3346,12 +3456,12 @@ async fn set_auto_attach_true_attaches_existing_unattached_shared_worker_target(
 async fn non_browser_auto_attach_owners_do_not_replay_existing_shared_worker_targets() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-page");
-    assert!(
-        ctx.conn
-            .prepare_auto_attached_page_session_binding("TID-page", "SID-page".to_owned())
-            .is_some()
-    );
-    ctx.conn.register_bound_session_for_test("SID-page");
+    let page_route = ctx
+        .conn
+        .prepare_auto_attached_page_session_binding("TID-page", "SID-page".to_owned())
+        .expect("page session binding");
+    ctx.conn
+        .register_session_route_for_test("SID-page", page_route);
     ctx.conn
         .runtime_session_owner_slot_mut(Some("SID-page"))
         .expect("page owner runtime slot")
@@ -3361,16 +3471,15 @@ async fn non_browser_auto_attach_owners_do_not_replay_existing_shared_worker_tar
         .target_page_residence_identity_for_session(Some("SID-page"))
         .expect("page owner residence");
     push_dedicated_worker_target(&mut ctx, 2401, "TID-dedicated-worker", owner_page);
-    assert!(
-        ctx.conn
-            .prepare_auto_attached_dedicated_worker_session_binding(
-                "TID-dedicated-worker",
-                "SID-dedicated-worker".to_owned(),
-            )
-            .is_some()
-    );
+    let dedicated_worker_route = ctx
+        .conn
+        .prepare_auto_attached_dedicated_worker_session_binding(
+            "TID-dedicated-worker",
+            "SID-dedicated-worker".to_owned(),
+        )
+        .expect("dedicated worker session binding");
     ctx.conn
-        .register_bound_session_for_test("SID-dedicated-worker");
+        .register_session_route_for_test("SID-dedicated-worker", dedicated_worker_route);
     push_shared_worker_target(
         &mut ctx,
         SharedWorkerInstanceId::from_u64(2402),

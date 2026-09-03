@@ -85,7 +85,7 @@ async fn request_stage_navigation_request_paused_includes_synthesized_cookie_hea
             )],
         );
     }
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 72_101,
@@ -154,7 +154,7 @@ fetch('/api', { method: 'POST', body: 'nav-payload' })
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
 
@@ -376,7 +376,7 @@ document.addEventListener('DOMContentLoaded', () => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
 
@@ -538,7 +538,7 @@ window.addEventListener('load', () => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
 
@@ -699,7 +699,7 @@ window.postMessage('go', '*');
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
 
@@ -865,7 +865,7 @@ document.body.setAttribute('data-trigger', '1');
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
 
@@ -1030,7 +1030,7 @@ observer.observe(document.getElementById('target'));
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
 
@@ -1192,7 +1192,7 @@ setTimeout(() => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
 
@@ -1367,7 +1367,7 @@ const id = setInterval(() => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
 
@@ -1540,7 +1540,7 @@ queueMicrotask(() => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
 
@@ -1701,7 +1701,7 @@ Promise.resolve().then(() => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
 
@@ -1863,7 +1863,7 @@ setTimeout(() => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let xhr_url = format!("http://{addr}/xhr");
 
@@ -2043,7 +2043,7 @@ const id = setInterval(() => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let xhr_url = format!("http://{addr}/xhr");
 
@@ -2217,7 +2217,7 @@ queueMicrotask(() => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let xhr_url = format!("http://{addr}/xhr");
 
@@ -2379,7 +2379,7 @@ Promise.resolve().then(() => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let xhr_url = format!("http://{addr}/xhr");
 
@@ -2541,7 +2541,7 @@ requestIdleCallback(deadline => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
 
@@ -2699,7 +2699,7 @@ requestIdleCallback(() => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let xhr_url = format!("http://{addr}/xhr");
 
@@ -2863,7 +2863,7 @@ requestAnimationFrame(() => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
 
@@ -3019,7 +3019,7 @@ requestAnimationFrame(() => {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
     let xhr_url = format!("http://{addr}/xhr");
 
@@ -3171,7 +3171,7 @@ fetch('/api').catch(() => {});
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let page_url = format!("http://{addr}/page");
 
     ctx.process_async(json!({
@@ -3242,7 +3242,8 @@ async fn continue_with_auth_default_aborts_pending_navigation() {
     });
 
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(attached_browser_context());
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
     let url = format!("http://{addr}/auth");
 
     ctx.process_async(json!({
@@ -3341,7 +3342,7 @@ async fn continue_with_auth_success_clears_pending_auth_navigation() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let url = format!("http://{addr}/auth");
 
     ctx.process_async(json!({
@@ -3449,7 +3450,7 @@ async fn continue_with_auth_retries_navigation_with_basic_proxy_credentials() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let url = format!("http://{addr}/auth");
 
     ctx.process_async(json!({
@@ -3544,7 +3545,7 @@ async fn continue_with_auth_retries_navigation_with_digest_proxy_credentials() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.conn
         .set_http_proxy_override_async(Some(proxy_url))
         .await;
@@ -3688,7 +3689,7 @@ async fn cancel_https_proxy_connect_auth_emits_407_without_extra_info_and_fails_
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.conn
         .set_http_proxy_override_async(Some(format!("http://{proxy_addr}")))
         .await;
@@ -3838,7 +3839,7 @@ async fn continue_with_auth_handles_multi_round_basic_navigation_challenge() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let url = format!("http://{addr}/auth");
 
     ctx.process_async(json!({
@@ -3970,7 +3971,7 @@ async fn continue_with_auth_handles_digest_navigation_challenge() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let url = format!("http://{addr}/auth");
 
     ctx.process_async(json!({
@@ -4101,7 +4102,7 @@ async fn continue_with_auth_handles_multi_round_digest_navigation_challenge() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let url = format!("http://{addr}/auth");
 
     ctx.process_async(json!({

@@ -7,7 +7,7 @@ use super::tests::navigate_to_data_html_async;
 fn load_bc(ctx: &mut TestContext, bc_id: &str) {
     let mut bc = BrowserContext::new(bc_id.into());
     bc.set_active_target_id("TID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 }
 
 fn take_response_by_id(ctx: &mut TestContext, id: u64) -> Value {

@@ -674,7 +674,7 @@ mod tests {
         let mut context = browser_context_with_service_worker_target();
         context.set_active_target_id("TID-page".to_owned());
         context.attach_active_session("SID-page".to_owned());
-        ctx.conn.browser_context = Some(context);
+        ctx.conn.install_browser_context_fixture_for_test(context);
 
         ctx.process_async(json!({
             "id": 1,
@@ -726,7 +726,7 @@ mod tests {
         let mut context = browser_context_with_service_worker_target();
         context.set_active_target_id("TID-page".to_owned());
         context.attach_active_session("SID-page".to_owned());
-        ctx.conn.browser_context = Some(context);
+        ctx.conn.install_browser_context_fixture_for_test(context);
 
         ctx.process_async(json!({
             "id": 2,
@@ -849,7 +849,7 @@ mod tests {
         let mut context = browser_context_with_service_worker_target();
         context.set_active_target_id("TID-page".to_owned());
         context.attach_active_session("SID-page".to_owned());
-        ctx.conn.browser_context = Some(context);
+        ctx.conn.install_browser_context_fixture_for_test(context);
 
         ctx.process_async(json!({
             "id": 1,
@@ -900,7 +900,7 @@ mod tests {
         let mut context = browser_context_with_service_worker_target();
         context.set_active_target_id("TID-page".to_owned());
         context.attach_active_session("SID-page".to_owned());
-        ctx.conn.browser_context = Some(context);
+        ctx.conn.install_browser_context_fixture_for_test(context);
 
         ctx.process_async(json!({
             "id": 1,
@@ -930,7 +930,7 @@ mod tests {
         let mut context = browser_context_with_service_worker_target();
         context.set_active_target_id("TID-page".to_owned());
         context.attach_active_session("SID-page".to_owned());
-        ctx.conn.browser_context = Some(context);
+        ctx.conn.install_browser_context_fixture_for_test(context);
 
         ctx.process_async(json!({
             "id": 1,

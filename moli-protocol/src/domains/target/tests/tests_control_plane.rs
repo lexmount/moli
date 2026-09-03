@@ -639,7 +639,8 @@ async fn get_target_info_for_inactive_target_keeps_previously_active_context() {
     load_bc_with_target(&mut ctx, "BID-A", "TID-A");
     let mut inactive = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     inactive.set_active_target_id("TID-B");
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 111,
@@ -675,7 +676,8 @@ async fn send_message_to_target_restores_previously_active_context() {
     load_bc_with_target(&mut ctx, "BID-A", "TID-A");
     let mut inactive = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     inactive.attach_active_session("SID-B");
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 1501,
@@ -705,7 +707,8 @@ async fn detach_from_target_error_restores_previously_active_context() {
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B");
     inactive.attach_active_session("SID-B");
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 1502,
@@ -731,9 +734,10 @@ async fn detach_from_inactive_context_cleans_exact_session_without_activating_co
     load_bc_with_target(&mut ctx, "BID-A", "TID-A");
     let mut inactive = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     inactive.attach_active_session("SID-B");
-    ctx.conn.inactive_browser_contexts.push(inactive);
     ctx.conn
-        .register_auto_attached_session_for_target("SID-B".to_owned(), None, Some("TID-B"));
+        .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.conn
+        .mark_session_auto_attached_for_test("SID-B".to_owned(), None);
     ctx.conn
         .set_service_worker_pause_on_start_owner(Some("SID-B"), true);
     ctx.conn
@@ -1707,6 +1711,7 @@ async fn set_auto_attach_false_detaches_existing_background_targets() {
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
         ));
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ctx.conn.set_auto_attach_owner(
         None,
         true,
@@ -1714,9 +1719,9 @@ async fn set_auto_attach_false_detaches_existing_background_targets() {
         crate::conn::CdpTargetFilter::default_auto_attach(),
     );
     ctx.conn
-        .register_auto_attached_session("SID-1".to_owned(), None);
+        .mark_session_auto_attached_for_test("SID-1".to_owned(), None);
     ctx.conn
-        .register_auto_attached_session("SID-bg".to_owned(), None);
+        .mark_session_auto_attached_for_test("SID-bg".to_owned(), None);
 
     ctx.process_async(json!({
         "id": 1702,
@@ -1759,7 +1764,8 @@ async fn set_auto_attach_restores_previously_active_context_after_sweeping_conte
     load_bc_with_target(&mut ctx, "BID-A", "TID-A");
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B");
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 181,

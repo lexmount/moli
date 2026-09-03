@@ -1386,6 +1386,7 @@ async fn rust_cdp_chromium_target_auto_attach_false_detaches_active_session() {
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ctx.conn.set_auto_attach_owner(
         None,
         true,
@@ -1393,7 +1394,7 @@ async fn rust_cdp_chromium_target_auto_attach_false_detaches_active_session() {
         crate::conn::CdpTargetFilter::default_auto_attach(),
     );
     ctx.conn
-        .register_auto_attached_session("SID-active".to_owned(), None);
+        .mark_session_auto_attached_for_test("SID-active".to_owned(), None);
 
     set_auto_attach(&mut ctx, 260_035, false).await;
     let detached = ctx.take_one();
@@ -1417,7 +1418,7 @@ async fn rust_cdp_chromium_target_auto_attach_false_detaches_background_session(
         crate::conn::CdpTargetFilter::default_auto_attach(),
     );
     ctx.conn
-        .register_auto_attached_session("SID-bg".to_owned(), None);
+        .mark_session_auto_attached_for_test("SID-bg".to_owned(), None);
 
     set_auto_attach(&mut ctx, 260_036, false).await;
     let detached = ctx.take_one();

@@ -410,7 +410,7 @@ impl CdpConnection {
             session_id.to_owned(),
             None,
             &target_id,
-            Some(route.clone()),
+            route.clone(),
             false,
             false,
         );
@@ -457,7 +457,6 @@ mod tests {
     #[tokio::test]
     async fn runtime_listener_enable_uses_shared_worker_target_session() {
         let mut conn = CdpConnection::new();
-        conn.require_committed_session_routes_for_test();
         let mut browser_context = BrowserContext::new("BID-shared".to_owned());
         browser_context.insert_shared_worker_target(SharedWorkerTargetState::new(
             RendererOwnerLocalHostId::new_for_testing(1),
@@ -467,7 +466,7 @@ mod tests {
             "https://example.test/shared-worker.js".to_owned(),
             "shared-worker".to_owned(),
         ));
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let outcome = conn
             .enable_runtime_listener_for_target("TID-shared-worker")

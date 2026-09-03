@@ -424,12 +424,12 @@ fn background_navigation_completion_sender_routes_explicit_session_owners() {
     let mut active = BrowserContext::new("BID-active".to_owned());
     active.set_active_target_id("TID-active");
     active.attach_active_session("SID-active");
-    conn.browser_context = Some(active);
+    conn.install_browser_context_fixture_for_test(active);
 
     let mut inactive = BrowserContext::new("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive");
     inactive.attach_active_session("SID-inactive");
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
     conn.set_background_navigation_completion_sender(sender);
@@ -459,13 +459,13 @@ fn navigation_gate_resolves_websocket_events_to_their_session_target() {
     let navigation_a = target_a
         .start_document_navigation_for_active_target("LOADER-A".to_owned())
         .expect("target A should accept a navigation request");
-    conn.browser_context = Some(target_a);
+    conn.install_browser_context_fixture_for_test(target_a);
     assert!(conn.arm_background_navigation_completion(&navigation_a, None));
 
     let mut target_b = BrowserContext::new("BID-B".to_owned());
     target_b.set_active_target_id("TID-B");
     target_b.attach_active_session("SID-B");
-    conn.inactive_browser_contexts.push(target_b);
+    conn.push_inactive_browser_context_fixture_for_test(target_b);
 
     let target_b_websocket = BackgroundProtocolEvent::immediate(json!({
         "method": "Network.webSocketClosed",
@@ -497,7 +497,7 @@ fn navigation_background_event_queue_drains_current_token() {
     let token = browser_context
         .start_document_navigation_for_active_target("LOADER-1".to_owned())
         .expect("active target should produce navigation token");
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let message = build_event(
         "Page.frameStartedLoading",
         json!({ "frameId": "TID-nav" }),
@@ -829,7 +829,8 @@ async fn moli_diagnostics_preserves_runtime_observable_diagnostics() {
         .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     ctx.process_async(json!({
         "id": 44_100,
@@ -1398,7 +1399,7 @@ fn navigation_background_event_queue_drops_stale_token() {
     let current = browser_context
         .start_document_navigation_for_active_target("LOADER-2".to_owned())
         .expect("active target should produce current token");
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let stale_message = build_event(
         "Page.frameStartedLoading",
         json!({ "frameId": "TID-nav", "loaderId": "LOADER-1" }),
@@ -1436,7 +1437,7 @@ fn navigation_background_event_queue_preserves_order_for_current_token() {
     let current = browser_context
         .start_document_navigation_for_active_target("LOADER-2".to_owned())
         .expect("active target should produce current navigation token");
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let stale_message = build_event(
         "Page.frameStartedLoading",
@@ -1483,7 +1484,7 @@ fn navigation_background_event_sender_preserves_typed_sidecar_for_current_token(
     let current = browser_context
         .start_document_navigation_for_active_target("LOADER-typed".to_owned())
         .expect("active target should produce current navigation token");
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let message = build_event(
         "Page.frameStartedNavigating",
         json!({
@@ -1533,7 +1534,7 @@ async fn materialized_navigation_completion_drops_stale_token() {
     let _current = browser_context
         .start_document_navigation_for_active_target("LOADER-2".to_owned())
         .expect("active target should produce current token");
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let state =
         materialized_navigation_test_state(Some(7), "LOADER-1", "https://example.test/stale");
     let navigation =
@@ -1585,7 +1586,7 @@ async fn materialized_navigation_completion_drops_stale_token_without_navigate_i
     let _ = browser_context
         .start_document_navigation_for_active_target("LOADER-2".to_owned())
         .expect("active target should produce current navigation token");
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let state =
         materialized_navigation_test_state(None, "LOADER-1", "https://example.test/stale-no-id");
     let navigation =
@@ -1619,7 +1620,7 @@ async fn materialized_navigation_completion_drains_current_token() {
     let current = browser_context
         .start_document_navigation_for_active_target("LOADER-1".to_owned())
         .expect("active target should produce current token");
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let state =
         materialized_navigation_test_state(Some(8), "LOADER-1", "https://example.test/current");
     let navigation =

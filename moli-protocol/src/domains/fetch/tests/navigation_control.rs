@@ -33,7 +33,8 @@ fn parse_binary_response_headers_rejects_invalid_header_value() {
 #[tokio::test]
 async fn continue_request_rejects_invalid_url_without_consuming_pending_navigation() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(attached_browser_context());
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
 
     ctx.process_async(json!({
         "id": 62,
@@ -85,7 +86,8 @@ async fn continue_request_rejects_invalid_url_without_consuming_pending_navigati
 #[tokio::test]
 async fn continue_request_rejects_invalid_post_data_without_consuming_pending_navigation() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(attached_browser_context());
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
 
     ctx.process_async(json!({
         "id": 65,
@@ -152,7 +154,8 @@ async fn request_paused_then_continue_request_resumes_main_document_navigation()
     });
 
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(attached_browser_context());
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
     let url = format!("http://{addr}/page");
@@ -219,7 +222,8 @@ async fn request_paused_then_continue_request_resumes_main_document_navigation()
 #[tokio::test]
 async fn main_document_request_uses_loader_id_as_observed_network_request_id() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(attached_browser_context());
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
 
     ctx.process_async(json!({
         "id": 301,
@@ -257,7 +261,7 @@ async fn fail_request_blocked_by_client_maps_main_document_navigation_to_net_err
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 303,
@@ -301,7 +305,8 @@ async fn fail_request_blocked_by_client_maps_main_document_navigation_to_net_err
 #[tokio::test(flavor = "multi_thread")]
 async fn request_paused_then_continue_request_fails_when_network_offline() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(attached_browser_context());
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
 
     ctx.process_async(json!({
         "id": 16630,
@@ -395,7 +400,7 @@ async fn response_stage_document_pattern_pauses_main_document_after_response() {
             &[("set-cookie".to_owned(), "sid=1; Path=/".to_owned())],
         );
     }
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
             "id": 33,
@@ -588,7 +593,7 @@ async fn continue_request_with_post_data_marks_network_request_as_having_post_da
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let url = format!("http://{addr}/page");
 
     ctx.process_async(json!({
@@ -697,7 +702,8 @@ async fn intercepted_form_post_navigation_body_is_available_by_network_request_i
     let page_url = format!("http://{addr}/page");
     let post_url = format!("http://{addr}/post");
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(attached_browser_context());
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
     {
@@ -823,7 +829,7 @@ async fn continue_request_with_intercept_response_pauses_after_response_until_co
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
     let url = format!("http://{addr}/page");
@@ -952,7 +958,7 @@ async fn intercepted_navigation_start_events_stay_before_network_pause_with_back
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
     ctx.conn.set_background_event_sender(sender);
 
@@ -1010,7 +1016,7 @@ async fn disable_aborts_paused_main_document_navigation() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 78,

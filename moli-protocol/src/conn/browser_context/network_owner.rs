@@ -896,7 +896,7 @@ mod tests {
             browser_context
                 .assign_attached_session_to_target("TID-background", "SID-attached".to_owned())
         );
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         conn
     }
 
@@ -911,7 +911,7 @@ mod tests {
             Some("SID-background".to_owned()),
             "https://background.example/".to_owned(),
         ));
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let (active_fetch_id, active_network_request_id) = conn
             .allocate_pending_subresource_fetch_request_ids_for_owner(

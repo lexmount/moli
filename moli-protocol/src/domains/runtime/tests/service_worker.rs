@@ -16,13 +16,13 @@ fn load_service_worker_target(ctx: &mut TestContext, session_id: &str) {
     let mut target = service_worker_target();
     target.attach_session(session_id.to_owned());
     bc.insert_service_worker_target(target);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 }
 
 fn load_unattached_service_worker_target(ctx: &mut TestContext) {
     let mut bc = BrowserContext::new("BID-service".to_owned());
     bc.insert_service_worker_target(service_worker_target());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 }
 
 fn service_worker_target() -> ServiceWorkerTargetState {

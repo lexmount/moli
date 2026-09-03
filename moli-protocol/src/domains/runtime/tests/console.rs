@@ -63,7 +63,8 @@ async fn runtime_discard_console_entries_is_page_target_local() {
     browser_context.set_active_target_id("TID-active");
     browser_context.attach_active_session("SID-active");
     browser_context.insert_page_target_host(background_target);
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<script>console.log('active-discard-peer')</script>",
         Some("SID-active"),

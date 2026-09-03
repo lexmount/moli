@@ -125,7 +125,7 @@ async fn set_blocked_urls_navigation_fails_with_blocked_by_client() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     enable_network_domain(&mut ctx, 28_040, Some("SID-1")).await;
 
     ctx.process_async(json!({
@@ -167,7 +167,7 @@ async fn set_blocked_urls_runtime_fetch_emits_loading_failed() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     enable_network_domain(&mut ctx, 28_060, Some("SID-1")).await;
 
     ctx.process_async(json!({
@@ -311,7 +311,8 @@ async fn background_set_blocked_urls_updates_loaded_owner_page_without_activatio
     );
     let mut inactive = BrowserContext::new("BID-background".to_owned());
     inactive.insert_page_target_host(background);
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
         .await;
 
@@ -407,7 +408,7 @@ async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 28_101,
@@ -551,7 +552,7 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 28_102,
@@ -691,7 +692,7 @@ async fn set_blocked_urls_worker_websocket_emits_loading_failed() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 28_103,
@@ -855,7 +856,7 @@ async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() 
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 2821,
@@ -971,7 +972,7 @@ async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 2826,
@@ -1083,7 +1084,7 @@ async fn set_blocked_urls_runtime_xhr_emits_loading_failed() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     enable_network_domain(&mut ctx, 28_110, Some("SID-1")).await;
 
     ctx.process_async(json!({
@@ -1172,7 +1173,7 @@ async fn set_blocked_urls_runtime_websocket_emits_loading_failed() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     enable_network_domain(&mut ctx, 28_160, Some("SID-1")).await;
 
     ctx.process_async(json!({
@@ -1351,7 +1352,7 @@ async fn emulate_network_conditions_offline_navigation_fails_before_completion_e
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 31,
@@ -1393,7 +1394,7 @@ async fn emulate_network_conditions_offline_runtime_fetch_emits_loading_failed()
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 33,
@@ -1507,7 +1508,7 @@ globalThis.__lm_after_blocked_parser_script = true;
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 70_010,

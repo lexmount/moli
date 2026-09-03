@@ -22,6 +22,12 @@ pub(crate) fn is_valid_download_behavior(behavior: &str) -> bool {
     DOWNLOAD_BEHAVIORS.contains(&behavior)
 }
 
+/// Disables Browser-domain observation owned by one DevTools session.
+pub(in crate::domains) fn dispose_session_handler(conn: &mut CdpConnection, session_id: &str) {
+    conn.download_behavior
+        .set_browser_events_enabled_for_session(Some(session_id), false);
+}
+
 pub(crate) struct PendingBrowserCommandDispatch {
     command_id: Option<u64>,
     response_session_id: Option<String>,

@@ -9,7 +9,7 @@ const INPUT_HIT_Y: u32 = 20;
 async fn with_loaded_document(ctx: &mut TestContext, html: &str) {
     let mut bc = BrowserContext::new("BID-I".into());
     bc.set_active_target_id("TID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let data_url = format!("data:text/html,{html}");
     // Input commands can execute JS and therefore publish concrete renderer
     // output. Install the fixture through the same Page-owner transaction as
@@ -422,7 +422,7 @@ async fn coordinate_mouse_event_without_document_still_reports_no_document_loade
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-I".into());
     bc.set_active_target_id("TID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 103,
@@ -610,7 +610,7 @@ async fn coordinate_input_invalid_params_keep_session_id() {
     let mut bc = BrowserContext::new("BID-I".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     for (id, method) in [
         (9001, "Input.dispatchMouseEvent"),

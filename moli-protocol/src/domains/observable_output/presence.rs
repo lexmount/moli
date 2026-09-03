@@ -587,7 +587,7 @@ mod tests {
         bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(17);
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         for session_id in enabled_session_ids {
             conn.with_target_devtools_session_state_for_session_mut(Some(session_id), |state| {
                 state.runtime_session_state.runtime_frontend_enabled = true
@@ -618,7 +618,7 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
 
         assert_eq!(
             observable_source_activity_outputs(
@@ -675,7 +675,7 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = false;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
 
         let outputs = observable_source_activity_outputs(
             &mut conn,
@@ -721,7 +721,7 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
 
         assert!(
             observable_source_activity_outputs(
@@ -765,7 +765,7 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .log_enabled = true;
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
 
         let outputs = observable_backlog_activity_outputs(&ctx.conn, None);
         assert_eq!(

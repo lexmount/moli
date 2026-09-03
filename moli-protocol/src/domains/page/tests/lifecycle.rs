@@ -696,7 +696,8 @@ async fn page_set_download_behavior_reuses_browser_download_state() {
     let mut ctx = TestContext::new();
     let mut browser_context = BrowserContext::new("BID-PAGE-DOWNLOAD".into());
     browser_context.set_active_target_id("TID-PAGE-DOWNLOAD");
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     ctx.process_async(json!({
         "id": 103,
@@ -736,10 +737,11 @@ async fn page_set_download_behavior_uses_current_page_context_not_param_context(
     let mut ctx = TestContext::new();
     let mut active = BrowserContext::new("BID-PAGE-DOWNLOAD-ACTIVE".into());
     active.set_active_target_id("TID-PAGE-DOWNLOAD-ACTIVE");
-    ctx.conn.browser_context = Some(active);
+    ctx.conn.install_browser_context_fixture_for_test(active);
     let mut inactive = BrowserContext::new("BID-PAGE-DOWNLOAD-OTHER".into());
     inactive.set_active_target_id("TID-PAGE-DOWNLOAD-OTHER");
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 105,
@@ -804,7 +806,7 @@ async fn set_lifecycle_events_enabled_sets_flag() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.process_async(json!({"id": 1, "method": "Page.setLifecycleEventsEnabled",
                            "params": {"enabled": true}}))
         .await;
@@ -1024,6 +1026,7 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_attached_sessi
     assert!(
         browser_context.assign_attached_session_to_target("TID-active", "SID-attached".to_owned())
     );
+    ctx.conn.commit_declared_session_fixtures_for_test();
     let (binding, initial_events) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
         &crate::conn::CommandOwnerScope::for_session("SID-attached"),
         artifacts,
@@ -1105,7 +1108,8 @@ async fn set_lifecycle_events_enabled_is_session_local_for_background_attached_s
             "SID-background-attached".to_owned()
         )
     );
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background attached lifecycle</body>",
         Some("SID-background-attached"),
@@ -1180,6 +1184,7 @@ async fn page_disable_clears_page_handler_state_for_active_attached_session() {
     assert!(
         browser_context.assign_attached_session_to_target("TID-active", "SID-attached".to_owned())
     );
+    ctx.conn.commit_declared_session_fixtures_for_test();
 
     enable_page_domain_for_session(&mut ctx.conn, "SID-attached");
     assert_page_domain_enabled(
@@ -1236,7 +1241,8 @@ async fn page_disable_clears_page_handler_state_for_background_attached_session(
                 .page_session_state,
         );
     }
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     enable_page_domain_for_session(&mut ctx.conn, "SID-background-attached");
     assert_page_domain_enabled(
@@ -2255,7 +2261,7 @@ async fn document_start_script_run_immediately_targets_loaded_background_owner_w
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background</body>",
         Some("SID-background"),
@@ -2704,7 +2710,7 @@ async fn crash_targets_background_owner_without_activation() {
         .expect("background target should start document navigation");
     bc.commit_document_navigation_if_matches(&background_document_token);
     assert!(bc.accepts_document_body_completion_event(&background_document_token));
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 248,
@@ -3884,6 +3890,7 @@ async fn screencast_visual_state_is_independent_for_two_sessions_on_one_page() {
                 "SID-screencast-attached".to_owned(),
             )
     );
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ensure_initial_document_for_session(&mut ctx, Some("SID-screencast-primary")).await;
 
     let start = |conn: &mut CdpConnection, session_id: &str, command_id: u64| {
@@ -4082,7 +4089,8 @@ async fn start_screencast_is_session_local_for_background_attached_session() {
             "SID-background-attached".to_owned()
         )
     );
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     ctx.process_async(json!({
         "id": 57,

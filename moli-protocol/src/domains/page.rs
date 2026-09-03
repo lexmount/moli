@@ -76,6 +76,38 @@ pub(in crate::domains) async fn dispose_session_async(
         .await
 }
 
+/// Clears target-visible state owned by the primary Page session after every
+/// per-session handler contribution has been removed.
+pub(in crate::domains) async fn dispose_primary_session_target_state_async(
+    conn: &mut CdpConnection,
+    plan: &crate::conn::SessionDisposalPlan,
+) -> anyhow::Result<()> {
+    let session_id = plan.session_id();
+    if let crate::conn::SessionDisposalTarget::PageTarget {
+        browser_context_id,
+        target_id,
+        session_key: moli_page_types::DevToolsSessionKey::Primary,
+    } = plan.target()
+    {
+        let reset_result = match conn.browser_context_by_id_mut(browser_context_id) {
+            Some(browser_context) => {
+                browser_context
+                    .reset_primary_page_session_target_state_async(target_id, session_id)
+                    .await
+            }
+            None => Ok(false),
+        };
+        reset_result.and_then(|found| {
+            anyhow::ensure!(
+                found,
+                "primary Page target disappeared during session disposal"
+            );
+            Ok(())
+        })?;
+    }
+    Ok(())
+}
+
 fn missing_page_target_error_message(
     conn: &CdpConnection,
     session_id: Option<&str>,
@@ -2683,7 +2715,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-title-source".into());
         bc.set_active_target_id("TID-title-source");
         bc.attach_active_session("SID-title-source");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
 
         let predecessor = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(
@@ -2747,7 +2779,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-active");
         bc.attach_active_session("SID-1");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-1");
         let source_document = renderer_document_identity_for_test(1, 1);
         let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
@@ -2814,7 +2846,7 @@ mod producer_tests {
                 "SID-attached".to_owned(),
             )
         );
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-attached");
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
@@ -2873,7 +2905,7 @@ mod producer_tests {
                 "SID-detached".to_owned(),
             )
         );
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let completion = RendererJavaScriptDialogCompletion::pending();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
@@ -2900,6 +2932,7 @@ mod producer_tests {
                     &moli_page_types::DevToolsSessionKey::Attached("SID-detached".to_owned()),
                 )
         );
+        conn.rollback_attached_session_without_event("SID-detached");
 
         let mut out = Vec::new();
         super::emit_javascript_dialog_activity_background_events_async(
@@ -2928,7 +2961,7 @@ mod producer_tests {
                 "SID-source".to_owned(),
             )
         );
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach());
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-source");
         let source_document = renderer_document_identity_for_test(1, 1);
@@ -2971,6 +3004,7 @@ mod producer_tests {
                     &moli_page_types::DevToolsSessionKey::Attached("SID-source".to_owned()),
                 )
         );
+        conn.rollback_attached_session_without_event("SID-source");
         let mut popup_output =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_popup_activations_for_test(
@@ -3017,7 +3051,7 @@ mod producer_tests {
         let mut browser_context = BrowserContext::new("BID-popup-dialog".into());
         browser_context.set_active_target_id("TID-opener");
         browser_context.attach_active_session("SID-opener");
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach());
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener");
         let source_dialog_scope = javascript_dialog_scope_for_test(&conn, "SID-opener");
@@ -3172,7 +3206,7 @@ mod producer_tests {
         let mut browser_context = BrowserContext::new("BID-popup-no-session".into());
         browser_context.set_active_target_id("TID-opener-no-session");
         browser_context.attach_active_session("SID-opener-no-session");
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener-no-session");
         let source_document = renderer_document_identity_for_test(1, 1);
         let completion = RendererJavaScriptDialogCompletion::pending();
@@ -3246,7 +3280,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-dialog-epoch".into());
         bc.set_active_target_id("TID-dialog-epoch");
         bc.attach_active_session("SID-dialog-epoch");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let first_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(
             &mut conn,
@@ -3293,7 +3327,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-dialog-stale-page".into());
         bc.set_active_target_id("TID-dialog-stale-page");
         bc.attach_active_session("SID-dialog-stale-page");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-stale-page");
         let completion = moli_core::page::RendererJavaScriptDialogCompletion::pending();
         let dialog = renderer_javascript_dialog_for_test(
@@ -3346,7 +3380,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-dialog-generation".into());
         bc.set_active_target_id("TID-dialog-generation");
         bc.attach_active_session("SID-dialog-generation");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-generation");
         let completion = moli_core::page::RendererJavaScriptDialogCompletion::pending();
         let dialog = renderer_javascript_dialog_for_test(
@@ -3394,7 +3428,7 @@ mod producer_tests {
         bc.set_active_target_id("TID-dialog-source");
         bc.set_target_url("https://example.test/current-before-capture".to_owned());
         bc.attach_active_session("SID-dialog-source");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-source");
         let dialog = RendererPendingJavaScriptDialog::new(
             RendererJavaScriptDialogId::new(9),
@@ -3456,7 +3490,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(
             &mut conn,
@@ -3617,7 +3651,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(
             &mut conn,
@@ -3787,7 +3821,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
         let mut background_events = Vec::new();
@@ -3867,7 +3901,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
         let mut background_events = Vec::new();
@@ -3938,7 +3972,7 @@ mod producer_tests {
                 "SID-attached".to_owned(),
             )
         );
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         conn.with_target_devtools_session_state_for_session_mut(Some("SID-attached"), |state| {
             state.page_session_state.page_domain_enabled = true;
             state.page_session_state.page_lifecycle_events = true;
@@ -4003,7 +4037,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
         let mut background_events = Vec::new();
@@ -4065,7 +4099,7 @@ mod producer_tests {
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
         assert!(bc.assign_attached_session_to_target("TID-1", "SID-ATTACHED".to_owned(),));
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-1")));
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-ATTACHED")));
         let source_document = renderer_document_identity_for_test(1, 1);
@@ -4215,7 +4249,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-1")));
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
@@ -4333,7 +4367,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         assert!(conn.enable_network_listener_for_session_owner(Some("SID-1")));
         let snapshot = ChildFrameDocumentNetworkSnapshot {
             request_url: "https://example.test/legacy-child".to_owned(),
@@ -4391,7 +4425,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
         let document = super::PagePreparedChildFrameDocumentActivity::from_parts(
@@ -4472,7 +4506,7 @@ mod producer_tests {
         browser_context.set_active_target_id("TID-child-page-owner");
         browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-page-owner");
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(
             &mut conn,
@@ -4509,7 +4543,7 @@ mod producer_tests {
         browser_context.set_active_target_id("TID-child-root-document");
         browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-root-document");
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(
             &mut conn,
@@ -4553,7 +4587,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(
             &mut conn,
@@ -4600,7 +4634,7 @@ mod producer_tests {
         browser_context.set_active_target_id("TID-child-session");
         browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-session");
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(
             &mut conn,
@@ -4621,6 +4655,7 @@ mod producer_tests {
                 .as_deref(),
             Some("SID-child-session")
         );
+        conn.rollback_attached_session_without_event("SID-child-session");
 
         let mut events = Vec::new();
         super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
@@ -4646,7 +4681,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let child_frame_id = "CHILD-FRAME-1".to_owned();
         let mut emitted = Vec::new();
         super::emit_prepared_child_frame_tree_background_events(
@@ -4704,7 +4739,7 @@ mod producer_tests {
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
         let mut command_context = crate::conn::CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
@@ -4726,7 +4761,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-active");
         bc.attach_active_session("SID-1");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-1");
         let source_document = renderer_document_identity_for_test(1, 1);
         let mut out = Vec::new();
@@ -4809,7 +4844,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-automation".into());
         bc.set_active_target_id("TID-opener");
         bc.attach_active_session("SID-opener");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener");
         let source_document = renderer_document_identity_for_test(1, 1);
         let mut prepared =
@@ -4880,7 +4915,7 @@ mod producer_tests {
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(&mut conn, "SID-1", "TID-1", source_document);
         let mut out = Vec::new();
@@ -4954,7 +4989,7 @@ mod producer_tests {
         bc.set_active_target_id("TID-document-open-same-document");
         bc.set_target_url("https://example.test/source".to_owned());
         bc.attach_active_session("SID-document-open-same-document");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
 
         let source_document = renderer_document_identity_for_test(1, 1);
         let replacement_document = renderer_document_identity_for_test(2, 2);
@@ -5010,7 +5045,7 @@ mod producer_tests {
         bc.set_active_target_id("TID-stale-page-same-document");
         bc.set_target_url("https://example.test/replacement".to_owned());
         bc.attach_active_session("SID-stale-page-same-document");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
 
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(
@@ -5061,7 +5096,7 @@ mod producer_tests {
         bc.set_active_target_id("TID-location");
         bc.set_target_url("about:blank".to_owned());
         bc.attach_active_session("SID-location");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(&mut conn, "SID-location", "TID-location", source_document);
 
@@ -5135,7 +5170,7 @@ mod producer_tests {
         bc.set_active_target_id("TID-document-open-location");
         bc.set_target_url("https://example.test/source".to_owned());
         bc.attach_active_session("SID-document-open-location");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
 
         let source_document = renderer_document_identity_for_test(1, 1);
         let replacement_document = renderer_document_identity_for_test(2, 2);
@@ -5200,7 +5235,7 @@ mod producer_tests {
         bc.set_active_target_id("TID-stale-page-location");
         bc.set_target_url("https://example.test/replacement".to_owned());
         bc.attach_active_session("SID-stale-page-location");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
 
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(

@@ -11542,7 +11542,7 @@ mod protocol_neutral_tests {
         let mut browser_context = BrowserContext::new("BID-duplicate".to_owned());
         browser_context.set_active_target_id("TID-duplicate".to_owned());
         browser_context.attach_active_session("SID-duplicate".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         conn.try_register_pending_inspector_await_with_object_group_for_owner(
             77,
             &CommandOwnerScope::for_session("SID-duplicate"),
@@ -11599,7 +11599,8 @@ mod protocol_neutral_tests {
         let mut browser_context = BrowserContext::new("BID-console-duplicate".to_owned());
         browser_context.set_active_target_id("TID-console-duplicate".to_owned());
         browser_context.attach_active_session("SID-console-duplicate".to_owned());
-        ctx.conn.browser_context = Some(browser_context);
+        ctx.conn
+            .install_browser_context_fixture_for_test(browser_context);
         let page = ctx
             .conn
             .load_page_via_runtime_async("data:text/html,<p>console duplicate</p>")
@@ -11707,7 +11708,7 @@ mod protocol_neutral_tests {
             stack: None,
         });
         browser_context.insert_shared_worker_target(target);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         apply_shared_worker_runtime_completion_projection(
             &mut conn,

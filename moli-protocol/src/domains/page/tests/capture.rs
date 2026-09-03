@@ -497,7 +497,7 @@ async fn capture_screenshot_targets_loaded_background_owner_without_activation()
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>Background Screenshot</title><main>background</main>",
         Some("SID-background"),
@@ -568,7 +568,8 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
         screen_height: 300,
     });
     inactive.replace_loaded_page(Some(page));
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 115,
@@ -959,7 +960,7 @@ async fn get_layout_metrics_targets_loaded_background_owner_without_activation()
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<body>active</body>".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-background"))
         .await;
     ctx.sent.clear();
@@ -1011,7 +1012,8 @@ async fn get_layout_metrics_targets_inactive_loaded_owner_without_activation() {
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-inactive"))
         .await;
     ctx.sent.clear();

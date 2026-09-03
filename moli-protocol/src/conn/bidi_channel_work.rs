@@ -165,7 +165,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-owner".to_owned());
         browser_context.set_active_target_id("TID-owner");
         browser_context.attach_active_session("SID-owner".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         conn.runtime_session_owner_slot_mut(Some("SID-owner"))
             .expect("test runtime slot")
             .set_page_attachment_id_for_test(1);
@@ -209,6 +209,7 @@ mod tests {
                 .as_deref(),
             Some("SID-owner")
         );
+        conn.rollback_attached_session_without_event("SID-owner");
 
         assert!(
             !owner.is_current(&conn),

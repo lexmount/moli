@@ -126,7 +126,7 @@ async fn browser_context_document_cookie_facade_snapshot_projects_probe_telemetr
     let mut conn = CdpConnection::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-cookie-facade", "TID-cookie-facade");
     bc.set_target_url("https://example.com/app".into());
-    conn.browser_context = Some(bc);
+    conn.install_browser_context_fixture_for_test(bc);
 
     let navigation = conn
         .build_loaded_navigation_from_buffered_response_async(

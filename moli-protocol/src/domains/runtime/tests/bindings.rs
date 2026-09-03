@@ -319,6 +319,7 @@ async fn add_binding_during_document_navigation_persists_without_touching_retiri
     browser_context
         .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
         .expect("active navigation should start");
+    ctx.conn.commit_declared_session_fixtures_for_test();
     assert!(
         ctx.conn
             .renderer_document_navigation_is_suspended_for_session_owner(Some("SID-1"))
@@ -1365,6 +1366,7 @@ async fn pre_document_add_binding_completes_through_command_task_without_live_pa
         .expect("browser context should exist");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
+    ctx.conn.commit_declared_session_fixtures_for_test();
 
     let raw = json!({
         "id": 36_001,
@@ -1504,6 +1506,7 @@ async fn pre_document_remove_binding_completes_through_command_task_without_live
         .expect("browser context should exist");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
+    ctx.conn.commit_declared_session_fixtures_for_test();
 
     let add_raw = json!({
         "id": 36_101,

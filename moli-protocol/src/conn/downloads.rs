@@ -1547,7 +1547,7 @@ mod tests {
             .network_policy
             .push_extra_header(("X-Target".to_owned(), "target".to_owned()));
         assert!(browser_context.insert_page_target_host(background));
-        connection.browser_context = Some(browser_context);
+        connection.install_browser_context_fixture_for_test(browser_context);
 
         let owner = connection
             .pending_download_owner_context(&CommandOwnerScope::for_session("SID-background"))

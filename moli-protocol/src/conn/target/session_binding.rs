@@ -1,3 +1,5 @@
+#[cfg(test)]
+use crate::conn::BrowserContext;
 use crate::conn::CdpConnection;
 use crate::devtools_runtime::DevToolsTargetInfo;
 
@@ -8,6 +10,116 @@ use super::{
 };
 
 impl CdpConnection {
+    /// Commits target-side session declarations built by low-level test
+    /// fixtures into the same control-plane registry used by production
+    /// attachment transactions.
+    ///
+    /// Older tests construct `BrowserContext` and worker targets directly,
+    /// before either object is owned by a `CdpConnection`. The test harness
+    /// calls this once at its fixture boundary. Runtime route lookup remains
+    /// strict: it never searches target state when the committed registry has
+    /// no entry.
+    #[cfg(test)]
+    pub(crate) fn commit_declared_session_fixtures_for_test(&mut self) {
+        let mut declared = Vec::new();
+        for browser_context in self.browser_contexts() {
+            let browser_context_id = browser_context.id.clone();
+            for target in browser_context.page_targets.iter() {
+                let target_id = target.target_id().to_owned();
+                if let Some(session_id) = target.devtools_sessions.primary_session_id() {
+                    declared.push((
+                        session_id.to_owned(),
+                        target_id.clone(),
+                        CdpSessionRoute::PageTarget {
+                            browser_context_id: browser_context_id.clone(),
+                            target_id: target_id.clone(),
+                            session_key: moli_page_types::DevToolsSessionKey::Primary,
+                        },
+                    ));
+                }
+                for session_id in target.devtools_sessions.attached_session_ids() {
+                    declared.push((
+                        session_id.to_owned(),
+                        target_id.clone(),
+                        CdpSessionRoute::PageTarget {
+                            browser_context_id: browser_context_id.clone(),
+                            target_id: target_id.clone(),
+                            session_key: moli_page_types::DevToolsSessionKey::Attached(
+                                session_id.to_owned(),
+                            ),
+                        },
+                    ));
+                }
+            }
+            for target in browser_context.shared_worker_targets.values() {
+                for session_id in target.session_ids() {
+                    declared.push((
+                        session_id,
+                        target.target_id.clone(),
+                        CdpSessionRoute::SharedWorkerTarget {
+                            browser_context_id: browser_context_id.clone(),
+                            target_id: target.target_id.clone(),
+                        },
+                    ));
+                }
+            }
+            for target in browser_context.dedicated_worker_targets.values() {
+                for session_id in target.inner.session_ids() {
+                    declared.push((
+                        session_id,
+                        target.inner.target_id.clone(),
+                        CdpSessionRoute::DedicatedWorkerTarget {
+                            browser_context_id: browser_context_id.clone(),
+                            target_id: target.inner.target_id.clone(),
+                        },
+                    ));
+                }
+            }
+            for target in browser_context.service_worker_targets.values() {
+                for session_id in target.session_ids() {
+                    declared.push((
+                        session_id,
+                        target.target_id.clone(),
+                        CdpSessionRoute::ServiceWorkerTarget {
+                            browser_context_id: browser_context_id.clone(),
+                            target_id: target.target_id.clone(),
+                        },
+                    ));
+                }
+            }
+        }
+
+        for (session_id, target_id, route) in declared {
+            if self
+                .target_control
+                .attached_session_route(&session_id)
+                .is_some()
+            {
+                continue;
+            }
+            self.target_control
+                .commit_attached_session(session_id, None, &target_id, route, false, false);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn install_browser_context_fixture_for_test(
+        &mut self,
+        browser_context: BrowserContext,
+    ) {
+        self.browser_context = Some(browser_context);
+        self.commit_declared_session_fixtures_for_test();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn push_inactive_browser_context_fixture_for_test(
+        &mut self,
+        browser_context: BrowserContext,
+    ) {
+        self.inactive_browser_contexts.push(browser_context);
+        self.commit_declared_session_fixtures_for_test();
+    }
+
     pub(crate) async fn clear_devtools_network_session_policy_async(
         &mut self,
         session_id: &str,
@@ -80,7 +192,7 @@ impl CdpConnection {
             session_id,
             None,
             "browser",
-            Some(CdpSessionRoute::Browser),
+            CdpSessionRoute::Browser,
             false,
             false,
         );
@@ -156,141 +268,51 @@ impl CdpConnection {
     }
 
     #[cfg(test)]
-    pub(crate) fn register_auto_attached_session(
+    pub(crate) fn register_auto_attached_session_route_for_test(
         &mut self,
         session_id: String,
         owner_session_id: Option<&str>,
+        route: CdpSessionRoute,
     ) {
-        let route = self.bound_session_route_for_test(&session_id, None);
-        let target_id = route.as_ref().and_then(|route| match route {
-            CdpSessionRoute::TabTarget { tab_target_id, .. } => Some(tab_target_id.clone()),
-            CdpSessionRoute::PageTarget { target_id, .. }
-            | CdpSessionRoute::SharedWorkerTarget { target_id, .. }
-            | CdpSessionRoute::DedicatedWorkerTarget { target_id, .. }
-            | CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => Some(target_id.clone()),
-            CdpSessionRoute::Browser | CdpSessionRoute::BrowserContext { .. } => None,
+        let target_id = route.target_id().unwrap_or_else(|| {
+            panic!("test auto-attached session route must identify a target: {route:?}")
         });
         self.target_control.commit_auto_attached_session_for_target(
             session_id,
             owner_session_id,
-            target_id.as_deref(),
-            route,
+            target_id,
+            route.clone(),
             false,
         );
     }
 
     #[cfg(test)]
-    pub(crate) fn register_auto_attached_session_for_target(
+    pub(crate) fn mark_session_auto_attached_for_test(
         &mut self,
         session_id: String,
         owner_session_id: Option<&str>,
-        target_id: Option<&str>,
     ) {
-        let route = self.bound_session_route_for_test(&session_id, target_id);
-        self.target_control.commit_auto_attached_session_for_target(
-            session_id,
-            owner_session_id,
-            target_id,
-            route,
-            false,
-        );
+        let route = self
+            .session_route(Some(&session_id))
+            .unwrap_or_else(|| panic!("test session {session_id} must have a committed route"));
+        self.register_auto_attached_session_route_for_test(session_id, owner_session_id, route);
     }
 
     #[cfg(test)]
-    pub(crate) fn register_bound_session_for_test(&mut self, session_id: &str) {
-        let route = self
-            .bound_session_route_for_test(session_id, None)
-            .unwrap_or_else(|| panic!("test session {session_id} must own a concrete route"));
-        let target_id = match &route {
-            CdpSessionRoute::TabTarget { tab_target_id, .. } => tab_target_id.as_str(),
-            CdpSessionRoute::PageTarget { target_id, .. }
-            | CdpSessionRoute::SharedWorkerTarget { target_id, .. }
-            | CdpSessionRoute::DedicatedWorkerTarget { target_id, .. }
-            | CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => target_id.as_str(),
-            CdpSessionRoute::Browser => "browser",
-            CdpSessionRoute::BrowserContext { browser_context_id } => browser_context_id.as_str(),
-        };
+    pub(crate) fn register_session_route_for_test(
+        &mut self,
+        session_id: &str,
+        route: CdpSessionRoute,
+    ) {
+        let target_id = route.target_id().unwrap_or("browser").to_owned();
         self.target_control.commit_attached_session(
             session_id.to_owned(),
             None,
-            target_id,
-            Some(route.clone()),
+            &target_id,
+            route,
             false,
             false,
         );
-    }
-
-    #[cfg(test)]
-    pub(crate) fn bound_session_route_for_test(
-        &self,
-        session_id: &str,
-        wanted_target_id: Option<&str>,
-    ) -> Option<CdpSessionRoute> {
-        if let Some(tab_target_id) = self.tab_target_id_for_session_id(session_id)
-            && wanted_target_id.is_none_or(|target_id| target_id == tab_target_id)
-        {
-            return Some(CdpSessionRoute::TabTarget {
-                browser_context_id: self.browser_context_id_for_tab_target_id(tab_target_id)?,
-                tab_target_id: tab_target_id.to_owned(),
-            });
-        }
-        self.browser_contexts().find_map(|browser_context| {
-            if let Some((target, session_key)) =
-                browser_context.page_targets.iter().find_map(|target| {
-                    (wanted_target_id.is_none_or(|target_id| target_id == target.target_id()))
-                        .then(|| {
-                            target
-                                .devtools_sessions
-                                .key_for_wire_session_id(session_id)
-                                .map(|session_key| (target, session_key))
-                        })
-                        .flatten()
-                })
-            {
-                return Some(CdpSessionRoute::PageTarget {
-                    browser_context_id: browser_context.id.clone(),
-                    target_id: target.target_id().to_owned(),
-                    session_key,
-                });
-            }
-            browser_context
-                .shared_worker_targets
-                .values()
-                .find(|target| {
-                    target.is_session(session_id)
-                        && wanted_target_id.is_none_or(|wanted| wanted == target.target_id)
-                })
-                .map(|target| CdpSessionRoute::SharedWorkerTarget {
-                    browser_context_id: browser_context.id.clone(),
-                    target_id: target.target_id.clone(),
-                })
-                .or_else(|| {
-                    browser_context
-                        .dedicated_worker_targets
-                        .values()
-                        .find(|target| {
-                            target.is_session(session_id)
-                                && wanted_target_id.is_none_or(|wanted| wanted == target.target_id)
-                        })
-                        .map(|target| CdpSessionRoute::DedicatedWorkerTarget {
-                            browser_context_id: browser_context.id.clone(),
-                            target_id: target.target_id.clone(),
-                        })
-                })
-                .or_else(|| {
-                    browser_context
-                        .service_worker_targets
-                        .values()
-                        .find(|target| {
-                            target.is_session(session_id)
-                                && wanted_target_id.is_none_or(|wanted| wanted == target.target_id)
-                        })
-                        .map(|target| CdpSessionRoute::ServiceWorkerTarget {
-                            browser_context_id: browser_context.id.clone(),
-                            target_id: target.target_id.clone(),
-                        })
-                })
-        })
     }
 
     pub(crate) fn commit_prepared_attach_event_plan(
@@ -328,7 +350,7 @@ impl CdpConnection {
                 session_id,
                 owner_session_id.as_deref(),
                 &target_id,
-                Some(route),
+                route,
                 auto_attached,
                 waiting_for_debugger,
                 target_info.clone(),
@@ -657,7 +679,7 @@ impl CdpConnection {
             session_id,
             owner_session_id,
             target_id,
-            Some(CdpSessionRoute::Browser),
+            CdpSessionRoute::Browser,
             false,
             false,
             target_info,
@@ -882,10 +904,10 @@ impl CdpConnection {
         &self,
         session_id: &str,
     ) -> TargetAutoAttachedSessionDetachPlan {
-        TargetAutoAttachedSessionDetachPlan::from_session_route(
-            session_id,
-            self.session_route(Some(session_id)),
-        )
+        let route = self.session_route(Some(session_id)).unwrap_or_else(|| {
+            panic!("committed auto-attached session {session_id} must retain its route")
+        });
+        TargetAutoAttachedSessionDetachPlan::from_session_route(session_id, route)
     }
 
     pub(crate) fn rollback_auto_attached_session_detach_plan_without_event(

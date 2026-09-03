@@ -1157,8 +1157,8 @@ mod tests {
         );
         let inactive_runtime = inactive.renderer_runtime();
 
-        conn.browser_context = Some(active);
-        conn.inactive_browser_contexts.push(inactive);
+        conn.install_browser_context_fixture_for_test(active);
+        conn.push_inactive_browser_context_fixture_for_test(inactive);
 
         assert!(conn.set_page_domain_enabled_for_session_owner(Some("SID-inactive-a"), true));
         assert!(inactive_runtime.javascript_dialog_handler_enabled());

@@ -18,6 +18,19 @@ mod state;
 #[cfg(test)]
 mod tests;
 
+/// Disables the Tracing handler owned by one DevTools session.
+pub(in crate::domains) async fn dispose_session_handler_async(
+    conn: &mut CdpConnection,
+    session_id: &str,
+) {
+    // A trace may own isolate tasks that must finish before another session
+    // can start one. Keep the synchronous cancellation as a final idempotent
+    // state reset after the async task has settled.
+    conn.cancel_tracing_for_session_owner_async(Some(session_id))
+        .await;
+    conn.cancel_tracing_for_session_owner(Some(session_id));
+}
+
 #[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct TracingStartParams {

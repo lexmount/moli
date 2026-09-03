@@ -587,7 +587,7 @@ mod tests {
         bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let page_owner = conn
             .target_page_residence_identity_for_session(Some("SID-1"))
             .expect("test target should expose a Page residence identity");
@@ -680,7 +680,7 @@ mod tests {
         bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
 
         let old_owner = conn
             .target_page_residence_identity_for_session(Some("SID-collision"))
@@ -762,7 +762,7 @@ mod tests {
         bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         assert!(conn.enable_network_listener_for_session_owner(Some("FETCH-SID")));
         let page_owner = conn
             .target_page_residence_identity_for_session(Some("SID-1"))
@@ -821,7 +821,7 @@ mod tests {
         bc.active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let page_owner = conn
             .target_page_residence_identity_for_session(Some("SID-1"))
             .expect("test target should expose a Page residence identity");
@@ -909,7 +909,7 @@ mod tests {
             Some("SID-background".to_owned()),
             page_url.clone(),
         ));
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
 
         for (id, session_id) in [(1, "SID-active"), (2, "SID-background")] {
             ctx.process_async(serde_json::json!({
@@ -997,7 +997,7 @@ mod tests {
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
         ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
             .await;
         ctx.process_async(serde_json::json!({

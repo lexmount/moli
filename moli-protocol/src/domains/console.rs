@@ -182,7 +182,7 @@ mod tests {
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,console-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
         ctx.install_navigation_fixture_for_session_owner(
             &format!("data:text/html,{html}"),
             Some("SID-1"),
@@ -293,7 +293,7 @@ mod tests {
             stack: None,
         });
         bc.insert_shared_worker_target(target);
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
     }
 
     #[tokio::test]
@@ -558,7 +558,7 @@ mod tests {
             None,
             None,
         );
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({
             "id": 13,

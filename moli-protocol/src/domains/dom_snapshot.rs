@@ -210,7 +210,7 @@ mod tests {
     async fn load_document(ctx: &mut TestContext, html: &str) {
         let mut bc = BrowserContext::new("BID-1".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
         ctx.install_navigation_fixture_for_session_owner(&format!("data:text/html,{html}"), None)
             .await;
         wait_until_renderer_document_load(ctx, None, "TID-1", LOADER_ID).await;
@@ -1037,7 +1037,7 @@ mod tests {
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         bc.insert_page_target_host(background);
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({
             "id": 101,
@@ -1088,14 +1088,15 @@ mod tests {
         let mut active = BrowserContext::new("BID-active".to_owned());
         active.set_active_target_id("TID-active".to_owned());
         active.attach_active_session("SID-active".to_owned());
-        ctx.conn.browser_context = Some(active);
+        ctx.conn.install_browser_context_fixture_for_test(active);
 
         let mut inactive = BrowserContext::new("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
         inactive.set_target_url(page.final_url().as_str().to_owned());
         inactive.attach_active_session("SID-inactive".to_owned());
         inactive.replace_loaded_page(Some(page));
-        ctx.conn.inactive_browser_contexts.push(inactive);
+        ctx.conn
+            .push_inactive_browser_context_fixture_for_test(inactive);
 
         ctx.process_async(json!({
             "id": 111,

@@ -785,7 +785,7 @@ mod tests {
     async fn with_loaded_document_async(ctx: &mut TestContext, html: &str) {
         let mut bc = crate::conn::BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-1");
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
         ctx.install_navigation_fixture_for_session_owner(&format!("data:text/html,{html}"), None)
             .await;
         wait_until_renderer_document_load(ctx, None, "TID-1", LOADER_ID).await;
@@ -1020,7 +1020,7 @@ mod tests {
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         bc.insert_page_target_host(background);
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
         ctx.install_navigation_fixture_for_session_owner(
             "data:text/html,<html><head><style title='owner'>body { color: red; }</style></head><body><div id='target' style='display:flex;width:123px;color:blue'></div></body></html>",
             Some("SID-background"),
@@ -1144,13 +1144,14 @@ mod tests {
         let mut active = BrowserContext::new("BID-active".to_owned());
         active.set_active_target_id("TID-active".to_owned());
         active.attach_active_session("SID-active".to_owned());
-        ctx.conn.browser_context = Some(active);
+        ctx.conn.install_browser_context_fixture_for_test(active);
 
         let mut inactive = BrowserContext::new("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
         inactive.set_target_url("about:blank".to_owned());
         inactive.attach_active_session("SID-inactive".to_owned());
-        ctx.conn.inactive_browser_contexts.push(inactive);
+        ctx.conn
+            .push_inactive_browser_context_fixture_for_test(inactive);
         ctx.install_navigation_fixture_for_session_owner(
             "data:text/html,<html><head><style title='inactive'>main { color: red; }</style></head><body><main id='target' style='display:block;height:77px'></main></body></html>",
             Some("SID-inactive"),
@@ -1699,7 +1700,8 @@ mod tests {
             .background_target_mut("TID-css-background")
             .expect("background target")
             .replace_loaded_page(Some(background_page));
-        ctx.conn.browser_context = Some(browser_context);
+        ctx.conn
+            .install_browser_context_fixture_for_test(browser_context);
 
         let background_session = attach_page_session_async(&mut ctx, "TID-css-background").await;
         let active_style_sheet_id = inline_style_sheet_id_for_session_async(&mut ctx, None).await;

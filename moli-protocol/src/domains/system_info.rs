@@ -90,7 +90,8 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-system-info".to_owned());
         browser_context.set_active_target_id("TID-system-info".to_owned());
         browser_context.attach_active_session("SID-frame".to_owned());
-        ctx.conn.browser_context = Some(browser_context);
+        ctx.conn
+            .install_browser_context_fixture_for_test(browser_context);
 
         ctx.process_async(json!({
             "id": 2,
@@ -130,7 +131,8 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-system-info".to_owned());
         browser_context.set_active_target_id("TID-system-info".to_owned());
         browser_context.attach_active_session("SID-frame".to_owned());
-        ctx.conn.browser_context = Some(browser_context);
+        ctx.conn
+            .install_browser_context_fixture_for_test(browser_context);
 
         ctx.process_async(json!({
             "id": 2,

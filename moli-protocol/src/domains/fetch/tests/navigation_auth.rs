@@ -46,7 +46,7 @@ async fn continue_with_auth_retries_navigation_with_basic_credentials() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
     let url = format!("http://{addr}/auth");
@@ -207,7 +207,7 @@ async fn devtools_continue_response_credentials_retries_auth_navigation() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.enable_page_events_for_test(Some("SID-1"));
     let url = format!("http://{addr}/auth");
 
@@ -353,7 +353,7 @@ async fn continue_with_auth_and_intercept_response_pauses_before_authorized_body
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let url = format!("http://{addr}/auth");
 
     ctx.process_async(json!({
@@ -487,7 +487,7 @@ async fn continue_with_non_basic_auth_and_intercept_response_fails_explicitly_wi
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let url = format!("http://{addr}/auth");
 
     ctx.process_async(json!({
@@ -615,7 +615,7 @@ async fn navigation_auth_required_includes_synthesized_cookie_header() {
             )],
         );
     }
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 72_001,
@@ -701,7 +701,7 @@ async fn continue_with_auth_prefers_supported_navigation_challenge_over_unsuppor
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let url = format!("http://{addr}/auth");
 
     ctx.process_async(json!({
@@ -851,7 +851,7 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.enable_page_events_for_test(Some("SID-1"));
     let url = format!("http://{addr}/auth");
 

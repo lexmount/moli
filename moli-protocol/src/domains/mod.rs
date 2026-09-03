@@ -31,6 +31,7 @@ pub mod runtime;
 pub(crate) mod runtime_context_events;
 pub mod security;
 pub mod service_worker;
+pub(crate) mod session;
 pub mod storage;
 pub mod system_info;
 pub mod target;

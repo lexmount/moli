@@ -968,7 +968,7 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let page_id = moli_core::PageId::new_for_testing(71);
         let frame = RendererFrameToken { page_id };
@@ -1110,7 +1110,7 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .enable_primary_network_events();
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let state = navigation_state();
         let final_url = Url::parse("https://example.test/download").unwrap();
@@ -1303,7 +1303,7 @@ mod tests {
             .page_session_state
             .page_domain_enabled = true;
         let mut conn = CdpConnection::new();
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let state = navigation_state();
         let activity = MainDocumentNavigationActivity::new(
             state.clone(),
@@ -1396,7 +1396,7 @@ mod tests {
         browser_context.commit_document_navigation_if_matches(&old_token);
 
         let mut conn = CdpConnection::new();
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let activity = MainDocumentNavigationActivity::new(
             navigation_state(),
             final_url.clone(),
@@ -1448,7 +1448,7 @@ mod tests {
         browser_context.commit_document_navigation_if_matches(&token);
 
         let mut conn = CdpConnection::new();
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let activity = MainDocumentNavigationActivity::new(
             navigation_state(),
             final_url,

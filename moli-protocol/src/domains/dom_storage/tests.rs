@@ -116,7 +116,8 @@ async fn loaded_dom_storage_context() -> (TestContext, String, String, tokio::ta
     browser_context.set_target_url(page_url.clone());
     browser_context.set_target_security_origin(origin.clone());
     browser_context.set_target_secure_context_type("Secure".to_owned());
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     let page = ctx
         .conn
@@ -452,7 +453,8 @@ async fn dom_storage_resolves_child_frame_storage_ids_without_collapsing_to_top_
     browser_context.set_target_url(page_url.clone());
     browser_context.set_target_security_origin(top_origin.clone());
     browser_context.set_target_secure_context_type("Secure".to_owned());
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     let page = ctx
         .conn
         .load_page_via_runtime_async(&page_url)

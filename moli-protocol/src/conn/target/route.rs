@@ -80,6 +80,18 @@ impl CdpSessionRoute {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn target_id(&self) -> Option<&str> {
+        match self {
+            Self::TabTarget { tab_target_id, .. } => Some(tab_target_id),
+            Self::PageTarget { target_id, .. }
+            | Self::SharedWorkerTarget { target_id, .. }
+            | Self::DedicatedWorkerTarget { target_id, .. }
+            | Self::ServiceWorkerTarget { target_id, .. } => Some(target_id),
+            Self::Browser | Self::BrowserContext { .. } => None,
+        }
+    }
+
     /// Whether Chromium installs a handler for this CDP domain on the routed
     /// DevToolsAgentHost.
     ///
@@ -173,23 +185,9 @@ impl CdpConnection {
 
     pub(crate) fn session_route(&self, session_id: Option<&str>) -> Option<CdpSessionRoute> {
         let session_id = session_id?;
-        let committed = self
-            .target_control
+        self.target_control
             .attached_session_route(session_id)
-            .cloned();
-        if committed.is_some() {
-            return committed;
-        }
-        #[cfg(test)]
-        if self.allow_incomplete_session_fixture_routes {
-            return self.bound_session_route_for_test(session_id, None);
-        }
-        None
-    }
-
-    #[cfg(test)]
-    pub(crate) fn require_committed_session_routes_for_test(&mut self) {
-        self.allow_incomplete_session_fixture_routes = false;
+            .cloned()
     }
 
     pub(crate) fn target_session_route_for_target_id(
@@ -303,7 +301,7 @@ mod tests {
         browser_context.set_active_target_id("TID-a");
         browser_context.attach_active_session("SID-a");
         assert!(browser_context.insert_page_target_host(PageTargetHost::empty("TID-b".to_owned())));
-        connection.browser_context = Some(browser_context);
+        connection.install_browser_context_fixture_for_test(browser_context);
 
         let route = CdpSessionRoute::PageTarget {
             browser_context_id: "BID-route".to_owned(),
@@ -314,7 +312,7 @@ mod tests {
             "SID-a".to_owned(),
             None,
             "TID-a",
-            Some(route.clone()),
+            route.clone(),
             false,
             false,
         );
@@ -338,7 +336,6 @@ mod tests {
     #[test]
     fn target_binding_is_not_globally_routable_before_session_commit() {
         let mut connection = CdpConnection::new();
-        connection.require_committed_session_routes_for_test();
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-route", "TID-page");
         browser_context.attach_active_session("SID-prepared");
         connection.browser_context = Some(browser_context);

@@ -86,6 +86,7 @@ async fn runtime_evaluate_materializes_default_context_via_inspector_hook() {
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ctx.sent.clear();
 
     let before = ctx
@@ -138,6 +139,7 @@ async fn pending_inspector_await_does_not_block_default_context_evaluate() {
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ctx.conn
         .register_pending_inspector_await(900_199, Some("SID-1"));
     ctx.sent.clear();

@@ -515,7 +515,7 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .replace_loaded_page(Some(page));
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         conn
     }
 

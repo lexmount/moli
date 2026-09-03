@@ -154,7 +154,7 @@ async fn enable_and_disable_are_session_local_for_same_target() {
     bc.set_active_target_id("TID-session-fetch".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     assert!(bc.assign_attached_session_to_target("TID-session-fetch", "SID-attached".to_owned()));
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 210,
@@ -246,7 +246,7 @@ async fn disable_drains_only_current_session_pending_subresource_fetches() {
     bc.set_active_target_id("TID-session-fetch".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     assert!(bc.assign_attached_session_to_target("TID-session-fetch", "SID-attached".to_owned()));
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 220,
@@ -319,7 +319,7 @@ async fn disable_drains_fetch_owned_pending_when_same_session_network_intercept_
     let mut bc = BrowserContext::new("BID-session-mixed-fetch-pending".into());
     bc.set_active_target_id("TID-session-fetch".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 230,
@@ -408,7 +408,7 @@ async fn enable_targets_loaded_background_owner_without_activation() {
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>fetch background</title>",
         Some("SID-background"),
@@ -460,7 +460,7 @@ async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
     let mut bc = BrowserContext::new("BID-fetch-owner-route".to_owned());
     bc.set_active_target_id("TID-fetch-active".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>active fetch</title>",
@@ -530,12 +530,13 @@ async fn enable_targets_inactive_owner_without_activation() {
     let mut active = BrowserContext::new("BID-active".to_owned());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active".to_owned());
-    ctx.conn.browser_context = Some(active);
+    ctx.conn.install_browser_context_fixture_for_test(active);
 
     let mut inactive = BrowserContext::new("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 1202,
@@ -614,7 +615,7 @@ async fn disable_targets_loaded_background_owner_without_activation() {
             }],
         );
     }
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>fetch disable background</title>",
         Some("SID-background"),
@@ -1139,7 +1140,7 @@ async fn disable_clears_fetch_state() {
                 auth_stage_chain: None,
             },
         );
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({"id": 5, "method": "Fetch.disable"}))
         .await;
@@ -1168,7 +1169,7 @@ async fn disable_after_enable_resets_pending_requests() {
     bc.active_page_target_mut()
         .fetch_owner
         .register_pending_fetch_request_id_for_test("INT-2".to_owned());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({"id": 14, "method": "Fetch.disable"}))
         .await;
@@ -1232,7 +1233,7 @@ async fn continue_response_and_take_response_body_as_stream_validate_like_fetch_
     bc.active_page_target_mut()
         .fetch_owner
         .register_pending_fetch_request_id_for_test("INT-43".to_owned());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 16,
@@ -1266,7 +1267,7 @@ async fn pending_fetch_request_can_be_consumed_once() {
     bc.active_page_target_mut()
         .fetch_owner
         .register_pending_fetch_request_id_for_test("INT-7".to_owned());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 8,
@@ -1363,7 +1364,7 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                 auth_stage_chain: None,
             },
         );
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 77,
@@ -1438,7 +1439,7 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                 auth_stage_chain: None,
             },
         );
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 78,

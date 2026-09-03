@@ -296,7 +296,7 @@ fn connection_with_background_pending_fetch_action(request_id: &str) -> CdpConne
         .fetch_owner
         .pending_state_mut()
         .insert_pending_fetch_request_id_for_test(request_id.to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     conn
 }
 
@@ -708,7 +708,7 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
         Some("SID-background".to_owned()),
         "https://example.test/background".to_owned(),
     ));
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     conn.register_pending_fetch_navigation_request_for_owner(
         &crate::conn::CommandOwnerScope::for_session("SID-background"),
@@ -1190,7 +1190,8 @@ async fn devtools_runtime_call_function_popup_activity_drains_from_protocol_neut
     let mut browser_context = BrowserContext::new("BID-neutral-popup".to_owned());
     browser_context.set_active_target_id("TID-neutral-popup-opener".to_owned());
     browser_context.attach_active_session("SID-neutral-popup-opener");
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     let page = ctx
         .conn
         .load_page_via_runtime_async("data:text/html,<p>neutral popup opener</p>")
@@ -1372,7 +1373,7 @@ async fn devtools_command_preserves_target_close_detached_typed_sidecar() {
     let mut browser_context = BrowserContext::new("BID-close-sidecar".to_owned());
     browser_context.set_active_target_id("TID-close-sidecar".to_owned());
     browser_context.attach_active_session("SID-close-sidecar".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let context = DevToolsCommandContext {
         protocol: DevToolsProtocol::WebDriverBidi,
@@ -2761,7 +2762,7 @@ async fn devtools_get_realms_succeeds_when_page_loaded_before_session_attach() {
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-late-realms".to_owned());
     browser_context.set_active_target_id("TID-late-realms".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let page = conn
         .load_page_via_runtime_async("data:text/html,<title>late-realms</title>")
@@ -2925,7 +2926,7 @@ async fn devtools_runtime_evaluate_reports_no_document_without_resolver_fallback
     browser_context.set_active_target_id("TID-no-page-runtime".to_owned());
     browser_context.attach_active_session("SID-no-page-runtime".to_owned());
     browser_context.set_target_url("about:blank".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let (evaluate_result, _) = conn
         .execute_devtools_command(DevToolsCommand::EvaluateScript(
@@ -3065,7 +3066,7 @@ async fn element_screenshot_reports_unsupported_without_initial_document_repair(
     browser_context.set_active_target_id("TID-no-page-element-shot".to_owned());
     browser_context.attach_active_session("SID-no-page-element-shot".to_owned());
     browser_context.set_target_url("about:blank".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let (screenshot_result, _) = conn
         .execute_devtools_command(DevToolsCommand::CaptureScreenshot(
@@ -5714,8 +5715,8 @@ async fn devtools_storage_cookie_commands_scope_to_target_browser_context() {
     default_context.set_active_target_id("TID-default".to_owned());
     let mut custom_context = BrowserContext::new("BID-custom".to_owned());
     custom_context.set_active_target_id("TID-custom".to_owned());
-    conn.browser_context = Some(default_context);
-    conn.inactive_browser_contexts.push(custom_context);
+    conn.install_browser_context_fixture_for_test(default_context);
+    conn.push_inactive_browser_context_fixture_for_test(custom_context);
 
     let base_context = DevToolsCommandContext {
         protocol: DevToolsProtocol::WebDriverBidi,
@@ -6830,7 +6831,7 @@ fn command_dispatch_completes_unknown_domains_without_legacy_fallback() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    conn.browser_context = Some(bc);
+    conn.install_browser_context_fixture_for_test(bc);
     let raw = serde_json::to_string(&json!({
         "id": 9,
         "method": "Nope.command",
@@ -6959,7 +6960,7 @@ async fn command_dispatch_completes_live_browser_permission_without_legacy_fallb
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-browser-permission-live".to_owned());
     browser_context.set_active_target_id("TID-browser-permission-live".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let page = conn
         .load_page_via_runtime_async("data:text/html,<p>browser permission</p>")
         .await
@@ -7164,7 +7165,7 @@ fn command_dispatch_completes_additional_page_sync_commands_without_legacy_fallb
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-page-sync".to_owned());
     browser_context.set_active_target_id("TID-page-sync");
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let download_raw = serde_json::to_string(&json!({
         "id": 411,
@@ -7335,7 +7336,8 @@ async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() 
     let mut browser_context = BrowserContext::new("BID-page-preload-live".to_owned());
     browser_context.set_active_target_id("TID-page-preload-live".to_owned());
     browser_context.attach_active_session("SID-page-preload-live");
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     let page = ctx
         .conn
         .load_page_via_runtime_async("data:text/html,<p>preload</p>")
@@ -7500,7 +7502,7 @@ async fn command_dispatch_completes_target_activate_without_legacy_fallback() {
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-target-activate".to_owned());
     browser_context.set_active_target_id("TID-target-activate".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let raw = serde_json::to_string(&json!({
         "id": 56,
@@ -7525,7 +7527,7 @@ async fn command_dispatch_completes_target_set_auto_attach_without_legacy_fallba
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-target-auto-attach".to_owned());
     browser_context.set_active_target_id("TID-target-auto-attach".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let raw = serde_json::to_string(&json!({
         "id": 57,
@@ -7559,7 +7561,7 @@ async fn command_dispatch_completes_page_bring_to_front_without_legacy_fallback(
     let mut browser_context = BrowserContext::new("BID-page-bring".to_owned());
     browser_context.set_active_target_id("TID-page-bring".to_owned());
     browser_context.attach_active_session("SID-page-bring".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let raw = serde_json::to_string(&json!({
         "id": 5701,
@@ -7589,7 +7591,7 @@ async fn command_dispatch_completes_target_detach_without_legacy_fallback() {
     let mut browser_context = BrowserContext::new("BID-target-detach".to_owned());
     browser_context.set_active_target_id("TID-target-detach".to_owned());
     browser_context.attach_active_session("SID-target-detach".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let raw = serde_json::to_string(&json!({
         "id": 58,
@@ -7632,7 +7634,7 @@ async fn command_dispatch_completes_target_close_without_legacy_fallback() {
     let mut browser_context = BrowserContext::new("BID-target-close".to_owned());
     browser_context.set_active_target_id("TID-target-close".to_owned());
     browser_context.attach_active_session("SID-target-close".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let raw = serde_json::to_string(&json!({
         "id": 59,
@@ -7682,7 +7684,7 @@ async fn command_dispatch_completes_target_dispose_browser_context_without_legac
     let mut browser_context = BrowserContext::new("BID-target-dispose".to_owned());
     browser_context.set_active_target_id("TID-target-dispose".to_owned());
     browser_context.attach_active_session("SID-target-dispose".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let raw = serde_json::to_string(&json!({
         "id": 60,
@@ -7725,7 +7727,7 @@ async fn command_dispatch_completes_target_send_message_without_legacy_fallback(
     let mut browser_context = BrowserContext::new("BID-target-send".to_owned());
     browser_context.set_active_target_id("TID-target-send".to_owned());
     browser_context.attach_active_session("SID-target-send".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let nested = serde_json::to_string(&json!({
         "id": 6101,
@@ -7819,7 +7821,7 @@ async fn command_dispatch_completes_live_storage_set_cookies_without_legacy_fall
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-storage-live".to_owned());
     browser_context.set_active_target_id("TID-storage-live".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let page = conn
         .load_page_via_runtime_async("data:text/html,<p>storage</p>")
         .await
@@ -7867,7 +7869,7 @@ async fn command_dispatch_completes_live_network_extra_headers_without_legacy_fa
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-network-live".to_owned());
     browser_context.set_active_target_id("TID-network-live".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let page = conn
         .load_page_via_runtime_async("data:text/html,<p>network</p>")
         .await
@@ -7904,7 +7906,7 @@ async fn command_dispatch_completes_live_network_blocked_urls_without_legacy_fal
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-network-blocked-live".to_owned());
     browser_context.set_active_target_id("TID-network-blocked-live".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let page = conn
         .load_page_via_runtime_async("data:text/html,<p>network blocked</p>")
         .await
@@ -7941,7 +7943,7 @@ async fn command_dispatch_completes_live_network_set_cookie_without_legacy_fallb
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-network-cookie-live".to_owned());
     browser_context.set_active_target_id("TID-network-cookie-live".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let page = conn
         .load_page_via_runtime_async("data:text/html,<p>network cookie</p>")
         .await
@@ -7986,7 +7988,7 @@ async fn command_dispatch_completes_live_network_emulation_without_legacy_fallba
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-network-emulated-live".to_owned());
     browser_context.set_active_target_id("TID-network-emulated-live".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let page = conn
         .load_page_via_runtime_async("data:text/html,<p>network emulated</p>")
         .await
@@ -8029,7 +8031,7 @@ async fn command_dispatch_completes_live_network_user_agent_without_legacy_fallb
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-network-ua-live".to_owned());
     browser_context.set_active_target_id("TID-network-ua-live".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let page = conn
         .load_page_via_runtime_async("data:text/html,<p>network ua</p>")
         .await
@@ -8066,7 +8068,7 @@ async fn command_dispatch_completes_live_emulation_user_agent_without_legacy_fal
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-emulation-ua-live".to_owned());
     browser_context.set_active_target_id("TID-emulation-ua-live".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let page = conn
         .load_page_via_runtime_async("data:text/html,<p>emulation ua</p>")
         .await
@@ -8127,7 +8129,7 @@ async fn pending_emulation_user_agent_loader_keeps_active_owner_route_across_com
         .background_target_mut("TID-emulation-ua-background")
         .expect("background target")
         .replace_loaded_page(Some(background_page));
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let raw = serde_json::to_string(&json!({
         "id": 688,
@@ -8204,7 +8206,7 @@ async fn pending_emulation_viewport_keeps_original_page_when_active_target_chang
         .background_target_mut("TID-emulation-viewport-replacement")
         .expect("replacement target")
         .replace_loaded_page(Some(replacement_page));
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let raw = serde_json::to_string(&json!({
         "id": 690,
@@ -8288,7 +8290,7 @@ async fn pending_emulation_timezone_keeps_background_owner_route_across_completi
         .background_target_mut("TID-emulation-timezone-background")
         .expect("background target")
         .replace_loaded_page(Some(background_page));
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let background_route = conn
         .target_session_route_for_target_id("TID-emulation-timezone-background")
@@ -8356,7 +8358,7 @@ async fn command_dispatch_completes_live_emulation_locale_without_legacy_fallbac
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-emulation-locale-live".to_owned());
     browser_context.set_active_target_id("TID-emulation-locale-live".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let page = conn
         .load_page_via_runtime_async("data:text/html,<p>emulation locale</p>")
         .await
@@ -8393,7 +8395,7 @@ async fn command_dispatch_completes_live_security_tls_without_legacy_fallback() 
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-security-tls-live".to_owned());
     browser_context.set_active_target_id("TID-security-tls-live".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let page = conn
         .load_page_via_runtime_async("data:text/html,<p>security tls</p>")
         .await
@@ -8455,7 +8457,7 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
         .background_target_mut("TID-security-background")
         .expect("background target")
         .replace_loaded_page(Some(background_page));
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let background_session =
         attach_page_session_for_test(&mut conn, "TID-security-background").await;
@@ -8525,7 +8527,8 @@ async fn command_dispatch_completes_live_fetch_enable_without_legacy_fallback() 
     let mut ctx = crate::testing::TestContext::new();
     let mut browser_context = BrowserContext::new("BID-fetch-live".to_owned());
     browser_context.set_active_target_id("TID-fetch-live".to_owned());
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     let page = ctx
         .conn
         .load_page_via_runtime_async("data:text/html,<p>fetch</p>")
@@ -8564,7 +8567,7 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-bidi-intercept".to_owned());
     browser_context.set_active_target_id("TID-bidi-intercept".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
     let context = DevToolsCommandContext {
         protocol: DevToolsProtocol::WebDriverBidi,
         session_id: Some(DevToolsSessionId::from("BIDI-SID")),
@@ -8766,7 +8769,8 @@ async fn command_dispatch_completes_live_fetch_disable_without_legacy_fallback()
         .active_page_target_mut()
         .fetch_owner
         .configure(None, true, Vec::new());
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     let page = ctx
         .conn
         .load_page_via_runtime_async("data:text/html,<p>fetch disable</p>")

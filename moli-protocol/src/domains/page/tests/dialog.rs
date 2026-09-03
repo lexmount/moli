@@ -560,6 +560,7 @@ async fn javascript_dialog_pending_state_is_session_local_for_active_attached_se
         browser_context
             .assign_attached_session_to_target("TID-dialog-attached", "SID-attached".to_owned())
     );
+    ctx.conn.commit_declared_session_fixtures_for_test();
     push_dialog_for_session(
         &mut ctx,
         Some("SID-attached"),

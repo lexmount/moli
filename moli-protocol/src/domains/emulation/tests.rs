@@ -60,9 +60,24 @@ fn install_multi_session_page_state(ctx: &mut TestContext) {
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-primary");
     assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
-    ctx.conn.browser_context = Some(browser_context);
-    ctx.conn.register_bound_session_for_test("SID-primary");
-    ctx.conn.register_bound_session_for_test("SID-attached");
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
+    for (session_id, session_key) in [
+        ("SID-primary", moli_page_types::DevToolsSessionKey::Primary),
+        (
+            "SID-attached",
+            moli_page_types::DevToolsSessionKey::Attached("SID-attached".to_owned()),
+        ),
+    ] {
+        ctx.conn.register_session_route_for_test(
+            session_id,
+            crate::conn::CdpSessionRoute::PageTarget {
+                browser_context_id: "BID-1".to_owned(),
+                target_id: "TID-1".to_owned(),
+                session_key,
+            },
+        );
+    }
 }
 
 async fn expect_session_command_result(
@@ -105,7 +120,7 @@ async fn install_session_page_for_emulation_test(
     bc: BrowserContext,
     url: &str,
 ) {
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     // A production navigation binds the reserved renderer Page to its target
     // before output can arrive. Use the production-shaped fixture transaction
     // instead of inserting a bare Page and racing its first publication.
@@ -158,7 +173,7 @@ async fn bidi_set_extra_headers_merges_global_user_context_and_context_layers() 
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     execute_set_extra_headers_for_test(
         &mut ctx,
@@ -274,11 +289,14 @@ async fn attached_session_first_io_emulation_response_uses_its_session_host() {
             .expect("browser context")
             .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
-    let owner = crate::conn::CommandOwnerScope::for_route(
-        ctx.conn
-            .bound_session_route_for_test("SID-attached", Some("TID-1"))
-            .expect("attached test session must own its Page route"),
-    );
+    let route = crate::conn::CdpSessionRoute::PageTarget {
+        browser_context_id: "BID-1".to_owned(),
+        target_id: "TID-1".to_owned(),
+        session_key: moli_page_types::DevToolsSessionKey::Attached("SID-attached".to_owned()),
+    };
+    ctx.conn
+        .register_session_route_for_test("SID-attached", route.clone());
+    let owner = crate::conn::CommandOwnerScope::for_route(route);
     ctx.conn
         .apply_runtime_binding_state_for_owner_async(&owner)
         .await
@@ -773,7 +791,7 @@ async fn pure_state_emulation_commands_complete_through_command_dispatch() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     for (id, method, params) in [
         (
@@ -830,7 +848,7 @@ async fn set_cpu_throttling_rate_rejects_invalid_params() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 9115,
@@ -858,7 +876,7 @@ async fn live_apply_emulation_commands_without_loaded_page_do_not_use_legacy_fal
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     for (id, method, params) in [
         (
@@ -1439,7 +1457,7 @@ async fn set_user_agent_override_applies_to_subsequent_navigation_requests() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 6,
@@ -1509,7 +1527,7 @@ async fn emulation_user_agent_override_replaces_network_override() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 9,
@@ -1577,7 +1595,7 @@ async fn set_user_agent_override_applies_to_current_page_xhr_requests() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>ok</body>",
         Some("SID-1"),
@@ -1665,7 +1683,7 @@ async fn set_user_agent_override_applies_complete_chromium_identity_profile() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 200,
@@ -2033,7 +2051,7 @@ async fn emulation_async_dispatch_updates_live_page_surface_without_mutating_acc
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(&format!("http://{addr}/page"), Some("SID-1"))
         .await;
 
@@ -2243,7 +2261,7 @@ async fn set_geolocation_override_applies_to_subsequent_navigation_surface() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 89,
@@ -2399,7 +2417,7 @@ async fn device_metrics_override_updates_layout_metrics() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 12,
@@ -2487,7 +2505,7 @@ async fn locale_override_updates_intl_without_mutating_language_surfaces() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 14,
@@ -2543,7 +2561,7 @@ async fn bidi_user_context_locale_composes_with_user_agent_on_all_identity_surfa
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     for command in [
         DevToolsCommand::SetUserAgentOverride(DevToolsSetUserAgentOverrideCommand {
@@ -2647,7 +2665,7 @@ async fn touch_and_timezone_overrides_apply_to_document_start_surface() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 16,
@@ -2686,7 +2704,7 @@ async fn locale_and_timezone_overrides_apply_to_locale_date_formatting() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 181,
@@ -2734,7 +2752,7 @@ async fn context_emulated_media_applies_to_loaded_background_page_without_activa
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active");
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background</body>",
         Some("SID-background"),
@@ -2810,7 +2828,7 @@ async fn context_locale_override_applies_to_loaded_background_page_without_activ
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active");
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background</body>",
         Some("SID-background"),
@@ -2899,7 +2917,7 @@ async fn session_emulation_routes_to_loaded_background_owner_without_activation(
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active");
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background</body>",
         Some("SID-background"),
@@ -3032,7 +3050,7 @@ async fn emulated_media_updates_existing_media_query_list_matches() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body><script>globalThis.events = []; globalThis.darkMql = matchMedia('(prefers-color-scheme: dark)'); globalThis.lightMql = matchMedia('(prefers-color-scheme: light)'); darkMql.addEventListener('change', event => events.push(['dark', event.matches, event.media, event.target === darkMql])); lightMql.onchange = event => events.push(['light', event.matches, event.media, event.target === lightMql]);</script></body>",
         Some("SID-1"),
@@ -3105,7 +3123,7 @@ async fn generated_surface_refresh_does_not_freeze_match_media_override() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner("data:text/html,<body></body>", Some("SID-1"))
         .await;
     ctx.sent.clear();
@@ -3162,7 +3180,7 @@ async fn target_session_detach_disposes_non_aggregated_emulation_state_before_re
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner("data:text/html,<body></body>", None)
         .await;
     ctx.sent.clear();
@@ -3311,7 +3329,7 @@ async fn emulated_media_color_scheme_applies_to_match_media_surface() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 184,
@@ -3347,7 +3365,7 @@ async fn active_document_start_surface_reports_active_focus_and_visibility() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
             "id": 18,
@@ -3370,7 +3388,7 @@ async fn focus_emulation_override_applies_to_document_start_surface() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 19,

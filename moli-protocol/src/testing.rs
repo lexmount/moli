@@ -261,6 +261,7 @@ impl TestContext {
         raw_url: &str,
         session_id: Option<&str>,
     ) {
+        self.conn.commit_declared_session_fixtures_for_test();
         let navigation = self
             .conn
             .load_navigation_via_runtime_for_session_owner_async(session_id, raw_url)
@@ -284,6 +285,7 @@ impl TestContext {
         response_body: String,
         session_id: Option<&str>,
     ) {
+        self.conn.commit_declared_session_fixtures_for_test();
         let navigation = self
             .conn
             .build_loaded_navigation_from_buffered_response_for_session_owner_async(
@@ -705,6 +707,11 @@ impl TestContext {
         command: &ParsedCdpCommand,
         drain_after_command: bool,
     ) -> Vec<CdpSchedulerEvent> {
+        // Some low-level fixtures mutate target-side session declarations
+        // after installing their BrowserContext. Materialize those declarations
+        // as committed attachments at the test scheduler boundary; production
+        // route lookup remains control-plane-only.
+        self.conn.commit_declared_session_fixtures_for_test();
         let output_session_id = command.command_output_session_id().map(str::to_owned);
         let output_owner =
             crate::conn::CommandOwnerScope::capture(&self.conn, output_session_id.as_deref());

@@ -1101,7 +1101,8 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
     enable_root_target_discovery_for_test(&mut ctx);
     let mut browser_context = ctx.conn.new_browser_context("BID-popup-storage".to_owned());
     browser_context.set_active_target_id("TID-popup-storage-opener");
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     let opener_url = format!("http://{addr}/opener");
     let page = ctx
         .conn
@@ -3083,17 +3084,21 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
         browser_context.remember_target_window_name("popupName", page_target_id);
         browser_context.remember_target_popup_id(Some(42), page_target_id);
     }
-    assert!(ctx.conn.assign_session_to_tab_target(
-        &tab_target_id,
-        "SID-popup-tab".to_owned(),
-        false
-    ));
     ctx.conn
-        .register_auto_attached_session("SID-popup-tab".to_owned(), None);
+        .attach_tab_target_session_event_plan(
+            "SID-popup-tab".to_owned(),
+            None,
+            &tab_target_id,
+            false,
+        )
+        .expect("popup tab session should commit");
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ctx.conn
-        .register_auto_attached_session("SID-popup-page-primary".to_owned(), None);
+        .mark_session_auto_attached_for_test("SID-popup-tab".to_owned(), None);
     ctx.conn
-        .register_auto_attached_session("SID-popup-page-attached".to_owned(), None);
+        .mark_session_auto_attached_for_test("SID-popup-page-primary".to_owned(), None);
+    ctx.conn
+        .mark_session_auto_attached_for_test("SID-popup-page-attached".to_owned(), None);
 
     assert!(ctx.conn.session_route(Some("SID-popup-tab")).is_some());
     assert!(
@@ -3156,17 +3161,21 @@ async fn incomplete_active_popup_rollback_clears_active_slot_sessions_and_target
             "SID-active-popup-page-attached".to_owned()
         ));
     }
-    assert!(ctx.conn.assign_session_to_tab_target(
-        &tab_target_id,
-        "SID-active-popup-tab".to_owned(),
-        false
-    ));
     ctx.conn
-        .register_auto_attached_session("SID-active-popup-tab".to_owned(), None);
+        .attach_tab_target_session_event_plan(
+            "SID-active-popup-tab".to_owned(),
+            None,
+            &tab_target_id,
+            false,
+        )
+        .expect("active popup tab session should commit");
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ctx.conn
-        .register_auto_attached_session("SID-active-popup-page-primary".to_owned(), None);
+        .mark_session_auto_attached_for_test("SID-active-popup-tab".to_owned(), None);
     ctx.conn
-        .register_auto_attached_session("SID-active-popup-page-attached".to_owned(), None);
+        .mark_session_auto_attached_for_test("SID-active-popup-page-primary".to_owned(), None);
+    ctx.conn
+        .mark_session_auto_attached_for_test("SID-active-popup-page-attached".to_owned(), None);
 
     assert!(
         ctx.conn
@@ -3234,8 +3243,9 @@ async fn unannounced_page_session_cleanup_clears_route_and_auto_attached_owner_i
                 "SID-page-cleanup".to_owned()
             )
     );
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ctx.conn
-        .register_auto_attached_session("SID-page-cleanup".to_owned(), Some("SID-tab-owner"));
+        .mark_session_auto_attached_for_test("SID-page-cleanup".to_owned(), Some("SID-tab-owner"));
     assert!(ctx.conn.session_route(Some("SID-page-cleanup")).is_some());
     assert_eq!(
         ctx.conn

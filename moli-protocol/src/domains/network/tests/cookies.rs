@@ -125,7 +125,7 @@ async fn set_user_agent_override_applies_to_subsequent_navigation_requests() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 30,
@@ -192,7 +192,8 @@ async fn background_target_user_agent_override_reaches_replacement_document() {
     )
     .expect("new BrowserContext owner should be live");
     ctx.conn.replace_standalone_navigation_engine(engine);
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     ctx.process_async(json!({
         "id": 35,
@@ -328,7 +329,7 @@ async fn set_user_agent_override_applies_to_current_page_fetch_requests() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>ok</body>",
         Some("SID-1"),
@@ -645,7 +646,7 @@ async fn network_set_cookie_uses_browser_context_default_cookie_url_when_missing
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-N6", "TID-N6");
     bc.set_target_url("https://example.com/path".into());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 46,

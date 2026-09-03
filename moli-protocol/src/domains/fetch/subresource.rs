@@ -700,7 +700,7 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
             .target_page_residence_identity_for_session(None)
             .expect("active test target should expose a Page residence identity");
@@ -779,7 +779,7 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
             .target_page_residence_identity_for_session(None)
             .expect("active test target should expose a Page residence identity");
@@ -824,7 +824,7 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
             .target_page_residence_identity_for_session(None)
             .expect("active test target should expose a Page residence identity");
@@ -876,7 +876,7 @@ mod tests {
             "https://example.test/background".to_owned(),
         );
         bc.insert_page_target_host(target);
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         conn.runtime_session_owner_slot_mut(Some("SID-background"))
             .expect("background test target runtime slot")
             .set_page_attachment_id_for_test(1);

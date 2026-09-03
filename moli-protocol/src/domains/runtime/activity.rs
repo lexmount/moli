@@ -634,7 +634,7 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .replace_loaded_page(Some(page));
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
     }
 
     fn runtime_binding_attachment_fixture() -> (
@@ -649,7 +649,7 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let attachment = conn
             .target_page_protocol_attachment_identity_for_session(Some("SID-1"))
             .expect("exact Runtime binding attachment");
@@ -869,6 +869,7 @@ mod tests {
                 .as_deref(),
             Some("SID-1"),
         );
+        ctx.conn.rollback_attached_session_without_event("SID-1");
         assert!(
             drain_runtime_inspector_outputs(&mut ctx.conn, outputs_after_detach, None)
                 .await
@@ -1006,6 +1007,7 @@ mod tests {
                 .as_deref(),
             Some("SID-1"),
         );
+        conn.rollback_attached_session_without_event("SID-1");
         let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
@@ -1104,6 +1106,7 @@ mod tests {
                 .as_deref(),
             Some("SID-1"),
         );
+        ctx.conn.rollback_attached_session_without_event("SID-1");
         let events = drain_runtime_inspector_outputs(&mut ctx.conn, outputs, None).await;
 
         assert!(
@@ -1123,6 +1126,7 @@ mod tests {
                 .expect("browser context")
                 .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
         );
+        ctx.conn.commit_declared_session_fixtures_for_test();
         let outputs = renderer_inspector_outputs(
             &mut ctx.conn,
             Some("SID-1"),

@@ -907,7 +907,13 @@ async fn close_active_target_activates_auto_attached_background_session_into_pag
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.register_bound_session_for_test("SID-active");
+    register_page_session_route(
+        &mut ctx,
+        "BID-9",
+        "TID-000000000A",
+        "SID-active",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
     ctx.conn.set_auto_attach_owner(
         None,
         true,
@@ -1000,7 +1006,13 @@ async fn close_targets_chain_activates_multiple_auto_attached_background_session
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.register_bound_session_for_test("SID-active");
+    register_page_session_route(
+        &mut ctx,
+        "BID-9",
+        "TID-000000000A",
+        "SID-active",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
     ctx.conn.set_auto_attach_owner(
         None,
         true,
@@ -1177,7 +1189,13 @@ async fn activate_target_chain_restores_multiple_auto_attached_loaded_page_runti
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.register_bound_session_for_test("SID-active");
+    register_page_session_route(
+        &mut ctx,
+        "BID-9",
+        "TID-000000000A",
+        "SID-active",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
     ctx.conn.set_auto_attach_owner(
         None,
         true,
@@ -1372,7 +1390,13 @@ async fn activate_target_chain_restores_multiple_set_auto_attach_background_load
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.register_bound_session_for_test("SID-active");
+    register_page_session_route(
+        &mut ctx,
+        "BID-9",
+        "TID-000000000A",
+        "SID-active",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
     {
         let bc = ctx.conn.browser_context.as_mut().unwrap();
         bc.insert_page_target_host(crate::conn::PageTargetHost::new(
@@ -1572,7 +1596,13 @@ async fn close_target_restores_loaded_runtime_to_previous_set_auto_attach_target
         .as_mut()
         .unwrap()
         .attach_active_session("SID-active");
-    ctx.conn.register_bound_session_for_test("SID-active");
+    register_page_session_route(
+        &mut ctx,
+        "BID-9",
+        "TID-000000000A",
+        "SID-active",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
     {
         let bc = ctx.conn.browser_context.as_mut().unwrap();
         bc.insert_page_target_host(crate::conn::PageTargetHost::new(
@@ -1842,8 +1872,20 @@ async fn page_command_on_background_target_session_routes_without_activating_loa
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
         ));
-    ctx.conn.register_bound_session_for_test("SID-active");
-    ctx.conn.register_bound_session_for_test("SID-bg");
+    register_page_session_route(
+        &mut ctx,
+        "BID-9",
+        "TID-000000000A",
+        "SID-active",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
+    register_page_session_route(
+        &mut ctx,
+        "BID-9",
+        "TID-000000000F",
+        "SID-bg",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
 
     ctx.process_async(json!({
         "id": 12,
@@ -1926,7 +1968,7 @@ async fn close_target_aborts_paused_request_stage_navigation() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 20,
@@ -2015,7 +2057,7 @@ async fn close_target_aborts_paused_runtime_fetch_subresource() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
     ctx.conn
@@ -2144,7 +2186,7 @@ async fn close_target_aborts_paused_response_stage_runtime_xhr_subresource() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
     ctx.conn
@@ -2312,7 +2354,7 @@ async fn close_target_aborts_paused_runtime_xhr_auth_subresource() {
     let mut bc = BrowserContext::new("BID-9".into());
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
     ctx.conn

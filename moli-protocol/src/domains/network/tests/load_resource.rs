@@ -9,7 +9,8 @@ async fn install_loaded_page(ctx: &mut TestContext, page_url: &str) {
     let mut browser_context = ctx.conn.new_browser_context("BID-1".to_owned());
     browser_context.set_active_target_id(TARGET_ID);
     browser_context.attach_active_session(SESSION_ID);
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some(SESSION_ID))
         .await;
     ctx.sent.clear();

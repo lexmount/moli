@@ -2171,7 +2171,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(&mut conn, "SID-typed", "ROOT-typed", source_document);
         let owner = page_residence_identity_for_test(&conn, "SID-typed");
@@ -2223,7 +2223,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-root-capture".into());
         bc.set_active_target_id("TID-root-capture");
         bc.attach_active_session("SID-root-capture");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(
             &mut conn,
@@ -2255,7 +2255,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(
             &mut conn,
@@ -2326,7 +2326,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(
             &mut conn,
@@ -2389,7 +2389,7 @@ mod producer_tests {
         let mut bc = BrowserContext::new("BID-download".into());
         bc.set_active_target_id("FRAME-download");
         bc.attach_active_session("SID-download");
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         conn.download_behavior
             .set_global("deny".to_owned(), None, true);
         let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
@@ -2441,7 +2441,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(&mut conn, "SID-1", "ROOT-1", source_document);
         let owner = page_residence_identity_for_test(&conn, "SID-1");
@@ -2489,7 +2489,7 @@ mod producer_tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
-        conn.browser_context = Some(bc);
+        conn.install_browser_context_fixture_for_test(bc);
         let source_document = renderer_document_identity_for_test(1, 1);
         bind_renderer_document_for_test(&mut conn, "SID-context", "ROOT-context", source_document);
         let owner = page_residence_identity_for_test(&conn, "SID-context");

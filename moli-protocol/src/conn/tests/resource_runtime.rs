@@ -94,7 +94,7 @@ async fn buffered_navigation_for_inactive_session_carries_its_target_engine() {
     target_context
         .start_document_navigation_for_active_target("LOADER-target".to_owned())
         .expect("target should accept its synthetic navigation");
-    conn.inactive_browser_contexts.push(target_context);
+    conn.push_inactive_browser_context_fixture_for_test(target_context);
 
     let requested_url = Url::parse("https://target.example/fulfilled").unwrap();
     let navigation = NavigationDispatchState {
@@ -157,7 +157,7 @@ fn current_navigation_initiator_url_uses_loaded_browser_context_url_when_availab
 
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.set_target_url("about:blank".into());
-    conn.browser_context = Some(bc);
+    conn.install_browser_context_fixture_for_test(bc);
     assert!(conn.current_navigation_initiator_url().is_none());
 
     conn.browser_context
@@ -512,7 +512,7 @@ fn page_request_client_for_navigation_inputs_inherits_service_worker_bypass() {
         network.network_enabled = true;
         network.bypass_service_worker = true;
     }
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let inputs = conn.navigation_load_inputs_for_session_owner(Some("SID-1"));
     let request_client = conn
@@ -530,8 +530,8 @@ fn connection_snapshot_cookies_collects_active_and_inactive_contexts() {
     active.upsert_cookie_for_test(stored_cookie("active", "1"));
     let inactive = BrowserContext::new("BID-inactive".to_owned());
     inactive.upsert_cookie_for_test(stored_cookie("inactive", "1"));
-    conn.browser_context = Some(active);
-    conn.inactive_browser_contexts.push(inactive);
+    conn.install_browser_context_fixture_for_test(active);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     let mut names = conn
         .snapshot_cookies()
@@ -550,8 +550,8 @@ fn connection_profile_backed_cookie_snapshot_ignores_ephemeral_contexts() {
     profile_backed.upsert_cookie_for_test(stored_cookie("profile", "1"));
     let ephemeral = conn.new_ephemeral_browser_context("BID-ephemeral".to_owned());
     ephemeral.upsert_cookie_for_test(stored_cookie("ephemeral", "1"));
-    conn.browser_context = Some(ephemeral);
-    conn.inactive_browser_contexts.push(profile_backed);
+    conn.install_browser_context_fixture_for_test(ephemeral);
+    conn.push_inactive_browser_context_fixture_for_test(profile_backed);
 
     let cookies = conn
         .snapshot_profile_backed_cookies()
@@ -566,7 +566,7 @@ fn connection_profile_backed_cookie_snapshot_is_none_without_profile_backed_cont
     let mut conn = CdpConnection::new_with_initial_cookies(vec![stored_cookie("sid", "seeded")]);
     let ephemeral = conn.new_ephemeral_browser_context("BID-ephemeral".to_owned());
     assert!(ephemeral.snapshot_cookies().is_empty());
-    conn.browser_context = Some(ephemeral);
+    conn.install_browser_context_fixture_for_test(ephemeral);
 
     assert!(conn.snapshot_profile_backed_cookies().is_none());
 }
@@ -587,7 +587,7 @@ async fn build_loaded_navigation_from_buffered_response_updates_request_cookie_a
     let before = bc
         .test_last_cookie_access_index("example.com", "/app", "sid")
         .expect("cookie should exist before synthetic navigation");
-    conn.browser_context = Some(bc);
+    conn.install_browser_context_fixture_for_test(bc);
 
     let navigation = conn
         .build_loaded_navigation_from_buffered_response_async(
@@ -637,7 +637,7 @@ async fn rebuild_buffered_response_preserving_request_report_avoids_second_acces
             "sid=1; Path=/app; Secure".to_owned(),
         )],
     );
-    conn.browser_context = Some(bc);
+    conn.install_browser_context_fixture_for_test(bc);
 
     let navigation = conn
         .build_loaded_navigation_from_buffered_response_async(
@@ -878,8 +878,8 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
     let mut conn = CdpConnection::new();
     let context_a = conn.new_ephemeral_browser_context("BID-1".into());
     let context_b = conn.new_ephemeral_browser_context("BID-2".into());
-    conn.browser_context = Some(context_a);
-    conn.inactive_browser_contexts.push(context_b);
+    conn.install_browser_context_fixture_for_test(context_a);
+    conn.push_inactive_browser_context_fixture_for_test(context_b);
     let first_url = Url::parse("https://context-storage-buckets.example/app/one").unwrap();
     let second_url = Url::parse("https://context-storage-buckets.example/app/two").unwrap();
 
@@ -1108,14 +1108,14 @@ async fn loader_uses_active_browser_context_user_agent_override() {
         .active_page_target_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-A".into());
-    conn.browser_context = Some(first);
+    conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
     second
         .active_page_target_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-B".into());
-    conn.inactive_browser_contexts.push(second);
+    conn.push_inactive_browser_context_fixture_for_test(second);
 
     assert_eq!(
         conn.ensure_resource_request_client()
@@ -1138,11 +1138,11 @@ async fn loader_uses_active_browser_context_http_proxy_override() {
     let mut conn = CdpConnection::new();
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     first.active_page_target_mut().http_proxy_override = Some("http://proxy-a.test:8080".into());
-    conn.browser_context = Some(first);
+    conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
     second.active_page_target_mut().http_proxy_override = Some("http://proxy-b.test:8080".into());
-    conn.inactive_browser_contexts.push(second);
+    conn.push_inactive_browser_context_fixture_for_test(second);
 
     assert_eq!(
         conn.ensure_resource_request_client()
@@ -1165,11 +1165,11 @@ async fn loader_uses_active_browser_context_http_no_proxy_override() {
     let mut conn = CdpConnection::new();
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     first.active_page_target_mut().http_no_proxy_override = Some("localhost,127.0.0.1".into());
-    conn.browser_context = Some(first);
+    conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
     second.active_page_target_mut().http_no_proxy_override = Some("::1,.example.com".into());
-    conn.inactive_browser_contexts.push(second);
+    conn.push_inactive_browser_context_fixture_for_test(second);
 
     assert_eq!(
         conn.ensure_resource_request_client()
@@ -1192,11 +1192,11 @@ async fn loader_uses_active_browser_context_tls_verify_host_override() {
     let mut conn = CdpConnection::new();
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     first.active_page_target_mut().tls_verify_host_override = Some(false);
-    conn.browser_context = Some(first);
+    conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
     second.active_page_target_mut().tls_verify_host_override = Some(true);
-    conn.inactive_browser_contexts.push(second);
+    conn.push_inactive_browser_context_fixture_for_test(second);
 
     assert!(
         !conn
@@ -1222,21 +1222,21 @@ async fn removing_an_inactive_browser_context_keeps_the_previously_active_contex
         .active_page_target_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-A".into());
-    conn.browser_context = Some(first);
+    conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second
         .active_page_target_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-B".into());
-    conn.inactive_browser_contexts.push(second);
+    conn.push_inactive_browser_context_fixture_for_test(second);
 
     let mut third = BrowserContext::new_with_page_for_test("BID-C", "TID-C");
     third
         .active_page_target_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-C".into());
-    conn.inactive_browser_contexts.push(third);
+    conn.push_inactive_browser_context_fixture_for_test(third);
 
     assert!(conn.activate_browser_context_by_id_async("BID-B").await);
     assert_eq!(conn.browser_context.as_ref().unwrap().id, "BID-B");
@@ -1275,14 +1275,14 @@ async fn manual_browser_context_restore_reselects_original_context_after_switch(
         .active_page_target_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-A".into());
-    conn.browser_context = Some(first);
+    conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second
         .active_page_target_mut()
         .network_policy
         .set_user_agent_override("Moli/Context-B".into());
-    conn.inactive_browser_contexts.push(second);
+    conn.push_inactive_browser_context_fixture_for_test(second);
 
     let previously_active_browser_context_id =
         conn.browser_context.as_ref().map(|bc| bc.id.clone());
@@ -1321,11 +1321,11 @@ async fn session_scoped_process_message_restores_previously_active_context_after
     let mut conn = CdpConnection::new();
 
     let first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
-    conn.browser_context = Some(first);
+    conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second.attach_active_session("SID-B");
-    conn.inactive_browser_contexts.push(second);
+    conn.push_inactive_browser_context_fixture_for_test(second);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -1360,11 +1360,11 @@ async fn session_scoped_process_message_async_restores_previously_active_context
     let mut conn = CdpConnection::new();
 
     let first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
-    conn.browser_context = Some(first);
+    conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second.attach_active_session("SID-B");
-    conn.inactive_browser_contexts.push(second);
+    conn.push_inactive_browser_context_fixture_for_test(second);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -1401,7 +1401,7 @@ async fn direct_network_enable_routes_to_inactive_active_owner_without_activatin
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -1440,7 +1440,8 @@ async fn direct_runtime_evaluate_routes_to_inactive_active_owner_without_activat
         [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><title>runtime-direct-owner</title>",
         Some("SID-B"),
@@ -1491,7 +1492,8 @@ async fn direct_runtime_evaluate_document_replacement_lifecycle_uses_inactive_ow
         [moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .page_lifecycle_events = true;
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><body>before</body>",
         Some("SID-document-replacement"),
@@ -1560,7 +1562,7 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
         .active_page_target_mut()
         .runtime_slot
         .set_page_attachment_id_for_test(901);
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let page_id = moli_core::PageId::new_for_testing(901);
     let frame = moli_core::page::RendererFrameToken { page_id };
@@ -1679,6 +1681,7 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
     );
 
     conn.browser_context = None;
+    conn.rollback_attached_session_without_event("SID-lifecycle-wait");
     assert_eq!(
         conn.devtools_document_lifecycle_wait_state(&context, &key),
         DevToolsDocumentLifecycleWaitState::Unavailable
@@ -1691,7 +1694,7 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
         .active_page_target_mut()
         .runtime_slot
         .set_page_attachment_id_for_test(902);
-    conn.browser_context = Some(replacement_context);
+    conn.install_browser_context_fixture_for_test(replacement_context);
     let (_, accepted) = conn.bind_renderer_document_lifecycle_for_owner(
         &crate::conn::CommandOwnerScope::for_session("SID-lifecycle-wait"),
         moli_core::page::RendererPageCreationArtifacts {
@@ -1751,7 +1754,7 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
     background
         .runtime_slot
         .start_document_navigation("TID-background".to_owned(), "LID-background".to_owned());
-    conn.browser_context = Some(browser_context);
+    conn.install_browser_context_fixture_for_test(browser_context);
 
     let context = crate::devtools_runtime::DevToolsCommandContext {
         protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverBidi,
@@ -1784,7 +1787,8 @@ async fn direct_runtime_evaluate_same_document_navigation_updates_inactive_owner
         .runtime_session_state
         .runtime_frontend_enabled = true;
     inactive.set_target_url(initial_url.clone());
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(&initial_url, Some("SID-same-document"))
         .await;
 
@@ -1862,7 +1866,8 @@ async fn direct_runtime_evaluate_javascript_dialog_uses_inactive_background_owne
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-dialog-background"))
         .await;
 
@@ -1968,7 +1973,8 @@ async fn direct_runtime_evaluate_popup_creates_target_in_inactive_background_own
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-popup-background"))
         .await;
 
@@ -2041,7 +2047,7 @@ async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active");
     active.set_target_url("https://active.example/current".to_owned());
-    ctx.conn.browser_context = Some(active);
+    ctx.conn.install_browser_context_fixture_for_test(active);
 
     let page_url = "data:text/html,<!doctype html><title>self-popup</title>";
     let background = PageTargetHost::with_url(
@@ -2058,7 +2064,8 @@ async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-self-popup-background"))
         .await;
 
@@ -2118,7 +2125,8 @@ async fn direct_runtime_evaluate_file_chooser_uses_inactive_background_owner() {
             .page_session_state
             .page_file_chooser_opened_event_enabled = true;
     }
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-file-background"))
         .await;
 
@@ -2183,7 +2191,8 @@ async fn direct_runtime_evaluate_routes_to_inactive_attached_owner_without_activ
         [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><title>runtime-direct-aux</title>",
         Some("SID-attached"),
@@ -2224,7 +2233,7 @@ async fn direct_network_enable_disable_routes_to_inactive_attached_owner_without
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-primary");
     assert!(inactive.assign_attached_session_to_target("TID-B", "SID-attached".to_owned()));
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -2291,7 +2300,7 @@ async fn direct_page_preload_routes_to_inactive_active_owner_without_activating_
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -2349,7 +2358,7 @@ async fn direct_page_preload_routes_to_inactive_background_owner_without_activat
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -2405,7 +2414,7 @@ async fn direct_network_enable_routes_to_inactive_background_owner_without_activ
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -2452,7 +2461,7 @@ async fn direct_attached_network_enable_for_background_target_does_not_enable_pr
             "SID-attached-background".to_owned()
         )
     );
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -2490,7 +2499,7 @@ async fn direct_network_enable_routes_to_active_background_owner_without_activat
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.browser_context = Some(active);
+    conn.install_browser_context_fixture_for_test(active);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -2590,7 +2599,8 @@ async fn direct_network_enable_for_loaded_background_owner_starts_at_network_tai
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.insert_page_target_host(background);
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
         .await;
     assert!(
@@ -2662,7 +2672,7 @@ async fn direct_background_command_does_not_emit_active_observable_output_under_
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.browser_context = Some(active);
+    conn.install_browser_context_fixture_for_test(active);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -2684,7 +2694,8 @@ async fn direct_console_routes_to_inactive_active_owner_without_activating_slot(
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-B"))
         .await;
     ctx.wait_for_scheduler_message("inactive console fixture load", |message| {
@@ -2805,7 +2816,7 @@ async fn direct_console_routes_to_inactive_background_owner_without_activating_s
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -2908,7 +2919,8 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_backgroun
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.insert_page_target_host(background);
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-background"))
         .await;
     ctx.wait_for_scheduler_message("background console fixture load", |message| {
@@ -3000,7 +3012,7 @@ async fn direct_log_enable_routes_to_inactive_active_owner_without_activating_sl
     inactive.set_target_url("data:text/html,log-direct-test".to_owned());
     inactive.attach_active_session("SID-B");
     inactive.replace_loaded_page(Some(page));
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -3054,7 +3066,7 @@ async fn direct_log_enable_routes_to_inactive_background_owner_without_activatin
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -3107,7 +3119,7 @@ async fn direct_log_enable_routes_to_loaded_background_owner_without_replaying_c
 
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.insert_page_target_host(background);
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -3165,7 +3177,8 @@ async fn direct_log_disable_routes_to_inactive_active_owner_without_activating_s
         [moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .log_enabled = true;
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-B"))
         .await;
     ctx.sent.clear();
@@ -3224,7 +3237,7 @@ async fn direct_log_disable_routes_to_inactive_background_owner_without_activati
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .log_enabled = true;
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -3263,7 +3276,7 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_activatin
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     for raw in [
         r#"{"id":0,"method":"Network.enable","sessionId":"SID-B"}"#,
@@ -3372,7 +3385,7 @@ async fn direct_network_policy_invalid_params_return_owner_plan_error_without_ac
     let mut inactive = BrowserContext::new("BID-B".into());
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     for raw in [
         r#"{"id":1,"method":"Network.setCacheDisabled","sessionId":"SID-B","params":{}}"#,
@@ -3430,7 +3443,7 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_activ
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    conn.inactive_browser_contexts.push(inactive);
+    conn.push_inactive_browser_context_fixture_for_test(inactive);
 
     for raw in [
         r#"{"id":0,"method":"Network.enable","sessionId":"SID-background"}"#,

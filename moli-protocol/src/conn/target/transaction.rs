@@ -450,17 +450,8 @@ pub(crate) struct TargetAttachRollbackPlan {
 
 impl TargetAttachRollbackPlan {
     pub(crate) fn from_prepared_attach_session(prepared: &TargetAttachSessionCommit) -> Self {
-        Self::from_session_route(prepared.session_id(), Some(prepared.route().clone()))
-    }
-
-    pub(crate) fn from_session_route(
-        session_id: impl Into<String>,
-        route: Option<CdpSessionRoute>,
-    ) -> Self {
-        let session_id = session_id.into();
-        let cleanup_plan = route
-            .as_ref()
-            .and_then(|route| SessionDisposalPlan::for_session_route(&session_id, route));
+        let session_id = prepared.session_id().to_owned();
+        let cleanup_plan = SessionDisposalPlan::for_session_route(&session_id, prepared.route());
         Self {
             session_id,
             cleanup_plan,
@@ -485,12 +476,9 @@ pub(crate) enum TargetAutoAttachedSessionDetachPlan {
 impl TargetAutoAttachedSessionDetachPlan {
     pub(crate) fn from_session_route(
         session_id: impl Into<String>,
-        route: Option<CdpSessionRoute>,
+        route: CdpSessionRoute,
     ) -> Self {
         let session_id = session_id.into();
-        let Some(route) = route else {
-            return Self::Rollback { session_id };
-        };
         if matches!(route, CdpSessionRoute::Browser) {
             return Self::Rollback { session_id };
         }
@@ -826,10 +814,10 @@ mod tests {
     fn target_auto_attached_session_detach_plan_preserves_route_cleanup_boundary() {
         let plan = TargetAutoAttachedSessionDetachPlan::from_session_route(
             "SID-worker",
-            Some(CdpSessionRoute::SharedWorkerTarget {
+            CdpSessionRoute::SharedWorkerTarget {
                 browser_context_id: "BID-1".to_owned(),
                 target_id: "TID-worker".to_owned(),
-            }),
+            },
         );
 
         assert_eq!(plan.session_id(), "SID-worker");
@@ -848,13 +836,13 @@ mod tests {
     }
 
     #[test]
-    fn target_auto_attached_session_detach_plan_rolls_back_missing_or_browser_route() {
-        for route in [None, Some(CdpSessionRoute::Browser)] {
-            let plan =
-                TargetAutoAttachedSessionDetachPlan::from_session_route("SID-browser", route);
-            assert_eq!(plan.session_id(), "SID-browser");
-            assert!(plan.cleanup_plan().is_none());
-        }
+    fn target_auto_attached_session_detach_plan_rolls_back_browser_route() {
+        let plan = TargetAutoAttachedSessionDetachPlan::from_session_route(
+            "SID-browser",
+            CdpSessionRoute::Browser,
+        );
+        assert_eq!(plan.session_id(), "SID-browser");
+        assert!(plan.cleanup_plan().is_none());
     }
 
     #[test]

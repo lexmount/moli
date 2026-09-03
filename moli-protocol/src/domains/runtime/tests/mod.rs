@@ -43,7 +43,7 @@ fn load_shared_worker_target(ctx: &mut TestContext, session_id: &str) {
     );
     target.attach_session(session_id.to_owned());
     bc.insert_shared_worker_target(target);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 }
 fn load_dedicated_worker_target(ctx: &mut TestContext, session_id: &str) {
     let browser_context_id = "BID-dedicated".to_owned();
@@ -58,7 +58,7 @@ fn load_dedicated_worker_target(ctx: &mut TestContext, session_id: &str) {
     );
     target.attach_session(session_id.to_owned());
     bc.insert_dedicated_worker_target(target);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 }
 fn record_shared_worker_console(ctx: &mut TestContext, session_id: &str, message: &str) {
     ctx.conn
@@ -157,7 +157,8 @@ async fn push_loaded_runtime_frontend_enabled_background_context_async(
         .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    ctx.conn.inactive_browser_contexts.push(background_context);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(background_context);
 }
 async fn with_loaded_runtime_frontend_enabled_background_target_async(
     ctx: &mut TestContext,
@@ -185,7 +186,8 @@ async fn with_loaded_runtime_frontend_enabled_background_target_async(
             .runtime_session_state
             .runtime_frontend_enabled = true;
     }
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     ctx.install_navigation_fixture_for_session_owner(
         &format!("data:text/html,{html}"),
         Some(background_session_id),

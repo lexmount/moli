@@ -1163,11 +1163,6 @@ pub struct CdpConnection {
     // choice vary between otherwise identical processes.
     auto_attach_owner_sessions: IndexMap<Option<String>, AutoAttachOwnerPolicy>,
     target_control: TargetControlPlane,
-    /// Allows old unit-test fixtures that install only the target-side half of
-    /// a session binding to remain usable while production routing is checked
-    /// separately against the committed control-plane registry.
-    #[cfg(test)]
-    allow_incomplete_session_fixture_routes: bool,
     default_target_lifecycle: DefaultTargetLifecycle,
     service_worker_auto_attach_related_owners: Vec<ServiceWorkerAutoAttachRelatedOwner>,
     service_worker_pause_on_start_owner_sessions: HashSet<Option<String>>,
@@ -1476,8 +1471,6 @@ impl CdpConnection {
             target_discovery_filter: None,
             auto_attach_owner_sessions: IndexMap::new(),
             target_control: TargetControlPlane::default(),
-            #[cfg(test)]
-            allow_incomplete_session_fixture_routes: true,
             default_target_lifecycle: DefaultTargetLifecycle::default(),
             service_worker_auto_attach_related_owners: Vec::new(),
             service_worker_pause_on_start_owner_sessions: HashSet::new(),

@@ -2471,7 +2471,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-session-id".to_owned());
         browser_context.set_active_target_id("TID-session-id");
         browser_context.attach_active_session("SID-1".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         assert_eq!(conn.gen_session_id(), "SID-2");
         assert_eq!(
@@ -2586,7 +2586,7 @@ mod tests {
             "TID-background",
             "SID-background-attached".to_owned(),
         ));
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         assert_eq!(
             conn.target_renderer_runtime_inspector_session_id_for_session(None),
@@ -3435,7 +3435,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-page-residence".to_owned());
         browser_context.set_active_target_id("TID-page-residence");
         browser_context.attach_active_session("SID-page-residence");
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         conn.runtime_session_owner_slot_mut(Some("SID-page-residence"))
             .expect("active target runtime slot")
             .set_page_attachment_id_for_test(41);
@@ -3475,7 +3475,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-pending-residence".to_owned());
         browser_context.set_active_target_id("TID-pending-residence");
         browser_context.attach_active_session("SID-pending-residence".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         assert_eq!(
             conn.target_page_residence_identity_for_session(Some("SID-pending-residence")),
@@ -3509,7 +3509,7 @@ mod tests {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-implicit-page-residence".to_owned());
         browser_context.set_active_target_id("TID-original");
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         conn.runtime_session_owner_slot_mut(None)
             .expect("implicit active runtime slot")
             .set_page_attachment_id_for_test(1);
@@ -3555,7 +3555,7 @@ mod tests {
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .inspector_enabled = true;
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.with_target_owner_state_for_session_mut(Some("SID-active"), |owner_state| {
             owner_state.target_crash_state.mark_crashed();
@@ -3609,7 +3609,7 @@ mod tests {
                 "SID-lifecycle-only".to_owned(),
             )
         );
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         for session_id in ["SID-primary", "SID-lifecycle-only"] {
             conn.with_target_devtools_session_state_for_session_mut(Some(session_id), |state| {
@@ -3667,7 +3667,7 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(41);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.with_target_devtools_session_state_for_session_mut(Some("SID-runtime-b"), |state| {
             state.runtime_session_state.runtime_frontend_enabled = true
@@ -3722,7 +3722,7 @@ mod tests {
             "TID-service-worker",
             "SID-service-worker".to_owned(),
         ));
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         assert_eq!(
             conn.session_route(Some("SID-service-worker")),
@@ -3789,8 +3789,8 @@ mod tests {
             )
         );
 
-        conn.browser_context = Some(active);
-        conn.inactive_browser_contexts.push(inactive);
+        conn.install_browser_context_fixture_for_test(active);
+        conn.push_inactive_browser_context_fixture_for_test(inactive);
 
         conn.runtime_session_owner_slot_mut(Some("SID-active"))
             .expect("active runtime slot should be mutable")
@@ -3897,7 +3897,7 @@ mod tests {
                 .is_none(),
             "a background target with default protocol settings should not allocate background overrides"
         );
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let observer = conn
             .runtime_session_owner_slot(Some("SID-background-dialog"))

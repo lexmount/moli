@@ -50,7 +50,7 @@ async fn dom_resolve_geometry_and_mutation_target_loaded_background_owner_withou
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_buffered_navigation_fixture_for_session_owner(
         background_url,
         "<!doctype html><html><body><section id='owned' data-route='background' style='position:absolute;left:11px;top:13px;width:17px;height:19px'>background</section></body></html>".to_owned(),
@@ -291,13 +291,14 @@ async fn dom_resolve_geometry_targets_inactive_loaded_owner_without_activation()
     let mut active = BrowserContext::new("BID-active".to_owned());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active".to_owned());
-    ctx.conn.browser_context = Some(active);
+    ctx.conn.install_browser_context_fixture_for_test(active);
 
     let mut inactive = BrowserContext::new("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<!doctype html><html><body><article id='owned' style='position:absolute;left:7px;top:9px;width:13px;height:15px'>inactive</article></body></html>",
         Some("SID-inactive"),

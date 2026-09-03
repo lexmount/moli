@@ -121,7 +121,7 @@ mod tests {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-scope".to_owned());
         browser_context.set_active_target_id("TID-original");
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let scope = CommandOwnerScope::capture(&conn, None);
         conn.browser_context
@@ -168,7 +168,7 @@ mod tests {
             browser_context
                 .assign_attached_session_to_target("TID-owner", "SID-attached".to_owned(),)
         );
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let owner = conn
             .command_owner_scope_for_devtools_context(&page_context("SID-attached", "TID-owner"))
@@ -191,7 +191,7 @@ mod tests {
                 "about:blank".to_owned(),
             ))
         );
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let protocol_neutral = conn
             .command_owner_scope_for_devtools_context(&page_context(

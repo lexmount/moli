@@ -409,10 +409,25 @@ mod tests {
                 "SID-debugger-attached".to_owned(),
             ));
         }
-        ctx.conn
-            .register_bound_session_for_test("SID-debugger-primary");
-        ctx.conn
-            .register_bound_session_for_test("SID-debugger-attached");
+        for (session_id, session_key) in [
+            (
+                "SID-debugger-primary",
+                moli_page_types::DevToolsSessionKey::Primary,
+            ),
+            (
+                "SID-debugger-attached",
+                moli_page_types::DevToolsSessionKey::Attached("SID-debugger-attached".to_owned()),
+            ),
+        ] {
+            ctx.conn.register_session_route_for_test(
+                session_id,
+                crate::conn::CdpSessionRoute::PageTarget {
+                    browser_context_id: "BID-debugger".to_owned(),
+                    target_id: "TID-debugger".to_owned(),
+                    session_key,
+                },
+            );
+        }
 
         let enable = command(
             &mut ctx,
@@ -491,10 +506,25 @@ mod tests {
                 "SID-debugger-attached".to_owned(),
             ));
         }
-        ctx.conn
-            .register_bound_session_for_test("SID-debugger-primary");
-        ctx.conn
-            .register_bound_session_for_test("SID-debugger-attached");
+        for (session_id, session_key) in [
+            (
+                "SID-debugger-primary",
+                moli_page_types::DevToolsSessionKey::Primary,
+            ),
+            (
+                "SID-debugger-attached",
+                moli_page_types::DevToolsSessionKey::Attached("SID-debugger-attached".to_owned()),
+            ),
+        ] {
+            ctx.conn.register_session_route_for_test(
+                session_id,
+                crate::conn::CdpSessionRoute::PageTarget {
+                    browser_context_id: "BID-debugger".to_owned(),
+                    target_id: "TID-debugger".to_owned(),
+                    session_key,
+                },
+            );
+        }
 
         for (id, session_id) in [(61, "SID-debugger-primary"), (62, "SID-debugger-attached")] {
             let enable = command(

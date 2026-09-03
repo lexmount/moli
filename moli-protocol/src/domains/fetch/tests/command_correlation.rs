@@ -21,7 +21,8 @@ async fn context_with_loaded_fetch_page() -> TestContext {
         .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     ctx
 }
 
@@ -167,7 +168,8 @@ async fn deferred_fetch_command_keeps_its_exact_page_for_implicit_work() {
         Some("SID-background".to_owned()),
         "https://example.test/background".to_owned(),
     ));
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     let completed = PendingFetchCommandDispatch::new(
         &ctx.conn,
@@ -196,7 +198,8 @@ async fn deferred_sessionless_fetch_command_freezes_the_active_page_at_admission
         None,
         "https://example.test/next".to_owned(),
     ));
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     let completed = PendingFetchCommandDispatch::new(
         &ctx.conn,

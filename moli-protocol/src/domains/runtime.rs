@@ -45,21 +45,45 @@ pub(in crate::domains) async fn detach_page_session_inspector_async(
     }
 }
 
-/// Releases Runtime state and the renderer Inspector endpoint owned by one
-/// Worker session. The binding described by `plan` remains authoritative for
-/// the whole operation.
-pub(in crate::domains) async fn dispose_worker_session_async(
+/// Disables Runtime state owned by one DevTools session. Renderer Inspector
+/// detachment is a separate lifecycle phase and runs after every browser-side
+/// domain handler has disabled itself.
+pub(in crate::domains) async fn dispose_session_handler_async(
     conn: &mut CdpConnection,
     background_events: &mut Vec<BackgroundProtocolEvent>,
     protocol_events: &mut Vec<BackgroundProtocolEvent>,
     plan: &SessionDisposalPlan,
 ) -> anyhow::Result<()> {
     let session_id = plan.session_id();
-    conn.release_worker_runtime_remote_objects_for_session_best_effort_async(session_id)
-        .await;
-    fail_pending_session_calls(conn, background_events, protocol_events, session_id);
-
     match plan.target() {
+        SessionDisposalTarget::PageTarget { .. }
+        | SessionDisposalTarget::SharedWorkerTarget { .. }
+        | SessionDisposalTarget::DedicatedWorkerTarget { .. }
+        | SessionDisposalTarget::ServiceWorkerTarget { .. } => {
+            if !matches!(plan.target(), SessionDisposalTarget::PageTarget { .. }) {
+                conn.release_worker_runtime_remote_objects_for_session_best_effort_async(
+                    session_id,
+                )
+                .await;
+            }
+            fail_pending_session_calls(conn, background_events, protocol_events, session_id);
+        }
+        SessionDisposalTarget::Browser | SessionDisposalTarget::TabTarget { .. } => {}
+    }
+    Ok(())
+}
+
+/// Detaches the renderer-side Inspector endpoint after every browser-side
+/// domain handler has disabled itself.
+pub(in crate::domains) async fn detach_session_inspector_async(
+    conn: &mut CdpConnection,
+    plan: &SessionDisposalPlan,
+) -> anyhow::Result<()> {
+    let session_id = plan.session_id();
+    match plan.target() {
+        SessionDisposalTarget::PageTarget { .. } => {
+            detach_page_session_inspector_async(conn, session_id).await;
+        }
         SessionDisposalTarget::SharedWorkerTarget {
             browser_context_id,
             target_id,
@@ -122,7 +146,6 @@ pub(in crate::domains) async fn dispose_worker_session_async(
                                 )
                             })
                     });
-            super::target::set_service_worker_pause_on_start_owner(conn, Some(session_id), false);
             if let Some((renderer_runtime, version_id)) = renderer_detach {
                 renderer_runtime.detach_service_worker_runtime_inspector_session(
                     version_id,
@@ -130,9 +153,7 @@ pub(in crate::domains) async fn dispose_worker_session_async(
                 );
             }
         }
-        SessionDisposalTarget::Browser
-        | SessionDisposalTarget::PageTarget { .. }
-        | SessionDisposalTarget::TabTarget { .. } => anyhow::bail!("InvalidSessionId"),
+        SessionDisposalTarget::Browser | SessionDisposalTarget::TabTarget { .. } => {}
     }
     Ok(())
 }

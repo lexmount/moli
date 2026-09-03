@@ -6832,7 +6832,7 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         conn
     }
 
@@ -6846,7 +6846,7 @@ mod tests {
             browser_context
                 .assign_attached_session_to_target("TID-active", "SID-attached".to_owned(),)
         );
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.register_runtime_remote_object_ids_for_session_owner(
             Some("SID-active"),
@@ -6983,7 +6983,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-navigation-termination".to_owned());
         browser_context.set_active_target_id("TID-navigation-termination".to_owned());
         browser_context.attach_active_session("SID-navigation-termination".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let old_attachment = RendererAgentAttachmentId::allocate();
         let terminal_attachment = RendererAgentAttachmentId::allocate();
@@ -7071,7 +7071,7 @@ mod tests {
             "TID-navigation-sessions",
             "SID-navigation-attached".to_owned(),
         ));
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let old_attachment = RendererAgentAttachmentId::allocate();
         let terminal_attachment = RendererAgentAttachmentId::allocate();
@@ -7178,7 +7178,7 @@ mod tests {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-navigation-sessionless".to_owned());
         browser_context.set_active_target_id("TID-navigation-sessionless".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let old_attachment = RendererAgentAttachmentId::allocate();
         let terminal_attachment = RendererAgentAttachmentId::allocate();
@@ -7236,7 +7236,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-attachment-race".to_owned());
         browser_context.set_active_target_id("TID-attachment-race".to_owned());
         browser_context.attach_active_session("SID-attachment-race".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let live_attachment = RendererAgentAttachmentId::allocate();
         let stale_attachment = RendererAgentAttachmentId::allocate();
@@ -7295,7 +7295,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-duplicate-response".to_owned());
         browser_context.set_active_target_id("TID-duplicate-response".to_owned());
         browser_context.attach_active_session("SID-duplicate-response".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let attachment_id = RendererAgentAttachmentId::allocate();
         let correlation = register_devtools_session_response_for_test(
@@ -7336,7 +7336,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-interleaved-response".to_owned());
         browser_context.set_active_target_id("TID-interleaved-response".to_owned());
         browser_context.attach_active_session("SID-interleaved-response".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let attachment_id = RendererAgentAttachmentId::allocate();
         let first = register_devtools_session_response_for_test(
@@ -7399,7 +7399,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-session-output".to_owned());
         browser_context.set_active_target_id("TID-session-output".to_owned());
         browser_context.attach_active_session("SID-session-output".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let attachment_id = RendererAgentAttachmentId::allocate();
         let frontend = ParsedCdpCommand::parse_str(
@@ -7481,7 +7481,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-session-projection".to_owned());
         browser_context.set_active_target_id("TID-session-projection".to_owned());
         browser_context.attach_active_session("SID-session-projection".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let session_id = Some("SID-session-projection");
         let attachment_id = RendererAgentAttachmentId::allocate();
 
@@ -7682,7 +7682,8 @@ mod tests {
         let mut ctx = TestContext::new();
         let mut browser_context = BrowserContext::new("BID-runtime-node-snapshot".to_owned());
         browser_context.set_active_target_id("TID-runtime-node-snapshot".to_owned());
-        ctx.conn.browser_context = Some(browser_context);
+        ctx.conn
+            .install_browser_context_fixture_for_test(browser_context);
         ctx.install_navigation_fixture_for_session_owner(
             "data:text/html,<html><body><article id='target'>live</article></body></html>",
             None,
@@ -7948,7 +7949,7 @@ mod tests {
             Some("SID-bg".to_owned()),
             "about:blank#bg".to_owned(),
         ));
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.register_pending_inspector_await(1, Some("SID-active"));
         conn.register_pending_inspector_await(2, Some("SID-bg"));
@@ -8027,7 +8028,7 @@ mod tests {
             Some("SID-bg".to_owned()),
             "about:blank#bg".to_owned(),
         ));
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.register_pending_inspector_await(1, Some("SID-active"));
         conn.register_pending_inspector_await(1, Some("SID-bg"));
@@ -8113,7 +8114,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-duplicate-owner".to_owned());
         browser_context.set_active_target_id("TID-duplicate-owner".to_owned());
         browser_context.attach_active_session("SID-duplicate-owner".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let original = conn
             .try_register_renderer_call_for_session_owner(
@@ -8163,7 +8164,7 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .set_page_attachment_id_for_test(1);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.try_register_renderer_call_for_session_owner(
             Some("SID-listener-cancel"),
@@ -8205,7 +8206,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-command-cancel".to_owned());
         browser_context.set_active_target_id("TID-command-cancel".to_owned());
         browser_context.attach_active_session("SID-command-cancel".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.try_register_renderer_call_for_session_owner(
             Some("SID-command-cancel"),
@@ -8235,7 +8236,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-terminal".to_owned());
         browser_context.set_active_target_id("TID-terminal".to_owned());
         browser_context.attach_active_session("SID-terminal".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let attachment = RendererAgentAttachmentId::allocate();
         let prepared = conn
@@ -8318,7 +8319,7 @@ mod tests {
             Some("SID-bg".to_owned()),
             "about:blank#bg".to_owned(),
         ));
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.try_register_pending_inspector_await_with_object_group_for_owner(
             77,

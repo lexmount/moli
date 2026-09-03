@@ -116,7 +116,7 @@ mod tests {
             .owner_state
             .target_crash_state
             .mark_crashed();
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({"id": 3, "method": "Inspector.enable", "sessionId": "SID-1"}))
             .await;
@@ -143,7 +143,7 @@ mod tests {
             .owner_state
             .target_crash_state
             .mark_crashed();
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({
             "id": 30,
@@ -185,7 +185,7 @@ mod tests {
             .owner_state
             .target_crash_state
             .mark_crashed();
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({
             "id": 301,
@@ -224,7 +224,7 @@ mod tests {
         );
         target.attach_session("SID-service-worker".to_owned());
         bc.insert_service_worker_target(target);
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({
             "id": 31,
@@ -277,7 +277,7 @@ mod tests {
             .owner_state
             .target_crash_state
             .mark_crashed();
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({"id": 4, "method": "Inspector.enable", "sessionId": "SID-B"}))
             .await;

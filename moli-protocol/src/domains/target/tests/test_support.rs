@@ -11,7 +11,7 @@ pub(super) fn load_bc(ctx: &mut TestContext, bc_id: &str) {
 pub(super) fn load_bc_with_target(ctx: &mut TestContext, bc_id: &str, target_id: &str) {
     let mut bc = BrowserContext::new(bc_id.into());
     bc.set_active_target_id(target_id);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 }
 
 pub(super) fn tab_id_for_page(ctx: &TestContext, page_target_id: &str) -> String {
@@ -19,6 +19,23 @@ pub(super) fn tab_id_for_page(ctx: &TestContext, page_target_id: &str) -> String
         .tab_target_id_for_page_target_id(page_target_id)
         .unwrap_or_else(|| panic!("page target {page_target_id} has no tab target"))
         .to_owned()
+}
+
+pub(super) fn register_page_session_route(
+    ctx: &mut TestContext,
+    browser_context_id: &str,
+    target_id: &str,
+    session_id: &str,
+    session_key: moli_page_types::DevToolsSessionKey,
+) {
+    ctx.conn.register_session_route_for_test(
+        session_id,
+        crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: browser_context_id.to_owned(),
+            target_id: target_id.to_owned(),
+            session_key,
+        },
+    );
 }
 
 pub(super) fn push_background_target(
@@ -45,7 +62,20 @@ pub(super) fn push_background_target(
         ));
     }
     if let Some(session_id) = session_id {
-        ctx.conn.register_bound_session_for_test(session_id);
+        ctx.conn.register_session_route_for_test(
+            session_id,
+            crate::conn::CdpSessionRoute::PageTarget {
+                browser_context_id: ctx
+                    .conn
+                    .browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .id
+                    .clone(),
+                target_id: target_id.to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            },
+        );
     }
 }
 
@@ -90,7 +120,19 @@ pub(super) fn push_shared_worker_target(
         bc.insert_shared_worker_target(target);
     }
     if let Some(session_id) = session_id {
-        ctx.conn.register_bound_session_for_test(session_id);
+        ctx.conn.register_session_route_for_test(
+            session_id,
+            crate::conn::CdpSessionRoute::SharedWorkerTarget {
+                browser_context_id: ctx
+                    .conn
+                    .browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .id
+                    .clone(),
+                target_id: target_id.to_owned(),
+            },
+        );
     }
 }
 
@@ -123,7 +165,19 @@ pub(super) fn push_service_worker_target(
         }
     }
     if let Some(session_id) = session_id {
-        ctx.conn.register_bound_session_for_test(session_id);
+        ctx.conn.register_session_route_for_test(
+            session_id,
+            crate::conn::CdpSessionRoute::ServiceWorkerTarget {
+                browser_context_id: ctx
+                    .conn
+                    .browser_context
+                    .as_ref()
+                    .expect("browser context")
+                    .id
+                    .clone(),
+                target_id: target_id.to_owned(),
+            },
+        );
     }
 }
 

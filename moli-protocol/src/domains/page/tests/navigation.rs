@@ -1305,7 +1305,7 @@ async fn get_navigation_history_targets_loaded_background_owner_without_activati
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(background_url, Some("SID-background"))
         .await;
     ctx.sent.clear();
@@ -1351,7 +1351,8 @@ async fn reset_navigation_history_targets_loaded_background_owner_without_activa
     browser_context
         .set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
     browser_context.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     ctx.install_navigation_fixture_for_session_owner(background_url, Some("SID-background-reset"))
         .await;
     ctx.sent.clear();
@@ -1404,7 +1405,7 @@ async fn navigate_to_history_entry_targets_background_owner_without_activation()
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     ));
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     let first_url = "data:text/html,<title>Background A</title><main>a</main>";
     let second_url = "data:text/html,<title>Background B</title><main>b</main>";
 
@@ -1488,7 +1489,8 @@ async fn get_navigation_history_targets_inactive_loaded_owner_without_activation
         .active_page_target_mut()
         .runtime_slot
         .replace_loaded_page(Some(page));
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 16,
@@ -1589,7 +1591,7 @@ async fn navigate_targets_background_owner_without_activation() {
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     ));
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     let background_url = "data:text/html,<title>Background</title><main>background</main>";
     ctx.process_async(json!({
@@ -1627,7 +1629,8 @@ async fn navigate_targets_inactive_owner_without_activation() {
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     let inactive_url = "data:text/html,<title>Inactive</title><main>inactive</main>";
     ctx.process_async(json!({
@@ -3550,6 +3553,7 @@ async fn navigate_with_staged_attached_runtime_enable_emits_context_created_for_
             .unwrap()
             .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
     );
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ctx.conn
         .with_target_devtools_session_state_for_session_mut(Some("SID-1"), |state| {
             state.runtime_session_state.runtime_frontend_enabled = true;
@@ -6056,7 +6060,7 @@ async fn reload_targets_background_owner_without_activation() {
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
         .await;
     let initial_html = ctx

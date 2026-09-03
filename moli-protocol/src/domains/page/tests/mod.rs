@@ -162,7 +162,7 @@ fn load_bc_with_target(ctx: &mut TestContext, bc_id: &str, target_id: &str, url:
     let mut bc = BrowserContext::new(bc_id.into());
     bc.set_active_target_id(target_id);
     bc.set_target_url(url.into());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 }
 fn load_bc_with_session(
     ctx: &mut TestContext,
@@ -183,7 +183,15 @@ fn load_bc_with_session(
         url.to_owned(),
         Some(url.to_owned()),
     );
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.conn.register_session_route_for_test(
+        session_id,
+        crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: bc_id.to_owned(),
+            target_id: target_id.to_owned(),
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
+        },
+    );
 }
 fn load_bc_with_service_worker_target(ctx: &mut TestContext) {
     let mut bc = BrowserContext::new("BID-service-worker-frame-tree".to_owned());
@@ -197,13 +205,13 @@ fn load_bc_with_service_worker_target(ctx: &mut TestContext) {
         None,
     );
     bc.insert_service_worker_target(target);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 }
 async fn ensure_initial_document_for_session(ctx: &mut TestContext, session_id: Option<&str>) {
     let owner = match session_id {
         Some(session_id) => crate::conn::CommandOwnerScope::for_route(
             ctx.conn
-                .bound_session_route_for_test(session_id, None)
+                .session_route(Some(session_id))
                 .expect("test session must own a concrete target route"),
         ),
         None => crate::conn::CommandOwnerScope::capture(&ctx.conn, None),

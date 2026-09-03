@@ -58,128 +58,23 @@ async fn dispose_live_session_domains_async(
     protocol_events: &mut Vec<BackgroundProtocolEvent>,
     plan: &SessionDisposalPlan,
 ) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
-    let session_id = plan.session_id();
-    dispose_connection_session_domains_async(conn, session_id).await;
-
-    match plan.target() {
-        SessionDisposalTarget::PageTarget { .. } => {
-            let mut first_error = None;
-            let predecessor = match Box::pin(crate::domains::fetch::dispose_session_async(
-                conn,
-                background_events,
-                session_id,
-            ))
-            .await
-            {
-                Ok(predecessor) => predecessor,
-                Err(error) => {
-                    record_session_cleanup_error(&mut first_error, session_id, "Fetch", error);
-                    None
-                }
-            };
-            crate::domains::runtime::fail_pending_session_calls(
-                conn,
-                background_events,
-                protocol_events,
-                session_id,
-            );
-
-            // Document-start scripts are renderer-owned resources. Remove
-            // them before detaching the Inspector endpoint that carries the
-            // cleanup commands.
-            record_session_cleanup_result(
-                &mut first_error,
-                session_id,
-                "Page",
-                crate::domains::page::dispose_session_async(conn, session_id).await,
-            );
-            record_session_cleanup_result(
-                &mut first_error,
-                session_id,
-                "Emulation",
-                crate::domains::emulation::dispose_page_session_async(conn, session_id).await,
-            );
-            record_session_cleanup_result(
-                &mut first_error,
-                session_id,
-                "Network",
-                crate::domains::network::dispose_session_policy_async(conn, session_id).await,
-            );
-            if let SessionDisposalTarget::PageTarget {
-                browser_context_id,
-                target_id,
-                session_key: moli_page_types::DevToolsSessionKey::Primary,
-            } = plan.target()
-            {
-                let reset_result = match conn.browser_context_by_id_mut(browser_context_id) {
-                    Some(browser_context) => {
-                        browser_context
-                            .reset_primary_page_session_target_state_async(target_id, session_id)
-                            .await
-                    }
-                    None => Ok(false),
-                };
-                record_session_cleanup_result(
-                    &mut first_error,
-                    session_id,
-                    "primary Page target",
-                    reset_result.and_then(|found| {
-                        anyhow::ensure!(
-                            found,
-                            "primary Page target disappeared during session disposal"
-                        );
-                        Ok(())
-                    }),
-                );
-            }
-            if let Some(error) = first_error {
-                recover_failed_page_session_disposal_async(conn, background_events, plan, &error)
-                    .await?;
-            }
-            crate::domains::runtime::detach_page_session_inspector_async(conn, session_id).await;
-            Ok(predecessor)
+    let disposal = crate::domains::session::dispose_live_handlers_async(
+        conn,
+        background_events,
+        protocol_events,
+        plan,
+    )
+    .await;
+    if let Some(error) = disposal.first_error() {
+        if matches!(plan.target(), SessionDisposalTarget::PageTarget { .. }) {
+            recover_failed_page_session_disposal_async(conn, background_events, plan, error)
+                .await?;
+        } else {
+            return Err(anyhow::anyhow!("{error:#}"));
         }
-        SessionDisposalTarget::SharedWorkerTarget { .. }
-        | SessionDisposalTarget::DedicatedWorkerTarget { .. }
-        | SessionDisposalTarget::ServiceWorkerTarget { .. } => {
-            crate::domains::runtime::dispose_worker_session_async(
-                conn,
-                background_events,
-                protocol_events,
-                plan,
-            )
-            .await?;
-            Ok(None)
-        }
-        SessionDisposalTarget::Browser | SessionDisposalTarget::TabTarget { .. } => Ok(None),
     }
-}
-
-fn record_session_cleanup_result(
-    first_error: &mut Option<anyhow::Error>,
-    session_id: &str,
-    domain: &'static str,
-    result: anyhow::Result<()>,
-) {
-    if let Err(error) = result {
-        record_session_cleanup_error(first_error, session_id, domain, error);
-    }
-}
-
-fn record_session_cleanup_error(
-    first_error: &mut Option<anyhow::Error>,
-    session_id: &str,
-    domain: &'static str,
-    error: anyhow::Error,
-) {
-    tracing::warn!(
-        session_id,
-        domain,
-        %error,
-        "failed to dispose DevTools session domain"
-    );
-    first_error
-        .get_or_insert_with(|| anyhow::anyhow!("failed to dispose {domain} domain: {error:#}"));
+    crate::domains::runtime::detach_session_inspector_async(conn, plan).await?;
+    Ok(disposal.into_renderer_output_predecessor())
 }
 
 async fn recover_failed_page_session_disposal_async(
@@ -251,24 +146,6 @@ async fn recover_failed_page_session_disposal_async(
     Ok(())
 }
 
-async fn dispose_connection_session_domains_async(conn: &mut CdpConnection, session_id: &str) {
-    // Tracing may own isolate tasks that must finish before another session
-    // can start a trace.
-    conn.cancel_tracing_for_session_owner_async(Some(session_id))
-        .await;
-    dispose_connection_session_domains_sync(conn, session_id);
-}
-
-fn dispose_connection_session_domains_sync(conn: &mut CdpConnection, session_id: &str) {
-    conn.cancel_tracing_for_session_owner(Some(session_id));
-    conn.download_behavior
-        .set_browser_events_enabled_for_session(Some(session_id), false);
-    conn.clear_auto_attach_owner(Some(session_id));
-    conn.clear_target_discovery_for_owner(Some(session_id));
-    super::set_service_worker_pause_on_start_owner(conn, Some(session_id), false);
-    super::set_dedicated_worker_pause_on_start_owner(conn, Some(session_id), false);
-}
-
 pub(super) async fn dispose_browser_session_without_event_async(
     conn: &mut CdpConnection,
     session_id: &str,
@@ -310,7 +187,7 @@ pub(crate) async fn dispose_closed_session_domains_async(
     conn: &mut CdpConnection,
     plan: &SessionDisposalPlan,
 ) {
-    dispose_connection_session_domains_async(conn, plan.session_id()).await;
+    crate::domains::session::dispose_closed_handlers_async(conn, plan.session_id()).await;
 }
 
 /// Rolls back a prepared attachment after it has become capable of owning
@@ -431,6 +308,6 @@ pub(super) fn dispose_removed_dedicated_worker_session_after_failed_retirement(
     conn: &mut CdpConnection,
     cleanup_plan: TargetSessionDetachCleanupPlan,
 ) -> TargetEventPlan {
-    dispose_connection_session_domains_sync(conn, cleanup_plan.session_id());
+    crate::domains::session::dispose_closed_handlers_sync(conn, cleanup_plan.session_id());
     conn.commit_target_session_detachment_after_prepared_state_delta_event_plan(cleanup_plan)
 }

@@ -330,7 +330,7 @@ mod tests {
         assert!(
             inactive.assign_attached_session_to_target("TID-inactive", "SID-attached".to_owned())
         );
-        conn.inactive_browser_contexts.push(inactive);
+        conn.push_inactive_browser_context_fixture_for_test(inactive);
 
         assert!(
             retain_unemitted_runtime_observable_prepared_source_for_session_owner(

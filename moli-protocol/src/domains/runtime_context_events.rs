@@ -508,7 +508,7 @@ mod tests {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-1".to_owned());
         browser_context.set_active_target_id("TID-1".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let mut created = json!({
             "method": "Runtime.executionContextCreated",
@@ -562,7 +562,7 @@ mod tests {
         );
         target.attach_session("SID-shared-worker".to_owned());
         browser_context.insert_shared_worker_target(target);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let mut event = super::RuntimeContextProtocolEvent::Created(
             super::runtime_context_created_event_from_cdp_params(json!({
@@ -614,7 +614,7 @@ mod tests {
         );
         target.attach_session("SID-service-worker".to_owned());
         browser_context.insert_service_worker_target(target);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
 
         let mut event = super::RuntimeContextProtocolEvent::Created(
             super::runtime_context_created_event_from_cdp_params(json!({
@@ -706,7 +706,7 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-1".to_owned());
         browser_context.set_active_target_id("TID-1".to_owned());
         browser_context.attach_active_session("SID-1".to_owned());
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let event = super::RuntimeContextProtocolEvent::Created(
             super::runtime_context_created_event_from_cdp_params(json!({
                 "context": {
@@ -864,7 +864,7 @@ mod tests {
         );
         target.attach_session("SID-shared-worker".to_owned());
         browser_context.insert_shared_worker_target(target);
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         conn.register_runtime_remote_object_ids_for_session_owner_with_realm(
             Some("SID-shared-worker"),
             vec!["worker-object".to_owned()],

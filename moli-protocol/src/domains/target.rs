@@ -182,6 +182,14 @@ pub(in crate::domains) fn set_dedicated_worker_pause_on_start_owner(
     sync_dedicated_worker_pause_on_start_for_devtools(conn);
 }
 
+/// Disables Target-domain policy owned by one DevTools session.
+pub(in crate::domains) fn dispose_session_handler(conn: &mut CdpConnection, session_id: &str) {
+    conn.clear_auto_attach_owner(Some(session_id));
+    conn.clear_target_discovery_for_owner(Some(session_id));
+    set_service_worker_pause_on_start_owner(conn, Some(session_id), false);
+    set_dedicated_worker_pause_on_start_owner(conn, Some(session_id), false);
+}
+
 impl CdpConnection {
     /// Releases root-owned Target control state after its transport frontend
     /// disconnects, while preserving sessions owned by direct page frontends.
@@ -1174,7 +1182,7 @@ mod devtools_runtime_entry_tests {
             "TID-runtime-ready-close",
             "SID-runtime-ready-close-attached".to_owned(),
         ));
-        conn.browser_context = Some(browser_context);
+        conn.install_browser_context_fixture_for_test(browser_context);
         let page = conn
             .load_page_via_runtime_async("data:text/html,<p>runtime ready close</p>")
             .await

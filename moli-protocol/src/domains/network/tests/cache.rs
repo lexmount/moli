@@ -116,7 +116,8 @@ async fn cached_subresource_reload_emits_served_from_cache_before_response() {
     let mut browser_context = ctx.conn.new_browser_context("BID-1".to_owned());
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     ctx.process_async(json!({
         "id": 70,
@@ -277,7 +278,8 @@ async fn cached_main_document_navigation_emits_served_from_cache_before_response
     let mut browser_context = ctx.conn.new_browser_context("BID-1".to_owned());
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     ctx.process_async(json!({
         "id": 73,
@@ -444,7 +446,7 @@ async fn clear_browser_cache_clears_response_body_and_stream_artifacts() {
     let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     bc.record_captured_response_body("REQ-1".to_owned(), "body".to_owned(), [None]);
     bc.insert_io_stream("STREAM-1".to_owned(), b"payload".to_vec(), 0);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({"id": 4, "method": "Network.clearBrowserCache"}))
         .await;
@@ -476,7 +478,8 @@ async fn clear_browser_cache_clears_configured_disk_http_cache() {
         fetch_config,
     ));
     let browser_context = ctx.conn.new_browser_context("BID-1".into());
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     ctx.process_async(json!({"id": 44, "method": "Network.clearBrowserCache"}))
         .await;
@@ -510,7 +513,8 @@ async fn clear_browser_cache_uses_browser_context_http_cache_owner() {
     ));
     let mut browser_context = BrowserContext::new("BID-1".into());
     browser_context.http_cache_root = Some(cache_dir.clone());
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     ctx.process_async(json!({"id": 45, "method": "Network.clearBrowserCache"}))
         .await;
@@ -560,8 +564,9 @@ async fn clear_browser_cache_targets_command_session_browser_context() {
     );
 
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(active);
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn.install_browser_context_fixture_for_test(active);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 46,
@@ -683,7 +688,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
             network_observation_journal: Default::default(),
         },
     );
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({"id": 5, "method": "Network.clearBrowserCache"}))
         .await;
@@ -778,7 +783,7 @@ async fn devtools_set_cache_behavior_global_updates_existing_targets_and_default
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     let result = ctx
         .conn
@@ -832,7 +837,7 @@ async fn devtools_set_cache_behavior_contexts_only_updates_requested_targets() {
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     ));
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.conn
         .execute_devtools_command(crate::devtools_runtime::DevToolsCommand::SetCacheBehavior(

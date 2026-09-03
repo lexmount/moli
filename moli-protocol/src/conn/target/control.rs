@@ -276,25 +276,20 @@ impl TargetControlPlane {
         &mut self,
         session_id: String,
         owner_session_id: Option<&str>,
-        target_id: Option<&str>,
-        route: Option<CdpSessionRoute>,
+        target_id: &str,
+        route: CdpSessionRoute,
         waiting_for_debugger: bool,
     ) {
         self.ensure_owner(owner_session_id);
-        if let Some(target_id) = target_id {
-            self.sessions
-                .commit_attached_session(PreparedAttachSession::new(
-                    session_id,
-                    owner_session_id,
-                    target_id,
-                    route,
-                    true,
-                    waiting_for_debugger,
-                ));
-        } else {
-            self.sessions
-                .register_auto_attached_session(session_id, owner_session_id, None);
-        }
+        self.sessions
+            .commit_attached_session(PreparedAttachSession::new(
+                session_id,
+                owner_session_id,
+                target_id,
+                route,
+                true,
+                waiting_for_debugger,
+            ));
     }
 
     pub(crate) fn commit_attached_session(
@@ -302,7 +297,7 @@ impl TargetControlPlane {
         session_id: String,
         owner_session_id: Option<&str>,
         target_id: &str,
-        route: Option<CdpSessionRoute>,
+        route: CdpSessionRoute,
         auto_attached: bool,
         waiting_for_debugger: bool,
     ) -> CommittedAttachSession {
@@ -322,7 +317,7 @@ impl TargetControlPlane {
         session_id: String,
         owner_session_id: Option<&str>,
         target_id: &str,
-        route: Option<CdpSessionRoute>,
+        route: CdpSessionRoute,
         auto_attached: bool,
         waiting_for_debugger: bool,
         target_info: DevToolsTargetInfo,
@@ -658,7 +653,7 @@ mod tests {
             "SID-page".to_owned(),
             Some("SID-tab"),
             "TID-page",
-            Some(route.clone()),
+            route.clone(),
             true,
             true,
             target_info("TID-page", DevToolsTargetKind::Page),
@@ -679,7 +674,7 @@ mod tests {
         assert_eq!(committed.session_id(), "SID-page");
         assert_eq!(committed.owner_session_id(), Some("SID-tab"));
         assert_eq!(committed.target_id(), "TID-page");
-        assert_eq!(committed.route(), Some(&route));
+        assert_eq!(committed.route(), &route);
         assert!(committed.auto_attached());
         assert!(committed.waiting_for_debugger());
 
@@ -698,7 +693,7 @@ mod tests {
             "SID-page".to_owned(),
             Some("SID-owner"),
             "TID-page",
-            Some(route.clone()),
+            route,
             false,
             false,
             target_info("TID-page", DevToolsTargetKind::Page),
@@ -719,7 +714,6 @@ mod tests {
         assert_eq!(detached.session_id(), "SID-page");
         assert_eq!(detached.owner_session_id(), Some("SID-owner"));
         assert_eq!(detached.target_id(), "TID-page");
-        assert_eq!(detached.route(), Some(&route));
         assert!(!detached.auto_attached());
         assert!(!detached.was_waiting_for_debugger());
 
@@ -739,11 +733,11 @@ mod tests {
                 session_id.to_owned(),
                 None,
                 "TID-page",
-                Some(CdpSessionRoute::PageTarget {
+                CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
                     target_id: "TID-page".to_owned(),
                     session_key: moli_page_types::DevToolsSessionKey::Primary,
-                }),
+                },
                 false,
                 false,
                 target_info("TID-page", DevToolsTargetKind::Page),
@@ -775,11 +769,11 @@ mod tests {
                 session_id.to_owned(),
                 None,
                 "TID-page",
-                Some(CdpSessionRoute::PageTarget {
+                CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
                     target_id: "TID-page".to_owned(),
                     session_key: moli_page_types::DevToolsSessionKey::Primary,
-                }),
+                },
                 false,
                 false,
                 target_info("TID-page", DevToolsTargetKind::Page),
@@ -814,11 +808,11 @@ mod tests {
             "SID-page".to_owned(),
             Some("SID-tab"),
             "TID-page",
-            Some(CdpSessionRoute::PageTarget {
+            CdpSessionRoute::PageTarget {
                 browser_context_id: "BID-1".to_owned(),
                 target_id: "TID-page".to_owned(),
                 session_key: moli_page_types::DevToolsSessionKey::Attached("SID-page".to_owned()),
-            }),
+            },
             true,
             false,
             target_info("TID-page", DevToolsTargetKind::Page),

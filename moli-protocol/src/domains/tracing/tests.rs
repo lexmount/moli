@@ -14,7 +14,8 @@ fn context_with_page_sessions() -> TestContext {
     assert!(
         browser_context.assign_attached_session_to_target("TID-tracing", "SID-peer".to_owned(),)
     );
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     ctx
 }
 

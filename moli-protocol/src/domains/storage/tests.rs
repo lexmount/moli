@@ -392,7 +392,7 @@ async fn storage_get_storage_key_for_frame_returns_top_frame_origin() {
     bc.set_active_target_id("TID-SK-TOP");
     bc.set_target_url("https://top.example/app".into());
     bc.set_target_security_origin("https://top.example".into());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 1,
@@ -421,7 +421,7 @@ async fn storage_get_storage_key_for_top_frame_uses_loaded_page_storage_key() {
     bc.set_target_url("https://stale-target-url.example/app".into());
     bc.set_target_security_origin("https://stale-target-url.example".into());
     bc.set_target_secure_context_type("Secure".into());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.install_navigation_fixture_for_session_owner(&page_url, None)
         .await;
@@ -457,7 +457,7 @@ async fn storage_get_storage_key_for_frame_returns_child_frame_inherited_origin(
     bc.set_target_url(page_url.clone());
     bc.set_target_security_origin(top_origin.clone());
     bc.set_target_secure_context_type("Secure".into());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.install_navigation_fixture_for_session_owner(&page_url, None)
         .await;
@@ -505,7 +505,7 @@ async fn storage_get_storage_key_for_credentialless_child_uses_page_nonce() {
     bc.set_target_url(page_url.clone());
     bc.set_target_security_origin(top_origin.clone());
     bc.set_target_secure_context_type("Secure".into());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.install_navigation_fixture_for_session_owner(&page_url, None)
         .await;
@@ -651,7 +651,7 @@ async fn storage_get_storage_key_for_frame_returns_child_frame_partition_key() {
     bc.set_target_url(page_url.clone());
     bc.set_target_security_origin(top_origin);
     bc.set_target_secure_context_type("Secure".into());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.enable_page_events_for_test(None);
 
     ctx.install_navigation_fixture_for_session_owner(&page_url, None)
@@ -708,7 +708,7 @@ async fn storage_get_storage_key_for_frame_rejects_opaque_child_frame() {
     bc.set_target_url(page_url.clone());
     bc.set_target_security_origin(top_origin);
     bc.set_target_secure_context_type("Secure".into());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.enable_page_events_for_test(None);
 
     ctx.install_navigation_fixture_for_session_owner(&page_url, None)
@@ -753,7 +753,7 @@ async fn storage_get_storage_key_for_frame_rejects_unknown_frame() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-SK-MISSING".into());
     bc.set_active_target_id("TID-SK-MISSING");
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 4,
@@ -784,7 +784,7 @@ async fn storage_key_targets_loaded_background_owner_without_activation() {
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
         .await;
     ctx.sent.clear();
@@ -872,7 +872,7 @@ async fn pending_storage_key_keeps_background_owner_route_across_completion() {
         .runtime_slot
         .set_loaded_page_for_test(active_page);
     bc.insert_page_target_host(background);
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     let raw = serde_json::to_string(&json!({
         "id": 104,
@@ -927,14 +927,15 @@ async fn storage_key_targets_inactive_owner_without_activation() {
     let mut active = BrowserContext::new("BID-active".to_owned());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active".to_owned());
-    ctx.conn.browser_context = Some(active);
+    ctx.conn.install_browser_context_fixture_for_test(active);
 
     let mut inactive = BrowserContext::new("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.set_target_url("https://inactive.example/app".to_owned());
     inactive.set_target_security_origin("https://inactive.example".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 111,
@@ -963,9 +964,18 @@ async fn storage_get_cookies_accepts_attached_page_session_route() {
         "TID-attached-storage",
         "SID-attached-storage".to_owned()
     ));
-    ctx.conn.browser_context = Some(browser_context);
     ctx.conn
-        .register_bound_session_for_test("SID-attached-storage");
+        .install_browser_context_fixture_for_test(browser_context);
+    ctx.conn.register_session_route_for_test(
+        "SID-attached-storage",
+        crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: "BID-attached-storage".to_owned(),
+            target_id: "TID-attached-storage".to_owned(),
+            session_key: moli_page_types::DevToolsSessionKey::Attached(
+                "SID-attached-storage".to_owned(),
+            ),
+        },
+    );
 
     ctx.process_async(json!({
         "id": 8,
@@ -989,9 +999,16 @@ async fn storage_get_cookies_accepts_background_page_session_route() {
         None,
         None,
     );
-    ctx.conn.browser_context = Some(browser_context);
     ctx.conn
-        .register_bound_session_for_test("SID-background-storage");
+        .install_browser_context_fixture_for_test(browser_context);
+    ctx.conn.register_session_route_for_test(
+        "SID-background-storage",
+        crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: "BID-background-storage".to_owned(),
+            target_id: "TID-background-storage".to_owned(),
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
+        },
+    );
 
     ctx.process_async(json!({
         "id": 9,
@@ -1775,7 +1792,7 @@ async fn storage_set_cookies_uses_browser_context_default_cookie_url_when_missin
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new_with_page_for_test("BID-DEF", "TID-DEF");
     bc.set_target_url("https://example.com/app".into());
-    ctx.conn.browser_context = Some(bc);
+    ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.process_async(json!({
         "id": 124,
@@ -1834,7 +1851,8 @@ async fn storage_cookie_methods_accept_inactive_browser_context_ids() {
     ));
     let mut inactive = BrowserContext::new_with_page_for_test("BID-INACTIVE", "TID-INACTIVE");
     inactive.set_target_url("https://inactive.example/app".into());
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 1_251,
@@ -2334,7 +2352,8 @@ async fn storage_get_usage_and_quota_reports_indexed_db_usage_for_origin() {
     let mut ctx = TestContext::new();
     let mut browser_context = BrowserContext::new("BID-usage-indexeddb".into());
     browser_context.set_active_target_id("TID-usage-indexeddb");
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     let url = Url::parse("https://idb-usage.example/app").unwrap();
     ctx.install_buffered_navigation_fixture_for_session_owner(
         url.clone(),
@@ -2600,8 +2619,9 @@ async fn storage_get_usage_and_quota_targets_command_session_browser_context() {
         assert!(store.set_item(&storage_key, "local", "bbbb"));
     }
 
-    ctx.conn.browser_context = Some(active);
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn.install_browser_context_fixture_for_test(active);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 12_529,
@@ -2688,8 +2708,9 @@ async fn storage_override_quota_for_origin_targets_command_session_browser_conte
         BrowserContext::new_with_page_for_test("BID-quota-inactive", "TID-quota-inactive");
     inactive.attach_active_session("SID-quota-inactive");
 
-    ctx.conn.browser_context = Some(active);
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn.install_browser_context_fixture_for_test(active);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 12_535,
@@ -2843,8 +2864,9 @@ async fn storage_clear_data_for_origin_targets_command_session_browser_context()
         assert!(store.set_item(&storage_key, "local", "inactive"));
     }
 
-    ctx.conn.browser_context = Some(active);
-    ctx.conn.inactive_browser_contexts.push(inactive);
+    ctx.conn.install_browser_context_fixture_for_test(active);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(inactive);
 
     ctx.process_async(json!({
         "id": 12_527,
@@ -2950,7 +2972,8 @@ async fn storage_clear_data_for_origin_clears_indexed_db_backend() {
     let mut ctx = TestContext::new();
     let mut browser_context = BrowserContext::new("BID-origin-indexeddb".into());
     browser_context.set_active_target_id("TID-origin-indexeddb");
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     let url = Url::parse("https://idb-clear.example/app").unwrap();
     ctx.install_buffered_navigation_fixture_for_session_owner(
         url.clone(),
@@ -3316,7 +3339,8 @@ async fn storage_clear_data_for_origin_clears_http_cache_entries_for_origin() {
         fetch_config.clone(),
     ));
     let browser_context = ctx.conn.new_browser_context("BID-cache-clear".into());
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     let app_origin = Url::parse(&app_url)
         .expect("app url should parse")
@@ -3389,7 +3413,8 @@ async fn storage_clear_data_for_origin_uses_browser_context_http_cache_owner() {
     let mut browser_context = BrowserContext::new("BID-cache-owner".into());
     browser_context.http_cache_root = Some(cache_root.path.clone());
     browser_context.http_cache_max_bytes = seed_config.http_cache_max_bytes();
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
 
     let app_origin = Url::parse(&app_url)
         .expect("app url should parse")

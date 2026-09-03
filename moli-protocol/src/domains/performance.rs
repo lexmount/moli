@@ -673,7 +673,7 @@ mod tests {
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,performance-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
         ctx.install_navigation_fixture_for_session_owner(
             &format!("data:text/html,{html}"),
             Some("SID-1"),
@@ -813,11 +813,14 @@ mod tests {
                 .expect("browser context")
                 .assign_attached_session_to_target("TID-1", "SID-attached".to_owned())
         );
-        let owner = crate::conn::CommandOwnerScope::for_route(
-            ctx.conn
-                .bound_session_route_for_test("SID-attached", Some("TID-1"))
-                .expect("attached test session must own its Page route"),
-        );
+        let route = crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: "BID-1".to_owned(),
+            target_id: "TID-1".to_owned(),
+            session_key: moli_page_types::DevToolsSessionKey::Attached("SID-attached".to_owned()),
+        };
+        ctx.conn
+            .register_session_route_for_test("SID-attached", route.clone());
+        let owner = crate::conn::CommandOwnerScope::for_route(route);
         ctx.conn
             .apply_runtime_binding_state_for_owner_async(&owner)
             .await
@@ -934,7 +937,8 @@ mod tests {
             None,
             None,
         );
-        ctx.conn.browser_context = Some(browser_context);
+        ctx.conn
+            .install_browser_context_fixture_for_test(browser_context);
         ctx.install_navigation_fixture_for_session_owner(
             active_url,
             Some("SID-performance-active"),
@@ -1039,7 +1043,7 @@ mod tests {
             None,
             None,
         );
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
         ctx.install_navigation_fixture_for_session_owner(background_url, Some("SID-background"))
             .await;
 
@@ -1085,7 +1089,7 @@ mod tests {
             None,
             None,
         );
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({
             "id": 7,
@@ -1136,7 +1140,7 @@ mod tests {
             None,
             None,
         );
-        ctx.conn.browser_context = Some(bc);
+        ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({
             "id": 5,

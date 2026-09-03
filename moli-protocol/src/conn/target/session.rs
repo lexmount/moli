@@ -7,7 +7,7 @@ pub(crate) struct PreparedAttachSession {
     session_id: String,
     owner_session_id: Option<String>,
     target_id: String,
-    route: Option<CdpSessionRoute>,
+    route: CdpSessionRoute,
     auto_attached: bool,
     waiting_for_debugger: bool,
 }
@@ -17,7 +17,7 @@ impl PreparedAttachSession {
         session_id: String,
         owner_session_id: Option<&str>,
         target_id: &str,
-        route: Option<CdpSessionRoute>,
+        route: CdpSessionRoute,
         auto_attached: bool,
         waiting_for_debugger: bool,
     ) -> Self {
@@ -37,7 +37,7 @@ pub(crate) struct CommittedAttachSession {
     session_id: String,
     owner_session_id: Option<String>,
     target_id: String,
-    route: Option<CdpSessionRoute>,
+    route: CdpSessionRoute,
     auto_attached: bool,
     waiting_for_debugger: bool,
 }
@@ -47,7 +47,6 @@ pub(crate) struct DetachedTargetSession {
     session_id: String,
     owner_session_id: Option<String>,
     target_id: String,
-    route: Option<CdpSessionRoute>,
     auto_attached: bool,
     waiting_for_debugger: bool,
 }
@@ -58,7 +57,6 @@ impl DetachedTargetSession {
             session_id: session_id.to_owned(),
             owner_session_id: None,
             target_id: target_id.to_owned(),
-            route: None,
             auto_attached: false,
             waiting_for_debugger: false,
         }
@@ -75,11 +73,6 @@ impl DetachedTargetSession {
 
     pub(crate) fn target_id(&self) -> &str {
         &self.target_id
-    }
-
-    #[cfg(test)]
-    pub(crate) fn route(&self) -> Option<&CdpSessionRoute> {
-        self.route.as_ref()
     }
 
     #[cfg(test)]
@@ -106,8 +99,8 @@ impl CommittedAttachSession {
         &self.target_id
     }
 
-    pub(crate) fn route(&self) -> Option<&CdpSessionRoute> {
-        self.route.as_ref()
+    pub(crate) fn route(&self) -> &CdpSessionRoute {
+        &self.route
     }
 
     pub(crate) fn auto_attached(&self) -> bool {
@@ -160,7 +153,7 @@ struct AutoAttachedTargetSession {
 struct AttachedTargetSession {
     owner_session_id: Option<String>,
     target_id: String,
-    route: Option<CdpSessionRoute>,
+    route: CdpSessionRoute,
     auto_attached: bool,
     waiting_for_debugger: bool,
 }
@@ -239,7 +232,7 @@ impl TargetSessionRegistry {
                 session_id.clone(),
                 owner_session_id.as_deref(),
                 target_id,
-                None,
+                test_route_for_target(&session_id, target_id),
                 true,
                 false,
             ));
@@ -289,7 +282,6 @@ impl TargetSessionRegistry {
             session_id: session_id.to_owned(),
             owner_session_id: session.owner_session_id,
             target_id: session.target_id,
-            route: session.route,
             auto_attached: session.auto_attached,
             waiting_for_debugger: session.waiting_for_debugger,
         })
@@ -346,13 +338,15 @@ impl TargetSessionRegistry {
     }
 
     pub(crate) fn attached_session_route(&self, session_id: &str) -> Option<&CdpSessionRoute> {
-        self.attached_sessions.get(session_id)?.route.as_ref()
+        self.attached_sessions
+            .get(session_id)
+            .map(|session| &session.route)
     }
 
     pub(crate) fn browser_session_count(&self) -> usize {
         self.attached_sessions
             .values()
-            .filter(|session| session.route == Some(CdpSessionRoute::Browser))
+            .filter(|session| session.route == CdpSessionRoute::Browser)
             .count()
     }
 
@@ -415,7 +409,7 @@ impl TargetSessionRegistry {
             let is_root_browser_session = self
                 .attached_sessions
                 .get(&session_id)
-                .is_some_and(|session| session.route == Some(CdpSessionRoute::Browser));
+                .is_some_and(|session| session.route == CdpSessionRoute::Browser);
             if is_root_browser_session || !visited.insert(session_id.clone()) {
                 continue;
             }
@@ -557,8 +551,20 @@ fn sorted_index_values(values: Option<&HashSet<String>>) -> Vec<String> {
 }
 
 #[cfg(test)]
+fn test_route_for_target(session_id: &str, target_id: &str) -> CdpSessionRoute {
+    CdpSessionRoute::PageTarget {
+        browser_context_id: "BID-test".to_owned(),
+        target_id: target_id.to_owned(),
+        session_key: moli_page_types::DevToolsSessionKey::Attached(session_id.to_owned()),
+    }
+}
+
+#[cfg(test)]
 mod tests {
-    use super::{PreparedAttachSession, PreparedAutoAttachSession, TargetSessionRegistry};
+    use super::{
+        PreparedAttachSession, PreparedAutoAttachSession, TargetSessionRegistry,
+        test_route_for_target,
+    };
     use crate::conn::CdpSessionRoute;
 
     #[test]
@@ -650,7 +656,7 @@ mod tests {
                 session_id.to_owned(),
                 owner_session_id,
                 target_id,
-                Some(CdpSessionRoute::PageTarget {
+                CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
                     target_id: target_id.to_owned(),
                     session_key: if auto_attached {
@@ -658,7 +664,7 @@ mod tests {
                     } else {
                         moli_page_types::DevToolsSessionKey::Primary
                     },
-                }),
+                },
                 auto_attached,
                 false,
             ));
@@ -721,7 +727,7 @@ mod tests {
             "SID-tab".to_owned(),
             Some("SID-browser"),
             "TAB-TID-page",
-            Some(route.clone()),
+            route.clone(),
             false,
             false,
         ));
@@ -729,7 +735,7 @@ mod tests {
         assert_eq!(committed.session_id, "SID-tab");
         assert_eq!(committed.owner_session_id.as_deref(), Some("SID-browser"));
         assert_eq!(committed.target_id, "TAB-TID-page");
-        assert_eq!(committed.route.as_ref(), Some(&route));
+        assert_eq!(committed.route, route);
         assert!(!committed.auto_attached);
         assert!(!committed.waiting_for_debugger);
         assert_eq!(
@@ -751,11 +757,11 @@ mod tests {
             "SID-page".to_owned(),
             Some("SID-tab"),
             "TID-page",
-            Some(CdpSessionRoute::PageTarget {
+            CdpSessionRoute::PageTarget {
                 browser_context_id: "BID-1".to_owned(),
                 target_id: "TID-page".to_owned(),
                 session_key: moli_page_types::DevToolsSessionKey::Primary,
-            }),
+            },
             true,
             true,
         ));
@@ -781,7 +787,7 @@ mod tests {
             "SID-waiting".to_owned(),
             Some("SID-owner"),
             "TID-waiting",
-            None,
+            test_route_for_target("SID-waiting", "TID-waiting"),
             true,
             true,
         ));
@@ -789,7 +795,7 @@ mod tests {
             "SID-running".to_owned(),
             Some("SID-owner"),
             "TID-running",
-            None,
+            test_route_for_target("SID-running", "TID-running"),
             true,
             false,
         ));
@@ -807,7 +813,7 @@ mod tests {
                 session_id.to_owned(),
                 Some("SID-owner"),
                 "TID-page",
-                None,
+                test_route_for_target(session_id, "TID-page"),
                 true,
                 true,
             ));

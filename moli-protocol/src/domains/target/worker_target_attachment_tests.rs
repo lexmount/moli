@@ -45,7 +45,13 @@ fn install_collision_target(conn: &mut CdpConnection) {
         .as_mut()
         .expect("test browser context")
         .insert_shared_worker_target(target);
-    conn.register_bound_session_for_test(SESSION_ID);
+    conn.register_session_route_for_test(
+        SESSION_ID,
+        crate::conn::CdpSessionRoute::SharedWorkerTarget {
+            browser_context_id: BROWSER_CONTEXT_ID.to_owned(),
+            target_id: TARGET_ID.to_owned(),
+        },
+    );
 }
 
 fn runtime_inspector_messages(value: &str) -> Vec<RendererRuntimeInspectorMessage> {

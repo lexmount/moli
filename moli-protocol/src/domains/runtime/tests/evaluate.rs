@@ -1817,6 +1817,7 @@ async fn evaluate_started_before_pending_navigation_can_complete() {
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
     browser_context.set_target_url("data:text/html,previous".to_owned());
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ctx.sent.clear();
 
     let step = ctx.conn.start_command_dispatch(
@@ -1871,6 +1872,7 @@ async fn evaluate_rejects_attached_session_while_main_document_navigation_is_pen
     browser_context
         .start_document_navigation_for_active_target("PENDING-LOADER".to_owned())
         .expect("active navigation should start");
+    ctx.conn.commit_declared_session_fixtures_for_test();
     assert!(
         ctx.conn
             .has_pending_document_navigation_for_session_owner(Some("SID-attached")),
@@ -1938,7 +1940,8 @@ async fn document_navigation_gate_is_scoped_to_background_target_owner() {
         .runtime_session_state
         .runtime_frontend_enabled = true;
     browser_context.insert_page_target_host(background_target);
-    ctx.conn.browser_context = Some(browser_context);
+    ctx.conn
+        .install_browser_context_fixture_for_test(browser_context);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<html><title>active</title></html>",
         Some("SID-active"),
@@ -6743,7 +6746,8 @@ async fn registered_named_world_object_handles_remain_callable_after_navigation(
     let mut other_context = crate::conn::BrowserContext::new("BID-2".into());
     other_context.set_active_target_id("TID-2");
     other_context.attach_active_session("SID-2");
-    ctx.conn.inactive_browser_contexts.push(other_context);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(other_context);
     assert!(
         ctx.conn.activate_browser_context_by_id_async("BID-2").await,
         "test setup should switch the active context away from the pending Runtime.callFunctionOn owner"
@@ -6795,7 +6799,8 @@ async fn call_function_on_rejects_object_id_known_to_different_target_owner() {
     let mut other_context = crate::conn::BrowserContext::new("BID-2".into());
     other_context.set_active_target_id("TID-2");
     other_context.attach_active_session("SID-2");
-    ctx.conn.inactive_browser_contexts.push(other_context);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(other_context);
 
     ctx.process_async(json!({
         "id": 513,
@@ -6981,7 +6986,8 @@ async fn call_function_on_rejects_dom_resolve_node_object_id_from_different_targ
     let mut other_context = crate::conn::BrowserContext::new("BID-2".into());
     other_context.set_active_target_id("TID-2");
     other_context.attach_active_session("SID-2");
-    ctx.conn.inactive_browser_contexts.push(other_context);
+    ctx.conn
+        .push_inactive_browser_context_fixture_for_test(other_context);
 
     ctx.process_async(json!({
         "id": 518,
