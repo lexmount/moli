@@ -3,6 +3,7 @@ use super::helpers::{
     window_receiver,
 };
 use super::*;
+use crate::{native_bridge::lightweight_popup_id_from_window, util::v8str, webidl};
 
 fn window_inner_surface_dimension<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -139,8 +140,19 @@ pub(crate) fn window_opener_getter<'s>(
         return;
     };
     rv.set_null();
-    if window_is_closed(scope, receiver) || window_child_context_handle(scope, receiver).is_some() {
+    if window_is_closed(scope, receiver) || window_has_discarded_child_browsing_context(scope, receiver) {
         return;
+    }
+    if let Some(host_ptr) = window_host_ptr(scope, receiver) {
+        let host = unsafe { &*host_ptr };
+        if let Some(popup_id) = lightweight_popup_id_from_window(scope, receiver) {
+            if let Some(opener) = host.lightweight_popup_opener_window(scope, popup_id) { rv.set(opener.into()); }
+            return;
+        }
+        if let Some(handle) = window_child_context_handle(scope, receiver) {
+            if let Some(opener) = host.child_browsing_context_opener(scope, handle) { rv.set(opener.into()); }
+            return;
+        }
     }
     let Some(host) = receiver
         .get_creation_context(scope)
@@ -175,17 +187,31 @@ pub(in crate::context_bootstrap) fn window_opener_setter<'s>(
         return;
     };
     let value = args.get(0);
-    if value.is_null()
-        && window_child_context_handle(scope, receiver).is_none()
-        && let Some(host) = receiver
-            .get_creation_context(scope)
-            .and_then(context_host_ptr_from_context_slot)
-        && let Some(environment) = unsafe { &*host }.page_script_environment()
-    {
-        environment.set_opener(None);
+    if value.is_null() {
+        if let Some(host_ptr) = window_host_ptr(scope, receiver) {
+            let host = unsafe { &mut *host_ptr };
+            if let Some(popup_id) = lightweight_popup_id_from_window(scope, receiver) {
+                host.clear_lightweight_popup_opener(popup_id);
+            } else if let Some(handle) = window_child_context_handle(scope, receiver) {
+                host.clear_child_browsing_context_opener(handle);
+            } else if let Some(environment) = host.page_script_environment() {
+                environment.set_opener(None);
+            }
+        }
+        return;
     }
-    let key = crate::util::v8str(scope, "opener");
-    let _ = receiver.define_own_property(scope, key.into(), value, v8::PropertyAttribute::NONE);
+    match receiver.define_own_property(
+        scope,
+        v8str(scope, "opener").into(),
+        value,
+        v8::PropertyAttribute::NONE,
+    ) {
+        Some(true) => {}
+        Some(false) => {
+            webidl::throw_type_error(scope, "Failed to replace Window.opener property.");
+        }
+        None => {}
+    }
 }
 
 pub(in crate::context_bootstrap) fn window_inner_width_getter<'s>(
