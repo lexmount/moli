@@ -63,13 +63,10 @@ fn raw_document_page_api_error() -> anyhow::Error {
 }
 
 fn is_fetch_readiness_timeout(error: &anyhow::Error, wait_until: RenderedDomWaitUntil) -> bool {
-    let expected = match wait_until {
-        RenderedDomWaitUntil::NetworkIdle => "timed out waiting for networkidle",
-        RenderedDomWaitUntil::DomStable => "timed out waiting for domstable",
-        RenderedDomWaitUntil::DomContentLoaded
-        | RenderedDomWaitUntil::Load
-        | RenderedDomWaitUntil::Done => return false,
+    let Some(wait) = wait_until.best_effort_page_wait() else {
+        return false;
     };
+    let expected = wait.timeout_message();
 
     error.chain().any(|cause| cause.to_string() == expected)
 }
@@ -147,13 +144,29 @@ pub enum RenderedDomWaitUntil {
     Load,
     NetworkIdle,
     DomStable,
+    /// Reach Load, then observe best-effort DOM stability.
     Done,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BestEffortPageWait {
+    NetworkIdle,
+    DomStable,
+}
+
+impl BestEffortPageWait {
+    fn timeout_message(self) -> &'static str {
+        match self {
+            Self::NetworkIdle => "timed out waiting for networkidle",
+            Self::DomStable => "timed out waiting for domstable",
+        }
+    }
 }
 
 impl RenderedDomWaitUntil {
     /// The concrete lifecycle boundary at which a live `Page` can first be
-    /// handed back to the host. Network-idle and DOM-stable are observations
-    /// made on that live Page, after Load and DCL respectively.
+    /// handed back to the host. Network-idle, DOM-stable, and Done add an
+    /// observation on that live Page after Load, DCL, and Load respectively.
     fn base_stage(self) -> PageVmInitStage {
         match self {
             Self::DomContentLoaded | Self::DomStable => PageVmInitStage::DomContentLoaded,
@@ -161,8 +174,12 @@ impl RenderedDomWaitUntil {
         }
     }
 
-    fn has_best_effort_page_wait(self) -> bool {
-        matches!(self, Self::NetworkIdle | Self::DomStable)
+    fn best_effort_page_wait(self) -> Option<BestEffortPageWait> {
+        match self {
+            Self::NetworkIdle => Some(BestEffortPageWait::NetworkIdle),
+            Self::DomStable | Self::Done => Some(BestEffortPageWait::DomStable),
+            Self::DomContentLoaded | Self::Load => None,
+        }
     }
 }
 
@@ -447,8 +464,9 @@ impl Browser {
     }
 
     /// Reaches the concrete lifecycle boundary that makes a live Page
-    /// available. For NetworkIdle and DomStable this is only the Load or DCL
-    /// base stage; their best-effort observation runs outside materialization.
+    /// available. For NetworkIdle, DomStable, and Done this is only the Load,
+    /// DCL, or Load base stage; their best-effort observation runs outside
+    /// materialization.
     async fn fetch_document_to_base_stage(
         &self,
         request: Request,
@@ -471,8 +489,8 @@ impl Browser {
         );
         // This deadline is strict: if the response or base DCL/Load stage does
         // not arrive in time, there is no Page on which best-effort readiness
-        // can operate. Only the later NetworkIdle/DomStable observation may
-        // soften an expired deadline.
+        // can operate. Only the later NetworkIdle/DOM-stability observation
+        // may soften an expired deadline.
         let outer_deadline = deadline.at();
         let requested_url = request.url.clone();
         if is_about_blank_url(&requested_url) {
@@ -751,7 +769,10 @@ impl Browser {
             .await
     }
 
-    /// Observes NetworkIdle or DomStable with the unspent part of `deadline`.
+    /// Observes NetworkIdle or DOM stability with the unspent part of
+    /// `deadline`. Done uses the DOM-stability observation after first reaching
+    /// Load, so post-load fragments are included by the default completion
+    /// strategy without changing the explicit Load boundary.
     ///
     /// A timeout in this observation is deliberately best-effort: the Page
     /// has already reached its required Load/DCL base stage, so the current
@@ -763,29 +784,24 @@ impl Browser {
         wait_until: RenderedDomWaitUntil,
         deadline: FetchDeadline,
     ) -> Result<()> {
-        if !wait_until.has_best_effort_page_wait() {
+        let Some(page_wait) = wait_until.best_effort_page_wait() else {
             return Ok(());
-        }
+        };
 
         let loader = self.resource_request_client();
         let remaining = deadline.remaining();
-        let result = match wait_until {
-            RenderedDomWaitUntil::NetworkIdle => {
+        let result = match page_wait {
+            BestEffortPageWait::NetworkIdle => {
                 tokio::time::timeout_at(
                     deadline.at(),
                     page.wait_for_network_idle(&loader, remaining),
                 )
                 .await
             }
-            RenderedDomWaitUntil::DomStable => {
+            BestEffortPageWait::DomStable => {
                 tokio::time::timeout_at(deadline.at(), page.wait_for_dom_stable(&loader, remaining))
                     .await
             }
-            RenderedDomWaitUntil::DomContentLoaded
-            | RenderedDomWaitUntil::Load
-            | RenderedDomWaitUntil::Done => unreachable!(
-                "concrete lifecycle modes returned before starting a best-effort Page wait"
-            ),
         };
 
         let timeout_error = match result {

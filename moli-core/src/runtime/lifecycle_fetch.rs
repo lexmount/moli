@@ -20,7 +20,8 @@ impl Browser {
     /// The decision runs in the renderer owner turn that observes DCL/load;
     /// it does not expose an intermediate Page or require a second owner
     /// command. The original `timeout` covers the request, the first lifecycle
-    /// target, any successor-navigation grace period, and the successor target.
+    /// target, any successor-navigation grace period, the successor target,
+    /// and the post-Load stability observation requested by Done.
     pub async fn fetch_document_with_lifecycle_decider<F>(
         &self,
         request: Request,
@@ -39,7 +40,8 @@ impl Browser {
     }
 
     /// Applies a lifecycle decision using a caller-owned absolute deadline.
-    /// The same deadline can then gate response, selector, and script waits.
+    /// Done consumes this deadline while observing post-Load DOM stability;
+    /// the caller can reuse any remaining budget for later waits.
     pub async fn fetch_document_with_lifecycle_decider_and_deadline<F>(
         &self,
         request: Request,
@@ -60,14 +62,24 @@ impl Browser {
             "a lifecycle decider requires DCL, load, or done"
         );
         let decider = RendererLifecycleDecider::new(decider);
-        self.fetch_document_to_base_stage(
-            request,
-            wait_until,
-            deadline,
-            RendererReplyBoundary::Stage,
-            Some(decider),
-            RawDocumentDisposition::Materialize,
-        )
-        .await
+        let fetched = self
+            .fetch_document_to_base_stage(
+                request,
+                wait_until,
+                deadline,
+                RendererReplyBoundary::Stage,
+                Some(decider),
+                RawDocumentDisposition::Materialize,
+            )
+            .await?;
+
+        match fetched {
+            FetchedDocument::Page(mut page) => {
+                self.wait_for_page_readiness_with_deadline(&mut page, wait_until, deadline)
+                    .await?;
+                Ok(FetchedDocument::Page(page))
+            }
+            FetchedDocument::Raw(raw) => Ok(FetchedDocument::Raw(raw)),
+        }
     }
 }
