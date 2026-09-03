@@ -2144,6 +2144,11 @@ async fn best_effort_page_readiness_consumes_only_the_remaining_fetch_deadline()
             "/wait-until-slow-interval-dom-mutation",
             "id=\"mutation-count\"",
         ),
+        (
+            RenderedDomWaitUntil::Done,
+            "/wait-until-slow-interval-dom-mutation",
+            "id=\"mutation-count\"",
+        ),
     ] {
         // The main response costs 500 ms. Readiness must receive only the
         // roughly 500 ms left in this one-second plan, not a fresh second.
@@ -2213,6 +2218,10 @@ async fn page_fetch_wait_until_apis_do_not_restart_best_effort_timeout() -> Resu
             RenderedDomWaitUntil::DomStable,
             "/wait-until-slow-interval-dom-mutation",
         ),
+        (
+            RenderedDomWaitUntil::Done,
+            "/wait-until-slow-interval-dom-mutation",
+        ),
     ] {
         let started = std::time::Instant::now();
         let page = browser
@@ -2238,6 +2247,7 @@ async fn best_effort_readiness_does_not_soften_a_base_lifecycle_timeout() -> Res
     for wait_until in [
         RenderedDomWaitUntil::NetworkIdle,
         RenderedDomWaitUntil::DomStable,
+        RenderedDomWaitUntil::Done,
     ] {
         // No Page exists at 200 ms because the main response itself takes
         // 500 ms. Best effort applies only after the Load/DCL base boundary.
