@@ -2643,6 +2643,16 @@ impl ScriptVm {
         let Some(root) = root else {
             return;
         };
+        let skip_pristine_document = {
+            let host = self._context_host.borrow();
+            let document = host.document_handle();
+            host.document_web_font_sidecar_is_pristine()
+                && !host.document_has_style_state(document)
+                && !host.document_has_active_author_stylesheet_sources(document)
+        };
+        if skip_pristine_document {
+            return;
+        }
         let Some(resources) = crate::layout_renderer::current_native_stylesheet_resources(
             &self._context_host.borrow(),
             root,
