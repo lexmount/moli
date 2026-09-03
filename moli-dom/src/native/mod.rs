@@ -1739,9 +1739,11 @@ mod tests {
         let body = host.document_body_handle().unwrap();
 
         let select = host.create_element("select");
+        assert!(host.append_child(body, select));
+        assert!(host.select_selectedcontent_elements(select).is_empty());
+
         let button = host.create_element("button");
         let selectedcontent = host.create_element("selectedcontent");
-        assert!(host.append_child(body, select));
         assert!(host.append_child(select, button));
         assert!(host.append_child(button, selectedcontent));
         assert_eq!(
@@ -1772,6 +1774,44 @@ mod tests {
         assert_eq!(
             host.select_selectedcontent_elements(select),
             vec![selectedcontent]
+        );
+
+        assert!(host.remove_child(button, selectedcontent));
+        assert!(host.select_selectedcontent_elements(select).is_empty());
+        assert!(host.append_child(button, selectedcontent));
+        assert_eq!(
+            host.select_selectedcontent_elements(select),
+            vec![selectedcontent]
+        );
+    }
+
+    #[test]
+    fn selectedcontent_query_index_preserves_detached_subtree_order_and_namespace() {
+        let mut host = DomHost::from_dom(NativeDom::new_html(test_url()));
+        let select = host.create_element("select");
+        assert!(host.select_selectedcontent_elements(select).is_empty());
+
+        let first_button = host.create_element("button");
+        let first = host.create_element("selectedcontent");
+        let second_button = host.create_element("button");
+        let second = host.create_element("selectedcontent");
+        let foreign = host
+            .create_element_ns(Some("urn:selectedcontent-test"), "selectedcontent")
+            .expect("foreign selectedcontent element");
+        assert!(host.append_child(select, first_button));
+        assert!(host.append_child(first_button, first));
+        assert!(host.append_child(select, second_button));
+        assert!(host.append_child(second_button, second));
+        assert!(host.append_child(select, foreign));
+
+        assert_eq!(
+            host.select_selectedcontent_elements(select),
+            vec![first, second]
+        );
+        assert!(host.insert_before(select, second_button, Some(first_button)));
+        assert_eq!(
+            host.select_selectedcontent_elements(select),
+            vec![second, first]
         );
     }
 
