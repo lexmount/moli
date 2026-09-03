@@ -1,6 +1,53 @@
 use super::*;
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_preserves_flex_content_basis_block_indefiniteness() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-content-basis-definiteness.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.column{display:flex;flex-direction:column}
+.item{min-height:0}
+.percentage{width:50px;height:100%}
+</style>`;
+document.body.innerHTML = `
+<div class=column><div id=t1 class=item style="flex:1 1 content;height:100px"><div class=percentage></div></div></div>
+<div class=column><div id=t2 class=item style="flex:1 1 auto;height:100px"><div class=percentage></div></div></div>
+<div style="display:flex"><div id=t3 class=item style="flex:1 1 content;height:100px"><div class=percentage></div></div></div>
+<div class=column><div id=t4 class=item style="flex:1 1 content;height:200px"><div style="width:50px;height:50px"></div><div style="width:50px;height:50%"></div></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(400, 600, 1.0))?
+            .expect("flex content-basis percentage screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['t1','t2','t3','t4'].map(id=>[id,document.getElementById(id).lastElementChild.offsetHeight])))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        assert_eq!(
+            geometry,
+            serde_json::json!({"t1": 0, "t2": 100, "t3": 100, "t4": 0}),
+            "only an initially definite flex-item block size may resolve descendant percentages",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("flex content-basis percentage fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_resolves_orthogonal_percentages_against_ratio_derived_block_size() {
     run_page_vm_async_test(async move {
         let loader =
