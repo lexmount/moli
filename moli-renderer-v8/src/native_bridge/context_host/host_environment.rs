@@ -884,6 +884,15 @@ impl JsContextHost {
             .adopted_style_sheet_sources_for_document(document)
     }
 
+    pub(crate) fn document_has_adopted_style_sheet_sources(&self, document: DomHandle) -> bool {
+        self.style_engine
+            .document_has_adopted_style_sheet_sources(document)
+    }
+
+    pub(crate) fn document_has_style_state(&self, document: DomHandle) -> bool {
+        self.style_engine.document_has_style_state(document)
+    }
+
     /// Initialize sources when taking ownership of an already constructed DOM.
     /// Ordinary reads and synchronization only install lifecycle-prepared sources.
     pub(crate) fn initialize_style_element_sources_for_document(&mut self, document: DomHandle) {
@@ -1260,6 +1269,11 @@ impl JsContextHost {
         let dom_host = self.dom_host() as *const _;
         self.style_engine
             .shadow_root_adopted_style_sheet_sources_with_host(unsafe { &*dom_host }, root)
+    }
+
+    pub(crate) fn shadow_root_has_adopted_style_sheet_sources(&self, root: DomHandle) -> bool {
+        self.style_engine
+            .shadow_root_has_adopted_style_sheet_sources(self.dom_host(), root)
     }
 
     pub(crate) fn register_css_custom_property_for_document(
