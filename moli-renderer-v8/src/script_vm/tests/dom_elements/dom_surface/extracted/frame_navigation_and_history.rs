@@ -3132,3 +3132,43 @@ async fn base_target_navigation_exposes_replacement_document_before_iframe_load(
         ["/replacement.html", "/source.html", "/target.html"]
     );
 }
+
+#[test]
+fn no_src_iframe_initial_about_blank_has_a_quirks_empty_document() {
+    let mut vm = new_storage_test_vm("https://iframe-initial-document.test/page.html");
+    vm.document_runtime
+        .set_document_character_set("windows-1252");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(frame);
+  const doc = frame.contentDocument;
+  return JSON.stringify({
+    compatMode: doc.compatMode,
+    contentType: doc.contentType,
+    readyState: doc.readyState,
+    documentURI: doc.documentURI,
+    url: doc.URL,
+    doctypeIsNull: doc.doctype === null,
+    characterSet: doc.characterSet,
+    documentChildCount: doc.childNodes.length,
+    documentElement: doc.documentElement.tagName,
+    documentElementChildCount: doc.documentElement.childNodes.length,
+    head: doc.documentElement.firstChild.tagName,
+    headChildCount: doc.head.childNodes.length,
+    body: doc.documentElement.lastChild.tagName,
+    bodyChildCount: doc.body.childNodes.length
+  });
+})()
+"#,
+        )
+        .expect("initial about:blank document shape should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"compatMode":"BackCompat","contentType":"text/html","readyState":"complete","documentURI":"about:blank","url":"about:blank","doctypeIsNull":true,"characterSet":"UTF-8","documentChildCount":1,"documentElement":"HTML","documentElementChildCount":2,"head":"HEAD","headChildCount":0,"body":"BODY","bodyChildCount":0}"#
+    );
+}
