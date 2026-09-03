@@ -42,6 +42,8 @@ use tracing_subscriber::fmt::MakeWriter;
 mod anubis_deferred_module;
 #[path = "fetch_cli/disable_css.rs"]
 mod disable_css;
+#[path = "fetch_cli/disable_css_boundaries.rs"]
+mod disable_css_boundaries;
 #[path = "fetch_cli/disable_js.rs"]
 mod disable_js;
 #[path = "fetch_cli/eval.rs"]
