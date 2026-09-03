@@ -5278,8 +5278,10 @@ html/browsers/history/the-history-interface/history_state.html
 html/browsers/history/the-history-interface/iframe_history_go_0.html
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/pushstate-base.html
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/pushstate-whitespace.html
+html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/pushstate.html
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate-base.html
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate-whitespace.html
+html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate.html
 html/browsers/history/the-history-interface/traverse-during-beforeunload.html
 html/browsers/history/the-history-interface/traverse-during-unload.html
 html/browsers/history/the-location-interface/document_location.html
