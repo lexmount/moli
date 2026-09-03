@@ -41,6 +41,7 @@ struct ChildWindowProxyRecord {
     facade_context: Option<v8::Global<v8::Context>>,
     browsing_context_parent_window: Option<v8::Global<v8::Object>>,
     browsing_context_top_window: Option<v8::Global<v8::Object>>,
+    browsing_context_opener: Option<ChildWindowProxyOpener>,
     cross_origin_endpoint_projections:
         HashMap<PendingWindowMessageEndpoint, v8::Global<v8::Object>>,
     realm_top_window_wrapper: Option<v8::Global<v8::Object>>,
@@ -48,6 +49,11 @@ struct ChildWindowProxyRecord {
     cross_origin_window_proxy: Option<v8::Global<v8::Object>>,
     cross_origin_access_surface: Option<v8::Global<v8::Object>>,
     default_execution_context_id: Option<i64>,
+}
+
+struct ChildWindowProxyOpener {
+    endpoint: PendingWindowMessageEndpoint,
+    window: v8::Global<v8::Object>,
 }
 
 impl ChildWindowProxyRecords {
@@ -159,6 +165,41 @@ impl ChildWindowProxyRecords {
             .browsing_context_top_window
             .as_ref()
             .map(|top| v8::Local::new(scope, top))
+    }
+
+    pub(in crate::native_bridge::context_host) fn set_browsing_context_opener(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+        endpoint: PendingWindowMessageEndpoint,
+        window: v8::Local<'_, v8::Object>,
+    ) {
+        self.record_mut(handle).browsing_context_opener = Some(ChildWindowProxyOpener {
+            endpoint,
+            window: v8::Global::new(scope, window),
+        });
+    }
+
+    pub(in crate::native_bridge::context_host) fn clear_browsing_context_opener(
+        &mut self,
+        handle: DomHandle,
+    ) {
+        if let Some(record) = self.records.get_mut(&handle) {
+            record.browsing_context_opener = None;
+        }
+    }
+
+    pub(in crate::native_bridge::context_host) fn browsing_context_opener<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_, ()>,
+        handle: DomHandle,
+    ) -> Option<(PendingWindowMessageEndpoint, v8::Local<'s, v8::Object>)> {
+        let opener = self
+            .records
+            .get(&handle)?
+            .browsing_context_opener
+            .as_ref()?;
+        Some((opener.endpoint, v8::Local::new(scope, &opener.window)))
     }
 
     fn cross_origin_endpoint_projection<'s>(
@@ -1283,6 +1324,67 @@ impl JsContextHost {
         handle: DomHandle,
     ) -> Option<v8::Local<'s, v8::Object>> {
         self.child_window_proxy_records.realm_top(scope, handle)
+    }
+
+    pub(crate) fn set_child_browsing_context_opener<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+        endpoint: PendingWindowMessageEndpoint,
+        opener: v8::Local<'s, v8::Object>,
+    ) {
+        if !self.child_browsing_context_is_live(handle) {
+            return;
+        }
+        self.child_window_proxy_records
+            .set_browsing_context_opener(scope, handle, endpoint, opener);
+    }
+
+    pub(crate) fn clear_child_browsing_context_opener(&mut self, handle: DomHandle) {
+        self.child_window_proxy_records
+            .clear_browsing_context_opener(handle);
+    }
+
+    pub(crate) fn child_browsing_context_opener<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        handle: DomHandle,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        let (endpoint, opener) = self
+            .child_window_proxy_records
+            .browsing_context_opener(scope, handle)?;
+        self.window_opener_endpoint_is_live(scope, endpoint, opener)
+            .then_some(opener)
+    }
+
+    pub(in crate::native_bridge::context_host) fn window_opener_endpoint_is_live<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        endpoint: PendingWindowMessageEndpoint,
+        opener: v8::Local<'s, v8::Object>,
+    ) -> bool {
+        match endpoint {
+            PendingWindowMessageEndpoint::TopWindow => true,
+            PendingWindowMessageEndpoint::ChildWindow(opener_handle) => {
+                if !self.child_browsing_context_is_live(opener_handle) {
+                    false
+                } else {
+                    opener
+                        .get_creation_context(scope)
+                        .and_then(|context| {
+                            self.window_execution_context_identity_for_access_check(context)
+                        })
+                        .is_some_and(|identity| {
+                            identity.dispatch_scope()
+                                == super::super::OwnerDispatchScope::Child(opener_handle)
+                                && self.window_execution_context_identity_is_current(identity)
+                        })
+                }
+            }
+            PendingWindowMessageEndpoint::LightweightPopup(popup_id) => {
+                self.lightweight_popup_is_open(popup_id)
+            }
+        }
     }
 
     pub(in crate::native_bridge::context_host) fn child_browsing_context_parent_window<'s>(

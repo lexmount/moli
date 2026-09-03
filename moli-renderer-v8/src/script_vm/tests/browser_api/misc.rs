@@ -24849,6 +24849,79 @@ fn window_open_resolves_relative_urls_against_the_entry_function_realm() {
 }
 
 #[test]
+fn window_open_existing_named_child_sets_and_can_disown_its_opener() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement("iframe");
+  frame.name = "named-child";
+  (document.body || document.documentElement || document).appendChild(frame);
+  globalThis.__namedOpenerFrame = frame;
+  return "created";
+})()
+"#,
+    )
+    .expect("named child opener setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const child = __namedOpenerFrame.contentWindow;
+  const before = child.opener;
+  const opened = open("about:blank#opened", "named-child");
+  const descriptor = Object.getOwnPropertyDescriptor(child, "opener");
+  const openerGet = descriptor.get;
+  const openerSet = descriptor.set;
+  const selected = {
+    initiallyNull: before === null,
+    returnedExisting: opened === child,
+    openerIsTop: child.opener === window,
+    directGetterIsTop: openerGet() === window,
+    descriptorShape: [
+      typeof openerGet,
+      typeof openerSet,
+      descriptor.enumerable,
+      descriptor.configurable
+    ].join(":")
+  };
+
+  child.opener = null;
+  const disowned = {
+    openerIsNull: child.opener === null,
+    directGetterIsNull: openerGet() === null,
+    descriptorPreserved:
+      Object.getOwnPropertyDescriptor(child, "opener").get === openerGet
+  };
+
+  child.opener = "immaterial";
+  const replacement = Object.getOwnPropertyDescriptor(child, "opener");
+  return JSON.stringify({
+    selected,
+    disowned,
+    replaced: {
+      value: child.opener,
+      directGetterIsNull: openerGet() === null,
+      writable: replacement.writable,
+      enumerable: replacement.enumerable,
+      configurable: replacement.configurable
+    }
+  });
+})()
+"#,
+        )
+        .expect("named child opener semantics should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"selected":{"initiallyNull":true,"returnedExisting":true,"openerIsTop":true,"directGetterIsTop":true,"descriptorShape":"function:function:true:true"},"disowned":{"openerIsNull":true,"directGetterIsNull":true,"descriptorPreserved":true},"replaced":{"value":"immaterial","directGetterIsNull":true,"writable":true,"enumerable":true,"configurable":true}}"#
+    );
+}
+
+#[test]
 fn window_open_about_blank_returns_lightweight_popup_window() {
     let mut vm = new_storage_test_vm("https://example.com/");
 
@@ -24893,6 +24966,71 @@ fn window_open_about_blank_returns_lightweight_popup_window() {
     assert_eq!(
         result,
         "[object Window]|true|about:blank#1|true|function:close:0:false:true:true:true|undefined;about:blank#2;false"
+    );
+}
+
+#[test]
+fn lightweight_popup_opener_accessor_preserves_and_disowns_the_underlying_relation() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const topOpenerGet = Object.getOwnPropertyDescriptor(window, "opener").get;
+  const replaced = open();
+  const replacedDescriptor = Object.getOwnPropertyDescriptor(replaced, "opener");
+  const replacedGet = replacedDescriptor.get;
+  replaced.opener = "replacement";
+  const replacementDescriptor = Object.getOwnPropertyDescriptor(replaced, "opener");
+
+  const disowned = open();
+  const disownedDescriptor = Object.getOwnPropertyDescriptor(disowned, "opener");
+  const disownedGet = disownedDescriptor.get;
+  disowned.opener = null;
+  const descriptorAfterNull = Object.getOwnPropertyDescriptor(disowned, "opener");
+
+  const closed = open();
+  const closedGet = Object.getOwnPropertyDescriptor(closed, "opener").get;
+  closed.close();
+  closed.opener = "closed replacement";
+
+  return JSON.stringify({
+    replaced: {
+      accessorShape: [
+        typeof replacedGet,
+        typeof replacedDescriptor.set,
+        replacedDescriptor.writable,
+        replacedDescriptor.enumerable,
+        replacedDescriptor.configurable
+      ].join(":"),
+      value: replaced.opener,
+      boundGetterKeepsRelation: replacedGet() === window,
+      borrowedGetterKeepsRelation: topOpenerGet.call(replaced) === window,
+      dataShape: [
+        replacementDescriptor.writable,
+        replacementDescriptor.enumerable,
+        replacementDescriptor.configurable
+      ].join(":")
+    },
+    disowned: {
+      valueIsNull: disowned.opener === null,
+      boundGetterIsNull: disownedGet() === null,
+      accessorPreserved: descriptorAfterNull.get === disownedGet
+    },
+    closed: {
+      boundGetterIsNull: closedGet() === null,
+      value: closed.opener
+    }
+  });
+})()
+"#,
+        )
+        .expect("lightweight popup opener accessor semantics should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"replaced":{"accessorShape":"function:function::true:true","value":"replacement","boundGetterKeepsRelation":true,"borrowedGetterKeepsRelation":true,"dataShape":"true:true:true"},"disowned":{"valueIsNull":true,"boundGetterIsNull":true,"accessorPreserved":true},"closed":{"boundGetterIsNull":true,"value":"closed replacement"}}"#
     );
 }
 

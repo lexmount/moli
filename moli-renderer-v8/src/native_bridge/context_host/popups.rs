@@ -175,6 +175,21 @@ struct LightweightPopupWindowNameDeclaration {
 
 #[derive(WebApiObject)]
 #[webapi(interface = "Object")]
+struct LightweightPopupWindowOpenerDeclaration<'scope> {
+    popup_id: v8::Local<'scope, v8::BigInt>,
+    #[webapi(
+        accessor_property,
+        enumerable,
+        getter = lightweight_popup_window_opener_getter,
+        setter = lightweight_popup_window_opener_setter,
+        data = self.popup_id,
+        setter_data = self.popup_id
+    )]
+    opener: (),
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = "Object")]
 struct LightweightPopupComputedStyleMethodDeclaration<'scope> {
     document: v8::Local<'scope, v8::BigInt>,
     #[webapi(
@@ -424,6 +439,7 @@ enum LightweightPopupLifecycle {
 pub(super) struct LightweightPopupBrowsingContextRecord {
     window_proxy: v8::Global<v8::Object>,
     opener: Option<super::PendingWindowMessageEndpoint>,
+    opener_window: Option<v8::Global<v8::Object>>,
     location_url: Url,
     opener_sandbox_policy: Option<DocumentSandboxPolicy>,
     lifecycle: LightweightPopupLifecycle,
@@ -610,6 +626,7 @@ impl JsContextHost {
                 .expect("lightweight popup navigation id space exhausted"),
         );
         record.opener = None;
+        record.opener_window = None;
         Some(LightweightPopupCloseTransition {
             retired_owner: open.document.owner,
             retired_local_window_id: open.document.local_window_id,
@@ -760,6 +777,12 @@ impl JsContextHost {
         LightweightPopupWindowNameDeclaration::default()
             .initialize(scope, window)
             .ok()?;
+        LightweightPopupWindowOpenerDeclaration {
+            popup_id: popup_id_private_value,
+            opener: (),
+        }
+        .initialize(scope, window)
+        .ok()?;
         install_window_location_history_navigation_runtime_state(
             scope,
             window,
@@ -784,11 +807,7 @@ impl JsContextHost {
         set_object_slot(scope, window, "top", window.into());
         set_object_slot(scope, window, "frames", window.into());
         if let Some(opener) = opener {
-            set_object_slot(scope, window, "opener", opener.into());
             install_lightweight_popup_viewport_surface_from_opener(scope, opener, window);
-        } else {
-            let opener = v8::null(scope);
-            set_object_slot(scope, window, "opener", opener.into());
         }
         if let Ok(navigator) =
             crate::context_bootstrap::build_lightweight_popup_window_navigator_object(
@@ -855,6 +874,7 @@ impl JsContextHost {
             LightweightPopupBrowsingContextRecord {
                 window_proxy: v8::Global::new(scope, window),
                 opener: opener_endpoint,
+                opener_window: opener.map(|opener| v8::Global::new(scope, opener)),
                 location_url: initial_url.clone(),
                 opener_sandbox_policy,
                 lifecycle: LightweightPopupLifecycle::Open(Box::new(LightweightPopupOpenState {
@@ -1088,6 +1108,32 @@ impl JsContextHost {
         self.lightweight_popup_browsing_contexts
             .get(&popup_id)
             .and_then(|record| record.opener)
+    }
+
+    pub(crate) fn lightweight_popup_opener_window<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        popup_id: u64,
+    ) -> Option<v8::Local<'s, v8::Object>> {
+        let (endpoint, opener) = {
+            let record = self.lightweight_popup_browsing_contexts.get(&popup_id)?;
+            if !record.is_open() {
+                return None;
+            }
+            let endpoint = record.opener?;
+            let opener = v8::Local::new(scope, record.opener_window.as_ref()?);
+            (endpoint, opener)
+        };
+        self.window_opener_endpoint_is_live(scope, endpoint, opener)
+            .then_some(opener)
+    }
+
+    pub(crate) fn clear_lightweight_popup_opener(&mut self, popup_id: u64) {
+        let Some(record) = self.lightweight_popup_browsing_contexts.get_mut(&popup_id) else {
+            return;
+        };
+        record.opener = None;
+        record.opener_window = None;
     }
 
     pub(crate) fn lightweight_popup_origin(&self, popup_id: u64) -> Option<String> {
@@ -4251,6 +4297,64 @@ fn lightweight_popup_window_name_setter<'s>(
     set_object_slot(scope, window, WINDOW_NAME_SLOT, next.into());
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         unsafe { &mut *host_ptr }.set_lightweight_popup_window_name(popup_id, &next_string);
+    }
+}
+
+fn lightweight_popup_window_opener_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(popup_id) = lightweight_popup_id_from_value(scope, args.data()) else {
+        throw_type_error(
+            scope,
+            "Window.opener getter called with invalid popup data.",
+        );
+        return;
+    };
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        rv.set_null();
+        return;
+    };
+    match unsafe { &*host_ptr }.lightweight_popup_opener_window(scope, popup_id) {
+        Some(opener) => rv.set(opener.into()),
+        None => rv.set_null(),
+    }
+}
+
+fn lightweight_popup_window_opener_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(popup_id) = lightweight_popup_id_from_value(scope, args.data()) else {
+        throw_type_error(
+            scope,
+            "Window.opener setter called with invalid popup data.",
+        );
+        return;
+    };
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let host = unsafe { &mut *host_ptr };
+    let value = args.get(0);
+    if value.is_null() {
+        host.clear_lightweight_popup_opener(popup_id);
+        return;
+    }
+    let Some(window) = host.lightweight_popup_window(scope, popup_id) else {
+        return;
+    };
+    match window.define_own_property(
+        scope,
+        v8str(scope, "opener").into(),
+        value,
+        v8::PropertyAttribute::NONE,
+    ) {
+        Some(true) => {}
+        Some(false) => throw_type_error(scope, "Failed to replace Window.opener property."),
+        None => {}
     }
 }
 
