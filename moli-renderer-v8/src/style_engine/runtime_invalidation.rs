@@ -32,6 +32,13 @@ use super::{
 const IMMEDIATE_STRUCTURAL_MUTATION_EFFECT_LIMIT: usize = 256;
 
 impl MoliStyleEngine {
+    pub(crate) fn document_has_style_state(&self, document: DomHandle) -> bool {
+        let Some(world) = self.document_worlds.active_world(document) else {
+            return false;
+        };
+        world_has_style_state(self, &world)
+    }
+
     #[cfg(test)]
     pub(crate) fn invalidate_for_mutations(
         &mut self,
