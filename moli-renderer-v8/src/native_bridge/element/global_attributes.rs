@@ -2409,6 +2409,57 @@ pub(in crate::native_bridge) fn node_autofocus_getter_function<'s>(
     boolean_attribute_property_getter_from_object_or_detached(scope, args.this(), "autofocus", rv);
 }
 
+pub(in crate::native_bridge) fn node_focus_group_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    attribute_property_getter_from_object_or_detached(scope, args.this(), "focusgroup", rv);
+}
+
+pub(in crate::native_bridge) fn node_focus_group_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    set_dom_string_attribute_property_on_object(
+        scope,
+        args.this(),
+        "focusgroup",
+        args.get(0),
+        "HTMLOrSVGOrMathMLElement",
+        "focusGroup",
+    );
+    rv.set_undefined();
+}
+
+pub(in crate::native_bridge) fn node_focus_group_start_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    boolean_attribute_property_getter_from_object_or_detached(
+        scope,
+        args.this(),
+        "focusgroupstart",
+        rv,
+    );
+}
+
+pub(in crate::native_bridge) fn node_focus_group_start_setter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    set_boolean_attribute_property_on_object_or_detached(
+        scope,
+        args.this(),
+        "focusgroupstart",
+        args.get(0),
+    );
+    rv.set_undefined();
+}
+
 pub(in crate::native_bridge) fn node_autofocus_setter_function<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

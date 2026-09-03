@@ -454,13 +454,15 @@ pub(super) use global_attributes::{
     node_credentialless_getter_function, node_credentialless_setter_function,
     node_dir_getter_function, node_dir_setter_function, node_draggable_getter_function,
     node_draggable_setter_function, node_enter_key_hint_getter_function,
-    node_enter_key_hint_setter_function, node_hidden_getter_function, node_hidden_setter_function,
-    node_inert_getter_function, node_inert_setter_function, node_input_mode_getter_function,
-    node_input_mode_setter_function, node_is_content_editable_getter_function,
-    node_lang_getter_function, node_lang_setter_function, node_spellcheck_getter_function,
-    node_spellcheck_setter_function, node_tab_index_getter_function,
-    node_tab_index_setter_function, node_title_getter_function, node_title_setter_function,
-    node_translate_getter_function, node_translate_setter_function,
+    node_enter_key_hint_setter_function, node_focus_group_getter_function,
+    node_focus_group_setter_function, node_focus_group_start_getter_function,
+    node_focus_group_start_setter_function, node_hidden_getter_function,
+    node_hidden_setter_function, node_inert_getter_function, node_inert_setter_function,
+    node_input_mode_getter_function, node_input_mode_setter_function,
+    node_is_content_editable_getter_function, node_lang_getter_function, node_lang_setter_function,
+    node_spellcheck_getter_function, node_spellcheck_setter_function,
+    node_tab_index_getter_function, node_tab_index_setter_function, node_title_getter_function,
+    node_title_setter_function, node_translate_getter_function, node_translate_setter_function,
     node_writing_suggestions_getter_function, node_writing_suggestions_setter_function,
     null_to_empty_dom_string_reflection_getter_function,
     null_to_empty_dom_string_reflection_setter_function, object_archive_getter_function,
@@ -1617,6 +1619,20 @@ struct HtmlOrForeignElementPrototypeDeclaration {
         setter = node_nonce_setter_function
     )]
     nonce: (),
+    #[webapi(
+        accessor_property = "focusGroup",
+        enumerable,
+        getter = node_focus_group_getter_function,
+        setter = node_focus_group_setter_function
+    )]
+    focus_group: (),
+    #[webapi(
+        accessor_property = "focusGroupStart",
+        enumerable,
+        getter = node_focus_group_start_getter_function,
+        setter = node_focus_group_start_setter_function
+    )]
+    focus_group_start: (),
     #[webapi(
         accessor_property,
         enumerable,
