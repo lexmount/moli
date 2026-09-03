@@ -82,6 +82,9 @@ impl CdpConnection {
         engine.set_http_proxy_override(http_proxy);
         engine.set_http_no_proxy_override(http_no_proxy);
         engine.set_tls_verify_host(tls_verify_host);
+        engine.set_extra_http_headers(&load_inputs.extra_http_headers);
+        engine.set_network_offline(load_inputs.network_offline);
+        engine.set_blocked_url_patterns(&load_inputs.blocked_url_patterns);
         engine.set_bypass_service_worker(load_inputs.bypass_service_worker);
         engine.set_cache_disabled(load_inputs.cache_disabled);
         Some(engine)

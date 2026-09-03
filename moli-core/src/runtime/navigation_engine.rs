@@ -721,6 +721,18 @@ impl NavigationEngine {
         self.page_network_policy.set_cache_disabled(disabled);
     }
 
+    pub fn set_extra_http_headers(&mut self, headers: &[(String, String)]) {
+        self.page_network_policy.set_extra_http_headers(headers);
+    }
+
+    pub fn set_network_offline(&mut self, offline: bool) {
+        self.page_network_policy.set_network_offline(offline);
+    }
+
+    pub fn set_blocked_url_patterns(&mut self, patterns: &[String]) {
+        self.page_network_policy.set_blocked_url_patterns(patterns);
+    }
+
     fn ensure_resource_runtime(
         &mut self,
         cookie_store: SharedBrowserCookieStore,

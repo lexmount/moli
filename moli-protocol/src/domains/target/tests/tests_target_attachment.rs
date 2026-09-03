@@ -1953,6 +1953,197 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn detach_attached_page_session_removes_its_network_policy_contribution() {
+    let mut ctx = TestContext::new();
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-detach-network-policy",
+        "TID-detach-network-policy",
+        "<!doctype html><body>detach network policy</body>",
+    )
+    .await;
+    {
+        let browser_context = ctx.conn.browser_context.as_mut().unwrap();
+        browser_context.attach_active_session("SID-detach-network-primary");
+        assert!(browser_context.assign_attached_session_to_target(
+            "TID-detach-network-policy",
+            "SID-detach-network-attached".to_owned(),
+        ));
+    }
+    register_page_session_route(
+        &mut ctx,
+        "BID-detach-network-policy",
+        "TID-detach-network-policy",
+        "SID-detach-network-primary",
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
+    register_page_session_route(
+        &mut ctx,
+        "BID-detach-network-policy",
+        "TID-detach-network-policy",
+        "SID-detach-network-attached",
+        moli_page_types::DevToolsSessionKey::Attached("SID-detach-network-attached".to_owned()),
+    );
+    ctx.sent.clear();
+
+    for (id, session_id) in [
+        (120_050, "SID-detach-network-primary"),
+        (120_051, "SID-detach-network-attached"),
+    ] {
+        ctx.process_async(json!({
+            "id": id,
+            "sessionId": session_id,
+            "method": "Network.enable"
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), Some(session_id));
+    }
+    for (id, session_id, name, value) in [
+        (
+            120_052,
+            "SID-detach-network-primary",
+            "X-Primary",
+            "primary",
+        ),
+        (
+            120_053,
+            "SID-detach-network-attached",
+            "X-Attached",
+            "attached",
+        ),
+    ] {
+        ctx.process_async(json!({
+            "id": id,
+            "sessionId": session_id,
+            "method": "Network.setExtraHTTPHeaders",
+            "params": { "headers": { (name): value } }
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), Some(session_id));
+    }
+    ctx.process_async(json!({
+        "id": 120_055,
+        "sessionId": "SID-detach-network-attached",
+        "method": "Emulation.setUserAgentOverride",
+        "params": {
+            "userAgent": "DetachedNetworkPolicy/1.0",
+            "acceptLanguage": "fr-FR"
+        }
+    }))
+    .await;
+    ctx.expect_result(120_055, json!({}), Some("SID-detach-network-attached"));
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .effective_policy()
+            .extra_headers(),
+        &[
+            ("X-Primary".to_owned(), "primary".to_owned()),
+            ("X-Attached".to_owned(), "attached".to_owned()),
+        ]
+    );
+
+    let observed_headers = Arc::new(Mutex::new(Vec::new()));
+    let observed_headers_for_route = Arc::clone(&observed_headers);
+    let app = Router::new().route(
+        "/",
+        get(move |headers: HeaderMap| {
+            let observed_headers = Arc::clone(&observed_headers_for_route);
+            async move {
+                observed_headers.lock().push((
+                    headers
+                        .get("x-primary")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned),
+                    headers
+                        .get("x-attached")
+                        .and_then(|value| value.to_str().ok())
+                        .map(str::to_owned),
+                ));
+                "<!doctype html><body>detached network policy request</body>"
+            }
+        }),
+    );
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 120_056,
+        "sessionId": "SID-detach-network-attached",
+        "method": "Page.navigate",
+        "params": { "url": format!("http://{addr}/?before-detach") }
+    }))
+    .await;
+    assert!(
+        take_response_by_id(&mut ctx, 120_056)
+            .get("error")
+            .is_none(),
+        "navigation with both session policies should succeed"
+    );
+
+    ctx.process_async(json!({
+        "id": 120_054,
+        "method": "Target.detachFromTarget",
+        "params": {
+            "targetId": "TID-detach-network-policy",
+            "sessionId": "SID-detach-network-attached"
+        }
+    }))
+    .await;
+    ctx.expect_result(120_054, json!({}), None);
+    ctx.expect_event(
+        "Target.detachedFromTarget",
+        Some(&json!({
+            "targetId": "TID-detach-network-policy",
+            "sessionId": "SID-detach-network-attached"
+        })),
+    );
+
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .effective_policy()
+            .extra_headers(),
+        &[("X-Primary".to_owned(), "primary".to_owned())]
+    );
+    assert_eq!(
+        ctx.conn.session_route(Some("SID-detach-network-attached")),
+        None
+    );
+    ctx.process_and_wait_for_response_async(json!({
+        "id": 120_057,
+        "sessionId": "SID-detach-network-primary",
+        "method": "Page.navigate",
+        "params": { "url": format!("http://{addr}/?after-detach") }
+    }))
+    .await;
+    assert!(
+        take_response_by_id(&mut ctx, 120_057)
+            .get("error")
+            .is_none(),
+        "navigation after attached session detach should succeed"
+    );
+    assert_eq!(
+        observed_headers.lock().as_slice(),
+        &[
+            (Some("primary".to_owned()), Some("attached".to_owned())),
+            (Some("primary".to_owned()), None),
+        ],
+        "the next navigation must not use the detached session's request policy"
+    );
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn detach_from_target_removes_only_selected_session_document_start_scripts() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
