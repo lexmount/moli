@@ -10287,6 +10287,72 @@ fn removing_iframe_discards_retained_window_relations_synchronously() {
 }
 
 #[test]
+fn reattaching_iframe_does_not_resurrect_retired_window_relations() {
+    let mut vm = new_storage_test_vm("https://loaded-iframe-discard-relations.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const child = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(child);
+  const grandchild = child.contentDocument.createElement("iframe");
+  grandchild.srcdoc = "<!doctype html><p>loaded grandchild</p>";
+  child.contentDocument.body.appendChild(grandchild);
+  globalThis.__loadedDiscardChild = child;
+  globalThis.__loadedDiscardGrandchild = grandchild;
+  return "scheduled";
+})()
+"#,
+    )
+    .expect("loaded descendant frame setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const child = globalThis.__loadedDiscardChild;
+  const grandchild = globalThis.__loadedDiscardGrandchild;
+  const childWindow = child.contentWindow;
+  const grandchildWindow = grandchild.contentWindow;
+  const before = {
+    grandchildLoaded: grandchildWindow.document.body.textContent === "loaded grandchild",
+    childParentIsTop: childWindow.parent === window,
+    childTopIsTop: childWindow.top === window,
+    grandchildParentIsChild: grandchildWindow.parent === childWindow,
+    grandchildTopIsTop: grandchildWindow.top === window
+  };
+
+  child.remove();
+  const detached = {
+    childParentIsNull: childWindow.parent === null,
+    childTopIsNull: childWindow.top === null,
+    grandchildParentIsNull: grandchildWindow.parent === null,
+    grandchildTopIsNull: grandchildWindow.top === null
+  };
+
+  (document.body || document.documentElement || document).appendChild(child);
+  const reattached = {
+    newChildWindow: child.contentWindow !== childWindow,
+    oldChildParentIsNull: childWindow.parent === null,
+    oldChildTopIsNull: childWindow.top === null,
+    oldGrandchildParentIsNull: grandchildWindow.parent === null,
+    oldGrandchildTopIsNull: grandchildWindow.top === null,
+    oldGrandchildRemoved: child.contentDocument.querySelector("iframe") === null
+  };
+  return JSON.stringify({ before, detached, reattached });
+})()
+"#,
+        )
+        .expect("loaded descendant frame discard probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"before":{"grandchildLoaded":true,"childParentIsTop":true,"childTopIsTop":true,"grandchildParentIsChild":true,"grandchildTopIsTop":true},"detached":{"childParentIsNull":true,"childTopIsNull":true,"grandchildParentIsNull":true,"grandchildTopIsNull":true},"reattached":{"newChildWindow":true,"oldChildParentIsNull":true,"oldChildTopIsNull":true,"oldGrandchildParentIsNull":true,"oldGrandchildTopIsNull":true,"oldGrandchildRemoved":true}}"#
+    );
+}
+
+#[test]
 fn moving_iframe_into_own_child_document_discards_retained_window_relations() {
     let mut vm = new_storage_test_vm("https://iframe-own-child-document.test/");
 
