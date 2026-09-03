@@ -119,7 +119,6 @@ content-security-policy/media-src/media-src-blocked-data-url.html
 content-security-policy/meta/meta-img-src.html
 content-security-policy/meta/meta-modified.html
 content-security-policy/meta/sandbox-iframe.html
-content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/navigation/to-javascript-parent-initiated-check-csp-order.html
 content-security-policy/navigation/to-javascript-parent-initiated-child-csp.html
 content-security-policy/navigation/to-javascript-url-frame-src.html
@@ -1555,12 +1554,10 @@ css/css-grid/abspos/orthogonal-positioned-grid-items-016.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-017.html
 css/css-grid/abspos/positioned-grid-descendants-003.html
 css/css-grid/abspos/positioned-grid-descendants-006.html
-css/css-grid/abspos/positioned-grid-descendants-009.html
-css/css-grid/abspos/positioned-grid-descendants-011.html
+css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
 css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
-css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-016.html
 css/css-grid/abspos/positioned-grid-descendants-017.html
 css/css-grid/abspos/positioned-grid-items-001.html
@@ -1688,6 +1685,7 @@ css/css-grid/alignment/grid-item-aspect-ratio-justify-self-002.html
 css/css-grid/alignment/grid-item-auto-margins-001.html
 css/css-grid/alignment/grid-item-auto-margins-002.html
 css/css-grid/alignment/grid-item-auto-margins-alignment.html
+css/css-grid/alignment/grid-place-content-001.html
 css/css-grid/alignment/grid-row-axis-alignment-sticky-positioned-items-001.html
 css/css-grid/alignment/grid-row-axis-alignment-sticky-positioned-items-002.html
 css/css-grid/alignment/grid-self-alignment-baseline-with-grid-001.html
@@ -3860,6 +3858,7 @@ dom/xpath-result-single-node-value-nullable.html
 domparsing/DOMParser-parseFromString-encoding.html
 domparsing/DOMParser-parseFromString-html.html
 domparsing/DOMParser-parseFromString-stylesheets.html
+domparsing/DOMParser-parseFromString-url-base-pushstate.html
 domparsing/DOMParser-parseFromString-url-base.html
 domparsing/DOMParser-parseFromString-url-moretests.html
 domparsing/DOMParser-parseFromString-url-pushstate.html
@@ -5524,6 +5523,7 @@ html/dom/partial-updates/tentative/template-for-parsing-only.html
 html/dom/partial-updates/tentative/template-for-reverse.html
 html/dom/partial-updates/tentative/template-for-scripting-nested.html
 html/dom/partial-updates/tentative/template-for-superseded-by-shadowrootmode.html
+html/dom/reflection-embedded.html
 html/dom/reflection-forms-weekmonth.html
 html/dom/reflection-forms.html
 html/dom/reflection-grouping.html
@@ -6150,7 +6150,6 @@ html/semantics/links/links-created-by-a-and-area-elements/anchor-src-encoding.ht
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_attribute-getter-setter.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_getter.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
-html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/popovers/button-type-popovertarget.html
 html/semantics/popovers/hide-other-popover-side-effects.html
 html/semantics/popovers/imperative-invokers.html
@@ -6497,7 +6496,6 @@ html/semantics/tabular-data/the-tr-element/deleteCell.html
 html/semantics/tabular-data/the-tr-element/insertCell.html
 html/semantics/tabular-data/the-tr-element/rowIndex.html
 html/semantics/tabular-data/the-tr-element/sectionRowIndex.html
-html/semantics/text-level-semantics/historical.html
 html/semantics/text-level-semantics/the-a-element/a-download-click-404.html
 html/semantics/text-level-semantics/the-a-element/a-download-click-redirect-to-javascript.html
 html/semantics/text-level-semantics/the-a-element/a-download-click.html
@@ -7637,6 +7635,7 @@ service-workers/service-worker/ServiceWorkerGlobalScope/service-worker-error-eve
 service-workers/service-worker/activate-event-after-install-state-change.https.html
 service-workers/service-worker/activation-after-registration.https.html
 service-workers/service-worker/claim-not-using-registration.https.html
+service-workers/service-worker/claim-shared-worker-fetch.https.html
 service-workers/service-worker/client-id.https.html
 service-workers/service-worker/client-url-of-blob-url-worker.https.html
 service-workers/service-worker/controller-on-disconnect.https.html
