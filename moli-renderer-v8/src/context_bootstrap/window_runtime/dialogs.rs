@@ -6,12 +6,13 @@ use crate::{
     context_bootstrap::{CHILD_BROWSING_CONTEXT_HANDLE_SLOT, is_window_receiver},
     document_runtime::{DocumentPolicyContainer, DomHandle},
     native_bridge::{
-        InputNavigationPolicy, OwnerDispatchScope, child_window_handle_from_marker_data,
+        InputNavigationPolicy, OwnerDispatchScope, PendingWindowMessageEndpoint,
+        child_window_handle_from_marker_data,
         element::{
             SpecialBrowsingContextTarget, navigate_existing_browsing_context_target,
             navigate_named_iframe_target,
         },
-        entered_child_window_handle,
+        entered_child_window_handle, lightweight_popup_id_from_window,
     },
     runtime::{
         RendererPendingJavaScriptDialog, RendererPendingPopupActivation,
@@ -174,9 +175,9 @@ pub(in crate::context_bootstrap) fn window_prompt_callback<'s>(
     rv.set(v8::null(scope).into());
 }
 
-pub(crate) fn window_const_false_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments<'_>,
+pub(crate) fn window_const_false_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
     rv.set(v8::Boolean::new(scope, false).into());
@@ -295,14 +296,30 @@ pub(crate) fn window_open_callback<'s>(
         }
         return;
     }
-    if let Some(target_window) =
+    if let Some((target_handle, target_window)) =
         existing_named_child_window_for_window_open(scope, host_ptr, &parsed.target_name)
         && !suppress_opener
-        && (parsed.raw_url.is_empty()
-            || navigate_named_iframe_target(scope, host_ptr, &parsed.target_name, &url, None))
     {
-        rv.set(target_window.into());
-        return;
+        let opener_child_handle = window_open_receiver_child_handle(scope, entered_window);
+        let opener_endpoint = opener_child_handle
+            .map(PendingWindowMessageEndpoint::ChildWindow)
+            .or_else(|| {
+                lightweight_popup_id_from_window(scope, entered_window)
+                    .map(PendingWindowMessageEndpoint::LightweightPopup)
+            })
+            .unwrap_or(PendingWindowMessageEndpoint::TopWindow);
+        unsafe { &mut *host_ptr }.set_child_browsing_context_opener(
+            scope,
+            target_handle,
+            opener_endpoint,
+            entered_window,
+        );
+        if parsed.raw_url.is_empty()
+            || navigate_named_iframe_target(scope, host_ptr, &parsed.target_name, &url, None)
+        {
+            rv.set(target_window.into());
+            return;
+        }
     }
     let host = unsafe { &mut *host_ptr };
     let window_open_event = RendererPendingWindowOpenEvent {
@@ -626,13 +643,14 @@ fn existing_named_child_window_for_window_open<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host_ptr: *mut crate::native_bridge::PageScriptHost,
     target_name: &str,
-) -> Option<v8::Local<'s, v8::Object>> {
+) -> Option<(DomHandle, v8::Local<'s, v8::Object>)> {
     if target_name.is_empty() || SpecialBrowsingContextTarget::parse(target_name).is_some() {
         return None;
     }
     let host = unsafe { &mut *host_ptr };
     let handle = host.child_browsing_context_handle_by_name(target_name)?;
     host.child_browsing_context_window_wrapper(scope, handle)
+        .map(|window| (handle, window))
 }
 
 fn open_dialog(
