@@ -96,7 +96,7 @@ pub async fn run_cli_with_config<W: Write>(
                         ));
                     }
                     let rendered =
-                        fetch_dump::render_raw_document_dump(&raw_document, &config.fetch)
+                        fetch_dump::render_raw_document_output(&raw_document, &config.fetch)
                             .map_err(|error| with_fetch_context(error, &args.url))?;
                     stdout
                         .write_all(&rendered)

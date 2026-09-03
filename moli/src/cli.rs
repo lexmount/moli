@@ -37,10 +37,12 @@ pub enum Commands {
 
 #[derive(Debug, Clone, PartialEq, Eq, Args)]
 pub struct FetchArgs {
-    /// Select the fetch output format. `screenshot` writes a viewport PNG,
-    /// `screenshot_full` writes a full-document PNG, and `pdf` writes a
-    /// paginated PDF directly to stdout; all three require layout. Dump output
-    /// is quiet by default; pass `--log-level` to opt into diagnostic logs.
+    /// Select the fetch output format. When omitted, rendered HTML documents
+    /// are serialized and raw responses such as PDFs or videos are written
+    /// verbatim. `screenshot` writes a viewport PNG, `screenshot_full` writes a
+    /// full-document PNG, and `pdf` writes a paginated PDF directly to stdout;
+    /// all three require layout. Dump output is quiet by default; pass
+    /// `--log-level` to opt into diagnostic logs.
     #[arg(short, long, value_enum)]
     pub dump: Option<DumpFormat>,
 

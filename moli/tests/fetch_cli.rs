@@ -155,6 +155,18 @@ fn run_fetch_cli_with_default_wait_and_dump(url: &str, dump: &str) -> Result<Out
     ])
 }
 
+fn run_fetch_cli_without_dump(url: &str) -> Result<Output> {
+    run_moli([
+        "moli",
+        "fetch",
+        "--log-level",
+        "error",
+        "--http-no-proxy",
+        "*",
+        url,
+    ])
+}
+
 fn run_moli<I, S>(args: I) -> Result<Output>
 where
     I: IntoIterator<Item = S>,
@@ -266,6 +278,7 @@ struct CacheableFixtureServer {
 
 const PDF_FIXTURE_BODY: &[u8] =
     b"%PDF-1.7\n% moli raw document fixture\n1 0 obj\n<<>>\nendobj\n%%EOF\n";
+const VIDEO_FIXTURE_BODY: &[u8] = b"\0\0\0\x18ftypmp42\xff\0moli-video-fixture";
 
 struct BinaryDocumentFixtureServer {
     base_url: String,
@@ -467,10 +480,18 @@ impl BinaryDocumentFixtureServer {
             )
         }
 
+        async fn inline_video() -> impl IntoResponse {
+            (
+                [("content-type", "video/mp4; codecs=\"avc1.42E01E\"")],
+                VIDEO_FIXTURE_BODY.to_vec(),
+            )
+        }
+
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let app = Router::new()
             .route("/inline.pdf", get(inline_pdf))
+            .route("/clip.mp4", get(inline_video))
             .route("/attachment.html", get(attachment_pdf));
         let task = tokio::spawn(async move {
             axum::serve(listener, app)
@@ -1001,11 +1022,11 @@ fn binary_dump_modes_require_layout() -> Result<()> {
 }
 
 #[test]
-fn cli_fetch_inline_pdf_dump_html_bypasses_dcl_page_lifecycle() -> Result<()> {
+fn cli_fetch_without_dump_writes_pdf_verbatim() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
     let url = server.url("/inline.pdf");
-    let output = run_fetch_cli_with_wait_until(&url, "domcontentloaded")?;
+    let output = run_fetch_cli_without_dump(&url)?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -1019,11 +1040,29 @@ fn cli_fetch_inline_pdf_dump_html_bypasses_dcl_page_lifecycle() -> Result<()> {
 }
 
 #[test]
-fn cli_fetch_attachment_dump_html_bypasses_dcl_page_lifecycle() -> Result<()> {
+fn cli_fetch_without_dump_writes_video_verbatim() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
+    let url = server.url("/clip.mp4");
+    let output = run_fetch_cli_without_dump(&url)?;
+    runtime.block_on(server.shutdown());
+
+    assert!(
+        output.status.success(),
+        "moli fetch failed: stdout={:?}\nstderr={}",
+        output.stdout,
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, VIDEO_FIXTURE_BODY);
+    Ok(())
+}
+
+#[test]
+fn cli_fetch_without_dump_writes_attachment_verbatim() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
     let url = server.url("/attachment.html");
-    let output = run_fetch_cli_with_wait_until(&url, "domcontentloaded")?;
+    let output = run_fetch_cli_without_dump(&url)?;
     runtime.block_on(server.shutdown());
 
     assert!(
@@ -1033,6 +1072,29 @@ fn cli_fetch_attachment_dump_html_bypasses_dcl_page_lifecycle() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(output.stdout, PDF_FIXTURE_BODY);
+    Ok(())
+}
+
+#[test]
+fn cli_dump_html_rejects_raw_documents_without_partial_output() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
+
+    for path in ["/inline.pdf", "/clip.mp4", "/attachment.html"] {
+        let url = server.url(path);
+        let output = run_fetch_cli_with_dump_and_args(&url, "html", &[])?;
+        let stdout = clean_output(&output.stdout);
+        let stderr = clean_output(&output.stderr);
+        assert!(!output.status.success(), "path={path} stdout={stdout}");
+        assert!(stdout.is_empty(), "path={path} stdout={stdout}");
+        assert_single_fetch_failure_reason(
+            &stderr,
+            &url,
+            "--dump html requires a renderable HTML document, not a raw download",
+        );
+    }
+
+    runtime.block_on(server.shutdown());
     Ok(())
 }
 

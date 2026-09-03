@@ -64,13 +64,16 @@ pub async fn render_page_dump_async(
     .await
 }
 
-pub fn render_raw_document_dump(
+pub fn render_raw_document_output(
     raw: &RawDocument,
     command: &FetchCommandConfig,
 ) -> Result<Vec<u8>> {
-    match command.dump_mode.unwrap_or(DumpFormat::Html) {
-        DumpFormat::Html => Ok(raw.body_bytes().to_vec()),
-        DumpFormat::Json => {
+    match command.dump_mode {
+        None => Ok(raw.body_bytes().to_vec()),
+        Some(DumpFormat::Html) => {
+            bail!("--dump html requires a renderable HTML document, not a raw download")
+        }
+        Some(DumpFormat::Json) => {
             let html = String::from_utf8_lossy(raw.body_bytes());
             let redirect_chain = raw
                 .navigation_redirect_chain()
@@ -89,13 +92,15 @@ pub fn render_raw_document_dump(
             )?;
             Ok(payload.into_bytes())
         }
-        DumpFormat::Markdown
-        | DumpFormat::Screenshot
-        | DumpFormat::ScreenshotFull
-        | DumpFormat::Pdf
-        | DumpFormat::SemanticTree
-        | DumpFormat::SemanticTreeText => {
-            anyhow::bail!("raw non-HTML document output only supports --dump html or --dump json")
+        Some(
+            DumpFormat::Markdown
+            | DumpFormat::Screenshot
+            | DumpFormat::ScreenshotFull
+            | DumpFormat::Pdf
+            | DumpFormat::SemanticTree
+            | DumpFormat::SemanticTreeText,
+        ) => {
+            bail!("raw download output only supports automatic output or --dump json")
         }
     }
 }
