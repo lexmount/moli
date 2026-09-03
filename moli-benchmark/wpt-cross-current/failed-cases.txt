@@ -3052,8 +3052,6 @@ html/semantics/scripting-1/the-script-element/module/evaluation-error-2.html
 html/semantics/scripting-1/the-script-element/module/evaluation-error-3.html
 html/semantics/scripting-1/the-script-element/module/evaluation-error-4.html
 html/semantics/scripting-1/the-script-element/module/evaluation-error-5.html
-html/semantics/scripting-1/the-script-element/module/import-meta/import-meta-resolve-multiple-scripts.html
-html/semantics/scripting-1/the-script-element/module/import-meta/import-meta-url.html
 html/semantics/scripting-1/the-script-element/module/inline-async-execorder.html
 html/semantics/scripting-1/the-script-element/module/instantiation-error-3.html
 html/semantics/scripting-1/the-script-element/module/instantiation-error-6.html

@@ -6317,6 +6317,8 @@ html/semantics/scripting-1/the-script-element/module/execorder.html
 html/semantics/scripting-1/the-script-element/module/fetch-error-1.html
 html/semantics/scripting-1/the-script-element/module/fetch-error-2.html
 html/semantics/scripting-1/the-script-element/module/import-meta/import-meta-resolve-importmap.html
+html/semantics/scripting-1/the-script-element/module/import-meta/import-meta-resolve-multiple-scripts.html
+html/semantics/scripting-1/the-script-element/module/import-meta/import-meta-url.html
 html/semantics/scripting-1/the-script-element/module/import-subgraph-404.html
 html/semantics/scripting-1/the-script-element/module/imports.html
 html/semantics/scripting-1/the-script-element/module/inactive-context-import.html
