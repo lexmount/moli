@@ -27,12 +27,20 @@ pub(in crate::context_bootstrap) fn document_constructor_callback(
         );
         return;
     }
+    let origin_document = current_document_object(scope);
     match call_global_bridge_method(scope, "__createDetachedDocument", &[]) {
         Some(value) => {
             let Ok(document) = v8::Local::<v8::Object>::try_from(value) else {
                 rv.set_undefined();
                 return;
             };
+            if let Some(origin_document) = origin_document {
+                crate::native_bridge::document::inherit_detached_document_origin(
+                    scope,
+                    document,
+                    origin_document,
+                );
+            }
             if crate::context_bootstrap::install_constructed_document_location_runtime_state(
                 scope, document,
             )
@@ -45,6 +53,15 @@ pub(in crate::context_bootstrap) fn document_constructor_callback(
         }
         None => rv.set_undefined(),
     }
+}
+
+fn current_document_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let global = scope.get_current_context().global(scope);
+    global
+        .get(scope, v8str(scope, "document").into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
 pub(in crate::context_bootstrap) fn document_fragment_constructor_callback(

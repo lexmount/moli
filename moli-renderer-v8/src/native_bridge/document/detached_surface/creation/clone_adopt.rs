@@ -65,6 +65,7 @@ fn clone_detached_document_shell<'s>(
     };
     let cloned = call_global_bridge_method(scope, helper, &[])
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())?;
+    inherit_detached_document_origin(scope, cloned, document);
     if !deep {
         return Some(cloned);
     }
