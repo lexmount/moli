@@ -206,6 +206,15 @@ impl JsContextHost {
             .unwrap_or_default()
     }
 
+    pub(crate) fn child_browsing_context_child_frame_handle_by_index(
+        &self,
+        parent: DomHandle,
+        index: usize,
+    ) -> Option<DomHandle> {
+        let document = self.child_browsing_context_document_handle(parent)?;
+        self.child_browsing_context_handle_by_index_for_document(document, index)
+    }
+
     pub(crate) fn child_browsing_context_direct_host_handles(
         &self,
         parent: DomHandle,

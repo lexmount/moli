@@ -1648,6 +1648,7 @@ fn is_cross_origin_named_child_slot_name(name: &str) -> bool {
                 | "location"
                 | "closed"
                 | "opener"
+                | "postMessage"
                 | "then"
         )
 }
@@ -2293,6 +2294,13 @@ fn child_window_cross_origin_named_getter<'s>(
     let Some(surface) = child_window_cross_origin_access_surface(scope, holder) else {
         return v8::Intercepted::kNo;
     };
+    if let Some(value) = child_window_cross_origin_named_child_value(scope, surface, key) {
+        let Some(value) = value else {
+            return v8::Intercepted::kNo;
+        };
+        rv.set(value);
+        return v8::Intercepted::kYes;
+    }
     if surface.has_own_property(scope, key).unwrap_or(false)
         && let Some(value) = surface.get(scope, key.into())
     {
@@ -2333,6 +2341,13 @@ fn child_window_cross_origin_named_query<'s>(
     let Some(surface) = child_window_cross_origin_access_surface(scope, args.holder()) else {
         return v8::Intercepted::kNo;
     };
+    if let Some(value) = child_window_cross_origin_named_child_value(scope, surface, key) {
+        if value.is_none() {
+            return v8::Intercepted::kNo;
+        }
+        rv.set_int32(cross_origin_named_property_attributes().as_u32() as i32);
+        return v8::Intercepted::kYes;
+    }
     if surface.has_own_property(scope, key).unwrap_or(false) {
         rv.set_int32(cross_origin_property_attributes().as_u32() as i32);
         return v8::Intercepted::kYes;
@@ -2363,11 +2378,44 @@ fn child_window_cross_origin_named_descriptor<'s>(
     let Some(surface) = child_window_cross_origin_access_surface(scope, args.holder()) else {
         return v8::Intercepted::kNo;
     };
+    if let Some(value) = child_window_cross_origin_named_child_value(scope, surface, key) {
+        let Some(value) = value else {
+            return v8::Intercepted::kNo;
+        };
+        let Ok(descriptor) =
+            CrossOriginPropertyDescriptorDeclaration::new(value, false, false, true).bind(scope)
+        else {
+            return v8::Intercepted::kNo;
+        };
+        rv.set(descriptor.into());
+        return v8::Intercepted::kYes;
+    }
     let Some(descriptor) = surface.get_own_property_descriptor(scope, key) else {
         return v8::Intercepted::kNo;
     };
     rv.set(descriptor);
     v8::Intercepted::kYes
+}
+
+fn child_window_cross_origin_named_child_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    surface: v8::Local<'s, v8::Object>,
+    key: v8::Local<'s, v8::Name>,
+) -> Option<Option<v8::Local<'s, v8::Value>>> {
+    let key = v8::Local::<v8::String>::try_from(key).ok()?;
+    let key_name = key.to_rust_string_lossy(scope);
+    if !is_cross_origin_named_child_slot_name(&key_name) {
+        return None;
+    }
+    let parent_handle = child_handle_from_object(scope, surface)?;
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let child_handle = unsafe { &*host_ptr }
+        .child_browsing_context_named_child_handle(Some(parent_handle), &key_name);
+    Some(child_handle.and_then(|child_handle| {
+        unsafe { &mut *host_ptr }
+            .child_browsing_context_window_proxy_for_top(scope, child_handle)
+            .map(Into::into)
+    }))
 }
 
 fn child_window_cross_origin_indexed_getter<'s>(
@@ -2376,15 +2424,29 @@ fn child_window_cross_origin_indexed_getter<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
-    let Some(surface) = child_window_cross_origin_access_surface(scope, args.holder()) else {
+    let Some(value) = child_window_cross_origin_indexed_value(scope, args.holder(), index) else {
         rv.set_undefined();
         return v8::Intercepted::kYes;
     };
-    match surface.get_index(scope, index) {
-        Some(value) => rv.set(value),
-        None => rv.set_undefined(),
-    }
+    rv.set(value);
     v8::Intercepted::kYes
+}
+
+fn child_window_cross_origin_indexed_value<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    holder: v8::Local<'s, v8::Object>,
+    index: u32,
+) -> Option<v8::Local<'s, v8::Value>> {
+    let surface = child_window_cross_origin_access_surface(scope, holder)?;
+    let Some(parent_handle) = child_handle_from_object(scope, surface) else {
+        return surface.get_index(scope, index);
+    };
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let host = unsafe { &mut *host_ptr };
+    let child_handle =
+        host.child_browsing_context_child_frame_handle_by_index(parent_handle, index as usize)?;
+    host.child_browsing_context_window_proxy_for_top(scope, child_handle)
+        .map(Into::into)
 }
 
 fn child_window_cross_origin_indexed_setter<'s>(
@@ -2404,13 +2466,7 @@ fn child_window_cross_origin_indexed_query<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Integer>,
 ) -> v8::Intercepted {
-    let Some(surface) = child_window_cross_origin_access_surface(scope, args.holder()) else {
-        return v8::Intercepted::kNo;
-    };
-    let Some(key) = v8_string(scope, &index.to_string()) else {
-        return v8::Intercepted::kNo;
-    };
-    if !surface.has_own_property(scope, key.into()).unwrap_or(false) {
+    if child_window_cross_origin_indexed_value(scope, args.holder(), index).is_none() {
         return v8::Intercepted::kNo;
     }
     rv.set_int32(cross_origin_index_property_attributes().as_u32() as i32);
@@ -2444,13 +2500,7 @@ fn child_window_cross_origin_indexed_descriptor<'s>(
     args: v8::PropertyCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) -> v8::Intercepted {
-    let Some(surface) = child_window_cross_origin_access_surface(scope, args.holder()) else {
-        return v8::Intercepted::kNo;
-    };
-    let Some(key) = v8_string(scope, &index.to_string()) else {
-        return v8::Intercepted::kNo;
-    };
-    let Some(value) = surface.get(scope, key.into()) else {
+    let Some(value) = child_window_cross_origin_indexed_value(scope, args.holder(), index) else {
         return v8::Intercepted::kNo;
     };
     let Ok(descriptor) =
