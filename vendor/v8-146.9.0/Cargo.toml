@@ -108,6 +108,7 @@ repository = "https://github.com/denoland/rusty_v8"
 
 [features]
 default = ["use_custom_libcxx"]
+moli_use_external_allocator = []
 simdutf = []
 use_custom_libcxx = []
 v8_enable_pointer_compression = []

@@ -105,10 +105,11 @@ xmlparser = "0.13.6"
 typed-num = { version = "0.3.0", default-features = false, features = ["serde"] }
 wasm_dep_analyzer = { git = "https://github.com/ldm0/wasm_dep_analyzer", branch = "moli0" }
 
-# rusty_v8 publishes pointer-compressed archives for these targets. Those
-# archives also provide the process-wide PartitionAlloc allocator shim.
+# rusty_v8 publishes pointer-compressed archives for these targets. Keep the
+# compressed V8 heap, but exclude the archive's process-wide allocator shim so
+# the executable remains the single owner of allocator policy.
 [target.'cfg(any(all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"), all(target_os = "macos", any(target_arch = "x86_64", target_arch = "aarch64"))))'.dependencies]
-v8 = { version = "146.8.0", features = ["v8_enable_pointer_compression"] }
+v8 = { version = "146.8.0", features = ["moli_use_external_allocator", "v8_enable_pointer_compression"] }
 
 # Keep the upstream V8 configuration on targets without an official
 # pointer-compressed archive.

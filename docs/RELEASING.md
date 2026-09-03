@@ -27,10 +27,10 @@ only a staging copy, leaving the binary under `target/release` unchanged for
 debugging. Because stripping invalidates a Mach-O signature, macOS staging
 binaries are ad-hoc signed again and verified before packaging. They are not
 Developer ID signed or notarized. Windows executables are not Authenticode
-signed. Linux x86_64 and both macOS targets use the allocator shim bundled in
-their official pointer-compressed V8 archives, routing native allocations to
-PartitionAlloc. Targets without such an archive retain their existing
-allocator: Linux ARM64 uses jemalloc and Windows uses the system allocator.
+signed. Linux x86_64 and both macOS targets use official pointer-compressed V8
+archives without their allocator shim, keeping V8 pointer encoding independent
+from the executable's allocator policy. Non-Windows targets retain Moli's
+jemalloc configuration; Windows uses the system allocator.
 
 Release builds use one code-generation unit. The release workflow and the CI
 release-regression binaries both invoke Cargo with `--release`, so they consume
