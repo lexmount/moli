@@ -1,4 +1,5 @@
 css/css-flexbox/align-items-baseline-column-vert-rl-table-item.html
+css/css-typed-om/the-stylepropertymap/properties/counter-increment.html
 dom/nodes/NodeList-static-length-getter-tampered-1.html
 editing/run/delete.html?1-1000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?5001-6000
