@@ -3056,8 +3056,6 @@ html/semantics/scripting-1/the-script-element/text-module/cors-crossorigin-reque
 html/semantics/scripting-1/the-script-element/text-module/integrity.html
 html/semantics/scripting-1/the-script-element/text-module/module.html
 html/semantics/scripting-1/the-script-element/text-module/service-worker-test.https.html
-html/semantics/selectors/pseudo-classes/autofill.html
-html/semantics/text-level-semantics/historical.html
 html/semantics/the-button-element/command-and-commandfor/on-dialog-behavior.html
 html/syntax/charset/xhr.html
 html/syntax/parsing/cdata-in-integration-point-fragment.html

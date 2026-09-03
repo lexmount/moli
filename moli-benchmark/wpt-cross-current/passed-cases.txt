@@ -6399,6 +6399,7 @@ html/semantics/scripting-1/the-template-element/template-element/template-descen
 html/semantics/scripting-1/the-template-element/template-element/template-descendant-frameset.html
 html/semantics/scripting-1/the-template-element/template-element/template-descendant-head.html
 html/semantics/sections/headingoffset-and-headingreset.html
+html/semantics/selectors/pseudo-classes/autofill.html
 html/semantics/selectors/pseudo-classes/checked-type-change.html
 html/semantics/selectors/pseudo-classes/checked.html
 html/semantics/selectors/pseudo-classes/default.html
@@ -6453,6 +6454,7 @@ html/semantics/tabular-data/the-tr-element/deleteCell.html
 html/semantics/tabular-data/the-tr-element/insertCell.html
 html/semantics/tabular-data/the-tr-element/rowIndex.html
 html/semantics/tabular-data/the-tr-element/sectionRowIndex.html
+html/semantics/text-level-semantics/historical.html
 html/semantics/text-level-semantics/the-a-element/a-download-click-404.html
 html/semantics/text-level-semantics/the-a-element/a-download-click-redirect-to-javascript.html
 html/semantics/text-level-semantics/the-a-element/a-download-click.html
