@@ -560,13 +560,12 @@ pub(crate) use state::{
     DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DocumentNavigationToken,
     DuplicatePendingRendererCommand, EffectiveTargetEmulationState,
     EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions, EmulatedViewportSurface,
-    InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationEngineHandoff,
-    NavigationResultProjection, NavigationSourceDocumentSecurityContext,
-    NetworkErrorPageNavigation, PageScreencastConfig, PageScreencastFormat,
-    PendingBidiChannelListener, PendingInspectorAwait, PendingRendererCommandKey,
-    PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,
-    RendererCommandCorrelation, RendererCommandDescriptor, RendererCommandReplay,
-    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
+    InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationResultProjection,
+    NavigationSourceDocumentSecurityContext, NetworkErrorPageNavigation, PageScreencastConfig,
+    PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait,
+    PendingRendererCommandKey, PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction,
+    ProfilerInspectorCommand, RendererCommandCorrelation, RendererCommandDescriptor,
+    RendererCommandReplay, RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
     RendererMainDocumentCommitSeed, RendererPageResidenceIdentity,
     ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
     SiteDataClearOptions, TargetIdentityState, TargetInitialEmptyDocumentCreator, TargetOwnerState,
@@ -2553,13 +2552,11 @@ impl CdpConnection {
                 ready_to_enqueue_ms = completion.ready_elapsed_ms(),
             );
         }
-        // Always complete the materialized navigation so the client receives
-        // a terminal Page.navigate response (success or abort-error) for the
-        // outstanding command id. The completion helper is responsible for the
-        // navigate_id-gated abort emission; the only thing we must avoid here
-        // is letting the stale background engine displace the live one.
-        let is_current = completion.is_current_for_connection(self);
-        let completion = completion.materialize_with_engine_replacement(self, is_current);
+        // Always materialize the navigation so the client receives a terminal
+        // Page.navigate response (success or abort-error) for the outstanding
+        // command id. The target retains its NavigationEngine independently of
+        // this completion, including when the completion is stale.
+        let completion = completion.materialize(self);
         if let Some(started) = timing_started {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
@@ -2581,65 +2578,6 @@ impl CdpConnection {
         if let Some(sender) = self.scheduler_hooks.renderer_publication_sender() {
             engine.set_renderer_output_transport_sender(sender);
         }
-    }
-
-    fn install_page_navigation_engine(
-        &mut self,
-        browser_context_id: &str,
-        target_id: &str,
-        engine: NavigationEngine,
-    ) -> Result<(), String> {
-        let owner_access = self
-            .browser_context_by_id(browser_context_id)
-            .ok_or_else(|| {
-                format!(
-                    "cannot install navigation engine for missing BrowserContext `{browser_context_id}`"
-                )
-            })?
-            .renderer_runtime_owner_access();
-        if !engine
-            .browser_context_runtime()
-            .shares_state_with(&owner_access.runtime())
-        {
-            return Err(format!(
-                "navigation engine renderer context does not match BrowserContext `{browser_context_id}`"
-            ));
-        }
-        self.apply_scheduler_senders_to_navigation_engine(&engine);
-        let replaced = self
-            .browser_context_by_id_mut(browser_context_id)
-            .and_then(|context| context.page_target_mut(target_id))
-            .ok_or_else(|| {
-                format!("cannot install navigation engine for missing Page target `{target_id}`")
-            })?
-            .replace_navigation_engine(engine);
-        drop(replaced);
-        owner_access.reap_retired_resource_runtimes();
-        Ok(())
-    }
-
-    pub(crate) fn adopt_loaded_navigation_engine_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        engine: NavigationEngine,
-    ) {
-        let Some((browser_context_id, Some(target_id))) =
-            self.target_owner_identity_for_owner(owner)
-        else {
-            self.replace_standalone_navigation_engine(engine);
-            return;
-        };
-        self.install_page_navigation_engine(&browser_context_id, &target_id, engine)
-            .expect("page owner must install its exact PageTargetHost engine");
-    }
-
-    pub(crate) fn adopt_loaded_navigation_engine_for_page_owner(
-        &mut self,
-        owner: &InitialDocumentPageOwner,
-        engine: NavigationEngine,
-    ) {
-        self.install_page_navigation_engine(&owner.browser_context_id, &owner.target_id, engine)
-            .expect("page owner must install its exact PageTargetHost engine");
     }
 
     pub(crate) fn enqueue_deferred_main_document_load_completion(
@@ -2890,12 +2828,11 @@ impl CdpConnection {
             );
         }
         let is_current = completion.is_current_for_connection(self);
-        let (token, state, navigation, engine_handoff) = completion.into_parts();
+        let (token, state, navigation) = completion.into_parts();
         if !is_current {
             crate::domains::page::push_superseded_navigation_result(out, &state);
             return;
         }
-        let navigation_owner = state.owner.clone();
         crate::domains::page::complete_materialized_navigation_into_buffer_async(
             self,
             out,
@@ -2905,9 +2842,6 @@ impl CdpConnection {
             command_context,
         )
         .await;
-        if let Some(engine) = engine_handoff.into_replacement() {
-            self.adopt_loaded_navigation_engine_for_owner(&navigation_owner, engine);
-        }
         if let Some(started) = timing_started {
             tracing::info!(
                 target: "moli_cdp_nav_timing",

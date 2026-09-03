@@ -78,7 +78,7 @@ async fn commit_navigation_outcome_for_session_test(
 }
 
 #[tokio::test]
-async fn buffered_navigation_for_inactive_session_carries_its_target_engine() {
+async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
     let mut conn = CdpConnection::new();
     let ambient_context = conn.new_browser_context("BID-ambient".to_owned());
     conn.insert_browser_context(ambient_context);
@@ -95,11 +95,16 @@ async fn buffered_navigation_for_inactive_session_carries_its_target_engine() {
         .start_document_navigation_for_active_target("LOADER-target".to_owned())
         .expect("target should accept its synthetic navigation");
     conn.push_inactive_browser_context_fixture_for_test(target_context);
+    let owner = crate::conn::CommandOwnerScope::for_session("SID-target");
+    let load_inputs = conn.navigation_load_inputs_for_owner(&owner);
+    let resident_client = conn
+        .ensure_resource_request_client_for_navigation_load_inputs(&load_inputs)
+        .expect("inactive target must initialize its resident navigation engine");
 
     let requested_url = Url::parse("https://target.example/fulfilled").unwrap();
     let navigation = NavigationDispatchState {
         navigate_id: Some(1),
-        owner: crate::conn::CommandOwnerScope::for_session("SID-target"),
+        owner,
         result_projection: NavigationResultProjection::Cdp(json!({
             "frameId": "TID-target",
             "loaderId": "LOADER-target",
@@ -134,11 +139,19 @@ async fn buffered_navigation_for_inactive_session_carries_its_target_engine() {
         .expect("buffered target navigation should prepare");
     let loaded =
         commit_navigation_outcome_for_session_test(&mut conn, outcome, Some("SID-target")).await;
-    let target_engine = loaded
-        .navigation_engine_replacement()
-        .expect("target-scoped buffered navigation must carry its engine to commit");
+    let target_engine = conn
+        .browser_context_by_id("BID-target")
+        .and_then(|context| context.page_navigation_engine("TID-target"))
+        .expect("inactive target must keep its navigation engine after completion");
+    let retained_client = target_engine
+        .resource_request_client()
+        .expect("resident target engine must keep a resource request client");
     let target_renderer_owner = target_engine.renderer_owner_id_for_diagnostics();
 
+    assert!(
+        resident_client.shares_page_network_policy_with(&retained_client),
+        "navigation completion must not replace the target's resident engine policy"
+    );
     assert_eq!(
         loaded.page.renderer_owner_local_host_id().as_u64(),
         target_renderer_owner,

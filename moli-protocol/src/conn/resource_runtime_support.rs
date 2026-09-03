@@ -57,7 +57,7 @@ impl CdpConnection {
             .ok_or_else(|| "resource request client unavailable".to_owned())
     }
 
-    fn configured_navigation_engine_for_load_inputs_mut(
+    pub(super) fn configured_navigation_engine_for_load_inputs_mut(
         &mut self,
         load_inputs: &TargetNavigationLoadInputs,
     ) -> Option<&mut moli_core::runtime::NavigationEngine> {

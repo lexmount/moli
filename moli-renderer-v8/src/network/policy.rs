@@ -139,13 +139,6 @@ impl PageNetworkPolicy {
         self.memory_cache_partition_id() == other.memory_cache_partition_id()
     }
 
-    /// Keeps this policy's current state while adopting another Page policy's
-    /// stable renderer memory-cache capability.
-    pub fn adopt_memory_cache_partition_from(&mut self, source: &Self) {
-        let source_partition_id = source.memory_cache_partition_id();
-        self.state.lock().memory_cache_partition_id = source_partition_id;
-    }
-
     pub fn from_snapshot(snapshot: PageNetworkPolicySnapshot) -> Self {
         Self::from_snapshot_with_memory_cache_partition(snapshot, next_memory_cache_partition_id())
     }

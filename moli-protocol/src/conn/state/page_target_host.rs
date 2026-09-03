@@ -166,14 +166,15 @@ impl PageTargetHost {
         self.navigation_engine.as_mut()
     }
 
-    pub(crate) fn replace_navigation_engine(
-        &mut self,
-        mut engine: NavigationEngine,
-    ) -> Option<NavigationEngine> {
+    pub(crate) fn install_navigation_engine(&mut self, mut engine: NavigationEngine) {
+        assert!(
+            self.navigation_engine.is_none(),
+            "PageTargetHost must retain its first installed NavigationEngine"
+        );
         let policy = self.effective_policy();
         engine.set_bypass_service_worker(policy.bypass_service_worker());
         engine.set_cache_disabled(policy.cache_disabled());
-        self.navigation_engine.replace(engine)
+        self.navigation_engine = Some(engine);
     }
 
     pub(crate) fn set_base_cache_disabled(&mut self, disabled: bool) {

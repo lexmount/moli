@@ -1851,12 +1851,11 @@ fn continue_streaming_document_response_in_background(
                 document_navigation_token.clone(),
                 navigation.clone(),
             );
-            let (engine, navigation_result) =
+            let navigation_result =
                 prepared_document.resume_streaming(response, Some(body_completion_sink));
             let _ = sender.send(page::BackgroundNavigationCompletion::new(
                 document_navigation_token,
                 navigation,
-                engine,
                 Ok(navigation_result),
             ));
         });
@@ -1877,11 +1876,10 @@ fn continue_streaming_document_response_in_background(
             document_navigation_token.clone(),
             navigation.clone(),
         );
-        let (engine, navigation_result) = job.run(Some(body_completion_sink)).await;
+        let navigation_result = job.run(Some(body_completion_sink)).await;
         let _ = sender.send(page::BackgroundNavigationCompletion::new(
             document_navigation_token,
             navigation,
-            engine,
             navigation_result,
         ));
     });

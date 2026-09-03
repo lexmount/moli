@@ -14,7 +14,6 @@ use moli_core::page::{
     ChildFrameDocumentOpenedSnapshot, CompletedPageCommand, PendingPageCommand,
     SameDocumentHistoryUpdate,
 };
-use moli_core::runtime::NavigationEngine;
 use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 use moli_url_policy::{LocalFileNavigationAccess, route_navigation_url};
 use serde_json::{Value, json};
@@ -23,10 +22,9 @@ use url::Url;
 use crate::conn::{
     BackgroundNavigationLoadJob, BackgroundProtocolEvent, CapturedBody, CdpConnection,
     CdpSessionRoute, Cmd, CommandDispatchContext, CommandOwnerScope, DocumentNavigationToken,
-    FetchRequestStage, NavigationDispatchState, NavigationEngineHandoff, NavigationLoadOutcome,
-    NavigationRequestLoadPolicy, NavigationResultProjection,
-    NavigationSourceDocumentSecurityContext, PendingFetchNavigation, ResponseStageUrlMatchPolicy,
-    monotonic_timestamp_seconds,
+    FetchRequestStage, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
+    NavigationResultProjection, NavigationSourceDocumentSecurityContext, PendingFetchNavigation,
+    ResponseStageUrlMatchPolicy, monotonic_timestamp_seconds,
 };
 use moli_cookie_jar::{NetworkCookieRequestContext, StoredCookieQueryReport};
 
@@ -62,7 +60,6 @@ pub(super) struct CompletedNavigateLoadCommand {
     prefix_events: Vec<BackgroundProtocolEvent>,
     token: DocumentNavigationToken,
     state: NavigationDispatchState,
-    engine: NavigationEngine,
     navigation: Result<NavigationLoadOutcome, String>,
 }
 
@@ -152,12 +149,11 @@ impl CompletedSameDocumentHistoryTraversalCommand {
 
 impl PendingNavigateLoadCommand {
     pub(super) async fn wait(self) -> CompletedNavigateLoadCommand {
-        let (engine, navigation, _early_result_sent) = self.job.run(None).await;
+        let (navigation, _early_result_sent) = self.job.run(None).await;
         CompletedNavigateLoadCommand {
             prefix_events: self.prefix_events,
             token: self.token,
             state: self.state,
-            engine,
             navigation,
         }
     }
@@ -395,7 +391,6 @@ pub(crate) struct MaterializedNavigationCompletion {
     token: DocumentNavigationToken,
     state: NavigationDispatchState,
     navigation: network::MaterializedNavigationLoadOutcome,
-    engine_handoff: NavigationEngineHandoff,
 }
 
 impl MaterializedNavigationCompletion {
@@ -408,13 +403,7 @@ impl MaterializedNavigationCompletion {
             token,
             state,
             navigation,
-            engine_handoff: NavigationEngineHandoff::retained_by_owner(),
         }
-    }
-
-    pub(crate) fn with_navigation_engine_replacement(mut self, engine: NavigationEngine) -> Self {
-        self.engine_handoff = NavigationEngineHandoff::replacement(engine);
-        self
     }
 
     pub(crate) fn is_current_for_connection(&self, conn: &CdpConnection) -> bool {
@@ -439,9 +428,8 @@ impl MaterializedNavigationCompletion {
         DocumentNavigationToken,
         NavigationDispatchState,
         network::MaterializedNavigationLoadOutcome,
-        NavigationEngineHandoff,
     ) {
-        (self.token, self.state, self.navigation, self.engine_handoff)
+        (self.token, self.state, self.navigation)
     }
 }
 
@@ -543,7 +531,6 @@ impl BackgroundNavigationCompletion {
 pub struct BackgroundNavigationLifecycleCompletion {
     token: DocumentNavigationToken,
     state: NavigationDispatchState,
-    engine: NavigationEngine,
     navigation: Result<NavigationLoadOutcome, String>,
     ready_at: std::time::Instant,
 }
@@ -552,13 +539,11 @@ impl BackgroundNavigationLifecycleCompletion {
     pub(crate) fn new(
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
-        engine: NavigationEngine,
         navigation: Result<NavigationLoadOutcome, String>,
     ) -> Self {
         Self {
             token,
             state,
-            engine,
             navigation,
             ready_at: std::time::Instant::now(),
         }
@@ -566,10 +551,6 @@ impl BackgroundNavigationLifecycleCompletion {
 
     pub(crate) fn navigation_token(&self) -> &DocumentNavigationToken {
         &self.token
-    }
-
-    pub(crate) fn is_current_for_connection(&self, conn: &CdpConnection) -> bool {
-        conn.accepts_pending_document_navigation_for_owner(&self.state.owner, &self.token)
     }
 
     pub(crate) fn requested_url(&self) -> &str {
@@ -580,38 +561,15 @@ impl BackgroundNavigationLifecycleCompletion {
         self.ready_at.elapsed().as_millis()
     }
 
-    /// Materialize the background navigation outcome into a queued
-    /// `MaterializedNavigationCompletion`. `replace_owner_engine` should be
-    /// `false`
-    /// when the completion's token is no longer current — stale completions
-    /// still flow into the materialized queue so the drain can emit a
-    /// terminal abort response for any outstanding `navigate_id`, but the
-    /// stale background engine must not keep a renderer owner alive.
-    pub(crate) fn materialize_with_engine_replacement(
-        self,
-        conn: &mut CdpConnection,
-        replace_owner_engine: bool,
-    ) -> MaterializedNavigationCompletion {
+    pub(crate) fn materialize(self, conn: &mut CdpConnection) -> MaterializedNavigationCompletion {
         let Self {
             token,
             state,
-            engine,
             navigation,
             ready_at: _,
         } = self;
-        let should_replace_owner_engine = replace_owner_engine
-            && matches!(
-                navigation,
-                Ok(NavigationLoadOutcome::ResponseCommitReady(_)
-                    | NavigationLoadOutcome::Loaded(_))
-            );
         let navigation = network::materialize_navigation_load_result(conn, &state, navigation);
-        let completion = MaterializedNavigationCompletion::new(token, state, navigation);
-        if should_replace_owner_engine {
-            completion.with_navigation_engine_replacement(engine)
-        } else {
-            completion
-        }
+        MaterializedNavigationCompletion::new(token, state, navigation)
     }
 }
 
@@ -619,11 +577,10 @@ impl BackgroundNavigationCompletion {
     pub(crate) fn new(
         token: DocumentNavigationToken,
         state: NavigationDispatchState,
-        engine: NavigationEngine,
         navigation: Result<NavigationLoadOutcome, String>,
     ) -> Self {
         Self::Lifecycle(Box::new(BackgroundNavigationLifecycleCompletion::new(
-            token, state, engine, navigation,
+            token, state, navigation,
         )))
     }
 
@@ -2993,7 +2950,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                 document_navigation_token.clone(),
                 completion_state.clone(),
             );
-            let (engine, navigation, early_result_sent) = job.run(Some(body_completion_sink)).await;
+            let (navigation, early_result_sent) = job.run(Some(body_completion_sink)).await;
             if early_result_sent {
                 completion_state.navigate_id = None;
             }
@@ -3007,7 +2964,6 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
             let _ = sender.send(BackgroundNavigationCompletion::new(
                 document_navigation_token,
                 completion_state,
-                engine,
                 navigation,
             ));
         });
@@ -3089,22 +3045,10 @@ pub(super) async fn complete_pending_navigate_load_command(
         prefix_events,
         token,
         state,
-        engine,
         navigation,
     } = completed;
-    let is_current = conn.accepts_pending_document_navigation_for_owner(&state.owner, &token);
-    let should_replace_owner_engine = is_current
-        && matches!(
-            navigation,
-            Ok(NavigationLoadOutcome::ResponseCommitReady(_) | NavigationLoadOutcome::Loaded(_))
-        );
     let navigation = network::materialize_navigation_load_result(conn, &state, navigation);
     let completion = MaterializedNavigationCompletion::new(token, state, navigation);
-    let completion = if should_replace_owner_engine {
-        completion.with_navigation_engine_replacement(engine)
-    } else {
-        completion
-    };
     let mut output = CommandOutputBuffer::default();
     output.extend_background_events_after_messages(prefix_events);
     conn.drain_materialized_navigation_completion_into_buffer(

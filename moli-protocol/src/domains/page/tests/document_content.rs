@@ -14,7 +14,6 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
         .load_navigation_via_runtime_for_session_owner_async(Some("SID-1"), url)
         .await
         .expect("document-content test page should load");
-    let navigation_engine = navigation.take_navigation_engine_replacement();
     let artifacts = navigation.page_creation_artifacts;
     {
         let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
@@ -55,12 +54,6 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
         LOADER_ID.to_owned(),
     );
     assert!(binding.is_some(), "renderer lifecycle should bind");
-    if let Some(navigation_engine) = navigation_engine {
-        ctx.conn.adopt_loaded_navigation_engine_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-1"),
-            navigation_engine,
-        );
-    }
     // The fixture commits an already-running renderer Page directly instead
     // of going through the production navigation command. Route that exact
     // Document's initial lifecycle publication before enabling observers.

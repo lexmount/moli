@@ -65,8 +65,7 @@ impl BrowserContext {
         host.set_base_cache_disabled(self.global_cache_disabled);
         if let Some(config) = self.page_navigation_runtime_config.clone() {
             let engine = self.new_page_navigation_engine(config);
-            let replaced = host.replace_navigation_engine(engine);
-            debug_assert!(replaced.is_none());
+            host.install_navigation_engine(engine);
         }
         self.page_targets.insert(host)
     }

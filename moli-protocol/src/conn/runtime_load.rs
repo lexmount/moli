@@ -176,7 +176,6 @@ enum PendingInitialDocumentPageBuildKind {
         owner: InitialDocumentPageOwner,
         load_inputs: Box<TargetNavigationLoadInputs>,
         override_mode: NavigationLoadInputOverrideMode,
-        engine: Box<Option<NavigationEngine>>,
         pending: moli_core::runtime::PendingBuiltDocumentPage,
     },
     Join {
@@ -189,7 +188,6 @@ pub(crate) enum CompletedInitialDocumentPageBuild {
         owner: InitialDocumentPageOwner,
         load_inputs: Box<TargetNavigationLoadInputs>,
         override_mode: NavigationLoadInputOverrideMode,
-        engine: Box<Option<NavigationEngine>>,
         built: Box<moli_core::runtime::BuiltDocumentPage>,
     },
     Joined,
@@ -248,7 +246,6 @@ impl PendingInitialDocumentPageBuild {
                 owner,
                 load_inputs,
                 override_mode,
-                engine,
                 pending,
             } => {
                 let built = match pending.await_ready().await {
@@ -264,7 +261,6 @@ impl PendingInitialDocumentPageBuild {
                     owner,
                     load_inputs,
                     override_mode,
-                    engine,
                     built: Box::new(built),
                 })
             }
@@ -305,7 +301,6 @@ pub struct ResponseCommitReady {
     response_status: u16,
     response_headers: Vec<(String, String)>,
     response_from_cache: bool,
-    navigation_engine_handoff: NavigationEngineHandoff,
     timing_started: Option<std::time::Instant>,
     main_document_commit: Option<Arc<RendererMainDocumentCommit>>,
     network_error_page: Option<NetworkErrorPageNavigation>,
@@ -399,11 +394,6 @@ impl ResponseCommitReady {
             .issue_commit_permit()
     }
 
-    pub(crate) fn with_navigation_engine_replacement(mut self, engine: NavigationEngine) -> Self {
-        self.navigation_engine_handoff = NavigationEngineHandoff::replacement(engine);
-        self
-    }
-
     pub(crate) async fn commit(
         mut self,
         permit: PreparedDocumentPageCommitPermit,
@@ -492,10 +482,6 @@ impl ResponseCommitReady {
             renderer_output_predecessor: diagnostics.renderer_output_predecessor,
             main_document_commit: self.main_document_commit.take(),
             document_progress_transfer,
-            navigation_engine_handoff: std::mem::replace(
-                &mut self.navigation_engine_handoff,
-                NavigationEngineHandoff::retained_by_owner(),
-            ),
             network_error_page: self.network_error_page.take(),
         })
     }
@@ -524,7 +510,6 @@ pub struct PausedResponsePreparedDocument {
     response_from_cache: bool,
     negotiated_http_version: Option<moli_fetch::NegotiatedHttpVersion>,
     network_observation_journal: NetworkObservationJournal,
-    engine: NavigationEngine,
     timing_started: Option<std::time::Instant>,
     main_document_commit: Option<Arc<RendererMainDocumentCommit>>,
 }
@@ -555,7 +540,7 @@ impl PausedResponsePreparedDocument {
         self,
         response: StreamingRawResponse,
         body_completion_sink: Option<BackgroundNavigationBodyCompletionSink>,
-    ) -> (NavigationEngine, NavigationLoadOutcome) {
+    ) -> NavigationLoadOutcome {
         let network_extra_info_available = !self.network_observation_journal.is_empty();
         self.body_progress_source.emit_response_metadata(
             &self.request_method,
@@ -591,15 +576,11 @@ impl PausedResponsePreparedDocument {
             response_status: self.response_status,
             response_headers: self.response_headers,
             response_from_cache: self.response_from_cache,
-            navigation_engine_handoff: NavigationEngineHandoff::retained_by_owner(),
             timing_started: self.timing_started,
             main_document_commit: self.main_document_commit,
             network_error_page: None,
         };
-        (
-            self.engine,
-            NavigationLoadOutcome::response_commit_ready(ready),
-        )
+        NavigationLoadOutcome::response_commit_ready(ready)
     }
 }
 
@@ -707,8 +688,9 @@ pub(crate) struct BackgroundNavigationLoadJob {
     body_progress_source: MainDocumentBodyProgressSource,
     /// Browser-context transport/cache state shared with the resident engine.
     ///
-    /// The detached job must not retain a source Page's request-policy view;
-    /// its own NavigationEngine supplies the target Page policy.
+    /// The detached job's NavigationEngine handle shares the resident target's
+    /// Page policy while retaining this exact browser-resource runtime for the
+    /// captured navigation.
     shared_resource_runtime: Option<moli_core::network::BrowserResourceRuntime>,
 }
 
@@ -831,11 +813,7 @@ impl BackgroundNavigationLoadJob {
     pub(crate) async fn run(
         mut self,
         body_completion_sink: Option<BackgroundNavigationBodyCompletionSink>,
-    ) -> (
-        NavigationEngine,
-        Result<NavigationLoadOutcome, String>,
-        bool,
-    ) {
+    ) -> (Result<NavigationLoadOutcome, String>, bool) {
         let timing_started = moli_trace::cdp_nav_timing_enabled().then(std::time::Instant::now);
         let timing_url = self.raw_url.clone();
         let mut engine = self.engine;
@@ -843,7 +821,7 @@ impl BackgroundNavigationLoadJob {
         if let Some(resource_runtime) = self.shared_resource_runtime.take()
             && let Err(error) = engine.adopt_registered_resource_runtime(resource_runtime)
         {
-            return (engine, Err(error.to_string()), false);
+            return (Err(error.to_string()), false);
         }
         let mut early_result_sent = false;
         let navigation = async {
@@ -993,7 +971,7 @@ impl BackgroundNavigationLoadJob {
                 elapsed_ms = started.elapsed().as_millis(),
             );
         }
-        (engine, navigation, early_result_sent)
+        (navigation, early_result_sent)
     }
 }
 
@@ -1001,14 +979,14 @@ impl BackgroundStreamingResponseNavigationLoadJob {
     pub(crate) async fn run(
         mut self,
         body_completion_sink: Option<BackgroundNavigationBodyCompletionSink>,
-    ) -> (NavigationEngine, Result<NavigationLoadOutcome, String>) {
+    ) -> Result<NavigationLoadOutcome, String> {
         let mut engine = self.engine;
         if let Some(resource_runtime) = self.shared_resource_runtime.take()
             && let Err(error) = engine.adopt_registered_resource_runtime(resource_runtime)
         {
-            return (engine, Err(error.to_string()));
+            return Err(error.to_string());
         }
-        let navigation = build_navigation_from_streaming_raw_response_with_engine_async(
+        build_navigation_from_streaming_raw_response_with_engine_async(
             &mut engine,
             self.page_reservation,
             &self.load_inputs,
@@ -1025,8 +1003,7 @@ impl BackgroundStreamingResponseNavigationLoadJob {
             CommittedDocumentResourceSource::Synthetic,
             RendererReplyBoundary::DocumentCommit,
         )
-        .await;
-        (engine, navigation)
+        .await
     }
 }
 
@@ -1440,7 +1417,6 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
                 response_status,
                 response_headers,
                 response_from_cache,
-                navigation_engine_handoff: NavigationEngineHandoff::retained_by_owner(),
                 timing_started: timing_enabled.then_some(timing_started),
                 main_document_commit,
                 network_error_page: None,
@@ -1533,7 +1509,6 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
             response_status,
             response_headers,
             response_from_cache,
-            navigation_engine_handoff: NavigationEngineHandoff::retained_by_owner(),
             timing_started: timing_enabled.then_some(timing_started),
             main_document_commit,
             network_error_page: None,
@@ -1679,7 +1654,7 @@ impl CdpConnection {
         );
         let shared_resource_runtime =
             self.shared_resource_runtime_for_navigation_load_inputs(&load_inputs);
-        let mut engine = self.background_navigation_engine_for_load_inputs(&load_inputs);
+        let mut engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
         if let Some(resource_runtime) = shared_resource_runtime {
             engine
                 .adopt_registered_resource_runtime(resource_runtime)
@@ -1759,7 +1734,6 @@ impl CdpConnection {
             response_from_cache,
             negotiated_http_version,
             network_observation_journal: network_observation_journal.clone(),
-            engine,
             timing_started,
             main_document_commit,
         }))
@@ -1918,7 +1892,7 @@ impl CdpConnection {
             .unwrap_or_else(|| Url::parse("about:blank").expect("about:blank should be valid"));
         let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
             load_inputs.fetch_subresource_interception;
-        let mut engine = self.background_navigation_engine_for_load_inputs(&load_inputs);
+        let mut engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
         let page_storage = load_inputs.page_storage_handles();
         let top_level_storage_key =
             self.runtime_session_owner_initial_empty_document_storage_key_for_owner(owner);
@@ -2004,7 +1978,6 @@ impl CdpConnection {
                 owner: page_owner,
                 load_inputs: Box::new(load_inputs),
                 override_mode: NavigationLoadInputOverrideMode::FreshlyBuiltPage,
-                engine: Box::new(Some(engine)),
                 pending,
             },
         }))
@@ -2142,14 +2115,12 @@ impl CdpConnection {
             owner,
             load_inputs,
             override_mode,
-            engine,
             built,
         } = completed
         else {
             return Ok(LoadedPageCreationDiagnosticsParts::default());
         };
         let load_inputs = *load_inputs;
-        let engine = *engine;
         let built = *built;
         let diagnostics = loaded_page_creation_diagnostics_parts(built.page_creation_diagnostics);
         let page_creation_artifacts = built.page_creation_artifacts;
@@ -2173,9 +2144,6 @@ impl CdpConnection {
         if install_result == InitialDocumentPageInstallResult::Stale {
             self.complete_stale_initial_document_page_build_for_page_owner(&owner);
             return Ok(LoadedPageCreationDiagnosticsParts::default());
-        }
-        if let Some(engine) = engine {
-            self.adopt_loaded_navigation_engine_for_page_owner(&owner, engine);
         }
         self.complete_initial_document_page_build_for_page_owner(&owner);
         Ok(diagnostics)
@@ -2363,7 +2331,7 @@ impl CdpConnection {
                 return navigation;
             }
         } else {
-            let mut inline_engine = self.background_navigation_engine_for_load_inputs(&load_inputs);
+            let mut inline_engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
             let page_reservation =
                 self.reserve_renderer_page_for_owner(owner, &load_inputs, &inline_engine);
             if let Some(navigation) = self
@@ -2378,9 +2346,7 @@ impl CdpConnection {
                 )
                 .await
             {
-                return navigation.map(|navigation| {
-                    navigation.with_navigation_engine_replacement(inline_engine)
-                });
+                return navigation;
             }
             if let Some(navigation) = load_data_url_navigation_with_engine_async(
                 &mut inline_engine,
@@ -2393,9 +2359,7 @@ impl CdpConnection {
             )
             .await
             {
-                return navigation.map(|navigation| {
-                    navigation.with_navigation_engine_replacement(inline_engine)
-                });
+                return navigation;
             }
         }
 
@@ -2439,12 +2403,12 @@ impl CdpConnection {
     ) -> Option<BackgroundNavigationLoadJob> {
         let cancellation = self.document_navigation_cancellation_handle(token)?;
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
-        // Ensure the connection's resident browser resource runtime exists,
-        // then share only that transport/cache owner with the background job.
-        // Page policy remains owned by the job's NavigationEngine.
+        // Ensure the target's resident browser resource runtime exists before
+        // cloning its engine handle. The job shares the target Page policy and
+        // retains this exact transport/cache owner for the captured navigation.
         let shared_resource_runtime =
             self.shared_resource_runtime_for_navigation_load_inputs(&load_inputs);
-        let engine = self.background_navigation_engine_for_load_inputs(&load_inputs);
+        let engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
         let page_reservation =
             self.reserve_renderer_page_for_owner(&navigation.owner, &load_inputs, &engine);
         Some(BackgroundNavigationLoadJob {
@@ -2491,7 +2455,7 @@ impl CdpConnection {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         let shared_resource_runtime =
             self.shared_resource_runtime_for_navigation_load_inputs(&load_inputs);
-        let engine = self.background_navigation_engine_for_load_inputs(&load_inputs);
+        let engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
         let page_reservation =
             self.reserve_renderer_page_for_owner(&navigation.owner, &load_inputs, &engine);
         BackgroundStreamingResponseNavigationLoadJob {
@@ -2560,38 +2524,20 @@ impl CdpConnection {
         }
     }
 
-    pub(super) fn background_navigation_engine_for_load_inputs(
-        &self,
+    /// Returns a task-local handle to the NavigationEngine retained by the
+    /// target owner. `NavigationEngine::clone` shares the target's Page policy
+    /// and renderer owner, so a background load never has to return or replace
+    /// the resident engine when it completes.
+    pub(super) fn navigation_engine_handle_for_load_inputs(
+        &mut self,
         load_inputs: &TargetNavigationLoadInputs,
     ) -> NavigationEngine {
-        let mut engine =
-            if let Some(source) = self.page_navigation_engine_for_load_inputs(load_inputs) {
-                NavigationEngine::new_for_target_navigation_with_shared_renderer_owner(
-                    self.navigation_runtime_config_for_load_inputs(load_inputs),
-                    source,
-                )
-                .expect("target Page renderer owner must be live")
-            } else {
-                NavigationEngine::new_with_runtime_config_and_browser_context_access(
-                    self.navigation_runtime_config_for_load_inputs(load_inputs),
-                    load_inputs.renderer_runtime.clone(),
-                )
-                .expect("navigation load BrowserContext owner must be live")
-            };
-        self.apply_fetch_overrides_to_background_navigation_engine(&mut engine, load_inputs);
-        if !self.page_resource_runtime_matches_navigation_load_inputs(load_inputs) {
-            // Sharing the renderer owner must not implicitly share a transport
-            // runtime that was rejected above for a different target policy.
-            // The next request rebuilds from this engine's effective fetch
-            // configuration and the target's storage partition.
-            engine.reset_resource_runtime_without_loaded_page();
-        }
-        engine.set_bypass_service_worker(load_inputs.bypass_service_worker);
-        engine.set_cache_disabled(load_inputs.cache_disabled);
-        // The engine may publish lifecycle or resource activity before the
-        // DCL-bound navigation result is adopted into a target slot. Bind its
-        // scheduler sender at construction time so that early tail work queues
-        // a wake instead of disappearing in the handoff window.
+        let engine = self
+            .configured_navigation_engine_for_load_inputs_mut(load_inputs)
+            .expect("navigation load target must retain its resident NavigationEngine")
+            .clone();
+        // The handle may publish lifecycle or resource activity before the
+        // DCL-bound navigation result is committed into a target slot.
         self.apply_scheduler_senders_to_navigation_engine(&engine);
         engine
     }
@@ -2604,46 +2550,6 @@ impl CdpConnection {
         let target_id = load_inputs.root_frame_id.as_deref()?;
         self.browser_context_by_id(browser_context_id)?
             .page_navigation_engine(target_id)
-    }
-
-    fn navigation_runtime_config_for_load_inputs(
-        &self,
-        load_inputs: &TargetNavigationLoadInputs,
-    ) -> moli_core::runtime::NavigationRuntimeConfig {
-        let mut config = self.standalone_navigation_engine.runtime_config();
-        *config.fetch_config_mut() = self.fetch_config_for_load_inputs(load_inputs);
-        config
-    }
-
-    fn apply_fetch_overrides_to_background_navigation_engine(
-        &self,
-        engine: &mut NavigationEngine,
-        load_inputs: &TargetNavigationLoadInputs,
-    ) {
-        engine.set_browser_identity_override(
-            load_inputs
-                .browser_identity_override
-                .clone()
-                .or_else(|| self.global_browser_identity_override.clone())
-                .unwrap_or_else(|| self.base_browser_identity.clone()),
-        );
-        engine.set_http_proxy_override(
-            load_inputs
-                .http_proxy_override
-                .clone()
-                .or_else(|| self.base_http_proxy.clone()),
-        );
-        engine.set_http_no_proxy_override(
-            load_inputs
-                .http_no_proxy_override
-                .clone()
-                .or_else(|| self.base_http_no_proxy.clone()),
-        );
-        engine.set_tls_verify_host(
-            load_inputs
-                .tls_verify_host_override
-                .unwrap_or(self.base_tls_verify_host),
-        );
     }
 
     fn shared_resource_runtime_for_navigation_load_inputs(
@@ -2722,18 +2628,7 @@ impl CdpConnection {
     }
 
     pub async fn load_page_via_runtime_async(&mut self, raw_url: &str) -> Result<Page, String> {
-        let mut navigation = self.load_navigation_via_runtime_async(raw_url).await?;
-        if let Some(engine) = navigation.take_navigation_engine_replacement() {
-            let page_owner = self.browser_context.as_ref().and_then(|context| {
-                Some((context.id.clone(), context.active_target_id()?.to_owned()))
-            });
-            if let Some((browser_context_id, target_id)) = page_owner {
-                self.install_page_navigation_engine(&browser_context_id, &target_id, engine)
-                    .expect("loaded page must retain its exact PageTargetHost engine");
-            } else {
-                self.replace_standalone_navigation_engine(engine);
-            }
-        }
+        let navigation = self.load_navigation_via_runtime_async(raw_url).await?;
         Ok(navigation.page)
     }
 
@@ -3071,7 +2966,6 @@ impl CdpConnection {
                 false,
                 network_progress,
             ),
-            navigation_engine_handoff: NavigationEngineHandoff::retained_by_owner(),
             network_error_page: None,
         })
     }
@@ -3367,7 +3261,6 @@ impl CdpConnection {
                 false,
                 network_progress,
             ),
-            navigation_engine_handoff: NavigationEngineHandoff::retained_by_owner(),
             network_error_page: None,
         })
     }
@@ -3544,7 +3437,7 @@ impl CdpConnection {
             .map(NavigationLoadOutcome::response_commit_ready);
         }
 
-        let mut engine = self.background_navigation_engine_for_load_inputs(load_inputs);
+        let mut engine = self.navigation_engine_handle_for_load_inputs(load_inputs);
         let page_reservation = self.reserve_renderer_page_for_owner(owner, load_inputs, &engine);
         let navigation = prepare_navigation_from_captured_raw_response_with_engine_async(
             &mut engine,
@@ -3562,9 +3455,7 @@ impl CdpConnection {
             RendererReplyBoundary::Stage,
         )
         .await?;
-        Ok(NavigationLoadOutcome::response_commit_ready(
-            navigation.with_navigation_engine_replacement(engine),
-        ))
+        Ok(NavigationLoadOutcome::response_commit_ready(navigation))
     }
 
     pub async fn build_navigation_from_streaming_raw_response_async(
@@ -3695,7 +3586,7 @@ impl CdpConnection {
             .await;
         }
 
-        let mut engine = self.background_navigation_engine_for_load_inputs(load_inputs);
+        let mut engine = self.navigation_engine_handle_for_load_inputs(load_inputs);
         let page_reservation = self.reserve_renderer_page_for_owner(owner, load_inputs, &engine);
         let navigation = build_navigation_from_streaming_raw_response_with_engine_async(
             &mut engine,
@@ -3715,7 +3606,7 @@ impl CdpConnection {
             RendererReplyBoundary::Stage,
         )
         .await?;
-        Ok(navigation.with_navigation_engine_replacement(engine))
+        Ok(navigation)
     }
 
     pub(crate) async fn collect_navigation_streaming_raw_response_async(
@@ -3984,7 +3875,6 @@ async fn prepare_captured_document_response_with_engine_async(
         response_status,
         response_headers,
         response_from_cache,
-        navigation_engine_handoff: NavigationEngineHandoff::retained_by_owner(),
         timing_started: None,
         main_document_commit,
         network_error_page,

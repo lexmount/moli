@@ -1207,41 +1207,6 @@ fn page_navigation_engines_remain_target_local_across_selection() {
     );
 }
 
-#[test]
-fn page_target_host_rejects_a_foreign_browser_context_engine() {
-    let mut conn = CdpConnection::new();
-    let mut context = BrowserContext::new("BID-retain-route".to_owned());
-    context.set_active_target_id("TID-retain-route");
-    conn.insert_browser_context(context);
-    let original_owner = conn
-        .active_navigation_engine()
-        .renderer_owner_id_for_diagnostics();
-    let foreign_context = BrowserContext::new("BID-retain-route-foreign".to_owned());
-    let foreign_engine = NavigationEngine::new_with_fetch_config_and_browser_context_access(
-        FetchConfig::default(),
-        foreign_context.renderer_runtime_owner_access(),
-        conn.standalone_navigation_engine
-            .ensure()
-            .optional_resource_fetch_mask(),
-        conn.standalone_navigation_engine
-            .ensure()
-            .subframe_loading_enabled(),
-    )
-    .expect("foreign context owner should be live during the regression");
-
-    let error = conn
-        .install_page_navigation_engine("BID-retain-route", "TID-retain-route", foreign_engine)
-        .expect_err("a PageTargetHost must reject an engine from another BrowserContext");
-
-    assert!(error.contains("does not match BrowserContext `BID-retain-route`"));
-    assert_eq!(
-        conn.active_navigation_engine()
-            .renderer_owner_id_for_diagnostics(),
-        original_owner,
-        "rejecting a foreign engine must preserve the host's resident engine"
-    );
-}
-
 #[tokio::test]
 async fn memory_diagnostics_splits_pending_inspector_await_counts_by_target_owner() {
     let mut conn = CdpConnection::new();

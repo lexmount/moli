@@ -577,8 +577,7 @@ impl BrowserContext {
             if let Some(sender) = sender.clone() {
                 engine.set_renderer_output_transport_sender(sender);
             }
-            let replaced = host.replace_navigation_engine(engine);
-            debug_assert!(replaced.is_none());
+            host.install_navigation_engine(engine);
         }
     }
 

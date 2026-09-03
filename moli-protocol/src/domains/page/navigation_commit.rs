@@ -42,7 +42,6 @@ pub(super) async fn commit_loaded_navigation_async(
         renderer_output_predecessor,
         main_document_commit,
         progress_gate,
-        navigation_engine_handoff,
         network_error_page,
     } = navigation;
     let target_url = network_error_page
@@ -135,10 +134,6 @@ pub(super) async fn commit_loaded_navigation_async(
     navigation_activity.defer_initial_renderer_document_lifecycle_events_until_load_boundary(
         deferred_initial_renderer_document_lifecycle_events,
     );
-    if let Some(engine) = navigation_engine_handoff.into_replacement() {
-        conn.adopt_loaded_navigation_engine_for_owner(&navigation_activity.state().owner, engine);
-    }
-
     // Keep the loaded commit tail boxed: the target/Patchright CDP test thread
     // has historically hit stack limits when this future is inlined.
     Box::pin(async move {

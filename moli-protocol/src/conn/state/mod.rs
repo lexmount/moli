@@ -138,7 +138,6 @@ pub use navigation_outcome::{
     NavigationRequestLoadPolicy, TargetInfo,
 };
 pub(crate) use navigation_outcome::{
-    NETWORK_ERROR_PAGE_URL, NavigationEngineHandoff, NavigationResultProjection,
-    NavigationSourceDocumentSecurityContext, NetworkErrorPageNavigation,
-    RendererMainDocumentCommitSeed,
+    NETWORK_ERROR_PAGE_URL, NavigationResultProjection, NavigationSourceDocumentSecurityContext,
+    NetworkErrorPageNavigation, RendererMainDocumentCommitSeed,
 };

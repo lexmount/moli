@@ -271,12 +271,11 @@ async fn install_runtime_document_replacement_test_page(ctx: &mut TestContext) -
         "SID-1",
         "about:blank",
     );
-    let mut navigation = ctx
+    let navigation = ctx
         .conn
         .load_navigation_via_runtime_async("data:text/html,<body>initial</body>")
         .await
         .expect("runtime replacement fixture page should load");
-    let navigation_engine = navigation.take_navigation_engine_replacement();
     let artifacts = navigation.page_creation_artifacts;
     ctx.conn
         .browser_context
@@ -298,12 +297,6 @@ async fn install_runtime_document_replacement_test_page(ctx: &mut TestContext) -
         2,
         "prepared data navigation commits at DOMContentLoaded; load remains renderer-owned tail work"
     );
-    if let Some(navigation_engine) = navigation_engine {
-        ctx.conn.adopt_loaded_navigation_engine_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-1"),
-            navigation_engine,
-        );
-    }
     ctx.enable_dom_events_for_test(Some("SID-1"));
 
     ctx.process_async(json!({
@@ -826,12 +819,11 @@ async fn set_lifecycle_events_enabled_sets_flag() {
 async fn set_lifecycle_events_enabled_replays_loaded_page_events() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let mut navigation = ctx
+    let navigation = ctx
         .conn
         .load_navigation_via_runtime_async("data:text/html,<body>hello</body>")
         .await
         .expect("page should load");
-    let navigation_engine = navigation.take_navigation_engine_replacement();
     let dom_timestamp = navigation
         .page_creation_artifacts
         .lifecycle_snapshot
@@ -855,12 +847,6 @@ async fn set_lifecycle_events_enabled_replays_loaded_page_events() {
     );
     assert!(binding.is_some());
     assert_eq!(initial_events.len(), 2);
-    if let Some(navigation_engine) = navigation_engine {
-        ctx.conn.adopt_loaded_navigation_engine_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-1"),
-            navigation_engine,
-        );
-    }
     let load_timestamp = wait_for_visible_renderer_load(&mut ctx, "SID-1")
         .await
         .timestamp_micros as f64
@@ -908,12 +894,11 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
         "SID-visible",
         "about:blank",
     );
-    let mut navigation = ctx
+    let navigation = ctx
         .conn
         .load_navigation_via_runtime_async("data:text/html,<body>visible lifecycle</body>")
         .await
         .expect("page should load");
-    let navigation_engine = navigation.take_navigation_engine_replacement();
     let artifacts = navigation.page_creation_artifacts;
     ctx.conn
         .browser_context
@@ -931,12 +916,6 @@ async fn set_lifecycle_events_enabled_replays_only_protocol_visible_load_state()
     );
     assert!(binding.is_some());
     assert_eq!(initial_events.len(), 2);
-    if let Some(navigation_engine) = navigation_engine {
-        ctx.conn.adopt_loaded_navigation_engine_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-visible"),
-            navigation_engine,
-        );
-    }
     assert!(
         ctx.conn
             .begin_renderer_document_load_visibility_barrier_for_owner(
@@ -1011,12 +990,11 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_attached_sessi
         "SID-primary",
         "about:blank",
     );
-    let mut navigation = ctx
+    let navigation = ctx
         .conn
         .load_navigation_via_runtime_async("data:text/html,<body>active attached lifecycle</body>")
         .await
         .expect("page should load");
-    let navigation_engine = navigation.take_navigation_engine_replacement();
     let artifacts = navigation.page_creation_artifacts;
     let browser_context = ctx.conn.browser_context.as_mut().unwrap();
     browser_context
@@ -1036,12 +1014,6 @@ async fn set_lifecycle_events_enabled_is_session_local_for_active_attached_sessi
     );
     assert!(binding.is_some());
     assert_eq!(initial_events.len(), 2);
-    if let Some(navigation_engine) = navigation_engine {
-        ctx.conn.adopt_loaded_navigation_engine_for_owner(
-            &crate::conn::CommandOwnerScope::for_session("SID-attached"),
-            navigation_engine,
-        );
-    }
     let _ = wait_for_visible_renderer_load(&mut ctx, "SID-attached").await;
     ctx.sent.clear();
 
