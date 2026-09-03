@@ -2,10 +2,11 @@ use std::collections::{HashMap, HashSet};
 
 use moli_dom::html_microsyntax::parse_non_negative_integer;
 use moli_layout::{
-    LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
-    LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
-    LayoutListRole, LayoutNamespace, LayoutReplacedKind, LayoutSource, LayoutSourceKind,
-    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics, ReplacedNaturalSizing,
+    LayoutDocumentContext, LayoutDocumentMode, LayoutElementCategory, LayoutElementMetadata,
+    LayoutElementSemantics, LayoutFormControlData, LayoutFormControlKind, LayoutImageResource,
+    LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace, LayoutReplacedKind,
+    LayoutSource, LayoutSourceKind, LayoutTableData, LayoutTableRole, LayoutTextSelection,
+    ReplacedMetrics, ReplacedNaturalSizing,
 };
 
 use crate::{
@@ -58,12 +59,27 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         self.root
     }
 
-    fn root_is_document_element(&self) -> bool {
-        self.document.and_then(|document| {
-            self.host()
-                .dom()
-                .document_element_handle_for_document(document)
-        }) == Some(self.root)
+    fn document_context(&self) -> Option<LayoutDocumentContext<Self::NodeId>> {
+        let document = self.document?;
+        let document_element = self
+            .host()
+            .dom()
+            .document_element_handle_for_document(document)?;
+        if document_element != self.root {
+            return None;
+        }
+        let mode = match self.host().document_quirks_mode_for_handle(document) {
+            Some(selectors::matching::QuirksMode::Quirks) => LayoutDocumentMode::Quirks,
+            Some(selectors::matching::QuirksMode::LimitedQuirks) => {
+                LayoutDocumentMode::LimitedQuirks
+            }
+            Some(selectors::matching::QuirksMode::NoQuirks) | None => LayoutDocumentMode::NoQuirks,
+        };
+        Some(LayoutDocumentContext::new(
+            document_element,
+            self.host().document_body_handle_for_document(document),
+            mode,
+        ))
     }
 
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId> {

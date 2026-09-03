@@ -14,9 +14,9 @@ use std::{
 
 use crate::{
     LayoutAnonymousReason, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic, LayoutDisplay,
-    LayoutElementCategory, LayoutElementSemantics, LayoutError, LayoutPseudo, LayoutSource,
-    LayoutSourceKind, LayoutStyleResolver, LayoutWorld, ResolvedLayoutPseudoStyle,
-    ResolvedLayoutStyle,
+    LayoutDocumentContext, LayoutElementCategory, LayoutElementSemantics, LayoutError,
+    LayoutPseudo, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutWorld,
+    ResolvedLayoutPseudoStyle, ResolvedLayoutStyle,
     form::form_control_context,
     replaced::ReplacedContext,
     style::{InlineWhiteSpaceCollapse, LayoutOverflowMode},
@@ -47,8 +47,8 @@ where
     seen_sources: HashMap<S::NodeId, String>,
     seen_css_images: HashSet<(S::NodeId, String)>,
     css_image_references: Vec<crate::LayoutCssImageReference<S::NodeId>>,
-    source_root: Option<S::NodeId>,
-    root_is_html: bool,
+    document_context: Option<LayoutDocumentContext<S::NodeId>>,
+    has_html_document_root: bool,
     viewport_body_candidate: Option<ViewportBodyCandidate<S::NodeId>>,
 }
 
@@ -94,8 +94,8 @@ where
             seen_sources: HashMap::new(),
             seen_css_images: HashSet::new(),
             css_image_references: Vec::new(),
-            source_root: None,
-            root_is_html: false,
+            document_context: None,
+            has_html_document_root: false,
             viewport_body_candidate: None,
         }
     }
@@ -103,6 +103,13 @@ where
     fn build(mut self) -> Result<LayoutWorld<S::NodeId>, LayoutError> {
         let source_root = self.source.root();
         let source_label = self.source.label(source_root);
+        let document_context = self.source.document_context();
+        if document_context.is_some_and(|context| context.document_element() != source_root) {
+            return Err(LayoutError::source_contract(
+                &source_label,
+                "document context must identify the source root as its document element",
+            ));
+        }
         if let Some(parent) = self.source.flat_parent(source_root) {
             return Err(LayoutError::source_contract(
                 &source_label,
@@ -120,8 +127,9 @@ where
             ));
         }
         let root_semantics = self.validated_element_semantics(source_root, source_kind)?;
-        self.source_root = Some(source_root);
-        self.root_is_html = root_semantics.is_html_element("html");
+        self.document_context = document_context;
+        self.has_html_document_root =
+            document_context.is_some() && root_semantics.is_html_element("html");
         let Some(root_styles) = self.styles.element_styles(source_root)? else {
             return Err(LayoutError::MissingRootStyle { source_label });
         };
@@ -161,7 +169,7 @@ where
             // `display:none`.
             root.source = None;
         }
-        let mut world = LayoutWorld::new(root, self.source.root_is_document_element());
+        let mut world = LayoutWorld::new(root, document_context);
         let root_box = world.root();
         if root_generates_principal_box {
             world.map_source(source_root, root_box);
@@ -271,10 +279,8 @@ where
             };
             let (mut style, before, after) = styles.into_parts();
             if self.viewport_body_candidate.is_none()
-                && self.root_is_html
-                && self
-                    .source_root
-                    .is_some_and(|root| self.source.flat_parent(source_node) == Some(root))
+                && self.has_html_document_root
+                && self.document_context.and_then(LayoutDocumentContext::body) == Some(source_node)
                 && semantics.is_html_element("body")
             {
                 self.viewport_body_candidate = Some(ViewportBodyCandidate {
@@ -348,7 +354,7 @@ where
             .viewport_body_candidate
             .as_ref()
             .and_then(|body| world.source_box(body.source));
-        let body_can_define_viewport = self.root_is_html
+        let body_can_define_viewport = self.has_html_document_root
             && root_style.overflow_is_visible_along_both_axes()
             && !root_style.applies_any_viewport_containment()
             && body_box.is_some()

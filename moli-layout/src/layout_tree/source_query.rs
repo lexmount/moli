@@ -137,19 +137,19 @@ where
                     ))
             });
         let unzoom = CssomAbsoluteZoom::new(geometry.effective_zoom);
-        let client_size = if is_root {
-            // CSSOM defines root client dimensions from the viewport and only
-            // subtracts an actually-present viewport scrollbar. Stable empty
-            // gutters still reduce root layout/scrollWidth, but not
-            // documentElement.clientWidth/clientHeight.
+        let client_size = if geometry.exposes_viewport_client_size {
+            // CSSOM defines standards-root and quirks-body client dimensions
+            // from the viewport, subtracting only an actually-present viewport
+            // scrollbar. The queried body's own scroll box stays independent.
+            let viewport_extent = self.scroll_extent(self.root_box)?;
             LayoutSize::new(
                 (self.viewport.css_width as f32
-                    - extent
+                    - viewport_extent
                         .vertical_scrollbar
                         .map_or(0.0, |scrollbar| scrollbar.frame.width))
                 .max(0.0),
                 (self.viewport.css_height as f32
-                    - extent
+                    - viewport_extent
                         .horizontal_scrollbar
                         .map_or(0.0, |scrollbar| scrollbar.frame.height))
                 .max(0.0),
@@ -764,6 +764,7 @@ mod tests {
             LayoutPoint::ZERO,
             LayoutSize::new(100.0, 100.0),
             box_id,
+            None,
             vec![FrozenLayoutBox {
                 geometry: LayoutBoxGeometry {
                     id: box_id,
@@ -782,6 +783,7 @@ mod tests {
                     fragments: vec![skipped_fragment, valid_fragment],
                     layout_origin_in_document: LayoutPoint::new(100.0, 200.0),
                     is_body_element: false,
+                    exposes_viewport_client_size: false,
                     is_table_offset_parent: false,
                     establishes_positioned_containing_block: false,
                     establishes_fixed_containing_block: false,

@@ -97,6 +97,7 @@ pub struct LayoutIntersectionGeometry {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayoutQuery<N> {
     DocumentMetrics,
+    DocumentScrollingElement,
     BoxModel {
         source: N,
     },
@@ -161,6 +162,7 @@ impl<N> LayoutQueryBatch<N> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayoutQueryAnswer<N> {
     DocumentMetrics(LayoutDocumentMetrics),
+    DocumentScrollingElement(Option<N>),
     BoxModel(Option<LayoutBoxModel>),
     ClientRects(Vec<LayoutQuad>),
     ContentQuads(Vec<LayoutQuad>),
@@ -218,6 +220,9 @@ where
                         viewport_scroll: self.viewport_scroll,
                         content_size: self.content_size,
                     })
+                }
+                LayoutQuery::DocumentScrollingElement => {
+                    LayoutQueryAnswer::DocumentScrollingElement(self.document_scrolling_element())
                 }
                 LayoutQuery::BoxModel { source } => {
                     LayoutQueryAnswer::BoxModel(self.box_model_for_source(*source))

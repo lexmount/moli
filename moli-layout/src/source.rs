@@ -11,6 +11,52 @@ pub enum LayoutSourceKind {
     Other,
 }
 
+/// Document mode that changes HTML layout and CSSOM View semantics.
+///
+/// The value is sampled once into a pass-local document context. Subtree and
+/// synthetic sources have no document context even when their nodes have an
+/// owner document.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LayoutDocumentMode {
+    #[default]
+    NoQuirks,
+    LimitedQuirks,
+    Quirks,
+}
+
+/// Canonical document identities visible to one complete-document layout.
+///
+/// Keeping the element identities and mode in one value prevents subtree
+/// layout from accidentally inheriting document-element or body exceptions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LayoutDocumentContext<N> {
+    document_element: N,
+    body: Option<N>,
+    mode: LayoutDocumentMode,
+}
+
+impl<N: Copy> LayoutDocumentContext<N> {
+    pub const fn new(document_element: N, body: Option<N>, mode: LayoutDocumentMode) -> Self {
+        Self {
+            document_element,
+            body,
+            mode,
+        }
+    }
+
+    pub const fn document_element(self) -> N {
+        self.document_element
+    }
+
+    pub const fn body(self) -> Option<N> {
+        self.body
+    }
+
+    pub const fn mode(self) -> LayoutDocumentMode {
+        self.mode
+    }
+}
+
 /// Namespace family needed by box construction and diagnostics.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LayoutNamespace {
@@ -489,15 +535,14 @@ pub trait LayoutSource {
         Self: 'a;
 
     fn root(&self) -> Self::NodeId;
-    /// Whether the view root is the document element associated with its
-    /// layout viewport.
+    /// Returns canonical document state only for a complete document-element
+    /// source.
     ///
     /// Subtree and synthetic sources also receive an internal viewport-sized
-    /// containing block. They must return `false`: document-element CSS
-    /// exceptions depend on node identity, not on occupying index zero in a
-    /// one-shot layout tree.
-    fn root_is_document_element(&self) -> bool {
-        false
+    /// containing block, but must return `None`: HTML layout exceptions depend
+    /// on canonical document identity, not on occupying index zero.
+    fn document_context(&self) -> Option<LayoutDocumentContext<Self::NodeId>> {
+        None
     }
     /// Returns the parent in the same flattened tree exposed by [`Self::flat_children`].
     /// The view root must return `None`, even when it has a DOM parent outside the view.

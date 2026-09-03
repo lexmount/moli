@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 
 use moli_layout::{
-    DocumentLayoutServices, LayoutControlSurfaceHit, LayoutDisplay, LayoutElementCategory,
-    LayoutElementSemantics, LayoutError, LayoutFlushReason, LayoutFragmentKind, LayoutNamespace,
-    LayoutPaintedSurfaceHit, LayoutPassRequest, LayoutPassResult, LayoutPoint, LayoutPosition,
-    LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutScrollbarColors,
-    LayoutScrollbarGutter, LayoutScrollbarPart, LayoutScrollbarWidth, LayoutSource,
-    LayoutSourceKind, LayoutStyleResolver, LayoutTransform2D, LayoutViewport, PaintBrush,
-    PaintCaptureRequest, PaintColor, PaintFragment, PaintShape, ResolvedLayoutElementStyles,
-    ResolvedLayoutStyle, build_layout_pass,
+    DocumentLayoutServices, LayoutControlSurfaceHit, LayoutDisplay, LayoutDocumentContext,
+    LayoutDocumentMode, LayoutElementCategory, LayoutElementSemantics, LayoutError,
+    LayoutFlushReason, LayoutFragmentKind, LayoutNamespace, LayoutPaintedSurfaceHit,
+    LayoutPassRequest, LayoutPassResult, LayoutPoint, LayoutPosition, LayoutQuery,
+    LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutScrollbarColors, LayoutScrollbarGutter,
+    LayoutScrollbarPart, LayoutScrollbarWidth, LayoutSource, LayoutSourceKind, LayoutStyleResolver,
+    LayoutTransform2D, LayoutViewport, PaintBrush, PaintCaptureRequest, PaintColor, PaintFragment,
+    PaintShape, ResolvedLayoutElementStyles, ResolvedLayoutStyle, build_layout_pass,
 };
 use style::Atom;
 use taffy::{
@@ -63,9 +63,23 @@ impl Node {
 
 struct Source(Vec<Node>);
 
+struct DocumentSource<'a> {
+    source: &'a Source,
+    body: Option<usize>,
+}
+
+impl Source {
+    fn as_document(&self, body: Option<usize>) -> DocumentSource<'_> {
+        DocumentSource { source: self, body }
+    }
+}
+
 impl LayoutSource for Source {
     type NodeId = usize;
-    type ChildIter<'a> = std::iter::Copied<std::slice::Iter<'a, usize>>;
+    type ChildIter<'a>
+        = std::iter::Copied<std::slice::Iter<'a, usize>>
+    where
+        Self: 'a;
 
     fn root(&self) -> Self::NodeId {
         0
@@ -109,6 +123,54 @@ impl LayoutSource for Source {
     }
 }
 
+impl LayoutSource for DocumentSource<'_> {
+    type NodeId = usize;
+    type ChildIter<'a>
+        = std::iter::Copied<std::slice::Iter<'a, usize>>
+    where
+        Self: 'a;
+
+    fn root(&self) -> Self::NodeId {
+        self.source.root()
+    }
+
+    fn document_context(&self) -> Option<LayoutDocumentContext<Self::NodeId>> {
+        Some(LayoutDocumentContext::new(
+            self.root(),
+            self.body,
+            LayoutDocumentMode::NoQuirks,
+        ))
+    }
+
+    fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId> {
+        self.source.flat_parent(node)
+    }
+
+    fn flat_children(&self, node: Self::NodeId) -> Self::ChildIter<'_> {
+        self.source.flat_children(node)
+    }
+
+    fn node_kind(&self, node: Self::NodeId) -> LayoutSourceKind {
+        self.source.node_kind(node)
+    }
+
+    fn element_semantics(&self, node: Self::NodeId) -> Option<LayoutElementSemantics> {
+        self.source.element_semantics(node)
+    }
+
+    fn text(&self, node: Self::NodeId) -> Option<&str> {
+        self.source.text(node)
+    }
+
+    fn label(&self, node: Self::NodeId) -> String {
+        self.source.label(node)
+    }
+
+    fn scroll_offset(&self, node: Self::NodeId) -> LayoutPoint {
+        self.source.scroll_offset(node)
+    }
+}
+
 #[derive(Default)]
 struct Styles(HashMap<usize, ResolvedLayoutStyle>);
 
@@ -142,7 +204,10 @@ fn fixed_size(display: LayoutDisplay, width: f32, height: f32) -> ResolvedLayout
     )
 }
 
-fn build(source: &Source, styles: &mut Styles) -> LayoutPassResult<usize> {
+fn build<S>(source: &S, styles: &mut Styles) -> LayoutPassResult<usize>
+where
+    S: LayoutSource<NodeId = usize>,
+{
     build_with_request(
         source,
         styles,
@@ -150,11 +215,14 @@ fn build(source: &Source, styles: &mut Styles) -> LayoutPassResult<usize> {
     )
 }
 
-fn build_with_request(
-    source: &Source,
+fn build_with_request<S>(
+    source: &S,
     styles: &mut Styles,
     request: LayoutPassRequest,
-) -> LayoutPassResult<usize> {
+) -> LayoutPassResult<usize>
+where
+    S: LayoutSource<NodeId = usize>,
+{
     build_layout_pass(source, styles, &mut DocumentLayoutServices::new(), request).unwrap()
 }
 
@@ -1225,7 +1293,7 @@ fn html_body_overflow_is_propagated_to_the_viewport_only() {
             .0
             .insert(2, fixed_size(LayoutDisplay::Block, 320.0, 480.0));
 
-        let output = build(&source, &mut styles);
+        let output = build(&source.as_document(Some(1)), &mut styles);
         let root_id = output.source_output(0).unwrap().principal_box.unwrap();
         let root_extent = output.scroll_extent(root_id).unwrap();
         assert!(root_extent.is_scroll_container);
@@ -1238,6 +1306,45 @@ fn html_body_overflow_is_propagated_to_the_viewport_only() {
         assert!(!body_extent.is_scroll_container);
         assert!(!body_extent.clips_overflow);
     }
+}
+
+#[test]
+fn html_named_subtree_keeps_body_overflow_on_the_body_box() {
+    let source = Source(vec![
+        Node::html_element("html", "html", vec![1]),
+        Node::html_element("body", "body", vec![2]),
+        Node::element("tall", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    styles
+        .0
+        .insert(0, resolved(LayoutDisplay::Block, Style::default()));
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: length(100.0),
+                },
+                overflow: Point {
+                    x: Overflow::Hidden,
+                    y: Overflow::Hidden,
+                },
+                ..Style::default()
+            },
+        ),
+    );
+    styles
+        .0
+        .insert(2, fixed_size(LayoutDisplay::Block, 320.0, 480.0));
+
+    let output = build(&source, &mut styles);
+    let body_id = output.source_output(1).unwrap().principal_box.unwrap();
+    let body_extent = output.scroll_extent(body_id).unwrap();
+    assert!(body_extent.is_scroll_container);
+    assert!(body_extent.clips_overflow);
 }
 
 #[test]
@@ -1274,7 +1381,7 @@ fn display_contents_body_cannot_define_viewport_overflow() {
             .0
             .insert(2, fixed_size(LayoutDisplay::Block, 320.0, 480.0));
 
-        let output = build(&source, &mut styles);
+        let output = build(&source.as_document(Some(1)), &mut styles);
         let root_id = output.source_output(0).unwrap().principal_box.unwrap();
         let root_extent = output.scroll_extent(root_id).unwrap();
         assert_eq!(
@@ -1307,7 +1414,7 @@ fn default_visible_root_reserves_stable_viewport_gutters() {
         root.set_scrollbar_style(LayoutScrollbarWidth::Auto, gutter, None);
         styles.0.insert(0, root);
 
-        let output = build(&source, &mut styles);
+        let output = build(&source.as_document(None), &mut styles);
         let metrics = output.element_metrics_for_source(0).unwrap();
         assert_eq!(metrics.client_size.width, 320.0);
         let root_id = output.source_output(0).unwrap().principal_box.unwrap();
@@ -1321,7 +1428,7 @@ fn default_visible_root_reserves_stable_viewport_gutters() {
 fn root_stable_gutters_are_reserved_by_the_initial_containing_block_once() {
     for (content_height, expected_client_width) in [(20.0, 320.0), (480.0, 305.0)] {
         let source = Source(vec![
-            Node::element("root", vec![1]),
+            Node::html_element("html", "html", vec![1]),
             Node::element("auto-width-child", Vec::new()),
         ]);
         let mut styles = Styles::default();
@@ -1345,7 +1452,7 @@ fn root_stable_gutters_are_reserved_by_the_initial_containing_block_once() {
         child.size.height = length(content_height);
         styles.0.insert(1, resolved(LayoutDisplay::Block, child));
 
-        let output = build(&source, &mut styles);
+        let output = build(&source.as_document(None), &mut styles);
         let root_metrics = output.element_metrics_for_source(0).unwrap();
         assert_eq!(root_metrics.client_size.width, expected_client_width);
         assert_eq!(root_metrics.scroll_size.width, 290.0);

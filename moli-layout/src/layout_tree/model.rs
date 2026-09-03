@@ -464,6 +464,9 @@ pub struct LayoutBoxGeometry {
     /// Untransformed border-box origin in document layout coordinates.
     pub layout_origin_in_document: LayoutPoint,
     pub is_body_element: bool,
+    /// Whether CSSOM View exposes the layout viewport, rather than this box's
+    /// padding box, through `clientWidth` and `clientHeight`.
+    pub exposes_viewport_client_size: bool,
     pub is_table_offset_parent: bool,
     pub establishes_positioned_containing_block: bool,
     pub establishes_fixed_containing_block: bool,

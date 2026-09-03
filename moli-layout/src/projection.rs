@@ -429,6 +429,15 @@ where
                 .flatten()
             }));
             let semantics = layout_box.element_semantics();
+            let is_document_element = self.world.is_document_element(box_id);
+            let is_document_body = self.world.is_document_body(box_id);
+            let exposes_viewport_client_size = match self.world.document_mode() {
+                Some(crate::LayoutDocumentMode::Quirks) => is_document_body,
+                Some(
+                    crate::LayoutDocumentMode::NoQuirks | crate::LayoutDocumentMode::LimitedQuirks,
+                ) => is_document_element,
+                None => false,
+            };
             self.boxes.push(LayoutBoxGeometry {
                 id,
                 effective_zoom: layout_box.style.effective_zoom(),
@@ -456,6 +465,7 @@ where
                 fragments: Vec::new(),
                 layout_origin_in_document: layout_origins[index],
                 is_body_element: semantics.is_some_and(|element| element.is_html_element("body")),
+                exposes_viewport_client_size,
                 is_table_offset_parent: semantics.is_some_and(|element| {
                     element.is_html_element("table")
                         || element.is_html_element("td")
@@ -924,6 +934,7 @@ where
         embedded_frames_complete: bool,
     ) -> FrozenLayoutTree<N> {
         let root_box = LayoutOutputBoxId::from_index(self.world.root.index());
+        let document_scrolling_element = self.world.document_scrolling_element();
         let mut coordinate_spaces = self
             .coordinate_spaces
             .into_iter()
@@ -976,6 +987,7 @@ where
             self.viewport_scroll,
             content_size,
             root_box,
+            document_scrolling_element,
             boxes,
             self.fragments,
             self.scroll_proxy_links,

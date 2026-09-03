@@ -25,6 +25,23 @@ pub(crate) fn observable_geometry_batch(
     }
 }
 
+pub(crate) fn observable_document_scrolling_element(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    reason: LayoutFlushReason,
+) -> Result<Option<DomHandle>, LayoutError> {
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        reason,
+        &LayoutQueryBatch::new(vec![LayoutQuery::DocumentScrollingElement]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::DocumentScrollingElement(element)) => Ok(element),
+        _ => Err(provider_contract_error("document scrolling element")),
+    }
+}
+
 pub(crate) fn observable_client_rects(
     runtime: &JsContextHost,
     source: DomHandle,

@@ -6602,6 +6602,129 @@ fn box_metrics_use_computed_display_and_real_used_sizes() {
 }
 
 #[test]
+fn quirks_body_uses_viewport_intrinsic_sizing_and_client_metrics() {
+    let mut vm = new_parsed_test_vm(
+        "https://quirks-body-viewport-sizing.test/",
+        r#"<html><head><style>
+          body { width: 100px; aspect-ratio: 1 / 1; }
+          #half { height: 50%; }
+        </style></head><body><div id="half"></div></body></html>"#,
+    );
+    refresh_layout_for_test(&mut vm);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const body = document.body;
+  return [
+    document.compatMode,
+    document.documentElement.localName,
+    document.documentElement === body,
+    body.getBoundingClientRect().height,
+    document.getElementById('half').getBoundingClientRect().height,
+    body.offsetHeight,
+    body.clientHeight,
+    document.documentElement.clientHeight,
+    document.scrollingElement === body
+  ].join('|');
+})()
+"#,
+        )
+        .expect("quirks body geometry should evaluate");
+
+    assert_eq!(result, "BackCompat|html|false|584|292|584|600|600|true");
+}
+
+#[test]
+fn standards_body_keeps_ratio_sizing_and_document_element_client_metrics() {
+    let mut vm = new_parsed_test_vm(
+        "https://standards-body-viewport-sizing.test/",
+        r#"<!doctype html><html><head><style>
+          body { width: 100px; aspect-ratio: 1 / 1; }
+        </style></head><body></body></html>"#,
+    );
+    refresh_layout_for_test(&mut vm);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const body = document.body;
+  return [
+    document.compatMode,
+    document.documentElement.localName,
+    document.documentElement === body,
+    body.getBoundingClientRect().height,
+    body.clientHeight,
+    document.documentElement.clientHeight,
+    document.scrollingElement === document.documentElement
+  ].join('|');
+})()
+"#,
+        )
+        .expect("standards body geometry should evaluate");
+
+    assert_eq!(result, "CSS1Compat|html|false|100|100|600|true");
+}
+
+#[test]
+fn potentially_scrollable_quirks_body_has_no_scrolling_element() {
+    let mut vm = new_parsed_test_vm(
+        "https://quirks-scrolling-element.test/",
+        r#"<html style="overflow:hidden"><head><style>
+          body { width: 100px; aspect-ratio: 1 / 1; overflow: hidden; }
+        </style></head><body></body></html>"#,
+    );
+    refresh_layout_for_test(&mut vm);
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const body = document.body;
+  return [
+    document.documentElement.localName,
+    body.getBoundingClientRect().height,
+    body.clientHeight,
+    document.documentElement.clientHeight,
+    document.scrollingElement === null
+  ].join('|');
+})()
+"#,
+        )
+        .expect("quirks scrolling element selection should evaluate");
+
+    assert_eq!(result, "html|100|600|600|true");
+}
+
+#[test]
+fn quirks_scrolling_element_reuses_layout_until_a_render_update() {
+    let mut vm = new_parsed_test_vm(
+        "https://quirks-scrolling-element-lifecycle.test/",
+        "<html><body></body></html>",
+    );
+    refresh_layout_for_test(&mut vm);
+
+    let stale = vm
+        .eval(
+            r#"
+document.documentElement.style.overflow = 'hidden';
+document.body.style.overflow = 'hidden';
+String(document.scrollingElement === document.body)
+"#,
+        )
+        .expect("synchronous scrollingElement should reuse the latest layout");
+    assert_eq!(stale, "true");
+
+    refresh_layout_for_test(&mut vm);
+    let refreshed = vm
+        .eval("String(document.scrollingElement === null)")
+        .expect("render update should publish the new scrolling element");
+    assert_eq!(refreshed, "true");
+}
+
+#[test]
 fn box_metric_materializes_one_style_world_update_for_nested_resolution() {
     let mut vm = new_storage_test_vm("https://box-metric-style-snapshot.test/");
 

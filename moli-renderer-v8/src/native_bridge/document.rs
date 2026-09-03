@@ -17,6 +17,7 @@ use super::node::{
 };
 use super::{
     JsContextHost, callback_arg_namespace, callback_arg_string, collections,
+    element::observable_document_scrolling_element,
     identity::{CollectionKind, LiveCollectionDescriptor, LiveCollectionQueryKind},
     runtime_ptr_from_object, set_wrapped_handle_or_null, throw_dom_exception,
     validate_attribute_name, validate_element_name, validate_qualified_element_name_and_namespace,
@@ -1131,10 +1132,21 @@ fn document_scrolling_element_getter_function<'s>(
     };
     let runtime = unsafe { &*runtime_ptr };
     let dom = runtime.dom_host().dom();
-    let element = dom
-        .node(handle)
-        .and_then(Node::as_document)
-        .and_then(|document| document.document_element_handle(dom, handle));
+    let Some(document) = dom.node(handle).and_then(Node::as_document) else {
+        rv.set_null();
+        return;
+    };
+    let element = if document.quirks_mode() == selectors::matching::QuirksMode::Quirks {
+        let fallback = document.body_handle(dom, handle);
+        observable_document_scrolling_element(
+            runtime,
+            handle,
+            moli_layout::LayoutFlushReason::SynchronousGeometry,
+        )
+        .unwrap_or(fallback)
+    } else {
+        document.document_element_handle(dom, handle)
+    };
     set_document_node_return_value_for_receiver(scope, &mut rv, runtime_ptr, receiver, element);
 }
 

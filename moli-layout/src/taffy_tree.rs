@@ -1473,6 +1473,35 @@ where
         }
     }
 
+    fn prepare_child_layout_input(&self, node_id: NodeId, inputs: LayoutInput) -> LayoutInput {
+        let writing_mode = self.get_writing_mode(node_id);
+        let mut inputs = inputs.for_child_writing_mode(writing_mode, self.get_layout_environment());
+        if !self.is_viewport_taffy_node(node_id)
+            && self.is_quirky_viewport_filler(LayoutBoxId::from_taffy(node_id))
+        {
+            inputs.block_auto_behavior = AutoSizeBehavior::FitContentWithAvailableIntrinsicFloor;
+            let block_axis = writing_mode.block_axis();
+            // Content-contribution probes may use an indefinite available
+            // space even after the containing block has final geometry. The
+            // quirks floor consumes that definite containing-block size.
+            if !matches!(
+                inputs.available_space.get_abs(block_axis),
+                AvailableSpace::Definite(_)
+            ) && let Some(parent_block_size) = inputs.parent_size.get_abs(block_axis)
+            {
+                match block_axis {
+                    AbsoluteAxis::Horizontal => {
+                        inputs.available_space.width = AvailableSpace::Definite(parent_block_size);
+                    }
+                    AbsoluteAxis::Vertical => {
+                        inputs.available_space.height = AvailableSpace::Definite(parent_block_size);
+                    }
+                }
+            }
+        }
+        inputs
+    }
+
     fn get_scrollbar_insets(&self, node_id: NodeId) -> taffy::Rect<f32> {
         if self.is_viewport_taffy_node(node_id) {
             // The synthetic viewport expresses its gutters as non-painted
@@ -1497,6 +1526,15 @@ where
             });
         }
         self.boxes[LayoutBoxId::from_taffy(node_id).index()].resolved_aspect_ratio()
+    }
+
+    fn is_scroll_container_for_automatic_minimum(&self, node_id: NodeId) -> bool {
+        if self.is_viewport_taffy_node(node_id) {
+            return self.viewport_scroll_policy.establishes_scroll_container();
+        }
+        self.boxes[LayoutBoxId::from_taffy(node_id).index()]
+            .style
+            .establishes_scroll_container()
     }
 
     fn get_size_containment(&self, node_id: NodeId) -> taffy::SizeContainment {

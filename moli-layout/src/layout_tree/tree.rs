@@ -85,6 +85,7 @@ where
     pub viewport_scroll: LayoutPoint,
     pub content_size: LayoutSize,
     pub root_box: LayoutOutputBoxId,
+    document_scrolling_element: Option<N>,
     pub boxes: Vec<FrozenLayoutBox<N>>,
     pub fragments: Vec<LayoutFragment>,
     /// Source/box relationships for `display: contents` nodes, which own no
@@ -103,6 +104,12 @@ where
     /// Source root whose complete layout projection this member tree owns.
     pub const fn source_root(&self) -> N {
         self.source_root
+    }
+
+    /// CSSOM View scrolling element selected from this tree's frozen document
+    /// mode, canonical body identity, and computed overflow values.
+    pub const fn document_scrolling_element(&self) -> Option<N> {
+        self.document_scrolling_element
     }
 
     /// Finds an exact Document/source-root member without a per-Document
@@ -250,6 +257,7 @@ where
         viewport_scroll: LayoutPoint,
         content_size: LayoutSize,
         root_box: LayoutOutputBoxId,
+        document_scrolling_element: Option<N>,
         boxes: Vec<FrozenLayoutBox<N>>,
         fragments: Vec<LayoutFragment>,
         scroll_proxy_links: Vec<(N, LayoutOutputBoxId)>,
@@ -264,6 +272,7 @@ where
             viewport_scroll,
             content_size,
             root_box,
+            document_scrolling_element,
             boxes,
             fragments,
             scroll_proxy_links,
