@@ -109,6 +109,27 @@ fn set_receiver_window_alias<'s>(
     );
 }
 
+fn set_receiver_related_window_alias<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    slot: &'static str,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(receiver) = window_receiver(scope, args) else {
+        return;
+    };
+    if window_has_discarded_child_browsing_context(scope, receiver) {
+        rv.set_null();
+        return;
+    }
+    let context = receiver.get_creation_context(scope).unwrap_or_else(|| scope.get_current_context());
+    let scope = &mut v8::ContextScope::new(scope, context);
+    rv.set(
+        window_hidden_value(scope, receiver, slot)
+            .unwrap_or_else(|| scope.get_current_context().global(scope).into()),
+    );
+}
+
 pub(crate) fn window_opener_getter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -328,7 +349,7 @@ pub(crate) fn window_top_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_receiver_window_alias(scope, &args, WINDOW_TOP_SLOT, rv);
+    set_receiver_related_window_alias(scope, &args, WINDOW_TOP_SLOT, rv);
 }
 
 pub(crate) fn window_parent_getter<'s>(
@@ -336,7 +357,7 @@ pub(crate) fn window_parent_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_receiver_window_alias(scope, &args, WINDOW_PARENT_SLOT, rv);
+    set_receiver_related_window_alias(scope, &args, WINDOW_PARENT_SLOT, rv);
 }
 
 pub(in crate::context_bootstrap) fn window_frames_getter<'s>(

@@ -733,6 +733,10 @@ fn legacy_unforgeable_parent_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if super::window_accessors::window_has_discarded_child_browsing_context(scope, args.this()) {
+        rv.set_null();
+        return;
+    }
     if let Some(value) =
         legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_PARENT_SLOT)
     {
@@ -753,6 +757,10 @@ fn legacy_unforgeable_top_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if super::window_accessors::window_has_discarded_child_browsing_context(scope, args.this()) {
+        rv.set_null();
+        return;
+    }
     if let Some(value) = legacy_unforgeable_window_slot_value(scope, args.this(), WINDOW_TOP_SLOT) {
         rv.set(value);
     }

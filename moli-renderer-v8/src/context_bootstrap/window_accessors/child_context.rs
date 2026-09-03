@@ -1,6 +1,6 @@
 use super::helpers::{
-    window_child_context_handle, window_document_handle, window_hidden_value, window_host_ptr,
-    window_is_closed, window_receiver,
+    window_child_context_handle, window_document_handle, window_has_discarded_child_browsing_context,
+    window_hidden_value, window_host_ptr, window_is_closed, window_receiver,
 };
 use super::*;
 
@@ -38,6 +38,10 @@ pub(in crate::context_bootstrap) fn window_frame_element_getter<'s>(
     let Some(receiver) = window_receiver(scope, &args) else {
         return;
     };
+    if window_has_discarded_child_browsing_context(scope, receiver) {
+        rv.set_null();
+        return;
+    }
     if let Some(value) = window_hidden_value(scope, receiver, WINDOW_FRAME_ELEMENT_SLOT) {
         rv.set(value);
         return;
