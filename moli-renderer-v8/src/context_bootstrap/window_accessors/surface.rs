@@ -1,5 +1,6 @@
 use super::helpers::{
-    window_child_context_handle, window_hidden_value, window_host_ptr, window_receiver,
+    window_child_context_handle, window_has_discarded_child_browsing_context, window_hidden_value,
+    window_host_ptr, window_receiver,
 };
 use super::*;
 
@@ -93,6 +94,25 @@ fn set_receiver_window_alias<'s>(
     let Some(receiver) = window_receiver(scope, args) else {
         return;
     };
+    rv.set(
+        window_hidden_value(scope, receiver, slot)
+            .unwrap_or_else(|| scope.get_current_context().global(scope).into()),
+    );
+}
+
+fn set_receiver_related_window_alias<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    slot: &'static str,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(receiver) = window_receiver(scope, args) else {
+        return;
+    };
+    if window_has_discarded_child_browsing_context(scope, receiver) {
+        rv.set_null();
+        return;
+    }
     rv.set(
         window_hidden_value(scope, receiver, slot)
             .unwrap_or_else(|| scope.get_current_context().global(scope).into()),
@@ -252,7 +272,7 @@ pub(in crate::context_bootstrap) fn window_top_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_receiver_window_alias(scope, &args, WINDOW_TOP_SLOT, rv);
+    set_receiver_related_window_alias(scope, &args, WINDOW_TOP_SLOT, rv);
 }
 
 pub(in crate::context_bootstrap) fn window_parent_getter<'s>(
@@ -260,7 +280,7 @@ pub(in crate::context_bootstrap) fn window_parent_getter<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    set_receiver_window_alias(scope, &args, WINDOW_PARENT_SLOT, rv);
+    set_receiver_related_window_alias(scope, &args, WINDOW_PARENT_SLOT, rv);
 }
 
 pub(in crate::context_bootstrap) fn window_frames_getter<'s>(
