@@ -23,6 +23,7 @@ use moli_renderer_v8::network::{
 };
 use moli_url::is_about_blank as is_about_blank_url;
 use moli_web_mime::response_headers_indicate_raw_document;
+use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use std::time::Instant;
@@ -52,14 +53,32 @@ pub use navigation_engine::{
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Controls whether a document fetch may consume a raw/download response.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum RawDocumentDisposition {
+pub enum RawDocumentFetchPolicy {
+    /// Read the response body and return [`FetchedDocument::Raw`].
     Materialize,
-    RejectForPageApi,
+    /// Require a renderable Page, rejecting raw responses from their headers.
+    RequirePage,
 }
 
-fn raw_document_page_api_error() -> anyhow::Error {
-    anyhow!("raw non-HTML document cannot be returned through the Page fetch API")
+/// Typed rejection produced by [`RawDocumentFetchPolicy::RequirePage`].
+#[derive(Debug)]
+pub struct RawDocumentPageRequired;
+
+impl fmt::Display for RawDocumentPageRequired {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("raw non-HTML document cannot be returned through the Page fetch API")
+    }
+}
+
+impl std::error::Error for RawDocumentPageRequired {}
+
+fn ensure_raw_document_materialization_allowed(policy: RawDocumentFetchPolicy) -> Result<()> {
+    match policy {
+        RawDocumentFetchPolicy::Materialize => Ok(()),
+        RawDocumentFetchPolicy::RequirePage => Err(anyhow::Error::new(RawDocumentPageRequired)),
+    }
 }
 
 fn is_fetch_readiness_timeout(error: &anyhow::Error, wait_until: RenderedDomWaitUntil) -> bool {
@@ -386,7 +405,7 @@ impl Browser {
                 deadline,
                 RendererReplyBoundary::Stage,
                 None,
-                RawDocumentDisposition::RejectForPageApi,
+                RawDocumentFetchPolicy::RequirePage,
             )
             .await?
         {
@@ -412,18 +431,24 @@ impl Browser {
     ) -> Result<FetchedDocument> {
         let deadline = FetchDeadline::new(timeout)?;
         self.fetch_request_document_allow_http_error_with_wait_until_deadline(
-            request, wait_until, deadline,
+            request,
+            wait_until,
+            deadline,
+            RawDocumentFetchPolicy::Materialize,
         )
         .await
     }
 
     /// Fetches a document to `wait_until` without starting a new timeout
-    /// budget. Callers can reuse `deadline` for later readiness conditions.
+    /// budget. Callers can reuse `deadline` for later readiness conditions and
+    /// choose whether raw responses are materialized or rejected from their
+    /// headers.
     pub async fn fetch_request_document_allow_http_error_with_wait_until_deadline(
         &self,
         request: Request,
         wait_until: RenderedDomWaitUntil,
         deadline: FetchDeadline,
+        raw_document_policy: RawDocumentFetchPolicy,
     ) -> Result<FetchedDocument> {
         let fetched = self
             .fetch_document_to_base_stage(
@@ -432,7 +457,7 @@ impl Browser {
                 deadline,
                 RendererReplyBoundary::Stage,
                 None,
-                RawDocumentDisposition::Materialize,
+                raw_document_policy,
             )
             .await?;
 
@@ -456,7 +481,7 @@ impl Browser {
         deadline: FetchDeadline,
         reply_boundary: RendererReplyBoundary,
         lifecycle_decider: Option<RendererLifecycleDecider>,
-        raw_document_disposition: RawDocumentDisposition,
+        raw_document_policy: RawDocumentFetchPolicy,
     ) -> Result<FetchedDocument> {
         let timeout = deadline.timeout();
         let stage = wait_until.base_stage();
@@ -522,9 +547,7 @@ impl Browser {
         if let Some(response) = response {
             navigation_loader.note_service_worker_response_ready()?;
             if response_headers_indicate_raw_document(&response.headers) {
-                if raw_document_disposition == RawDocumentDisposition::RejectForPageApi {
-                    return Err(raw_document_page_api_error());
-                }
+                ensure_raw_document_materialization_allowed(raw_document_policy)?;
                 let raw_response =
                     RawResponse::from_head_and_body(response.head(), response.clone_body_bytes());
                 return Ok(FetchedDocument::Raw(Box::new(RawDocument::from_response(
@@ -570,9 +593,7 @@ impl Browser {
             )
             .await?;
         if response_headers_indicate_raw_document(&response.headers) {
-            if raw_document_disposition == RawDocumentDisposition::RejectForPageApi {
-                return Err(raw_document_page_api_error());
-            }
+            ensure_raw_document_materialization_allowed(raw_document_policy)?;
             // Binary/download-like main resources have no DOM lifecycle
             // milestones, but materializing a RawDocument still consumes the
             // caller-owned absolute fetch-readiness budget.

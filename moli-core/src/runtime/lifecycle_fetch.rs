@@ -5,7 +5,7 @@
 //! lifecycle decision cannot reset or extend the caller's timeout budget.
 
 use super::{
-    Browser, FetchDeadline, FetchedDocument, RawDocumentDisposition, RenderedDomWaitUntil,
+    Browser, FetchDeadline, FetchedDocument, RawDocumentFetchPolicy, RenderedDomWaitUntil,
     RendererLifecycleDecider, RendererLifecycleDecision, RendererLifecycleSnapshot,
     RendererReplyBoundary,
 };
@@ -33,18 +33,25 @@ impl Browser {
     {
         let deadline = FetchDeadline::new(timeout)?;
         self.fetch_document_with_lifecycle_decider_and_deadline(
-            request, wait_until, deadline, decider,
+            request,
+            wait_until,
+            deadline,
+            RawDocumentFetchPolicy::Materialize,
+            decider,
         )
         .await
     }
 
     /// Applies a lifecycle decision using a caller-owned absolute deadline.
-    /// The same deadline can then gate response, selector, and script waits.
+    /// The same deadline can then gate response, selector, and script waits;
+    /// `raw_document_policy` decides whether a non-Page response is read or
+    /// rejected from its headers.
     pub async fn fetch_document_with_lifecycle_decider_and_deadline<F>(
         &self,
         request: Request,
         wait_until: RenderedDomWaitUntil,
         deadline: FetchDeadline,
+        raw_document_policy: RawDocumentFetchPolicy,
         decider: F,
     ) -> Result<FetchedDocument>
     where
@@ -66,7 +73,7 @@ impl Browser {
             deadline,
             RendererReplyBoundary::Stage,
             Some(decider),
-            RawDocumentDisposition::Materialize,
+            raw_document_policy,
         )
         .await
     }

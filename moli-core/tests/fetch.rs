@@ -3,7 +3,7 @@ use moli_test_support as support;
 use anyhow::Result;
 use moli_core::runtime::{
     Browser, BrowserConfig as AppConfig, FetchReadinessTimeout, FetchTimeoutPhase,
-    RenderedDomWaitUntil,
+    RawDocumentPageRequired, RenderedDomWaitUntil,
 };
 use moli_fetch::Request;
 use std::time::{Duration, Instant};
@@ -194,6 +194,7 @@ async fn page_fetch_rejects_raw_response_without_waiting_for_its_stalled_body() 
     .expect("the Page API must not wait for a raw response body")
     .expect_err("the Page API must reject a raw non-HTML document");
 
+    assert!(error.is::<RawDocumentPageRequired>());
     assert_eq!(
         error.to_string(),
         "raw non-HTML document cannot be returned through the Page fetch API"

@@ -2,7 +2,7 @@ use moli_test_support as support;
 
 use super::{
     Browser, FetchDeadline, FetchedDocument, NavigationEngine, NavigationPageStorageHandles,
-    NavigationResourceStorageHandles, RenderedDomWaitUntil,
+    NavigationResourceStorageHandles, RawDocumentFetchPolicy, RenderedDomWaitUntil,
     external_raw_document_body_from_streaming_response_with_body_eof_observer,
 };
 use crate::{
@@ -2089,6 +2089,7 @@ async fn fetch_deadline_spans_lifecycle_selector_and_script_without_reset() -> R
             Request::get(&server.url("/static"))?,
             RenderedDomWaitUntil::Load,
             deadline,
+            RawDocumentFetchPolicy::Materialize,
         )
         .await?;
     let FetchedDocument::Page(mut page) = fetched else {
@@ -2153,6 +2154,7 @@ async fn best_effort_page_readiness_consumes_only_the_remaining_fetch_deadline()
                 Request::get(&server.url(path))?,
                 wait_until,
                 deadline,
+                RawDocumentFetchPolicy::Materialize,
             )
             .await?;
         let elapsed = started.elapsed();

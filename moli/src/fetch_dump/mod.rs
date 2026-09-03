@@ -6,10 +6,10 @@ mod semantic;
 #[cfg(test)]
 mod tests;
 
-use anyhow::{Result, bail};
+use anyhow::{Result, anyhow, bail};
 use moli_core::{
     page::{Page, RendererScreenshotRegion, SubresourceResponseWaitCriteria},
-    runtime::RawDocument,
+    runtime::{RawDocument, RawDocumentFetchPolicy, RawDocumentPageRequired},
 };
 
 use crate::{
@@ -19,6 +19,39 @@ use crate::{
 };
 
 pub use node_details::summarize_node_details_async;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum RawDocumentOutputPolicy {
+    Passthrough,
+    Json,
+    RequiresPage(DumpFormat),
+}
+
+impl RawDocumentOutputPolicy {
+    pub(crate) fn from_command(command: &FetchCommandConfig) -> Self {
+        match command.dump_mode {
+            None => Self::Passthrough,
+            Some(DumpFormat::Json) => Self::Json,
+            Some(format) => Self::RequiresPage(format),
+        }
+    }
+
+    pub(crate) const fn fetch_policy(self) -> RawDocumentFetchPolicy {
+        match self {
+            Self::Passthrough | Self::Json => RawDocumentFetchPolicy::Materialize,
+            Self::RequiresPage(_) => RawDocumentFetchPolicy::RequirePage,
+        }
+    }
+
+    pub(crate) fn map_fetch_error(self, error: anyhow::Error) -> anyhow::Error {
+        if error.is::<RawDocumentPageRequired>()
+            && let Self::RequiresPage(format) = self
+        {
+            return raw_document_requires_page_error(format);
+        }
+        error
+    }
+}
 
 pub async fn render_page_output_async(
     page: &mut Page,
@@ -64,16 +97,13 @@ pub async fn render_page_dump_async(
     .await
 }
 
-pub fn render_raw_document_output(
+pub(crate) fn render_raw_document_output(
     raw: &RawDocument,
-    command: &FetchCommandConfig,
+    policy: RawDocumentOutputPolicy,
 ) -> Result<Vec<u8>> {
-    match command.dump_mode {
-        None => Ok(raw.body_bytes().to_vec()),
-        Some(DumpFormat::Html) => {
-            bail!("--dump html requires a renderable HTML document, not a raw download")
-        }
-        Some(DumpFormat::Json) => {
+    match policy {
+        RawDocumentOutputPolicy::Passthrough => Ok(raw.body_bytes().to_vec()),
+        RawDocumentOutputPolicy::Json => {
             let html = String::from_utf8_lossy(raw.body_bytes());
             let redirect_chain = raw
                 .navigation_redirect_chain()
@@ -92,15 +122,25 @@ pub fn render_raw_document_output(
             )?;
             Ok(payload.into_bytes())
         }
-        Some(
-            DumpFormat::Markdown
-            | DumpFormat::Screenshot
-            | DumpFormat::ScreenshotFull
-            | DumpFormat::Pdf
-            | DumpFormat::SemanticTree
-            | DumpFormat::SemanticTreeText,
-        ) => {
-            bail!("raw download output only supports automatic output or --dump json")
+        RawDocumentOutputPolicy::RequiresPage(format) => {
+            Err(raw_document_requires_page_error(format))
+        }
+    }
+}
+
+fn raw_document_requires_page_error(format: DumpFormat) -> anyhow::Error {
+    match format {
+        DumpFormat::Html => {
+            anyhow!("--dump html requires a renderable HTML document, not a raw download")
+        }
+        DumpFormat::Json => unreachable!("JSON output accepts raw documents"),
+        DumpFormat::Markdown
+        | DumpFormat::Screenshot
+        | DumpFormat::ScreenshotFull
+        | DumpFormat::Pdf
+        | DumpFormat::SemanticTree
+        | DumpFormat::SemanticTreeText => {
+            anyhow!("raw download output only supports automatic output or --dump json")
         }
     }
 }

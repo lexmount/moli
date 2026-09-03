@@ -5,7 +5,8 @@
 
 use anyhow::{Context, Result};
 use moli_core::runtime::{
-    Browser, FetchDeadline, FetchedDocument, RenderedDomWaitUntil, RendererLifecycleDecision,
+    Browser, FetchDeadline, FetchedDocument, RawDocumentFetchPolicy, RenderedDomWaitUntil,
+    RendererLifecycleDecision,
 };
 use moli_fetch::Request;
 use std::time::{Duration, Instant};
@@ -20,6 +21,7 @@ pub(super) async fn fetch_with_redirect_wait(
     wait_until: RenderedDomWaitUntil,
     deadline: FetchDeadline,
     minimum_navigation_wait: Duration,
+    raw_document_policy: RawDocumentFetchPolicy,
 ) -> Result<FetchedDocument> {
     let minimum_navigation_deadline = Instant::now()
         .checked_add(minimum_navigation_wait)
@@ -35,6 +37,7 @@ pub(super) async fn fetch_with_redirect_wait(
             request,
             wait_until,
             deadline,
+            raw_document_policy,
             move |target| {
                 Ok(if uses_redirect_wait(target.status) {
                     RendererLifecycleDecision::FollowNextDocumentOrFinish {

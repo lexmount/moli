@@ -12,7 +12,9 @@ use crate::cli::{FetchArgs, FetchWaitUntil};
 use anyhow::{Context, Result, anyhow, bail};
 use moli_core::{
     page::{Page, SubresourceResponseWaitCriteria},
-    runtime::{Browser, FetchDeadline, FetchedDocument, RenderedDomWaitUntil},
+    runtime::{
+        Browser, FetchDeadline, FetchedDocument, RawDocumentFetchPolicy, RenderedDomWaitUntil,
+    },
 };
 use moli_fetch::Request;
 use std::{path::Path, time::Duration};
@@ -52,6 +54,7 @@ impl ReadinessPlan {
         &self,
         browser: &Browser,
         request: Request,
+        raw_document_policy: RawDocumentFetchPolicy,
     ) -> Result<FetchedDocument> {
         match self.wait_until {
             RenderedDomWaitUntil::DomContentLoaded
@@ -63,6 +66,7 @@ impl ReadinessPlan {
                     self.wait_until,
                     self.deadline,
                     self.minimum_navigation_wait,
+                    raw_document_policy,
                 )
                 .await
             }
@@ -72,6 +76,7 @@ impl ReadinessPlan {
                         request,
                         self.wait_until,
                         self.deadline,
+                        raw_document_policy,
                     )
                     .await
             }

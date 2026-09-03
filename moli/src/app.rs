@@ -55,6 +55,8 @@ pub async fn run_cli_with_config<W: Write>(
             };
             let readiness =
                 ReadinessPlan::from_fetch_args(&args, config.fetch.response_wait.clone())?;
+            let raw_document_output =
+                fetch_dump::RawDocumentOutputPolicy::from_command(&config.fetch);
             let request = build_fetch_request(&args.url, &config)?;
             if config.browser.fetch().obey_robots() {
                 // Checked before the browser starts so a refused fetch costs
@@ -65,12 +67,17 @@ pub async fn run_cli_with_config<W: Write>(
             }
             let browser = Browser::new(config.browser.clone())?;
             load_cookie_state(&browser, &config)?;
-            let fetch_result = readiness.fetch_document(&browser, request).await;
+            let fetch_result = readiness
+                .fetch_document(&browser, request, raw_document_output.fetch_policy())
+                .await;
             let fetched_document = match fetch_result {
                 Ok(document) => document,
                 Err(error) => {
                     finalize_fetch_browser(browser);
-                    return Err(with_fetch_context(error, &args.url));
+                    return Err(with_fetch_context(
+                        raw_document_output.map_fetch_error(error),
+                        &args.url,
+                    ));
                 }
             };
 
@@ -96,7 +103,7 @@ pub async fn run_cli_with_config<W: Write>(
                         ));
                     }
                     let rendered =
-                        fetch_dump::render_raw_document_output(&raw_document, &config.fetch)
+                        fetch_dump::render_raw_document_output(&raw_document, raw_document_output)
                             .map_err(|error| with_fetch_context(error, &args.url))?;
                     stdout
                         .write_all(&rendered)
