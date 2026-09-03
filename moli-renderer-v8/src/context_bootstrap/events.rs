@@ -232,12 +232,13 @@ pub(super) use base::{
 };
 pub(in crate::context_bootstrap) use init::{EventInit, parse_event_dictionary};
 pub(super) use kind::EventSubclassKind;
+pub(crate) use methods::set_event_default_prevented;
 pub(super) use methods::{
     event_cancel_bubble_getter_function, event_cancel_bubble_setter_function,
     event_composed_path_callback, event_prevent_default_callback,
     event_return_value_getter_function, event_return_value_setter_function,
     event_stop_immediate_propagation_callback, event_stop_propagation_callback,
-    event_time_stamp_getter_function, set_event_default_prevented,
+    event_time_stamp_getter_function,
 };
 pub(in crate::context_bootstrap) use moli_webapi::events::subclasses::new_uninitialized_before_unload_event;
 use moli_webapi::events::subclasses::{

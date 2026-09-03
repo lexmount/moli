@@ -252,3 +252,43 @@ fn pointer_raw_update_handler_properties_follow_secure_context_exposure() {
         assert_eq!(vm.eval(&script).unwrap(), "true", "{url}");
     }
 }
+
+#[test]
+fn child_window_onerror_return_values_use_native_cancellation() {
+    let mut vm = new_parsed_test_vm(
+        "https://child-window-handler-return.test/",
+        "<!doctype html><iframe id='child'></iframe>",
+    );
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const child = document.getElementById("child").contentWindow;
+  const rows = [];
+  child.onerror = function (...args) {
+    rows.push([this === child, args.length, args[0]]);
+    return true;
+  };
+  const error = new child.ErrorEvent("error", {cancelable: true, message: "failure"});
+  const errorAllowed = child.dispatchEvent(error);
+  child.onerror = function (event) {
+    rows.push([this === child, arguments.length, event.type]);
+    return false;
+  };
+  const ordinary = new child.Event("error", {cancelable: true});
+  const ordinaryAllowed = child.dispatchEvent(ordinary);
+  const noncancelable = new child.Event("error");
+  const noncancelableAllowed = child.dispatchEvent(noncancelable);
+  return JSON.stringify({rows, errorAllowed, errorPrevented:error.defaultPrevented,
+    ordinaryAllowed, ordinaryPrevented:ordinary.defaultPrevented,
+    noncancelableAllowed, noncancelablePrevented:noncancelable.defaultPrevented,
+    topUntouched: window.onerror === null});
+})()
+"#,
+        )
+        .expect("child Window handler return should evaluate");
+    assert_eq!(
+        result,
+        r#"{"rows":[[true,5,"failure"],[true,1,"error"],[true,1,"error"]],"errorAllowed":false,"errorPrevented":true,"ordinaryAllowed":false,"ordinaryPrevented":true,"noncancelableAllowed":true,"noncancelablePrevented":false,"topUntouched":true}"#
+    );
+}
