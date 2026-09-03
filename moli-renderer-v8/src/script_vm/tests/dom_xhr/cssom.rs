@@ -9179,6 +9179,67 @@ fn cssom_rejects_terminal_pseudo_element_chains() {
 }
 
 #[test]
+fn webkit_autofill_alias_uses_stylo_across_selector_surfaces() {
+    let mut vm = new_storage_test_vm("https://webkit-autofill-selector.test/");
+
+    let setup = vm
+        .eval(
+            r#"
+(() => {
+  const root = document.documentElement || document.appendChild(document.createElement('html'));
+  const head = document.head || root.appendChild(document.createElement('head'));
+  const body = document.body || root.appendChild(document.createElement('body'));
+  const input = document.createElement('input');
+  input.id = 'autofill-target';
+  body.append(input);
+
+  const style = document.createElement('style');
+  style.textContent = '#autofill-target:-webkit-autofill { color: rgb(1, 2, 3); }';
+  head.append(style);
+
+  const sheet = new CSSStyleSheet();
+  const index = sheet.insertRule('#autofill-target:-WeBkIt-AuToFiLl {}');
+  globalThis.__webkitAutofillSheet = sheet;
+  return [
+    document.querySelector(':-webkit-autofill') === null,
+    style.sheet.cssRules.length,
+    style.sheet.cssRules[0].selectorText,
+    index,
+    sheet.cssRules[0].selectorText,
+    CSS.supports('selector(:-webkit-autofill)')
+  ].join('|');
+})()
+"#,
+        )
+        .expect("webkit autofill selector setup should evaluate");
+
+    assert_eq!(
+        setup,
+        "true|1|#autofill-target:autofill|0|#autofill-target:autofill|true"
+    );
+
+    let input = cssom_element_handle_by_id(&vm, "autofill-target");
+    assert!(
+        vm.document_runtime
+            .dom_host_mut()
+            .set_autofilled_state(input, true)
+    );
+
+    let result = vm
+        .eval(
+            r#"[
+  document.querySelector(':-webkit-autofill') === document.getElementById('autofill-target'),
+  document.getElementById('autofill-target').matches(':-WeBkIt-AuToFiLl'),
+  getComputedStyle(document.getElementById('autofill-target')).color,
+  __webkitAutofillSheet.cssRules[0].selectorText
+].join('|')"#,
+        )
+        .expect("webkit autofill selector state should evaluate");
+
+    assert_eq!(result, "true|true|rgb(1, 2, 3)|#autofill-target:autofill");
+}
+
+#[test]
 fn cssom_stylesheet_text_uses_prior_namespace_rules_for_attribute_case_flags() {
     let mut vm = new_storage_test_vm("https://cssom-attribute-case-namespace.test/");
 

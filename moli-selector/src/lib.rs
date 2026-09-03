@@ -511,6 +511,15 @@ mod tests {
     }
 
     #[test]
+    fn webkit_autofill_alias_uses_standard_autofill_selector_semantics() {
+        for selector in ["input:-webkit-autofill", "input:-WeBkIt-AuToFiLl"] {
+            assert!(validate_style_rule_selector_list(selector).is_ok());
+            assert!(validate_supports_selector_list(selector).is_ok());
+            assert!(validate_supports_selector_condition_argument(selector).is_ok());
+        }
+    }
+
+    #[test]
     fn cssom_style_rule_selector_canonicalization_owns_namespace_validation() {
         let namespace_context = StyleRuleNamespaceContext {
             default_namespace_uri: Some("http://www.w3.org/1999/xhtml".to_owned()),
@@ -2027,6 +2036,38 @@ mod tests {
         assert!(engine.matches_host(&host, input, ":default").unwrap());
         assert!(host.remove_attribute(input, "checked"));
         assert!(!engine.matches_host(&host, input, ":default").unwrap());
+    }
+
+    #[test]
+    fn dom_api_webkit_autofill_alias_matches_autofilled_state() {
+        let url = url::Url::parse("https://example.test/").unwrap();
+        let mut host = DomHost::from_dom(NativeDom::new_html(url));
+        host.reset_html_document_shell();
+        let body = host.document_body_handle().unwrap();
+        let input = host.create_element("input");
+        assert!(host.append_child(body, input));
+
+        let engine = QueryEngine;
+        assert_eq!(
+            engine
+                .query_selector_host(&host, ":-webkit-autofill")
+                .unwrap(),
+            None
+        );
+
+        assert!(host.set_autofilled_state(input, true));
+        assert_eq!(
+            engine
+                .query_selector_host(&host, ":-webkit-autofill")
+                .unwrap(),
+            Some(input)
+        );
+        assert!(
+            engine
+                .matches_host(&host, input, ":-WeBkIt-AuToFiLl")
+                .unwrap()
+        );
+        assert!(engine.matches_host(&host, input, ":autofill").unwrap());
     }
 
     #[test]
