@@ -16,6 +16,52 @@ fn take_next_hash_change_task_for_authorization_test(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn user_agent_hashchange_is_trusted_but_author_constructed_event_is_not() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse("https://example.com/hashchange-event-trust").unwrap();
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(
+            r##"
+globalThis.__authorHashChange = new HashChangeEvent("author", {
+  oldURL: "https://old.example/",
+  newURL: "https://new.example/"
+});
+globalThis.__hashChangeTrust = null;
+addEventListener("hashchange", event => {
+  __hashChangeTrust = [event.isTrusted, event instanceof HashChangeEvent];
+}, { once: true });
+location.hash = "#trusted";
+"queued"
+"##,
+        )?;
+
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::DomManipulation(
+                        PageDomManipulationTestFamily::HashChange
+                    ),
+                    &loader,
+                )
+                .await?,
+            "one exact hashchange task should dispatch"
+        );
+        assert_eq!(
+            page_vm
+                .vm_mut()
+                .eval("JSON.stringify([...__hashChangeTrust, __authorHashChange instanceof HashChangeEvent, __authorHashChange.isTrusted, __authorHashChange.oldURL, __authorHashChange.newURL])")?,
+            r#"[true,true,true,false,"https://old.example/","https://new.example/"]"#
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("hashchange trust test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn hashchange_body_leaves_reactions_for_selected_callback_completion() {
     run_page_vm_async_test(async move {
         let loader =
