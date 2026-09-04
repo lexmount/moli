@@ -21,7 +21,7 @@ globalThis.__firstJointLengthFrame = first;
 (() => {
   const child = __firstJointLengthFrame.contentWindow;
   const before = history.length;
-  child.history.pushState(null, '', '#first');
+  child.history.pushState(null, '', child.location.href + '#first');
   return [before, history.length, child.history.length].join('|');
 })()
 "#,
@@ -48,7 +48,7 @@ globalThis.__secondJointLengthFrame = second;
 (() => {
   const child = __secondJointLengthFrame.contentWindow;
   const before = history.length;
-  child.history.pushState(null, '', '#second');
+  child.history.pushState(null, '', child.location.href + '#second');
   return [before, history.length, child.history.length].join('|');
 })()
 "#,
