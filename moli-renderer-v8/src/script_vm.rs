@@ -690,6 +690,7 @@ mod page_task_enqueue;
 mod parser_owned_classic;
 pub(crate) use parser_owned_classic::*;
 mod parser_module_terminal;
+mod popup_close;
 mod popup_load_event;
 mod post_parse;
 mod post_parse_lifecycle;
@@ -1070,7 +1071,6 @@ pub(super) struct ActiveDragSession {
 #[cfg(feature = "devtools")]
 #[derive(Clone, Copy)]
 pub(super) struct PendingDragGesture {
-    pub handle: DomHandle,
     pub x: f64,
     pub y: f64,
     pub root_to_frame: moli_layout::LayoutTransform2D,
