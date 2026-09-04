@@ -9776,6 +9776,46 @@ async fn worker_console_does_not_crash() {
     );
 }
 
+#[tokio::test]
+async fn worker_console_does_not_invoke_error_prepare_stack_trace() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        let accessed = false;
+        const originalPrepareStackTrace = Error.prepareStackTrace;
+        try {
+          Error.prepareStackTrace = () => {
+            accessed = true;
+            return "detected";
+          };
+          console.log(new Error(""));
+          const afterConsole = accessed;
+          void new Error("explicit stack access").stack;
+          postMessage(`${afterConsole}|${accessed}`);
+        } finally {
+          Error.prepareStackTrace = originalPrepareStackTrace;
+        }
+        "#
+        .into(),
+        "test://console_prepare_stack_trace".into(),
+    );
+
+    loop {
+        let message = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("timed out")
+            .expect("channel closed");
+        match message {
+            WorkerToParentMessage::Console(_) => {}
+            WorkerToParentMessage::Post(payload) => {
+                assert_eq!(stringify_payload(&payload), r#""false|true""#);
+                break;
+            }
+            other => panic!("unexpected worker console probe message: {other:?}"),
+        }
+    }
+}
+
 // ─── Self reference ─────────────────────────────────────────────────
 
 #[tokio::test]

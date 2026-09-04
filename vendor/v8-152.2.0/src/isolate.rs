@@ -782,7 +782,7 @@ unsafe extern "C" {
   fn v8__Isolate__GetCppHeap(isolate: *mut RealIsolate) -> *mut Heap;
   fn v8__Isolate__SetPrepareStackTraceCallback(
     isolate: *mut RealIsolate,
-    callback: PrepareStackTraceCallback,
+    callback: Option<PrepareStackTraceCallback>,
   );
   fn v8__Isolate__SetPromiseHook(isolate: *mut RealIsolate, hook: PromiseHook);
   fn v8__Isolate__SetPromiseRejectCallback(
@@ -1655,8 +1655,18 @@ impl Isolate {
     unsafe {
       v8__Isolate__SetPrepareStackTraceCallback(
         self.as_real_ptr(),
-        callback.map_fn_to(),
+        Some(callback.map_fn_to()),
       );
+    };
+  }
+
+  /// Clears the embedder callback installed by
+  /// [`Self::set_prepare_stack_trace_callback`], restoring V8's normal
+  /// `Error.prepareStackTrace` behavior.
+  #[inline(always)]
+  pub fn clear_prepare_stack_trace_callback(&mut self) {
+    unsafe {
+      v8__Isolate__SetPrepareStackTraceCallback(self.as_real_ptr(), None);
     };
   }
 
