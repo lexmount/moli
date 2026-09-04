@@ -198,14 +198,48 @@ async fn media_invalid_request_url_fails_before_load() {
 
     assert_eq!(
         vm.eval(
-            r#"[
-  __lmMediaInvalidUrlEvents.join("|"),
-  __lmMediaInvalidUrlVideo.readyState,
-  __lmMediaInvalidUrlVideo.networkState
-].join("|")"#,
+            r#"(() => {
+  const firstError = __lmMediaInvalidUrlVideo.error;
+  globalThis.__lmMediaInvalidUrlFirstError = firstError;
+  const result = [
+    __lmMediaInvalidUrlEvents.join("|"),
+    __lmMediaInvalidUrlVideo.readyState,
+    __lmMediaInvalidUrlVideo.networkState,
+    firstError instanceof MediaError,
+    firstError && firstError.code,
+    firstError && firstError.message.length > 0,
+    __lmMediaInvalidUrlVideo.error === firstError
+  ].join("|");
+  __lmMediaInvalidUrlVideo.load();
+  return `${result}|${__lmMediaInvalidUrlVideo.error === null}`;
+})()"#,
         )
         .expect("invalid media URL events should evaluate"),
-        "error|0|3"
+        "error|0|3|true|4|true|true|true"
+    );
+
+    run_next_page_media_element_event_for_test(
+        &mut vm,
+        &loader,
+        "reloaded invalid-URL media loadstart turn",
+    )
+    .await;
+    run_next_page_media_element_event_for_test(
+        &mut vm,
+        &loader,
+        "reloaded invalid-URL media error turn",
+    )
+    .await;
+    assert_eq!(
+        vm.eval(
+            r#"[
+  __lmMediaInvalidUrlVideo.error instanceof MediaError,
+  __lmMediaInvalidUrlVideo.error.code,
+  __lmMediaInvalidUrlVideo.error !== __lmMediaInvalidUrlFirstError
+].join("|")"#,
+        )
+        .expect("reloaded invalid media URL error should evaluate"),
+        "true|4|true"
     );
 }
 
@@ -889,6 +923,39 @@ fn media_error_constants_are_declared_on_constructor_and_prototype() {
     assert_eq!(
         result,
         r#"{"constructor":["MEDIA_ERR_ABORTED:1:true:true:false:false","MEDIA_ERR_NETWORK:2:true:true:false:false","MEDIA_ERR_DECODE:3:true:true:false:false","MEDIA_ERR_SRC_NOT_SUPPORTED:4:true:true:false:false"],"prototype":["MEDIA_ERR_ABORTED:1:true:true:false:false","MEDIA_ERR_NETWORK:2:true:true:false:false","MEDIA_ERR_DECODE:3:true:true:false:false","MEDIA_ERR_SRC_NOT_SUPPORTED:4:true:true:false:false"],"keysContainConstants":[true,true],"constructorMatchesPrototype":true}"#
+    );
+}
+
+#[test]
+fn media_error_instance_attributes_are_readonly_prototype_accessors() {
+    let mut vm = new_storage_test_vm("https://media-error-attributes-declared.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const shape = name => {
+    const descriptor = Object.getOwnPropertyDescriptor(MediaError.prototype, name);
+    return [
+      typeof descriptor.get,
+      descriptor.set === undefined,
+      descriptor.enumerable,
+      descriptor.configurable
+    ].join(":");
+  };
+  let codeBrand;
+  let messageBrand;
+  try { Reflect.get(MediaError.prototype, "code", {}); } catch (error) { codeBrand = error.name; }
+  try { Reflect.get(MediaError.prototype, "message", {}); } catch (error) { messageBrand = error.name; }
+  return [shape("code"), shape("message"), codeBrand, messageBrand].join("|");
+})()
+"#,
+        )
+        .expect("MediaError attribute descriptor probe should evaluate");
+
+    assert_eq!(
+        result,
+        "function:true:true:true|function:true:true:true|TypeError|TypeError"
     );
 }
 

@@ -25,11 +25,11 @@ pub(in crate::native_bridge) use methods::{
 pub(crate) use state::{dispatch_media_seek_completion, dispatch_media_seeking_event};
 pub(in crate::native_bridge) use state::{
     media_current_time_getter_function, media_current_time_setter_function,
-    media_duration_getter_function, media_ended_getter_function, media_muted_getter_function,
-    media_muted_setter_function, media_network_state_getter_function, media_paused_getter_function,
-    media_playback_rate_getter_function, media_playback_rate_setter_function,
-    media_ready_state_getter_function, media_seeking_getter_function, media_volume_getter_function,
-    media_volume_setter_function,
+    media_duration_getter_function, media_ended_getter_function, media_error_getter_function,
+    media_muted_getter_function, media_muted_setter_function, media_network_state_getter_function,
+    media_paused_getter_function, media_playback_rate_getter_function,
+    media_playback_rate_setter_function, media_ready_state_getter_function,
+    media_seeking_getter_function, media_volume_getter_function, media_volume_setter_function,
 };
 pub(crate) use text_tracks::{
     apply_default_text_track_mode_for_track, apply_text_track_load_task,

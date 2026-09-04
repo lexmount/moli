@@ -1515,6 +1515,14 @@ impl DocumentRuntime {
         self.dom_host.set_media_network_state(handle, network_state)
     }
 
+    pub(crate) fn set_media_error_code(
+        &mut self,
+        handle: DomHandle,
+        error_code: Option<u32>,
+    ) -> bool {
+        self.dom_host.set_media_error_code(handle, error_code)
+    }
+
     pub(crate) fn set_checked_state_with_old_states(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,

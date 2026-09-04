@@ -153,6 +153,7 @@ pub struct ElementControlState {
     media_current_time: Option<f64>,
     media_ready_state: Option<u32>,
     media_network_state: Option<u32>,
+    media_error_code: Option<u32>,
     image_load_dispatched: bool,
     cryptographic_nonce: Option<String>,
     scroll_top: Option<f64>,
@@ -229,6 +230,7 @@ impl ElementControlState {
             state.media_current_time = Some(0.0);
             state.media_ready_state = Some(0);
             state.media_network_state = Some(0);
+            state.media_error_code = None;
         }
 
         Some(state)
@@ -371,6 +373,10 @@ impl ElementControlState {
 
     pub fn media_network_state(&self) -> Option<u32> {
         self.media_network_state
+    }
+
+    pub fn media_error_code(&self) -> Option<u32> {
+        self.media_error_code
     }
 
     pub fn scroll_top(&self) -> Option<f64> {
@@ -721,6 +727,14 @@ impl ElementControlState {
             return false;
         }
         self.media_network_state = Some(network_state);
+        true
+    }
+
+    pub fn set_media_error_code(&mut self, error_code: Option<u32>) -> bool {
+        if self.media_error_code == error_code {
+            return false;
+        }
+        self.media_error_code = error_code;
         true
     }
 

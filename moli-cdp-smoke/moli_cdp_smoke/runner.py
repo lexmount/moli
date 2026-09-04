@@ -63,6 +63,7 @@ from .groups.stagehand import run_stagehand_group
 from .groups.target_semantics import run_target_semantics_group
 from .groups.tracing import run_raw_tracing_group, run_tracing_group
 from .groups.url_policy import run_url_policy_group
+from .groups.media_error import run_media_error_group
 from .groups.workers import run_workers_group
 from .groups.xhr_sync_semantics import run_xhr_sync_semantics_group
 from .helpers import attach_cdp_event_collector
@@ -338,8 +339,14 @@ PAGE_GROUPS: tuple[SmokeGroup, ...] = (
 
 BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
     SmokeGroup(
+        "media-error",
+        "HTMLMediaElement MediaError publication, identity, and reset lifecycle.",
+        "browser",
+        run_media_error_group,
+    ),
+    SmokeGroup(
         "emulation-storage",
-        "Playwright screenshot-clip boundary, viewport, storage/cookie isolation, IndexedDB, and profile overrides.",
+        "Viewport, storage, profile, and detailed locale/timezone override contracts.",
         "browser",
         run_emulation_storage_group,
     ),

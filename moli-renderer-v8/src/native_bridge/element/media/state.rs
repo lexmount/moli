@@ -1,6 +1,10 @@
 use crate::document_runtime::DomHandle;
 use crate::dom::native::{Element, Node};
+use crate::util::{get_private_value, set_private_value};
 use crate::webidl;
+
+const MEDIA_ERROR_OBJECT_SLOT: &str = "__moliMediaElementErrorObject";
+const MEDIA_ERROR_OBJECT_CODE_SLOT: &str = "__moliMediaElementErrorObjectCode";
 
 use super::super::{
     dispatch_text_control_event, html_media_element_getter_receiver,
@@ -24,6 +28,68 @@ pub(in crate::native_bridge) fn media_paused_getter_function<'s>(
         .and_then(Node::as_element)
         .is_some_and(Element::media_paused);
     rv.set_bool(paused);
+}
+
+pub(in crate::native_bridge) fn media_error_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    let Some((runtime_ptr, handle)) =
+        html_media_element_getter_receiver(scope, args.this(), "error")
+    else {
+        rv.set_null();
+        return;
+    };
+    let error_code = unsafe { &*runtime_ptr }
+        .dom_host()
+        .node(handle)
+        .and_then(Node::as_element)
+        .and_then(Element::media_error_code);
+    let Some(error_code) = error_code else {
+        set_private_value(
+            scope,
+            args.this(),
+            MEDIA_ERROR_OBJECT_SLOT,
+            v8::undefined(scope).into(),
+        );
+        set_private_value(
+            scope,
+            args.this(),
+            MEDIA_ERROR_OBJECT_CODE_SLOT,
+            v8::undefined(scope).into(),
+        );
+        rv.set_null();
+        return;
+    };
+    let cached_code = get_private_value(scope, args.this(), MEDIA_ERROR_OBJECT_CODE_SLOT)
+        .and_then(|value| value.uint32_value(scope));
+    if cached_code == Some(error_code)
+        && let Some(error) = get_private_value(scope, args.this(), MEDIA_ERROR_OBJECT_SLOT)
+        && !error.is_undefined()
+    {
+        rv.set(error);
+        return;
+    }
+    let message = match error_code {
+        1 => "The fetching process for the media resource was aborted by the user agent.",
+        2 => "A network error prevented the media resource from being fetched.",
+        3 => "An error occurred while decoding the media resource.",
+        _ => "The media resource could not be loaded because its format is not supported.",
+    };
+    let Some(error) = crate::context_bootstrap::new_media_error_value(scope, error_code, message)
+    else {
+        rv.set_null();
+        return;
+    };
+    set_private_value(scope, args.this(), MEDIA_ERROR_OBJECT_SLOT, error.into());
+    set_private_value(
+        scope,
+        args.this(),
+        MEDIA_ERROR_OBJECT_CODE_SLOT,
+        v8::Integer::new_from_unsigned(scope, error_code).into(),
+    );
+    rv.set(error.into());
 }
 
 pub(in crate::native_bridge) fn media_volume_getter_function<'s>(

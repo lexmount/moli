@@ -2002,6 +2002,14 @@ impl JsContextHost {
         changed
     }
 
+    pub(crate) fn set_media_error_code(
+        &mut self,
+        handle: DomHandle,
+        error_code: Option<u32>,
+    ) -> bool {
+        unsafe { DocumentRuntime::set_media_error_code(&mut *self.runtime, handle, error_code) }
+    }
+
     pub(crate) fn set_media_muted(&mut self, handle: DomHandle, muted: bool) -> bool {
         let old_state = self.retained_current_element_state(handle);
         let changed =
