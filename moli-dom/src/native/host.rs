@@ -38,7 +38,7 @@ use self::query_index::ElementQueryIndex;
 use self::types::{
     CachedConnectedShadowRoots, CachedLiveCollection, LiveCollectionCacheKey,
     LiveCollectionCacheKind, MutationScope, NamedElementIndex, ShadowRootState,
-    ShadowSlotNameIndex,
+    ShadowSlotNameIndex, ThinArcStr,
 };
 pub use self::types::{ConnectedShadowRootSnapshot, DomHandle, DomHost};
 pub use self::types::{HostElementSnapshot, ShadowRootBindingSnapshot, ShadowRootInit};

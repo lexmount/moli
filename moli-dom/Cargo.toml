@@ -12,6 +12,7 @@ moli-html-input-temporal = { path = "../moli-html-input-temporal" }
 percent-encoding = "2.3"
 selectors = "0.40"
 serde_json = "1.0.145"
+servo_arc = "0.4.3"
 thin-vec = "0.2.14"
 url = "2.5.7"
 

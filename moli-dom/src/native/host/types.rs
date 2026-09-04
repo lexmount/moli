@@ -1,5 +1,10 @@
 use super::*;
-use std::sync::Arc;
+use servo_arc::ThinArc;
+use std::{
+    borrow::Borrow,
+    fmt,
+    hash::{Hash, Hasher},
+};
 
 pub type DomHandle = NativeNodeId;
 
@@ -10,8 +15,63 @@ pub struct HostElementSnapshot {
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct NamedElementIndex {
-    pub(super) handles_by_value: HashMap<Arc<str>, IndexSet<DomHandle>>,
-    pub(super) value_by_handle: HashMap<DomHandle, Arc<str>>,
+    pub(super) handles_by_value: HashMap<ThinArcStr, IndexSet<DomHandle>>,
+    pub(super) value_by_handle: HashMap<DomHandle, ThinArcStr>,
+}
+
+#[repr(transparent)]
+#[derive(Clone)]
+pub(super) struct ThinArcStr(ThinArc<(), u8>);
+
+impl ThinArcStr {
+    fn as_str(&self) -> &str {
+        // SAFETY: Construction only accepts UTF-8 `str` bytes, and the shared
+        // backing slice cannot be mutated.
+        unsafe { std::str::from_utf8_unchecked(self.0.slice()) }
+    }
+
+    #[cfg(test)]
+    pub(super) fn ptr_eq(&self, other: &Self) -> bool {
+        servo_arc::Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl From<&str> for ThinArcStr {
+    fn from(value: &str) -> Self {
+        Self(ThinArc::from_header_and_iter((), value.bytes()))
+    }
+}
+
+impl Borrow<str> for ThinArcStr {
+    fn borrow(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl AsRef<str> for ThinArcStr {
+    fn as_ref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl PartialEq for ThinArcStr {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for ThinArcStr {}
+
+impl Hash for ThinArcStr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
+    }
+}
+
+impl fmt::Debug for ThinArcStr {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.as_str().fmt(formatter)
+    }
 }
 
 #[derive(Debug, Clone, Default)]

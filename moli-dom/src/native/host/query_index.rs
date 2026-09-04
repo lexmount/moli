@@ -993,14 +993,14 @@ mod tests {
     #[test]
     fn named_candidate_index_shares_values_between_directions() {
         let mut host = test_host();
-        let element = host.create_element("div");
-        assert!(host.set_attribute(element, "id", "shared-identifier"));
-        assert!(host.append_child(host.document_handle(), element));
+        let first = host.create_element("div");
+        let second = host.create_element("span");
+        for element in [first, second] {
+            assert!(host.set_attribute(element, "id", "shared-identifier"));
+            assert!(host.append_child(host.document_handle(), element));
+        }
 
-        assert_eq!(
-            host.element_handle_by_id("shared-identifier"),
-            Some(element)
-        );
+        assert_eq!(host.element_handle_by_id("shared-identifier"), Some(first));
 
         let index = host.id_index.borrow();
         let index = index.as_ref().expect("materialized ID index");
@@ -1009,11 +1009,17 @@ mod tests {
             .keys()
             .find(|value| value.as_ref() == "shared-identifier")
             .expect("forward index key");
-        let reverse = index
-            .value_by_handle
-            .get(&element)
-            .expect("reverse index value");
-        assert!(std::sync::Arc::ptr_eq(forward, reverse));
+        for element in [first, second] {
+            let reverse = index
+                .value_by_handle
+                .get(&element)
+                .expect("reverse index value");
+            assert!(forward.ptr_eq(reverse));
+        }
+        assert_eq!(
+            std::mem::size_of::<ThinArcStr>(),
+            std::mem::size_of::<usize>()
+        );
     }
 
     #[test]

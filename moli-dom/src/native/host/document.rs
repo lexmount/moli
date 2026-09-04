@@ -320,13 +320,12 @@ impl DomHost {
             }
         }
         if let Some(current_value) = current_value {
-            let current_value = std::sync::Arc::<str>::from(current_value);
-            index
+            let entry = index
                 .handles_by_value
-                .entry(current_value.clone())
-                .or_default()
-                .insert(handle);
-            index.value_by_handle.insert(handle, current_value);
+                .entry(ThinArcStr::from(current_value));
+            let canonical_value = entry.key().clone();
+            entry.or_default().insert(handle);
+            index.value_by_handle.insert(handle, canonical_value);
         }
     }
 

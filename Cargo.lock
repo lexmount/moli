@@ -2482,6 +2482,7 @@ dependencies = [
  "percent-encoding",
  "selectors",
  "serde_json",
+ "servo_arc",
  "thin-vec",
  "url",
 ]
