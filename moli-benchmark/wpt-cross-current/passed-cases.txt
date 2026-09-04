@@ -5666,6 +5666,7 @@ html/semantics/document-metadata/the-meta-element/color-scheme/meta-color-scheme
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-1.html
 html/semantics/document-metadata/the-meta-element/http-equiv-and-name-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/dynamic-append.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/not-in-shadow-tree.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/http-equiv-enumerated-ascii-case-insensitive.html

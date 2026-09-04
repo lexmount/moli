@@ -124,7 +124,6 @@ html/editing/the-hidden-attribute/beforematch-attribute-removal-002.html
 html/editing/the-hidden-attribute/beforematch-element-removal-001.html
 html/editing/the-hidden-attribute/beforematch-element-removal-002.html
 html/editing/the-hidden-attribute/hidden-until-found-and-details.html
-html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/remove-from-document.html
 html/semantics/embedded-content/the-embed-element/embed-change-src.html
 html/semantics/embedded-content/the-iframe-element/change_parentage.html
@@ -185,6 +184,7 @@ navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-s
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler-reject.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler.html
+navigation-api/navigate-event/intercept-cross-origin.html
 navigation-api/navigate-event/navigate-form-requestSubmit.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
 navigation-api/navigate-event/navigation-traverseTo-navigates-top-and-same-doc-child-and-cross-doc-child.html
