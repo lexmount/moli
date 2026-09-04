@@ -1,7 +1,7 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, rc::Rc};
 
 use super::{
-    JsContextHost,
+    DateLocaleRuntimeState, JsContextHost,
     permissions::{permission_names_match, permission_override_name},
 };
 use crate::{
@@ -704,20 +704,20 @@ impl JsContextHost {
         &self.permission_overrides
     }
 
-    pub(crate) fn set_locale_override(&mut self, locale: Option<&str>) {
-        self.locale_override = locale.map(str::to_owned);
+    pub(crate) fn set_locale_override(&self, locale: Option<&str>) {
+        self.date_locale_runtime_state.set_locale(locale);
     }
 
-    pub(crate) fn set_timezone_override(&mut self, timezone: Option<&str>) {
-        self.timezone_override = timezone.map(str::to_owned);
+    pub(crate) fn set_timezone_override(&self, timezone: Option<&str>) {
+        self.date_locale_runtime_state.set_timezone(timezone);
     }
 
-    pub(crate) fn locale_override(&self) -> Option<&str> {
-        self.locale_override.as_deref()
+    pub(crate) fn date_locale_runtime_state(&self) -> Rc<DateLocaleRuntimeState> {
+        Rc::clone(&self.date_locale_runtime_state)
     }
 
-    pub(crate) fn timezone_override(&self) -> Option<&str> {
-        self.timezone_override.as_deref()
+    pub(crate) fn timezone_override(&self) -> Option<String> {
+        self.date_locale_runtime_state.timezone()
     }
 
     pub(crate) fn set_idle_override(
@@ -2000,6 +2000,14 @@ impl JsContextHost {
             );
         }
         changed
+    }
+
+    pub(crate) fn set_media_error_code(
+        &mut self,
+        handle: DomHandle,
+        error_code: Option<u32>,
+    ) -> bool {
+        unsafe { DocumentRuntime::set_media_error_code(&mut *self.runtime, handle, error_code) }
     }
 
     pub(crate) fn set_media_muted(&mut self, handle: DomHandle, muted: bool) -> bool {

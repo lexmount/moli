@@ -1,5 +1,5 @@
 use super::document_runtime::DomHandle;
-use super::native_bridge::JsContextHost;
+use super::native_bridge::{DateLocaleRuntimeState, JsContextHost};
 pub use moli_v8_util::{
     array_contains_strict, array_push_value, call_object_method, callback_data_index_value,
     callback_data_item, constructor_object, constructor_prototype, constructor_prototype_object,
@@ -360,6 +360,10 @@ pub(super) fn install_context_host_pointer_slot(
 ) {
     let host_ptr =
         NonNull::new(host_ptr).expect("V8 context JsContextHost pointer should not be null");
+    // SAFETY: the caller installs context slots while the owning ScriptVm's
+    // `Rc<RefCell<JsContextHost>>` is alive. Clone the independently owned
+    // Date/Intl state before exposing the context to script.
+    let date_locale_runtime_state = unsafe { host_ptr.as_ref() }.date_locale_runtime_state();
     let previous = context.set_slot(Rc::new(ContextHostPointerSlot(host_ptr)));
     assert!(
         previous
@@ -367,6 +371,19 @@ pub(super) fn install_context_host_pointer_slot(
             .is_none_or(|previous| previous.0 == host_ptr),
         "V8 context JsContextHost pointer must not be rebound"
     );
+    let previous = context.set_slot(Rc::clone(&date_locale_runtime_state));
+    assert!(
+        previous
+            .as_ref()
+            .is_none_or(|previous| Rc::ptr_eq(previous, &date_locale_runtime_state)),
+        "V8 context Date/Intl runtime state must not be rebound"
+    );
+}
+
+pub(super) fn date_locale_runtime_state_from_context(
+    context: v8::Local<'_, v8::Context>,
+) -> Option<Rc<DateLocaleRuntimeState>> {
+    context.get_slot::<DateLocaleRuntimeState>()
 }
 
 pub(super) fn context_host_ptr_from_context_slot(

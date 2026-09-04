@@ -8,16 +8,26 @@ use std::{
     sync::OnceLock,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
+use temporal_rs::{
+    PlainDateTime, TimeZone,
+    options::Disambiguation,
+    provider::{COMPILED_TZ_PROVIDER, TimeZoneProvider},
+};
 
 mod timers;
 
 pub use timers::{ReadyTimer, TimerId, TimerReadyAllowance, TimerScheduler};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DateLocaleFormatKind {
-    DateTime,
-    DateOnly,
-    TimeOnly,
+pub struct LocalDateFields {
+    pub year: i32,
+    pub month_zero_based: u8,
+    pub day: u8,
+    pub weekday_sunday_zero: u8,
+    pub hour: u8,
+    pub minute: u8,
+    pub second: u8,
+    pub millisecond: u16,
 }
 
 pub fn unix_epoch_millis() -> f64 {
@@ -60,47 +70,6 @@ pub fn dom_time_since_origin_millis(time_origin: f64) -> f64 {
     coarsened_dom_time_millis((unix_epoch_millis() - time_origin).max(0.0))
 }
 
-pub fn format_date_locale_value(
-    timestamp_ms: f64,
-    kind: DateLocaleFormatKind,
-    locale_override: Option<&str>,
-    timezone_override: Option<&str>,
-) -> String {
-    let Some(datetime) = offset_datetime_from_unix_millis(timestamp_ms) else {
-        return "Invalid Date".to_owned();
-    };
-    let datetime = datetime.to_offset(resolve_time_zone_offset(timezone_override));
-    let month = u8::from(datetime.month());
-    let day = datetime.day();
-    let year = datetime.year();
-    let hour24 = datetime.hour();
-    let minute = datetime.minute();
-    let second = datetime.second();
-    let (hour12, meridiem) = match hour24 {
-        0 => (12, "AM"),
-        1..=11 => (hour24, "AM"),
-        12 => (12, "PM"),
-        _ => (hour24 - 12, "PM"),
-    };
-    let locale = locale_override.unwrap_or("en-US").to_ascii_lowercase();
-    let is_french_like = locale.starts_with("fr");
-
-    match kind {
-        DateLocaleFormatKind::DateTime if is_french_like => {
-            format!("{day:02}/{month:02}/{year} {hour24:02}:{minute:02}:{second:02}")
-        }
-        DateLocaleFormatKind::DateOnly if is_french_like => format!("{day:02}/{month:02}/{year}"),
-        DateLocaleFormatKind::TimeOnly if is_french_like => {
-            format!("{hour24:02}:{minute:02}:{second:02}")
-        }
-        DateLocaleFormatKind::DateTime => {
-            format!("{month}/{day}/{year}, {hour12}:{minute:02}:{second:02} {meridiem}")
-        }
-        DateLocaleFormatKind::DateOnly => format!("{month}/{day}/{year}"),
-        DateLocaleFormatKind::TimeOnly => format!("{hour12}:{minute:02}:{second:02} {meridiem}"),
-    }
-}
-
 /// Formats the source modification time exposed by `Document.lastModified`.
 ///
 /// The HTML surface uses the user's local time zone unless CDP has installed
@@ -117,7 +86,7 @@ pub fn format_document_last_modified_value(
         .or_else(|| offset_datetime_from_unix_millis(current_timestamp_ms))
         .unwrap_or(time::OffsetDateTime::UNIX_EPOCH);
     let offset = match timezone_override {
-        Some(timezone) => resolve_time_zone_offset(Some(timezone)),
+        Some(timezone) => resolve_time_zone_offset(datetime, timezone),
         None => time::UtcOffset::local_offset_at(datetime).unwrap_or(time::UtcOffset::UTC),
     };
     let datetime = datetime.to_offset(offset);
@@ -137,19 +106,196 @@ fn offset_datetime_from_unix_millis(timestamp_ms: f64) -> Option<time::OffsetDat
     if !timestamp_ms.is_finite() {
         return None;
     }
-    let nanos = (timestamp_ms * 1_000_000.0).round();
-    if !nanos.is_finite() || nanos < i128::MIN as f64 || nanos > i128::MAX as f64 {
+    let whole_millis = timestamp_ms.trunc();
+    if whole_millis < i128::MIN as f64 || whole_millis > i128::MAX as f64 {
         return None;
     }
-    time::OffsetDateTime::from_unix_timestamp_nanos(nanos as i128).ok()
+    // Multiplying an epoch-sized millisecond value by 1e6 in f64 first loses
+    // precision (current dates are already around 1.7e18 nanoseconds). Split
+    // the value before scaling so integral ECMAScript Date milliseconds remain
+    // exact and only the sub-millisecond remainder is rounded.
+    let whole_nanos = (whole_millis as i128).checked_mul(1_000_000)?;
+    let fractional_nanos = ((timestamp_ms - whole_millis) * 1_000_000.0).round() as i128;
+    time::OffsetDateTime::from_unix_timestamp_nanos(whole_nanos.checked_add(fractional_nanos)?).ok()
 }
 
-fn resolve_time_zone_offset(timezone_override: Option<&str>) -> time::UtcOffset {
-    match timezone_override.unwrap_or_default() {
-        "Asia/Shanghai" => time::UtcOffset::from_hms(8, 0, 0).unwrap_or(time::UtcOffset::UTC),
-        "UTC" | "Etc/UTC" | "GMT" => time::UtcOffset::UTC,
-        _ => time::UtcOffset::UTC,
-    }
+fn unix_millis_from_offset_datetime(datetime: time::OffsetDateTime) -> f64 {
+    const NANOS_PER_MILLISECOND: i128 = 1_000_000;
+    let nanos = datetime.unix_timestamp_nanos();
+    let whole_millis = nanos.div_euclid(NANOS_PER_MILLISECOND);
+    let fractional_nanos = nanos.rem_euclid(NANOS_PER_MILLISECOND);
+    whole_millis as f64 + fractional_nanos as f64 / NANOS_PER_MILLISECOND as f64
+}
+
+fn resolve_time_zone_offset(datetime: time::OffsetDateTime, timezone: &str) -> time::UtcOffset {
+    let Some(offset_seconds) =
+        time_zone_offset_seconds_at(datetime.unix_timestamp_nanos(), timezone)
+    else {
+        return time::UtcOffset::UTC;
+    };
+    time::UtcOffset::from_whole_seconds(offset_seconds).unwrap_or(time::UtcOffset::UTC)
+}
+
+/// Resolves the IANA time-zone offset used by local `Date` operations.
+///
+/// The lookup is timestamp-sensitive, so daylight-saving transitions follow
+/// the same tzdb data used by Temporal instead of a fixed per-zone table.
+pub fn time_zone_offset_seconds(timestamp_ms: f64, timezone: &str) -> Option<i32> {
+    let datetime = offset_datetime_from_unix_millis(timestamp_ms)?;
+    time_zone_offset_seconds_at(datetime.unix_timestamp_nanos(), timezone)
+}
+
+pub fn local_time_zone_offset_seconds(timestamp_ms: f64) -> Option<i32> {
+    let datetime = offset_datetime_from_unix_millis(timestamp_ms)?;
+    Some(
+        time::UtcOffset::local_offset_at(datetime)
+            .unwrap_or(time::UtcOffset::UTC)
+            .whole_seconds(),
+    )
+}
+
+/// Returns whether the compiled IANA database recognizes a time-zone name.
+///
+/// Protocol surfaces must reject an unknown override before publishing it to
+/// a target. Date formatting deliberately has a UTC fallback for defensive
+/// rendering, so using an offset lookup as validation after committing state
+/// would turn an invalid CDP command into a misleading success.
+pub fn is_valid_time_zone_identifier(timezone: &str) -> bool {
+    !timezone.is_empty() && COMPILED_TZ_PROVIDER.get(timezone.as_bytes()).is_ok()
+}
+
+pub fn local_date_fields(timestamp_ms: f64, timezone: Option<&str>) -> Option<LocalDateFields> {
+    let datetime = offset_datetime_from_unix_millis(timestamp_ms)?;
+    let offset = timezone
+        .map(|timezone| resolve_time_zone_offset(datetime, timezone))
+        .unwrap_or_else(|| {
+            time::UtcOffset::local_offset_at(datetime).unwrap_or(time::UtcOffset::UTC)
+        });
+    let datetime = datetime.to_offset(offset);
+    Some(LocalDateFields {
+        year: datetime.year(),
+        month_zero_based: u8::from(datetime.month()).saturating_sub(1),
+        day: datetime.day(),
+        weekday_sunday_zero: datetime.weekday().number_days_from_sunday(),
+        hour: datetime.hour(),
+        minute: datetime.minute(),
+        second: datetime.second(),
+        millisecond: datetime.millisecond(),
+    })
+}
+
+/// Projects an instant into a UTC-shaped millisecond value whose fields are
+/// the instant's local wall-clock fields in `timezone`.
+///
+/// V8's UTC Date setters already implement ECMAScript argument conversion and
+/// field balancing. The renderer uses this projection as their temporary input
+/// and converts the resulting fields back with
+/// [`epoch_millis_for_local_wall_clock`], avoiding a second implementation of
+/// Date's normalization rules.
+pub fn local_wall_clock_as_utc_millis(timestamp_ms: f64, timezone: &str) -> Option<f64> {
+    let datetime = offset_datetime_from_unix_millis(timestamp_ms)?;
+    let offset = resolve_time_zone_offset(datetime, timezone);
+    let wall_clock = datetime
+        .to_offset(offset)
+        .replace_offset(time::UtcOffset::UTC);
+    Some(unix_millis_from_offset_datetime(wall_clock))
+}
+
+/// Interprets the UTC fields of `wall_clock_utc_ms` as a local wall-clock time
+/// in `timezone` and returns the corresponding ECMAScript epoch milliseconds.
+///
+/// Temporal's `Compatible` disambiguation matches legacy Date behavior: it
+/// chooses the earlier instant for a repeated clock time and advances across a
+/// daylight-saving gap.
+pub fn epoch_millis_for_local_wall_clock(wall_clock_utc_ms: f64, timezone: &str) -> Option<f64> {
+    let fields = offset_datetime_from_unix_millis(wall_clock_utc_ms)?;
+    let date_time = PlainDateTime::try_new_iso(
+        fields.year(),
+        u8::from(fields.month()),
+        fields.day(),
+        fields.hour(),
+        fields.minute(),
+        fields.second(),
+        fields.millisecond(),
+        0,
+        0,
+    )
+    .ok()?;
+    let time_zone = TimeZone::try_from_identifier_str(timezone).ok()?;
+    let zoned = date_time
+        .to_zoned_date_time(time_zone, Disambiguation::Compatible)
+        .ok()?;
+    Some(zoned.epoch_milliseconds() as f64)
+}
+
+pub fn format_date_local_string(timestamp_ms: f64, timezone: Option<&str>) -> String {
+    let Some(fields) = local_date_fields(timestamp_ms, timezone) else {
+        return "Invalid Date".to_owned();
+    };
+    format!(
+        "{} {} {:02} {:04} {}",
+        weekday_name(fields.weekday_sunday_zero),
+        month_name(fields.month_zero_based),
+        fields.day,
+        fields.year,
+        format_date_local_time_string(timestamp_ms, timezone),
+    )
+}
+
+pub fn format_date_local_date_string(timestamp_ms: f64, timezone: Option<&str>) -> String {
+    let Some(fields) = local_date_fields(timestamp_ms, timezone) else {
+        return "Invalid Date".to_owned();
+    };
+    format!(
+        "{} {} {:02} {:04}",
+        weekday_name(fields.weekday_sunday_zero),
+        month_name(fields.month_zero_based),
+        fields.day,
+        fields.year,
+    )
+}
+
+pub fn format_date_local_time_string(timestamp_ms: f64, timezone: Option<&str>) -> String {
+    let Some(fields) = local_date_fields(timestamp_ms, timezone) else {
+        return "Invalid Date".to_owned();
+    };
+    let offset_seconds = timezone
+        .and_then(|timezone| time_zone_offset_seconds(timestamp_ms, timezone))
+        .or_else(|| local_time_zone_offset_seconds(timestamp_ms))
+        .unwrap_or_default();
+    let sign = if offset_seconds < 0 { '-' } else { '+' };
+    let offset_minutes = offset_seconds.unsigned_abs() / 60;
+    let offset_hours = offset_minutes / 60;
+    let offset_minutes = offset_minutes % 60;
+    format!(
+        "{:02}:{:02}:{:02} GMT{sign}{offset_hours:02}{offset_minutes:02}",
+        fields.hour, fields.minute, fields.second,
+    )
+}
+
+fn weekday_name(weekday_sunday_zero: u8) -> &'static str {
+    ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+        .get(usize::from(weekday_sunday_zero))
+        .copied()
+        .unwrap_or("Invalid")
+}
+
+fn month_name(month_zero_based: u8) -> &'static str {
+    [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ]
+    .get(usize::from(month_zero_based))
+    .copied()
+    .unwrap_or("Invalid")
+}
+
+fn time_zone_offset_seconds_at(epoch_nanoseconds: i128, timezone: &str) -> Option<i32> {
+    let id = COMPILED_TZ_PROVIDER.get(timezone.as_bytes()).ok()?;
+    let seconds = COMPILED_TZ_PROVIDER
+        .transition_nanoseconds_for_utc_epoch_nanoseconds(id, epoch_nanoseconds)
+        .ok()?
+        .0;
+    i32::try_from(seconds).ok()
 }
 
 #[cfg(test)]
@@ -157,43 +303,78 @@ mod tests {
     use super::*;
 
     #[test]
-    fn date_locale_format_matches_existing_en_us_and_fr_surface() {
-        let timestamp = 1_704_067_384_005.0;
+    fn iana_timezone_offsets_follow_daylight_saving_transitions() {
+        let winter = 1_704_067_200_000.0; // 2024-01-01T00:00:00Z
+        let summer = 1_719_792_000_000.0; // 2024-07-01T00:00:00Z
 
+        assert_eq!(time_zone_offset_seconds(winter, "Europe/Paris"), Some(3600));
+        assert_eq!(time_zone_offset_seconds(summer, "Europe/Paris"), Some(7200));
         assert_eq!(
-            format_date_locale_value(timestamp, DateLocaleFormatKind::DateTime, None, Some("UTC")),
-            "1/1/2024, 12:03:04 AM"
+            time_zone_offset_seconds(winter, "America/New_York"),
+            Some(-18_000)
+        );
+        assert_eq!(time_zone_offset_seconds(winter, "Not/AZone"), None);
+        assert_eq!(
+            local_date_fields(winter, Some("Europe/Paris")),
+            Some(LocalDateFields {
+                year: 2024,
+                month_zero_based: 0,
+                day: 1,
+                weekday_sunday_zero: 1,
+                hour: 1,
+                minute: 0,
+                second: 0,
+                millisecond: 0,
+            })
         );
         assert_eq!(
-            format_date_locale_value(
-                timestamp,
-                DateLocaleFormatKind::DateOnly,
-                Some("fr-FR"),
-                Some("UTC")
-            ),
-            "01/01/2024"
-        );
-        assert_eq!(
-            format_date_locale_value(
-                timestamp,
-                DateLocaleFormatKind::TimeOnly,
-                Some("fr"),
-                Some("UTC")
-            ),
-            "00:03:04"
+            format_date_local_string(winter, Some("Europe/Paris")),
+            "Mon Jan 01 2024 01:00:00 GMT+0100"
         );
     }
 
     #[test]
-    fn date_locale_timezone_override_shifts_display_time() {
+    fn time_zone_identifier_validation_uses_the_same_compiled_database() {
+        assert!(is_valid_time_zone_identifier("UTC"));
+        assert!(is_valid_time_zone_identifier("Europe/Paris"));
+        assert!(!is_valid_time_zone_identifier(""));
+        assert!(!is_valid_time_zone_identifier("Mars/Olympus"));
+    }
+
+    #[test]
+    fn local_wall_clock_round_trips_through_the_selected_timezone() {
+        let instant = 1_704_067_200_123.0; // 2024-01-01T00:00:00.123Z
+        let wall_clock = local_wall_clock_as_utc_millis(instant, "Europe/Paris")
+            .expect("Paris wall clock should project");
+        assert_eq!(wall_clock, 1_704_070_800_123.0);
         assert_eq!(
-            format_date_locale_value(
-                0.0,
-                DateLocaleFormatKind::DateTime,
-                Some("en-US"),
-                Some("Asia/Shanghai")
-            ),
-            "1/1/1970, 8:00:00 AM"
+            epoch_millis_for_local_wall_clock(wall_clock, "Europe/Paris"),
+            Some(instant)
+        );
+    }
+
+    #[test]
+    fn epoch_millisecond_conversion_does_not_round_through_large_f64_nanoseconds() {
+        for timestamp_ms in [-1.0, 0.0, 1_704_130_496_789.0] {
+            let datetime = offset_datetime_from_unix_millis(timestamp_ms)
+                .expect("ECMAScript timestamp should be representable");
+            assert_eq!(unix_millis_from_offset_datetime(datetime), timestamp_ms);
+        }
+    }
+
+    #[test]
+    fn local_wall_clock_uses_legacy_date_dst_disambiguation() {
+        // 2024-03-10T02:30 does not exist in New York. Compatible
+        // disambiguation advances it to 03:30 EDT (07:30Z).
+        assert_eq!(
+            epoch_millis_for_local_wall_clock(1_710_037_800_000.0, "America/New_York"),
+            Some(1_710_055_800_000.0)
+        );
+        // 2024-11-03T01:30 occurs twice. Legacy Date selects the earlier EDT
+        // occurrence (05:30Z).
+        assert_eq!(
+            epoch_millis_for_local_wall_clock(1_730_597_400_000.0, "America/New_York"),
+            Some(1_730_611_800_000.0)
         );
     }
 
@@ -206,37 +387,6 @@ mod tests {
         assert_eq!(
             format_document_last_modified_value(None, 1_704_067_384_005.0, Some("UTC")),
             "01/01/2024 00:03:04"
-        );
-    }
-
-    #[test]
-    fn chromium_js_date_limits_stay_representable_with_large_dates() {
-        assert_eq!(
-            format_date_locale_value(
-                8_640_000_000_000_000.0,
-                DateLocaleFormatKind::DateTime,
-                Some("en-US"),
-                Some("UTC")
-            ),
-            "9/13/275760, 12:00:00 AM"
-        );
-        assert_eq!(
-            format_date_locale_value(
-                f64::INFINITY,
-                DateLocaleFormatKind::DateTime,
-                Some("en-US"),
-                Some("UTC")
-            ),
-            "Invalid Date"
-        );
-        assert_eq!(
-            format_date_locale_value(
-                f64::NAN,
-                DateLocaleFormatKind::DateTime,
-                Some("en-US"),
-                Some("UTC")
-            ),
-            "Invalid Date"
         );
     }
 

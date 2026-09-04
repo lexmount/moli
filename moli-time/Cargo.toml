@@ -5,6 +5,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+temporal_rs = { version = "0.1.2", default-features = false, features = ["compiled_data"] }
 time = { version = "0.3", features = ["large-dates", "local-offset"] }
 
 [lints]

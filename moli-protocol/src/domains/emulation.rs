@@ -590,6 +590,9 @@ fn start_timezone_override_command(
         let trimmed = params.timezone_id.trim();
         (!trimmed.is_empty()).then(|| trimmed.to_owned())
     };
+    if let Err(message) = validate_timezone_override(timezone_override.as_deref()) {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(-32602, message));
+    }
     if let Err(message) = conn
         .set_devtools_timezone_override_for_session_owner(cmd.session_id, timezone_override.clone())
     {
@@ -1786,6 +1789,8 @@ async fn execute_devtools_set_timezone_override_command_async(
     conn: &mut CdpConnection,
     command: DevToolsSetTimezoneOverrideCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
+    validate_timezone_override(command.timezone.as_deref())
+        .map_err(|message| DevToolsError::new(DevToolsErrorKind::InvalidArgument, message))?;
     if !command.target_ids.is_empty() {
         return execute_devtools_set_timezone_override_for_targets(conn, command).await;
     }
@@ -1796,6 +1801,13 @@ async fn execute_devtools_set_timezone_override_command_async(
         DevToolsErrorKind::InvalidArgument,
         "TimezoneOverrideRequiresContextOrUserContext",
     ))
+}
+
+fn validate_timezone_override(timezone: Option<&str>) -> Result<(), &'static str> {
+    if timezone.is_some_and(|timezone| !moli_time::is_valid_time_zone_identifier(timezone)) {
+        return Err("Invalid timezone id");
+    }
+    Ok(())
 }
 
 async fn execute_devtools_set_timezone_override_for_targets(

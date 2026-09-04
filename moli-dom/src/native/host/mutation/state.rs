@@ -517,6 +517,22 @@ impl DomHost {
         did_change
     }
 
+    pub fn set_media_error_code(&mut self, handle: DomHandle, error_code: Option<u32>) -> bool {
+        let did_change = {
+            let Some(element) = self
+                .node_mut(handle)
+                .and_then(|node| node.data_mut().as_element_mut())
+            else {
+                return false;
+            };
+            element.set_media_error_code(error_code)
+        };
+        if did_change {
+            self.record_mutation(MutationScope::LocalState);
+        }
+        did_change
+    }
+
     pub fn set_checked_state(&mut self, handle: DomHandle, checked: bool) -> bool {
         !self
             .set_checked_state_changed_handles(handle, checked)

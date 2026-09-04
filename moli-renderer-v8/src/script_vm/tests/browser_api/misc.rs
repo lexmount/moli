@@ -92,16 +92,15 @@ fn service_worker_csp_report_seen(
 #[test]
 fn date_locale_methods_use_shared_time_formatting_surface() {
     let mut vm = new_storage_test_vm("https://date-locale-formatting.test/");
+    vm.set_timezone_override(Some("UTC"));
 
     let us = vm
         .eval("new Date(0).toLocaleString()")
         .expect("default Date locale formatting should evaluate");
     assert_eq!(us, "1/1/1970, 12:00:00 AM");
 
-    vm.set_locale_override_and_sync_surface(Some("fr-FR"))
-        .expect("Date locale override should sync into private surface");
-    vm.set_timezone_override_and_sync_surface(Some("Asia/Shanghai"))
-        .expect("Date timezone override should sync into private surface");
+    vm.set_locale_override(Some("fr-FR"));
+    vm.set_timezone_override(Some("Asia/Shanghai"));
 
     let result = vm
         .eval(
@@ -141,8 +140,267 @@ fn date_locale_methods_use_shared_time_formatting_surface() {
 }
 
 #[test]
+fn emulation_defaults_drive_real_intl_and_local_date_operations() {
+    let mut vm = new_storage_test_vm("https://date-locale-emulation-surface.test/");
+    let baseline = vm
+        .eval(
+            r#"
+(() => {
+  const date = new Date('2024-01-01T00:00:00Z');
+  return JSON.stringify([
+    new Intl.NumberFormat().resolvedOptions().locale,
+    new Intl.DateTimeFormat().resolvedOptions().timeZone,
+    date.getTimezoneOffset(),
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    date.getDay(),
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+    date.getMilliseconds(),
+    date.toString(),
+    date.toDateString(),
+    date.toTimeString()
+  ]);
+})()
+"#,
+        )
+        .expect("baseline Intl and Date surfaces should evaluate");
+    vm.set_locale_override(Some("fr-FR"));
+    vm.set_timezone_override(Some("Europe/Paris"));
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const winter = new Date('2024-01-01T00:00:00Z');
+  const summer = new Date('2024-07-01T00:00:00Z');
+  return JSON.stringify({
+    locales: [
+      new Intl.Collator().resolvedOptions().locale,
+      new Intl.DateTimeFormat().resolvedOptions().locale,
+      new Intl.NumberFormat().resolvedOptions().locale,
+      new Intl.PluralRules().resolvedOptions().locale
+    ],
+    timezone: new Intl.DateTimeFormat().resolvedOptions().timeZone,
+    formattedAsFrench: new Intl.NumberFormat().format(1.5).endsWith(',5'),
+    winter: [winter.getTimezoneOffset(), winter.getHours(), winter.getDate()],
+    summer: [summer.getTimezoneOffset(), summer.getHours(), summer.getDate()],
+    strings: [winter.toString(), winter.toDateString(), winter.toTimeString()],
+    explicit: [
+      new Intl.NumberFormat('en-US').resolvedOptions().locale,
+      new Intl.DateTimeFormat('en-US', { timeZone: 'UTC' }).resolvedOptions().timeZone
+    ],
+    invalidOptions: (() => {
+      try { new Intl.DateTimeFormat(undefined, null); return 'accepted'; }
+      catch (error) { return error.name; }
+    })(),
+    navigatorLanguage: navigator.language
+  });
+})()
+"#,
+        )
+        .expect("Intl and Date emulation surfaces should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"locales":["fr-FR","fr-FR","fr-FR","fr-FR"],"timezone":"Europe/Paris","formattedAsFrench":true,"winter":[-60,1,1],"summer":[-120,2,1],"strings":["Mon Jan 01 2024 01:00:00 GMT+0100","Mon Jan 01 2024","01:00:00 GMT+0100"],"explicit":["en-US","UTC"],"invalidOptions":"TypeError","navigatorLanguage":"en-US"}"#
+    );
+
+    vm.set_locale_override(None);
+    vm.set_timezone_override(None);
+    let restored = vm
+        .eval(
+            r#"
+(() => {
+  const date = new Date('2024-01-01T00:00:00Z');
+  return JSON.stringify([
+    new Intl.NumberFormat().resolvedOptions().locale,
+    new Intl.DateTimeFormat().resolvedOptions().timeZone,
+    date.getTimezoneOffset(),
+    date.getFullYear(),
+    date.getMonth(),
+    date.getDate(),
+    date.getDay(),
+    date.getHours(),
+    date.getMinutes(),
+    date.getSeconds(),
+    date.getMilliseconds(),
+    date.toString(),
+    date.toDateString(),
+    date.toTimeString()
+  ]);
+})()
+"#,
+        )
+        .expect("restored Intl and Date surfaces should evaluate");
+    assert_eq!(restored, baseline);
+}
+
+#[test]
+fn emulation_preserves_intl_construction_and_complete_local_date_operations() {
+    let mut vm = new_storage_test_vm("https://date-locale-native-semantics.test/");
+    vm.set_locale_override(Some("fr-FR"));
+    vm.set_timezone_override(Some("America/New_York"));
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  let timeZoneReads = 0;
+  let getterReceiverPreserved = false;
+  const options = {
+    get timeZone() {
+      timeZoneReads += 1;
+      getterReceiverPreserved = this === options;
+      return undefined;
+    }
+  };
+  const optionFormat = new Intl.DateTimeFormat(undefined, options);
+
+  class DerivedNumberFormat extends Intl.NumberFormat {}
+  const numberFormat = new DerivedNumberFormat();
+  class DerivedDate extends Date {}
+  const derivedDate = new DerivedDate(2024, 0, 1);
+
+  const setter = new Date('2024-01-01T05:00:00Z');
+  const setterResult = setter.setHours(12, 34, 56, 789);
+  const gapSetter = new Date('2024-03-10T06:30:00Z');
+  gapSetter.setHours(2, 30, 0, 0);
+  const revived = new Date(NaN);
+  revived.setFullYear(2024, 0, 1);
+
+  const explicitLocaleOptions = {
+    timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23'
+  };
+  const explicitLocaleDate = new Date('2024-01-01T00:00:00Z');
+
+  return JSON.stringify({
+    intlSubclass: [
+      numberFormat instanceof DerivedNumberFormat,
+      numberFormat instanceof Intl.NumberFormat,
+      Object.getPrototypeOf(numberFormat) === DerivedNumberFormat.prototype,
+      numberFormat.resolvedOptions().locale
+    ],
+    options: [
+      timeZoneReads,
+      getterReceiverPreserved,
+      optionFormat.resolvedOptions().timeZone
+    ],
+    dateSubclass: [
+      derivedDate instanceof DerivedDate,
+      derivedDate instanceof Date,
+      Object.getPrototypeOf(derivedDate) === DerivedDate.prototype,
+      derivedDate.toISOString()
+    ],
+    constructors: [
+      new Date(2024, 0, 1).toISOString(),
+      new Date(2024, 6, 1).toISOString(),
+      new Date(2024, 2, 10, 2, 30).toISOString(),
+      new Date(2024, 10, 3, 1, 30).toISOString()
+    ],
+    parsing: [
+      new Date('2024-01-01T00:00:00').toISOString(),
+      new Date(Date.parse('2024-01-01T00:00:00')).toISOString(),
+      new Date('2024-01-01').toISOString(),
+      new Date('2024-01-01T00:00:00+02:00').toISOString()
+    ],
+    setters: [setterResult, setter.toISOString(), gapSetter.toISOString(), revived.toISOString()],
+    functionCallUsesOverride: /GMT-0[45]00/.test(Date()),
+    explicitLocalePreserved:
+      explicitLocaleDate.toLocaleString('en-US', explicitLocaleOptions) ===
+      new Intl.DateTimeFormat('en-US', explicitLocaleOptions).format(explicitLocaleDate),
+    reflection: [
+      Date.name,
+      Date.length,
+      typeof Date.UTC,
+      typeof Date.parse,
+      Object.getOwnPropertyDescriptor(Date, 'UTC').enumerable,
+      Intl.NumberFormat.name,
+      Intl.NumberFormat.length,
+      typeof Intl.NumberFormat.supportedLocalesOf
+    ]
+  });
+})()
+"#,
+        )
+        .expect("native Intl and complete local Date semantics should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"intlSubclass":[true,true,true,"fr-FR"],"options":[1,true,"America/New_York"],"dateSubclass":[true,true,true,"2024-01-01T05:00:00.000Z"],"constructors":["2024-01-01T05:00:00.000Z","2024-07-01T04:00:00.000Z","2024-03-10T07:30:00.000Z","2024-11-03T05:30:00.000Z"],"parsing":["2024-01-01T05:00:00.000Z","2024-01-01T05:00:00.000Z","2024-01-01T00:00:00.000Z","2023-12-31T22:00:00.000Z"],"setters":[1704130496789,"2024-01-01T17:34:56.789Z","2024-03-10T07:30:00.000Z","2024-01-01T05:00:00.000Z"],"functionCallUsesOverride":true,"explicitLocalePreserved":true,"reflection":["Date",7,"function","function",false,"NumberFormat",0,"function"]}"#
+    );
+}
+
+#[test]
+fn date_locale_override_updates_reach_existing_main_child_and_isolated_realms() {
+    let mut vm = new_parsed_test_vm(
+        "https://date-locale-shared-state.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+    vm.eval(
+        r#"
+const iframe = document.createElement("iframe");
+iframe.srcdoc = "<!doctype html><html><body></body></html>";
+document.body.appendChild(iframe);
+"ready"
+"#,
+    )
+    .expect("child Date/Intl realm setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    let child_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .next()
+        .expect("child Date/Intl realm should be materialized")
+        .context_id;
+    let top_isolated_context_id = vm
+        .create_isolated_world("date-locale-shared-state", false)
+        .expect("top isolated Date/Intl realm should be created");
+    const PROBE: &str = r#"
+[
+  new Intl.DateTimeFormat().resolvedOptions().locale,
+  new Intl.DateTimeFormat().resolvedOptions().timeZone,
+  new Date(0).getHours()
+].join("|")
+"#;
+
+    vm.set_locale_override(Some("fr-FR"));
+    vm.set_timezone_override(Some("Asia/Shanghai"));
+    assert_eq!(vm.eval(PROBE).unwrap(), "fr-FR|Asia/Shanghai|8");
+    assert_eq!(
+        vm.eval_in_child_default_context(child_context_id, PROBE)
+            .unwrap(),
+        "fr-FR|Asia/Shanghai|8"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(top_isolated_context_id, PROBE)
+            .unwrap(),
+        "fr-FR|Asia/Shanghai|8"
+    );
+
+    vm.set_locale_override(Some("en-US"));
+    vm.set_timezone_override(Some("America/New_York"));
+    assert_eq!(vm.eval(PROBE).unwrap(), "en-US|America/New_York|19");
+    assert_eq!(
+        vm.eval_in_child_default_context(child_context_id, PROBE)
+            .unwrap(),
+        "en-US|America/New_York|19"
+    );
+    assert_eq!(
+        vm.eval_in_isolated_context(top_isolated_context_id, PROBE)
+            .unwrap(),
+        "en-US|America/New_York|19"
+    );
+}
+
+#[test]
 fn date_locale_methods_are_declared_on_date_prototype() {
     let mut vm = new_storage_test_vm("https://date-locale-declared.test/");
+    vm.set_timezone_override(Some("UTC"));
 
     let result = vm
         .eval(
@@ -2114,6 +2372,46 @@ fn font_face_binary_source_union_rejects_invalid_font_data() {
     assert_eq!(
         result,
         r#"{"source":"","status":"error","samePromise":true,"readyChanged":true,"setStatus":"loaded","events":["loading:0:true","loadingerror:1:true"],"rejection":"SyntaxError"}"#
+    );
+}
+
+#[test]
+fn font_face_rejects_malformed_string_and_magic_prefixed_payloads() {
+    let mut vm = new_storage_test_vm("https://font-face-payload-validation.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const invalidSource = new FontFace('InvalidSource', 'garbage');
+  const invalidUrl = new FontFace(
+    'InvalidUrl',
+    'url("data:font/woff2;base64,d09GMmdhcmJhZ2U=")'
+  );
+  const invalidBytes = new FontFace(
+    'InvalidBytes',
+    new TextEncoder().encode('wOF2garbage')
+  );
+  globalThis.__fontFaceMalformedProbe = {
+    initial: [invalidSource.status, invalidUrl.status, invalidBytes.status],
+    settled: ['pending', 'pending', 'pending']
+  };
+  [invalidSource, invalidUrl, invalidBytes].forEach((face, index) => {
+    face.load().then(
+      () => { __fontFaceMalformedProbe.settled[index] = 'resolved'; },
+      error => { __fontFaceMalformedProbe.settled[index] = error.name; }
+    );
+  });
+})()
+"#,
+    )
+    .expect("malformed FontFace payload probe should initialize");
+
+    let result = vm
+        .eval("JSON.stringify(globalThis.__fontFaceMalformedProbe)")
+        .expect("malformed FontFace payload promises should settle");
+    assert_eq!(
+        result,
+        r#"{"initial":["error","error","error"],"settled":["SyntaxError","NetworkError","SyntaxError"]}"#
     );
 }
 

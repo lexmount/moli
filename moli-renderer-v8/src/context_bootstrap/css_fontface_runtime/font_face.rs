@@ -3,7 +3,9 @@ use crate::{
     util::{callback_data_index_value, callback_data_item, get_private_value, set_private_value},
     webidl,
 };
+use data_url::DataUrl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
+use url::Url;
 
 #[derive(WebApiObject)]
 #[webapi(interface = "FontFace")]
@@ -251,12 +253,36 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
     };
     let display = descriptor_string_property(scope, descriptors, "display", "auto");
     let (source, status, loaded) = match parsed.source {
+        FontFaceConstructorSource::Css(source)
+            if moli_css_parse::normalize_font_face_src(&source).is_none() =>
+        {
+            let loaded = super::query::make_rejected_dom_exception_promise(
+                scope,
+                "SyntaxError",
+                "Invalid FontFace source descriptor.",
+            );
+            (source, "error", Some(loaded))
+        }
+        FontFaceConstructorSource::Css(source)
+            if font_face_data_url_bytes(&source).is_some_and(|bytes| {
+                bytes
+                    .as_deref()
+                    .is_none_or(|bytes| moli_layout::validate_web_font_bytes(bytes).is_err())
+            }) =>
+        {
+            let loaded = super::query::make_rejected_dom_exception_promise(
+                scope,
+                "NetworkError",
+                "The FontFace data URL does not contain a valid font.",
+            );
+            (source, "error", Some(loaded))
+        }
         FontFaceConstructorSource::Css(source) => {
             let loaded = resolved_promise(scope, this.into());
             (source, "loaded", loaded)
         }
         FontFaceConstructorSource::Binary(bytes)
-            if moli_web_mime::sniff_font_mime_type(&bytes).is_some() =>
+            if moli_layout::validate_web_font_bytes(&bytes).is_ok() =>
         {
             let loaded = resolved_promise(scope, this.into());
             (String::new(), "loaded", loaded)
@@ -286,6 +312,21 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
     .initialize(scope, this)
     .expect("FontFace declaration should initialize object");
     rv.set(this.into());
+}
+
+fn font_face_data_url_bytes(source: &str) -> Option<Option<Vec<u8>>> {
+    let normalized = moli_css_parse::normalize_font_face_src(source)?;
+    let base_url = Url::parse("about:blank").expect("static FontFace base URL should parse");
+    let request_url = crate::css_resource_urls::preferred_font_source_url(&normalized, &base_url)?;
+    if request_url.scheme() != "data" {
+        return None;
+    }
+    Some(
+        DataUrl::process(request_url.as_str())
+            .ok()
+            .and_then(|data_url| data_url.decode_to_vec().ok())
+            .map(|(bytes, _)| bytes),
+    )
 }
 
 fn font_face_constructor_source_arg<'s>(

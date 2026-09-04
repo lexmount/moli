@@ -533,12 +533,12 @@ pub(super) use media::{
     media_cross_origin_getter_function, media_cross_origin_setter_function,
     media_current_time_getter_function, media_current_time_setter_function,
     media_default_muted_getter_function, media_default_muted_setter_function,
-    media_duration_getter_function, media_ended_getter_function, media_height_getter_function,
-    media_height_setter_function, media_load_callback, media_loading_getter_function,
-    media_loading_setter_function, media_loop_getter_function, media_loop_setter_function,
-    media_muted_getter_function, media_muted_setter_function, media_network_state_getter_function,
-    media_pause_callback, media_paused_getter_function, media_play_callback,
-    media_playback_rate_getter_function, media_playback_rate_setter_function,
+    media_duration_getter_function, media_ended_getter_function, media_error_getter_function,
+    media_height_getter_function, media_height_setter_function, media_load_callback,
+    media_loading_getter_function, media_loading_setter_function, media_loop_getter_function,
+    media_loop_setter_function, media_muted_getter_function, media_muted_setter_function,
+    media_network_state_getter_function, media_pause_callback, media_paused_getter_function,
+    media_play_callback, media_playback_rate_getter_function, media_playback_rate_setter_function,
     media_plays_inline_getter_function, media_plays_inline_setter_function,
     media_poster_getter_function, media_poster_setter_function, media_preload_getter_function,
     media_preload_setter_function, media_ready_state_getter_function,
@@ -5234,6 +5234,8 @@ struct HtmlHtmlElementPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "HTMLMediaElement", enumerable)]
 struct HtmlMediaElementPrototypeDeclaration {
+    #[webapi(accessor_property, getter = media_error_getter_function)]
+    error: (),
     #[webapi(
         accessor_property = "crossOrigin",
         getter = media_cross_origin_getter_function,
