@@ -2727,7 +2727,6 @@ html/browsers/browsing-the-web/navigating-across-documents/abort-document-load.h
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-204-fragment.html
 html/browsers/browsing-the-web/navigating-across-documents/plugin-document.historical.html
 html/browsers/browsing-the-web/navigating-across-documents/refresh/after-same-document-navigation.html
-html/browsers/browsing-the-web/navigating-across-documents/refresh/same-document-refresh.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-requestsubmit-during-load.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-requestsubmit-during-pageshow.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/form-requestsubmit.html

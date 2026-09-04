@@ -5221,6 +5221,7 @@ html/browsers/browsing-the-web/navigating-across-documents/navigate-cross-origin
 html/browsers/browsing-the-web/navigating-across-documents/navigate-to-unparseable-url.html
 html/browsers/browsing-the-web/navigating-across-documents/navigation-unload-form-submit.html
 html/browsers/browsing-the-web/navigating-across-documents/navigation-unload-same-origin-fragment.html
+html/browsers/browsing-the-web/navigating-across-documents/refresh/same-document-refresh.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/a-click-during-load.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/a-click-during-pageshow.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/a-click.html
