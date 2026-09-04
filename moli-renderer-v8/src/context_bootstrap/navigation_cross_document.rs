@@ -113,6 +113,7 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
         child_handle,
         next_url.as_str(),
         entry_seed,
+        matches!(mutation, NavigationHistoryMutation::Push),
     );
     host.sync_existing_child_browsing_context_window_state(scope, child_handle);
     navigation_signal
