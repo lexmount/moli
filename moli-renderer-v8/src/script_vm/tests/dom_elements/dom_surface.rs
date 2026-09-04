@@ -12211,6 +12211,7 @@ fn explicit_about_blank_iframe_variants_reuse_initial_empty_document_synchronous
 (() => {
   const root = document.body || document.documentElement || document;
   const variants = ["about:blank", "about:blank#foo", "about:blank?foo"];
+  const initialJointLength = history.length;
   globalThis.__explicitInitialBlankFrames = [];
   const observed = variants.map(src => {
     const frame = document.createElement("iframe");
@@ -12231,9 +12232,11 @@ fn explicit_about_blank_iframe_variants_reuse_initial_empty_document_synchronous
       child.document.body.textContent,
       child.navigation.entries().map(entry => entry.url).join(","),
       child.navigation.activation === null,
+      child.history.length,
+      history.length,
     ].join("|");
   });
-  return JSON.stringify(observed);
+  return JSON.stringify({initialJointLength, observed});
 })()
 "##,
         )
@@ -12241,7 +12244,7 @@ fn explicit_about_blank_iframe_variants_reuse_initial_empty_document_synchronous
 
     assert_eq!(
         result,
-        r##"["load|about:blank|about:blank|about:blank|about:blank|true","load|about:blank#foo|about:blank#foo|about:blank#foo|about:blank#foo|true","load|about:blank?foo|about:blank?foo|about:blank?foo|about:blank?foo|true"]"##
+        r##"{"initialJointLength":1,"observed":["load|about:blank|about:blank|about:blank|about:blank|true|1|1","load|about:blank#foo|about:blank#foo|about:blank#foo|about:blank#foo|true|1|1","load|about:blank?foo|about:blank?foo|about:blank?foo|about:blank?foo|true|1|1"]}"##
     );
     assert!(
         !vm.has_pending_child_navigation_commit_for_test(),
@@ -12256,15 +12259,19 @@ fn explicit_about_blank_iframe_variants_reuse_initial_empty_document_synchronous
     assert_eq!(
         vm.eval(
             r##"
-JSON.stringify(__explicitInitialBlankFrames.map(({child, windowEvents}) => [
-  child.location.href,
-  child.document.body.textContent,
-  windowEvents.join(","),
-]))
+JSON.stringify({
+  jointLength: history.length,
+  frames: __explicitInitialBlankFrames.map(({child, windowEvents}) => [
+    child.location.href,
+    child.document.body.textContent,
+    child.history.length,
+    windowEvents.join(","),
+  ]),
+})
 "##,
         )
         .expect("explicit initial about:blank state should remain stable"),
-        r##"[["about:blank","about:blank",""],["about:blank#foo","about:blank#foo",""],["about:blank?foo","about:blank?foo",""]]"##
+        r##"{"jointLength":1,"frames":[["about:blank","about:blank",1,""],["about:blank#foo","about:blank#foo",1,""],["about:blank?foo","about:blank?foo",1,""]]}"##
     );
 }
 
