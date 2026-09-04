@@ -37,8 +37,8 @@ pub use self::mutation::{
 use self::query_index::ElementQueryIndex;
 use self::types::{
     CachedConnectedShadowRoots, CachedLiveCollection, LiveCollectionCacheKey,
-    LiveCollectionCacheKind, MutationScope, NamedElementIndex, ShadowRootState,
-    ShadowSlotNameIndex, ThinArcStr,
+    LiveCollectionCacheKind, MutationScope, NamedElementHandles, NamedElementIndex,
+    ShadowRootState, ShadowSlotNameIndex, ThinArcStr,
 };
 pub use self::types::{ConnectedShadowRootSnapshot, DomHandle, DomHost};
 pub use self::types::{HostElementSnapshot, ShadowRootBindingSnapshot, ShadowRootInit};

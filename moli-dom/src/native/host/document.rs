@@ -307,14 +307,10 @@ impl DomHost {
             return;
         }
         if let Some(previous_value) = index.value_by_handle.remove(&handle) {
-            let remove_key =
-                index
-                    .handles_by_value
-                    .get_mut(&previous_value)
-                    .is_some_and(|handles| {
-                        handles.swap_remove(&handle);
-                        handles.is_empty()
-                    });
+            let remove_key = index
+                .handles_by_value
+                .get_mut(&previous_value)
+                .is_some_and(|handles| handles.remove(handle));
             if remove_key {
                 index.handles_by_value.remove(&previous_value);
             }
@@ -324,7 +320,14 @@ impl DomHost {
                 .handles_by_value
                 .entry(ThinArcStr::from(current_value));
             let canonical_value = entry.key().clone();
-            entry.or_default().insert(handle);
+            match entry {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().insert(handle);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(NamedElementHandles::One(handle));
+                }
+            }
             index.value_by_handle.insert(handle, canonical_value);
         }
     }
@@ -464,7 +467,7 @@ impl DomHost {
 
     fn first_current_named_candidate(
         &self,
-        candidates: &IndexSet<DomHandle>,
+        candidates: &NamedElementHandles,
         key: &str,
         read_value: impl Fn(&Element) -> Option<&str>,
     ) -> Option<DomHandle> {
