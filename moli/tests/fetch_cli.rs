@@ -8,6 +8,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::get,
 };
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use clap::Parser;
 use moli::{
     app,
@@ -273,6 +274,47 @@ fn assert_json_dump_shape(payload: &Value, expected_url: &str, expected_status: 
     assert!(payload["html"].is_string(), "payload={payload}");
 }
 
+fn assert_raw_json_dump_shape(
+    payload: &Value,
+    expected_url: &str,
+    expected_status: u64,
+    expected_body: &[u8],
+) {
+    let Some(object) = payload.as_object() else {
+        panic!("expected top-level JSON object, got {payload}");
+    };
+
+    let mut keys = object.keys().cloned().collect::<Vec<_>>();
+    keys.sort();
+    assert_eq!(
+        keys,
+        vec![
+            "body_base64",
+            "final_url",
+            "headers",
+            "html",
+            "redirect_chain",
+            "status",
+            "title",
+        ]
+    );
+    assert_eq!(payload["final_url"], expected_url);
+    assert_eq!(payload["status"], expected_status);
+    assert!(payload["title"].is_null(), "payload={payload}");
+    assert!(payload["headers"].is_array(), "payload={payload}");
+    assert!(payload["redirect_chain"].is_array(), "payload={payload}");
+    assert!(payload["html"].is_null(), "payload={payload}");
+    let encoded = payload["body_base64"]
+        .as_str()
+        .expect("raw JSON body must be a base64 string");
+    assert_eq!(
+        BASE64_STANDARD
+            .decode(encoded)
+            .expect("raw JSON body must contain valid base64"),
+        expected_body
+    );
+}
+
 fn unique_temp_dir(name: &str) -> Result<PathBuf> {
     let nonce = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
     let dir = std::env::temp_dir().join(format!("moli-{name}-{}-{nonce}", std::process::id()));
@@ -293,6 +335,13 @@ struct CacheableFixtureServer {
 const PDF_FIXTURE_BODY: &[u8] =
     b"%PDF-1.7\n% moli raw document fixture\n1 0 obj\n<<>>\nendobj\n%%EOF\n";
 const VIDEO_FIXTURE_BODY: &[u8] = b"\0\0\0\x18ftypmp42\xff\0moli-video-fixture";
+const PNG_FIXTURE_BODY: &[u8] = &[
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x06, 0x00, 0x00, 0x00, 0x1f, 0x15, 0xc4,
+    0x89, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x44, 0x41, 0x54, 0x08, 0x1d, 0x63, 0xf8, 0xcf, 0xc0, 0xf0,
+    0x1f, 0x00, 0x05, 0x80, 0x02, 0x3f, 0x49, 0xc2, 0xfa, 0x39, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45,
+    0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+];
 
 struct BinaryDocumentFixtureServer {
     base_url: String,
@@ -529,11 +578,16 @@ impl BinaryDocumentFixtureServer {
             )
         }
 
+        async fn inline_png() -> impl IntoResponse {
+            ([("content-type", "image/png")], PNG_FIXTURE_BODY.to_vec())
+        }
+
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let app = Router::new()
             .route("/inline.pdf", get(inline_pdf))
             .route("/clip.mp4", get(inline_video))
+            .route("/pixel.png", get(inline_png))
             .route("/attachment.html", get(attachment_pdf));
         let task = tokio::spawn(async move {
             axum::serve(listener, app)
@@ -1114,6 +1168,33 @@ fn cli_fetch_without_dump_writes_attachment_verbatim() -> Result<()> {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(output.stdout, PDF_FIXTURE_BODY);
+    Ok(())
+}
+
+#[test]
+fn cli_dump_json_encodes_raw_documents_losslessly() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(BinaryDocumentFixtureServer::spawn())?;
+
+    for (path, expected_body) in [
+        ("/pixel.png", PNG_FIXTURE_BODY),
+        ("/inline.pdf", PDF_FIXTURE_BODY),
+        ("/clip.mp4", VIDEO_FIXTURE_BODY),
+        ("/attachment.html", PDF_FIXTURE_BODY),
+    ] {
+        let url = server.url(path);
+        let output = run_fetch_cli_with_dump_and_args(&url, "json", &[])?;
+        assert!(
+            output.status.success(),
+            "path={path} stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let payload: Value = serde_json::from_slice(&output.stdout)?;
+        assert_raw_json_dump_shape(&payload, &url, 200, expected_body);
+    }
+
+    runtime.block_on(server.shutdown());
     Ok(())
 }
 
@@ -3476,10 +3557,8 @@ fn cli_default_done_returns_raw_http_error_status_and_body() -> Result<()> {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = clean_output(&output.stdout);
-    let payload: Value = serde_json::from_str(&stdout)?;
-    assert_json_dump_shape(&payload, &url, 404);
-    assert_eq!(payload["html"], "raw-error-body");
+    let payload: Value = serde_json::from_slice(&output.stdout)?;
+    assert_raw_json_dump_shape(&payload, &url, 404, b"raw-error-body");
     Ok(())
 }
 
@@ -3746,10 +3825,8 @@ fn cli_slow_streaming_raw_404_returns_complete_status_and_body() -> Result<()> {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
-    let stdout = clean_output(&output.stdout);
-    let payload: Value = serde_json::from_str(&stdout)?;
-    assert_json_dump_shape(&payload, &url, 404);
-    assert_eq!(payload["html"], "slow-raw-404-head|slow-raw-404-tail");
+    let payload: Value = serde_json::from_slice(&output.stdout)?;
+    assert_raw_json_dump_shape(&payload, &url, 404, b"slow-raw-404-head|slow-raw-404-tail");
     Ok(())
 }
 

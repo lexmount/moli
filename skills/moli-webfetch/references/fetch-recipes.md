@@ -18,14 +18,17 @@
 | Read page content | `--dump markdown` | Default for research and summarization |
 | Inspect semantic structure | `--dump semantic_tree_text` | Compact roles, labels, text, and backend node IDs |
 | Process semantic structure | `--dump semantic_tree` | Structured accessibility-oriented payload |
-| Process stable fields | `--dump json` | Returns `final_url`, `status`, `title`, `headers`, `redirect_chain`, and `html` |
+| Process stable fields | `--dump json` | Returns response metadata plus rendered `html` or a raw `body_base64` |
 | Inspect exact DOM | `--dump html` | Useful when Markdown loses important structure |
 | Diagnose requests | `--dump json --trace-network` | Adds the `network` object |
 | Capture the viewport | `--layout --dump screenshot` | Writes PNG bytes to stdout |
 | Capture the full document | `--layout --dump screenshot_full` | Writes one full-page PNG to stdout |
 | Capture a paginated document | `--layout --dump pdf` | Writes PDF bytes to stdout |
 
-Raw non-HTML responses support only `html` and `json`.
+When `--dump` is omitted, raw downloads are written byte-for-byte to stdout.
+With `--dump json`, their `html` and `title` fields are null and the exact body
+is encoded in `body_base64`. Other explicit dump formats require a renderable
+HTML document.
 
 JSON `headers` is an ordered list of `{name, value}` records so duplicate
 headers are preserved. `redirect_chain` contains every main-navigation HTTP

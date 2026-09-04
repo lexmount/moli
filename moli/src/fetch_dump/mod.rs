@@ -104,21 +104,18 @@ pub(crate) fn render_raw_document_output(
     match policy {
         RawDocumentOutputPolicy::Passthrough => Ok(raw.body_bytes().to_vec()),
         RawDocumentOutputPolicy::Json => {
-            let html = String::from_utf8_lossy(raw.body_bytes());
             let redirect_chain = raw
                 .navigation_redirect_chain()
                 .iter()
                 .cloned()
                 .map(Into::into)
                 .collect::<Vec<_>>();
-            let payload = dom::render_json_payload(
+            let payload = dom::render_raw_json_payload(
                 raw.final_url().as_str(),
                 raw.status(),
-                None,
                 raw.headers(),
                 &redirect_chain,
-                &html,
-                None,
+                raw.body_bytes(),
             )?;
             Ok(payload.into_bytes())
         }

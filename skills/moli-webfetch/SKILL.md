@@ -83,7 +83,8 @@ structure-first; enable layout only when the result needs pixels or pagination.
   when roles and accessible names matter.
 - Use `json` for automation that needs `final_url`, HTTP `status`, `title`,
   duplicate-safe response `headers`, the main-navigation `redirect_chain`,
-  serialized `html`, or network trace data.
+  serialized `html`, or network trace data. For a raw download, `html` is null
+  and `body_base64` contains the exact response bytes.
 - Use `html` to diagnose DOM serialization or preserve exact markup.
 - Use `--eval` for a focused value or structured extraction from the live page
   without dumping the full DOM.

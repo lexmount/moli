@@ -1,4 +1,5 @@
 use anyhow::Result;
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use moli_core::page::{
     Page, RendererPageDumpFormat, RendererPageDumpOptions, RendererPageDumpStripOptions,
     SubresourceResponseWaitCriteria,
@@ -59,6 +60,39 @@ pub(super) fn render_json_payload(
     network: Option<Value>,
 ) -> Result<String> {
     // Keep --dump json as a stable machine interface for scrapling-style callers.
+    let mut payload = response_metadata(final_url, status, title, headers, redirect_chain);
+    payload.insert("html".to_owned(), json!(html));
+    if let Some(network) = network {
+        payload.insert("network".to_owned(), network);
+    }
+    Ok(serde_json::to_string_pretty(&Value::Object(payload))?)
+}
+
+pub(super) fn render_raw_json_payload(
+    final_url: &str,
+    status: u16,
+    headers: &[(String, String)],
+    redirect_chain: &[moli_core::page::NavigationRedirect],
+    body: &[u8],
+) -> Result<String> {
+    let mut payload = response_metadata(final_url, status, None, headers, redirect_chain);
+    payload.insert("html".to_owned(), Value::Null);
+    // Raw responses may contain arbitrary bytes. Always use one lossless
+    // representation instead of changing the schema based on UTF-8 validity.
+    payload.insert(
+        "body_base64".to_owned(),
+        Value::String(BASE64_STANDARD.encode(body)),
+    );
+    Ok(serde_json::to_string_pretty(&Value::Object(payload))?)
+}
+
+fn response_metadata(
+    final_url: &str,
+    status: u16,
+    title: Option<&str>,
+    headers: &[(String, String)],
+    redirect_chain: &[moli_core::page::NavigationRedirect],
+) -> Map<String, Value> {
     let mut payload = Map::new();
     payload.insert("final_url".to_owned(), json!(final_url));
     payload.insert("status".to_owned(), json!(status));
@@ -73,11 +107,7 @@ pub(super) fn render_json_payload(
                 .collect(),
         ),
     );
-    payload.insert("html".to_owned(), json!(html));
-    if let Some(network) = network {
-        payload.insert("network".to_owned(), network);
-    }
-    Ok(serde_json::to_string_pretty(&Value::Object(payload))?)
+    payload
 }
 
 fn render_headers(headers: &[(String, String)]) -> Value {
