@@ -1,6 +1,7 @@
 use super::*;
 
 mod broadcast_channel;
+mod chrome;
 mod crypto_misc;
 mod crypto_subtle_aes;
 mod crypto_subtle_digest;

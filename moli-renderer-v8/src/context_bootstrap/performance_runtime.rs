@@ -141,6 +141,37 @@ pub(super) fn ensure_current_performance_for_api<'s>(
         .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
 }
 
+pub(in crate::context_bootstrap) struct WindowNavigationTimingSnapshot {
+    pub(in crate::context_bootstrap) time_origin_millis: f64,
+    pub(in crate::context_bootstrap) dom_content_loaded_end_millis: Option<f64>,
+    pub(in crate::context_bootstrap) load_event_end_millis: Option<f64>,
+    pub(in crate::context_bootstrap) navigation_type: String,
+}
+
+pub(in crate::context_bootstrap) fn current_window_navigation_timing_snapshot(
+    scope: &mut v8::PinScope<'_, '_>,
+) -> Option<WindowNavigationTimingSnapshot> {
+    let performance = ensure_current_performance_for_api(scope)?;
+    Some(WindowNavigationTimingSnapshot {
+        time_origin_millis: performance_slot_number(
+            scope,
+            performance,
+            PERFORMANCE_TIME_ORIGIN_SLOT,
+        )?,
+        dom_content_loaded_end_millis: install::performance_lifecycle_timestamp(
+            scope,
+            performance,
+            install::DOM_CONTENT_LOADED_END_INDEX,
+        ),
+        load_event_end_millis: install::performance_lifecycle_timestamp(
+            scope,
+            performance,
+            install::LOAD_END_INDEX,
+        ),
+        navigation_type: install::performance_navigation_type_seed(scope, performance),
+    })
+}
+
 pub(in crate::context_bootstrap) fn ensure_navigation_performance_entry_for_api<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,

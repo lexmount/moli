@@ -16,6 +16,8 @@ use std::{
 enum DirectCallOwner {
     /// Shared renderer adapter for a typed Web IDL callback.
     TypedWebIdlAdapter,
+    /// Callback accepted by a Chromium-specific API outside Web IDL.
+    VendorApiCallback,
     /// HTML event-handler or reaction policy owned by the renderer.
     EventHandlerOrReaction,
     /// Promise capability or browser-created algorithm function.
@@ -67,6 +69,11 @@ const DIRECT_V8_CALL_ALLOWLIST: &[AllowedDirectCallFile] = &[
         "context_bootstrap/view_transition_runtime/lifecycle.rs",
         1,
         DirectCallOwner::TypedWebIdlAdapter,
+    ),
+    allowed(
+        "context_bootstrap/chrome_runtime.rs",
+        1,
+        DirectCallOwner::VendorApiCallback,
     ),
     // Event-handler/reaction policy. These are HTML-owned callbacks rather
     // than values accepted through a Web IDL callback parameter.

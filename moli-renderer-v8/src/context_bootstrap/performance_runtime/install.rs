@@ -52,9 +52,9 @@ pub(super) const EVENT_COUNTS_TRACKED_TYPES: &[&str] = &[
 ];
 
 const DOM_CONTENT_LOADED_START_INDEX: usize = 0;
-const DOM_CONTENT_LOADED_END_INDEX: usize = 1;
+pub(super) const DOM_CONTENT_LOADED_END_INDEX: usize = 1;
 const LOAD_START_INDEX: usize = 2;
-const LOAD_END_INDEX: usize = 3;
+pub(super) const LOAD_END_INDEX: usize = 3;
 const LIFECYCLE_TIMESTAMP_COUNT: usize = 4;
 
 #[derive(WebApiObject)]
@@ -1014,7 +1014,7 @@ fn apply_lifecycle_to_navigation_entry<'s>(
     }
 }
 
-fn performance_navigation_type_seed<'s>(
+pub(super) fn performance_navigation_type_seed<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
 ) -> String {
@@ -1024,7 +1024,7 @@ fn performance_navigation_type_seed<'s>(
         .unwrap_or_else(|| "navigate".to_owned())
 }
 
-fn performance_lifecycle_timestamp<'s>(
+pub(super) fn performance_lifecycle_timestamp<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     performance: v8::Local<'s, v8::Object>,
     index: usize,

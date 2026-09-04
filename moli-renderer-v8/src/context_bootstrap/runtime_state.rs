@@ -4,6 +4,7 @@ use super::shared::*;
 use super::webassembly_runtime::install_webassembly_runtime_extensions;
 use super::window_events::*;
 use super::{
+    chrome_runtime::install_chrome_runtime_state,
     crypto::install_window_crypto_runtime_state,
     css_runtime::install_css_runtime_state,
     exposed_interfaces::is_lazy_exposed_interface,
@@ -2037,6 +2038,7 @@ fn install_window_runtime_state<'s>(
     install_window_crypto_runtime_state(scope, global, secure_context_available)?;
     install_css_runtime_state(scope, global)?;
     install_default_window_performance_seed(scope, global)?;
+    install_chrome_runtime_state(scope, global)?;
     install_storage_runtime_state(scope, global)?;
     network_host::initialize_fetch_realm_helpers(scope)?;
     install_public_window_surface_accessors(scope, global)?;

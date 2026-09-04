@@ -3,6 +3,7 @@ mod assets;
 pub(crate) mod bridge_descriptor;
 mod broadcast_channel;
 mod canvas;
+mod chrome_runtime;
 mod constructors;
 mod crypto;
 mod css_fontface_runtime;
