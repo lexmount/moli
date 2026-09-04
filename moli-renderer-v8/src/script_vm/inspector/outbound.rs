@@ -2,6 +2,7 @@ use crate::devtools::pause::{
     RendererInspectorPauseNotificationRoute, RendererInspectorPausePrefaceGuard,
     RendererInspectorSessionOutboundRoute,
 };
+use crate::inspector_session::InspectorSessionOutput;
 use crate::runtime::{
     PendingRendererOutputRecord, RendererCommandTurnOutputRecorder,
     RendererDevToolsSessionOutputHost, RendererProtocolObservation,
@@ -73,6 +74,18 @@ pub(in crate::script_vm) struct InspectorOutbound {
 impl Default for InspectorOutbound {
     fn default() -> Self {
         Self::for_agent(RendererDevToolsAgentToken::allocate())
+    }
+}
+
+impl InspectorSessionOutput for InspectorOutbound {
+    fn capture_internal_response(&self, call_id: i32, dispatch: impl FnOnce()) -> Option<Value> {
+        let snapshot = self.len();
+        {
+            let _internal_capture = self.capture_internal_dispatch_response(call_id);
+            let _dispatch_capture = self.capture_dispatch_responses();
+            dispatch();
+        }
+        self.take_response_for_call_id_after(snapshot, i64::from(call_id))
     }
 }
 
@@ -337,9 +350,6 @@ impl InspectorOutbound {
     }
 
     pub(super) fn push_response_value(&self, call_id: i32, value: Value) {
-        if let Some(session_route) = self.session_route.borrow().as_ref() {
-            session_route.mark_command_response(call_id, value.get("error").is_none());
-        }
         let mut guard = self.response_routing.borrow_mut();
         if guard
             .internal_dispatch_response_call_ids
@@ -349,6 +359,9 @@ impl InspectorOutbound {
             drop(guard);
             self.push_local_value(value);
             return;
+        }
+        if let Some(session_route) = self.session_route.borrow().as_ref() {
+            session_route.mark_command_response(call_id, value.get("error").is_none());
         }
         let callback = guard.pending_response_callbacks.remove(&call_id);
         if let Some(callback) = callback {
@@ -548,6 +561,8 @@ impl InspectorOutbound {
             .map(|message| message.value)
     }
 
+    // DOMDebugger's internal Runtime.callFunctionOn can execute JS, unlike the
+    // synchronous stack-capture setter, so it still needs an unoccupied ID.
     pub(in crate::script_vm) fn internal_dispatch_call_id_is_available(
         &self,
         call_id: i32,
@@ -751,14 +766,21 @@ impl Drop for InspectorInternalDispatchResponseCapture {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtime::{PageId, RendererOutputItem, RendererOutputStreamIdentity};
+    use crate::devtools::pause::RendererInspectorPauseBridge;
+    use crate::runtime::{
+        PageId, RendererInspectorCommandRoute, RendererInspectorIngressTicket,
+        RendererInspectorPauseCommandEffect, RendererOutputItem, RendererOutputStreamIdentity,
+    };
 
-    #[test]
-    fn instrumentation_pause_prefix_publishes_context_created_with_bound_origin() {
+    fn routed_outbound() -> (
+        InspectorOutbound,
+        RendererInspectorPauseBridge,
+        RendererTurnOutputJournal,
+    ) {
         let journal = RendererTurnOutputJournal::new(
             RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(41)),
         );
-        let pause_bridge = crate::devtools::pause::RendererInspectorPauseBridge::default();
+        let pause_bridge = RendererInspectorPauseBridge::default();
         pause_bridge.configure_page_route(journal.clone());
         let agent_token = RendererDevToolsAgentToken::allocate();
         let session = DevToolsSessionKey::Primary;
@@ -781,9 +803,63 @@ mod tests {
             .outbound_route(agent_token, session.clone()),
             Some(journal.clone()),
         );
+        (outbound, pause_bridge, journal)
+    }
+
+    #[test]
+    fn internal_response_does_not_complete_a_same_id_frontend_pause_command() {
+        let (outbound, bridge, _) = routed_outbound();
+        let route = outbound
+            .session_route
+            .borrow()
+            .clone()
+            .expect("frontend route");
+        route.route_notification(&serde_json::json!({
+            "method": "Debugger.paused", "params": {"callFrames": []}
+        }));
+        assert!(bridge.enter_pause().is_some());
+        let dispatch = bridge.begin_command_dispatch(
+            1,
+            &RendererInspectorIngressTicket::new(None, None, RendererInspectorCommandRoute::Io),
+            RendererInspectorPauseCommandEffect::Resume,
+            Some(-1),
+        );
         let recorder = RendererCommandTurnOutputRecorder::default();
         outbound
-            .begin_command_turn_output(session, recorder)
+            .begin_command_turn_output(DevToolsSessionKey::Primary, recorder.clone())
+            .expect("command output scope");
+        let response = serde_json::json!({"id": -1, "result": {}});
+        assert_eq!(
+            outbound.capture_internal_response(-1, || {
+                outbound.push_response_value(-1, response.clone());
+            }),
+            Some(response)
+        );
+        outbound.end_command_turn_output(&recorder);
+        assert!(recorder.finish().is_empty());
+        assert!(outbound.take_pending_messages().is_empty());
+        drop(dispatch);
+        bridge.leave_pause();
+        assert!(
+            matches!(
+                route.route_notification(
+                    &serde_json::json!({"method": "Debugger.resumed", "params": {}})
+                ),
+                RendererInspectorPauseNotificationRoute::PublishImmediately {
+                    command_output: None,
+                    ..
+                }
+            ),
+            "the internal response must not mark the frontend resume command successful"
+        );
+    }
+
+    #[test]
+    fn instrumentation_pause_prefix_publishes_context_created_with_bound_origin() {
+        let (outbound, pause_bridge, journal) = routed_outbound();
+        let recorder = RendererCommandTurnOutputRecorder::default();
+        outbound
+            .begin_command_turn_output(DevToolsSessionKey::Primary, recorder)
             .expect("command output scope");
 
         outbound.push_value(serde_json::json!({

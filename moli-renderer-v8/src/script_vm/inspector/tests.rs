@@ -1,4 +1,5 @@
 use super::*;
+use crate::inspector_session::InspectorSessionOutput;
 
 #[test]
 fn inspector_outbound_queue_reports_its_exact_length_until_flushed() {
@@ -323,6 +324,31 @@ fn internal_dispatch_call_id_avoids_queued_and_active_frontend_ids() {
         assert!(!outbound.internal_dispatch_call_id_is_available(-2));
     }
     assert!(outbound.internal_dispatch_call_id_is_available(-2));
+}
+
+#[test]
+fn internal_response_capture_preserves_queued_responses_and_canceled_callbacks() {
+    let outbound = InspectorOutbound::default();
+    let queued = json!({"id": -1, "result": "queued"});
+    let notification = json!({"method": "Runtime.consoleAPICalled", "params": {}});
+    outbound.push_value(queued.clone());
+    let (tx, _rx) = tokio::sync::oneshot::channel();
+    outbound.register_response_callback(RendererRuntimeInspectorResponseSender::new(-1, tx));
+    outbound.cancel_response_callback(-1);
+
+    let response = outbound.capture_internal_response(-1, || {
+        outbound.push_response_value(-1, json!({"id": -1, "result": "outer"}));
+        let nested = outbound.capture_internal_response(-1, || {
+            outbound.push_value(notification.clone());
+            outbound.push_response_value(-1, json!({"id": -1, "result": "inner"}));
+        });
+        assert_eq!(nested, Some(json!({"id": -1, "result": "inner"})));
+    });
+    assert_eq!(response, Some(json!({"id": -1, "result": "outer"})));
+    assert_eq!(outbound.response_callback_counts(), (0, 1));
+    outbound.push_response_value(-1, json!({"id": -1, "result": "canceled"}));
+    assert_eq!(outbound.response_callback_counts(), (0, 0));
+    assert_eq!(outbound.take_pending_messages(), vec![queued, notification]);
 }
 
 #[test]

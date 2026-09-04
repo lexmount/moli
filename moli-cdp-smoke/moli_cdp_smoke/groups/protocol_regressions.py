@@ -151,6 +151,8 @@ async def run_runtime_exception_group(
         # asynchronous exception.
         enable_id = await client.send("Runtime.enable", session_id=session_id)
         await client.recv_until_id(enable_id, timeout=5)
+        stack_cost = await _runtime_enable_stack_cost_probe(client, session_id)
+        record(results, "raw_cdp_runtime_enable_stack_cost", stack_cost)
         marker = "moli-smoke-async-exception"
         exceptions = await _schedule_async_exception_and_collect(
             client,
@@ -207,6 +209,90 @@ async def run_runtime_exception_group(
     finally:
         await _dispose_page(client, page)
         await _close_client(client)
+
+
+async def _runtime_enable_stack_cost_probe(
+    client: RawCdpClient,
+    session_id: str,
+) -> dict[str, Any]:
+    evaluate_id = await client.send(
+        "Runtime.evaluate",
+        {
+            "expression": r"""
+(() => {
+  const measureOnce = () => {
+    let sink = 0;
+    const sample = depth => {
+      if (depth > 0) return sample(depth - 1);
+      const started = performance.now();
+      for (let index = 0; index < 3; index += 1) {
+        try {
+          throw new Error('runtime-stack-cost-probe');
+        } catch (error) {
+          sink += error.stack.length;
+        }
+      }
+      return (performance.now() - started) / 3;
+    };
+
+    for (let index = 0; index < 50; index += 1) sample(50);
+    const depths = [];
+    const costs = [];
+    for (let depth = 10; depth <= 200; depth += 10) {
+      let cost = 0;
+      for (let repeat = 0; repeat < 4; repeat += 1) cost += sample(depth);
+      depths.push(depth);
+      costs.push(cost / 4);
+    }
+
+    const mean = values =>
+      values.reduce((total, value) => total + value, 0) / values.length;
+    const meanDepth = mean(depths);
+    const meanCost = mean(costs);
+    let covariance = 0;
+    let depthVariance = 0;
+    let costVariance = 0;
+    for (let index = 0; index < depths.length; index += 1) {
+      const depthDelta = depths[index] - meanDepth;
+      const costDelta = costs[index] - meanCost;
+      covariance += depthDelta * costDelta;
+      depthVariance += depthDelta * depthDelta;
+      costVariance += costDelta * costDelta;
+    }
+    const slope = depthVariance === 0 ? 0 : covariance / depthVariance;
+    const rSquared = depthVariance === 0 || costVariance === 0
+      ? 0
+      : (covariance * covariance) / (depthVariance * costVariance);
+    return {rSquared, slope, sink};
+  };
+  return [measureOnce(), measureOnce(), measureOnce()];
+})()
+""",
+            "returnByValue": True,
+        },
+        session_id=session_id,
+    )
+    response, _messages = await client.recv_until_id(evaluate_id, timeout=5)
+    if "error" in response:
+        raise SmokeError(f"Runtime stack-cost probe failed: {response}")
+    probes = response.get("result", {}).get("result", {}).get("value")
+    if not isinstance(probes, list) or len(probes) != 3:
+        raise SmokeError(f"Runtime stack-cost probe returned invalid samples: {response}")
+    try:
+        ordered_r_squared = sorted(float(probe["rSquared"]) for probe in probes)
+    except (KeyError, TypeError, ValueError) as error:
+        raise SmokeError(
+            f"Runtime stack-cost probe returned invalid regression data: {probes}"
+        ) from error
+    if ordered_r_squared[1] >= 0.5:
+        raise SmokeError(
+            "Runtime.enable exposed a repeatable Error stack-depth timing slope: "
+            f"{probes}"
+        )
+    return {
+        "probes": probes,
+        "medianRSquared": ordered_r_squared[1],
+    }
 
 
 async def run_file_chooser_group(

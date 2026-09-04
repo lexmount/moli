@@ -410,6 +410,7 @@ pub(super) fn inspector_session_key(inspector_session_id: Option<&str>) -> DevTo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::inspector_session::dispatch_with_runtime_defaults;
     use crate::script_vm::inspector::context_registry::DocumentInspectorContextRegistrationId;
     use serde_json::Value;
     use std::pin::pin;
@@ -423,9 +424,8 @@ mod tests {
     fn dispatch(session: &RendererDevToolsSession, request: &str) -> Vec<Value> {
         let snapshot = session.outbound.len();
         let _response_capture = session.outbound.capture_dispatch_responses();
-        session
-            .session
-            .dispatch_protocol_message(v8::inspector::StringView::from(request.as_bytes()));
+        dispatch_with_runtime_defaults(&session.session, request, &session.outbound)
+            .expect("Inspector session dispatch");
         session.outbound.take_messages_after(snapshot)
     }
 
@@ -587,6 +587,14 @@ mod tests {
             4,
         );
 
+        assert_successful_response(
+            &dispatch(
+                &first_attach,
+                r#"{"id":6,"method":"Runtime.setMaxCallStackSizeToCapture","params":{"size":50}}"#,
+            ),
+            6,
+        );
+
         let state = first_attach.v8_state();
         assert!(
             !state.is_empty(),
@@ -658,6 +666,15 @@ mod tests {
             "V8 should apply the restored custom formatter setting: {formatter_response:?}"
         );
         let restored_state = restored.v8_state();
+        assert_successful_response(
+            &dispatch(&restored, r#"{"id":7,"method":"Runtime.enable"}"#),
+            7,
+        );
+        assert_eq!(
+            state_json(&restored.v8_state()),
+            state_json(&restored_state),
+            "repeated Runtime.enable must preserve the restored stack-capture override"
+        );
         assert_eq!(
             state_json(&restored_state),
             initial_state_json,
