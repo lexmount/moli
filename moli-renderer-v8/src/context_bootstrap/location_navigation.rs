@@ -736,17 +736,20 @@ fn navigate_location_object_with_options<'s>(
         }
         if let Some(host_ptr) = host_ptr {
             let host = unsafe { &mut *host_ptr };
+            let initiator_url = location_navigation_initiator_url(scope, host);
             if matches!(kind, LocationNavigationKind::Reload) {
                 host.queue_child_browsing_context_reload_from_existing_seed(
                     scope,
                     handle,
                     resolved.as_str(),
+                    initiator_url,
                 );
             } else {
                 host.queue_child_browsing_context_navigation_without_seed_update(
                     scope,
                     handle,
                     resolved.as_str(),
+                    initiator_url,
                 );
             }
         }
@@ -1280,6 +1283,33 @@ pub(crate) fn history_entry_seed_for_cross_document_location<'s>(
     );
     super::session_history::capture_for_navigation(scope, owner, &mut seed);
     Some(seed)
+}
+
+fn location_navigation_initiator_url(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &PageScriptHost,
+) -> Option<url::Url> {
+    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
+        return host.lightweight_popup_document_url(popup_id);
+    }
+    let dispatch_scope = scope
+        .get_incumbent_context()
+        .and_then(|context| host.window_execution_context_identity_for_access_check(context))
+        .map(|identity| identity.dispatch_scope())
+        .or_else(|| {
+            crate::context_bootstrap::current_child_browsing_context_handle_for_runtime_scope(scope)
+                .map(crate::native_bridge::OwnerDispatchScope::Child)
+        })
+        .unwrap_or(crate::native_bridge::OwnerDispatchScope::Top);
+    match dispatch_scope {
+        crate::native_bridge::OwnerDispatchScope::Top => Some(host.document_url().clone()),
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+            host.child_browsing_context_current_url(handle)
+        }
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
+            host.lightweight_popup_document_url(popup_id)
+        }
+    }
 }
 
 #[cfg(test)]
