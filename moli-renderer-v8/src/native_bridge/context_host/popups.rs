@@ -7,12 +7,14 @@ use crate::{
         SharedWebStorageStore, WINDOW_NAME_SLOT, apply_local_window_location_navigation,
         deep_clone_shared_web_storage_store, dispatch_simple_event_target_event,
         install_navigation_bootstrap_entry_for_holder, install_simple_event_target_methods,
-        install_storage_aliases_for_window,
+        install_simple_event_target_ordered_handlers, install_storage_aliases_for_window,
         install_window_location_history_navigation_runtime_state, new_shared_web_storage_store,
-        scoped_indexed_db_factory, sync_document_location_runtime_state_from_window,
+        scoped_indexed_db_factory, simple_object_event_set_ordered_handler,
+        sync_document_location_runtime_state_from_window,
         sync_window_location_history_navigation_runtime_surface,
         sync_window_location_runtime_state, web_storage_area_key_for_storage_key,
     },
+    definitions::define_function_accessor_property,
     document_runtime::create_content_security_policy_violation_event,
     document_runtime::{DocumentPolicyContainer, DocumentSandboxPolicy, DomHandle},
     host::HostTimerOwner,
@@ -443,12 +445,17 @@ pub(super) struct LightweightPopupBrowsingContextRecord {
     location_url: Url,
     opener_sandbox_policy: Option<DocumentSandboxPolicy>,
     lifecycle: LightweightPopupLifecycle,
+    is_closing: bool,
     navigation_id: LightweightPopupNavigationId,
 }
 
 impl LightweightPopupBrowsingContextRecord {
-    fn is_open(&self) -> bool {
+    fn is_live(&self) -> bool {
         matches!(self.lifecycle, LightweightPopupLifecycle::Open(_))
+    }
+
+    fn is_open(&self) -> bool {
+        self.is_live() && !self.is_closing
     }
 }
 
@@ -609,15 +616,30 @@ impl JsContextHost {
             .map(|record| record.navigation_id)
     }
 
-    fn close_lightweight_popup_browsing_context(
+    fn begin_lightweight_popup_close(&mut self, popup_id: u64) -> bool {
+        let Some(record) = self.lightweight_popup_record_mut(popup_id) else {
+            return false;
+        };
+        if !record.is_open() {
+            return false;
+        }
+        record.is_closing = true;
+        true
+    }
+
+    fn take_lightweight_popup_close_transition(
         &mut self,
         popup_id: u64,
     ) -> Option<LightweightPopupCloseTransition> {
         let record = self.lightweight_popup_record_mut(popup_id)?;
+        if !record.is_live() || !record.is_closing {
+            return None;
+        }
         let lifecycle = std::mem::replace(&mut record.lifecycle, LightweightPopupLifecycle::Closed);
         let LightweightPopupLifecycle::Open(open) = lifecycle else {
             return None;
         };
+        record.is_closing = false;
         record.navigation_id = LightweightPopupNavigationId::new(
             record
                 .navigation_id
@@ -632,6 +654,34 @@ impl JsContextHost {
             retired_local_window_id: open.document.local_window_id,
             retired_document_handle: open.document.handle,
         })
+    }
+
+    /// Definitely close a lightweight top-level browsing context after its
+    /// queued DOM-manipulation close task reaches the head of the source.
+    pub(crate) fn definitely_close_lightweight_popup_browsing_context<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        popup_id: u64,
+    ) -> bool {
+        let Some(transition) = self.take_lightweight_popup_close_transition(popup_id) else {
+            return false;
+        };
+        let window = self.lightweight_popup_window(scope, popup_id);
+        self.unregister_service_worker_popup_client(popup_id);
+        self.cancel_lightweight_popup_document_loads(popup_id);
+        self.cancel_lightweight_popup_classic_script_loads(popup_id);
+        if let Some(window) = window {
+            clear_lightweight_popup_window_document_event_state(scope, window);
+        }
+        if let Some(document_handle) = transition.retired_document_handle {
+            self.retire_lightweight_popup_document_handle(popup_id, document_handle);
+            self.clear_custom_element_registry_associations_for_document(document_handle);
+        }
+        self.retire_lightweight_popup_document_owner(transition.retired_owner);
+        self.retire_lightweight_popup_local_window(popup_id, transition.retired_local_window_id);
+        self.lightweight_popup_window_names
+            .retain(|_, named_popup_id| *named_popup_id != popup_id);
+        true
     }
 
     fn set_lightweight_popup_same_document_url(&mut self, popup_id: u64, url: Url) -> bool {
@@ -823,6 +873,7 @@ impl JsContextHost {
             LIGHTWEIGHT_POPUP_EVENT_LISTENERS_SLOT,
             false,
         );
+        install_lightweight_popup_event_handler_accessors(scope, window);
         let _ = LightweightPopupWindowMethodsDeclaration::default().initialize(scope, window);
         let initial_document_owner = self.allocate_lightweight_popup_document_owner(popup_id);
         let initial_local_window_id = self.allocate_lightweight_popup_local_window_id();
@@ -895,6 +946,7 @@ impl JsContextHost {
                     },
                     session_storage_store,
                 })),
+                is_closing: false,
                 navigation_id: LightweightPopupNavigationId::new(1),
             },
         );
@@ -1117,7 +1169,7 @@ impl JsContextHost {
     ) -> Option<v8::Local<'s, v8::Object>> {
         let (endpoint, opener) = {
             let record = self.lightweight_popup_browsing_contexts.get(&popup_id)?;
-            if !record.is_open() {
+            if !record.is_live() {
                 return None;
             }
             let endpoint = record.opener?;
@@ -1485,6 +1537,11 @@ impl JsContextHost {
             .is_some_and(LightweightPopupBrowsingContextRecord::is_open)
     }
 
+    pub(crate) fn lightweight_popup_is_closing(&self, popup_id: u64) -> bool {
+        self.lightweight_popup_record(popup_id)
+            .is_some_and(|record| record.is_live() && record.is_closing)
+    }
+
     pub(crate) fn open_lightweight_popup_ids(&self) -> Vec<u64> {
         let mut popup_ids = self
             .lightweight_popup_browsing_contexts
@@ -1757,7 +1814,7 @@ impl JsContextHost {
         document_handle: crate::document_runtime::DomHandle,
     ) -> bool {
         self.lightweight_popup_id_for_document_handle(document_handle)
-            .is_some()
+            .is_some_and(|popup_id| self.lightweight_popup_is_open(popup_id))
     }
 
     pub(crate) fn current_lightweight_popup_document_owner(
@@ -3614,7 +3671,7 @@ impl JsContextHost {
                     document_remained_current = false;
                     break;
                 }
-                set_object_slot(scope, window, &name, value);
+                set_lightweight_popup_persisted_script_global(scope, window, &name, value);
                 if !self.lightweight_popup_document_owner_is_current(script_document_owner) {
                     document_remained_current = false;
                     break;
@@ -3641,7 +3698,7 @@ impl JsContextHost {
                 if value.is_undefined() {
                     continue;
                 }
-                set_object_slot(scope, window, &name, value);
+                set_lightweight_popup_persisted_script_global(scope, window, &name, value);
                 if !self.lightweight_popup_document_owner_is_current(script_document_owner) {
                     document_remained_current = false;
                     break;
@@ -4371,27 +4428,21 @@ fn lightweight_popup_close_callback<'s>(
         return;
     };
     let host = unsafe { &mut *host_ptr };
-    let Some(transition) = host.close_lightweight_popup_browsing_context(popup_id) else {
+    if !host.begin_lightweight_popup_close(popup_id) {
         return;
-    };
+    }
     set_object_slot(
         scope,
         window,
         "closed",
         v8::Boolean::new(scope, true).into(),
     );
-    host.unregister_service_worker_popup_client(popup_id);
-    host.cancel_lightweight_popup_document_loads(popup_id);
-    host.cancel_lightweight_popup_classic_script_loads(popup_id);
-    clear_lightweight_popup_window_document_event_state(scope, window);
-    if let Some(document_handle) = transition.retired_document_handle {
-        host.retire_lightweight_popup_document_handle(popup_id, document_handle);
-        host.clear_custom_element_registry_associations_for_document(document_handle);
+    if host.page_popup_close_sender().send(popup_id).is_err() {
+        tracing::debug!(
+            popup_id,
+            "retired Page DOM-manipulation route rejected popup close task"
+        );
     }
-    host.retire_lightweight_popup_document_owner(transition.retired_owner);
-    host.retire_lightweight_popup_local_window(popup_id, transition.retired_local_window_id);
-    host.lightweight_popup_window_names
-        .retain(|_, named_popup_id| *named_popup_id != popup_id);
 }
 
 fn lightweight_popup_initiator_endpoint<'s>(
@@ -4729,6 +4780,89 @@ fn sync_lightweight_popup_window_location<'s>(
     }
 }
 
+fn install_lightweight_popup_event_handler_accessors<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+) {
+    install_simple_event_target_ordered_handlers(scope, window);
+    for property_name in WINDOW_EVENT_HANDLER_PROPERTIES {
+        let data = v8str(scope, property_name).into();
+        define_function_accessor_property(
+            scope,
+            window,
+            property_name,
+            lightweight_popup_event_handler_getter,
+            Some(data),
+            lightweight_popup_event_handler_setter,
+            Some(data),
+            v8::PropertyAttribute::NONE,
+        )
+        .expect("lightweight popup Window event handler accessor should initialize");
+    }
+}
+
+fn lightweight_popup_event_handler_name<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    data: v8::Local<'s, v8::Value>,
+) -> Option<&'static str> {
+    let requested = data.to_string(scope)?.to_rust_string_lossy(scope);
+    WINDOW_EVENT_HANDLER_PROPERTIES
+        .iter()
+        .copied()
+        .find(|candidate| *candidate == requested)
+}
+
+fn lightweight_popup_event_handler_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if lightweight_popup_id_from_window(scope, args.this()).is_none() {
+        rv.set_null();
+        return;
+    }
+    let Some(property_name) = lightweight_popup_event_handler_name(scope, args.data()) else {
+        rv.set_null();
+        return;
+    };
+    rv.set(
+        get_private_value(scope, args.this(), property_name)
+            .filter(|value| value.is_function())
+            .unwrap_or_else(|| v8::null(scope).into()),
+    );
+}
+
+fn lightweight_popup_event_handler_setter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if lightweight_popup_id_from_window(scope, args.this()).is_none() {
+        rv.set_undefined();
+        return;
+    }
+    let Some(property_name) = lightweight_popup_event_handler_name(scope, args.data()) else {
+        rv.set_undefined();
+        return;
+    };
+    let value = args.get(0);
+    let stored = if value.is_function() {
+        value
+    } else {
+        v8::null(scope).into()
+    };
+    set_private_value(scope, args.this(), property_name, stored);
+    simple_object_event_set_ordered_handler(
+        scope,
+        args.this(),
+        LIGHTWEIGHT_POPUP_EVENT_LISTENERS_SLOT,
+        property_name.strip_prefix("on").unwrap_or(property_name),
+        property_name,
+        stored.is_function(),
+    );
+    rv.set_undefined();
+}
+
 fn clear_lightweight_popup_window_document_event_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     window: v8::Local<'s, v8::Object>,
@@ -4744,6 +4878,21 @@ fn clear_lightweight_popup_window_document_event_state<'s>(
     for name in WINDOW_EVENT_HANDLER_PROPERTIES {
         let _ = window.set(scope, v8str(scope, name).into(), null);
     }
+}
+
+fn set_lightweight_popup_persisted_script_global<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    window: v8::Local<'s, v8::Object>,
+    name: &str,
+    value: v8::Local<'s, v8::Value>,
+) {
+    if WINDOW_EVENT_HANDLER_PROPERTIES.contains(&name) {
+        // The wrapped popup script already assigned this value while its
+        // exact popup owner scope was active. Do not invoke the setter again
+        // from the surrounding top scope or replace its accessor.
+        return;
+    }
+    set_object_slot(scope, window, name, value);
 }
 
 fn lightweight_popup_effective_navigation_kind(

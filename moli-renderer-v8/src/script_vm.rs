@@ -747,6 +747,7 @@ mod page_task_enqueue;
 mod parser_owned_classic;
 pub(crate) use parser_owned_classic::*;
 mod parser_module_terminal;
+mod popup_close;
 mod popup_load_event;
 mod post_parse;
 mod post_parse_lifecycle;

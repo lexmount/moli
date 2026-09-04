@@ -716,6 +716,18 @@ impl JsContextHost {
             .popup_load_event()
     }
 
+    pub(crate) fn page_popup_close_sender(
+        &self,
+    ) -> crate::page_task_queue::RendererPagePopupCloseSender {
+        self.page_task_capabilities
+            .get()
+            .expect(
+                "a live Page Window must install its complete Page task capabilities before popup close admission",
+            )
+            .dom_manipulation()
+            .popup_close()
+    }
+
     pub(crate) fn page_file_entry_file_callback_sender(
         &self,
     ) -> crate::page_task_queue::RendererPageFileEntryFileCallbackSender {

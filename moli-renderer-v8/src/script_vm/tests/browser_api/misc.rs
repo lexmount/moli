@@ -24969,9 +24969,10 @@ fn window_open_about_blank_returns_lightweight_popup_window() {
     );
 }
 
-#[test]
-fn lightweight_popup_opener_accessor_preserves_and_disowns_the_underlying_relation() {
-    let mut vm = new_storage_test_vm("https://example.com/");
+#[tokio::test]
+async fn lightweight_popup_opener_accessor_preserves_and_disowns_the_underlying_relation() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_page_task_executor_test_vm_with_loader("https://example.com/", &loader);
 
     let result = vm
         .eval(
@@ -24994,6 +24995,8 @@ fn lightweight_popup_opener_accessor_preserves_and_disowns_the_underlying_relati
   const closedGet = Object.getOwnPropertyDescriptor(closed, "opener").get;
   closed.close();
   closed.opener = "closed replacement";
+  globalThis.__closedPopupOpenerGet = closedGet;
+  globalThis.__closedPopupForOpenerTest = closed;
 
   return JSON.stringify({
     replaced: {
@@ -25018,8 +25021,9 @@ fn lightweight_popup_opener_accessor_preserves_and_disowns_the_underlying_relati
       boundGetterIsNull: disownedGet() === null,
       accessorPreserved: descriptorAfterNull.get === disownedGet
     },
-    closed: {
-      boundGetterIsNull: closedGet() === null,
+    closing: {
+      closedFlag: closed.closed,
+      boundGetterKeepsRelation: closedGet() === window,
       value: closed.opener
     }
   });
@@ -25030,7 +25034,20 @@ fn lightweight_popup_opener_accessor_preserves_and_disowns_the_underlying_relati
 
     assert_eq!(
         result,
-        r#"{"replaced":{"accessorShape":"function:function::true:true","value":"replacement","boundGetterKeepsRelation":true,"borrowedGetterKeepsRelation":true,"dataShape":"true:true:true"},"disowned":{"valueIsNull":true,"boundGetterIsNull":true,"accessorPreserved":true},"closed":{"boundGetterIsNull":true,"value":"closed replacement"}}"#
+        r#"{"replaced":{"accessorShape":"function:function::true:true","value":"replacement","boundGetterKeepsRelation":true,"borrowedGetterKeepsRelation":true,"dataShape":"true:true:true"},"disowned":{"valueIsNull":true,"boundGetterIsNull":true,"accessorPreserved":true},"closing":{"closedFlag":true,"boundGetterKeepsRelation":true,"value":"closed replacement"}}"#
+    );
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__closedPopupOpenerGet() === null)",
+        "true",
+        "queued popup definite close clears the opener relation",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("String(__closedPopupForOpenerTest.opener)")
+            .expect("closed popup replacement opener should evaluate"),
+        "closed replacement"
     );
 }
 
@@ -26334,6 +26351,129 @@ async fn noopener_hyperlink_reuses_an_existing_named_popup_and_preserves_its_ope
         .expect("named noopener popup result should evaluate"),
         r#"{"openerPreserved":true,"namePreserved":true,"targetCommitted":true}"#
     );
+}
+
+#[tokio::test]
+async fn top_realm_popup_load_handler_can_queue_a_timer_after_window_close() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  globalThis.__popupCloseHandlerState = "pending";
+  globalThis.__popupCloseHandlerEvents = [];
+  const targetUrl = URL.createObjectURL(new Blob([
+    "<!doctype html><title>close target</title>"
+  ], { type: "text/html" }));
+  const popup = open(targetUrl);
+  popup.onload = () => {
+    popup.close();
+    const timerId = setTimeout(() => {
+      __popupCloseHandlerEvents.push([
+        popup.closed,
+        popup.opener === null
+      ].join(":"));
+    }, 0);
+    __popupCloseHandlerState = [
+      popup.closed,
+      popup.opener === window,
+      timerId !== 0
+    ].join(":");
+  };
+  globalThis.__popupCloseHandlerPopup = popup;
+  return __popupCloseHandlerState;
+})()
+"#,
+        )
+        .expect("popup close handler setup should evaluate"),
+        "pending"
+    );
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "__popupCloseHandlerState",
+        "true:true:true",
+        "popup close handler synchronous state",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("__popupCloseHandlerEvents.length")
+            .expect("popup close handler timer count should evaluate"),
+        "0",
+        "the close task must remain ahead of the later timer"
+    );
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "__popupCloseHandlerEvents.join('|')",
+        "true:true",
+        "top-realm timer queued after popup close",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn named_popup_broadcast_precedes_its_queued_close() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://example.com/base/page.html", &loader);
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const popupName = "moli-noopener-close-order";
+  globalThis.__namedPopupCloseOrder = "pending";
+  const channel = new BroadcastChannel(popupName);
+  const popup = open("about:blank", popupName);
+  channel.onmessage = event => {
+    __namedPopupCloseOrder = JSON.stringify({
+      payload: event.data,
+      openerPreserved: popup.opener === window,
+      alreadyClosing: popup.closed
+    });
+  };
+  const targetMarkup = `<!doctype html><script>
+    const channel = new BroadcastChannel(window.name);
+    channel.postMessage("sent-before-close");
+    window.close();
+  <\/script>`;
+  const link = document.createElement("a");
+  link.rel = "noopener";
+  link.target = popupName;
+  link.href = URL.createObjectURL(new Blob([targetMarkup], { type: "text/html" }));
+  document.body.appendChild(link);
+  globalThis.__namedPopupCloseOrderPopup = popup;
+  link.click();
+  return __namedPopupCloseOrder;
+})()
+"#,
+        )
+        .expect("named popup close ordering setup should evaluate"),
+        "pending"
+    );
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "__namedPopupCloseOrder",
+        r#"{"payload":"sent-before-close","openerPreserved":true,"alreadyClosing":true}"#,
+        "BroadcastChannel delivery before named popup close",
+    )
+    .await;
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__namedPopupCloseOrderPopup.opener === null)",
+        "true",
+        "named popup definite close",
+    )
+    .await;
 }
 
 #[tokio::test]
