@@ -416,10 +416,6 @@ impl JsContextHost {
             self.sync_existing_child_browsing_context_window_state(scope, handle);
             return None;
         }
-        let increment_top_level_history_length = self
-            .child_browsing_contexts
-            .get_mut(&handle)
-            .is_some_and(|entry| entry.take_pending_top_level_history_length_increment());
         self.clear_child_browsing_context_pending_navigation(handle);
         self.clear_pending_form_submission_child_target(handle);
         let commit_result = self.commit_child_document_bootstrap_or_start_load(
@@ -429,13 +425,30 @@ impl JsContextHost {
             navigation_load,
             ChildDocumentNavigationInitiator::BrowsingContext,
         );
+        if commit_result
+            .as_ref()
+            .is_some_and(|result| result.state == ChildDocumentCommitState::Ready)
+        {
+            self.commit_pending_child_joint_history_push(scope, handle);
+        }
         self.sync_existing_child_browsing_context_window_state(scope, handle);
-        if increment_top_level_history_length
+        commit_result
+    }
+
+    pub(in crate::native_bridge::context_host) fn commit_pending_child_joint_history_push(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        handle: DomHandle,
+    ) {
+        let increments_joint_history = self
+            .child_browsing_contexts
+            .get_mut(&handle)
+            .is_some_and(|entry| entry.take_pending_top_level_history_length_increment());
+        if increments_joint_history
             && let Some(window) = self.child_browsing_context_window_wrapper(scope, handle)
         {
             increment_top_level_history_length_for_runtime_owner(scope, window);
         }
-        commit_result
     }
 
     pub(crate) fn queue_child_browsing_context_javascript_url_execution(
