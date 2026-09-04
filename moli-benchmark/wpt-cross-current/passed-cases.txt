@@ -5583,11 +5583,9 @@ html/browsers/browsing-the-web/history-traversal/event-order/same-document-trave
 html/browsers/browsing-the-web/history-traversal/events.html
 html/browsers/browsing-the-web/history-traversal/hash-empty-string.html
 html/browsers/browsing-the-web/history-traversal/hashchange-same-fragment-does-not-fire.html
-html/browsers/browsing-the-web/history-traversal/hashchange_event.html
 html/browsers/browsing-the-web/history-traversal/history-traversal-navigate-parent-while-child-loading.html
 html/browsers/browsing-the-web/history-traversal/history-traversal-navigates-multiple-frames.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-basic.html
-html/browsers/browsing-the-web/history-traversal/popstate_event.html
 html/browsers/browsing-the-web/history-traversal/same-url.html
 html/browsers/browsing-the-web/history-traversal/window-name-after-same-origin-main-frame-navigation.html
 html/browsers/browsing-the-web/navigating-across-documents/003.html
@@ -5610,9 +5608,6 @@ html/browsers/browsing-the-web/navigating-across-documents/initial-empty-documen
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-204.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-aboutblank-navigate-immediately.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-aboutblank-wait-for-load.html
-html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/initial-content-replacement.html
-html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/load-event-iframe-element.html
-html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/load-pageshow-events-iframe-contentWindow.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/load-pageshow-events-window-open.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-204-fragment.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-aboutblank.html
@@ -5754,7 +5749,6 @@ html/browsers/history/the-location-interface/location_protocol.html
 html/browsers/history/the-location-interface/location_reload.html
 html/browsers/history/the-location-interface/location_reload_javascript_url.html
 html/browsers/history/the-location-interface/location_replace.html
-html/browsers/history/the-location-interface/location_search.html
 html/browsers/history/the-location-interface/reload_document_write.html
 html/browsers/history/the-location-interface/replace-with-nested-iframe.html
 html/browsers/history/the-location-interface/security_location_0.htm
