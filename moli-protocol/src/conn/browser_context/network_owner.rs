@@ -1,4 +1,4 @@
-use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionStateMut};
+use super::target_session_owner::TargetSessionOwnerMut;
 use super::*;
 use crate::conn::CdpSessionRoute;
 use crate::conn::{CapturedBody, TargetRuntimeSlot};
@@ -10,18 +10,6 @@ use crate::domains::network::{
 };
 use moli_core::page::PendingPageCommand;
 use moli_page_types::DevToolsSessionKey;
-
-impl TargetSessionStateMut<'_> {
-    fn set_tls_verify_host_override(mut self, enabled: bool) -> bool {
-        *self.tls_verify_host_override_mut() = Some(enabled);
-        true
-    }
-
-    fn set_network_offline(mut self, offline: bool) -> bool {
-        self.network_policy_mut().set_network_offline(offline);
-        offline
-    }
-}
 
 struct TargetNetworkListenerOwnerMut<'a> {
     target: &'a mut crate::conn::PageTargetHost,
@@ -217,9 +205,7 @@ impl TargetSessionOwnerMut<'_> {
         extra_headers: moli_fetch::RequestHeaders,
     ) -> Result<Option<PendingPageCommand>, String> {
         let headers = self.mutate_page_state(|state, _session_key| {
-            state
-                .network_policy
-                .replace_base_extra_headers(extra_headers);
+            state.set_base_extra_headers(extra_headers);
             state.effective_policy().extra_headers().clone()
         });
         let effective_headers = self.effective_extra_headers_for_target_policy(headers);
@@ -266,27 +252,26 @@ impl TargetSessionOwnerMut<'_> {
         fallback_identity: &moli_browser_profile::BrowserIdentityProfile,
     ) -> bool {
         self.mutate_page_state(|state, _session_key| {
-            state
-                .network_policy
-                .set_base_user_agent_override(user_agent, fallback_identity);
+            state.set_base_user_agent_override(user_agent, fallback_identity);
         });
         true
     }
 
-    fn set_tls_verify_host_override(mut self, enabled: bool) -> bool {
-        self.mutate_session_state_ref(|state| state.set_tls_verify_host_override(enabled))
+    fn set_tls_verify_host_override(mut self, enabled: bool) {
+        self.mutate_page_state(|target, _session| {
+            target.set_tls_verify_host_override(Some(enabled));
+        });
     }
 
     fn start_set_network_offline(
         mut self,
         offline: bool,
     ) -> Result<Option<PendingPageCommand>, String> {
-        let effective_offline =
-            self.mutate_session_state_ref(|state| state.set_network_offline(offline));
+        self.mutate_page_state(|target, _session| target.set_network_offline(offline));
         let Some(page) = self.runtime_slot_mut().loaded_page_mut() else {
             return Ok(None);
         };
-        page.start_set_network_offline(effective_offline)
+        page.start_set_network_offline(offline)
             .map(Some)
             .map_err(|error| format!("set emulated network conditions failed: {error}"))
     }
@@ -724,17 +709,9 @@ impl CdpConnection {
         }
 
         if is_browser_session && let Some(browser_context) = self.browser_context.as_mut() {
-            if let Some(browser_identity) = browser_identity {
-                browser_context
-                    .active_page_target_mut()
-                    .network_policy
-                    .set_browser_identity_override(browser_identity);
-            } else {
-                browser_context
-                    .active_page_target_mut()
-                    .network_policy
-                    .clear_browser_identity_override();
-            }
+            browser_context
+                .active_page_target_mut()
+                .set_base_browser_identity_override(browser_identity);
         } else {
             self.global_browser_identity_override = browser_identity;
         }
@@ -778,7 +755,7 @@ impl CdpConnection {
             )
         {
             if let Some(browser_context) = self.browser_context.as_mut() {
-                browser_context.default_tls_verify_host_override = Some(enabled);
+                browser_context.set_tls_verify_host_override(enabled);
             } else {
                 self.base_tls_verify_host = enabled;
             }
@@ -789,9 +766,7 @@ impl CdpConnection {
         let Some(owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
-        if !owner.set_tls_verify_host_override(enabled) {
-            return Err("BrowserContextNotLoaded".to_owned());
-        }
+        owner.set_tls_verify_host_override(enabled);
         self.start_rebuild_resource_runtime_for_session_owner(session_id)
     }
 
@@ -821,25 +796,6 @@ mod tests {
     use super::*;
     use crate::conn::PageTargetHost;
 
-    fn active_session_state_mut(browser_context: &mut BrowserContext) -> TargetSessionStateMut<'_> {
-        let state = browser_context.active_page_target_mut();
-        TargetSessionStateMut {
-            devtools_session_state: &mut state.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary],
-            network_policy: &mut state.network_policy,
-            tls_verify_host_override: &mut state.tls_verify_host_override,
-        }
-    }
-
-    fn background_session_state_mut(state: &mut PageTargetHost) -> TargetSessionStateMut<'_> {
-        TargetSessionStateMut {
-            devtools_session_state: &mut state.devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary],
-            network_policy: &mut state.network_policy,
-            tls_verify_host_override: &mut state.tls_verify_host_override,
-        }
-    }
-
     fn connection_with_background_attached_session() -> CdpConnection {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new("BID-background".to_owned());
@@ -854,6 +810,155 @@ mod tests {
         );
         conn.install_browser_context_fixture_for_test(browser_context);
         conn
+    }
+
+    #[tokio::test]
+    async fn tls_policy_is_shared_by_page_sessions_and_primary_cleanup_reveals_context_default() {
+        let mut conn = connection_with_background_attached_session();
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .set_tls_verify_host_override(true);
+        for (session, enabled) in [
+            ("SID-attached", false),
+            ("SID-background", true),
+            ("SID-attached", false),
+        ] {
+            assert!(
+                conn.start_set_tls_verify_host_for_session_owner(Some(session), enabled)
+                    .unwrap()
+                    .is_none()
+            );
+            for observer in ["SID-background", "SID-attached"] {
+                let inputs = conn.navigation_load_inputs_for_session_owner(Some(observer));
+                assert_eq!(inputs.tls_verify_host_override, Some(enabled));
+                assert_eq!(
+                    conn.ensure_resource_request_client_for_navigation_load_inputs(&inputs)
+                        .unwrap()
+                        .tls_verify_host(),
+                    enabled
+                );
+            }
+        }
+        for (session, installed, effective) in [
+            ("SID-attached", Some(false), false),
+            ("SID-background", None, true),
+        ] {
+            let context = conn.browser_context.as_mut().unwrap();
+            context
+                .reset_primary_page_session_target_state_async("TID-background", session)
+                .await
+                .unwrap();
+            let target = context.page_target("TID-background").unwrap();
+            assert!(target.is_session("SID-background"));
+            assert_eq!(target.tls_verify_host_override(), installed);
+            assert_eq!(context.network_policy().tls_verify_host, Some(true));
+            let inputs = conn.navigation_load_inputs_for_session_owner(Some("SID-background"));
+            assert_eq!(inputs.tls_verify_host_override, Some(effective));
+            assert_eq!(
+                conn.ensure_resource_request_client_for_navigation_load_inputs(&inputs)
+                    .unwrap()
+                    .tls_verify_host(),
+                effective
+            );
+        }
+    }
+
+    #[test]
+    fn network_offline_updates_are_shared_by_sessions_and_navigation_keeps_emulation_defaults() {
+        let mut conn = connection_with_background_attached_session();
+        let primary = crate::conn::CommandOwnerScope::for_session("SID-background");
+        let attached = crate::conn::CommandOwnerScope::for_session("SID-attached");
+        for (session, offline) in [
+            ("SID-attached", true),
+            ("SID-background", false),
+            ("SID-attached", true),
+        ] {
+            assert!(
+                conn.start_set_network_offline_for_session_owner(Some(session), offline)
+                    .unwrap()
+                    .is_none()
+            );
+            assert_eq!(
+                conn.navigation_load_inputs_for_owner(&primary)
+                    .network_offline,
+                offline
+            );
+            assert_eq!(
+                conn.navigation_load_inputs_for_owner(&attached)
+                    .network_offline,
+                offline
+            );
+        }
+        let context = conn.browser_context.as_mut().unwrap();
+        let target = context.page_target_mut("TID-background").unwrap();
+        target.clear_devtools_network_state(&DevToolsSessionKey::Attached("SID-attached".into()));
+        assert!(
+            target.network_offline(),
+            "Network.disable does not reset traffic state"
+        );
+        target.reset_primary_session_target_state_fields();
+        assert!(!target.network_offline());
+        context.set_default_network_conditions(Some(
+            crate::conn::EmulatedNetworkConditions::offline(),
+        ));
+        assert!(
+            conn.navigation_load_inputs_for_owner(&primary)
+                .network_offline
+        );
+        let context = conn.browser_context.as_mut().unwrap();
+        context.set_default_network_conditions(None);
+        context
+            .page_target_mut("TID-background")
+            .unwrap()
+            .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::NetworkConditions(
+                Some(crate::conn::EmulatedNetworkConditions::offline()),
+            ));
+        assert!(
+            conn.navigation_load_inputs_for_owner(&primary)
+                .network_offline
+        );
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .page_target_mut("TID-background")
+            .unwrap()
+            .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::NetworkConditions(
+                None,
+            ));
+        assert!(
+            !conn
+                .navigation_load_inputs_for_owner(&primary)
+                .network_offline
+        );
+    }
+
+    #[tokio::test]
+    async fn only_primary_session_cleanup_resets_installed_network_offline() {
+        let mut conn = connection_with_background_attached_session();
+        conn.start_set_network_offline_for_session_owner(Some("SID-attached"), true)
+            .unwrap();
+        let context = conn.browser_context.as_mut().unwrap();
+        context
+            .reset_primary_page_session_target_state_async("TID-background", "SID-attached")
+            .await
+            .unwrap();
+        assert!(
+            context
+                .page_target("TID-background")
+                .unwrap()
+                .network_offline()
+        );
+        context
+            .reset_primary_page_session_target_state_async("TID-background", "SID-background")
+            .await
+            .unwrap();
+        assert!(
+            !context
+                .page_target("TID-background")
+                .unwrap()
+                .network_offline()
+        );
     }
 
     #[test]
@@ -900,21 +1005,18 @@ mod tests {
     }
 
     #[test]
-    fn target_session_state_mut_applies_active_and_background_network_fields() {
+    fn network_updates_preserve_active_and_background_policy_fields() {
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
-        {
-            let network = &mut active
-                .active_page_target_mut()
-                .devtools_sessions
-                .primary_mut()
-                .network_session_state;
-            network.network_enabled = true;
-            network.cache_disabled = true;
-            network.bypass_service_worker = true;
-            network.blocked_url_patterns = vec!["*://blocked.test/*".to_owned()];
-            network.extra_headers = vec![("X-Test".to_owned(), "active".to_owned())].into();
-        }
-        let active_offline = active_session_state_mut(&mut active).set_network_offline(true);
+        active
+            .active_page_target_mut()
+            .mutate_devtools_network_session_state(&DevToolsSessionKey::Primary, |network| {
+                network.network_enabled = true;
+                network.cache_disabled = true;
+                network.bypass_service_worker = true;
+                network.blocked_url_patterns = vec!["*://blocked.test/*".to_owned()];
+                network.extra_headers = vec![("X-Test".to_owned(), "active".to_owned())].into();
+            });
+        active.active_page_target_mut().set_network_offline(true);
 
         assert!(
             active
@@ -943,23 +1045,17 @@ mod tests {
                 .to_byte_strings(),
             vec![("X-Test".to_owned(), "active".to_owned())]
         );
-        assert!(active_offline);
-        assert!(active.active_page_target().network_policy.network_offline());
+        assert!(active.active_page_target().network_offline());
 
         let mut background = PageTargetHost::empty("TID-network-owner-test".to_owned());
-        {
-            let network = &mut background
-                .devtools_sessions
-                .primary_mut()
-                .network_session_state;
+        background.mutate_devtools_network_session_state(&DevToolsSessionKey::Primary, |network| {
             network.network_enabled = true;
             network.cache_disabled = true;
             network.bypass_service_worker = true;
             network.blocked_url_patterns = vec!["*://background-blocked.test/*".to_owned()];
             network.extra_headers = vec![("X-Test".to_owned(), "background".to_owned())].into();
-        }
-        let background_offline =
-            background_session_state_mut(&mut background).set_network_offline(true);
+        });
+        background.set_network_offline(true);
 
         assert!(background.effective_policy().cache_disabled());
         assert!(background.effective_policy().bypass_service_worker());
@@ -974,8 +1070,7 @@ mod tests {
                 .to_byte_strings(),
             vec![("X-Test".to_owned(), "background".to_owned())]
         );
-        assert!(background_offline);
-        assert!(background.network_policy.network_offline());
+        assert!(background.network_offline());
     }
 
     #[test]

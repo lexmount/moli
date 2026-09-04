@@ -207,8 +207,8 @@ async fn create_browser_context_records_proxy_server_override() {
             .expect("active browser context");
         (
             active.id.clone(),
-            active.default_http_proxy_override.clone(),
-            active.default_http_no_proxy_override.clone(),
+            active.network_policy().http_proxy.clone(),
+            active.network_policy().http_no_proxy.clone(),
         )
     };
     ctx.expect_result(41, json!({ "browserContextId": active_id }), None);
@@ -240,7 +240,7 @@ async fn create_browser_context_preserves_non_loopback_proxy_bypass_entries() {
             .expect("active browser context");
         (
             active.id.clone(),
-            active.default_http_no_proxy_override.clone(),
+            active.network_policy().http_no_proxy.clone(),
         )
     };
     ctx.expect_result(42, json!({ "browserContextId": active_id }), None);

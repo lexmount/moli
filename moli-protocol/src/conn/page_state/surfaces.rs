@@ -1,133 +1,11 @@
+#[cfg(test)]
 use super::super::cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
 use super::super::{
-    BrowserContext, CdpConnection, DocumentStartScript, EmulatedGeolocationOverrideState,
-    EmulatedNetworkConditions, EmulatedViewportSurface, PageTargetHost,
+    BrowserContext, CdpConnection, DocumentStartScript, EmulatedViewportSurface, PageTargetHost,
 };
+use crate::conn::state::PageSurface;
 #[cfg(test)]
 use moli_cookie_jar::{BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides};
-
-struct SurfaceOverrideInputs {
-    network_conditions: Option<EmulatedNetworkConditions>,
-    geolocation_override: Option<EmulatedGeolocationOverrideState>,
-    max_touch_points: u32,
-    navigator_queries: moli_page_types::NavigatorQueryOverrides,
-    focus_emulation_enabled: bool,
-    active_target_surface: bool,
-    window_document_hidden: bool,
-}
-
-impl SurfaceOverrideInputs {
-    fn from_active(browser_context: &BrowserContext) -> Self {
-        Self {
-            navigator_queries: browser_context
-                .active_page_target()
-                .devtools_sessions
-                .navigator_emulation
-                .effective(),
-            network_conditions: browser_context.effective_active_network_conditions(),
-            geolocation_override: browser_context.effective_active_geolocation_override(),
-            max_touch_points: browser_context
-                .active_page_target()
-                .effective_emulation_state
-                .max_touch_points,
-            focus_emulation_enabled: browser_context
-                .active_page_target()
-                .effective_emulation_state
-                .focus_emulation_enabled,
-            active_target_surface: true,
-            window_document_hidden: browser_context
-                .active_page_target()
-                .owner_state
-                .window_document_hidden(),
-        }
-    }
-
-    fn from_background(
-        state: &PageTargetHost,
-        default_network_conditions: Option<EmulatedNetworkConditions>,
-        default_geolocation_override: Option<EmulatedGeolocationOverrideState>,
-    ) -> Self {
-        Self {
-            network_conditions: state
-                .effective_emulation_state
-                .network_conditions
-                .or(default_network_conditions),
-            geolocation_override: state
-                .effective_emulation_state
-                .geolocation_override
-                .clone()
-                .or(default_geolocation_override),
-            max_touch_points: state.effective_emulation_state.max_touch_points,
-            navigator_queries: state.devtools_sessions.navigator_emulation.effective(),
-            focus_emulation_enabled: state.effective_emulation_state.focus_emulation_enabled,
-            active_target_surface: false,
-            window_document_hidden: false,
-        }
-    }
-
-    fn max_touch_points(&self) -> u32 {
-        self.max_touch_points
-    }
-
-    fn document_has_focus(&self) -> bool {
-        self.document_is_focused()
-    }
-
-    fn document_hidden(&self) -> bool {
-        !self.document_is_visible()
-    }
-
-    fn document_visibility_state(&self) -> &'static str {
-        if self.document_is_visible() {
-            "visible"
-        } else {
-            "hidden"
-        }
-    }
-
-    fn document_activity(&self) -> moli_page_types::DocumentActivity {
-        moli_page_types::DocumentActivity::new(
-            self.document_is_focused(),
-            self.document_is_visible(),
-        )
-    }
-
-    fn navigator_overrides(&self) -> moli_page_types::NavigatorOverrides {
-        moli_page_types::NavigatorOverrides {
-            online: self
-                .network_conditions
-                .map(|conditions| conditions.navigator_online()),
-            max_touch_points: self.max_touch_points(),
-            queries: self.navigator_queries,
-            geolocation: self
-                .geolocation_override
-                .as_ref()
-                .and_then(EmulatedGeolocationOverrideState::position)
-                .map(|position| moli_page_types::GeolocationPositionOverride {
-                    latitude: position.latitude,
-                    longitude: position.longitude,
-                    accuracy: position.accuracy,
-                    altitude: position.altitude,
-                    altitude_accuracy: position.altitude_accuracy,
-                    heading: position.heading,
-                    speed: position.speed,
-                }),
-        }
-    }
-
-    fn document_is_visible(&self) -> bool {
-        self.document_is_focused() && !self.window_document_hidden
-    }
-
-    fn document_is_focused(&self) -> bool {
-        // Focus and Page Visibility are target-state surfaces, not raw mirrors
-        // of the CDP focus-emulation flag. Chrome's created active targets
-        // report focused and visible by default; background targets
-        // stay unfocused/hidden unless CDP explicitly asks to simulate a
-        // focused and active page.
-        (self.active_target_surface && !self.window_document_hidden) || self.focus_emulation_enabled
-    }
-}
 
 impl BrowserContext {
     pub(crate) fn navigator_overrides_for_target(
@@ -136,20 +14,14 @@ impl BrowserContext {
     ) -> Option<moli_page_types::NavigatorOverrides> {
         let target = self.page_target(target_id)?;
         Some(
-            SurfaceOverrideInputs::from_background(
-                target,
-                self.default_network_conditions
-                    .or(self.global_network_conditions),
-                self.default_geolocation_override
-                    .clone()
-                    .or_else(|| self.global_geolocation_override.clone()),
-            )
-            .navigator_overrides(),
+            self.page_surface_for_state(target, self.is_active_target(target_id))
+                .navigator_overrides(),
         )
     }
 
     pub(crate) fn active_navigator_overrides(&self) -> moli_page_types::NavigatorOverrides {
-        SurfaceOverrideInputs::from_active(self).navigator_overrides()
+        self.page_surface_for_state(self.active_page_target(), true)
+            .navigator_overrides()
     }
 
     pub(crate) fn document_activity_for_target(
@@ -158,26 +30,18 @@ impl BrowserContext {
     ) -> Option<moli_page_types::DocumentActivity> {
         let target = self.page_target(target_id)?;
         Some(
-            if self.is_active_target(target_id) {
-                SurfaceOverrideInputs::from_active(self)
-            } else {
-                SurfaceOverrideInputs::from_background(
-                    target,
-                    self.default_network_conditions
-                        .or(self.global_network_conditions),
-                    self.default_geolocation_override
-                        .clone()
-                        .or_else(|| self.global_geolocation_override.clone()),
-                )
-            }
-            .document_activity(),
+            self.page_surface_for_state(target, self.is_active_target(target_id))
+                .document_activity(),
         )
     }
 
     pub(crate) fn active_document_activity(&self) -> moli_page_types::DocumentActivity {
         self.page_targets
             .active()
-            .map(|_| SurfaceOverrideInputs::from_active(self).document_activity())
+            .map(|target| {
+                self.page_surface_for_state(target, true)
+                    .document_activity()
+            })
             .unwrap_or_default()
     }
     #[cfg(test)]
@@ -202,6 +66,7 @@ impl BrowserContext {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn raw_cookie_manager_surface_snapshot(
         &self,
     ) -> BrowserContextCookieManagerSurfaceSnapshot {
@@ -338,7 +203,7 @@ impl BrowserContext {
     ) -> moli_fetch::RequestHeaders {
         merge_extra_header_layers(&[
             &self.global_extra_headers,
-            &self.default_extra_headers,
+            &self.network_policy().extra_headers,
             target_headers,
         ])
     }
@@ -401,20 +266,41 @@ impl BrowserContext {
 
     pub fn max_touch_points(&self) -> u32 {
         self.active_page_target()
-            .effective_emulation_state
+            .emulation_policy()
             .max_touch_points
     }
 
     pub fn document_has_focus(&self) -> bool {
-        SurfaceOverrideInputs::from_active(self).document_has_focus()
+        self.page_surface_for_state(self.active_page_target(), true)
+            .document_has_focus()
     }
 
     pub fn document_hidden(&self) -> bool {
-        SurfaceOverrideInputs::from_active(self).document_hidden()
+        self.page_surface_for_state(self.active_page_target(), true)
+            .document_hidden()
     }
 
     pub fn document_visibility_state(&self) -> &'static str {
-        SurfaceOverrideInputs::from_active(self).document_visibility_state()
+        self.page_surface_for_state(self.active_page_target(), true)
+            .document_visibility_state()
+    }
+
+    // Context default resolution stays in this residence until Commit 7;
+    // source generation itself only reads the embedded Browser object.
+    fn page_surface_for_state(&self, state: &PageTargetHost, foreground: bool) -> PageSurface {
+        let mut surface = state.runtime_slot.page_slot().contents.page_surface(
+            foreground,
+            self.emulation_defaults()
+                .network_conditions
+                .or(self.global_network_conditions),
+            self.emulation_defaults()
+                .geolocation
+                .as_ref()
+                .or(self.global_geolocation_override.as_ref()),
+            self.emulation_defaults().device_metrics.as_ref(),
+        );
+        surface.navigator_queries = state.devtools_sessions.navigator_emulation.effective();
+        surface
     }
 
     pub(crate) async fn apply_background_target_surface_overrides_async(
@@ -627,4 +513,34 @@ fn merge_extra_header_layers(layers: &[&moli_fetch::RequestHeaders]) -> moli_fet
         }
     }
     headers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conn::WindowSurfaceState;
+
+    #[test]
+    fn background_surface_uses_the_owning_window_state() {
+        let mut target = PageTargetHost::empty("TID-background-window".into());
+        target
+            .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::FocusEnabled(true));
+        target.set_window_surface_state(WindowSurfaceState::Minimized);
+        let mut contents = std::mem::take(&mut target.runtime_slot.page_slot_mut().contents);
+        drop(target);
+        let minimized = contents.page_surface(false, None, None, None);
+        assert!(minimized.document_has_focus());
+        assert!(
+            minimized.document_hidden(),
+            "focus emulation must not unminimize a window"
+        );
+
+        contents.window.surface.state = WindowSurfaceState::Fullscreen;
+        let fullscreen = contents.page_surface(false, None, None, None);
+        assert!(!fullscreen.document_hidden());
+        assert_eq!(
+            contents.window.surface.state,
+            WindowSurfaceState::Fullscreen
+        );
+    }
 }

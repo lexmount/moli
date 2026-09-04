@@ -1,7 +1,8 @@
 use crate::conn::{
     BrowserContext, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope, EmulatedDeviceMetrics,
-    EmulatedGeolocationOverrideState, EmulatedViewportSurface, RendererCommandCorrelation,
-    RendererCommandDescriptor, RuntimeInspectorAsyncCompletionReceiver, TargetWindowSurfaceState,
+    EmulatedGeolocationOverrideState, EmulatedViewportSurface, EmulationPolicyChange,
+    RendererCommandCorrelation, RendererCommandDescriptor, RuntimeInspectorAsyncCompletionReceiver,
+    WindowSurfaceState,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandResult, DevToolsDevicePixelRatioSetting, DevToolsError,
@@ -261,11 +262,11 @@ fn start_focus_emulation_enabled_command(
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::success());
     }
-    if let Err(message) =
-        page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
-            state.set_focus_emulation_enabled(params.enabled);
-        })
-    {
+    if let Err(message) = page_session::update_page_emulation_state(
+        conn,
+        cmd.session_id,
+        EmulationPolicyChange::FocusEnabled(params.enabled),
+    ) {
         let code = if message == "BrowserContextNotLoaded" {
             -31998
         } else {
@@ -312,15 +313,15 @@ fn start_touch_emulation_enabled_command(
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if let Err(message) =
-        page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
-            state.set_max_touch_points(if params.enabled {
-                max_touch_points as u32
-            } else {
-                0
-            });
-        })
-    {
+    if let Err(message) = page_session::update_page_emulation_state(
+        conn,
+        cmd.session_id,
+        EmulationPolicyChange::MaxTouchPoints(if params.enabled {
+            max_touch_points as u32
+        } else {
+            0
+        }),
+    ) {
         let code = if message == "BrowserContextNotLoaded" {
             -31998
         } else {
@@ -461,9 +462,11 @@ fn emit_touch_events_for_mouse_command_output_plan(
     if conn.browser_context.is_none() {
         return CommandOutputPlan::result(json!({}));
     }
-    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
-        state.set_emit_touch_events_for_mouse(params.enabled);
-    }) {
+    match page_session::update_page_emulation_state(
+        conn,
+        cmd.session_id,
+        EmulationPolicyChange::EmitTouchEventsForMouse(params.enabled),
+    ) {
         Ok(()) => CommandOutputPlan::result(json!({})),
         Err(message) if message == "BrowserContextNotLoaded" => {
             CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
@@ -488,11 +491,10 @@ fn start_script_execution_disabled_command(
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_script_execution_disabled(params.value);
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::ScriptExecutionDisabled(params.value),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
@@ -748,11 +750,10 @@ fn start_update_geolocation_override_command(
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_geolocation_override(override_state.clone());
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::Geolocation(override_state),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
@@ -796,9 +797,11 @@ fn default_background_color_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> 
             (color.a.unwrap_or(1.0).clamp(0.0, 1.0) * 255.0).round() as u8,
         ]
     });
-    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
-        state.set_default_background_color(color);
-    }) {
+    match page_session::update_page_emulation_state(
+        conn,
+        cmd.session_id,
+        EmulationPolicyChange::DefaultBackgroundColor(color),
+    ) {
         // Paint is demand-driven; each capture samples the target's current base color.
         Ok(()) => CommandOutputPlan::success(),
         Err(error) => CommandOutputPlan::error(-31998, error),
@@ -822,11 +825,10 @@ fn start_emulated_media_command(
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
     let overrides = media::emulated_media_overrides_from_params(params);
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_emulated_media(overrides.clone());
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::Media(overrides.clone()),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
@@ -925,11 +927,17 @@ fn start_device_metrics_override_command(
     let mut base = conn
         .target_owner_identity_for_owner(&owner)
         .and_then(|(context_id, _)| conn.browser_context_by_id(&context_id))
-        .and_then(|context| context.default_emulated_device_metrics.as_ref())
+        .and_then(|context| context.emulation_defaults().device_metrics.as_ref())
         .map(EmulatedDeviceMetrics::viewport_surface)
         .unwrap_or_default();
-    if let Some(state) = conn.target_owner_state_for_owner(&owner) {
-        let geometry = state.window_surface_geometry;
+    if let Some(geometry) =
+        conn.target_owner_identity_for_owner(&owner)
+            .and_then(|(context_id, target_id)| {
+                conn.browser_context_by_id(&context_id)?
+                    .page_target(target_id.as_deref()?)
+                    .map(|target| target.window_surface())
+            })
+    {
         if geometry.width != 0 {
             base.inner_width = geometry.width;
             base.outer_width = geometry.width;
@@ -974,11 +982,10 @@ fn start_clear_device_metrics_override_command(
     {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_emulated_device_metrics(None);
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::DeviceMetrics(None),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
@@ -1030,11 +1037,10 @@ fn start_apply_device_metrics(
     metrics: EmulatedDeviceMetrics,
     owner_scope: CommandOwnerScope,
 ) -> Result<Option<PendingEmulationCommandDispatch>, DevToolsError> {
-    if !conn.update_emulation_state_for_owner(&owner_scope, |state| {
-        if let Some(mut state) = state {
-            state.set_emulated_device_metrics(Some(metrics.clone()));
-        }
-    }) {
+    if !conn.apply_emulation_override_for_owner(
+        &owner_scope,
+        EmulationPolicyChange::DeviceMetrics(Some(metrics.clone())),
+    ) {
         return Err(DevToolsError::new(
             DevToolsErrorKind::NoSuchTarget,
             "BrowserContextNotLoaded",
@@ -1186,7 +1192,7 @@ async fn execute_devtools_set_extra_headers_for_browser_contexts(
         let browser_context = conn
             .browser_context_by_id_mut(browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_extra_headers = command.headers.clone();
+        browser_context.set_default_extra_headers(command.headers.clone());
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_extra_headers_updates_for_routes(
@@ -1292,9 +1298,11 @@ async fn execute_devtools_set_geolocation_override_for_browser_contexts(
         let browser_context = conn
             .browser_context_by_id_mut(browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_geolocation_override = command
-            .override_state
-            .map(emulated_geolocation_override_state);
+        browser_context.set_default_geolocation_override(
+            command
+                .override_state
+                .map(emulated_geolocation_override_state),
+        );
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_geolocation_surface_updates_for_routes(
@@ -1327,11 +1335,10 @@ fn start_geolocation_override_for_current_route(
     override_state: Option<EmulatedGeolocationOverrideState>,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let owner = CommandOwnerScope::for_route(route.clone());
-    if !conn.update_emulation_state_for_owner(&owner, |state| {
-        if let Some(mut state) = state {
-            state.set_geolocation_override(override_state);
-        }
-    }) {
+    if !conn.apply_emulation_override_for_owner(
+        &owner,
+        EmulationPolicyChange::Geolocation(override_state),
+    ) {
         return Err(devtools_emulation_owner_error(
             "BrowserContextNotLoaded".to_owned(),
         ));
@@ -1383,8 +1390,9 @@ async fn execute_devtools_set_network_conditions_for_browser_contexts(
         let browser_context = conn
             .browser_context_by_id_mut(browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_network_conditions =
-            command.network_conditions.map(emulated_network_conditions);
+        browser_context.set_default_network_conditions(
+            command.network_conditions.map(emulated_network_conditions),
+        );
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_network_conditions_updates_for_routes(
@@ -1414,11 +1422,12 @@ fn start_network_conditions_for_current_route(
     network_conditions: Option<DevToolsNetworkConditions>,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let owner = CommandOwnerScope::for_route(route.clone());
-    if !conn.update_emulation_state_for_owner(&owner, |state| {
-        if let Some(mut state) = state {
-            state.set_network_conditions(network_conditions.map(emulated_network_conditions));
-        }
-    }) {
+    if !conn.apply_emulation_override_for_owner(
+        &owner,
+        EmulationPolicyChange::NetworkConditions(
+            network_conditions.map(emulated_network_conditions),
+        ),
+    ) {
         return Err(devtools_emulation_owner_error(
             "BrowserContextNotLoaded".to_owned(),
         ));
@@ -2088,9 +2097,7 @@ async fn execute_devtools_set_window_state_for_owner(
 ) -> Result<DevToolsCommandResult, DevToolsError> {
     let state = target_window_surface_state_from_devtools(command.state);
     if conn
-        .with_target_owner_state_for_owner_mut(&owner, |owner_state| {
-            owner_state.set_window_surface_state(state);
-        })
+        .set_window_surface_state_for_owner(&owner, state)
         .is_none()
     {
         return Err(DevToolsError::new(
@@ -2127,14 +2134,13 @@ async fn execute_devtools_set_client_window_state_command_async(
     match result {
         Ok(_) => {
             let owner = CommandOwnerScope::for_route(route);
-            let _ = conn.with_target_owner_state_for_owner_mut(&owner, |owner_state| {
-                owner_state.set_window_surface_geometry(
-                    command.width,
-                    command.height,
-                    command.x,
-                    command.y,
-                );
-            });
+            let _ = conn.set_window_surface_geometry_for_owner(
+                &owner,
+                command.width,
+                command.height,
+                command.x,
+                command.y,
+            );
             super::target::devtools_client_window_info_for_target(conn, &command.client_window)
                 .map(|client_window| {
                     DevToolsCommandResult::ClientWindow(DevToolsSetClientWindowStateResult {
@@ -2147,14 +2153,12 @@ async fn execute_devtools_set_client_window_state_command_async(
     }
 }
 
-fn target_window_surface_state_from_devtools(
-    state: DevToolsWindowState,
-) -> TargetWindowSurfaceState {
+fn target_window_surface_state_from_devtools(state: DevToolsWindowState) -> WindowSurfaceState {
     match state {
-        DevToolsWindowState::Normal => TargetWindowSurfaceState::Normal,
-        DevToolsWindowState::Maximized => TargetWindowSurfaceState::Maximized,
-        DevToolsWindowState::Minimized => TargetWindowSurfaceState::Minimized,
-        DevToolsWindowState::Fullscreen => TargetWindowSurfaceState::Fullscreen,
+        DevToolsWindowState::Normal => WindowSurfaceState::Normal,
+        DevToolsWindowState::Maximized => WindowSurfaceState::Maximized,
+        DevToolsWindowState::Minimized => WindowSurfaceState::Minimized,
+        DevToolsWindowState::Fullscreen => WindowSurfaceState::Fullscreen,
     }
 }
 
@@ -2167,12 +2171,12 @@ async fn execute_devtools_set_viewport_for_browser_contexts(
     for browser_context_id in browser_context_ids {
         let current_default = conn
             .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.default_emulated_device_metrics.as_ref());
+            .and_then(|context| context.emulation_defaults().device_metrics.as_ref());
         let metrics = set_viewport_metrics_from_current(current_default, &command)?;
         let browser_context = conn
             .browser_context_by_id_mut(&browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_emulated_device_metrics = Some(metrics.clone());
+        browser_context.set_default_device_metrics(metrics.clone());
         pending.extend(start_browser_context_default_device_metrics_page_commands(
             browser_context,
             &metrics,
@@ -2250,11 +2254,7 @@ fn start_browser_context_default_device_metrics_page_commands(
     let viewport_surface = Some(metrics.viewport_surface());
     let mut pending = Vec::new();
     for target in browser_context.page_targets.iter_mut() {
-        if target
-            .effective_emulation_state
-            .emulated_device_metrics
-            .is_some()
-        {
+        if target.emulation_policy().emulated_device_metrics.is_some() {
             continue;
         }
         let target_id = target.target_id().to_owned();

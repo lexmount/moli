@@ -7334,10 +7334,7 @@ async fn reload_after_crash_emits_target_reloaded_after_crash() {
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .record_inspector_target_crashed();
-    bc.active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
+    bc.active_page_target_mut().mark_crashed();
 
     ctx.process_async(json!({
         "id": 248,
@@ -7363,8 +7360,6 @@ async fn reload_after_crash_emits_target_reloaded_after_crash() {
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 }
@@ -7382,10 +7377,7 @@ async fn navigate_after_crash_emits_target_reloaded_after_crash() {
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .record_inspector_target_crashed();
-    bc.active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
+    bc.active_page_target_mut().mark_crashed();
 
     ctx.process_async(json!({
         "id": 249,
@@ -7414,8 +7406,6 @@ async fn navigate_after_crash_emits_target_reloaded_after_crash() {
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
     assert_eq!(
@@ -7438,8 +7428,6 @@ async fn navigate_after_crash_without_inspector_enabled_clears_crash_without_eve
         .as_mut()
         .unwrap()
         .active_page_target_mut()
-        .owner_state
-        .target_crash_state
         .mark_crashed();
 
     ctx.process_async(json!({
@@ -7470,8 +7458,6 @@ async fn navigate_after_crash_without_inspector_enabled_clears_crash_without_eve
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 }

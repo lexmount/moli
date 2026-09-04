@@ -1289,16 +1289,30 @@ async fn emulate_network_conditions_requires_browser_context() {
 async fn emulate_network_conditions_rejects_invalid_params() {
     let mut ctx = TestContext::new();
     ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
-    ctx.process_async(json!({
-        "id": 29,
-        "method": "Network.emulateNetworkConditions",
-        "params": { "offline": true }
-    }))
-    .await;
-    ctx.expect_error(29, -32602, "InvalidParams");
+    for params in [
+        json!({ "offline": true }),
+        json!({ "offline": true, "latency": "slow", "downloadThroughput": -1, "uploadThroughput": -1 }),
+        json!({ "offline": true, "latency": 0, "downloadThroughput": -1, "uploadThroughput": -1, "connectionType": "invalid" }),
+    ] {
+        ctx.process_async(json!({
+            "id": 29,
+            "method": "Network.emulateNetworkConditions",
+            "params": params,
+        }))
+        .await;
+        ctx.expect_error(29, -32602, "InvalidParams");
+        assert!(
+            !ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .network_offline()
+        );
+    }
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn emulate_network_conditions_updates_browser_context_state() {
+async fn emulate_network_conditions_installs_only_the_supported_offline_value() {
     let mut ctx = TestContext::new();
     ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
@@ -1316,7 +1330,7 @@ async fn emulate_network_conditions_updates_browser_context_state() {
     ctx.expect_result(30, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(bc.active_page_target().network_policy.network_offline());
+    assert!(bc.active_page_target().network_offline());
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_offline_navigation_commits_error_document() {

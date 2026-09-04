@@ -47,11 +47,12 @@ pub(crate) use devtools_renderer_channel::{
 pub(crate) use dedicated_worker_target::{
     DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot, DedicatedWorkerTargetState,
 };
+#[cfg(test)]
+pub(crate) use devtools_session::DevToolsEmulationSessionState;
 pub(crate) use devtools_session::{
     DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
-    DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DevToolsNetworkSessionState,
-    DevToolsSessionState, PreparedRendererCallReplacements, SessionRendererCallReplay,
-    SessionRendererCallTermination,
+    DevToolsLogViolationThreshold, DevToolsNetworkSessionState, DevToolsSessionState,
+    PreparedRendererCallReplacements, SessionRendererCallReplay, SessionRendererCallTermination,
 };
 pub(crate) use document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
@@ -95,38 +96,42 @@ pub(crate) use service_worker_lifetime::{
 pub(crate) use service_worker_target::{
     ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState,
 };
-#[cfg(test)]
-pub(crate) use session::TargetPerformanceSessionState;
 pub(crate) use session::{
     EffectiveTargetPolicy, PageScreencastConfig, PageScreencastFormat, PerformanceTimeDomain,
-    TargetNetworkPolicyState, TargetPageSessionState, TargetRuntimeSessionState,
+    TargetPageSessionState, TargetRuntimeSessionState,
 };
 pub(crate) use shared_worker_attachment::{
     TargetSharedWorkerProtocolAttachmentIdentity, TargetSharedWorkerProtocolAttachmentRetirement,
 };
 pub(crate) use shared_worker_target::SharedWorkerTargetState;
-pub(crate) use web_contents::SessionStorageNamespace;
+#[cfg(test)]
+pub(crate) use web_contents::JavaScriptDialogKey;
+pub(crate) use web_contents::{
+    EmulationPolicy, EmulationPolicyChange, EmulationPolicyDelta, SessionStorageNamespace,
+    WindowSurface, WindowSurfaceState,
+};
+pub(crate) use web_contents::{
+    JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogSnapshot,
+};
+pub(in crate::conn) use web_contents::{PageSurface, WindowOpener};
 
 pub use browser_context::BrowserContext;
 pub(crate) use browser_context::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles,
-    BrowserContextStoragePartitionHandles, SiteDataClearOptions,
+    BrowserContextStoragePartitionHandles, ContextNetworkPolicy, SiteDataClearOptions,
 };
 
 pub(crate) use navigation_controller::{InitialDocument, InitialDocumentCreator};
 pub use navigation_controller::{PageNavigationHistoryEntry, PendingNavigationHistoryUpdate};
 
-pub(crate) use emulation::{
-    EffectiveTargetEmulationState, EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions,
-    EmulatedViewportSurface,
-};
 pub use emulation::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
     EmulatedMediaOverrides,
 };
+pub(crate) use emulation::{EmulatedNetworkConditions, EmulatedViewportSurface};
 pub use page_target_host::PageTargetHost;
 pub(crate) use target_state::{
-    PendingBidiChannelListener, PendingInspectorAwait, TargetOwnerState, TargetWindowSurfaceState,
+    PendingBidiChannelListener, PendingInspectorAwait, TargetOwnerState,
 };
 
 pub(crate) use navigation_outcome::{CompletedDownloadBody, CompletedDownloadBodyArtifact};

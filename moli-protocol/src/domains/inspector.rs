@@ -112,10 +112,7 @@ mod tests {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.attach_active_session("SID-1");
-        bc.active_page_target_mut()
-            .owner_state
-            .target_crash_state
-            .mark_crashed();
+        bc.active_page_target_mut().mark_crashed();
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({"id": 3, "method": "Inspector.enable", "sessionId": "SID-1"}))
@@ -139,10 +136,7 @@ mod tests {
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-primary");
         assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
-        bc.active_page_target_mut()
-            .owner_state
-            .target_crash_state
-            .mark_crashed();
+        bc.active_page_target_mut().mark_crashed();
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({
@@ -182,8 +176,6 @@ mod tests {
         ));
         bc.background_target_mut("TID-background")
             .expect("background target must exist")
-            .owner_state
-            .target_crash_state
             .mark_crashed();
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -273,10 +265,7 @@ mod tests {
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
         ));
-        bc.active_page_target_mut()
-            .owner_state
-            .target_crash_state
-            .mark_crashed();
+        bc.active_page_target_mut().mark_crashed();
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({"id": 4, "method": "Inspector.enable", "sessionId": "SID-B"}))

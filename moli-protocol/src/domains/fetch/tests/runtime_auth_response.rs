@@ -5776,12 +5776,7 @@ async fn crash_aborts_paused_runtime_fetch_subresource() {
     ctx.expect_error(905, -32000, "RequestNotFound");
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(
-        bc.active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!(bc.active_page_target().is_crashed());
     assert!(!bc.has_loaded_page());
 
     server.abort();
@@ -5925,12 +5920,7 @@ async fn crash_aborts_paused_response_stage_runtime_xhr_subresource() {
     ctx.expect_error(912, -32000, "RequestNotFound");
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(
-        bc.active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!(bc.active_page_target().is_crashed());
     assert!(!bc.has_loaded_page());
 
     server.abort();
@@ -6107,12 +6097,7 @@ async fn crash_aborts_paused_runtime_xhr_auth_subresource() {
     ctx.expect_error(919, -32000, "RequestNotFound");
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(
-        bc.active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!(bc.active_page_target().is_crashed());
     assert!(!bc.has_loaded_page());
 
     server.abort();

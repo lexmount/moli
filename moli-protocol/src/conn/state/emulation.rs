@@ -125,100 +125,10 @@ impl From<&EmulatedMediaOverrides> for moli_core::page::EmulatedMediaOverrides {
     }
 }
 
-/// Values currently exposed by the shared Page target.
-///
-/// A DevTools session keeps its own raw Emulation handler state separately.
-/// Commands copy the calling handler's value into this shared surface, just as
-/// Chromium's per-session Emulation handlers update one target-wide renderer.
-#[derive(Debug, Clone, PartialEq, Default)]
-pub(crate) struct EffectiveTargetEmulationState {
-    pub(crate) default_background_color: Option<[u8; 4]>,
-    pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
-    pub(crate) geolocation_override: Option<EmulatedGeolocationOverrideState>,
-    pub(crate) emulated_media: EmulatedMediaOverrides,
-    pub(crate) emulated_device_metrics: Option<EmulatedDeviceMetrics>,
-    pub(crate) max_touch_points: u32,
-    pub(crate) emit_touch_events_for_mouse: bool,
-    pub(crate) focus_emulation_enabled: bool,
-    pub(crate) script_execution_disabled: bool,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct EffectiveTargetEmulationStateDelta {
-    pub(crate) network_conditions: bool,
-    pub(crate) geolocation_override: bool,
-    pub(crate) emulated_media: bool,
-    pub(crate) emulated_device_metrics: bool,
-    pub(crate) max_touch_points: bool,
-    pub(crate) navigator_queries: bool,
-    pub(crate) focus_emulation_enabled: bool,
-    pub(crate) script_execution_disabled: bool,
-}
-
-impl EffectiveTargetEmulationStateDelta {
-    pub(crate) fn surface_changed(self) -> bool {
-        self.network_conditions
-            || self.geolocation_override
-            || self.emulated_device_metrics
-            || self.max_touch_points
-            || self.navigator_queries
-            || self.focus_emulation_enabled
-    }
-}
-
-impl EffectiveTargetEmulationState {
-    /// Applies Chromium's per-handler disable contract to the shared target
-    /// surface. Decisions use the disconnecting session's raw values, never a
-    /// value last written by another session.
-    pub(crate) fn disable_session_handler(
-        &mut self,
-        raw: &super::devtools_session::DevToolsEmulationSessionState,
-    ) -> EffectiveTargetEmulationStateDelta {
-        let previous = self.clone();
-        if raw.network_conditions.is_some() {
-            self.network_conditions = None;
-        }
-        if raw.geolocation_override.is_some() {
-            self.geolocation_override = None;
-        }
-        // Blink clears media on every Emulation handler disable. Keep the
-        // target-wide side effect while retaining each handler's raw copy.
-        self.emulated_media = EmulatedMediaOverrides::default();
-        self.default_background_color = None;
-        if raw.emulated_device_metrics.is_some() {
-            self.emulated_device_metrics = None;
-        }
-        if raw.max_touch_points != 0 {
-            self.max_touch_points = 0;
-        }
-        if raw.emit_touch_events_for_mouse {
-            self.emit_touch_events_for_mouse = false;
-        }
-        if raw.focus_emulation_enabled {
-            self.focus_emulation_enabled = false;
-        }
-        // Blink also sends the shared renderer an unconditional script
-        // execution reset when any Emulation handler is disabled.
-        self.script_execution_disabled = false;
-        EffectiveTargetEmulationStateDelta {
-            network_conditions: previous.network_conditions != self.network_conditions,
-            geolocation_override: previous.geolocation_override != self.geolocation_override,
-            emulated_media: previous.emulated_media != self.emulated_media,
-            emulated_device_metrics: previous.emulated_device_metrics
-                != self.emulated_device_metrics,
-            max_touch_points: previous.max_touch_points != self.max_touch_points,
-            navigator_queries: false,
-            focus_emulation_enabled: previous.focus_emulation_enabled
-                != self.focus_emulation_enabled,
-            script_execution_disabled: previous.script_execution_disabled
-                != self.script_execution_disabled,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{EffectiveTargetEmulationState, EmulatedDeviceMetrics};
+    use super::EmulatedDeviceMetrics;
+    use crate::conn::EmulationPolicy;
 
     #[test]
     fn device_pixel_ratio_normalizes_non_positive_and_non_finite_values() {
@@ -251,7 +161,7 @@ mod tests {
 
     #[test]
     fn handler_disable_uses_raw_state_for_conditional_target_resets() {
-        let mut effective = EffectiveTargetEmulationState {
+        let mut effective = EmulationPolicy {
             focus_emulation_enabled: true,
             script_execution_disabled: true,
             emulated_media: super::EmulatedMediaOverrides {
@@ -262,7 +172,7 @@ mod tests {
         };
         let raw = crate::conn::DevToolsEmulationSessionState::default();
 
-        let delta = effective.disable_session_handler(&raw);
+        let delta = effective.apply_changes(raw.disable_policy_changes());
 
         assert!(
             effective.focus_emulation_enabled,

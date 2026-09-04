@@ -40,6 +40,7 @@ mod command_owner_scope;
 mod command_view;
 mod cookie_manager_surface;
 mod cookie_owner;
+#[cfg(test)]
 mod cookie_policy_surface;
 #[cfg(test)]
 mod cookie_store_boundary;
@@ -77,8 +78,7 @@ pub(crate) use bidi_channel_work::{
 pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter};
 pub(crate) use browser_context::{
     PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
-    SessionOwnerRuntimeFrontendEnableResult, TargetEmulationStateUpdate,
-    TargetNavigationLoadInputs,
+    SessionOwnerRuntimeFrontendEnableResult, TargetNavigationLoadInputs,
 };
 pub(crate) use command_owner_scope::CommandOwnerScope;
 pub use command_view::Cmd;
@@ -547,6 +547,7 @@ pub use scheduler_state::{CdpRendererOwnerTurnOutcome, CdpSchedulerEvent, CdpTur
 pub(crate) use site_data_manager_surface::{
     BrowserContextReservedSiteDataOwnerState, BrowserContextSiteDataManagerOwnerState,
 };
+pub(crate) use state::JavaScriptDialogError;
 pub use state::{
     BrowserContext, BrowserWindowBounds, DevToolsPageResidenceIdentity, DocumentStartScript,
     DownloadNavigation, EmulatedDeviceMetrics, EmulatedGeolocationOverride,
@@ -559,13 +560,12 @@ pub(crate) use state::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles,
     BrowserContextStoragePartitionHandles, CommittedRendererAgentAttachment,
     CommittedRendererDocumentBinding, CompletedDownloadBody, CompletedDownloadBodyArtifact,
-    DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot,
+    ContextNetworkPolicy, DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot,
     DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
-    DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DocumentId,
-    DuplicatePendingRendererCommand, EffectiveTargetEmulationState,
-    EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions, EmulatedViewportSurface,
-    InitialDocumentCreator, InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationId,
-    NavigationResultProjection, NavigationSourceDocumentSecurityContext,
+    DevToolsLogViolationThreshold, DocumentId, DuplicatePendingRendererCommand,
+    EmulatedNetworkConditions, EmulatedViewportSurface, EmulationPolicyChange,
+    EmulationPolicyDelta, InitialDocumentCreator, InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL,
+    NavigationId, NavigationResultProjection, NavigationSourceDocumentSecurityContext,
     NetworkErrorPageNavigation, PageScreencastConfig, PageScreencastFormat,
     PendingBidiChannelListener, PendingInspectorAwait, PendingRendererCommandKey,
     PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,
@@ -581,12 +581,13 @@ pub(crate) use state::{
     TargetServiceWorkerRunIdentity, TargetServiceWorkerRunRetirement,
     TargetServiceWorkerRuntimeAttachmentIdentity, TargetServiceWorkerVersionIdentity,
     TargetServiceWorkerVersionRetirement, TargetSharedWorkerProtocolAttachmentIdentity,
-    TargetSharedWorkerProtocolAttachmentRetirement, TargetWindowSurfaceState,
+    TargetSharedWorkerProtocolAttachmentRetirement, WindowSurface, WindowSurfaceState,
 };
 #[cfg(test)]
 pub(crate) use state::{
-    DevToolsSessionState, TargetJavaScriptDialog, TargetJavaScriptDialogScopeObserver,
-    TargetPageSlot, TargetRuntimeSessionState,
+    DevToolsEmulationSessionState, DevToolsSessionState, EmulationPolicy, JavaScriptDialogKey,
+    TargetJavaScriptDialog, TargetJavaScriptDialogScopeObserver, TargetPageSlot,
+    TargetRuntimeSessionState,
 };
 pub(crate) use target::{
     PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,

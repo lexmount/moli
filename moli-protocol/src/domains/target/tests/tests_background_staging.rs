@@ -1321,7 +1321,7 @@ async fn same_context_background_session_can_stage_its_own_emulated_media_before
         assert_eq!(
             active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .emulated_media
                 .color_scheme
                 .as_deref(),
@@ -1333,7 +1333,7 @@ async fn same_context_background_session_can_stage_its_own_emulated_media_before
             .expect("second target should have staged background page session state");
         assert_eq!(
             staged
-                .effective_emulation_state
+                .emulation_policy()
                 .emulated_media
                 .color_scheme
                 .as_deref(),
@@ -1468,7 +1468,7 @@ async fn same_context_background_session_can_clear_its_own_emulated_media_before
         assert!(
             active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .emulated_media
                 .color_scheme
                 .is_none(),
@@ -1604,13 +1604,12 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
             .as_ref()
             .expect("active browser context");
         assert_eq!(active.active_target_id(), Some("TID-000000000PN"));
-        assert!(!active.active_page_target().network_policy.network_offline());
-
+        assert!(!active.active_page_target().network_offline());
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged background page session state");
-        assert!(staged.network_policy.network_offline());
+        assert!(staged.network_offline());
     }
 
     ctx.process_async(json!({
@@ -1652,12 +1651,7 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
             activated.active_session_id(),
             Some(second_session_id.as_str())
         );
-        assert!(
-            activated
-                .active_page_target()
-                .network_policy
-                .network_offline()
-        );
+        assert!(activated.active_page_target().network_offline());
     }
 
     ctx.process_async(json!({
@@ -1758,7 +1752,7 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_a
             staged
                 .devtools_sessions
                 .primary()
-                .network_session_state
+                .network_session_state()
                 .blocked_url_patterns,
             ["http://example.test/blocked/*".to_owned()],
             "the disabled handler must retain its staged contribution until enable"
@@ -1912,16 +1906,17 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
             .expect("active browser context");
         assert_eq!(active.active_target_id(), Some("TID-000000000PR"));
         assert!(
-            !active.active_page_target().network_policy.network_offline(),
+            !active.active_page_target().network_offline(),
             "active target should keep its default online state",
         );
         let staged = active
             .background_target(&second_target_id)
-            .expect("second target should have staged background page session state");
-        assert!(!staged.network_policy.network_offline());
+            .expect("reset must preserve the background page");
+        assert!(!staged.network_offline());
+        assert!(staged.is_session(&second_session_id));
         assert!(
             !staged.has_non_default_session_state(),
-            "offline reset should return to the default policy"
+            "reset must not retain unimplemented traffic overrides"
         );
     }
 
@@ -1934,17 +1929,45 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
     let _ = take_response_by_id(&mut ctx, 104194505);
     ctx.take_all();
 
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let page_url = format!("http://{}/page", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/page",
+                get(|| async {
+                    axum::response::Html(
+                        "<title>activated-online</title><div id='ok'>activated online</div>",
+                    )
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
     ctx.process_async(json!({
-            "id": 104194506,
-            "method": "Page.navigate",
-            "sessionId": second_session_id,
-            "params": { "url": "data:text/html,<title>activated-online</title><div id='ok'>activated online</div>" }
-        })).await;
+        "id": 104194506,
+        "method": "Page.navigate",
+        "sessionId": second_session_id,
+        "params": { "url": page_url }
+    }))
+    .await;
     let activated_navigation = take_response_by_id(&mut ctx, 104194506);
     assert_eq!(
         activated_navigation["result"]["frameId"],
         json!(second_target_id)
     );
+    let loader_id = activated_navigation["result"]["loaderId"]
+        .as_str()
+        .expect("online navigation loader id");
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        Some(&second_session_id),
+        &second_target_id,
+        loader_id,
+    )
+    .await;
     assert!(
         ctx.sent
             .iter()
@@ -1960,13 +1983,28 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
             activated.active_target_id(),
             Some(second_target_id.as_str())
         );
-        assert!(
-            !activated
-                .active_page_target()
-                .network_policy
-                .network_offline()
-        );
+        assert!(!activated.active_page_target().network_offline());
+        assert_eq!(activated.active_page_target().target_url(), page_url);
     }
+    ctx.process_async(json!({
+        "id": 104194507,
+        "method": "Runtime.evaluate",
+        "sessionId": second_session_id,
+        "params": {
+            "expression": "({title: document.title, online: navigator.onLine})",
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let surface = take_response_by_id(&mut ctx, 104194507);
+    assert_eq!(
+        surface["result"]["result"]["value"],
+        json!({
+            "title": "activated-online",
+            "online": true,
+        })
+    );
+    server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3489,7 +3527,7 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
         assert_eq!(
             active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .emulated_device_metrics
                 .as_ref()
                 .map(|metrics| (
@@ -3504,14 +3542,14 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
         assert!(
             active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .max_touch_points
                 != 0
         );
         assert!(
             active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .focus_emulation_enabled
         );
 
@@ -3521,7 +3559,7 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
             .expect("second target should have staged background page session state");
         assert_eq!(
             staged
-                .effective_emulation_state
+                .emulation_policy()
                 .emulated_device_metrics
                 .as_ref()
                 .map(|metrics| (
@@ -3533,8 +3571,8 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
                 )),
             Some((640, 360, 1.0, 800, 600))
         );
-        assert_eq!(staged.effective_emulation_state.max_touch_points, 0);
-        assert!(!staged.effective_emulation_state.focus_emulation_enabled);
+        assert_eq!(staged.emulation_policy().max_touch_points, 0);
+        assert!(!staged.emulation_policy().focus_emulation_enabled);
     }
 
     ctx.process_async(json!({
@@ -3721,7 +3759,7 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
         assert!(
             staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
-                .page_bypass_csp_enabled
+                .page_bypass_csp_enabled()
         );
         assert_eq!(
             staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -3761,7 +3799,7 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
     assert!(
         active.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
-            .page_bypass_csp_enabled
+            .page_bypass_csp_enabled()
     );
     assert_eq!(
         active.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -3862,7 +3900,7 @@ async fn same_context_background_session_can_clear_its_own_device_metrics_before
         assert!(
             active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .emulated_device_metrics
                 .is_none(),
             "active target should keep its default device metrics",
@@ -4039,7 +4077,7 @@ async fn same_context_background_session_can_clear_its_own_touch_and_focus_befor
         assert!(
             active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .max_touch_points
                 == 0,
             "active target should keep default touch emulation"
@@ -4047,7 +4085,7 @@ async fn same_context_background_session_can_clear_its_own_touch_and_focus_befor
         assert!(
             !active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .focus_emulation_enabled,
             "active target should keep default focus emulation"
         );
@@ -4198,14 +4236,14 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
         assert!(
             !active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .script_execution_disabled
         );
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged background page session state");
-        assert!(staged.effective_emulation_state.script_execution_disabled);
+        assert!(staged.emulation_policy().script_execution_disabled);
     }
 
     ctx.process_async(json!({
@@ -4279,7 +4317,7 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
         assert!(
             activated
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .script_execution_disabled
         );
     }
@@ -4375,7 +4413,7 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
         assert!(
             !active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .script_execution_disabled
         );
         // A completed renderer call may retain its monotonic correlation
@@ -4385,7 +4423,7 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
             active
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
-                .is_none_or(|state| { !state.effective_emulation_state.script_execution_disabled }),
+                .is_none_or(|state| { !state.emulation_policy().script_execution_disabled }),
             "script execution re-enable should clear the staged background setting: {:#?}",
             active
                 .background_target(&second_target_id)
@@ -4464,7 +4502,7 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
         assert!(
             !activated
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .script_execution_disabled
         );
     }
@@ -5897,8 +5935,6 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
         .as_mut()
         .unwrap()
         .active_page_target_mut()
-        .owner_state
-        .target_crash_state
         .mark_crashed();
 
     ctx.process_async(json!({
@@ -5944,13 +5980,7 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
             .browser_context
             .as_ref()
             .expect("active browser context");
-        assert!(
-            active
-                .active_page_target()
-                .owner_state
-                .target_crash_state
-                .is_crashed()
-        );
+        assert!(active.active_page_target().is_crashed());
         assert!(
             !active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
@@ -6021,8 +6051,6 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 }
@@ -6123,8 +6151,6 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_ac
         .as_mut()
         .unwrap()
         .active_page_target_mut()
-        .owner_state
-        .target_crash_state
         .mark_crashed();
 
     ctx.process_async(json!({
@@ -6152,8 +6178,6 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_ac
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed(),
         "navigation should still clear crash state even when inspector is disabled"
     );

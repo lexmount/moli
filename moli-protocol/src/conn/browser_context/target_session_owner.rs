@@ -2,8 +2,8 @@ use super::*;
 use crate::conn::state::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles, DevToolsSessionState,
     PageNavigationHistoryEntry, PageTargetHost, RendererMainDocumentCommitSeed, TargetFetchConfig,
-    TargetNetworkPolicyState, TargetOwnerState, TargetPageAbsenceReason,
-    TargetPageResidenceIdentity, TargetRuntimeSessionState, TargetRuntimeSlot,
+    TargetOwnerState, TargetPageAbsenceReason, TargetPageResidenceIdentity,
+    TargetRuntimeSessionState, TargetRuntimeSlot, WindowSurfaceState,
 };
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
@@ -89,8 +89,6 @@ impl ClosedPageTarget {
 
 pub(super) struct TargetSessionStateMut<'a> {
     pub(super) devtools_session_state: &'a mut DevToolsSessionState,
-    pub(super) network_policy: &'a mut TargetNetworkPolicyState,
-    pub(super) tls_verify_host_override: &'a mut Option<bool>,
 }
 
 pub(crate) struct TargetLoadedNavigationCommitState {
@@ -151,10 +149,8 @@ pub(crate) struct TargetNavigationLoadInputs {
     storage_handles: TargetNavigationStorageHandles,
     pub(crate) root_frame_id: Option<String>,
     pub(crate) renderer_runtime: RendererBrowserContextRuntimeOwnerAccess,
-    /// Browser-side identity used for navigation request headers.
+    /// One identity for navigation request headers and the Document's Navigator.
     pub(crate) browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
-    /// Renderer-agent identity exposed through the committed Document's Navigator.
-    pub(crate) navigator_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
     pub(crate) http_proxy_override: Option<String>,
     pub(crate) http_no_proxy_override: Option<String>,
     pub(crate) tls_verify_host_override: Option<bool>,
@@ -261,15 +257,15 @@ impl TargetNavigationLoadInputs {
         ));
 
         let effective_network_conditions = page_state
-            .effective_emulation_state
+            .emulation_policy()
             .network_conditions
-            .or(browser_context.default_network_conditions)
+            .or(browser_context.emulation_defaults().network_conditions)
             .or(browser_context.global_network_conditions);
         let emulated_device_metrics = page_state
-            .effective_emulation_state
+            .emulation_policy()
             .emulated_device_metrics
             .clone()
-            .or_else(|| browser_context.default_emulated_device_metrics.clone());
+            .or_else(|| browser_context.emulation_defaults().device_metrics.clone());
         let effective_policy = page_state.effective_policy();
         let document_activity = browser_context
             .document_activity_for_target(target_id)
@@ -290,20 +286,11 @@ impl TargetNavigationLoadInputs {
                 .browser_identity_override()
                 .cloned()
                 .or_else(|| browser_context.default_browser_identity_override_owned()),
-            navigator_identity_override: page_state
-                .effective_renderer_browser_identity_override_owned()
-                .or_else(|| browser_context.default_browser_identity_override_owned()),
-            http_proxy_override: page_state
-                .http_proxy_override
-                .clone()
-                .or_else(|| browser_context.default_http_proxy_override.clone()),
-            http_no_proxy_override: page_state
-                .http_no_proxy_override
-                .clone()
-                .or_else(|| browser_context.default_http_no_proxy_override.clone()),
+            http_proxy_override: browser_context.network_policy().http_proxy.clone(),
+            http_no_proxy_override: browser_context.network_policy().http_no_proxy.clone(),
             tls_verify_host_override: page_state
-                .tls_verify_host_override
-                .or(browser_context.default_tls_verify_host_override),
+                .tls_verify_host_override()
+                .or(browser_context.network_policy().tls_verify_host),
             navigation_initiator_url: target_navigation_initiator_url(
                 target.target_url(),
                 target.loaded_page(),
@@ -317,16 +304,14 @@ impl TargetNavigationLoadInputs {
                 .runtime_inspector_restore_snapshots(),
             extra_http_headers: browser_context
                 .merged_extra_headers_for_target_policy(effective_policy.extra_headers()),
-            script_execution_disabled: page_state
-                .effective_emulation_state
-                .script_execution_disabled,
-            bypass_content_security_policy: page_state.devtools_sessions.page_bypass_csp_enabled(),
-            emulated_media: (&page_state.effective_emulation_state.emulated_media).into(),
+            script_execution_disabled: page_state.emulation_policy().script_execution_disabled,
+            bypass_content_security_policy: page_state.bypass_content_security_policy(),
+            emulated_media: (&page_state.emulation_policy().emulated_media).into(),
             viewport_surface: emulated_device_metrics
                 .as_ref()
                 .map(|metrics| metrics.viewport_surface()),
             document_activity,
-            network_offline: page_state.network_policy.network_offline()
+            network_offline: page_state.network_offline()
                 || effective_network_conditions
                     .is_some_and(|conditions| !conditions.navigator_online()),
             navigator_overrides: browser_context
@@ -357,17 +342,15 @@ impl TargetNavigationLoadInputs {
         inputs.browser_context_id = Some(browser_context.id.clone());
         inputs.browser_identity_override =
             browser_context.effective_active_browser_identity_override_owned();
-        inputs.navigator_identity_override =
-            browser_context.effective_active_renderer_browser_identity_override_owned();
-        inputs.http_proxy_override = browser_context.effective_active_http_proxy_override_owned();
-        inputs.http_no_proxy_override =
-            browser_context.effective_active_http_no_proxy_override_owned();
+        inputs.http_proxy_override = browser_context.network_policy().http_proxy.clone();
+        inputs.http_no_proxy_override = browser_context.network_policy().http_no_proxy.clone();
         inputs.tls_verify_host_override =
             browser_context.effective_active_tls_verify_host_override();
         inputs.document_start_scripts = browser_context.default_document_start_script_descriptors();
         inputs.extra_http_headers = browser_context.effective_extra_headers();
         inputs.viewport_surface = browser_context
-            .default_emulated_device_metrics
+            .emulation_defaults()
+            .device_metrics
             .as_ref()
             .map(|metrics| metrics.viewport_surface());
         inputs.document_activity = browser_context.active_document_activity();
@@ -387,7 +370,6 @@ impl TargetNavigationLoadInputs {
             root_frame_id: None,
             renderer_runtime,
             browser_identity_override: None,
-            navigator_identity_override: None,
             http_proxy_override: None,
             http_no_proxy_override: None,
             tls_verify_host_override: None,
@@ -499,7 +481,7 @@ impl<'a> TargetSessionOwnerRef<'a> {
     }
 
     pub(super) fn effective_page_bypass_csp_enabled(&self) -> bool {
-        self.target().devtools_sessions.page_bypass_csp_enabled()
+        self.target().bypass_content_security_policy()
     }
 
     pub(super) fn runtime_session_state(&self) -> Option<&'a TargetRuntimeSessionState> {
@@ -606,10 +588,15 @@ impl<'a> TargetSessionOwnerRef<'a> {
 
     pub(super) fn emulated_device_metrics(&self) -> Option<EmulatedDeviceMetrics> {
         self.target()
-            .effective_emulation_state
+            .emulation_policy()
             .emulated_device_metrics
             .clone()
-            .or_else(|| self.browser_context.default_emulated_device_metrics.clone())
+            .or_else(|| {
+                self.browser_context
+                    .emulation_defaults()
+                    .device_metrics
+                    .clone()
+            })
     }
 
     pub(super) fn navigation_load_inputs(&self) -> TargetNavigationLoadInputs {
@@ -631,14 +618,6 @@ impl TargetSessionStateMut<'_> {
 
     pub(super) fn runtime_session_state_mut(&mut self) -> &mut TargetRuntimeSessionState {
         &mut self.devtools_session_state.runtime_session_state
-    }
-
-    pub(super) fn network_policy_mut(&mut self) -> &mut TargetNetworkPolicyState {
-        self.network_policy
-    }
-
-    pub(super) fn tls_verify_host_override_mut(&mut self) -> &mut Option<bool> {
-        self.tls_verify_host_override
     }
 }
 
@@ -698,8 +677,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
         let devtools_session_state = target.devtools_sessions.ensure_session(&self.session_key);
         f(TargetSessionStateMut {
             devtools_session_state,
-            network_policy: &mut target.network_policy,
-            tls_verify_host_override: &mut target.tls_verify_host_override,
         })
     }
 
@@ -802,7 +779,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
 
     pub(super) async fn mark_target_crashed_async(&mut self) -> Option<()> {
         let target = self.target_mut();
-        target.owner_state.target_crash_state.mark_crashed();
+        target.mark_crashed();
         target
             .runtime_slot
             .page_slot_mut()
@@ -1630,6 +1607,43 @@ impl CdpConnection {
             self.target_session_owner_ref(session_id)?
                 .target_owner_state(),
         )
+    }
+
+    // In-place Browser operations; replaced by BrowserHandle at Commit 22.
+    pub(crate) fn target_is_crashed_for_owner(&self, owner: &CommandOwnerScope) -> bool {
+        self.target_session_owner_ref_for_owner(owner)
+            .is_some_and(|owner| owner.target().is_crashed())
+    }
+
+    pub(crate) fn clear_target_crash_state_for_owner(&mut self, owner: &CommandOwnerScope) {
+        if let Some(mut owner) = self.target_session_owner_mut_for_owner(owner) {
+            owner.target_mut().clear_crash_state();
+        }
+    }
+
+    pub(crate) fn set_window_surface_state_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        state: WindowSurfaceState,
+    ) -> Option<()> {
+        self.target_session_owner_mut_for_owner(owner)?
+            .target_mut()
+            .set_window_surface_state(state);
+        Some(())
+    }
+
+    pub(crate) fn set_window_surface_geometry_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        width: Option<u32>,
+        height: Option<u32>,
+        x: Option<i32>,
+        y: Option<i32>,
+    ) -> Option<()> {
+        self.target_session_owner_mut_for_owner(owner)?
+            .target_mut()
+            .set_window_surface_geometry(width, height, x, y);
+        Some(())
     }
 
     pub(crate) fn target_owner_state_for_owner(
@@ -2603,15 +2617,15 @@ mod tests {
                 session_key: DevToolsSessionKey::Primary,
             };
             owner.mutate_target_owner_state(|owner_state| {
-                owner_state.target_crash_state.mark_crashed();
+                owner_state.next_document_start_script_id = 7;
             });
         }
-        assert!(
+        assert_eq!(
             active
                 .active_page_target()
                 .owner_state
-                .target_crash_state
-                .is_crashed()
+                .next_document_start_script_id,
+            7
         );
 
         let mut background = background_target_context();
@@ -2623,16 +2637,16 @@ mod tests {
                 session_key: DevToolsSessionKey::Primary,
             };
             owner.mutate_target_owner_state(|owner_state| {
-                owner_state.target_crash_state.mark_crashed();
+                owner_state.next_document_start_script_id = 9;
             });
         }
-        assert!(
+        assert_eq!(
             background
                 .background_target("TID-background")
                 .expect("background target must exist")
                 .owner_state
-                .target_crash_state
-                .is_crashed()
+                .next_document_start_script_id,
+            9
         );
     }
 
@@ -3014,8 +3028,7 @@ mod tests {
         let mut background = BrowserContext::new_with_page_for_test("BID-background", "TID-active");
         background
             .active_page_target_mut()
-            .network_policy
-            .set_browser_identity_override(test_browser_identity("Active-Only-UA"));
+            .set_base_browser_identity_override(Some(test_browser_identity("Active-Only-UA")));
         background.replace_default_browser_identity_override_for_test(test_browser_identity(
             "Browser-Context-Default-UA",
         ));
@@ -3029,9 +3042,9 @@ mod tests {
                 .background_target_mut("TID-background")
                 .expect("background target must exist");
             state.runtime_slot.enable_primary_network_events();
-            state
-                .network_policy
-                .push_extra_header(("X-Owner".to_owned(), "background".to_owned()));
+            state.set_base_extra_headers(
+                vec![("X-Owner".to_owned(), "background".to_owned())].into(),
+            );
             state.fetch_owner.configure(
                 Some("SID-background".to_owned()),
                 false,
@@ -3176,6 +3189,11 @@ mod tests {
     #[test]
     fn target_session_owner_ref_snapshots_background_navigation_load_inputs() {
         let mut background = BrowserContext::new_with_page_for_test("BID-background", "TID-active");
+        background.set_network_policy(crate::conn::ContextNetworkPolicy {
+            http_proxy: Some("http://proxy.example:8080".to_owned()),
+            http_no_proxy: Some("localhost,127.0.0.1".to_owned()),
+            ..Default::default()
+        });
         background.insert_page_target_host(crate::conn::PageTargetHost::with_url(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
@@ -3185,21 +3203,25 @@ mod tests {
             let state = background
                 .background_target_mut("TID-background")
                 .expect("background target must exist");
-            state.http_proxy_override = Some("http://proxy.example:8080".to_owned());
-            state.http_no_proxy_override = Some("localhost,127.0.0.1".to_owned());
-            state.tls_verify_host_override = Some(false);
-            state.effective_emulation_state.script_execution_disabled = true;
-            state
-                .network_policy
-                .set_user_agent_override("OwnerUA/1.0".to_owned());
-            state.network_policy.set_network_offline(true);
-            let network = &mut state.devtools_sessions.primary_mut().network_session_state;
-            network.network_enabled = true;
-            network.blocked_url_patterns = vec!["*.blocked.test".to_owned()];
-            state
-                .network_policy
-                .push_extra_header(("X-Owner".to_owned(), "background".to_owned()));
-            state.effective_emulation_state.emulated_media.media = Some("print".to_owned());
+            state.set_tls_verify_host_override(Some(false));
+            state.apply_emulation_policy_change(
+                crate::conn::EmulationPolicyChange::ScriptExecutionDisabled(true),
+            );
+            state.set_user_agent_override_for_test("OwnerUA/1.0".to_owned());
+            state.set_network_offline(true);
+            state.mutate_devtools_network_session_state(&DevToolsSessionKey::Primary, |network| {
+                network.network_enabled = true;
+                network.blocked_url_patterns = vec!["*.blocked.test".to_owned()];
+            });
+            state.set_base_extra_headers(
+                vec![("X-Owner".to_owned(), "background".to_owned())].into(),
+            );
+            state.apply_emulation_policy_change(crate::conn::EmulationPolicyChange::Media(
+                crate::conn::EmulatedMediaOverrides {
+                    media: Some("print".to_owned()),
+                    ..Default::default()
+                },
+            ));
             state.fetch_owner.configure(
                 Some("SID-background".to_owned()),
                 false,
@@ -3639,7 +3661,7 @@ mod tests {
         conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.with_target_owner_state_for_session_mut(Some("SID-active"), |owner_state| {
-            owner_state.target_crash_state.mark_crashed();
+            owner_state.next_document_start_script_id = 7;
         })
         .expect("active target owner state should be mutable");
         conn.with_target_devtools_session_state_for_session_mut(Some("SID-background"), |state| {
@@ -3655,11 +3677,11 @@ mod tests {
             .target_runtime_session_state_for_session(Some("SID-background"))
             .expect("background runtime state should be readable");
         assert!(background_runtime_state.inspector_enabled);
-        assert!(
+        assert_eq!(
             conn.target_owner_state_for_session(Some("SID-active"))
                 .expect("active owner state should be readable")
-                .target_crash_state
-                .is_crashed()
+                .next_document_start_script_id,
+            7
         );
         assert!(
             conn.target_devtools_session_state_for_session(Some("SID-background"))

@@ -78,10 +78,7 @@ async fn close_target_success() {
     bc.active_page_target_mut()
         .runtime_slot
         .set_next_subresource_fetch_request_id_for_test(5);
-    bc.active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
+    bc.active_page_target_mut().mark_crashed();
     bc.record_captured_response_body("REQ-old".into(), "body".into(), [None]);
     bc.insert_io_stream("STREAM-old".into(), b"body".to_vec(), 0);
     ctx.process_async(json!({"id": 11, "method": "Target.closeTarget",
@@ -524,14 +521,10 @@ async fn close_background_target_emits_detached_events_and_clears_attached_sessi
     assert!(bc.assign_attached_session_to_target("TID-000000000B", "SID-attached".into()));
     bc.background_target_mut("TID-000000000B")
         .expect("background target must exist")
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-        crate::conn::DevToolsSessionState {
-            runtime_session_state: crate::conn::TargetRuntimeSessionState {
-                inspector_enabled: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        .devtools_sessions
+        .primary_mut()
+        .runtime_session_state
+        .inspector_enabled = true;
 
     ctx.process_async(json!({
         "id": 121,

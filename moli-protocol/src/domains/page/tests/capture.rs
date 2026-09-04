@@ -653,22 +653,23 @@ async fn capture_screenshot_targets_loaded_background_owner_without_activation()
         .expect("browser context")
         .background_target_mut("TID-background")
         .expect("background target must exist")
-        .effective_emulation_state
-        .emulated_device_metrics = Some(EmulatedDeviceMetrics {
-        width: 320,
-        height: 240,
-        view: None,
-        outer_width: 320,
-        outer_height: 240,
-        device_scale_factor: 2.0,
-        screen_width: 320,
-        screen_height: 240,
-        screen_avail_height: 240,
+        .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::DeviceMetrics(Some(
+            EmulatedDeviceMetrics {
+                width: 320,
+                height: 240,
+                view: None,
+                outer_width: 320,
+                outer_height: 240,
+                device_scale_factor: 2.0,
+                screen_width: 320,
+                screen_height: 240,
+                screen_avail_height: 240,
 
-        window_x: 0,
-        window_y: 0,
-        screen_orientation: Default::default(),
-    });
+                window_x: 0,
+                window_y: 0,
+                screen_orientation: Default::default(),
+            },
+        )));
 
     ctx.process_async(json!({
         "id": 114,
@@ -709,22 +710,23 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
     inactive.attach_active_session("SID-inactive".to_owned());
     inactive
         .active_page_target_mut()
-        .effective_emulation_state
-        .emulated_device_metrics = Some(EmulatedDeviceMetrics {
-        width: 500,
-        height: 300,
-        view: None,
-        outer_width: 500,
-        outer_height: 300,
-        device_scale_factor: 1.5,
-        screen_width: 500,
-        screen_height: 300,
-        screen_avail_height: 300,
+        .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::DeviceMetrics(Some(
+            EmulatedDeviceMetrics {
+                width: 500,
+                height: 300,
+                view: None,
+                outer_width: 500,
+                outer_height: 300,
+                device_scale_factor: 1.5,
+                screen_width: 500,
+                screen_height: 300,
+                screen_avail_height: 300,
 
-        window_x: 0,
-        window_y: 0,
-        screen_orientation: Default::default(),
-    });
+                window_x: 0,
+                window_y: 0,
+                screen_orientation: Default::default(),
+            },
+        )));
     inactive.replace_loaded_page(Some(page));
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);

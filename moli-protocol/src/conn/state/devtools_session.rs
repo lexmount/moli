@@ -12,6 +12,7 @@ use super::{
     },
     session::{InspectorSessionState, TargetPageSessionState, TargetRuntimeSessionState},
     target_state::{PendingInspectorAwait, TargetPendingInspectorAwaitRegistry},
+    web_contents::NetworkRequestPolicy,
 };
 use moli_core::{
     network::WebStorageMutationSubscription,
@@ -39,7 +40,7 @@ pub(crate) struct DevToolsSessionState {
     pub(crate) runtime_session_state: TargetRuntimeSessionState,
     pub(crate) console_output_session_state: DevToolsConsoleOutputSessionState,
     pub(crate) dom_storage_session_state: DevToolsDomStorageSessionState,
-    pub(crate) network_session_state: DevToolsNetworkSessionState,
+    pub(in crate::conn::state) network_session_state: DevToolsNetworkSessionState,
     pub(crate) emulation_session_state: DevToolsEmulationSessionState,
     pub(crate) runtime_bindings: Vec<RuntimeBindingDefinition>,
     pub(crate) runtime_binding_replay_pending: BTreeSet<(String, Option<String>)>,
@@ -152,7 +153,10 @@ impl DevToolsSessionRegistry {
             .or_default()
     }
 
-    pub(crate) fn remove_attached(&mut self, session_id: &str) -> Option<DevToolsSessionState> {
+    pub(in crate::conn::state) fn remove_attached(
+        &mut self,
+        session_id: &str,
+    ) -> Option<DevToolsSessionState> {
         let key = DevToolsSessionKey::Attached(session_id.to_owned());
         self.environment_owners.remove(&key);
         self.navigator_emulation.remove(&key);
@@ -169,7 +173,7 @@ impl DevToolsSessionRegistry {
     /// The primary handler slot remains allocated for the renderer's implicit
     /// root Inspector session, but its state is replaced atomically. Attached
     /// sessions are removed from both the state map and attachment order.
-    pub(crate) fn dispose(
+    pub(in crate::conn::state) fn dispose(
         &mut self,
         session_id: &str,
         session_key: &DevToolsSessionKey,
@@ -232,8 +236,8 @@ impl DevToolsSessionRegistry {
         )
     }
 
-    pub(crate) fn effective_network_policy(&self) -> DevToolsNetworkPolicyAggregate {
-        let mut aggregate = DevToolsNetworkPolicyAggregate::default();
+    pub(in crate::conn::state) fn effective_network_policy(&self) -> NetworkRequestPolicy {
+        let mut aggregate = NetworkRequestPolicy::default();
         for state in self.states_in_attachment_order() {
             let network = &state.network_session_state;
             if !network.network_enabled {
@@ -261,7 +265,7 @@ impl DevToolsSessionRegistry {
         aggregate
     }
 
-    pub(crate) fn effective_network_browser_identity_override(
+    pub(in crate::conn::state) fn effective_browser_identity_override(
         &self,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
         Self::aggregate_browser_identity_overrides(self.states_in_attachment_order().filter_map(
@@ -274,7 +278,7 @@ impl DevToolsSessionRegistry {
         ))
     }
 
-    pub(crate) fn effective_user_agent_override(&self) -> Option<&str> {
+    pub(in crate::conn::state) fn reported_user_agent_override(&self) -> Option<&str> {
         self.states_in_attachment_order()
             .filter_map(|state| {
                 state
@@ -284,17 +288,6 @@ impl DevToolsSessionRegistry {
                     .and_then(|identity| identity.user_agent.as_deref())
             })
             .last()
-    }
-
-    /// Resolves the identity exposed by the live renderer Document.
-    ///
-    /// Chromium applies the same session attachment precedence to renderer
-    /// agents and browser-side navigation handlers. Setter order does not
-    /// change the winner on either surface.
-    pub(crate) fn effective_renderer_browser_identity_override(
-        &self,
-    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
-        self.effective_network_browser_identity_override()
     }
 
     fn aggregate_browser_identity_overrides<'a>(
@@ -329,7 +322,7 @@ impl DevToolsSessionRegistry {
         })
     }
 
-    pub(crate) fn set_browser_identity_override(
+    pub(in crate::conn::state) fn set_browser_identity_override(
         &mut self,
         session_key: &DevToolsSessionKey,
         browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
@@ -341,7 +334,7 @@ impl DevToolsSessionRegistry {
         state.emulation_session_state.browser_identity_override = browser_identity_override;
     }
 
-    pub(crate) fn set_locale_override(
+    pub(in crate::conn::state) fn set_locale_override(
         &mut self,
         session_key: &DevToolsSessionKey,
         locale_override: Option<String>,
@@ -351,7 +344,7 @@ impl DevToolsSessionRegistry {
         })
     }
 
-    pub(crate) fn set_timezone_override(
+    pub(in crate::conn::state) fn set_timezone_override(
         &mut self,
         session_key: &DevToolsSessionKey,
         timezone_override: Option<String>,
@@ -556,7 +549,7 @@ impl DevToolsSessionRegistry {
             .collect()
     }
 
-    pub(crate) fn page_bypass_csp_enabled(&self) -> bool {
+    pub(in crate::conn::state) fn page_bypass_csp_enabled(&self) -> bool {
         self.states()
             .any(|state| state.page_session_state.page_bypass_csp_enabled)
     }
@@ -674,19 +667,46 @@ pub(crate) struct DevToolsNetworkSessionState {
     pub(crate) service_worker_fetch_diagnostic_entries: usize,
 }
 
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DevToolsEmulationSessionState {
-    pub(crate) default_background_color: Option<[u8; 4]>,
     // UA, Accept-Language, and platform are independent handler contributions.
-    pub(crate) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
-    pub(crate) network_conditions: Option<super::EmulatedNetworkConditions>,
-    pub(crate) geolocation_override: Option<super::EmulatedGeolocationOverrideState>,
-    pub(crate) emulated_media: super::EmulatedMediaOverrides,
-    pub(crate) emulated_device_metrics: Option<super::EmulatedDeviceMetrics>,
-    pub(crate) max_touch_points: u32,
-    pub(crate) emit_touch_events_for_mouse: bool,
-    pub(crate) focus_emulation_enabled: bool,
-    pub(crate) script_execution_disabled: bool,
+    pub(in crate::conn::state) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
+    pub(crate) overrides: super::EmulationPolicy,
+}
+
+impl DevToolsEmulationSessionState {
+    /// Handler-disable semantics belong to DevTools. Browser receives only
+    /// source-free changes, without learning which session caused a reset or
+    /// requiring a read-modify-write round trip through Browser state.
+    pub(in crate::conn) fn disable_policy_changes(&self) -> Vec<super::EmulationPolicyChange> {
+        use super::EmulationPolicyChange;
+        let raw = &self.overrides;
+        // Blink clears media and script execution on every handler disable.
+        let mut changes = vec![
+            EmulationPolicyChange::DefaultBackgroundColor(None),
+            EmulationPolicyChange::Media(super::EmulatedMediaOverrides::default()),
+            EmulationPolicyChange::ScriptExecutionDisabled(false),
+        ];
+        if raw.network_conditions.is_some() {
+            changes.push(EmulationPolicyChange::NetworkConditions(None));
+        }
+        if raw.geolocation_override.is_some() {
+            changes.push(EmulationPolicyChange::Geolocation(None));
+        }
+        if raw.emulated_device_metrics.is_some() {
+            changes.push(EmulationPolicyChange::DeviceMetrics(None));
+        }
+        if raw.max_touch_points != 0 {
+            changes.push(EmulationPolicyChange::MaxTouchPoints(0));
+        }
+        if raw.emit_touch_events_for_mouse {
+            changes.push(EmulationPolicyChange::EmitTouchEventsForMouse(false));
+        }
+        if raw.focus_emulation_enabled {
+            changes.push(EmulationPolicyChange::FocusEnabled(false));
+        }
+        changes
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -734,14 +754,6 @@ impl DevToolsBrowserIdentityOverride {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct DevToolsNetworkPolicyAggregate {
-    pub(crate) cache_disabled: bool,
-    pub(crate) bypass_service_worker: bool,
-    pub(crate) blocked_url_patterns: Vec<String>,
-    pub(crate) extra_headers: moli_fetch::RequestHeaders,
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DevToolsConsoleOutputSessionState {
     pub(crate) console_enabled: bool,
@@ -763,6 +775,11 @@ pub(crate) struct DevToolsLogViolationThreshold {
 }
 
 impl DevToolsSessionState {
+    #[cfg(test)]
+    pub(crate) fn network_session_state(&self) -> &DevToolsNetworkSessionState {
+        &self.network_session_state
+    }
+
     pub(crate) fn upsert_runtime_binding_definition(
         &mut self,
         name: String,
@@ -1155,6 +1172,48 @@ impl DevToolsDomStorageSessionState {
 mod tests {
     use super::*;
 
+    #[test]
+    fn handler_disable_uses_raw_state_for_conditional_target_resets() {
+        let mut effective = crate::conn::EmulationPolicy {
+            focus_emulation_enabled: true,
+            script_execution_disabled: true,
+            emulated_media: crate::conn::EmulatedMediaOverrides {
+                color_scheme: Some("dark".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let raw = DevToolsEmulationSessionState::default();
+        let delta = effective.apply_changes(raw.disable_policy_changes());
+
+        assert!(
+            effective.focus_emulation_enabled,
+            "an untouched handler must not clear another session's focus setting"
+        );
+        assert!(
+            effective.emulated_media.color_scheme.is_none(),
+            "Blink clears the shared media override on every handler disable"
+        );
+        assert!(!delta.focus_emulation_enabled);
+        assert!(delta.emulated_media);
+        assert!(!effective.script_execution_disabled);
+        assert!(delta.script_execution_disabled);
+    }
+
+    #[test]
+    fn prepared_handler_reset_preserves_unrelated_later_policy_updates() {
+        let mut target = crate::conn::PageTargetHost::empty("TID-policy-reset".into());
+        let handler = DevToolsEmulationSessionState::default();
+        let reset = handler.disable_policy_changes();
+        target
+            .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::FocusEnabled(true));
+        target.apply_emulation_policy_changes(reset);
+        assert!(
+            target.emulation_policy().focus_emulation_enabled,
+            "a prepared reset must not overwrite a field this handler never controlled"
+        );
+    }
+
     fn binding(name: &str) -> RuntimeBindingDefinition {
         RuntimeBindingDefinition {
             devtools_session: None,
@@ -1181,16 +1240,8 @@ mod tests {
         sessions: &DevToolsSessionRegistry,
     ) -> moli_browser_profile::BrowserIdentityProfile {
         sessions
-            .effective_network_browser_identity_override()
+            .effective_browser_identity_override()
             .expect("browser identity contribution should be effective")
-    }
-
-    fn effective_renderer_identity(
-        sessions: &DevToolsSessionRegistry,
-    ) -> moli_browser_profile::BrowserIdentityProfile {
-        sessions
-            .effective_renderer_browser_identity_override()
-            .expect("renderer browser identity contribution should be effective")
     }
 
     #[test]
@@ -1266,7 +1317,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_identity_uses_attachment_order_on_network_and_renderer_surfaces() {
+    fn browser_identity_uses_attachment_order_for_the_shared_runtime_profile() {
         let mut sessions = DevToolsSessionRegistry::default();
         let primary = DevToolsSessionKey::Primary;
         let later = DevToolsSessionKey::Attached("SID-later".to_owned());
@@ -1277,9 +1328,8 @@ mod tests {
             &primary,
             identity_override("Moli/Primary-1", None, None),
         );
-        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-1");
         assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
+            effective_identity(&sessions).user_agent(),
             "Moli/Later-1",
             "the later-attached session wins even when it set its override first"
         );
@@ -1291,45 +1341,27 @@ mod tests {
             "Moli/Later-2",
             "the browser-side winner remains the later-attached session"
         );
-        assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Later-2",
-            "updating the later-attached renderer agent preserves its precedence"
-        );
 
         sessions.set_browser_identity_override(
             &primary,
             identity_override("Moli/Primary-2", None, None),
         );
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
-        assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Later-2"
-        );
 
         sessions.set_browser_identity_override(&primary, None);
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
-        assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Later-2"
-        );
 
         sessions.set_browser_identity_override(
             &primary,
             identity_override("Moli/Primary-3", Some("fr-FR"), Some("PrimaryPlatform")),
         );
-        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
-        let renderer_identity = effective_renderer_identity(&sessions);
-        assert_eq!(renderer_identity.user_agent(), "Moli/Later-2");
-        assert_eq!(renderer_identity.accept_language(), "fr-FR");
-        assert_eq!(renderer_identity.navigator_platform(), "PrimaryPlatform");
+        let identity = effective_identity(&sessions);
+        assert_eq!(identity.user_agent(), "Moli/Later-2");
+        assert_eq!(identity.accept_language(), "fr-FR");
+        assert_eq!(identity.navigator_platform(), "PrimaryPlatform");
 
         sessions.remove_attached("SID-later");
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Primary-3");
-        assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Primary-3"
-        );
     }
 
     #[test]
