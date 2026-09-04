@@ -51,6 +51,7 @@ sanitize-filename = "=0.6.0"
 tokio-tungstenite = { version = "0.28.0", default-features = false, features = ["handshake"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 axum = { version = "0.8.6", features = ["ws"] }
+moli-core = { path = "../moli-core", features = ["test-support"] }
 moli-cookie-jar = { path = "../moli-cookie-jar", features = ["test-support"] }
 moli-image = { path = "../moli-image" }
 moli-storage-service = { path = "../moli-storage-service" }
