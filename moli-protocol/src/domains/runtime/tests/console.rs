@@ -1309,6 +1309,86 @@ async fn runtime_console_api_called_preserves_basic_argument_shapes() {
     assert_eq!(args[11]["type"], json!("bigint"));
     assert_eq!(args[11]["unserializableValue"], json!("1n"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn runtime_console_error_does_not_invoke_error_prepare_stack_trace() {
+    let mut ctx = TestContext::new();
+    with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
+    let execution_context_id =
+        enable_runtime_and_take_execution_context_id_async(&mut ctx, 206_844).await;
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 206_845,
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": r#"
+                (() => {
+                  let accessed = false;
+                  const originalPrepareStackTrace = Error.prepareStackTrace;
+                  try {
+                    Error.prepareStackTrace = () => {
+                      accessed = true;
+                      return "detected";
+                    };
+                    console.log(new Error(""));
+                    const afterConsole = accessed;
+                    void new Error("explicit stack access").stack;
+                    return `${afterConsole}|${accessed}`;
+                  } finally {
+                    Error.prepareStackTrace = originalPrepareStackTrace;
+                  }
+                })()
+            "#
+        }
+    }))
+    .await;
+
+    let response = take_response_by_id(&mut ctx, 206_845);
+    assert_eq!(response["result"]["result"]["value"], json!("false|true"));
+
+    wait_until_message(
+        &mut ctx,
+        None,
+        "Runtime.consoleAPICalled with Error argument",
+        |message| {
+            message["method"] == json!("Runtime.consoleAPICalled")
+                && message["params"]["executionContextId"] == json!(execution_context_id)
+        },
+    )
+    .await;
+    let event = ctx
+        .sent
+        .iter()
+        .find(|message| {
+            message["method"] == json!("Runtime.consoleAPICalled")
+                && message["params"]["executionContextId"] == json!(execution_context_id)
+        })
+        .expect("consoleAPICalled event should be recorded");
+    let error = &event["params"]["args"][0];
+    assert_eq!(error["type"], json!("object"));
+    assert_eq!(error["subtype"], json!("error"));
+    let error_object_id = error["objectId"]
+        .as_str()
+        .unwrap_or_else(|| panic!("Error console argument should retain its V8 objectId: {event}"))
+        .to_owned();
+
+    ctx.process_async(json!({
+        "id": 206_846,
+        "method": "Runtime.getProperties",
+        "params": {
+            "objectId": error_object_id,
+            "ownProperties": true
+        }
+    }))
+    .await;
+    let properties = take_response_by_id(&mut ctx, 206_846);
+    assert!(
+        properties["result"]["result"].is_array(),
+        "Error objectId should remain inspectable: {properties}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_console_api_called_includes_basic_stack_trace() {
     let mut ctx = TestContext::new();

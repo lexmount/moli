@@ -152,5 +152,30 @@ fn call_original_console_method<'s>(
     for index in 0..args.length() {
         forwarded_args.push(args.get(index));
     }
+    let suppress_page_stack_hook = forwarded_args.iter().any(|value| value.is_native_error())
+        && error_prepare_stack_trace_is_function(scope);
+    if suppress_page_stack_hook {
+        scope.set_prepare_stack_trace_callback(inspector_console_stack_without_page_hook);
+    }
     let _ = method.call(scope, original_console.into(), &forwarded_args);
+    if suppress_page_stack_hook {
+        scope.clear_prepare_stack_trace_callback();
+    }
+}
+
+fn error_prepare_stack_trace_is_function(scope: &mut v8::PinScope<'_, '_>) -> bool {
+    let global = scope.get_current_context().global(scope);
+    global
+        .get(scope, v8str(scope, "Error").into())
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+        .and_then(|error| error.get(scope, v8str(scope, "prepareStackTrace").into()))
+        .is_some_and(|value| value.is_function())
+}
+
+fn inspector_console_stack_without_page_hook<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    _error: v8::Local<'s, v8::Value>,
+    _sites: v8::Local<'s, v8::Array>,
+) -> v8::Local<'s, v8::Value> {
+    v8::String::empty(scope).into()
 }
