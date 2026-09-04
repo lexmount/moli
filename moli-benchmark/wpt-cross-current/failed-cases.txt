@@ -2752,7 +2752,6 @@ html/browsers/history/the-history-interface/traverse_the_history_4.html
 html/browsers/history/the-history-interface/traverse_the_history_5.html
 html/browsers/history/the-location-interface/assign_before_load.html
 html/browsers/history/the-location-interface/location_hash.html
-html/browsers/history/the-location-interface/location_reload_javascript_url.html
 html/browsers/history/the-location-interface/reload_document_write_onload.html
 html/browsers/history/the-location-interface/same-hash.html
 html/browsers/origin/cross-origin-objects/cross-origin-due-to-document-domain-only.html
