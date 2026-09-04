@@ -5140,6 +5140,25 @@ test(() => {}, "ok");
             b' var missing = "";',
         )
 
+    def test_fixture_server_substitutes_request_header_or_default(self) -> None:
+        body = (
+            b"present={{header_or_default(Referer, missing)}}"
+            b" absent={{header_or_default(X-Absent, <missing>)}}"
+            b" empty={{header_or_default(X-Empty, )}}"
+        )
+
+        self.assertEqual(
+            _substitute_wpt_template_variables(
+                body,
+                port=12345,
+                request_headers={
+                    "referer": "https://example.test/path?a=1&b=2",
+                },
+            ),
+            b"present=https://example.test/path?a=1&amp;b=2"
+            b" absent=&lt;missing&gt; empty=",
+        )
+
     def test_fixture_server_substitutes_template_variables_in_sidecar_headers(self) -> None:
         with tempfile.TemporaryDirectory() as root:
             fixture = Path(root) / "frame-ancestors.sub.html"

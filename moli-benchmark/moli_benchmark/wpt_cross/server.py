@@ -35,6 +35,7 @@ import sys
 import threading
 import time
 import uuid
+from collections.abc import Mapping
 from html import escape as html_escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -793,6 +794,10 @@ _TRICKLE_PIPE_RE = re.compile(r"(?:^|[|,])trickle\(d([0-9]+(?:\.[0-9]+)?)\)(?:$|
 _HEADER_PIPE_RE = re.compile(r"^header\(([^,()]+),([^()]*)\)$")
 _STATUS_PIPE_RE = re.compile(r"^status\(([0-9]{3})\)$")
 _GET_TEMPLATE_RE = re.compile(rb"\{\{GET\[([^\]\r\n]+)\]\}\}")
+_HEADER_OR_DEFAULT_TEMPLATE_RE = re.compile(
+    rb"\{\{header_or_default\(\s*([^,()]+?)\s*,\s*([^()]*)\)\}\}",
+    re.IGNORECASE,
+)
 _UUID_TEMPLATE_RE = re.compile(rb"\{\{\$([A-Za-z_][A-Za-z0-9_]*):uuid\(\)\}\}")
 _ID_TEMPLATE_RE = re.compile(rb"\{\{\$([A-Za-z_][A-Za-z0-9_]*)\}\}")
 _HTTP_TOKEN_RE = re.compile(r"^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$")
@@ -1267,6 +1272,7 @@ def _static_response_headers(
     request_path: str = "/",
     request_hostname: str = "localhost",
     primary_hostname: str | None = None,
+    request_headers: Mapping[str, str] | None = None,
 ) -> list[tuple[str, str]]:
     headers = _apply_header_operations(
         _sidecar_response_headers(file_path),
@@ -1287,6 +1293,7 @@ def _static_response_headers(
                 request_path=request_path,
                 request_hostname=request_hostname,
                 primary_hostname=primary_hostname,
+                request_headers=request_headers,
                 template_ids=template_ids,
             ).decode("latin-1"),
         )
@@ -1332,6 +1339,7 @@ def _substitute_wpt_template_variables(
     request_path: str = "/",
     request_hostname: str = "localhost",
     primary_hostname: str | None = None,
+    request_headers: Mapping[str, str] | None = None,
     template_ids: dict[bytes, bytes] | None = None,
 ) -> bytes:
     if alternate_port is None:
@@ -1502,6 +1510,17 @@ def _substitute_wpt_template_variables(
     }
     for marker, value in replacements.items():
         body = body.replace(marker, value)
+    normalized_request_headers = {
+        name.lower(): value for name, value in (request_headers or {}).items()
+    }
+
+    def replace_header_or_default(match: re.Match[bytes]) -> bytes:
+        name = match.group(1).decode("ascii", errors="ignore").strip().lower()
+        default = match.group(2).decode("utf-8", errors="replace").strip()
+        value = normalized_request_headers.get(name, default)
+        return html_escape(value, quote=True).encode("utf-8")
+
+    body = _HEADER_OR_DEFAULT_TEMPLATE_RE.sub(replace_header_or_default, body)
     if template_ids is None:
         template_ids = {}
 
@@ -2057,6 +2076,7 @@ def _make_handler(
                     request_path=path,
                     request_hostname=_host_header_hostname(self.headers.get("Host")),
                     primary_hostname=primary_hostname,
+                    request_headers=self.headers,
                 )
             static_header_context = {
                 "port": int(
@@ -2101,6 +2121,7 @@ def _make_handler(
                         _host_header_hostname(self.headers.get("Host")),
                     )
                 ),
+                "request_headers": self.headers,
             }
 
             def static_headers() -> list[tuple[str, str]]:
