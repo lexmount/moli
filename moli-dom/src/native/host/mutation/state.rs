@@ -841,7 +841,11 @@ impl DomHost {
     }
 
     pub fn finish_parsing_script_children(&mut self, handle: DomHandle) -> bool {
-        let Some(source) = self.dom.direct_text_content(handle) else {
+        let Some(source) = self
+            .dom
+            .node(handle)
+            .and_then(|node| node.shared_direct_text_content(&self.dom))
+        else {
             return false;
         };
         let did_change = {
@@ -851,7 +855,7 @@ impl DomHost {
             else {
                 return false;
             };
-            element.finish_parsing_script_children(&source)
+            element.finish_parsing_script_children(source)
         };
         if did_change {
             self.record_mutation(MutationScope::LocalState);

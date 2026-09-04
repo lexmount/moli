@@ -641,6 +641,30 @@ mod tests {
     }
 
     #[test]
+    fn parser_script_internal_slot_shares_single_text_backing() {
+        let mut host = test_host();
+        let script = host.create_element("script");
+        let source = "large parser script source whose backing should remain shared";
+        let text = host.create_text_node(source);
+        assert!(host.append_child(script, text));
+        let backing = host
+            .node(text)
+            .and_then(Node::as_text)
+            .expect("script text node")
+            .shared_data();
+
+        assert!(host.finish_parsing_script_children(script));
+        assert_eq!(std::sync::Arc::strong_count(&backing), 3);
+        assert_eq!(
+            host.node(script)
+                .and_then(Node::as_element)
+                .expect("script element")
+                .script_text_internal_slot(),
+            source
+        );
+    }
+
+    #[test]
     fn deep_clone_and_is_equal_node_walk_iteratively() {
         let mut host = test_host();
         let (root, _) = append_deep_element_chain(&mut host, DEEP_TREE_DEPTH);

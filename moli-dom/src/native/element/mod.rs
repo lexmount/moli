@@ -737,7 +737,7 @@ impl Element {
             .note_script_children_changed_by_api()
     }
 
-    pub fn finish_parsing_script_children(&mut self, source: &str) -> bool {
+    pub fn finish_parsing_script_children(&mut self, source: std::sync::Arc<str>) -> bool {
         if !self.is_script_element() {
             return false;
         }
