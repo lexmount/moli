@@ -5349,6 +5349,7 @@ html/browsers/the-window-object/named-access-on-the-window-object/removing.html
 html/browsers/the-window-object/named-access-on-the-window-object/strict-mode-redefine-readonly-property.html
 html/browsers/the-window-object/named-access-on-the-window-object/window-null-names.html
 html/browsers/the-window-object/navigate-to-about-blank-while-initial-load-pending.html
+html/browsers/the-window-object/open-close/closed-after-close.html
 html/browsers/the-window-object/open-close/creating_browsing_context_test_01.html
 html/browsers/the-window-object/open-close/open-features-tokenization-noopener.html
 html/browsers/the-window-object/open-close/open-features-tokenization-noreferrer.html

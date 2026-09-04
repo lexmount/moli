@@ -2806,7 +2806,6 @@ html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard
 html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard_iframe_history_4.html
 html/browsers/the-window-object/named-access-on-the-window-object/window-named-properties.html
 html/browsers/the-window-object/open-close/close_script_defer.html
-html/browsers/the-window-object/open-close/closed-after-close.html
 html/browsers/the-window-object/open-close/script-closable.html
 html/browsers/the-window-object/window-indexed-properties-delete-no-cache.html
 html/browsers/the-window-object/window-indexed-properties-strict.html
