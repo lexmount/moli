@@ -573,17 +573,20 @@ pub(super) fn dispatch_popstate_event<'s>(
     child_handle: Option<crate::document_runtime::DomHandle>,
     state: v8::Local<'s, v8::Value>,
 ) {
-    let global = scope.get_current_context().global(scope);
-    let Some(event_ctor) = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())
+    let Ok(event_ctor) =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "PopStateEvent")
     else {
         return;
     };
-    let Some(event) = event_ctor.new_instance(scope, &[v8str(scope, "popstate").into()]) else {
+    let init = PopStateEventStateDeclaration::new(state)
+        .bind(scope)
+        .expect("PopStateEvent init declaration should bind");
+    let Some(event) =
+        event_ctor.new_instance(scope, &[v8str(scope, "popstate").into(), init.into()])
+    else {
         return;
     };
-    let _ = PopStateEventStateDeclaration::new(state).initialize(scope, event);
+    mark_event_trusted(scope, event);
     let runtime = unsafe { &mut *host_ptr };
     if let Some(child_handle) = child_handle {
         runtime.dispatch_child_window_event(scope, child_handle, "popstate", event);
@@ -603,13 +606,15 @@ pub(crate) fn construct_original_hash_change_event<'s>(
     old_url: &str,
     new_url: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let global = scope.get_current_context().global(scope);
-    let event_ctor = global
-        .get(scope, v8str(scope, "Event").into())
-        .and_then(|value| v8::Local::<v8::Function>::try_from(value).ok())?;
-    let event = event_ctor.new_instance(scope, &[v8str(scope, "hashchange").into()])?;
-    let _ = HashChangeEventStateDeclaration::new(old_url.to_owned(), new_url.to_owned())
-        .initialize(scope, event);
+    let event_ctor =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "HashChangeEvent")
+            .ok()?;
+    let init = HashChangeEventStateDeclaration::new(old_url.to_owned(), new_url.to_owned())
+        .bind(scope)
+        .expect("HashChangeEvent init declaration should bind");
+    let event =
+        event_ctor.new_instance(scope, &[v8str(scope, "hashchange").into(), init.into()])?;
+    mark_event_trusted(scope, event);
     Some(event)
 }
 

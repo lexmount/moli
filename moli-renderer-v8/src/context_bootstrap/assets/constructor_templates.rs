@@ -180,6 +180,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::PopStateEvent => {
             build_event_subclass_template(scope, EventSubclassKind::PopStateEvent)
         }
+        ConstructorKind::HashChangeEvent => {
+            build_event_subclass_template(scope, EventSubclassKind::HashChangeEvent)
+        }
         ConstructorKind::PageTransitionEvent => {
             build_event_subclass_template(scope, EventSubclassKind::PageTransitionEvent)
         }

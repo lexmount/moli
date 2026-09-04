@@ -416,7 +416,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     ConstructorSpec {
         name: "HashChangeEvent",
         parent: Some("Event"),
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::HashChangeEvent,
     },
     ConstructorSpec {
         name: "MediaQueryListEvent",

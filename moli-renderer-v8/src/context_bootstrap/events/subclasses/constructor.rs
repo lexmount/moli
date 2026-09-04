@@ -163,6 +163,11 @@ fn event_subclass_constructor_callback<'s>(
                 return;
             }
         }
+        EventSubclassKind::HashChangeEvent => {
+            if !data::initialize_hash_change_event(scope, event, init) {
+                return;
+            }
+        }
         EventSubclassKind::PageTransitionEvent => {
             data::initialize_page_transition_event(scope, event, init);
         }

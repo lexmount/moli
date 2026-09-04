@@ -197,6 +197,25 @@ struct PopStateEventInitMembers<'s> {
 
 #[derive(WebApiObject)]
 #[webapi(interface = "Object", data_properties, enumerable)]
+struct HashChangeEventInitDeclaration {
+    #[webapi(data_property = "oldURL")]
+    old_url: String,
+    #[webapi(data_property = "newURL")]
+    new_url: String,
+}
+
+/// Members are declared in Web IDL lexicographic order.
+#[derive(Default, webidl::WebIdlDictionary)]
+#[webidl(prefix = "HashChangeEventInit")]
+struct HashChangeEventInitMembers {
+    #[webidl(name = "newURL", default = "", converter = "usv_string")]
+    new_url: String,
+    #[webidl(name = "oldURL", default = "", converter = "usv_string")]
+    old_url: String,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = "Object", data_properties, enumerable)]
 struct PageTransitionEventOwnInitDeclaration {
     persisted: bool,
 }
@@ -532,6 +551,29 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_pop_state_eve
     PopStateEventInitDeclaration::new(state, parsed.has_ua_visual_transition)
         .initialize(scope, event)
         .expect("PopStateEvent init declaration should initialize");
+    true
+}
+
+pub(in crate::context_bootstrap::events::subclasses) fn initialize_hash_change_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    init: Option<v8::Local<'s, v8::Object>>,
+) -> bool {
+    let parsed = match init {
+        Some(init) => {
+            match webidl::parse_dictionary_object::<HashChangeEventInitMembers>(scope, init) {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    webidl::throw_error(scope, &error);
+                    return false;
+                }
+            }
+        }
+        None => HashChangeEventInitMembers::default(),
+    };
+    HashChangeEventInitDeclaration::new(parsed.old_url, parsed.new_url)
+        .initialize(scope, event)
+        .expect("HashChangeEvent init declaration should initialize");
     true
 }
 
