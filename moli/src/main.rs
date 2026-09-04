@@ -7,17 +7,7 @@
 use anyhow::Result;
 use std::process::ExitCode;
 
-#[cfg(all(
-    feature = "jemalloc",
-    not(target_os = "windows"),
-    not(any(
-        all(target_os = "linux", target_env = "gnu", target_arch = "x86_64"),
-        all(
-            target_os = "macos",
-            any(target_arch = "x86_64", target_arch = "aarch64")
-        )
-    ))
-))]
+#[cfg(all(feature = "jemalloc", not(target_os = "windows")))]
 mod allocator;
 
 fn run() -> Result<()> {
