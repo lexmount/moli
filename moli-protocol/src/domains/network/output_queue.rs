@@ -9,6 +9,7 @@ use moli_core::page::{
 };
 use moli_fetch::NegotiatedHttpVersion;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use url::Url;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -21,9 +22,9 @@ pub(crate) struct TargetNetworkOutputQueue {
     websocket_handshake_recorded_socket_ids: HashSet<u64>,
     pending_websocket_lifecycle_events: HashMap<u64, Vec<WebSocketLifecycleEvent>>,
     staged_subresource_requests:
-        HashMap<SubresourceNetworkRequestHandle, TargetSubresourceRequestStartedOutput>,
+        HashMap<SubresourceNetworkRequestHandle, Arc<TargetSubresourceRequestStartedOutput>>,
     staged_subresource_responses:
-        HashMap<SubresourceNetworkRequestHandle, TargetSubresourceResponseStartedOutput>,
+        HashMap<SubresourceNetworkRequestHandle, Arc<TargetSubresourceResponseStartedOutput>>,
     delivery_outputs: TargetNetworkDeliveryOutputQueue,
 }
 
@@ -1227,10 +1228,10 @@ impl PendingWebSocketNetworkActivitySession {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum TargetSubresourcePlanOutput {
-    Complete(TargetSubresourceMetadataOutput),
-    RequestStarted(TargetSubresourceRequestStartedOutput),
+    Complete(Box<TargetSubresourceMetadataOutput>),
+    RequestStarted(Arc<TargetSubresourceRequestStartedOutput>),
     RequestExtraInfo(TargetSubresourceRequestExtraInfoOutput),
-    ResponseStarted(TargetSubresourceResponseStartedOutput),
+    ResponseStarted(Arc<TargetSubresourceResponseStartedOutput>),
     DataReceived(TargetSubresourceDataReceivedOutput),
     EventSourceMessageReceived(Box<TargetSubresourceEventSourceMessageReceivedOutput>),
     BodyFinished(Box<TargetSubresourceBodyFinishedOutput>),
@@ -1275,9 +1276,9 @@ impl TargetSubresourcePlanOutput {
 
     fn into_delivery_output(self, request_id: String) -> TargetSubresourceNetworkDeliveryOutput {
         match self {
-            Self::Complete(output) => TargetSubresourceNetworkDeliveryOutput::Complete(
-                TargetSubresourceCompleteNetworkDeliveryOutput::new(output, request_id),
-            ),
+            Self::Complete(output) => TargetSubresourceNetworkDeliveryOutput::Complete(Box::new(
+                TargetSubresourceCompleteNetworkDeliveryOutput::new(*output, request_id),
+            )),
             Self::RequestStarted(output) => TargetSubresourceNetworkDeliveryOutput::RequestStarted(
                 TargetSubresourceRequestNetworkDeliveryOutput::new(output, request_id),
             ),
@@ -1372,7 +1373,7 @@ impl TargetSubresourceRequestStartedOutput {
             method: request.method().to_owned(),
             request_headers: request.request_headers().to_vec(),
             request_body: request.request_body().map(str::to_owned),
-            request_body_bytes: request.request_body_bytes().map(|body| body.to_vec()),
+            request_body_bytes: request.request_body_bytes().map(<[u8]>::to_vec),
             resource_type: request.resource_type(),
             request_initiator_type: request.request_initiator_type(),
             request_cookie_report: request.request_cookie_report().cloned(),
@@ -1440,7 +1441,7 @@ impl TargetSubresourceRequestStartedOutput {
 pub(crate) struct TargetSubresourceRequestExtraInfoOutput {
     delivery_order_index: usize,
     index: usize,
-    request: TargetSubresourceRequestStartedOutput,
+    request: Arc<TargetSubresourceRequestStartedOutput>,
     request_headers: Vec<(String, String)>,
     request_cookie_report: StoredCookieQueryReport,
 }
@@ -1449,7 +1450,7 @@ impl TargetSubresourceRequestExtraInfoOutput {
     fn new(
         delivery_order_index: usize,
         index: usize,
-        request: TargetSubresourceRequestStartedOutput,
+        request: Arc<TargetSubresourceRequestStartedOutput>,
         request_headers: Vec<(String, String)>,
         request_cookie_report: StoredCookieQueryReport,
     ) -> Self {
@@ -1487,7 +1488,7 @@ impl TargetSubresourceRequestExtraInfoOutput {
 pub(crate) struct TargetSubresourceResponseStartedOutput {
     delivery_order_index: usize,
     index: usize,
-    request: TargetSubresourceRequestStartedOutput,
+    request: Arc<TargetSubresourceRequestStartedOutput>,
     redirect_chain: Vec<TargetSubresourceRedirectOutput>,
     final_url: Url,
     status: u16,
@@ -1503,7 +1504,7 @@ impl TargetSubresourceResponseStartedOutput {
     fn from_page_response_started(
         delivery_order_index: usize,
         index: usize,
-        request: TargetSubresourceRequestStartedOutput,
+        request: Arc<TargetSubresourceRequestStartedOutput>,
         response: &SubresourceResponseStarted,
     ) -> Self {
         Self {
@@ -1671,8 +1672,8 @@ impl TargetSubresourceEventSourceMessageReceivedOutput {
 pub(crate) struct TargetSubresourceBodyFinishedOutput {
     delivery_order_index: usize,
     index: usize,
-    request: TargetSubresourceRequestStartedOutput,
-    response: Option<TargetSubresourceResponseStartedOutput>,
+    request: Arc<TargetSubresourceRequestStartedOutput>,
+    response: Option<Arc<TargetSubresourceResponseStartedOutput>>,
     result: SubresourceBodyFinishedResult,
     data_was_streamed: bool,
 }
@@ -1681,8 +1682,8 @@ impl TargetSubresourceBodyFinishedOutput {
     fn from_page_body_finished(
         delivery_order_index: usize,
         index: usize,
-        request: TargetSubresourceRequestStartedOutput,
-        response: Option<TargetSubresourceResponseStartedOutput>,
+        request: Arc<TargetSubresourceRequestStartedOutput>,
+        response: Option<Arc<TargetSubresourceResponseStartedOutput>>,
         body: &SubresourceBodyFinished,
     ) -> Self {
         Self {
@@ -1866,7 +1867,7 @@ impl TargetSubresourceMetadataOutput {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum TargetSubresourceNetworkDeliveryOutput {
-    Complete(TargetSubresourceCompleteNetworkDeliveryOutput),
+    Complete(Box<TargetSubresourceCompleteNetworkDeliveryOutput>),
     RequestStarted(TargetSubresourceRequestNetworkDeliveryOutput),
     RequestExtraInfo(TargetSubresourceRequestExtraInfoNetworkDeliveryOutput),
     ResponseStarted(TargetSubresourceResponseNetworkDeliveryOutput),
@@ -1907,11 +1908,11 @@ impl TargetSubresourceCompleteNetworkDeliveryOutput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TargetSubresourceRequestNetworkDeliveryOutput {
     request_id: String,
-    output: TargetSubresourceRequestStartedOutput,
+    output: Arc<TargetSubresourceRequestStartedOutput>,
 }
 
 impl TargetSubresourceRequestNetworkDeliveryOutput {
-    fn new(output: TargetSubresourceRequestStartedOutput, request_id: String) -> Self {
+    fn new(output: Arc<TargetSubresourceRequestStartedOutput>, request_id: String) -> Self {
         Self { request_id, output }
     }
 
@@ -1955,11 +1956,11 @@ impl TargetSubresourceRequestExtraInfoNetworkDeliveryOutput {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TargetSubresourceResponseNetworkDeliveryOutput {
     request_id: String,
-    output: TargetSubresourceResponseStartedOutput,
+    output: Arc<TargetSubresourceResponseStartedOutput>,
 }
 
 impl TargetSubresourceResponseNetworkDeliveryOutput {
-    fn new(output: TargetSubresourceResponseStartedOutput, request_id: String) -> Self {
+    fn new(output: Arc<TargetSubresourceResponseStartedOutput>, request_id: String) -> Self {
         Self { request_id, output }
     }
 
@@ -2737,14 +2738,14 @@ impl TargetNetworkOutputQueue {
         }
         let delivery_order_index = self.next_delivery_order_index();
         self.delivery_outputs
-            .push_subresource(TargetSubresourcePlanOutput::Complete(
+            .push_subresource(TargetSubresourcePlanOutput::Complete(Box::new(
                 TargetSubresourceMetadataOutput::from_page_record(
                     delivery_order_index,
                     index,
                     document_loader_id,
                     record,
                 ),
-            ));
+            )));
         let appended_websocket_handshake = self
             .delivery_outputs
             .push_handshake_output_if_websocket(delivery_order_index, index, record);
@@ -2855,11 +2856,13 @@ impl TargetNetworkOutputQueue {
         request: &SubresourceRequestStarted,
     ) {
         let delivery_order_index = self.next_delivery_order_index();
-        let output = TargetSubresourceRequestStartedOutput::from_page_request_started(
-            delivery_order_index,
-            index,
-            document_loader_id,
-            request,
+        let output = Arc::new(
+            TargetSubresourceRequestStartedOutput::from_page_request_started(
+                delivery_order_index,
+                index,
+                document_loader_id,
+                request,
+            ),
         );
         self.staged_subresource_requests
             .insert(output.handle(), output.clone());
@@ -2881,11 +2884,13 @@ impl TargetNetworkOutputQueue {
             return false;
         };
         let delivery_order_index = self.next_delivery_order_index();
-        let output = TargetSubresourceResponseStartedOutput::from_page_response_started(
-            delivery_order_index,
-            index,
-            request,
-            response,
+        let output = Arc::new(
+            TargetSubresourceResponseStartedOutput::from_page_response_started(
+                delivery_order_index,
+                index,
+                request,
+                response,
+            ),
         );
         self.staged_subresource_responses
             .insert(output.handle(), output.clone());
@@ -3036,6 +3041,7 @@ mod tests {
     use std::cell::Cell;
     use std::cell::RefCell;
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     use moli_cookie_jar::StoredCookieQueryReport;
     use moli_core::page::{
@@ -3052,7 +3058,7 @@ mod tests {
         PendingSubresourceNetworkActivity, PendingSubresourceNetworkActivitySession,
         PendingWebSocketNetworkActivity, PendingWebSocketNetworkActivitySession,
         TargetNetworkBacklogActivityCursor, TargetNetworkBacklogRequestIdResolver,
-        TargetNetworkDeliveryOutputItem, TargetNetworkOutputQueue,
+        TargetNetworkDeliveryOutput, TargetNetworkDeliveryOutputItem, TargetNetworkOutputQueue,
         TargetSubresourceMetadataOutcome, TargetSubresourceMetadataOutput,
         TargetSubresourceNetworkDeliveryOutput, TargetSubresourcePlanOutput,
         TargetWebSocketDeliveryOutputSource, TargetWebSocketDeliveryPlanRecord,
@@ -3373,6 +3379,52 @@ mod tests {
         let mut output_queue = TargetNetworkOutputQueue::default();
         append_concrete_items_for_test(&mut output_queue, &items, "LOADER-1");
         assert_eq!(output_queue.subresource_record_count(), 3);
+
+        let staged_request = output_queue
+            .staged_subresource_requests
+            .get(&handle)
+            .expect("request should remain staged");
+        let staged_response = output_queue
+            .staged_subresource_responses
+            .get(&handle)
+            .expect("response should remain staged");
+        let request_output = match output_queue.delivery_outputs.outputs[0].output() {
+            TargetNetworkDeliveryOutput::Subresource(output) => match output.as_ref() {
+                TargetSubresourcePlanOutput::RequestStarted(output) => output,
+                _ => panic!("first output should be request-started"),
+            },
+            TargetNetworkDeliveryOutput::WebSocket(_) => {
+                panic!("first output should be a subresource")
+            }
+        };
+        let response_output = match output_queue.delivery_outputs.outputs[1].output() {
+            TargetNetworkDeliveryOutput::Subresource(output) => match output.as_ref() {
+                TargetSubresourcePlanOutput::ResponseStarted(output) => output,
+                _ => panic!("second output should be response-started"),
+            },
+            TargetNetworkDeliveryOutput::WebSocket(_) => {
+                panic!("second output should be a subresource")
+            }
+        };
+        let body_output = match output_queue.delivery_outputs.outputs[2].output() {
+            TargetNetworkDeliveryOutput::Subresource(output) => match output.as_ref() {
+                TargetSubresourcePlanOutput::BodyFinished(output) => output,
+                _ => panic!("third output should be body-finished"),
+            },
+            TargetNetworkDeliveryOutput::WebSocket(_) => {
+                panic!("third output should be a subresource")
+            }
+        };
+        assert!(Arc::ptr_eq(staged_request, request_output));
+        assert!(Arc::ptr_eq(staged_request, &response_output.request));
+        assert!(Arc::ptr_eq(staged_request, &body_output.request));
+        assert!(Arc::ptr_eq(staged_response, response_output));
+        assert!(
+            body_output
+                .response
+                .as_ref()
+                .is_some_and(|response| Arc::ptr_eq(staged_response, response))
+        );
 
         let activity = PendingSubresourceNetworkActivity::from_sessions(vec![
             PendingSubresourceNetworkActivitySession::new(None, 0),
