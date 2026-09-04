@@ -27,9 +27,6 @@ impl<'vm> ChildHostLoadOwner<'vm> {
             let ready_work = context_host
                 .borrow_mut()
                 .resync_child_browsing_contexts_into_ready_work(scope);
-            context_host
-                .borrow()
-                .sync_initial_child_browsing_context_history_floor(scope);
             Ok(ready_work)
         }) else {
             return;
