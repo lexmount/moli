@@ -1361,6 +1361,39 @@ fn detached_child_document_anchor_resolves_url_properties() {
         "about:blank|https://child-window-anchor.test/path/page.html|[object HTMLAnchorElement]|false|true|true|https://child-window-anchor.test/item?id=1#frag|https:|child-window-anchor.test|child-window-anchor.test||/item|?id=1|#frag|/"
     );
 }
+
+#[test]
+fn child_document_base_uri_tracks_connected_base_href_mutations() {
+    let mut vm = new_storage_test_vm("https://child-base-uri.test/path/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const childDocument = frame.contentDocument;
+  const base = childDocument.body.appendChild(childDocument.createElement('base'));
+  const before = childDocument.baseURI;
+  base.href = 'sub/';
+  const image = childDocument.createElement('img');
+  image.src = 'asset.png';
+  return JSON.stringify({
+    before,
+    after: childDocument.baseURI,
+    image: image.src,
+    ownsBaseUri: Object.prototype.hasOwnProperty.call(childDocument, 'baseURI')
+  });
+})()
+"#,
+        )
+        .expect("child document base URL should remain live");
+
+    assert_eq!(
+        result,
+        r#"{"before":"https://child-base-uri.test/path/page.html","after":"https://child-base-uri.test/path/sub/","image":"https://child-base-uri.test/path/sub/asset.png","ownsBaseUri":false}"#
+    );
+}
 #[test]
 fn detached_html_elements_use_specific_prototypes_for_common_tags() {
     let mut vm = new_storage_test_vm("https://detached-html-element-prototypes.test/");

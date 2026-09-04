@@ -8,7 +8,7 @@ use crate::native_bridge::{
     document::detached_native_handle_for_runtime, node::remove_child_to_current_reaction_queue,
     throw_dom_exception,
 };
-use crate::util::{context_host_ptr_from_global_bridge, set_private_value, v8_string, v8str};
+use crate::util::{context_host_ptr_from_global_bridge, set_private_value, v8str};
 use moli_webapi_declare::WebApiObject;
 use url::Url;
 
@@ -245,31 +245,6 @@ fn install_child_document_stream_methods<'s>(
             child_document_native_handle_for_runtime(scope, runtime_ptr, document)
     {
         let runtime = unsafe { &mut *runtime_ptr };
-        let base_url = runtime
-            .child_browsing_context_base_url(handle)
-            .map(|base_url| {
-                if moli_url::is_about_blank(&base_url)
-                    && runtime
-                        .child_browsing_context_current_url(handle)
-                        .as_ref()
-                        .is_some_and(moli_url::is_about_blank)
-                    && runtime.child_browsing_context_inherits_parent_origin(handle)
-                {
-                    runtime.document_base_url_for_child_context(handle)
-                } else {
-                    base_url
-                }
-            });
-        if let Some(base_url) = base_url
-            && let Some(value) = v8_string(scope, base_url.as_str())
-        {
-            crate::native_bridge::helpers::set_object_slot(
-                scope,
-                document,
-                "baseURI",
-                value.into(),
-            );
-        }
         if !runtime.dom_host().is_connected(document_handle) {
             runtime
                 .dom_host_mut()
