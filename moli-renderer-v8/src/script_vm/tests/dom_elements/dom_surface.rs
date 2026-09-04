@@ -11780,6 +11780,53 @@ JSON.stringify({
 }
 
 #[test]
+fn dynamic_about_blank_iframe_navigation_uses_origin_referrer() {
+    let mut vm = new_storage_test_vm(
+        "http://dynamic-about-blank-referrer.test/source/parent.html?query#fragment",
+    );
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  globalThis.__dynamicBlankFrame = frame;
+})()
+"#,
+    )
+    .expect("initial about:blank child should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+
+    vm.eval(
+        r#"
+(() => {
+  globalThis.__dynamicBlankLoadCount = 0;
+  __dynamicBlankFrame.onload = () => globalThis.__dynamicBlankLoadCount++;
+  __dynamicBlankFrame.src = 'about:blank';
+})()
+"#,
+    )
+    .expect("dynamic about:blank navigation should evaluate");
+
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval(
+            r#"(() => {
+  const frame = document.querySelector('iframe');
+  return JSON.stringify({
+    referrer: frame.contentDocument.referrer,
+    loads: __dynamicBlankLoadCount,
+    href: frame.contentWindow.location.href,
+    historyLength: frame.contentWindow.history.length
+  });
+})()"#,
+        )
+        .expect("dynamic about:blank result should evaluate"),
+        r#"{"referrer":"http://dynamic-about-blank-referrer.test/","loads":1,"href":"about:blank","historyLength":1}"#
+    );
+}
+
+#[test]
 fn no_src_iframe_initial_about_blank_has_a_quirks_empty_document() {
     let mut vm = new_storage_test_vm("https://iframe-initial-document.test/page.html");
     vm.document_runtime
