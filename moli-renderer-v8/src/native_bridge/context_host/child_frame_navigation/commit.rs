@@ -665,7 +665,7 @@ impl JsContextHost {
         let handle = target.child_handle();
         let window_commit_preflight = self.capture_child_document_window_commit_preflight(handle);
         let replacement_document_url = self
-            .child_browsing_context_current_url(handle)
+            .child_browsing_context_committed_document_url(handle)
             .or_else(|| {
                 self.child_browsing_context_document_handle(handle)
                     .map(|document| self.document_url_for_handle(document))

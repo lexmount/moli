@@ -11080,6 +11080,112 @@ async fn iframe_javascript_url_string_completion_replaces_child_document() {
     assert_eq!(result, "true|text/html|text/html|false|1");
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn iframe_javascript_url_replacement_preserves_later_fragment_for_reload() {
+    const HOST: &str = "iframe-javascript-url-reload.test";
+
+    let server = StaticHttpServer::spawn(2).await;
+    let top_url = server.url_for_host(HOST, "/page.html");
+    let child_url = server.url_for_host(HOST, "/blank.html");
+    let child_fragment_url = server.url_for_host(HOST, "/blank.html#foo");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(&format!(
+        r#"
+(() => {{
+  globalThis.__javascriptUrlReloadLoadCount = 0;
+  globalThis.__javascriptUrlReloadChildUrl = {};
+  globalThis.__javascriptUrlReloadFragmentUrl = {};
+  const frame = document.createElement('iframe');
+  frame.src = __javascriptUrlReloadChildUrl;
+  frame.onload = () => {{
+    globalThis.__javascriptUrlReloadLoadCount++;
+  }};
+  (document.body || document.documentElement || document).appendChild(frame);
+}})()
+"#,
+        serde_json::to_string(child_url.as_str()).expect("serialize child URL"),
+        serde_json::to_string(child_fragment_url.as_str()).expect("serialize fragment URL")
+    ))
+    .expect("javascript URL reload child setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__javascriptUrlReloadLoadCount)",
+        "1",
+        "initial child document should load",
+    )
+    .await;
+
+    vm.eval(
+        r#"
+(() => {
+  const frame = document.querySelector('iframe');
+  frame.contentWindow.location =
+    "javascript:'<html>javascript generated page</html>'";
+  frame.contentWindow.location = __javascriptUrlReloadFragmentUrl;
+})()
+"#,
+    )
+    .expect("javascript URL followed by fragment navigation should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__javascriptUrlReloadLoadCount)",
+        "2",
+        "javascript URL replacement should dispatch load",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const frame = document.querySelector('iframe');
+  return [
+    frame.contentDocument.URL,
+    frame.contentDocument.body.textContent
+  ].join('|');
+})()
+"#,
+        )
+        .expect("javascript URL replacement state should evaluate"),
+        format!("{}|javascript generated page", child_fragment_url.as_str())
+    );
+
+    vm.eval("document.querySelector('iframe').contentWindow.location.reload()")
+        .expect("replacement document reload should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__javascriptUrlReloadLoadCount)",
+        "3",
+        "replacement document should reload the network resource",
+    )
+    .await;
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const frame = document.querySelector('iframe');
+  return [
+    frame.contentDocument.URL,
+    frame.contentDocument.body.textContent
+  ].join('|');
+})()
+"#,
+        )
+        .expect("reloaded child document state should evaluate"),
+        format!("{}|child fixture", child_fragment_url.as_str())
+    );
+    assert_eq!(
+        server.finish_targets().await,
+        vec!["/blank.html", "/blank.html"]
+    );
+}
+
 #[tokio::test]
 async fn iframe_javascript_url_non_string_completion_does_not_replace_child_document() {
     let mut vm = new_storage_test_vm("https://iframe-javascript-url-non-string.test/");

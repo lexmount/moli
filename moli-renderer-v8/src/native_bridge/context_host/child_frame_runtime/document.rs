@@ -182,7 +182,10 @@ impl JsContextHost {
             .clear_detached_content_surfaces(handle);
     }
 
-    fn child_browsing_context_committed_document_url(&self, handle: DomHandle) -> Option<Url> {
+    pub(in crate::native_bridge::context_host) fn child_browsing_context_committed_document_url(
+        &self,
+        handle: DomHandle,
+    ) -> Option<Url> {
         let entry = self.child_browsing_contexts.get(&handle)?;
         let committed_seed = entry.committed_navigation_entry_seed();
         committed_seed
