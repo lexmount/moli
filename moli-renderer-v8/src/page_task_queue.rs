@@ -34,6 +34,7 @@ mod owner_sources;
 mod parse_time;
 mod parser_async_module_admission;
 mod parser_owned_module_continuation;
+mod popup_close;
 mod popup_load_event;
 mod post_domcontentloaded_runtime;
 mod post_parse_owner_work;
@@ -370,6 +371,10 @@ pub(crate) use self::parser_async_module_admission::{
 pub(crate) use self::parser_owned_module_continuation::{
     PageParserOwnedModuleContinuationBodyActivity, PageParserOwnedModuleContinuationTargetEffect,
     PageParserOwnedModuleContinuationTurnAction,
+};
+pub(crate) use self::popup_close::{
+    PagePopupCloseTargetEffect, PagePopupCloseTurnAction, PagePopupCloseTurnOutcome,
+    RendererPagePopupCloseOwner, RendererPagePopupCloseSender, RendererPagePopupCloseTask,
 };
 pub(crate) use self::popup_load_event::{
     PagePopupLoadEventTargetEffect, PagePopupLoadEventTurnAction, PagePopupLoadEventTurnOutcome,

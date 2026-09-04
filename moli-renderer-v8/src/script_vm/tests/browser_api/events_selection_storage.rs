@@ -5885,7 +5885,8 @@ popup.clearTimeout(cancelledPopupTimer);
 #[tokio::test]
 async fn lightweight_popup_close_retires_its_local_window_timers() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_storage_test_vm_with_loader("https://timer-popup-close.test/", &loader);
+    let mut vm =
+        new_page_task_executor_test_vm_with_loader("https://timer-popup-close.test/", &loader);
 
     vm.eval(
         r#"
@@ -5897,9 +5898,14 @@ popup.close();
 "#,
     )
     .expect("popup timer close setup should evaluate");
-    vm.advance_timers_until_deadline_for_test(&loader)
-        .await
-        .expect("closed popup timer should leave the timer queue quiescent");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(popup.opener === null)",
+        "true",
+        "queued popup definite close",
+    )
+    .await;
     assert_eq!(
         vm.eval("__closedPopupTimerEvents.length")
             .expect("closed popup timer result should evaluate"),
