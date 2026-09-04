@@ -144,6 +144,8 @@ impl PageScriptHost {
             "initial-empty Document initialization must not replace an adapter document handle"
         );
 
+        self.refresh_current_child_document_ancestor_origins(handle);
+
         self.populate_initial_empty_child_html_document(document_handle);
         self.dom_host_mut()
             .mark_subtree_connected_preserving_owner_document(document_handle);

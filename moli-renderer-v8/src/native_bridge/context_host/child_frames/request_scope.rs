@@ -875,14 +875,24 @@ impl PageScriptHost {
         &self,
         handle: DomHandle,
     ) -> crate::document_runtime::DocumentSandboxPolicy {
-        let mut policy = document_sandbox_policy_from_attribute(
+        let mut owner_policy = document_sandbox_policy_from_attribute(
             self.dom_host().get_attribute(handle, "sandbox").as_deref(),
         );
         let parent = self
             .owner_dispatch_scope_for_node(handle)
             .unwrap_or(OwnerDispatchScope::Top);
-        policy.allows_downloads &= self.owner_allows_downloads(parent);
-        policy
+        owner_policy.allows_downloads &= self.owner_allows_downloads(parent);
+        // A nested browsing context inherits the active sandboxing flags of
+        // its container Document. Preserve those restrictions when a network
+        // navigation replaces the initial empty Document.
+        self.child_browsing_context_parent_handle(handle)
+            .and_then(|parent| {
+                self.child_browsing_contexts
+                    .get(&parent)
+                    .map(|entry| entry.document_sandbox_policy())
+            })
+            .unwrap_or(self.document_policy_container().sandbox)
+            .with_response_content_security_policy(owner_policy)
     }
 
     pub(crate) fn child_browsing_context_document_credentialless(&self, handle: DomHandle) -> bool {
