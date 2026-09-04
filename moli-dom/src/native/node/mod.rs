@@ -6,6 +6,7 @@ pub use types::{CDataSection, Comment, ProcessingInstruction, Text};
 
 use std::fmt;
 use std::num::NonZeroU32;
+use std::sync::Arc;
 
 use super::NativeDom;
 use super::element::Element;
@@ -507,6 +508,60 @@ impl Node {
                 out.push_str(text.data());
                 out
             })
+    }
+
+    pub(crate) fn shared_direct_text_content(&self, dom: &NativeDom) -> Option<Arc<str>> {
+        let mut text_children = self
+            .child_ids(dom)
+            .filter_map(|child_id| dom.node(child_id).and_then(Node::as_text));
+        let first = text_children.next()?;
+        let Some(second) = text_children.next() else {
+            return Some(first.shared_data());
+        };
+
+        let mut content = String::with_capacity(first.data().len() + second.data().len());
+        content.push_str(first.data());
+        content.push_str(second.data());
+        for text in text_children {
+            content.push_str(text.data());
+        }
+        Some(content.into())
+    }
+
+    pub(crate) fn shared_text_content(&self, dom: &NativeDom) -> Arc<str> {
+        match self.data() {
+            NodeData::Text(text) => return text.shared_data(),
+            NodeData::CDataSection(cdata) => return Arc::from(cdata.data()),
+            NodeData::Comment(comment) => return Arc::from(comment.data()),
+            NodeData::ProcessingInstruction(processing_instruction) => {
+                return Arc::from(processing_instruction.data());
+            }
+            NodeData::DocumentType(_) => return Arc::from(""),
+            NodeData::Document(_) | NodeData::Element(_) | NodeData::DocumentFragment(_) => {}
+        }
+
+        let mut only_text = None;
+        let mut stack = dom.child_ids_reversed(self.id()).collect::<Vec<_>>();
+        while let Some(node_id) = stack.pop() {
+            let Some(node) = dom.node(node_id) else {
+                continue;
+            };
+            match node.data() {
+                NodeData::Text(text) if only_text.is_none() => only_text = Some(text),
+                NodeData::Text(_) | NodeData::CDataSection(_) => {
+                    return Arc::from(self.text_content(dom));
+                }
+                NodeData::Document(_) | NodeData::Element(_) | NodeData::DocumentFragment(_) => {
+                    stack.extend(dom.child_ids_reversed(node_id));
+                }
+                NodeData::Comment(_)
+                | NodeData::ProcessingInstruction(_)
+                | NodeData::DocumentType(_) => {}
+            }
+        }
+        only_text
+            .map(Text::shared_data)
+            .unwrap_or_else(|| Arc::from(""))
     }
 
     pub fn metadata(&self) -> LiveDomNodeMetadata {
