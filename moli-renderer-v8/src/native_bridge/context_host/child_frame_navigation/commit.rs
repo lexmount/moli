@@ -239,6 +239,7 @@ impl PageScriptHost {
         &mut self,
         handle: DomHandle,
         url: &Url,
+        initiator_url: Option<Url>,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -251,6 +252,7 @@ impl PageScriptHost {
             .set_child_browsing_context_pending_navigation(
                 handle,
                 ChildBrowsingContextBootstrap::Url(url.clone()),
+                initiator_url,
                 true,
             )
             .is_none()
@@ -278,6 +280,7 @@ impl PageScriptHost {
             .set_child_browsing_context_pending_navigation(
                 handle,
                 ChildBrowsingContextBootstrap::Request(request),
+                None,
                 true,
             )
             .is_none()
@@ -360,7 +363,11 @@ impl PageScriptHost {
                     .frame_owner_store
                     .current_child_document_owner_load_is_complete(handle, navigation_load.owner());
             let entry = self.child_browsing_contexts.get_mut(&handle)?;
-            entry.set_pending_navigation(ChildBrowsingContextBootstrap::Url(url.clone()), true);
+            entry.set_pending_navigation(
+                ChildBrowsingContextBootstrap::Url(url.clone()),
+                None,
+                true,
+            );
             self.queue_child_browsing_context_javascript_url_execution(
                 handle,
                 url.clone(),
@@ -387,6 +394,7 @@ impl PageScriptHost {
             attribute_bootstrap,
             navigation_load,
             ChildDocumentNavigationInitiator::FrameOwnerElement,
+            None,
         );
         self.sync_existing_child_browsing_context_window_state(scope, handle);
         commit_result
@@ -400,6 +408,7 @@ impl PageScriptHost {
     ) -> Option<ChildDocumentCommitResult> {
         let entry_snapshot = self.child_browsing_contexts.get(&handle).cloned()?;
         let pending_bootstrap = entry_snapshot.pending_live_navigation()?;
+        let initiator_url = entry_snapshot.pending_live_navigation_initiator_url();
         if self.current_child_navigation_load(handle) != Some(navigation_load) {
             tracing::debug!(
                 ?handle,
@@ -431,6 +440,7 @@ impl PageScriptHost {
             ChildDocumentNavigationInitiator::BrowsingContext(
                 entry_snapshot.pending_download_policy,
             ),
+            initiator_url,
         );
         self.sync_existing_child_browsing_context_window_state(scope, handle);
         commit_result

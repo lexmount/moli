@@ -32,7 +32,7 @@ impl PageScriptHost {
             }
         }
         self.sync_existing_child_browsing_context_runtime_surface_from_seed(scope, handle);
-        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url);
+        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url, None);
         self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
@@ -80,7 +80,7 @@ impl PageScriptHost {
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.apply_queued_navigation_to_entry_seed(&url, replace_current);
         }
-        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url);
+        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url, None);
         self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
@@ -89,6 +89,7 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
         resolved_url: &str,
+        initiator_url: Option<Url>,
     ) -> bool {
         let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         if !self.child_browsing_contexts.contains_key(&handle) {
@@ -97,7 +98,7 @@ impl PageScriptHost {
         let Some(url) = Url::parse(resolved_url).ok() else {
             return false;
         };
-        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url);
+        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url, initiator_url);
         self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 
@@ -122,6 +123,7 @@ impl PageScriptHost {
             .set_child_browsing_context_pending_navigation(
                 handle,
                 ChildBrowsingContextBootstrap::Url(url),
+                None,
                 false,
             )
             .is_none()
@@ -171,6 +173,7 @@ impl PageScriptHost {
             .set_child_browsing_context_pending_navigation(
                 handle,
                 ChildBrowsingContextBootstrap::Url(url),
+                None,
                 false,
             )
             .is_none()
@@ -202,6 +205,7 @@ impl PageScriptHost {
             .set_child_browsing_context_pending_navigation(
                 handle,
                 ChildBrowsingContextBootstrap::Request(request),
+                None,
                 false,
             )
             .is_none()
@@ -217,12 +221,13 @@ impl PageScriptHost {
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
         resolved_url: &str,
+        initiator_url: Option<Url>,
     ) -> bool {
         let download_policy = self.capture_child_navigation_download_policy(scope, handle);
         let Some(url) = Url::parse(resolved_url).ok() else {
             return false;
         };
-        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url);
+        let queued = self.queue_child_browsing_context_navigation_to_url(handle, &url, initiator_url);
         self.remember_child_navigation_download_policy(handle, download_policy, queued)
     }
 }

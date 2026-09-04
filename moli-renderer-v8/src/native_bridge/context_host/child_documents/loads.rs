@@ -125,6 +125,7 @@ impl PageScriptHost {
         bootstrap: ChildBrowsingContextBootstrap,
         navigation_load: crate::frame_owner_model::FrameDocumentNavigationLoadBinding,
         initiator: ChildDocumentNavigationInitiator,
+        initiator_url: Option<url::Url>,
     ) -> Option<u64> {
         let target_url = Self::child_browsing_context_bootstrap_url(&bootstrap)?;
         let initiating_owner = navigation_load.owner();
@@ -189,7 +190,8 @@ impl PageScriptHost {
             .and_then(|entry| entry.pending_service_worker_client_id());
         let frame_owner_resource_timing =
             self.pending_frame_owner_resource_timing(handle, &target_url, initiator);
-        let initiator_url = self.document_url_for_child_context(handle);
+        let initiator_url =
+            initiator_url.unwrap_or_else(|| self.document_url_for_child_context(handle));
         let browser_context = self.host_document().cookie_browser_context();
         self.pending_child_document_navigations.insert(
             load_id,
@@ -200,6 +202,7 @@ impl PageScriptHost {
                     .and_then(|entry| entry.navigation_entry_seed().session_history.admitted_entry),
                 target,
                 target_url: target_url.clone(),
+                referrer_source_url: initiator_url.clone(),
                 resource_loader: resource_loader.clone(),
                 reserved_service_worker_client_id: service_worker_client_id,
                 document_credentialless,
@@ -681,6 +684,13 @@ impl PageScriptHost {
                         sandbox,
                         &loaded.policy_container.permissions_policy,
                     );
+                let document_referrer = moli_fetch::referrer_header_value(
+                    &pending.referrer_source_url,
+                    &final_url,
+                    None,
+                    None,
+                )
+                .unwrap_or_default();
                 self.clear_child_browsing_context_pending_navigation(handle);
                 let Some(entry) = self.child_browsing_contexts.get_mut(&handle) else {
                     self.clear_pending_service_worker_child_client_if_matches(
@@ -703,6 +713,7 @@ impl PageScriptHost {
                 entry.set_document_permissions_policy(permissions_policy);
                 entry.commit_pending_child_document_load(
                     &final_url,
+                    &document_referrer,
                     &loaded.policy_container,
                     sandbox,
                     document_credentialless,

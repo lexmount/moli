@@ -478,6 +478,7 @@ impl PageScriptHost {
         &mut self,
         handle: DomHandle,
         bootstrap: ChildBrowsingContextBootstrap,
+        initiator_url: Option<Url>,
         reflects_window_state: bool,
     ) -> Option<crate::frame_owner_model::FrameDocumentNavigationLoadBinding> {
         if !self.child_browsing_contexts.contains_key(&handle) {
@@ -497,7 +498,7 @@ impl PageScriptHost {
         let entry = self.child_browsing_contexts.get_mut(&handle)?;
         entry.set_document_permissions_policy(permissions_policy);
         entry.set_ancestor_origins_referrer_policy_snapshot(ancestor_origins_referrer_policy);
-        entry.set_pending_navigation(bootstrap, reflects_window_state);
+        entry.set_pending_navigation(bootstrap, initiator_url, reflects_window_state);
         self.note_child_frame_load_started_for_parent(handle);
         Some(navigation)
     }
