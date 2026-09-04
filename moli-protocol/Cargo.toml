@@ -49,6 +49,7 @@ sanitize-filename = "=0.6.0"
 
 [dev-dependencies]
 axum = { version = "0.8.6", features = ["ws"] }
+moli-core = { path = "../moli-core", features = ["test-support"] }
 moli-cookie-jar = { path = "../moli-cookie-jar", features = ["test-support"] }
 moli-image = { path = "../moli-image" }
 moli-storage-service = { path = "../moli-storage-service" }

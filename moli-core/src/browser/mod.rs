@@ -62,6 +62,7 @@ define_browser_identity!(
     "Identity of one browser-owned navigation attempt."
 );
 
+#[cfg(any(test, feature = "test-support"))]
 impl DocumentId {
     /// Constructs a deterministic identity for cross-crate tests.
     #[doc(hidden)]
