@@ -12,6 +12,7 @@ use super::{
     },
     session::{InspectorSessionState, TargetPageSessionState, TargetRuntimeSessionState},
     target_state::{PendingInspectorAwait, TargetPendingInspectorAwaitRegistry},
+    web_contents::NetworkRequestPolicy,
 };
 use moli_core::{
     network::WebStorageMutationSubscription,
@@ -39,7 +40,7 @@ pub(crate) struct DevToolsSessionState {
     pub(crate) runtime_session_state: TargetRuntimeSessionState,
     pub(crate) console_output_session_state: DevToolsConsoleOutputSessionState,
     pub(crate) dom_storage_session_state: DevToolsDomStorageSessionState,
-    pub(crate) network_session_state: DevToolsNetworkSessionState,
+    pub(in crate::conn::state) network_session_state: DevToolsNetworkSessionState,
     pub(crate) emulation_session_state: DevToolsEmulationSessionState,
     pub(crate) runtime_bindings: Vec<RuntimeBindingDefinition>,
     pub(crate) runtime_binding_replay_pending: BTreeSet<(String, Option<String>)>,
@@ -222,8 +223,8 @@ impl DevToolsSessionRegistry {
         )
     }
 
-    pub(crate) fn effective_network_policy(&self) -> DevToolsNetworkPolicyAggregate {
-        let mut aggregate = DevToolsNetworkPolicyAggregate::default();
+    pub(in crate::conn::state) fn effective_network_policy(&self) -> NetworkRequestPolicy {
+        let mut aggregate = NetworkRequestPolicy::default();
         for state in self.states_in_attachment_order() {
             let network = &state.network_session_state;
             if !network.network_enabled {
@@ -753,14 +754,6 @@ impl DevToolsBrowserIdentityOverride {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct DevToolsNetworkPolicyAggregate {
-    pub(crate) cache_disabled: bool,
-    pub(crate) bypass_service_worker: bool,
-    pub(crate) blocked_url_patterns: Vec<String>,
-    pub(crate) extra_headers: Vec<(String, String)>,
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DevToolsConsoleOutputSessionState {
     pub(crate) console_enabled: bool,
@@ -782,6 +775,11 @@ pub(crate) struct DevToolsLogViolationThreshold {
 }
 
 impl DevToolsSessionState {
+    #[cfg(test)]
+    pub(crate) fn network_session_state(&self) -> &DevToolsNetworkSessionState {
+        &self.network_session_state
+    }
+
     pub(crate) fn upsert_runtime_binding_definition(
         &mut self,
         name: String,

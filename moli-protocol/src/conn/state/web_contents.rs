@@ -8,10 +8,12 @@ use super::navigation_controller::NavigationController;
 
 mod document_host;
 mod emulation_policy;
+mod network_request_policy;
 mod session_storage;
 mod window;
 pub(in crate::conn) use document_host::DocumentHost;
 pub(crate) use emulation_policy::{EmulationPolicy, EmulationPolicyChange, EmulationPolicyDelta};
+pub(in crate::conn) use network_request_policy::NetworkRequestPolicy;
 pub(crate) use session_storage::SessionStorageNamespace;
 pub(in crate::conn) use window::{Window, WindowOpener};
 pub(crate) use window::{WindowSurface, WindowSurfaceState};
@@ -31,6 +33,7 @@ pub(in crate::conn) struct WebContents {
     pub(in crate::conn) window: Window,
     pub(in crate::conn) crashed: bool,
     pub(in crate::conn) emulation_policy: EmulationPolicy,
+    pub(in crate::conn) network_request_policy: NetworkRequestPolicy,
 }
 
 impl Default for WebContents {
@@ -44,6 +47,7 @@ impl Default for WebContents {
             window: Window::default(),
             crashed: false,
             emulation_policy: EmulationPolicy::default(),
+            network_request_policy: NetworkRequestPolicy::default(),
         }
     }
 }
@@ -53,11 +57,17 @@ impl WebContents {
         self.id
     }
 
-    pub(in crate::conn) fn install_navigation_engine(&mut self, engine: NavigationEngine) {
+    pub(in crate::conn) fn set_network_request_policy(&mut self, policy: NetworkRequestPolicy) {
+        self.network_request_policy = policy;
+    }
+
+    pub(in crate::conn) fn install_navigation_engine(&mut self, mut engine: NavigationEngine) {
         assert!(
             self.navigation_engine.is_none(),
             "WebContents must retain its first installed NavigationEngine"
         );
+        engine.set_cache_disabled(self.network_request_policy.cache_disabled);
+        engine.set_bypass_service_worker(self.network_request_policy.bypass_service_worker);
         self.navigation_engine = Some(engine);
     }
 }

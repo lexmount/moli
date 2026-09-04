@@ -1543,9 +1543,7 @@ mod tests {
             Some("SID-background".to_owned()),
             "https://background.test/".to_owned(),
         );
-        background
-            .network_policy
-            .push_extra_header(("X-Target".to_owned(), "target".to_owned()));
+        background.set_base_extra_headers(vec![("X-Target".to_owned(), "target".to_owned())]);
         assert!(browser_context.insert_page_target_host(background));
         connection.install_browser_context_fixture_for_test(browser_context);
 

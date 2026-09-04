@@ -516,15 +516,15 @@ fn page_request_client_for_navigation_inputs_inherits_service_worker_bypass() {
     let mut browser_context = BrowserContext::new("BID-1".to_owned());
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
-    {
-        let network = &mut browser_context
-            .active_page_target_mut()
-            .devtools_sessions
-            .primary_mut()
-            .network_session_state;
-        network.network_enabled = true;
-        network.bypass_service_worker = true;
-    }
+    browser_context
+        .active_page_target_mut()
+        .mutate_devtools_network_session_state(
+            &moli_page_types::DevToolsSessionKey::Primary,
+            |network| {
+                network.network_enabled = true;
+                network.bypass_service_worker = true;
+            },
+        );
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let inputs = conn.navigation_load_inputs_for_session_owner(Some("SID-1"));

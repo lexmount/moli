@@ -2667,14 +2667,10 @@ async fn crash_targets_background_owner_without_activation() {
     bc.insert_page_target_host(background);
     bc.background_target_mut("TID-background")
         .expect("background target must exist")
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-        crate::conn::DevToolsSessionState {
-            runtime_session_state: crate::conn::TargetRuntimeSessionState {
-                inspector_enabled: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        .devtools_sessions
+        .primary_mut()
+        .runtime_session_state
+        .inspector_enabled = true;
     let background_document_token = bc
         .start_document_navigation_for_target(
             "TID-background",
@@ -3151,14 +3147,10 @@ async fn close_aborts_background_paused_navigation_without_activation() {
     assert!(bc.assign_attached_session_to_target("TID-background", "SID-attached".to_owned()));
     bc.background_target_mut("TID-background")
         .expect("background target must exist")
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-        crate::conn::DevToolsSessionState {
-            runtime_session_state: crate::conn::TargetRuntimeSessionState {
-                inspector_enabled: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        .devtools_sessions
+        .primary_mut()
+        .runtime_session_state
+        .inspector_enabled = true;
 
     ctx.process_async(json!({
         "id": 246,
