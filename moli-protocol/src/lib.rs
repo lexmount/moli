@@ -18,7 +18,8 @@ pub mod version;
 pub use devtools_runtime::*;
 
 pub use conn::{
-    BackgroundCommandResponsePayload, BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection,
+    BackgroundCommandResponsePayload, BackgroundProtocolEvent, CdpCommandCompletionSemantics,
+    CdpCommandDispatchLane, CdpCommandSchedulingPolicy, CdpCommandTaskStep, CdpConnection,
     CdpInitialStoragePartition, CdpRendererCommandAccess, CdpRendererCommandReplacement,
     CdpRendererCommandReplayDispatch, CdpRendererOwnerTurnOutcome, CdpSchedulerEvent,
     CdpTargetHostLifecycleDelta, CdpTargetHostLifecycleObserver, CdpTurnOutcome,
