@@ -415,7 +415,7 @@ impl NativeDom {
         data: &str,
     ) -> NativeNodeId {
         self.create_node(
-            NodeData::Text(Text::new(data.to_owned())),
+            NodeData::Text(Text::new(data)),
             Some(owner_document),
             false,
             false,
@@ -1063,7 +1063,7 @@ mod tests {
             size_of::<DocumentType>()
         );
         // Growing text fits within the existing NodeData/Node size limits below.
-        assert_eq!(size_of::<Text>(), size_of::<String>());
+        assert!(size_of::<Text>() <= 32);
         assert_eq!(size_of::<CDataSection>(), 16);
         assert_eq!(size_of::<Comment>(), 16);
         assert_eq!(size_of::<ProcessingInstruction>(), 32);
