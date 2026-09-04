@@ -145,6 +145,60 @@ document.body.innerHTML = `
     .expect("internal-table-box aspect-ratio fixture should run");
 }
 
+/// Regression for WPT css/css-sizing/aspect-ratio/floats-aspect-ratio-001.html.
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_retries_an_independent_formatting_context_across_float_opportunities() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/float-opportunity-aspect-ratio.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>html,body{margin:0;background:white}</style>`;
+document.body.innerHTML = `
+<div id=container style="width:200px;border:solid 1px;display:flow-root">
+  <div id=left style="float:left;width:50px;height:50px;background:lime"></div>
+  <div id=right style="float:right;width:50px;height:50px;background:hotpink"></div>
+  <div id=next-left style="float:left;width:160px;height:50px;background:aqua"></div>
+  <div id=target style="aspect-ratio:1/1;background:orange;display:flow-root"></div>
+</div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(240, 140, 1.0))?
+            .expect("float-opportunity fixture must retain a layout root");
+
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"JSON.stringify(Object.fromEntries(['container','left','right','next-left','target'].map(id=>{const rect=document.getElementById(id).getBoundingClientRect();return [id,[rect.x,rect.y,rect.width,rect.height]]})))"#,
+            )?,
+            r#"{"container":[0,0,202,102],"left":[1,1,50,50],"right":[151,1,50,50],"next-left":[1,51,160,50],"target":[161,51,40,40]}"#,
+            "the square BFC must reject the shallow first band and relayout in the next two-dimensional opportunity",
+        );
+
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| -> [u8; 4] {
+            let offset = ((y * raster.width + x) * 4) as usize;
+            raster.rgba[offset..offset + 4].try_into().unwrap()
+        };
+        assert_eq!(pixel(10, 10), [0, 255, 0, 255]);
+        assert_eq!(pixel(190, 10), [255, 105, 180, 255]);
+        assert_eq!(pixel(10, 60), [0, 255, 255, 255]);
+        assert_eq!(pixel(170, 60), [255, 165, 0, 255]);
+        assert_eq!(pixel(170, 95), [255, 255, 255, 255]);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("float-opportunity aspect-ratio fixture should run");
+}
+
 #[tokio::test(flavor = "current_thread")]
 async fn screenshot_resolves_preferred_ratios_at_layout_boundaries() {
     run_page_vm_async_test(async move {
