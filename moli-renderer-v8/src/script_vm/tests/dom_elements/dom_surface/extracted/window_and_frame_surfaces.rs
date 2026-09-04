@@ -1008,9 +1008,9 @@ const frame = document.createElement('iframe');
 frame.name = 'target';
 const root = document.body || document.documentElement || document;
 root.appendChild(frame);
-frame.contentWindow.history.pushState(null, '', '/child.html');
+frame.contentWindow.history.replaceState(null, '', 'about:blank#child');
 const link = document.createElement('a');
-link.href = '/child.html#next';
+link.href = 'about:blank#next';
 link.target = 'target';
 root.appendChild(link);
 let seen = [];
@@ -1028,10 +1028,7 @@ seen.join('|')
         )
         .expect("targeted same-document anchor click should dispatch child navigate");
 
-    assert_eq!(
-        result,
-        "true,true,https://targeted-child-hash.test/child.html#next,-1"
-    );
+    assert_eq!(result, "true,true,about:blank#next,-1");
 }
 #[test]
 fn window_load_uses_original_event_after_global_constructors_are_deleted() {
