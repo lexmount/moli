@@ -33,6 +33,9 @@ impl PageScriptHost {
         attribute_bootstrap: &ChildBrowsingContextBootstrap,
     ) -> ChildBrowsingContextBootstrap {
         match attribute_bootstrap {
+            ChildBrowsingContextBootstrap::Url(url) if moli_url::is_about_blank(url) => {
+                attribute_bootstrap.clone()
+            }
             ChildBrowsingContextBootstrap::Url(_)
             | ChildBrowsingContextBootstrap::Request(_)
             | ChildBrowsingContextBootstrap::Srcdoc { .. } => {
