@@ -8,7 +8,7 @@ use moli_core::page::{
     WebSocketFrameOpcode, WebSocketLifecycleEvent, WebSocketLifecycleKind, WebSocketNetworkEvent,
 };
 use moli_fetch::NegotiatedHttpVersion;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use url::Url;
 
@@ -64,7 +64,7 @@ pub(crate) struct TargetNetworkBacklogActivityCursor {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct TargetNetworkDeliveryOutputQueue {
-    outputs: Vec<TargetNetworkDeliveryOutputItem>,
+    outputs: VecDeque<TargetNetworkDeliveryOutputItem>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -481,15 +481,12 @@ impl TargetNetworkDeliveryOutputQueue {
         let mut batch = TargetNetworkBacklogPreparedDeliveryBatch::default();
         for item in self
             .outputs
-            .get(
-                self.first_output_position_for_activity(
-                    subresource_record_start_index,
-                    websocket_record_start_index,
-                    websocket_event_start_index,
-                )..,
-            )
-            .unwrap_or_default()
             .iter()
+            .skip(self.first_output_position_for_activity(
+                subresource_record_start_index,
+                websocket_record_start_index,
+                websocket_event_start_index,
+            ))
         {
             match item.output() {
                 TargetNetworkDeliveryOutput::Subresource(output) => {
@@ -621,12 +618,40 @@ impl TargetNetworkDeliveryOutputQueue {
         let websocket_event_tail_after_item = self
             .websocket_event_tail()
             .max(output.emitted_websocket_event_end());
-        self.outputs.push(TargetNetworkDeliveryOutputItem::new(
+        self.outputs.push_back(TargetNetworkDeliveryOutputItem::new(
             subresource_record_tail_after_item,
             websocket_record_tail_after_item,
             websocket_event_tail_after_item,
             output,
         ));
+    }
+
+    fn discard_observed_outputs(
+        &mut self,
+        subresource_record_cursor: usize,
+        websocket_record_cursor: usize,
+        websocket_event_cursor: usize,
+    ) {
+        while self
+            .outputs
+            .front()
+            .is_some_and(|item| match item.output() {
+                TargetNetworkDeliveryOutput::Subresource(output) => {
+                    output.index() < subresource_record_cursor
+                }
+                TargetNetworkDeliveryOutput::WebSocket(output) => match output.source() {
+                    TargetWebSocketDeliveryOutputSource::Handshake { record_index } => {
+                        record_index < websocket_record_cursor
+                    }
+                    TargetWebSocketDeliveryOutputSource::Frame { event_index }
+                    | TargetWebSocketDeliveryOutputSource::Lifecycle { event_index } => {
+                        event_index < websocket_event_cursor
+                    }
+                },
+            })
+        {
+            self.outputs.pop_front();
+        }
     }
 
     fn first_output_position_for_activity(
@@ -648,21 +673,21 @@ impl TargetNetworkDeliveryOutputQueue {
 
     fn subresource_record_tail(&self) -> usize {
         self.outputs
-            .last()
+            .back()
             .map(TargetNetworkDeliveryOutputItem::subresource_record_tail_after_item)
             .unwrap_or(0)
     }
 
     fn websocket_record_tail(&self) -> usize {
         self.outputs
-            .last()
+            .back()
             .map(TargetNetworkDeliveryOutputItem::websocket_record_tail_after_item)
             .unwrap_or(0)
     }
 
     fn websocket_event_tail(&self) -> usize {
         self.outputs
-            .last()
+            .back()
             .map(TargetNetworkDeliveryOutputItem::websocket_event_tail_after_item)
             .unwrap_or(0)
     }
@@ -670,9 +695,8 @@ impl TargetNetworkDeliveryOutputQueue {
     #[cfg(test)]
     fn subresource_outputs_from(&self, start_index: usize) -> Vec<TargetSubresourceMetadataOutput> {
         self.outputs
-            .get(self.first_output_position_for_activity(Some(start_index), None, None)..)
-            .unwrap_or_default()
             .iter()
+            .skip(self.first_output_position_for_activity(Some(start_index), None, None))
             .filter_map(TargetNetworkDeliveryOutputItem::subresource_output)
             .filter(|output| output.index() >= start_index)
             .cloned()
@@ -2551,6 +2575,24 @@ impl TargetNetworkOutputQueue {
             queue_generation,
             ..Self::default()
         };
+    }
+
+    pub(crate) fn discard_observed_delivery_outputs(
+        &mut self,
+        subresource_record_cursor: usize,
+        websocket_record_cursor: usize,
+        websocket_event_cursor: usize,
+    ) {
+        self.delivery_outputs.discard_observed_outputs(
+            subresource_record_cursor,
+            websocket_record_cursor,
+            websocket_event_cursor,
+        );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn retained_delivery_output_count(&self) -> usize {
+        self.delivery_outputs.outputs.len()
     }
 
     #[cfg(test)]

@@ -296,11 +296,15 @@ impl TargetNetworkAgentState {
             preferred_request_id,
             request_id_allocator,
         );
-        self.output_queue.backlog_prepared_delivery_for_activity(
+        let delivery = self.output_queue.backlog_prepared_delivery_for_activity(
             subresource_activity,
             websocket_activity,
             &mut request_ids,
-        )
+        );
+        if !self.has_event_listeners() {
+            self.discard_observed_delivery_outputs();
+        }
+        delivery
     }
 
     pub(crate) fn renderer_subresources_are_idle(&self) -> bool {
@@ -471,6 +475,7 @@ impl TargetNetworkAgentState {
         self.artifacts
             .websocket_network_artifacts
             .set_session_cursors(session_id, subresource_record_count, websocket_event_count);
+        self.discard_observed_delivery_outputs();
     }
 
     pub(crate) fn remove_session_observation_cursor(&mut self, session_id: Option<&str>) {
@@ -480,6 +485,7 @@ impl TargetNetworkAgentState {
         self.artifacts
             .websocket_network_artifacts
             .remove_session_cursors(session_id);
+        self.discard_observed_delivery_outputs();
     }
 
     pub(crate) fn collected_network_data_artifacts(&self) -> Vec<CollectedNetworkDataArtifact> {
@@ -802,6 +808,38 @@ impl TargetNetworkAgentState {
                 cursor.event_count(),
             );
         }
+        self.discard_observed_delivery_outputs();
+    }
+
+    fn discard_observed_delivery_outputs(&mut self) {
+        let (subresource_record_cursor, websocket_record_cursor, websocket_event_cursor) =
+            if self.has_event_listeners() {
+                (
+                    self.artifacts
+                        .subresource_network_artifacts
+                        .minimum_emitted_record_count()
+                        .unwrap_or(0),
+                    self.artifacts
+                        .websocket_network_artifacts
+                        .minimum_emitted_record_count()
+                        .unwrap_or(0),
+                    self.artifacts
+                        .websocket_network_artifacts
+                        .minimum_emitted_event_count()
+                        .unwrap_or(0),
+                )
+            } else {
+                (
+                    self.output_queue_subresource_record_count(),
+                    self.output_queue_subresource_record_count(),
+                    self.output_queue_websocket_event_count(),
+                )
+            };
+        self.output_queue.discard_observed_delivery_outputs(
+            subresource_record_cursor,
+            websocket_record_cursor,
+            websocket_event_cursor,
+        );
     }
 
     pub(crate) fn clear_websocket_request_ids(&mut self) {
@@ -1803,6 +1841,13 @@ impl SubresourceNetworkArtifacts {
             .unwrap_or(0)
     }
 
+    fn minimum_emitted_record_count(&self) -> Option<usize> {
+        self.emitted_record_counts_by_session
+            .values()
+            .copied()
+            .min()
+    }
+
     pub(crate) fn mark_emitted(
         &mut self,
         session_id: Option<&str>,
@@ -2516,6 +2561,7 @@ mod tests {
             None,
             &mut request_id_allocator,
         );
+        assert_eq!(agent.output_queue.retained_delivery_output_count(), 2);
 
         let first_snapshot = agent
             .pending_network_backlog_delivery_snapshot_from_backlog(&mut first_delivery)
@@ -2525,6 +2571,7 @@ mod tests {
             vec!["https://example.com/first.js"]
         );
         agent.mark_network_backlog_delivery_snapshot_emitted(&first_snapshot);
+        assert_eq!(agent.output_queue.retained_delivery_output_count(), 1);
 
         let second_snapshot = agent
             .pending_network_backlog_delivery_snapshot_from_backlog(&mut second_delivery)
@@ -2535,12 +2582,35 @@ mod tests {
             "a later ingress token must not rediscover an earlier unprojected fact from the session cursor"
         );
         agent.mark_network_backlog_delivery_snapshot_emitted(&second_snapshot);
+        assert_eq!(agent.output_queue.retained_delivery_output_count(), 0);
         assert_eq!(
             agent
                 .artifacts
                 .emitted_subresource_record_count_for_session(None),
             2
         );
+    }
+
+    #[test]
+    fn renderer_outputs_without_network_listeners_are_not_retained() {
+        let mut agent = TargetNetworkAgentState::default();
+        let mut request_id_allocator = ConnectionNetworkRequestIdAllocator::default();
+        let item = ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(subresource_record(
+            "https://example.com/before-enable.js",
+        )));
+
+        let delivery = agent.ingest_renderer_output_item_and_prepare_live_delivery(
+            &item,
+            "LOADER-1",
+            None,
+            None,
+            None,
+            &mut request_id_allocator,
+        );
+
+        assert!(!delivery.has_output());
+        assert_eq!(agent.output_queue.subresource_record_count(), 1);
+        assert_eq!(agent.output_queue.retained_delivery_output_count(), 0);
     }
 
     #[test]
@@ -3190,6 +3260,22 @@ impl WebSocketNetworkArtifacts {
 
     pub(crate) fn emitted_event_count_for_session(&self, session_id: Option<&str>) -> usize {
         self.observation.emitted_event_count_for_session(session_id)
+    }
+
+    fn minimum_emitted_record_count(&self) -> Option<usize> {
+        self.observation
+            .emitted_record_counts_by_session
+            .values()
+            .copied()
+            .min()
+    }
+
+    fn minimum_emitted_event_count(&self) -> Option<usize> {
+        self.observation
+            .emitted_event_counts_by_session
+            .values()
+            .copied()
+            .min()
     }
 
     pub(crate) fn mark_emitted(
