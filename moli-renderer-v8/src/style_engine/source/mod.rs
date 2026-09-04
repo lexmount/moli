@@ -1,4 +1,6 @@
 use std::collections::HashSet;
+#[cfg(test)]
+use std::sync::Arc;
 
 pub(super) mod adopted;
 pub(super) mod inline;
@@ -170,7 +172,12 @@ impl MoliStyleEngine {
         css_text: String,
     ) {
         let parser_base = stylesheet_source_base_url(host, owner);
-        self.set_owner_style_sheet_source_with_parser_base(host, owner, css_text, parser_base);
+        self.set_owner_style_sheet_source_with_parser_base(
+            host,
+            owner,
+            css_text.into(),
+            parser_base,
+        );
     }
 
     #[cfg(test)]
@@ -178,7 +185,7 @@ impl MoliStyleEngine {
         &mut self,
         host: &DomHost,
         owner: DomHandle,
-        css_text: String,
+        css_text: Arc<str>,
         parser_base: url::Url,
     ) {
         let Some(document) = owner_document_for_source_owner(host, owner) else {
