@@ -1755,8 +1755,8 @@ fn owner_style_sheet_sources_share_one_cached_text_allocation() {
     let mut owner_sources = super::source_owner_text::OwnerStyleSheetSources::default();
     let base_url = url::Url::parse("https://example.test/").expect("valid test url");
     let css_text = ".card:has(.item) { color: red; }";
-    owner_sources.set_source(first_owner, css_text.to_owned(), base_url.clone());
-    owner_sources.set_source(second_owner, css_text.to_owned(), base_url);
+    owner_sources.set_source(first_owner, css_text.into(), base_url.clone());
+    owner_sources.set_source(second_owner, css_text.into(), base_url);
 
     let first = owner_sources
         .source(first_owner)
@@ -1852,7 +1852,7 @@ fn linked_source_store_lifecycle_records_drive_retained_record_construction() {
     let mut owner_sources = super::source_owner_text::OwnerStyleSheetSources::default();
     owner_sources.set_source(
         style,
-        ".owner { color: green; }".to_owned(),
+        ".owner { color: green; }".into(),
         url::Url::parse("https://example.test/").unwrap(),
     );
     let linked_url = url::Url::parse("https://example.test/linked.css").unwrap();

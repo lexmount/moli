@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 use super::{
     JsContextHost,
@@ -873,13 +873,13 @@ impl JsContextHost {
     }
 
     pub(crate) fn sync_owner_style_sheet_text(&mut self, owner: DomHandle) {
-        let css_text = self.dom_host().text_content(owner).unwrap_or_default();
+        let css_text = self
+            .dom_host()
+            .shared_text_content(owner)
+            .unwrap_or_else(|| Arc::from(""));
         let dom_host = self.dom_host() as *const _;
-        self.style_engine.sync_owner_style_sheet_text_with_host(
-            unsafe { &*dom_host },
-            owner,
-            css_text,
-        );
+        self.style_engine
+            .sync_owner_style_sheet_text_backing_with_host(unsafe { &*dom_host }, owner, css_text);
         self.install_owner_live_stylesheet(owner);
     }
 
