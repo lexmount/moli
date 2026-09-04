@@ -5195,6 +5195,8 @@ html/browsers/browsing-the-web/navigating-across-documents/anchor-jsurl-form-sub
 html/browsers/browsing-the-web/navigating-across-documents/empty-iframe-load-event.html
 html/browsers/browsing-the-web/navigating-across-documents/empty_fragment.html
 html/browsers/browsing-the-web/navigating-across-documents/form-submit-and-window-stop.html
+html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-aboutblank-navigate-immediately.html
+html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-aboutblank-wait-for-load.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/initial-content-replacement.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/load-event-iframe-element.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/load-pageshow-events-iframe-contentWindow.html
