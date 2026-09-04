@@ -1576,6 +1576,7 @@ css/css-flexbox/text-as-flexitem-size-001.html
 css/css-flexbox/text-overflow-on-flexbox-001.html
 css/css-flexbox/total-min-max-violation-zero.html
 css/css-flexbox/webkit-box-vertical-writing-mode.html
+css/css-flexbox/whitespace-in-flexitem-001.html
 css/css-flexbox/zero-content-size-with-scrollbar-crash.html
 css/css-font-loading/empty-family-load.html
 css/css-font-loading/font-face-reject.html
@@ -1665,9 +1666,7 @@ css/css-grid/abspos/positioned-grid-descendants-006.html
 css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-descendants-010.html
-css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
-css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
 css/css-grid/abspos/positioned-grid-descendants-016.html
 css/css-grid/abspos/positioned-grid-descendants-017.html
@@ -5365,6 +5364,7 @@ encoding/legacy-mb-tchinese/big5/big5-decode.html?14001-last
 encoding/legacy-mb-tchinese/big5/big5-decode.html?2001-3000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?3001-4000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?4001-5000
+encoding/legacy-mb-tchinese/big5/big5-decode.html?5001-6000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?6001-7000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?7001-8000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?8001-9000
@@ -7659,6 +7659,7 @@ import-maps/module-map-key.html
 import-maps/multiple-import-maps/basic.html
 import-maps/multiple-import-maps/conflict-first-persists.html
 import-maps/multiple-import-maps/resolution-consistency-in-module-tree-inline.html
+import-maps/multiple-import-maps/resolution-consistency-in-module-tree.html
 import-maps/multiple-import-maps/scope-ordering-reverse.html
 import-maps/multiple-import-maps/scope-ordering.html
 import-maps/multiple-import-maps/url-resolution-conflict.html
@@ -9771,7 +9772,6 @@ xhr/xmlhttprequest-timeout-overrides.html?timeout disabled after initially set
 xhr/xmlhttprequest-timeout-overrides.html?timeout enabled after initially disabled
 xhr/xmlhttprequest-timeout-overrides.html?timeout overrides load after a delay
 xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to expired value before load fires
-xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to expiring value after load fires
 xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to non-expiring value after timeout fires
 xhr/xmlhttprequest-timeout-simple.html?load fires normally
 xhr/xmlhttprequest-timeout-simple.html?no time out scheduled, load fires normally
