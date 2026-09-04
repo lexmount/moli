@@ -186,7 +186,14 @@ impl JsContextHost {
                 let existing_document_policy = existing
                     .as_ref()
                     .map(|entry| entry.document_policy_container_snapshot());
-                let name = self.dom_host().get_attribute(handle, "name");
+                // The owner element's `name` attribute seeds the navigable target name only
+                // when the child navigable is created. Preserve later `window.name` writes
+                // across ordinary DOM-to-runtime record refreshes.
+                let name = existing
+                    .as_ref()
+                    .map(|entry| entry.name.clone())
+                    .unwrap_or_else(|| self.dom_host().get_attribute(handle, "name"))
+                    .filter(|value| !value.is_empty());
                 let id = self.dom_host().get_attribute(handle, "id");
                 let credentialless = self
                     .dom_host()
@@ -361,7 +368,7 @@ impl JsContextHost {
                         current_document_loader_id: existing.as_ref().and_then(|entry| {
                             entry.current_document_loader_id().map(ToOwned::to_owned)
                         }),
-                        name: name.filter(|value| !value.is_empty()),
+                        name,
                         id: id.filter(|value| !value.is_empty()),
                         attribute_bootstrap,
                         pending_attribute_bootstrap_commit,

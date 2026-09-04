@@ -10052,6 +10052,76 @@ frame.name = 'target';
 
     assert_eq!(result, "[object Window]|true|object");
 }
+
+#[tokio::test]
+async fn child_window_name_assignment_updates_parent_named_access() {
+    let mut vm = new_storage_test_vm("https://dynamic-frame-name.test/");
+
+    let initial = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  frame.id = 'frame';
+  frame.name = 'bar';
+  (document.body || document.documentElement || document).appendChild(frame);
+  return [
+    'bar' in window,
+    window.bar === frame.contentWindow,
+    frame.contentWindow.name
+  ].join('|');
+})()
+"#,
+        )
+        .expect("initial iframe browsing-context name should evaluate");
+    assert_eq!(initial, "true|true|bar");
+
+    vm.eval(
+        r#"
+document.getElementById('frame').srcdoc =
+  "<script>window.name = 'foo'<\/script>";
+"#,
+    )
+    .expect("child window.name assignment should queue through srcdoc navigation");
+    run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
+        &mut vm,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "child window.name assignment srcdoc should commit before parser work",
+    )
+    .await;
+    run_realm_prerequisite_then_expected_child_frame_semantic_turn_for_test(
+        &mut vm,
+        ChildFrameSemanticTurnKind::DocumentScriptReady,
+        "child window.name assignment should run as parser script",
+    )
+    .await;
+    run_child_document_lifecycle_and_host_load_for_test(
+        &mut vm,
+        "child window.name assignment srcdoc",
+    )
+    .await;
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.getElementById('frame');
+  return [
+    'foo' in window,
+    window.foo === frame.contentWindow,
+    'bar' in window,
+    window.bar === undefined,
+    frame.name,
+    frame.contentWindow.name
+  ].join('|');
+})()
+"#,
+        )
+        .expect("dynamic iframe browsing-context name should evaluate");
+
+    assert_eq!(result, "true|true|false|true|bar|foo");
+}
+
 #[test]
 fn iframe_in_shadow_tree_is_not_a_window_child_property() {
     let mut vm = new_storage_test_vm("https://shadow-iframe-named-property.test/");
