@@ -5196,6 +5196,7 @@ html/browsers/browsing-the-web/navigating-across-documents/empty-iframe-load-eve
 html/browsers/browsing-the-web/navigating-across-documents/empty_fragment.html
 html/browsers/browsing-the-web/navigating-across-documents/form-submit-and-window-stop.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-nosrc.html
+html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-204-pushState-replaceState.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-204.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-aboutblank-navigate-immediately.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-aboutblank-wait-for-load.html
@@ -5204,6 +5205,8 @@ html/browsers/browsing-the-web/navigating-across-documents/initial-empty-documen
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/load-pageshow-events-iframe-contentWindow.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/load-pageshow-events-window-open.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-204-fragment.html
+html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-204-pushState-replaceState.html
+html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-204.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-aboutblank.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-history-length.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-nourl.html
@@ -5296,6 +5299,7 @@ html/browsers/history/the-history-interface/history_pushstate.html
 html/browsers/history/the-history-interface/history_pushstate_err.html
 html/browsers/history/the-history-interface/history_pushstate_nooptionalparam.html
 html/browsers/history/the-history-interface/history_pushstate_url.html
+html/browsers/history/the-history-interface/history_pushstate_url_rewriting.html
 html/browsers/history/the-history-interface/history_replacestate.html
 html/browsers/history/the-history-interface/history_replacestate_err.html
 html/browsers/history/the-history-interface/history_replacestate_nooptionalparam.html
@@ -5583,6 +5587,7 @@ html/interaction/focus/sequential-focus-navigation-and-the-tabindex-attribute/fo
 html/interaction/focus/sequential-focus-navigation-and-the-tabindex-attribute/tabindex-getter-frame.html
 html/interaction/focus/sequential-focus-navigation-and-the-tabindex-attribute/tabindex-getter.html
 html/interaction/focus/the-autofocus-attribute/autofocus-in-not-fully-active-document.html
+html/interaction/focus/the-autofocus-attribute/document-with-fragment-valid.html
 html/interaction/focus/the-autofocus-attribute/first-when-later.html
 html/interaction/focus/the-autofocus-attribute/first.html
 html/interaction/focus/the-autofocus-attribute/focusable-area-in-top-document.html
@@ -5703,6 +5708,8 @@ html/semantics/embedded-content/the-iframe-element/iframe-display-none-with-obje
 html/semantics/embedded-content/the-iframe-element/iframe-first-load-canceled-second-load-blank.html
 html/semantics/embedded-content/the-iframe-element/iframe-load-event.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-eager.html
+html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-history-pushState.html
+html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-history-replaceState.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-in-script-disabled-iframe.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-in-scroller-horizontal.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-in-scroller-nested-2.html

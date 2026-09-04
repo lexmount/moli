@@ -2725,9 +2725,6 @@ html/browsers/browsing-the-web/navigating-across-documents/012.html
 html/browsers/browsing-the-web/navigating-across-documents/014.html
 html/browsers/browsing-the-web/navigating-across-documents/abort-document-load.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-204-fragment.html
-html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-204-pushState-replaceState.html
-html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-204-pushState-replaceState.html
-html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-204.html
 html/browsers/browsing-the-web/navigating-across-documents/plugin-document.historical.html
 html/browsers/browsing-the-web/navigating-across-documents/refresh/after-same-document-navigation.html
 html/browsers/browsing-the-web/navigating-across-documents/refresh/same-document-refresh.html
@@ -2768,7 +2765,6 @@ html/browsers/history/the-history-interface/004.html
 html/browsers/history/the-history-interface/009.html
 html/browsers/history/the-history-interface/010.html
 html/browsers/history/the-history-interface/history_go_undefined.html
-html/browsers/history/the-history-interface/history_pushstate_url_rewriting.html
 html/browsers/history/the-history-interface/traverse_the_history_2.html
 html/browsers/history/the-history-interface/traverse_the_history_3.html
 html/browsers/history/the-history-interface/traverse_the_history_4.html
@@ -2876,7 +2872,6 @@ html/interaction/focus/the-autofocus-attribute/autofocus-on-stable-document.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-empty.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-nonexistent.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-top.html
-html/interaction/focus/the-autofocus-attribute/document-with-fragment-valid.html
 html/interaction/focus/the-autofocus-attribute/first-reconnected.html
 html/interaction/focus/the-autofocus-attribute/first-when-later-but-before.html
 html/interaction/focus/the-autofocus-attribute/supported-elements.html
@@ -2904,8 +2899,6 @@ html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-adopt-laz
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-base-url-2.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-base-url-3.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-base-url.html
-html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-history-pushState.html
-html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-history-replaceState.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-in-scroller-far.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-in-scroller-horizontal-far.html
 html/semantics/embedded-content/the-iframe-element/iframe-loading-lazy-load-event.html
