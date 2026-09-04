@@ -198,3 +198,26 @@ pub(super) fn current_document_origin<'s>(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::navigation_entry_url_inherits_origin;
+    use url::Url;
+
+    #[test]
+    fn about_document_history_urls_inherit_origin_with_fragments() {
+        for raw_url in [
+            "about:blank",
+            "about:blank#history",
+            "about:srcdoc",
+            "about:srcdoc#history",
+        ] {
+            assert!(navigation_entry_url_inherits_origin(
+                &Url::parse(raw_url).expect("about URL should parse")
+            ));
+        }
+        assert!(!navigation_entry_url_inherits_origin(
+            &Url::parse("about:other#history").expect("about URL should parse")
+        ));
+    }
+}
