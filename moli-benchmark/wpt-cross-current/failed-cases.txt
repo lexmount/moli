@@ -2772,13 +2772,11 @@ html/browsers/browsing-the-web/history-traversal/001.html
 html/browsers/browsing-the-web/history-traversal/PopStateEvent.html
 html/browsers/browsing-the-web/history-traversal/browsing_context_name_cross_origin_2.html
 html/browsers/browsing-the-web/history-traversal/browsing_context_name_cross_origin_3.html
-html/browsers/browsing-the-web/history-traversal/hashchange_event.html
 html/browsers/browsing-the-web/history-traversal/pagereveal/order-in-new-document-navigation-iframe.html
 html/browsers/browsing-the-web/history-traversal/pagereveal/order-in-new-document-navigation.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-fragment-scrolling-samedoc.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-navigation-cross-origin.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-navigation-samedoc.html
-html/browsers/browsing-the-web/history-traversal/popstate_event.html
 html/browsers/browsing-the-web/history-traversal/scroll-restoration-order.html
 html/browsers/browsing-the-web/history-traversal/srcdoc/consecutive-srcdoc.html
 html/browsers/browsing-the-web/history-traversal/srcdoc/srcdoc-history-entries.html
