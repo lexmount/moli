@@ -45,6 +45,7 @@ pub(super) struct PendingChildDocumentNavigation {
     pub(super) admitted_history_entry: Option<moli_session_history::SessionHistoryEntry>,
     pub(super) target: ChildDocumentNavigationFetchTarget,
     pub(super) target_url: Url,
+    pub(super) referrer_source_url: Url,
     pub(super) resource_loader: crate::network::navigation::NavigationResourceLoader,
     pub(super) reserved_service_worker_client_id:
         Option<crate::service_worker_runtime::ServiceWorkerClientId>,
