@@ -1,7 +1,6 @@
 use super::form_data_runtime::{form_data_entries, form_data_is_object};
 use super::url_form::{
-    apply_url_update, callback_arg_url_like_string, callback_value_string,
-    object_prototype_matches, url_object_value,
+    apply_url_update, callback_arg_url_like_string, callback_value_string, url_object_value,
 };
 use super::*;
 use crate::util::{get_private_object, get_private_value, set_private_value};

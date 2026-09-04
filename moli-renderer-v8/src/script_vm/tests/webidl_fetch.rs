@@ -8338,6 +8338,49 @@ fn webidl_iterator_prototypes_use_v8_intrinsics_after_public_tampering() {
 }
 
 #[test]
+fn url_search_params_subclasses_retain_their_webidl_brand() {
+    let mut vm = new_storage_test_vm("https://url-search-params-subclass.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  class ReadonlyURLSearchParams extends URLSearchParams {
+    append() { throw new Error('readonly'); }
+    delete() { throw new Error('readonly'); }
+    set() { throw new Error('readonly'); }
+    sort() { throw new Error('readonly'); }
+  }
+
+  const params = new ReadonlyURLSearchParams('loc=fr&loc=de&empty=');
+  const seen = [];
+  params.forEach((value, name, owner) => {
+    seen.push(`${name}:${value}:${owner === params}`);
+  });
+
+  return JSON.stringify({
+    directPrototypeIsSubclass:
+      Object.getPrototypeOf(params) === ReadonlyURLSearchParams.prototype,
+    get: params.get('loc'),
+    getAll: params.getAll('loc').join(','),
+    has: params.has('empty'),
+    size: params.size,
+    entries: Array.from(params.entries()).map(pair => pair.join(':')).join(','),
+    seen,
+    serialized: params.toString()
+  });
+})()
+"#,
+        )
+        .expect("URLSearchParams subclass WebIDL operations should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"directPrototypeIsSubclass":true,"get":"fr","getAll":"fr,de","has":true,"size":3,"entries":"loc:fr,loc:de,empty:","seen":["loc:fr:true","loc:de:true","empty::true"],"serialized":"loc=fr&loc=de&empty="}"#
+    );
+}
+
+#[test]
 fn url_and_search_params_declared_slots_ignore_prototype_spoofing() {
     let mut vm = new_storage_test_vm("https://url-declared-slots.test/");
 
