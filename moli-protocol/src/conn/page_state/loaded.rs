@@ -179,17 +179,20 @@ impl PageTargetHost {
 
         self.runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .mark_initial_empty_document_exited();
         if let Some(previous_title) = previous_title {
             self.runtime_slot
                 .page_slot_mut()
+                .contents
                 .navigation
                 .refresh_current_navigation_history_title(previous_title);
         }
         let committed_document_title = page.document_title();
         self.runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .record_loaded_page_navigation_history((
                 history_url.to_string(),

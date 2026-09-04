@@ -313,6 +313,7 @@ mod tests {
             !target
                 .runtime_slot
                 .page_slot()
+                .contents
                 .navigation
                 .initial_empty_document_pending_cross_document_navigation(),
             "rollback must retire the initial document's pending state with its navigation"
@@ -373,6 +374,7 @@ mod tests {
             target
                 .runtime_slot
                 .page_slot()
+                .contents
                 .navigation
                 .initial_empty_document_pending_cross_document_navigation()
         );
@@ -389,6 +391,7 @@ mod tests {
             !target
                 .runtime_slot
                 .page_slot()
+                .contents
                 .navigation
                 .initial_empty_document_pending_cross_document_navigation()
         );

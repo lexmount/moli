@@ -1,7 +1,7 @@
 //! Stable page-target registry behavior and foreground target selection.
 
 use super::super::state::{
-    EffectiveTargetPolicy, TargetPageAbsenceReason, TargetSessionStorageNamespace,
+    EffectiveTargetPolicy, SessionStorageNamespace, TargetPageAbsenceReason,
 };
 use super::super::{
     BrowserContext, DedicatedWorkerTargetState, InitialDocumentCreator, PageTargetHost,
@@ -53,7 +53,7 @@ impl BrowserContext {
         initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
     ) {
         let session_storage_namespace = session_storage_store
-            .map(TargetSessionStorageNamespace::from_store)
+            .map(SessionStorageNamespace::from_store)
             .or_else(|| self.deep_cloned_session_storage_namespace_for_creator(creator.as_ref()));
         self.stage_background_target_with_session_storage_namespace(
             target_id,
@@ -69,7 +69,7 @@ impl BrowserContext {
     fn deep_cloned_session_storage_namespace_for_creator(
         &self,
         creator: Option<&InitialDocumentCreator>,
-    ) -> Option<TargetSessionStorageNamespace> {
+    ) -> Option<SessionStorageNamespace> {
         creator.and_then(|creator| {
             self.page_targets
                 .iter()
@@ -86,13 +86,14 @@ impl BrowserContext {
         initial_empty_document_url: Option<String>,
         creator: Option<InitialDocumentCreator>,
         initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
-        session_storage_namespace: Option<TargetSessionStorageNamespace>,
+        session_storage_namespace: Option<SessionStorageNamespace>,
     ) {
         let target_identity = background_target_identity_for_initial_url(&url, creator.as_ref());
         let mut target = PageTargetHost::with_identity(target_id, session_id, target_identity);
         target
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .begin_initial_empty_document(
                 initial_empty_document_url.unwrap_or_else(|| url.clone()),
@@ -120,6 +121,7 @@ impl BrowserContext {
         );
         host.runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .begin_initial_empty_document(initial_empty_document_url.unwrap_or(url), None, None);
         let inserted = self.insert_page_target_host(host);
@@ -699,6 +701,7 @@ impl BrowserContext {
         target
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .begin_initial_empty_document(initial_url, None, storage_key);
     }
@@ -709,6 +712,7 @@ impl BrowserContext {
             target
                 .runtime_slot
                 .page_slot_mut()
+                .contents
                 .navigation
                 .mark_initial_empty_document_materialized();
         }
@@ -719,6 +723,7 @@ impl BrowserContext {
             target
                 .runtime_slot
                 .page_slot_mut()
+                .contents
                 .navigation
                 .mark_next_navigation_history_replace_initial_empty_document();
         }
@@ -730,6 +735,7 @@ impl BrowserContext {
             target
                 .runtime_slot
                 .page_slot_mut()
+                .contents
                 .navigation
                 .mark_initial_empty_document_exited();
         }

@@ -521,6 +521,7 @@ impl<'a> TargetSessionOwnerRef<'a> {
     pub(super) fn initial_empty_document_url_if_current(&self) -> Option<String> {
         self.runtime_slot()
             .page_slot()
+            .contents
             .navigation
             .initial_empty_document_url_if_current()
             .map(str::to_owned)
@@ -531,6 +532,7 @@ impl<'a> TargetSessionOwnerRef<'a> {
     ) -> Option<moli_storage_key::MoliStorageKey> {
         self.runtime_slot()
             .page_slot()
+            .contents
             .navigation
             .initial_empty_document_storage_key_if_current()
             .cloned()
@@ -539,6 +541,7 @@ impl<'a> TargetSessionOwnerRef<'a> {
     pub(super) fn is_on_initial_empty_document(&self) -> Option<bool> {
         self.runtime_slot()
             .page_slot()
+            .contents
             .navigation
             .is_on_initial_empty_document()
     }
@@ -546,6 +549,7 @@ impl<'a> TargetSessionOwnerRef<'a> {
     pub(super) fn initial_empty_document_has_pending_cross_document_navigation(&self) -> bool {
         self.runtime_slot()
             .page_slot()
+            .contents
             .navigation
             .initial_empty_document_pending_cross_document_navigation()
     }
@@ -799,6 +803,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         target
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .clear_navigation_history();
         target.owner_state.clear_loaded_document_context_state();
@@ -830,6 +835,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         target
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .mark_initial_empty_document_exited();
         target
@@ -864,6 +870,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
             self.target_mut()
                 .runtime_slot
                 .page_slot_mut()
+                .contents
                 .navigation
                 .navigation_history_snapshot(page_snapshot),
         )
@@ -878,6 +885,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         self.target_mut()
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .navigation_history_entry_url(page_snapshot, entry_id)
     }
@@ -888,6 +896,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
             self.target_mut()
                 .runtime_slot
                 .page_slot_mut()
+                .contents
                 .navigation
                 .reset_navigation_history(page_snapshot),
         )
@@ -899,6 +908,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
             self.target_mut()
                 .runtime_slot
                 .page_slot_mut()
+                .contents
                 .navigation
                 .can_reset_navigation_history(page_snapshot),
         )
@@ -908,6 +918,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         self.target_mut()
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .mark_next_navigation_history_replace_current();
         Some(())
@@ -920,6 +931,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         self.target_mut()
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .mark_next_navigation_history_traverse_to_entry(entry_id);
         Some(())
@@ -947,6 +959,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         target
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .record_same_document_navigation_history(
                 page_snapshot,
@@ -1125,6 +1138,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         target
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .mark_initial_empty_document_exited();
         Some(())
@@ -1134,6 +1148,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         self.target_mut()
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .clear_pending_navigation_history_update();
         Some(())
@@ -1313,6 +1328,7 @@ impl CdpConnection {
         target
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .mark_initial_empty_document_materialized();
         target
@@ -2833,6 +2849,7 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .record_loaded_page_navigation_history((
                 "https://active.example/".to_owned(),
@@ -2859,6 +2876,7 @@ mod tests {
             .expect("background target must exist")
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .record_loaded_page_navigation_history((
                 "https://background.example/".to_owned(),
@@ -3391,6 +3409,7 @@ mod tests {
                 .expect("background target must exist")
                 .runtime_slot
                 .page_slot_mut()
+                .contents
                 .navigation;
             navigation.record_loaded_page_navigation_history((
                 "https://old.example/".to_owned(),
@@ -3414,6 +3433,7 @@ mod tests {
             .expect("background target must exist")
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .record_loaded_page_navigation_history((
                 "https://new.example/".to_owned(),
@@ -3424,6 +3444,7 @@ mod tests {
             .expect("background target must exist")
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .navigation_history_snapshot(None);
         assert_eq!(
@@ -3483,6 +3504,7 @@ mod tests {
             .expect("background target must exist")
             .runtime_slot
             .page_slot_mut()
+            .contents
             .navigation
             .navigation_history_snapshot(None);
         assert_eq!(entries.len(), 1);

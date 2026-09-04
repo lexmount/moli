@@ -21,12 +21,12 @@ mod runtime_slot;
 mod service_worker_lifetime;
 mod service_worker_target;
 mod session;
-mod session_storage;
 mod shared_worker_attachment;
 mod shared_worker_target;
 mod target_state;
 #[cfg(test)]
 mod tests;
+mod web_contents;
 
 // Re-export everything so `use super::state::*` paths continue to work.
 
@@ -101,11 +101,11 @@ pub(crate) use session::{
     EffectiveTargetPolicy, PageScreencastConfig, PageScreencastFormat, PerformanceTimeDomain,
     TargetNetworkPolicyState, TargetPageSessionState, TargetRuntimeSessionState,
 };
-pub(crate) use session_storage::TargetSessionStorageNamespace;
 pub(crate) use shared_worker_attachment::{
     TargetSharedWorkerProtocolAttachmentIdentity, TargetSharedWorkerProtocolAttachmentRetirement,
 };
 pub(crate) use shared_worker_target::SharedWorkerTargetState;
+pub(crate) use web_contents::SessionStorageNamespace;
 
 pub use browser_context::BrowserContext;
 pub(crate) use browser_context::{

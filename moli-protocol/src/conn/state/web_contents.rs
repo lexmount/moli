@@ -1,0 +1,78 @@
+use moli_core::{
+    browser::{MainFrameSlotId, WebContentsId},
+    page::Page,
+    runtime::NavigationEngine,
+};
+
+use super::navigation_controller::NavigationController;
+
+mod document_host;
+mod session_storage;
+pub(in crate::conn) use document_host::DocumentHost;
+pub(crate) use session_storage::SessionStorageNamespace;
+
+/// Stable Browser page ownership, independent of DevTools bindings.
+///
+/// Embedded in the legacy residence until the typed API cutover (Commit 24b).
+/// Declaration order cancels pending work and retires the Document before
+/// releasing the engine and storage. This owner is deliberately not Clone.
+#[derive(Debug)]
+pub(in crate::conn) struct WebContents {
+    id: WebContentsId,
+    pub(in crate::conn) navigation: NavigationController,
+    pub(in crate::conn) main_frame: MainFrameSlot,
+    pub(in crate::conn) navigation_engine: Option<NavigationEngine>,
+    pub(in crate::conn) session_storage: SessionStorageNamespace,
+}
+
+impl Default for WebContents {
+    fn default() -> Self {
+        Self {
+            id: WebContentsId::allocate(),
+            navigation: NavigationController::default(),
+            main_frame: MainFrameSlot::default(),
+            navigation_engine: None,
+            session_storage: SessionStorageNamespace::default(),
+        }
+    }
+}
+
+impl WebContents {
+    pub(in crate::conn) fn id(&self) -> WebContentsId {
+        self.id
+    }
+
+    pub(in crate::conn) fn install_navigation_engine(&mut self, engine: NavigationEngine) {
+        assert!(
+            self.navigation_engine.is_none(),
+            "WebContents must retain its first installed NavigationEngine"
+        );
+        self.navigation_engine = Some(engine);
+    }
+}
+
+/// Stable main-frame slot; only the current Document is replaced on navigation.
+#[derive(Debug)]
+pub(in crate::conn) struct MainFrameSlot {
+    id: MainFrameSlotId,
+    pub(in crate::conn) current_document: Option<DocumentHost>,
+}
+
+impl Default for MainFrameSlot {
+    fn default() -> Self {
+        Self {
+            id: MainFrameSlotId::allocate(),
+            current_document: None,
+        }
+    }
+}
+
+impl MainFrameSlot {
+    pub(in crate::conn) fn id(&self) -> MainFrameSlotId {
+        self.id
+    }
+
+    pub(in crate::conn) fn replace_document(&mut self, next: Option<DocumentHost>) -> Option<Page> {
+        std::mem::replace(&mut self.current_document, next).map(DocumentHost::retire)
+    }
+}

@@ -8,15 +8,15 @@ use moli_core::{
 /// Private in the current residence until the typed API cutover (Commit 24b).
 /// No Target/session state or public mutable Page capability belongs here.
 #[derive(Debug)]
-pub(super) struct DocumentHost {
-    pub(super) id: DocumentId,
-    pub(super) page: Page,
-    pub(super) lifecycle: DocumentLifecycle,
-    pub(super) lifetime: DocumentLifetime,
+pub(in crate::conn) struct DocumentHost {
+    pub(in crate::conn) id: DocumentId,
+    pub(in crate::conn) page: Page,
+    pub(in crate::conn) lifecycle: DocumentLifecycle,
+    pub(in crate::conn) lifetime: DocumentLifetime,
 }
 
 impl DocumentHost {
-    pub(super) fn new(id: DocumentId, page: Page) -> Self {
+    pub(in crate::conn) fn new(id: DocumentId, page: Page) -> Self {
         Self {
             id,
             page,

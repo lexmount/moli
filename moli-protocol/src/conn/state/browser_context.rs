@@ -628,7 +628,7 @@ impl BrowserContext {
         let session_storage_store = self
             .page_targets
             .active()
-            .map(|target| target.session_storage_namespace.store().clone())
+            .map(|target| target.session_storage_store().clone())
             .unwrap_or_else(new_shared_web_storage_store);
         self.storage_partition
             .handles
@@ -639,7 +639,7 @@ impl BrowserContext {
         let session_storage_store = self
             .page_targets
             .active()
-            .map(|target| target.session_storage_namespace.store().clone())
+            .map(|target| target.session_storage_store().clone())
             .unwrap_or_else(new_shared_web_storage_store);
         self.storage_partition
             .handles
@@ -962,7 +962,7 @@ impl BrowserContext {
     }
 
     fn target_owner_diagnostics(&self, target: &PageTargetHost) -> Value {
-        let navigation = &target.runtime_slot.page_slot().navigation;
+        let navigation = &target.runtime_slot.page_slot().contents.navigation;
         let initial = navigation.initial_empty_document_state().map(|document| {
             let creator = document.creator().map(|creator| json!({
                 "targetId": self.page_targets.iter()
@@ -1043,6 +1043,7 @@ impl BrowserContext {
             && target
                 .runtime_slot
                 .page_slot()
+                .contents
                 .navigation
                 .can_install_current_initial_empty_document_page()
     }
@@ -1057,7 +1058,7 @@ impl BrowserContext {
         let Some(target) = self.page_target(target_id) else {
             return false;
         };
-        let navigation = &target.runtime_slot.page_slot().navigation;
+        let navigation = &target.runtime_slot.page_slot().contents.navigation;
         let Some(initial_url) = navigation.initial_empty_document_url_if_current() else {
             return false;
         };
@@ -1457,7 +1458,7 @@ impl BrowserContext {
 
     #[cfg(test)]
     pub(crate) fn session_storage_store_for_test(&self) -> &SharedWebStorageStore {
-        self.active_page_target().session_storage_namespace.store()
+        self.active_page_target().session_storage_store()
     }
 
     #[cfg(test)]
@@ -1776,6 +1777,7 @@ fn materialized_initial_empty_document_missing_page_error(
     if target
         .runtime_slot
         .page_slot()
+        .contents
         .navigation
         .has_materialized_current_initial_empty_document()
         && !target.has_loaded_page()
