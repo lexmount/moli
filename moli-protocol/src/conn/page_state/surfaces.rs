@@ -27,11 +27,11 @@ impl SurfaceOverrideInputs {
             emulated_device_metrics: browser_context.effective_active_emulated_device_metrics(),
             touch_emulation_enabled: browser_context
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .touch_emulation_enabled,
             focus_emulation_enabled: browser_context
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .focus_emulation_enabled,
             active_target_surface: true,
             window_document_hidden: browser_context
@@ -55,21 +55,21 @@ impl SurfaceOverrideInputs {
     ) -> Self {
         Self {
             network_conditions: state
-                .effective_emulation_state
+                .emulation_policy()
                 .network_conditions
                 .or(default_network_conditions),
             geolocation_override: state
-                .effective_emulation_state
+                .emulation_policy()
                 .geolocation_override
                 .clone()
                 .or(default_geolocation_override),
             emulated_device_metrics: state
-                .effective_emulation_state
+                .emulation_policy()
                 .emulated_device_metrics
                 .clone()
                 .or(default_emulated_device_metrics),
-            touch_emulation_enabled: state.effective_emulation_state.touch_emulation_enabled,
-            focus_emulation_enabled: state.effective_emulation_state.focus_emulation_enabled,
+            touch_emulation_enabled: state.emulation_policy().touch_emulation_enabled,
+            focus_emulation_enabled: state.emulation_policy().focus_emulation_enabled,
             active_target_surface: false,
             window_document_hidden: state.window_surface().state.document_hidden(),
             window_fullscreen: state.window_surface().state.is_fullscreen(),
@@ -342,7 +342,7 @@ impl BrowserContext {
     pub fn max_touch_points(&self) -> u32 {
         if self
             .active_page_target()
-            .effective_emulation_state
+            .emulation_policy()
             .touch_emulation_enabled
         {
             1
@@ -820,7 +820,8 @@ mod tests {
     #[test]
     fn background_surface_uses_the_owning_window_state() {
         let mut target = PageTargetHost::empty("TID-background-window".into());
-        target.effective_emulation_state.focus_emulation_enabled = true;
+        target
+            .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::FocusEnabled(true));
         target.set_window_surface_state(WindowSurfaceState::Minimized);
         let minimized = SurfaceOverrideInputs::from_background(&target, None, None, None);
         assert!(minimized.document_has_focus());

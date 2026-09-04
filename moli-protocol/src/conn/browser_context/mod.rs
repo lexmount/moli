@@ -13,7 +13,6 @@ mod runtime_owner;
 mod session_owner;
 mod target_session_owner;
 
-pub(crate) use emulation_owner::TargetEmulationStateUpdate;
 pub(crate) use page_owner::PageLifecycleEventsEnableResult;
 pub(crate) use runtime_owner::{
     SessionOwnerInspectorEnableResult, SessionOwnerRuntimeFrontendEnableResult,

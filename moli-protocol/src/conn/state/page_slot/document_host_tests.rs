@@ -24,6 +24,8 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
     target.set_window_surface_state(crate::conn::WindowSurfaceState::Fullscreen);
     target.set_window_surface_geometry(Some(800), Some(600), Some(10), Some(20));
     let window = target.window_surface();
+    target
+        .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::CpuThrottlingRate(4.0));
     let first_document = target.current_document_id().unwrap();
     let storage = target.session_storage_store().clone();
     assert!(
@@ -79,6 +81,7 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
     );
     assert_eq!(target.current_document_id(), Some(reserved));
     assert_eq!(target.window_surface(), window);
+    assert_eq!(target.emulation_policy().cpu_throttling_rate, 4.0);
     assert_ne!(first_document, reserved);
     assert_eq!(
         target

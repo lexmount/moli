@@ -9,14 +9,16 @@ use serde_json::Value;
 use super::{
     SessionStorageNamespace,
     devtools_session::DevToolsSessionRegistry,
-    emulation::EffectiveTargetEmulationState,
     fetch::TargetFetchOwner,
     identity::TargetIdentityState,
     page_slot::TargetPageSlot,
     runtime_slot::TargetRuntimeSlot,
     session::TargetNetworkPolicyState,
     target_state::TargetOwnerState,
-    web_contents::{WindowSurface, WindowSurfaceState},
+    web_contents::{
+        EmulationPolicy, EmulationPolicyChange, EmulationPolicyDelta, WindowSurface,
+        WindowSurfaceState,
+    },
 };
 use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 
@@ -39,7 +41,6 @@ pub struct PageTargetHost {
     pub(crate) tls_verify_host_override: Option<bool>,
     pub(crate) base_locale_override: Option<String>,
     pub(crate) base_timezone_override: Option<String>,
-    pub(crate) effective_emulation_state: EffectiveTargetEmulationState,
     pub(crate) input_intercept_drags_enabled: bool,
     pub(crate) input_drag_intercepted: bool,
     pub(crate) css_enabled: bool,
@@ -77,7 +78,6 @@ impl PageTargetHost {
             tls_verify_host_override: None,
             base_locale_override: None,
             base_timezone_override: None,
-            effective_emulation_state: EffectiveTargetEmulationState::default(),
             input_intercept_drags_enabled: false,
             input_drag_intercepted: false,
             css_enabled: false,
@@ -150,6 +150,29 @@ impl PageTargetHost {
 
     pub(crate) fn window_surface(&self) -> WindowSurface {
         self.runtime_slot.page_slot().contents.window.surface
+    }
+
+    pub(crate) fn emulation_policy(&self) -> &EmulationPolicy {
+        &self.runtime_slot.page_slot().contents.emulation_policy
+    }
+
+    pub(crate) fn apply_emulation_policy_change(&mut self, change: EmulationPolicyChange) {
+        self.runtime_slot
+            .page_slot_mut()
+            .contents
+            .emulation_policy
+            .apply(change);
+    }
+
+    pub(in crate::conn) fn apply_emulation_policy_changes(
+        &mut self,
+        changes: Vec<EmulationPolicyChange>,
+    ) -> EmulationPolicyDelta {
+        self.runtime_slot
+            .page_slot_mut()
+            .contents
+            .emulation_policy
+            .apply_changes(changes)
     }
 
     pub(in crate::conn) fn set_window_surface_state(&mut self, state: WindowSurfaceState) {

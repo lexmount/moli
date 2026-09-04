@@ -1,15 +1,11 @@
-use crate::conn::{CdpConnection, TargetEmulationStateUpdate};
+use crate::conn::{CdpConnection, EmulationPolicyChange};
 
 pub(super) fn update_page_emulation_state(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
-    f: impl FnOnce(TargetEmulationStateUpdate<'_>),
+    change: EmulationPolicyChange,
 ) -> Result<(), String> {
-    if conn.update_emulation_state_for_session_owner(session_id, |state| {
-        if let Some(state) = state {
-            f(state);
-        }
-    }) {
+    if conn.apply_emulation_override_for_session_owner(session_id, change) {
         return Ok(());
     }
     Err("BrowserContextNotLoaded".to_owned())

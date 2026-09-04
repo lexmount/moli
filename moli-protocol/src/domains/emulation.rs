@@ -1,8 +1,8 @@
 use crate::conn::{
     BrowserContext, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope, EmulatedDeviceMetrics,
-    EmulatedGeolocationOverrideState, EmulatedViewportSurface, PageTargetHost,
-    RendererCommandCorrelation, RendererCommandDescriptor, RuntimeInspectorAsyncCompletionReceiver,
-    WindowSurfaceState,
+    EmulatedGeolocationOverrideState, EmulatedViewportSurface, EmulationPolicyChange,
+    PageTargetHost, RendererCommandCorrelation, RendererCommandDescriptor,
+    RuntimeInspectorAsyncCompletionReceiver, WindowSurfaceState,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandResult, DevToolsDevicePixelRatioSetting, DevToolsError,
@@ -256,9 +256,11 @@ fn focus_emulation_enabled_command_output_plan(
     if conn.browser_context.is_none() {
         return CommandOutputPlan::result(json!({}));
     }
-    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
-        state.set_focus_emulation_enabled(params.enabled);
-    }) {
+    match page_session::update_page_emulation_state(
+        conn,
+        cmd.session_id,
+        EmulationPolicyChange::FocusEnabled(params.enabled),
+    ) {
         Ok(()) => CommandOutputPlan::result(json!({})),
         Err(message) if message == "BrowserContextNotLoaded" => {
             CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
@@ -278,9 +280,11 @@ fn touch_emulation_enabled_command_output_plan(
     if conn.browser_context.is_none() {
         return CommandOutputPlan::result(json!({}));
     }
-    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
-        state.set_touch_emulation_enabled(params.enabled);
-    }) {
+    match page_session::update_page_emulation_state(
+        conn,
+        cmd.session_id,
+        EmulationPolicyChange::TouchEnabled(params.enabled),
+    ) {
         Ok(()) => CommandOutputPlan::result(json!({})),
         Err(message) if message == "BrowserContextNotLoaded" => {
             CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
@@ -306,11 +310,10 @@ fn start_cpu_throttling_rate_command(
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_cpu_throttling_rate(params.rate);
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::CpuThrottlingRate(params.rate),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
@@ -345,9 +348,11 @@ fn emit_touch_events_for_mouse_command_output_plan(
     if conn.browser_context.is_none() {
         return CommandOutputPlan::result(json!({}));
     }
-    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
-        state.set_emit_touch_events_for_mouse(params.enabled);
-    }) {
+    match page_session::update_page_emulation_state(
+        conn,
+        cmd.session_id,
+        EmulationPolicyChange::EmitTouchEventsForMouse(params.enabled),
+    ) {
         Ok(()) => CommandOutputPlan::result(json!({})),
         Err(message) if message == "BrowserContextNotLoaded" => {
             CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
@@ -372,11 +377,10 @@ fn start_script_execution_disabled_command(
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_script_execution_disabled(params.value);
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::ScriptExecutionDisabled(params.value),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
@@ -668,11 +672,10 @@ fn start_update_geolocation_override_command(
     if conn.browser_context.is_none() {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_geolocation_override(override_state.clone());
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::Geolocation(override_state),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
@@ -711,11 +714,10 @@ fn start_emulated_media_command(
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
     let overrides = media::emulated_media_overrides_from_params(params);
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_emulated_media(overrides.clone());
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::Media(overrides.clone()),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
@@ -876,11 +878,10 @@ fn start_clear_device_metrics_override_command(
     {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    if !conn.update_emulation_state_for_session_owner(cmd.session_id, |state| {
-        if let Some(mut state) = state {
-            state.set_emulated_device_metrics(None);
-        }
-    }) {
+    if !conn.apply_emulation_override_for_session_owner(
+        cmd.session_id,
+        EmulationPolicyChange::DeviceMetrics(None),
+    ) {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
             -31998,
             "BrowserContextNotLoaded",
@@ -947,11 +948,10 @@ fn start_devtools_set_viewport_command(
     let had_existing_device_metrics = conn
         .target_session_owner_emulated_device_metrics_for_owner(&owner_scope)
         .is_some();
-    if !conn.update_emulation_state_for_owner(&owner_scope, |state| {
-        if let Some(mut state) = state {
-            state.set_emulated_device_metrics(Some(metrics.clone()));
-        }
-    }) {
+    if !conn.apply_emulation_override_for_owner(
+        &owner_scope,
+        EmulationPolicyChange::DeviceMetrics(Some(metrics.clone())),
+    ) {
         return Err(DevToolsError::new(
             DevToolsErrorKind::NoSuchTarget,
             "BrowserContextNotLoaded",
@@ -1252,11 +1252,10 @@ fn start_geolocation_override_for_current_route(
     override_state: Option<EmulatedGeolocationOverrideState>,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let owner = CommandOwnerScope::for_route(route.clone());
-    if !conn.update_emulation_state_for_owner(&owner, |state| {
-        if let Some(mut state) = state {
-            state.set_geolocation_override(override_state);
-        }
-    }) {
+    if !conn.apply_emulation_override_for_owner(
+        &owner,
+        EmulationPolicyChange::Geolocation(override_state),
+    ) {
         return Err(devtools_emulation_owner_error(
             "BrowserContextNotLoaded".to_owned(),
         ));
@@ -1339,11 +1338,12 @@ fn start_network_conditions_for_current_route(
     network_conditions: Option<DevToolsNetworkConditions>,
 ) -> Result<Vec<PendingEmulationPageCommand>, DevToolsError> {
     let owner = CommandOwnerScope::for_route(route.clone());
-    if !conn.update_emulation_state_for_owner(&owner, |state| {
-        if let Some(mut state) = state {
-            state.set_network_conditions(network_conditions.map(emulated_network_conditions));
-        }
-    }) {
+    if !conn.apply_emulation_override_for_owner(
+        &owner,
+        EmulationPolicyChange::NetworkConditions(
+            network_conditions.map(emulated_network_conditions),
+        ),
+    ) {
         return Err(devtools_emulation_owner_error(
             "BrowserContextNotLoaded".to_owned(),
         ));
@@ -2255,10 +2255,7 @@ fn browser_context_default_device_metrics_runtime_command_count(
         .page_targets
         .iter()
         .filter(|target| {
-            target
-                .effective_emulation_state
-                .emulated_device_metrics
-                .is_none()
+            target.emulation_policy().emulated_device_metrics.is_none()
                 && target.loaded_page().is_some()
         })
         .count()
@@ -2277,7 +2274,7 @@ fn start_browser_context_default_device_metrics_page_commands(
     if let Some(active_target_id) = active_target_id
         && let Some(active_target) = browser_context.page_targets.active_mut()
         && active_target
-            .effective_emulation_state
+            .emulation_policy()
             .emulated_device_metrics
             .is_none()
         && let Some(page) = active_target.runtime_slot.loaded_page_mut()
@@ -2321,12 +2318,7 @@ fn start_browser_context_default_device_metrics_page_commands(
             .to_owned();
         let has_target_override = browser_context
             .page_target(&target_id)
-            .is_some_and(|state| {
-                state
-                    .effective_emulation_state
-                    .emulated_device_metrics
-                    .is_some()
-            });
+            .is_some_and(|state| state.emulation_policy().emulated_device_metrics.is_some());
         if has_target_override {
             continue;
         }
