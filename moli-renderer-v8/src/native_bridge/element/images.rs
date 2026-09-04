@@ -10,7 +10,7 @@ pub(in crate::native_bridge) use attributes::{
     image_is_map_getter_function, image_is_map_setter_function,
 };
 pub(in crate::native_bridge) use decode::image_decode_callback;
-pub(crate) use dimensions::image_intrinsic_dimensions;
+pub(crate) use dimensions::image_natural_dimensions;
 pub(in crate::native_bridge) use dimensions::{
     image_height_getter_function, image_height_setter_function,
     image_natural_height_getter_function, image_natural_width_getter_function,

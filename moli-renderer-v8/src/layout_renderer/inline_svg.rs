@@ -7,7 +7,9 @@
 
 use std::sync::Arc;
 
-use moli_layout::{LayoutImageResource, PaintColor, ReplacedMetrics, ResolvedLayoutStyle};
+use moli_layout::{
+    LayoutImageResource, PaintColor, ReplacedMetrics, ReplacedNaturalSizing, ResolvedLayoutStyle,
+};
 use style::color::ColorSpace;
 use style::values::computed::{SVGPaint, SVGPaintKind};
 use style_traits::ToCss;
@@ -27,11 +29,11 @@ pub(super) fn replaced_metrics(element: &Element) -> ReplacedMetrics {
         element.attribute("viewBox"),
     );
     ReplacedMetrics {
-        intrinsic_width: metadata.intrinsic_width,
-        intrinsic_height: metadata.intrinsic_height,
-        attribute_width: None,
-        attribute_height: None,
-        intrinsic_ratio: metadata.intrinsic_ratio,
+        natural_sizing: Some(ReplacedNaturalSizing {
+            width: metadata.intrinsic_width,
+            height: metadata.intrinsic_height,
+            ratio: metadata.intrinsic_ratio,
+        }),
     }
 }
 
@@ -74,14 +76,17 @@ pub(super) fn replaced_resource(
             return None;
         }
     };
-    // Inline SVG box sizing comes from Stylo's width/height presentation
-    // hints. The vector object's own dimensions must use the same resolved
-    // root font context, so use the parsed tree size rather than the
-    // context-free metadata probe (which deliberately cannot resolve `em`).
+    // Inline SVG presentation lengths (including `em`) have already been
+    // serialized from the resolved Stylo style into this tree. Keep that
+    // context-dependent authored size as the paint resource's natural size;
+    // the context-free metadata probe cannot recover it.
     let tree_size = svg.tree().size();
     Some(LayoutImageResource {
-        intrinsic_width: tree_size.width(),
-        intrinsic_height: tree_size.height(),
+        natural_sizing: ReplacedNaturalSizing {
+            width: Some(tree_size.width()),
+            height: Some(tree_size.height()),
+            ratio: Some(tree_size.width() / tree_size.height()),
+        },
         pixels: None,
         svg: Some(svg),
     })

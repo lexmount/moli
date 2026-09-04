@@ -187,6 +187,24 @@ mod tests {
         }
     }
 
+    fn assert_named_paint_rect(
+        name: &str,
+        actual: moli_layout::PaintRect,
+        expected: moli_layout::PaintRect,
+    ) {
+        for (axis, actual, expected) in [
+            ("x", actual.x, expected.x),
+            ("y", actual.y, expected.y),
+            ("width", actual.width, expected.width),
+            ("height", actual.height, expected.height),
+        ] {
+            assert!(
+                (actual - expected).abs() <= 0.01,
+                "{name} {axis}: expected {expected}, got {actual}; rect={actual:?}"
+            );
+        }
+    }
+
     fn rgb(red: u8, green: u8, blue: u8) -> moli_layout::PaintColor {
         moli_layout::PaintColor::new(
             f32::from(red) / 255.0,
@@ -203,6 +221,197 @@ mod tests {
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
             .expect("test layout should succeed")
             .expect("test fixture should have a document element")
+    }
+
+    #[test]
+    fn layout_renderer_propagates_flex_first_and_last_line_baselines_from_stylo() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.outer{position:absolute;left:0;display:flex;width:300px;height:150px}
+#first{top:0;align-items:baseline}
+#last{top:200px;align-items:last baseline}
+.inner{display:flex;flex-wrap:wrap;align-content:center;width:80px;height:100px}
+.line-a{width:80px;height:10px;flex-shrink:0}
+.line-b{width:80px;height:20px;flex-shrink:0}
+.reference{width:20px;height:20px}
+#first-inner{background:rgb(201,1,1)}#first-reference{background:rgb(1,201,1)}
+#first-a{background:rgb(1,1,201)}#first-b{background:rgb(201,201,1)}
+#last-inner{background:rgb(201,1,201)}#last-reference{background:rgb(1,201,201)}
+#last-a{background:rgb(241,101,1)}#last-b{background:rgb(101,1,241)}
+</style></head><body>
+<div id=first class=outer><div id=first-inner class=inner><div id=first-a class=line-a></div><div id=first-b class=line-b></div></div><div id=first-reference class=reference></div></div>
+<div id=last class=outer><div id=last-inner class=inner><div id=last-a class=line-a></div><div id=last-b class=line-b></div></div><div id=last-reference class=reference></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Chromium positions the centered inner lines at 35/45px. The
+            // first exported baseline is 45px, while the last is 65px. The
+            // outer last-baseline line itself sits at y=250px.
+            for (color, expected) in [
+                (rgb(201, 1, 1), (0.0, 0.0, 80.0, 100.0)),
+                (rgb(1, 201, 1), (80.0, 25.0, 20.0, 20.0)),
+                (rgb(1, 1, 201), (0.0, 35.0, 80.0, 10.0)),
+                (rgb(201, 201, 1), (0.0, 45.0, 80.0, 20.0)),
+                (rgb(201, 1, 201), (0.0, 250.0, 80.0, 100.0)),
+                (rgb(1, 201, 201), (80.0, 295.0, 20.0, 20.0)),
+                (rgb(241, 101, 1), (0.0, 285.0, 80.0, 10.0)),
+                (rgb(101, 1, 241), (0.0, 295.0, 80.0, 20.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_applies_used_size_containment_across_formatting_contexts() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.case{position:absolute;contain:size;contain-intrinsic-size:111px 22px}
+.large{width:300px;height:400px}
+#block{left:0;top:0;background:rgb(241,1,1)}
+#flex{display:flex;left:130px;top:0;background:rgb(242,2,2)}
+#grid{display:grid;left:260px;top:0;background:rgb(243,3,3)}
+#constrained{left:390px;top:0;width:300px;height:400px;max-width:max-content;max-height:max-content;background:rgb(244,4,4)}
+#boxed{left:0;top:60px;padding:5px 7px;border:3px solid transparent;background:rgb(245,5,5)}
+#single-axis{position:absolute;display:flow-root;left:150px;top:60px;writing-mode:vertical-rl;contain:inline-size;contain-intrinsic-width:77px;contain-intrinsic-height:88px;background:rgb(246,6,6)}
+#intrinsic-parent{position:absolute;display:flex;left:260px;top:60px;width:max-content;height:max-content;background:rgb(247,7,7)}
+#grid-tracks{position:absolute;display:grid;left:400px;top:60px;contain:size;grid-template-columns:50px auto;grid-template-rows:30px auto;gap:5px;background:rgb(248,8,8)}
+#replaced{position:absolute;left:500px;top:0;contain:size;contain-intrinsic-size:90px 45px;background:rgb(249,9,9)}
+#natural-ratio{position:absolute;left:600px;top:0;contain:size;contain-intrinsic-size:90px;background:rgb(250,10,10)}
+#authored-ratio{position:absolute;left:700px;top:0;contain:size;contain-intrinsic-size:90px;aspect-ratio:2/1;background:rgb(250,20,20)}
+#presentation-size{position:absolute;left:600px;top:60px;contain:size;contain-intrinsic-size:90px;background:rgb(250,30,30)}
+#hidden{position:absolute;left:0;top:130px;content-visibility:hidden;contain-intrinsic-size:70px 35px;background:rgb(251,11,11)}
+#hidden-child{width:300px;height:400px;background:rgb(252,12,12)}
+#hidden-replaced{position:absolute;left:300px;top:130px;width:40px;height:20px;content-visibility:hidden;background:rgb(252,22,22)}
+#table{position:absolute;left:100px;top:130px;border-spacing:0;contain:size;contain-intrinsic-size:10px;background:rgb(253,13,13)}
+#table td{padding:0}#table-content{width:80px;height:20px}
+#query-container{position:absolute;display:flow-root;left:200px;top:130px;container-type:inline-size;contain-intrinsic-width:65px;background:rgb(254,14,14)}
+#html-dimensions{position:absolute;left:400px;top:130px;contain:size;contain-intrinsic-size:90px;background:rgb(254,24,24)}
+</style></head><body>
+<div id=block class=case><div class=large></div></div>
+<div id=flex class=case><div class=large></div></div>
+<div id=grid class=case><div class=large></div></div>
+<div id=constrained class=case><div class=large></div></div>
+<div id=boxed class=case><div class=large></div></div>
+<div id=single-axis><div style="width:30px;height:40px"></div></div>
+<div id=intrinsic-parent><div class=case style="position:static"><div class=large></div></div></div>
+<div id=grid-tracks><div class=large></div><div class=large></div><div class=large></div></div>
+<img id=replaced>
+<img id=natural-ratio src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='60'%20height='30'%3E%3C/svg%3E">
+<img id=authored-ratio src="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='60'%20height='30'%3E%3C/svg%3E">
+<svg id=presentation-size width=60 height=30></svg>
+<div id=hidden><div id=hidden-child></div></div>
+<svg id=hidden-replaced viewBox="0 0 40 20"><rect width=40 height=20 fill=blue></rect></svg>
+<table id=table><tbody><tr><td><div id=table-content></div></td></tr></tbody></table>
+<div id=query-container><div style="width:200px;height:30px"></div></div>
+<img id=html-dimensions width=130 height=70>
+</body></html>"#,
+            )
+            .await;
+
+            for (name, color, expected) in [
+                ("block", rgb(241, 1, 1), (0.0, 0.0, 111.0, 22.0)),
+                ("flex", rgb(242, 2, 2), (130.0, 0.0, 111.0, 22.0)),
+                ("grid", rgb(243, 3, 3), (260.0, 0.0, 111.0, 22.0)),
+                (
+                    "constrained",
+                    rgb(244, 4, 4),
+                    (390.0, 0.0, 111.0, 22.0),
+                ),
+                ("boxed", rgb(245, 5, 5), (0.0, 60.0, 131.0, 38.0)),
+                (
+                    "single-axis",
+                    rgb(246, 6, 6),
+                    (150.0, 60.0, 30.0, 88.0),
+                ),
+                (
+                    "intrinsic-parent",
+                    rgb(247, 7, 7),
+                    (260.0, 60.0, 111.0, 22.0),
+                ),
+                (
+                    "grid-tracks",
+                    rgb(248, 8, 8),
+                    (400.0, 60.0, 55.0, 35.0),
+                ),
+                ("replaced", rgb(249, 9, 9), (500.0, 0.0, 90.0, 45.0)),
+                (
+                    "natural-ratio",
+                    rgb(250, 10, 10),
+                    (600.0, 0.0, 90.0, 90.0),
+                ),
+                (
+                    "authored-ratio",
+                    rgb(250, 20, 20),
+                    (700.0, 0.0, 90.0, 45.0),
+                ),
+                (
+                    "presentation-size",
+                    rgb(250, 30, 30),
+                    (600.0, 60.0, 60.0, 30.0),
+                ),
+                ("hidden", rgb(251, 11, 11), (0.0, 130.0, 70.0, 35.0)),
+                (
+                    "hidden-replaced",
+                    rgb(252, 22, 22),
+                    (300.0, 130.0, 40.0, 20.0),
+                ),
+                ("table", rgb(253, 13, 13), (100.0, 130.0, 80.0, 20.0)),
+                (
+                    "query-container",
+                    rgb(254, 14, 14),
+                    (200.0, 130.0, 65.0, 30.0),
+                ),
+                (
+                    "html-dimensions",
+                    rgb(254, 24, 24),
+                    (400.0, 130.0, 130.0, 70.0),
+                ),
+            ] {
+                assert_named_paint_rect(
+                    name,
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+            assert!(
+                snapshot.fragments.iter().all(|fragment| {
+                    !fragment
+                        .solid_fill_in_surface()
+                        .is_some_and(|(_, color)| color == rgb(252, 12, 12))
+                }),
+                "content-visibility:hidden must not construct or paint descendant contents"
+            );
+            assert!(
+                snapshot.fragments.iter().all(|fragment| {
+                    !matches!(
+                        fragment,
+                        moli_layout::PaintFragment::SvgImage(image)
+                            if (image.destination.x - 300.0).abs() <= 0.01
+                                && (image.destination.y - 130.0).abs() <= 0.01
+                    )
+                }),
+                "content-visibility:hidden must paint the replaced element's own box without its replaced content"
+            );
+        }));
     }
 
     fn glyph_min_x(snapshot: &moli_layout::PaintSnapshot, color: moli_layout::PaintColor) -> f32 {
@@ -635,6 +844,291 @@ html, body, main { display: block; margin: 0 }
     }
 
     #[test]
+    fn layout_renderer_uses_the_initial_containing_block_for_orthogonal_inline_percentages() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html, body { display: block; margin: 0; padding: 0 }
+html { scrollbar-width: none }
+#subject {
+  writing-mode: vertical-lr;
+  inline-size: 100%;
+  block-size: 20px;
+  background: rgb(13, 73, 173);
+}
+</style></head><body><div id="subject"></div></body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(13, 73, 173)),
+                moli_layout::PaintRect::new(0.0, 0.0, 20.0, 600.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_uses_logical_float_contributions_for_orthogonal_flex_basis() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html, body { display: block; margin: 0; padding: 0 }
+html { scrollbar-width: none }
+.case { position: absolute; top: 0; display: flex; flex-flow: column;
+  width: 75px; height: 75px }
+.item { flex-shrink: 0; min-width: 0; min-height: 0; writing-mode: vertical-rl }
+.float { float: left; width: 50px; height: 50px }
+#min-case { left: 0 } #min { flex-basis: min-content; background: rgb(41, 51, 161) }
+#max-case { left: 100px } #max { flex-basis: max-content; background: rgb(42, 52, 162) }
+#fit-case { left: 200px } #fit { flex-basis: fit-content; background: rgb(43, 53, 163) }
+</style></head><body>
+<div id=min-case class=case><div id=min class=item><i class=float></i><i class=float></i></div></div>
+<div id=max-case class=case><div id=max class=item><i class=float></i><i class=float></i></div></div>
+<div id=fit-case class=case><div id=fit class=item><i class=float></i><i class=float></i></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Mirrors the three orthogonal column cases in WPT
+            // css/css-flexbox/flex-basis-intrinsics-001.html. The two floats
+            // contribute 50px min-content, 100px max-content, and a 75px
+            // fit-content clamp along the vertical owner's logical inline axis.
+            for (color, expected) in [
+                (rgb(41, 51, 161), moli_layout::PaintRect::new(0.0, 0.0, 75.0, 50.0)),
+                (
+                    rgb(42, 52, 162),
+                    moli_layout::PaintRect::new(100.0, 0.0, 75.0, 100.0),
+                ),
+                (
+                    rgb(43, 53, 163),
+                    moli_layout::PaintRect::new(200.0, 0.0, 75.0, 75.0),
+                ),
+            ] {
+                assert_paint_rect(solid_paint_rect(&snapshot, color), expected);
+            }
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_projects_vertical_inline_fragments_in_physical_space() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0} html{scrollbar-width:none}
+#host{writing-mode:vertical-rl;direction:ltr;width:100px;height:200px;font-size:0;line-height:0;background:rgb(1,2,3)}
+#inline{margin:3px 2px 4px 1px;padding:7px 6px 8px 5px;border-style:solid;border-width:11px 10px 12px 9px;background:rgb(4,5,6)}
+#atomic{display:inline-block;width:20px;height:30px;background:rgb(7,8,9)}
+</style></head><body><div id=host><span id=inline><i id=atomic></i></span></div></body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(1, 2, 3)),
+                moli_layout::PaintRect::new(0.0, 0.0, 100.0, 200.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(4, 5, 6)),
+                moli_layout::PaintRect::new(76.0, 3.0, 30.0, 68.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(7, 8, 9)),
+                moli_layout::PaintRect::new(80.0, 21.0, 20.0, 30.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_projects_vertical_text_origins_and_decorations() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let color = rgb(31, 32, 33);
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0} html{scrollbar-width:none}
+#host{writing-mode:vertical-lr;direction:ltr;width:100px;height:200px;font-size:20px;line-height:20px;color:rgb(31,32,33);text-decoration:underline}
+</style></head><body><div id=host>AB</div></body></html>"#,
+            )
+            .await;
+
+            // This locks the logical-to-physical origin mapping. Vertical
+            // OpenType shaping and glyph orientation are separate text-engine
+            // capabilities; their absence must not make layout coordinates
+            // horizontal again.
+            let mut glyphs = snapshot
+                .fragments
+                .iter()
+                .filter_map(|fragment| match fragment {
+                    moli_layout::PaintFragment::GlyphRun(run) if run.color == color => {
+                        Some(run.glyphs_in_surface())
+                    }
+                    _ => None,
+                })
+                .flatten()
+                .collect::<Vec<_>>();
+            glyphs.sort_by(|left, right| left.y.total_cmp(&right.y));
+            assert_eq!(glyphs.len(), 2, "the fixture must shape two glyphs");
+            assert!(
+                (glyphs[0].x - glyphs[1].x).abs() <= 0.01,
+                "vertical glyph origins must share the physical baseline axis: {glyphs:?}"
+            );
+            assert!(
+                glyphs[1].y > glyphs[0].y,
+                "visual inline advance must map onto physical y: {glyphs:?}"
+            );
+
+            let decoration = snapshot
+                .fragments
+                .iter()
+                .find_map(|fragment| match fragment {
+                    moli_layout::PaintFragment::TextDecoration(decoration)
+                        if decoration.color == color =>
+                    {
+                        Some(decoration)
+                    }
+                    _ => None,
+                })
+                .expect("vertical underline should be projected");
+            let start = decoration.transform.map_point(decoration.start);
+            let end = decoration.transform.map_point(decoration.end);
+            assert!(
+                (start.x - end.x).abs() <= 0.01 && end.y > start.y,
+                "decoration centerline must follow the physical inline axis: {start:?}..{end:?}"
+            );
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_uses_line_over_inside_vertical_lr_lines() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0} html{scrollbar-width:none}
+#host{writing-mode:vertical-lr;direction:ltr;width:100px;height:200px;font-size:20px;line-height:20px;background:rgb(11,12,13)}
+#atomic{display:inline-block;vertical-align:top;width:10px;height:30px;background:rgb(14,15,16)}
+</style></head><body><div id=host><i id=atomic></i></div></body></html>"#,
+            )
+            .await;
+
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(11, 12, 13)),
+                moli_layout::PaintRect::new(0.0, 0.0, 100.0, 200.0),
+            );
+            assert_paint_rect(
+                solid_paint_rect(&snapshot, rgb(14, 15, 16)),
+                moli_layout::PaintRect::new(10.0, 0.0, 10.0, 30.0),
+            );
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_synthesizes_baselines_for_orthogonal_atomic_inlines() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0} html{scrollbar-width:none}
+#host{writing-mode:vertical-lr;direction:ltr;width:100px;height:200px;font-size:0;line-height:0}
+.atomic{display:inline-block;width:40px;height:30px}
+#same{background:rgb(21,22,23)}
+#orthogonal{writing-mode:vertical-rl;background:rgb(24,25,26)}
+#inner{display:inline-block;width:10px;height:10px;background:rgb(27,28,29)}
+</style></head><body><div id=host><i id=same class=atomic></i><i id=orthogonal class=atomic><b id=inner></b></i></div></body></html>"#,
+            )
+            .await;
+
+            for (color, expected) in [
+                (rgb(21, 22, 23), moli_layout::PaintRect::new(0.0, 0.0, 40.0, 30.0)),
+                (
+                    rgb(24, 25, 26),
+                    moli_layout::PaintRect::new(0.0, 30.0, 40.0, 30.0),
+                ),
+                (
+                    rgb(27, 28, 29),
+                    moli_layout::PaintRect::new(30.0, 30.0, 10.0, 10.0),
+                ),
+            ] {
+                assert_paint_rect(solid_paint_rect(&snapshot, color), expected);
+            }
+        }));
+    }
+
+    #[test]
+    fn layout_renderer_skips_orthogonal_block_children_when_exporting_inline_block_baselines() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0} html{scrollbar-width:none}
+body{font-size:16px;line-height:20px}
+.ib{display:inline-block}
+#control{background:rgb(31,32,33)}
+#visible{background:rgb(34,35,36)}
+#scroll{background:rgb(37,38,39)}
+.orthogonal{writing-mode:vertical-rl;color:transparent}
+#visible-child{background:rgb(40,41,42)}
+#scroll-child{background:rgb(43,44,45)}
+.scroll{overflow:hidden}
+</style></head><body><div id=control class=ib>aaa</div><div id=visible class=ib>bbb<div id=visible-child class=orthogonal>vvv</div></div><div id=scroll class=ib>ccc<div id=scroll-child class="orthogonal scroll">vvv</div></div></body></html>"#,
+            )
+            .await;
+
+            let control = solid_paint_rect(&snapshot, rgb(31, 32, 33));
+            let visible = solid_paint_rect(&snapshot, rgb(34, 35, 36));
+            let scroll = solid_paint_rect(&snapshot, rgb(37, 38, 39));
+            let visible_child = solid_paint_rect(&snapshot, rgb(40, 41, 42));
+            let scroll_child = solid_paint_rect(&snapshot, rgb(43, 44, 45));
+            assert!(
+                (visible.y - control.y).abs() <= 0.01,
+                "orthogonal child changed the inline-block baseline: {control:?} vs {visible:?}"
+            );
+            assert!(
+                (scroll.y - control.y).abs() <= 0.01,
+                "orthogonal scroll child changed the inline-block baseline: {control:?} vs {scroll:?}"
+            );
+            assert!(
+                visible_child.height < 100.0 && scroll_child.height < 100.0,
+                "orthogonal auto inline sizes must remain content-sized: {visible_child:?}, {scroll_child:?}"
+            );
+            assert!(
+                (visible_child.height - scroll_child.height).abs() <= 0.01,
+                "overflow must not change the orthogonal auto inline size: {visible_child:?}, {scroll_child:?}"
+            );
+        }));
+    }
+
+    #[test]
     fn layout_renderer_computes_phase_two_grid_calc_and_positioned_geometry_from_stylo() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -729,6 +1223,126 @@ body { background: rgb(0, 0, 255) }
                 diagnostic.code != "grid-layout-deferred"
                     && diagnostic.code != "fixed-position-layout-deferred"
             }));
+        }));
+    }
+
+    #[test]
+    fn grid_intrinsic_sizes_preserve_flexible_spanning_automatic_minimum_semantics() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.grid{display:grid;height:10px;grid-template-columns:1fr 30px;width:min-content}
+.item{grid-column:1/span 2}.wide{width:300px;height:10px}
+#multi-min{background:rgb(31,41,51)}#multi-min>.item{background:rgb(32,42,52)}
+#multi-max{width:max-content;background:rgb(41,51,61)}#multi-max>.item{background:rgb(42,52,62)}
+#single{grid-template-columns:1fr;background:rgb(51,61,71)}#single>.item{grid-column:1;background:rgb(52,62,72)}
+#explicit{background:rgb(61,71,81)}#explicit>.item{min-width:120px;background:rgb(62,72,82)}
+#rows{width:10px;height:min-content;grid-template-columns:10px;grid-template-rows:1fr 30px;background:rgb(71,81,91)}
+#rows>.item{grid-column:1;grid-row:1/span 2;background:rgb(72,82,92)}#rows .wide{width:10px;height:300px}
+</style></head><body>
+<div id=multi-min class=grid><div class=item><div class=wide></div></div></div>
+<div id=multi-max class=grid><div class=item><div class=wide></div></div></div>
+<div id=single class=grid><div class=item><div class=wide></div></div></div>
+<div id=explicit class=grid><div class=item><div class=wide></div></div></div>
+<div id=rows class=grid><div class=item><div class=wide></div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Chromium 147 keeps the automatic minimum at zero only for an
+            // item spanning multiple tracks including a flexible track. A
+            // max-content constraint, a single flexible track, or an explicit
+            // minimum still contributes. Intrinsic block-size remains
+            // max-content-like rather than reusing the inline-axis result.
+            for (color, expected) in [
+                (rgb(31, 41, 51), (0.0, 0.0, 30.0, 10.0)),
+                (rgb(32, 42, 52), (0.0, 0.0, 30.0, 10.0)),
+                (rgb(41, 51, 61), (0.0, 10.0, 300.0, 10.0)),
+                (rgb(42, 52, 62), (0.0, 10.0, 300.0, 10.0)),
+                (rgb(51, 61, 71), (0.0, 20.0, 300.0, 10.0)),
+                (rgb(52, 62, 72), (0.0, 20.0, 300.0, 10.0)),
+                (rgb(61, 71, 81), (0.0, 30.0, 120.0, 10.0)),
+                (rgb(62, 72, 82), (0.0, 30.0, 120.0, 10.0)),
+                (rgb(71, 81, 91), (0.0, 40.0, 10.0, 300.0)),
+                (rgb(72, 82, 92), (0.0, 40.0, 10.0, 300.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
+        }));
+    }
+
+    #[test]
+    fn grid_flexible_tracks_rerun_against_the_final_used_content_box() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}
+.grid{display:inline-grid;position:absolute}
+.item,.probe{grid-area:1/1}.probe{z-index:1}
+#both{left:0;top:0;grid-template:minmax(0,.5fr)/minmax(0,.5fr);background:rgb(101,102,103)}
+#both .item{width:200px;height:200px}#both .probe{background:rgb(201,202,203)}
+#row{left:0;top:110px;grid-template:minmax(0,.5fr)/50px;background:rgb(111,112,113)}
+#row .item{width:50px;height:200px}#row .probe{background:rgb(211,212,213)}
+#minimum{left:100px;top:110px;min-width:200px;grid-template:10px/minmax(0,.5fr);background:rgb(121,122,123)}
+#minimum .item{width:100px;height:10px}#minimum .probe{background:rgb(221,222,223)}
+#maximum{left:350px;top:110px;max-width:80px;grid-template:10px/minmax(0,.5fr);background:rgb(131,132,133)}
+#maximum .item{width:200px;height:10px}#maximum .probe{background:rgb(231,232,233)}
+#insets{box-sizing:border-box;left:450px;top:110px;min-width:230px;padding:0 10px;border:solid transparent;border-width:0 5px;grid-template:10px/minmax(0,.5fr);background:rgb(141,142,143)}
+#insets .item{width:100px;height:10px}#insets .probe{background:rgb(241,242,243)}
+#row-maximum{left:700px;top:0;max-height:80px;grid-template:minmax(0,.5fr)/10px;background:rgb(151,152,153)}
+#row-maximum .item{width:10px;height:200px}#row-maximum .probe{background:rgb(251,252,253)}
+#gapped{left:700px;top:100px;min-width:210px;column-gap:10px;grid-template:10px/minmax(0,.25fr) minmax(0,.75fr)}
+#gapped .first{grid-area:1/1;background:rgb(161,162,163)}#gapped .second{grid-area:1/2;background:rgb(171,172,173)}
+</style></head><body>
+<div id=both class=grid><div class=item></div><div class=probe></div></div>
+<div id=row class=grid><div class=item></div><div class=probe></div></div>
+<div id=minimum class=grid><div class=item></div><div class=probe></div></div>
+<div id=maximum class=grid><div class=item></div><div class=probe></div></div>
+<div id=insets class=grid><div class=item></div><div class=probe></div></div>
+<div id=row-maximum class=grid><div class=item></div><div class=probe></div></div>
+<div id=gapped class=grid><div class=first></div><div class=second></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Captured with Chromium 147. This covers both physical axes,
+            // min/max clamping, the content-box basis inside insets, and
+            // multi-track fr distribution after subtracting a grid gap.
+            for (color, expected) in [
+                (rgb(101, 102, 103), (0.0, 0.0, 100.0, 100.0)),
+                (rgb(201, 202, 203), (0.0, 0.0, 50.0, 50.0)),
+                (rgb(111, 112, 113), (0.0, 110.0, 50.0, 100.0)),
+                (rgb(211, 212, 213), (0.0, 110.0, 50.0, 50.0)),
+                (rgb(121, 122, 123), (100.0, 110.0, 200.0, 10.0)),
+                (rgb(221, 222, 223), (100.0, 110.0, 100.0, 10.0)),
+                (rgb(131, 132, 133), (350.0, 110.0, 80.0, 10.0)),
+                (rgb(231, 232, 233), (350.0, 110.0, 40.0, 10.0)),
+                (rgb(141, 142, 143), (450.0, 110.0, 230.0, 10.0)),
+                (rgb(241, 242, 243), (465.0, 110.0, 100.0, 10.0)),
+                (rgb(151, 152, 153), (700.0, 0.0, 10.0, 80.0)),
+                (rgb(251, 252, 253), (700.0, 0.0, 10.0, 40.0)),
+                (rgb(161, 162, 163), (700.0, 100.0, 50.0, 10.0)),
+                (rgb(171, 172, 173), (760.0, 100.0, 150.0, 10.0)),
+            ] {
+                assert_paint_rect(
+                    solid_paint_rect(&snapshot, color),
+                    moli_layout::PaintRect::new(expected.0, expected.1, expected.2, expected.3),
+                );
+            }
         }));
     }
 
@@ -1035,6 +1649,88 @@ td{padding:0;border:0;height:10px}
                 solid_paint_rect(&snapshot, rgb(71, 72, 73)),
                 moli_layout::PaintRect::new(150.0, 0.0, 150.0, 10.0),
             );
+        }));
+    }
+
+    #[test]
+    fn fixed_percentage_table_exports_its_parent_facing_max_content_size() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}html{scrollbar-width:none}
+.case{width:100px}.wrapper{display:table}.cell{display:table-cell}
+.flex{display:flex;height:10px}.flex table{height:5px}
+#percent-flex{background:rgb(201,11,11)}#percent-table{background:rgb(201,12,12)}
+#calc-flex{background:rgb(202,11,11)}#calc-table{background:rgb(202,12,12)}
+#length-flex{background:rgb(203,11,11)}#length-table{background:rgb(203,12,12)}
+#auto-flex{background:rgb(204,11,11)}#auto-table{background:rgb(204,12,12)}
+</style></head><body>
+<div class=case><div class=wrapper><div class=cell><div id=percent-flex class=flex><table id=percent-table style="table-layout:fixed;width:100%"></table></div></div></div></div>
+<div class=case><div class=wrapper><div class=cell><div id=calc-flex class=flex><table id=calc-table style="table-layout:fixed;width:calc(40px + 0%)"></table></div></div></div></div>
+<div class=case><div class=wrapper><div class=cell><div id=length-flex class=flex><table id=length-table style="table-layout:fixed;width:40px"></table></div></div></div></div>
+<div class=case><div class=wrapper><div class=cell><div id=auto-flex class=flex><table id=auto-table style="table-layout:auto;width:100%"></table></div></div></div></div>
+</body></html>"#,
+            )
+            .await;
+
+            // Chromium gives a percentage-dependent fixed table an
+            // effectively unbounded max-content contribution. The wrapper
+            // therefore fills the 100px opportunity, while final layout still
+            // resolves the authored width normally. Definite and automatic
+            // controls must retain their ordinary finite contributions.
+            for (color, expected_width) in [
+                (rgb(201, 11, 11), 100.0),
+                (rgb(201, 12, 12), 100.0),
+                (rgb(202, 11, 11), 100.0),
+                (rgb(202, 12, 12), 40.0),
+                (rgb(203, 11, 11), 40.0),
+                (rgb(203, 12, 12), 40.0),
+                (rgb(204, 11, 11), 4.0),
+                (rgb(204, 12, 12), 4.0),
+            ] {
+                let rect = solid_paint_rect(&snapshot, color);
+                assert!(
+                    (rect.width - expected_width).abs() <= 0.01,
+                    "expected width {expected_width}, got {rect:?}",
+                );
+            }
+        }));
+    }
+
+    #[test]
+    fn table_layout_fixed_with_auto_width_uses_automatic_column_measurement() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let snapshot = render_test_snapshot(
+                r#"<!doctype html><html><head><style>
+html,body{margin:0;padding:0}html{scrollbar-width:none}
+table{table-layout:fixed;width:auto;border-spacing:0;background:rgb(205,11,11)}
+td{padding:0;border:0;height:5px;background:rgb(205,12,12)}
+.wide{width:80px;height:5px;background:rgb(205,13,13)}
+</style></head><body><table><tr><td style="width:10px"></td></tr><tr><td><div class=wide></div></td></tr></table></body></html>"#,
+            )
+            .await;
+
+            // `table-layout: fixed` selects the fixed algorithm only when the
+            // table has an eligible non-auto preferred width. Chromium keeps
+            // the computed property value but measures this table with the
+            // automatic algorithm, so the second row contributes 80px.
+            for color in [rgb(205, 11, 11), rgb(205, 12, 12), rgb(205, 13, 13)] {
+                let rect = solid_paint_rect(&snapshot, color);
+                assert!(
+                    (rect.width - 80.0).abs() <= 0.01,
+                    "auto-width table should measure every row: {rect:?}",
+                );
+            }
         }));
     }
 

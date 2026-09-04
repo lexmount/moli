@@ -1,7 +1,7 @@
 use super::super::{object_property_as_object, object_string_property};
 use super::shared::{
     ADOPTED_STYLE_SHEETS_SLOT, FONT_FACE_SET_CONNECTED_FACES_SLOT,
-    FONT_FACE_SET_CONNECTED_OWNER_FACES_SLOT, FONTS_SLOT,
+    FONT_FACE_SET_CONNECTED_OWNER_FACES_SLOT, FONT_FACE_SET_OWNER_DOCUMENT_SLOT, FONTS_SLOT,
 };
 use crate::{
     context_bootstrap::css_stylesheet_runtime::{
@@ -9,6 +9,7 @@ use crate::{
     },
     document_runtime::DomHandle,
     native_bridge::JsContextHost,
+    native_bridge::node::node_runtime_and_handle_from_object,
     style_engine::{
         StylesheetFontFaceDescriptor, StylesheetFontFaceProjection,
         StylesheetFontFaceRuleProjection,
@@ -22,6 +23,66 @@ const CSS_STYLE_SHEET_FONT_FACE_WRAPPERS_SLOT: &str = "__moliCssStyleSheetFontFa
 const FONT_FACE_STYLESHEET_RULE_IDENTITY_SLOT: &str = "__moliFontFaceStylesheetRuleIdentity";
 const FONT_FACE_STYLESHEET_RULE_FINGERPRINT_SLOT: &str = "__moliFontFaceStylesheetRuleFingerprint";
 const FONT_FACE_STYLESHEET_ID_SLOT: &str = "__moliFontFaceStylesheetId";
+
+fn existing_document_font_face_set<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    document: DomHandle,
+) -> Option<v8::Local<'s, v8::Object>> {
+    let holder = crate::util::node_wrapper_from_handle(scope, document)?;
+    get_private_value(scope, holder, FONTS_SLOT)
+        .or_else(|| holder.get(scope, v8str(scope, FONTS_SLOT).into()))
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+}
+
+pub(crate) fn synchronize_font_face_set_load_state_for_attribute<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    fonts: v8::Local<'s, v8::Object>,
+    observe_ready: bool,
+) {
+    let Some(document) = get_private_value(scope, fonts, FONT_FACE_SET_OWNER_DOCUMENT_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    else {
+        return;
+    };
+    let Ok((runtime_ptr, document)) = node_runtime_and_handle_from_object(scope, document) else {
+        return;
+    };
+    let runtime = unsafe { &*runtime_ptr };
+    if document != runtime.document_handle() {
+        return;
+    }
+    let cycle = if observe_ready {
+        runtime.observe_document_web_font_ready_cycle()
+    } else {
+        runtime.active_document_web_font_load_cycle()
+    };
+    if let Some(cycle) = cycle {
+        let _ =
+            crate::context_bootstrap::begin_document_font_face_set_load_cycle(scope, fonts, cycle);
+    }
+}
+
+pub(crate) fn begin_document_font_face_set_load_cycle_for_document(
+    scope: &mut v8::PinScope<'_, '_>,
+    document: DomHandle,
+    cycle: crate::script_vm::web_fonts::DocumentWebFontLoadCycleId,
+) {
+    let Some(fonts) = existing_document_font_face_set(scope, document) else {
+        return;
+    };
+    let _ = crate::context_bootstrap::begin_document_font_face_set_load_cycle(scope, fonts, cycle);
+}
+
+pub(crate) fn settle_document_font_face_set_load_cycle_for_document(
+    scope: &mut v8::PinScope<'_, '_>,
+    document: DomHandle,
+    cycle: crate::script_vm::web_fonts::DocumentWebFontLoadCycleId,
+) {
+    let Some(fonts) = existing_document_font_face_set(scope, document) else {
+        return;
+    };
+    let _ = crate::context_bootstrap::settle_document_font_face_set_load_cycle(scope, fonts, cycle);
+}
 
 #[derive(Clone, Debug)]
 pub(super) enum OwnerFontFaceProjection {

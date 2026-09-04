@@ -5,13 +5,13 @@ use moli_layout::{
     LayoutError, LayoutFlushReason, LayoutNamespace, LayoutPassRequest, LayoutPosition,
     LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, PaintBlendMode,
     PaintCaptureRequest, PaintColor, PaintFragment, PaintRect, PaintSnapshot, PaintViewport,
-    ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutStyle, ScreenshotLayoutRequest,
-    build_layout_pass, build_screenshot_snapshot,
+    ReplacedMetrics, ReplacedNaturalSizing, ResolvedLayoutElementStyles, ResolvedLayoutStyle,
+    ScreenshotLayoutRequest, build_layout_pass, build_screenshot_snapshot,
 };
 use style::Atom;
 use taffy::{
     AlignContent, BoxSizing, Dimension, Display, FlexDirection, FlexWrap, Line, Rect, Size, Style,
-    style_helpers::{fr, length, line, percent},
+    style_helpers::{fr, length, line, percent, repeat},
 };
 
 const RED: PaintColor = PaintColor::new(1.0, 0.0, 0.0, 1.0);
@@ -57,10 +57,31 @@ impl FixtureNode {
             ),
             children: Vec::new(),
             replaced_metrics: Some(ReplacedMetrics {
-                intrinsic_width: Some(width),
-                intrinsic_height: Some(height),
-                intrinsic_ratio: Some(width / height),
-                ..ReplacedMetrics::default()
+                natural_sizing: Some(ReplacedNaturalSizing {
+                    width: Some(width),
+                    height: Some(height),
+                    ratio: Some(width / height),
+                }),
+            }),
+        }
+    }
+
+    fn ratio_only_svg(label: &'static str, ratio: f32) -> Self {
+        Self {
+            label,
+            semantics: LayoutElementSemantics::new(
+                LayoutNamespace::Svg,
+                "svg",
+                LayoutElementCategory::Generic,
+                Some(LayoutReplacedKind::Svg),
+            ),
+            children: Vec::new(),
+            replaced_metrics: Some(ReplacedMetrics {
+                natural_sizing: Some(ReplacedNaturalSizing {
+                    width: None,
+                    height: None,
+                    ratio: Some(ratio),
+                }),
             }),
         }
     }
@@ -299,6 +320,114 @@ fn explicit_and_implicit_grid_tracks_use_real_grid_layout() {
     assert_rect(
         solid_rect(&snapshot, BLUE),
         PaintRect::new(0.0, 170.0, 100.0, 30.0),
+    );
+}
+
+#[test]
+fn inline_grid_auto_repeat_uses_the_final_ratio_resolved_size() {
+    let source = FixtureSource {
+        nodes: vec![
+            FixtureNode::div("flow", vec![1]),
+            FixtureNode::div("grid", Vec::new()),
+        ],
+    };
+    let mut styles = FixtureStyles::default();
+    styles.0.insert(
+        0,
+        fixed_box(LayoutDisplay::Block, 200.0, 200.0, PaintColor::TRANSPARENT),
+    );
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::InlineGrid,
+            Style {
+                display: Display::Grid,
+                min_size: Size {
+                    width: Dimension::auto(),
+                    height: length(60.0),
+                },
+                aspect_ratio: Some(1.0),
+                grid_template_columns: vec![repeat("auto-fill", vec![length(50.0)])],
+                ..Style::default()
+            },
+            GREEN,
+        ),
+    );
+
+    let snapshot = render(&source, &mut styles, PaintViewport::new(200, 200, 1.0));
+    assert!(snapshot.diagnostics.is_empty());
+    assert_rect(
+        solid_rect(&snapshot, GREEN),
+        PaintRect::new(0.0, 0.0, 100.0, 100.0),
+    );
+}
+
+#[test]
+fn nested_grid_auto_repeat_resolves_percentage_minimum_through_ratio() {
+    let source = FixtureSource {
+        nodes: vec![
+            FixtureNode::div("flow", vec![1]),
+            FixtureNode::div("sizing container", vec![2]),
+            FixtureNode::div("percentage container", vec![3]),
+            FixtureNode::div("grid", Vec::new()),
+        ],
+    };
+    let mut styles = FixtureStyles::default();
+    styles.0.insert(
+        0,
+        fixed_box(LayoutDisplay::Block, 200.0, 200.0, PaintColor::TRANSPARENT),
+    );
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: Dimension::min_content(),
+                    height: length(100.0),
+                },
+                ..Style::default()
+            },
+            GREEN,
+        ),
+    );
+    styles.0.insert(
+        2,
+        resolved(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: Dimension::auto(),
+                    height: percent(1.0),
+                },
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        ),
+    );
+    styles.0.insert(
+        3,
+        resolved(
+            LayoutDisplay::Grid,
+            Style {
+                display: Display::Grid,
+                min_size: Size {
+                    width: Dimension::auto(),
+                    height: percent(0.6),
+                },
+                aspect_ratio: Some(1.0),
+                grid_template_columns: vec![repeat("auto-fill", vec![length(50.0)])],
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        ),
+    );
+
+    let snapshot = render(&source, &mut styles, PaintViewport::new(200, 200, 1.0));
+    assert!(snapshot.diagnostics.is_empty());
+    assert_rect(
+        solid_rect(&snapshot, GREEN),
+        PaintRect::new(0.0, 0.0, 100.0, 100.0),
     );
 }
 
@@ -874,6 +1003,135 @@ fn oversized_percentage_inline_iframe_is_not_clamped_to_the_line_width() {
         solid_rect(&snapshot, BLUE),
         PaintRect::new(0.0, 0.0, 250.0, 40.0),
     );
+}
+
+#[test]
+fn ratio_only_replaced_inline_stretches_its_margin_box_and_preserves_intrinsic_ratio() {
+    let source = FixtureSource {
+        nodes: vec![
+            FixtureNode::div("root", vec![1, 3]),
+            FixtureNode::div("content-box container", vec![2]),
+            FixtureNode::ratio_only_svg("content-box svg", 2.0),
+            FixtureNode::div("border-box container", vec![4]),
+            FixtureNode::ratio_only_svg("border-box svg", 2.0),
+        ],
+    };
+    let mut styles = FixtureStyles::default();
+    styles.0.insert(
+        0,
+        fixed_box(LayoutDisplay::Block, 300.0, 120.0, PaintColor::TRANSPARENT),
+    );
+    for node in [1, 3] {
+        styles.0.insert(
+            node,
+            fixed_box(
+                LayoutDisplay::InlineBlock,
+                130.0,
+                100.0,
+                PaintColor::TRANSPARENT,
+            ),
+        );
+    }
+    for (node, box_sizing) in [(2, BoxSizing::ContentBox), (4, BoxSizing::BorderBox)] {
+        styles.0.insert(
+            node,
+            resolved(
+                LayoutDisplay::Inline,
+                Style {
+                    box_sizing,
+                    margin: Rect {
+                        left: taffy::LengthPercentageAuto::length(7.0),
+                        right: taffy::LengthPercentageAuto::length(11.0),
+                        top: taffy::LengthPercentageAuto::length(5.0),
+                        bottom: taffy::LengthPercentageAuto::length(5.0),
+                    },
+                    border: Rect {
+                        left: length(3.0),
+                        right: length(5.0),
+                        top: length(13.0),
+                        bottom: length(17.0),
+                    },
+                    ..Style::default()
+                },
+                GREEN,
+            ),
+        );
+    }
+
+    let result = build_layout_pass(
+        &source,
+        &mut styles,
+        &mut DocumentLayoutServices::new(),
+        LayoutPassRequest::new(PaintViewport::new(300, 120, 1.0), LayoutFlushReason::Test),
+    )
+    .unwrap();
+    for node in [2, 4] {
+        let output = result
+            .source_output(node)
+            .expect("ratio-only SVG must produce a principal box");
+        let geometry = result
+            .box_geometry(output.principal_box.expect("missing principal SVG box"))
+            .expect("missing frozen SVG geometry");
+        assert_eq!(geometry.border_box.width, 112.0);
+        assert_eq!(geometry.border_box.height, 82.0);
+        assert_eq!(geometry.content_box.width, 104.0);
+        assert_eq!(geometry.content_box.height, 52.0);
+    }
+}
+
+#[test]
+fn absolutely_positioned_ratio_only_replaced_box_owns_its_available_space_sizing() {
+    let source = FixtureSource {
+        nodes: vec![
+            FixtureNode::div("containing block", vec![1]),
+            FixtureNode::ratio_only_svg("absolute ratio-only svg", 1.0),
+        ],
+    };
+    let mut styles = FixtureStyles::default();
+    styles.0.insert(
+        0,
+        fixed_box(LayoutDisplay::Block, 220.0, 190.0, PaintColor::TRANSPARENT)
+            .with_position(LayoutPosition::Relative),
+    );
+    styles.0.insert(
+        1,
+        resolved(
+            LayoutDisplay::Inline,
+            Style {
+                inset: Rect {
+                    left: length(20.0),
+                    top: length(30.0),
+                    right: taffy::LengthPercentageAuto::auto(),
+                    bottom: taffy::LengthPercentageAuto::auto(),
+                },
+                margin: Rect::length(5.0),
+                border: Rect::length(10.0),
+                ..Style::default()
+            },
+            GREEN,
+        )
+        .with_position(LayoutPosition::Absolute),
+    );
+
+    let result = build_layout_pass(
+        &source,
+        &mut styles,
+        &mut DocumentLayoutServices::new(),
+        LayoutPassRequest::new(PaintViewport::new(220, 190, 1.0), LayoutFlushReason::Test),
+    )
+    .unwrap();
+    let output = result
+        .source_output(1)
+        .expect("absolute ratio-only SVG must produce a principal box");
+    let geometry = result
+        .box_geometry(output.principal_box.expect("missing principal SVG box"))
+        .expect("missing frozen SVG geometry");
+    assert_eq!(geometry.layout_origin_in_document.x, 25.0);
+    assert_eq!(geometry.layout_origin_in_document.y, 35.0);
+    assert_eq!(geometry.border_box.width, 190.0);
+    assert_eq!(geometry.border_box.height, 190.0);
+    assert_eq!(geometry.content_box.width, 170.0);
+    assert_eq!(geometry.content_box.height, 170.0);
 }
 
 #[test]

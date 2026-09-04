@@ -11,6 +11,52 @@ pub enum LayoutSourceKind {
     Other,
 }
 
+/// Document mode that changes HTML layout and CSSOM View semantics.
+///
+/// The value is sampled once into a pass-local document context. Subtree and
+/// synthetic sources have no document context even when their nodes have an
+/// owner document.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum LayoutDocumentMode {
+    #[default]
+    NoQuirks,
+    LimitedQuirks,
+    Quirks,
+}
+
+/// Canonical document identities visible to one complete-document layout.
+///
+/// Keeping the element identities and mode in one value prevents subtree
+/// layout from accidentally inheriting document-element or body exceptions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct LayoutDocumentContext<N> {
+    document_element: N,
+    body: Option<N>,
+    mode: LayoutDocumentMode,
+}
+
+impl<N: Copy> LayoutDocumentContext<N> {
+    pub const fn new(document_element: N, body: Option<N>, mode: LayoutDocumentMode) -> Self {
+        Self {
+            document_element,
+            body,
+            mode,
+        }
+    }
+
+    pub const fn document_element(self) -> N {
+        self.document_element
+    }
+
+    pub const fn body(self) -> Option<N> {
+        self.body
+    }
+
+    pub const fn mode(self) -> LayoutDocumentMode {
+        self.mode
+    }
+}
+
 /// Namespace family needed by box construction and diagnostics.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LayoutNamespace {
@@ -404,20 +450,33 @@ impl LayoutPseudo {
     }
 }
 
-/// Replaced-element inputs known without decoding or querying a paint backend.
+/// Natural dimensions and aspect ratio exposed by replaced content.
 ///
-/// Attribute dimensions remain distinct from intrinsic dimensions because CSS
-/// replaced sizing gives them different precedence. An unavailable HTML image
-/// has no intrinsic dimensions and represents no content, while replaced
-/// categories with a CSS default object size (for example canvas) keep their
-/// category-specific fallback.
+/// Width, height, and ratio deliberately remain independent. In particular,
+/// an external SVG can have one natural dimension and no natural ratio; its
+/// concrete object size may use the CSS 300x150 default without manufacturing
+/// a ratio from that fallback. This mirrors Blink's `NaturalSizingInfo` model.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ReplacedNaturalSizing {
+    pub width: Option<f32>,
+    pub height: Option<f32>,
+    pub ratio: Option<f32>,
+}
+
+/// Natural replaced-element inputs owned by the DOM/resource layer.
+///
+/// HTML width/height presentation attributes are deliberately absent here:
+/// they enter layout through computed style. Canvas dimensions are different
+/// because they define the intrinsic bitmap and are converted to natural
+/// metrics before crossing this boundary.
+///
+/// `natural_sizing: None` means that an HTML image resource is unavailable and
+/// therefore represents no content. `Some(Default::default())` is distinct: it
+/// represents available content with no natural dimensions or ratio, for
+/// which CSS Images supplies the default concrete object size.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct ReplacedMetrics {
-    pub intrinsic_width: Option<f32>,
-    pub intrinsic_height: Option<f32>,
-    pub attribute_width: Option<f32>,
-    pub attribute_height: Option<f32>,
-    pub intrinsic_ratio: Option<f32>,
+    pub natural_sizing: Option<ReplacedNaturalSizing>,
 }
 
 /// Pass-local view of one renderer-owned decoded image resource.
@@ -426,8 +485,12 @@ pub struct ReplacedMetrics {
 /// but this value contains no DOM callback or retained layout state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct LayoutImageResource {
-    pub intrinsic_width: f32,
-    pub intrinsic_height: f32,
+    /// Sparse natural dimensions used by CSS Images sizing algorithms.
+    ///
+    /// This is already normalized for image-candidate density by the resource
+    /// owner. Default concrete dimensions never enter this record because
+    /// their constraint rectangle depends on the eventual paint consumer.
+    pub natural_sizing: ReplacedNaturalSizing,
     pub pixels: Option<Arc<moli_image::RgbaImage>>,
     pub svg: Option<Arc<moli_image::SvgImage>>,
 }
@@ -472,15 +535,14 @@ pub trait LayoutSource {
         Self: 'a;
 
     fn root(&self) -> Self::NodeId;
-    /// Whether the view root is the document element associated with its
-    /// layout viewport.
+    /// Returns canonical document state only for a complete document-element
+    /// source.
     ///
     /// Subtree and synthetic sources also receive an internal viewport-sized
-    /// containing block. They must return `false`: document-element CSS
-    /// exceptions depend on node identity, not on occupying index zero in a
-    /// one-shot layout tree.
-    fn root_is_document_element(&self) -> bool {
-        false
+    /// containing block, but must return `None`: HTML layout exceptions depend
+    /// on canonical document identity, not on occupying index zero.
+    fn document_context(&self) -> Option<LayoutDocumentContext<Self::NodeId>> {
+        None
     }
     /// Returns the parent in the same flattened tree exposed by [`Self::flat_children`].
     /// The view root must return `None`, even when it has a DOM parent outside the view.

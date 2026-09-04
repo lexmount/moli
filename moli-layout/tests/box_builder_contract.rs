@@ -6,9 +6,9 @@ use moli_layout::{
     LayoutFormControlKind, LayoutInlineAlignment, LayoutInputControlKind, LayoutListRole,
     LayoutNamespace, LayoutPosition, LayoutPseudo, LayoutReplacedKind, LayoutSource,
     LayoutSourceKind, LayoutStyleResolver, LayoutTableRole, PaintColor, PaintFragment, PaintRect,
-    PaintViewport, ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
-    ResolvedLayoutStyle, ScreenshotLayoutRequest, build_layout_world, build_screenshot_snapshot,
-    normalize_layout_source,
+    PaintViewport, ReplacedMetrics, ReplacedNaturalSizing, ResolvedLayoutElementStyles,
+    ResolvedLayoutPseudoStyle, ResolvedLayoutStyle, ScreenshotLayoutRequest, build_layout_world,
+    build_screenshot_snapshot, normalize_layout_source,
 };
 use style::Atom;
 use taffy::{Dimension, Display, FlexDirection, Rect, Size, Style, style_helpers::length};
@@ -97,11 +97,11 @@ impl TestNode {
                 Some(LayoutReplacedKind::Image),
             )),
             replaced_metrics: Some(ReplacedMetrics {
-                intrinsic_width: Some(width),
-                intrinsic_height: Some(height),
-                attribute_width: None,
-                attribute_height: None,
-                intrinsic_ratio: (height > 0.0).then_some(width / height),
+                natural_sizing: Some(ReplacedNaturalSizing {
+                    width: Some(width),
+                    height: Some(height),
+                    ratio: (height > 0.0).then_some(width / height),
+                }),
             }),
         }
     }
@@ -582,6 +582,43 @@ fn grid_direct_text_uses_one_anonymous_grid_item_and_keeps_text_boundaries() {
     assert_eq!(text_item.children().len(), 3);
     assert_eq!(world.source_box(2), Some(text_item.children()[1]));
     assert!(root.capability_diagnostics().is_empty());
+}
+
+#[test]
+fn flex_and_grid_distinguish_css_whitespace_from_non_breaking_space_items() {
+    let cases = [
+        (LayoutDisplay::Flex, LayoutBoxKind::AnonymousFlexItem),
+        (LayoutDisplay::Grid, LayoutBoxKind::AnonymousGridItem),
+    ];
+
+    for (container_display, anonymous_kind) in cases {
+        let source = TestSource {
+            root: 0,
+            nodes: vec![
+                TestNode::element("root", vec![1, 2, 3]),
+                TestNode::text("css-whitespace", " \t\n"),
+                TestNode::element("item", Vec::new()),
+                TestNode::text("non-breaking-space", "\u{00a0}"),
+            ],
+        };
+        let mut styles = TestStyles::default();
+        styles.primary.insert(0, style(container_display));
+        styles.primary.insert(2, style(LayoutDisplay::Block));
+
+        let world = build_layout_world(&source, &mut styles).unwrap();
+        let root = world.box_by_id(world.root()).unwrap();
+        assert_eq!(root.children().len(), 2, "display={container_display:?}");
+        assert_eq!(world.source_box(1), None, "display={container_display:?}");
+        assert_eq!(
+            world.box_by_id(root.children()[1]).unwrap().kind(),
+            anonymous_kind,
+            "display={container_display:?}",
+        );
+        assert!(
+            world.source_box(3).is_some(),
+            "display={container_display:?}"
+        );
+    }
 }
 
 #[test]

@@ -1,12 +1,16 @@
 use std::collections::HashMap;
 
-use moli_layout::{DocumentLayoutServices, FrozenLayoutTree, LayoutViewport};
+use moli_layout::{
+    DocumentFontMetricsProvider, DocumentLayoutServices, FrozenLayoutTree, LayoutViewport,
+};
 
 use super::layout_snapshot::LatestLayoutTreeCache;
 use crate::{
     css_resource_urls::{CompletedStylesheetWebFont, StylesheetLoadBlockingResource},
     document_runtime::DomHandle,
-    script_vm::web_fonts::{DocumentWebFontCompletion, DocumentWebFontState},
+    script_vm::web_fonts::{
+        DocumentWebFontCompletion, DocumentWebFontLoadCycleId, DocumentWebFontState,
+    },
     style_engine::{StyleViewport, StylesheetResourceGeneration, StyloStyleEnvironment},
 };
 
@@ -35,7 +39,6 @@ struct CachedInferredFrameStyleViewport {
 /// The single snapshot slot records the exact root Document it was built for;
 /// embedded Document member trees remain recursively owned by that same
 /// snapshot instead of becoming separately keyed cache entries.
-#[derive(Default)]
 pub(super) struct DocumentLayoutState {
     services: DocumentLayoutServices,
     embedded_document_services: HashMap<DomHandle, DocumentLayoutServices>,
@@ -59,6 +62,23 @@ pub(super) struct DocumentLayoutState {
 }
 
 impl DocumentLayoutState {
+    pub(super) fn new(font_metrics_provider: DocumentFontMetricsProvider) -> Self {
+        Self {
+            services: DocumentLayoutServices::with_font_metrics_provider(font_metrics_provider),
+            embedded_document_services: HashMap::new(),
+            web_fonts: DocumentWebFontState::default(),
+            web_font_resource_generation: None,
+            visual_state_generation: 0,
+            latest_layout: LatestLayoutTreeCache::default(),
+            frame_viewports: HashMap::new(),
+            inferred_frame_style_viewports: HashMap::new(),
+            #[cfg(test)]
+            inferred_frame_style_viewport_cache_hits: 0,
+            #[cfg(test)]
+            inferred_frame_style_viewport_cache_misses: 0,
+        }
+    }
+
     pub(super) fn web_font_resources_are_current(
         &self,
         generation: StylesheetResourceGeneration,
@@ -85,12 +105,18 @@ impl DocumentLayoutState {
         &mut self,
         document: DomHandle,
         main_document: DomHandle,
+        font_metrics_provider: DocumentFontMetricsProvider,
         consume: impl FnOnce(
             &mut DocumentLayoutServices,
             &mut HashMap<DomHandle, DocumentLayoutServices>,
         ) -> T,
     ) -> T {
         if document == main_document {
+            debug_assert!(
+                self.services
+                    .shares_font_registry_with(&font_metrics_provider),
+                "main layout services must share the style world's document font registry"
+            );
             return consume(&mut self.services, &mut self.embedded_document_services);
         }
 
@@ -100,7 +126,10 @@ impl DocumentLayoutState {
         let mut services = self
             .embedded_document_services
             .remove(&document)
-            .unwrap_or_default();
+            .filter(|services| services.shares_font_registry_with(&font_metrics_provider))
+            .unwrap_or_else(|| {
+                DocumentLayoutServices::with_font_metrics_provider(font_metrics_provider)
+            });
         let output = consume(&mut services, &mut self.embedded_document_services);
         self.embedded_document_services.insert(document, services);
         output
@@ -227,16 +256,46 @@ impl DocumentLayoutState {
     pub(super) fn retain_active_slots<'a>(
         &mut self,
         resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
-    ) {
+    ) -> bool {
+        let previous_count = self.services.web_font_count();
         self.web_fonts
             .retain_active_slots(resources, &mut self.services);
+        let changed = self.services.web_font_count() != previous_count;
+        if changed {
+            self.mark_visual_state_dirty();
+        }
+        changed
     }
 
     pub(super) fn admit(
         &mut self,
         resource: StylesheetLoadBlockingResource,
-    ) -> Option<StylesheetLoadBlockingResource> {
-        self.web_fonts.admit(resource, &mut self.services)
+    ) -> (Option<StylesheetLoadBlockingResource>, bool) {
+        let previous_count = self.services.web_font_count();
+        let resource = self.web_fonts.admit(resource, &mut self.services);
+        let changed = self.services.web_font_count() != previous_count;
+        if changed {
+            self.mark_visual_state_dirty();
+        }
+        (resource, changed)
+    }
+
+    pub(super) fn observe_web_font_ready<'a>(
+        &mut self,
+        resources: impl IntoIterator<Item = &'a StylesheetLoadBlockingResource>,
+    ) -> Option<DocumentWebFontLoadCycleId> {
+        self.web_fonts.observe_ready(resources)
+    }
+
+    pub(super) fn active_web_font_load_cycle(&self) -> Option<DocumentWebFontLoadCycleId> {
+        self.web_fonts.active_load_cycle()
+    }
+
+    pub(super) fn complete_web_font_cycle_after_layout(
+        &mut self,
+    ) -> Option<DocumentWebFontLoadCycleId> {
+        let cycle = self.web_fonts.cycle_ready_for_layout()?;
+        self.web_fonts.complete_after_layout(cycle).then_some(cycle)
     }
 
     pub(super) fn complete(

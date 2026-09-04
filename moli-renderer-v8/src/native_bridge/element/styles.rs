@@ -346,7 +346,9 @@ fn style_object_computation_context<'s>(
     let read_document = style_object_read_document(scope, style);
     let viewport = live_computed_style_viewport(scope, style)
         .unwrap_or_else(|| style_object_viewport(scope, style));
-    StyleComputationContext::new(viewport).with_read_document(read_document)
+    StyleComputationContext::new(viewport)
+        .with_read_document(read_document)
+        .with_resolved_values()
 }
 
 fn live_computed_style_viewport<'s>(

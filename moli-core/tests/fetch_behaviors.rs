@@ -1579,6 +1579,27 @@ async fn fetch_with_domstable_waits_for_delayed_fetch_dom_mutation() -> Result<(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn fetch_with_done_waits_for_post_load_fetch_dom_mutation() -> Result<()> {
+    let server = FixtureServer::spawn().await?;
+    let browser = Browser::new(AppConfig::default())?;
+
+    let page = browser
+        .fetch_with_wait_until(
+            &server.url("/wait-until-delayed-fetch"),
+            RenderedDomWaitUntil::Done,
+            Duration::from_secs(5),
+        )
+        .await?;
+    let html = page.serialize_html_async().await?;
+    assert!(html.contains("data-state=\"settled\""), "html={html}");
+    assert!(html.contains("id=\"late\""), "html={html}");
+    assert!(html.contains(">settled<"), "html={html}");
+
+    server.shutdown().await;
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn fetch_with_domstable_waits_for_late_complete_dom_mutation() -> Result<()> {
     let server = FixtureServer::spawn().await?;
     let browser = Browser::new(AppConfig::default())?;

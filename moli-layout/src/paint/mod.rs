@@ -764,7 +764,7 @@ fn project_box_text_clip_mask<N>(
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &projection.world.boxes[id.index()];
-    if !layout_box.style.is_visible() {
+    if !layout_box.style.is_visible() || layout_box.skips_contents_for_content_visibility() {
         return;
     }
     let geometry = &projection.boxes[id.index()];
@@ -857,7 +857,7 @@ fn project_box_contents<N>(
     N: Copy + Debug + Eq + Hash,
 {
     let layout_box = &projection.world.boxes[id.index()];
-    if !layout_box.style.is_visible() {
+    if !layout_box.style.is_visible() || layout_box.skips_contents_for_content_visibility() {
         return;
     }
     let geometry = &projection.boxes[id.index()];
@@ -902,7 +902,7 @@ fn unavailable_replaced_content_paint<N>(
 where
     N: Copy + Debug + Eq + Hash,
 {
-    if !layout_box.is_replaced() {
+    if !layout_box.is_replaced() || layout_box.skips_contents_for_content_visibility() {
         return None;
     }
     if layout_box

@@ -428,6 +428,7 @@ struct PendingInnerTextNode {
     white_space: InnerTextWhiteSpace,
     visible: bool,
     text_participates: bool,
+    allow_unfragmented_text: bool,
     parent_groups_table_cells: bool,
     prepared_style: Option<ElementRenderedStyle>,
 }
@@ -588,6 +589,7 @@ fn append_inner_text(
         white_space: InnerTextWhiteSpace::Collapse,
         visible: true,
         text_participates: true,
+        allow_unfragmented_text: false,
         parent_groups_table_cells: false,
         prepared_style: root_style,
     })];
@@ -621,7 +623,8 @@ fn append_inner_text(
         };
 
         if let Some(text) = node.as_text() {
-            let has_rendered_text = rendered_text_sources.contains(&task.handle)
+            let has_rendered_text = task.allow_unfragmented_text
+                || rendered_text_sources.contains(&task.handle)
                 || text.data().chars().all(char::is_whitespace);
             if task.visible && task.text_participates && has_rendered_text {
                 task.transform
@@ -642,6 +645,14 @@ fn append_inner_text(
         {
             continue;
         }
+
+        // Chromium keeps collecting innerText below a hidden table caption
+        // even though its contents produce no paint fragments. Reuse the
+        // rendered-state applicability decision for that CSSOM exception and
+        // carry it down the traversal without pretending the text was painted.
+        let allow_unfragmented_text = task.allow_unfragmented_text
+            || (style.content_visibility == ElementContentVisibility::Hidden
+                && !style.content_visibility_applicable);
 
         // These containers do not expose normal rendered children. A direct
         // read of a non-rendered root has already taken the textContent
@@ -769,6 +780,7 @@ fn append_inner_text(
                             white_space,
                             visible,
                             text_participates,
+                            allow_unfragmented_text,
                             parent_groups_table_cells,
                             prepared_style: None,
                         })

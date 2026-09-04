@@ -15,17 +15,285 @@ use std::{
 };
 
 use parley::{BreakReason, InlineBox, InlineBoxKind, Layout, PositionedLayoutItem, TextStyle};
-use taffy::{MaybeResolve as _, Point, Size};
+use taffy::{
+    Direction, LogicalBoxStrut, LogicalOffset, LogicalSize, MaybeResolve as _, Point, Rect, Size,
+    WritingDirection, WritingMode,
+};
 
 use crate::{
-    LayoutBoxId, LayoutBoxKind, LayoutWorld, PaintColor, PaintRect,
+    LayoutBoxId, LayoutBoxKind, LayoutWorld, PaintColor, PaintEdgeSizes, PaintRect,
     style::{
-        InlineDirection, InlineTextTransform, InlineUnicodeBidi, InlineVerticalAlign,
-        InlineWhiteSpaceCollapse, LayoutInlineAlignment,
+        InlineBaselineType, InlineDirection, InlineTextTransform, InlineUnicodeBidi,
+        InlineVerticalAlign, InlineWhiteSpaceCollapse, LayoutInlineAlignment,
     },
     stylo_to_parley::TextBrush,
     text::{DocumentLayoutServices, InlineFontMetrics},
 };
+
+/// A rectangle in the IFC owner's flow-relative coordinate space.
+///
+/// Parley always exposes a horizontal `x/y` surface, but those values mean
+/// inline/block offsets rather than physical left/top once the owner uses a
+/// vertical writing mode. Keeping that distinction in the type system avoids
+/// reinterpreting a physical height as an inline width at individual call
+/// sites.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct FlowRelativeRect {
+    pub(crate) inline_offset: f32,
+    pub(crate) block_offset: f32,
+    pub(crate) inline_size: f32,
+    pub(crate) block_size: f32,
+}
+
+impl FlowRelativeRect {
+    pub(crate) const fn new(
+        inline_offset: f32,
+        block_offset: f32,
+        inline_size: f32,
+        block_size: f32,
+    ) -> Self {
+        Self {
+            inline_offset,
+            block_offset,
+            inline_size,
+            block_size,
+        }
+    }
+
+    fn line_relative_rect(self, child: Self) -> LineRelativeRect {
+        LineRelativeRect::new(
+            child.inline_offset - self.inline_offset,
+            child.block_offset - self.block_offset,
+            child.inline_size,
+            child.block_size,
+        )
+    }
+}
+
+/// Coordinates of an item relative to its containing line box.
+///
+/// Parley has already performed bidi reordering, so `inline_offset` is a
+/// visual low-coordinate offset. `line_over_offset` is measured from the
+/// line-over side. The latter differs from flow-relative block-start in
+/// `vertical-lr`, matching Blink's `ToLineWritingMode()` boundary.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct LineRelativeRect {
+    pub(crate) inline_offset: f32,
+    pub(crate) line_over_offset: f32,
+    pub(crate) inline_size: f32,
+    pub(crate) block_size: f32,
+}
+
+impl LineRelativeRect {
+    pub(crate) const fn new(
+        inline_offset: f32,
+        line_over_offset: f32,
+        inline_size: f32,
+        block_size: f32,
+    ) -> Self {
+        Self {
+            inline_offset,
+            line_over_offset,
+            inline_size,
+            block_size,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct LineRelativeOffset {
+    pub(crate) inline_offset: f32,
+    pub(crate) line_over_offset: f32,
+}
+
+impl LineRelativeOffset {
+    pub(crate) const fn new(inline_offset: f32, line_over_offset: f32) -> Self {
+        Self {
+            inline_offset,
+            line_over_offset,
+        }
+    }
+}
+
+/// Converts flow-relative line geometry exactly once at the physical fragment
+/// boundary.
+///
+/// The element's bidi direction is intentionally absent: Parley has already
+/// resolved visual inline ordering. Re-applying it here would mirror RTL
+/// content twice. Writing mode still selects the physical axes and block-flow
+/// direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct InlineCoordinateSpace {
+    writing_mode: WritingMode,
+}
+
+impl InlineCoordinateSpace {
+    pub(crate) const fn new(writing_mode: WritingMode) -> Self {
+        Self { writing_mode }
+    }
+
+    pub(crate) fn to_logical_size<T>(self, size: Size<T>) -> LogicalSize<T> {
+        self.writing_mode.to_logical(size)
+    }
+
+    pub(crate) fn to_physical_size<T>(self, size: LogicalSize<T>) -> Size<T> {
+        self.writing_mode.to_physical(size)
+    }
+
+    pub(crate) fn to_line_relative_box_strut<T: Copy>(self, edges: Rect<T>) -> LogicalBoxStrut<T> {
+        self.line_writing_direction().to_logical_box_strut(edges)
+    }
+
+    pub(crate) fn to_physical_flow_point(
+        self,
+        offset: LogicalOffset<f32>,
+        inner_size: Size<f32>,
+        outer_size: Size<f32>,
+    ) -> Point<f32> {
+        self.flow_writing_direction()
+            .converter(outer_size)
+            .to_physical_point(offset, inner_size)
+    }
+
+    pub(crate) fn to_physical_flow_rect(
+        self,
+        rect: FlowRelativeRect,
+        outer_size: Size<f32>,
+    ) -> PaintRect {
+        let size = self.to_physical_size(LogicalSize {
+            inline_size: rect.inline_size,
+            block_size: rect.block_size,
+        });
+        let point = self.to_physical_flow_point(
+            LogicalOffset {
+                inline_offset: rect.inline_offset,
+                block_offset: rect.block_offset,
+            },
+            size,
+            outer_size,
+        );
+        PaintRect::new(point.x, point.y, size.width, size.height)
+    }
+
+    pub(crate) fn to_physical_line_rect(
+        self,
+        line: FlowRelativeRect,
+        child: LineRelativeRect,
+        outer_size: Size<f32>,
+    ) -> PaintRect {
+        let physical_line = self.to_physical_flow_rect(line, outer_size);
+        let child_size = self.to_physical_size(LogicalSize {
+            inline_size: child.inline_size,
+            block_size: child.block_size,
+        });
+        let child_offset = self
+            .line_writing_direction()
+            .converter(Size {
+                width: physical_line.width,
+                height: physical_line.height,
+            })
+            .to_physical_point(
+                LogicalOffset {
+                    inline_offset: child.inline_offset,
+                    block_offset: child.line_over_offset,
+                },
+                child_size,
+            );
+        PaintRect::new(
+            physical_line.x + child_offset.x,
+            physical_line.y + child_offset.y,
+            child_size.width,
+            child_size.height,
+        )
+    }
+
+    pub(crate) fn to_physical_line_point(
+        self,
+        line: FlowRelativeRect,
+        child: LineRelativeOffset,
+        inner_size: Size<f32>,
+        outer_size: Size<f32>,
+    ) -> Point<f32> {
+        let physical_line = self.to_physical_flow_rect(line, outer_size);
+        let child_offset = self
+            .line_writing_direction()
+            .converter(Size {
+                width: physical_line.width,
+                height: physical_line.height,
+            })
+            .to_physical_point(
+                LogicalOffset {
+                    inline_offset: child.inline_offset,
+                    block_offset: child.line_over_offset,
+                },
+                inner_size,
+            );
+        Point {
+            x: physical_line.x + child_offset.x,
+            y: physical_line.y + child_offset.y,
+        }
+    }
+
+    pub(crate) fn to_physical_line_baseline(
+        self,
+        baseline: InlineBaselinePlacement,
+        outer_size: Size<f32>,
+    ) -> Point<Option<f32>> {
+        let point = self.to_physical_line_point(
+            baseline.line,
+            LineRelativeOffset::new(0.0, baseline.block_offset - baseline.line.block_offset),
+            Size::ZERO,
+            outer_size,
+        );
+        if self.writing_mode.is_horizontal() {
+            Point {
+                x: None,
+                y: Some(point.y),
+            }
+        } else {
+            Point {
+                x: Some(point.x),
+                y: None,
+            }
+        }
+    }
+
+    pub(crate) fn to_line_block_baseline(
+        self,
+        baseline: Point<Option<f32>>,
+        fragment_size: Size<f32>,
+    ) -> Option<f32> {
+        let physical = if self.writing_mode.is_horizontal() {
+            Point {
+                x: 0.0,
+                y: baseline.y?,
+            }
+        } else {
+            Point {
+                x: baseline.x?,
+                y: 0.0,
+            }
+        };
+        Some(
+            self.line_writing_direction()
+                .converter(fragment_size)
+                .to_logical_point(physical, Size::ZERO)
+                .block_offset,
+        )
+    }
+
+    const fn flow_writing_direction(self) -> WritingDirection {
+        WritingDirection::new(self.writing_mode, Direction::Ltr)
+    }
+
+    const fn line_writing_direction(self) -> WritingDirection {
+        let writing_mode = match self.writing_mode {
+            WritingMode::VerticalLr => WritingMode::VerticalRl,
+            writing_mode => writing_mode,
+        };
+        WritingDirection::new(writing_mode, Direction::Ltr)
+    }
+}
 
 /// Resolve the relative inset applied after Parley has positioned an atomic
 /// inline box. Taffy cannot do this itself because atomic IFC children are
@@ -34,7 +302,7 @@ use crate::{
 pub(crate) fn relative_atomic_inset_offset(
     style: &taffy::Style<style::Atom>,
     containing_block_size: Size<f32>,
-    container_direction: InlineDirection,
+    writing_direction: WritingDirection,
 ) -> Point<f32> {
     let inset = taffy::Rect {
         left: style.inset.left.maybe_resolve(
@@ -54,24 +322,20 @@ pub(crate) fn relative_atomic_inset_offset(
             crate::style::resolve_stylo_calc_value,
         ),
     };
-    Point {
-        x: if container_direction == InlineDirection::Rtl {
-            inset
-                .right
-                .map(|value| -value)
-                .or(inset.left)
-                .unwrap_or(0.0)
-        } else {
-            inset
-                .left
-                .or(inset.right.map(|value| -value))
-                .unwrap_or(0.0)
-        },
-        y: inset
-            .top
-            .or(inset.bottom.map(|value| -value))
+    let logical = writing_direction.to_logical_box_strut(inset);
+    let offset = LogicalOffset {
+        inline_offset: logical
+            .inline_start
+            .or_else(|| logical.inline_end.map(|value| -value))
             .unwrap_or(0.0),
-    }
+        block_offset: logical
+            .block_start
+            .or_else(|| logical.block_end.map(|value| -value))
+            .unwrap_or(0.0),
+    };
+    writing_direction
+        .converter(Size::ZERO)
+        .to_physical_point(offset, Size::ZERO)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -136,6 +400,10 @@ pub(crate) struct InlineStructuralBox {
 #[derive(Debug)]
 pub(crate) struct InlineFormattingContext {
     pub(crate) root_style: LayoutBoxId,
+    /// Baseline protocol of the IFC owner. Parley's numeric surface is always
+    /// horizontal, so baseline synthesis must remain an explicit CSS writing-
+    /// mode decision rather than inheriting Parley's physical bottom edge.
+    pub(crate) baseline_type: InlineBaselineType,
     /// Reusable Parley layout for intrinsic and final-width probes. Line
     /// breaking replaces only Parley's line output while retaining the shaped
     /// runs, clusters, glyphs, and their allocations, so probes must not clone
@@ -267,7 +535,7 @@ pub(crate) enum InlineSelection {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct InlineLinePlacement {
     pub(crate) line_index: usize,
-    pub(crate) rect: PaintRect,
+    pub(crate) rect: FlowRelativeRect,
     pub(crate) baseline: f32,
     /// CSS phantom line boxes retain positions for their inline descendants,
     /// but do not contribute height, baselines, or block margin-collapse
@@ -285,9 +553,27 @@ pub(crate) struct InlineLinePlacement {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub(crate) struct InlineLineMetrics {
     pub(crate) line_expansion: f32,
-    pub(crate) first_baseline: Option<f32>,
-    pub(crate) last_baseline: Option<f32>,
+    pub(crate) first_baseline: Option<InlineBaselinePlacement>,
+    pub(crate) last_baseline: Option<InlineBaselinePlacement>,
     pub(crate) has_non_phantom_line: bool,
+}
+
+/// A line baseline retained in the IFC owner's flow coordinate space.
+///
+/// The line rectangle is part of the value because vertical-lr progresses
+/// lines from the physical left while a line's over-side remains the physical
+/// right. A scalar block offset cannot preserve both facts.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct InlineBaselinePlacement {
+    pub(crate) line: FlowRelativeRect,
+    pub(crate) block_offset: f32,
+}
+
+impl InlineBaselinePlacement {
+    pub(crate) fn translate_block_axis(&mut self, offset: f32) {
+        self.line.block_offset += offset;
+        self.block_offset += offset;
+    }
 }
 
 impl InlineLinePlacement {
@@ -306,7 +592,7 @@ impl InlineLinePlacement {
     }
 
     pub(crate) fn translate_block_axis(&mut self, offset: f32) {
-        self.rect.y += offset;
+        self.rect.block_offset += offset;
         self.baseline += offset;
         self.content_offset += offset;
         for item_offset in &mut self.item_offsets {
@@ -319,6 +605,29 @@ impl InlineLinePlacement {
             box_placement.top += offset;
         }
     }
+}
+
+/// Returns one final line box in the IFC owner's flow-relative coordinates.
+///
+/// Parley exposes a horizontal numeric surface even for vertical writing. Its
+/// x coordinate is the visual inline offset and its y coordinate is the block
+/// offset; callers must not reinterpret those values as physical coordinates.
+pub(crate) fn flow_relative_line_rect(
+    line: &parley::Line<'_, TextBrush>,
+    placement: Option<&InlineLinePlacement>,
+) -> FlowRelativeRect {
+    placement.map_or_else(
+        || {
+            let metrics = line.metrics();
+            FlowRelativeRect::new(
+                metrics.inline_min_coord + metrics.offset,
+                metrics.block_min_coord,
+                metrics.advance,
+                (metrics.block_max_coord - metrics.block_min_coord).max(0.0),
+            )
+        },
+        |placement| placement.rect,
+    )
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -378,7 +687,6 @@ pub(crate) struct InlineLineFragment {
     /// Conservative glyph/decoration/shadow ink used only by capture culling.
     /// CSSOM line geometry continues to use `rect`.
     pub(crate) paint_bounds: InlinePaintBounds,
-    pub(crate) baseline: f32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -418,10 +726,150 @@ pub(crate) struct InlineBoxFragment {
     pub(crate) has_end_edge: bool,
 }
 
+/// Physical box-model geometry for one fragment of a non-atomic inline box.
+///
+/// Parley includes the logical inline-axis edge contributions in its advance,
+/// while the line box supplies the structural box's block-axis font extent.
+/// Resolving both facts here keeps paint, CSSOM geometry, hit testing, and
+/// positioned containing blocks on one box-model definition.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct InlineFragmentBoxGeometry {
+    pub(crate) margin_rect: PaintRect,
+    pub(crate) border_rect: PaintRect,
+    pub(crate) padding_rect: PaintRect,
+    pub(crate) content_rect: PaintRect,
+    pub(crate) border_widths: PaintEdgeSizes,
+    pub(crate) padding_widths: PaintEdgeSizes,
+}
+
+pub(crate) fn inline_fragment_box_geometry(
+    fragment: &InlineBoxFragment,
+    writing_direction: WritingDirection,
+    margin: Rect<f32>,
+    padding: Rect<f32>,
+    border: Rect<f32>,
+) -> InlineFragmentBoxGeometry {
+    let logical_margin = writing_direction.to_logical_box_strut(margin);
+    let logical_padding = writing_direction.to_logical_box_strut(padding);
+    let logical_border = writing_direction.to_logical_box_strut(border);
+
+    let included_inline_margin = writing_direction.to_physical_box_strut(LogicalBoxStrut {
+        inline_start: if fragment.has_start_edge {
+            logical_margin.inline_start
+        } else {
+            0.0
+        },
+        inline_end: if fragment.has_end_edge {
+            logical_margin.inline_end
+        } else {
+            0.0
+        },
+        block_start: 0.0,
+        block_end: 0.0,
+    });
+    let block_expansion = writing_direction.to_physical_box_strut(LogicalBoxStrut {
+        inline_start: 0.0,
+        inline_end: 0.0,
+        block_start: (logical_padding.block_start + logical_border.block_start).max(0.0),
+        block_end: (logical_padding.block_end + logical_border.block_end).max(0.0),
+    });
+    let border_rect = PaintRect::new(
+        fragment.rect.x + included_inline_margin.left - block_expansion.left,
+        fragment.rect.y + included_inline_margin.top - block_expansion.top,
+        (fragment.rect.width - included_inline_margin.left - included_inline_margin.right
+            + block_expansion.left
+            + block_expansion.right)
+            .max(0.0),
+        (fragment.rect.height - included_inline_margin.top - included_inline_margin.bottom
+            + block_expansion.top
+            + block_expansion.bottom)
+            .max(0.0),
+    );
+
+    let painted_border = writing_direction.to_physical_box_strut(LogicalBoxStrut {
+        inline_start: fragment
+            .has_start_edge
+            .then_some(logical_border.inline_start),
+        inline_end: fragment.has_end_edge.then_some(logical_border.inline_end),
+        block_start: Some(logical_border.block_start),
+        block_end: Some(logical_border.block_end),
+    });
+    let painted_padding = writing_direction.to_physical_box_strut(LogicalBoxStrut {
+        inline_start: fragment
+            .has_start_edge
+            .then_some(logical_padding.inline_start),
+        inline_end: fragment.has_end_edge.then_some(logical_padding.inline_end),
+        block_start: Some(logical_padding.block_start),
+        block_end: Some(logical_padding.block_end),
+    });
+    let border_widths = nonnegative_physical_edge_sizes(painted_border);
+    let padding_widths = nonnegative_physical_edge_sizes(painted_padding);
+    let padding_rect = inset_physical_rect(border_rect, border_widths);
+    let content_rect = inset_physical_rect(padding_rect, padding_widths);
+
+    let fragment_margin = writing_direction.to_physical_box_strut(LogicalBoxStrut {
+        inline_start: fragment
+            .has_start_edge
+            .then_some(logical_margin.inline_start),
+        inline_end: fragment.has_end_edge.then_some(logical_margin.inline_end),
+        block_start: Some(logical_margin.block_start),
+        block_end: Some(logical_margin.block_end),
+    });
+    let margin_rect =
+        expand_physical_rect(border_rect, signed_physical_edge_sizes(fragment_margin));
+
+    InlineFragmentBoxGeometry {
+        margin_rect,
+        border_rect,
+        padding_rect,
+        content_rect,
+        border_widths,
+        padding_widths,
+    }
+}
+
+fn nonnegative_physical_edge_sizes(edges: Rect<Option<f32>>) -> PaintEdgeSizes {
+    PaintEdgeSizes::new(
+        edges.top.unwrap_or(0.0).max(0.0),
+        edges.right.unwrap_or(0.0).max(0.0),
+        edges.bottom.unwrap_or(0.0).max(0.0),
+        edges.left.unwrap_or(0.0).max(0.0),
+    )
+}
+
+fn signed_physical_edge_sizes(edges: Rect<Option<f32>>) -> PaintEdgeSizes {
+    PaintEdgeSizes::new(
+        edges.top.unwrap_or(0.0),
+        edges.right.unwrap_or(0.0),
+        edges.bottom.unwrap_or(0.0),
+        edges.left.unwrap_or(0.0),
+    )
+}
+
+fn inset_physical_rect(rect: PaintRect, edges: PaintEdgeSizes) -> PaintRect {
+    PaintRect::new(
+        rect.x + edges.left,
+        rect.y + edges.top,
+        (rect.width - edges.left - edges.right).max(0.0),
+        (rect.height - edges.top - edges.bottom).max(0.0),
+    )
+}
+
+fn expand_physical_rect(rect: PaintRect, edges: PaintEdgeSizes) -> PaintRect {
+    PaintRect::new(
+        rect.x - edges.left,
+        rect.y - edges.top,
+        (rect.width + edges.left + edges.right).max(0.0),
+        (rect.height + edges.top + edges.bottom).max(0.0),
+    )
+}
+
 pub(crate) fn build_inline_fragments(
     context: &InlineFormattingContext,
     layout: &Layout<TextBrush>,
     line_placements: &[InlineLinePlacement],
+    coordinates: InlineCoordinateSpace,
+    content_box_size: Size<f32>,
 ) -> InlineFragments {
     // Binary overlap lookup relies on both endpoints being monotonic. Validate
     // each immutable normalization product once, rather than rescanning the
@@ -429,6 +877,7 @@ pub(crate) fn build_inline_fragments(
     debug_assert!(output_ranges_are_monotonic(&context.text_units));
     debug_assert!(output_ranges_are_monotonic(&context.source_map));
     let mut fragments = InlineFragments::default();
+    let mut flow_lines = Vec::with_capacity(layout.lines().len());
     let mut box_fragments = HashMap::<(usize, usize), FragmentAccumulator>::new();
     let mut source_fragments = HashMap::<SourceFragmentKey, FragmentAccumulator>::new();
     let style_paint_outsets = layout
@@ -442,27 +891,18 @@ pub(crate) fn build_inline_fragments(
         let placement = line_placements
             .get(line_index)
             .filter(|placement| placement.line_index == line_index);
-        let line_rect = placement.map_or_else(
-            || {
-                PaintRect::new(
-                    metrics.inline_min_coord + metrics.offset,
-                    metrics.block_min_coord,
-                    metrics.advance,
-                    (metrics.block_max_coord - metrics.block_min_coord).max(0.0),
-                )
-            },
-            |placement| placement.rect,
-        );
+        let line_rect = flow_relative_line_rect(&line, placement);
+        flow_lines.push(line_rect);
+        let physical_line_rect = coordinates.to_physical_flow_rect(line_rect, content_box_size);
         fragments.lines.push(InlineLineFragment {
             line_index,
-            rect: line_rect,
+            rect: physical_line_rect,
             paint_bounds: context
                 .selection
                 .as_ref()
                 .map_or(InlinePaintBounds::Empty, |_| {
-                    InlinePaintBounds::Bounded(line_rect)
+                    InlinePaintBounds::Bounded(physical_line_rect)
                 }),
-            baseline: placement.map_or(metrics.baseline, |placement| placement.baseline),
         });
         if let Some(placement) = placement {
             for box_placement in &placement.box_block_placements {
@@ -498,7 +938,7 @@ pub(crate) fn build_inline_fragments(
                 let ascent = font_metrics.map_or(run_metrics.ascent, |metrics| metrics.text_ascent);
                 let descent =
                     font_metrics.map_or(run_metrics.descent, |metrics| metrics.text_descent);
-                let rect = PaintRect::new(
+                let rect = FlowRelativeRect::new(
                     metrics.inline_min_coord + cluster.visual_offset().unwrap_or(metrics.offset),
                     metrics.baseline - ascent + vertical_offset,
                     cluster.advance().max(0.0),
@@ -514,11 +954,16 @@ pub(crate) fn build_inline_fragments(
                     // displacement. This work happens once, alongside final
                     // fragment materialization, not during every paint.
                     let glyph_guard = run.font_size().max(0.0) * 2.0 + 1.0;
+                    let physical_rect = coordinates.to_physical_line_rect(
+                        line_rect,
+                        line_rect.line_relative_rect(rect),
+                        content_box_size,
+                    );
                     let line = &mut fragments.lines[line_index];
                     match style_paint_outsets.get(style_index).copied().flatten() {
-                        Some(outsets) => {
-                            line.paint_bounds.include(outsets.outset(rect, glyph_guard))
-                        }
+                        Some(outsets) => line
+                            .paint_bounds
+                            .include(outsets.outset(physical_rect, glyph_guard)),
                         None => line.paint_bounds = InlinePaintBounds::Unbounded,
                     }
                 }
@@ -527,7 +972,7 @@ pub(crate) fn build_inline_fragments(
                         box_fragments
                             .entry((ancestor.index(), line_index))
                             .or_default()
-                            .include_inline_axis(rect.x, rect.width);
+                            .include_inline_axis(rect.inline_offset, rect.inline_size);
                     }
                 }
                 for source in overlapping_output_ranges(&context.source_map, &range) {
@@ -555,7 +1000,7 @@ pub(crate) fn build_inline_fragments(
                 continue;
             };
             let rect = (object.role == InlineObjectRole::Atomic).then(|| {
-                PaintRect::new(
+                FlowRelativeRect::new(
                     positioned.x,
                     positioned.y
                         + placement.map_or(0.0, |placement| placement.item_offset(item_index)),
@@ -568,7 +1013,7 @@ pub(crate) fn build_inline_fragments(
                     .entry((ancestor.index(), line_index))
                     .or_default();
                 if let Some(rect) = rect {
-                    accumulator.include_inline_axis(rect.x, rect.width);
+                    accumulator.include_inline_axis(rect.inline_offset, rect.inline_size);
                 } else if matches!(
                     object.role,
                     InlineObjectRole::StartEdge | InlineObjectRole::EndEdge
@@ -597,11 +1042,12 @@ pub(crate) fn build_inline_fragments(
     fragments.boxes = box_fragments
         .into_iter()
         .filter_map(|((box_index, line_index), accumulator)| {
-            let line_rect = fragments.lines.get(line_index)?.rect;
+            let line_rect = *flow_lines.get(line_index)?;
+            let rect = line_rect.line_relative_rect(accumulator.rect(line_rect)?);
             Some(InlineBoxFragment {
                 line_index,
                 box_id: LayoutBoxId::from_index(box_index),
-                rect: accumulator.rect(line_rect)?,
+                rect: coordinates.to_physical_line_rect(line_rect, rect, content_box_size),
                 has_start_edge: accumulator.has_start_edge,
                 has_end_edge: accumulator.has_end_edge,
             })
@@ -612,14 +1058,15 @@ pub(crate) fn build_inline_fragments(
     fragments.text = source_fragments
         .into_iter()
         .filter_map(|(key, accumulator)| {
-            let line_rect = fragments.lines.get(key.line_index)?.rect;
+            let line_rect = *flow_lines.get(key.line_index)?;
+            let rect = line_rect.line_relative_rect(accumulator.rect(line_rect)?);
             Some(InlineSourceFragment {
                 line_index: key.line_index,
                 box_id: LayoutBoxId::from_index(key.box_index),
                 source_byte_range: key.source_byte_start..key.source_byte_end,
                 source_utf16_range: key.source_utf16_start..key.source_utf16_end,
                 rtl: key.rtl,
-                rect: accumulator.rect(line_rect)?,
+                rect: coordinates.to_physical_line_rect(line_rect, rect, content_box_size),
             })
         })
         .collect();
@@ -862,7 +1309,11 @@ fn resolve_inline_lines(
                     let is_atomic =
                         object.is_some_and(|object| object.role == InlineObjectRole::Atomic);
                     let baseline_ascent = internal_baseline_ascent
-                        .or_else(|| is_atomic.then_some(positioned.height))
+                        .or_else(|| {
+                            is_atomic.then(|| {
+                                context.baseline_type.synthesized_ascent(positioned.height)
+                            })
+                        })
                         .unwrap_or_default();
                     InlineItemVerticalGeometry {
                         bounds: if is_atomic {
@@ -1057,11 +1508,21 @@ fn resolve_inline_lines(
         };
         let line_height = bounds.height();
         let root_baseline = raw_top + preceding_adjustment - bounds.top;
+        let line_rect = FlowRelativeRect::new(
+            metrics.inline_min_coord + metrics.offset,
+            raw_top + preceding_adjustment,
+            metrics.advance,
+            line_height,
+        );
 
         if !phantom {
             result.has_non_phantom_line = true;
-            result.first_baseline.get_or_insert(root_baseline);
-            result.last_baseline = Some(root_baseline);
+            let baseline = InlineBaselinePlacement {
+                line: line_rect,
+                block_offset: root_baseline,
+            };
+            result.first_baseline.get_or_insert(baseline);
+            result.last_baseline = Some(baseline);
         }
 
         // Intrinsic and flex/grid probes need only the resolved line height
@@ -1110,12 +1571,7 @@ fn resolve_inline_lines(
                 .collect();
             placements.push(InlineLinePlacement {
                 line_index,
-                rect: PaintRect::new(
-                    metrics.inline_min_coord + metrics.offset,
-                    raw_top + preceding_adjustment,
-                    metrics.advance,
-                    line_height,
-                ),
+                rect: line_rect,
                 baseline: root_baseline,
                 phantom,
                 content_offset: root_baseline - metrics.baseline,
@@ -1452,44 +1908,56 @@ struct SourceFragmentKey {
 
 #[derive(Clone, Copy, Debug, Default)]
 struct FragmentAccumulator {
-    min_x: Option<f32>,
-    min_y: Option<f32>,
-    max_x: Option<f32>,
-    max_y: Option<f32>,
+    min_inline: Option<f32>,
+    min_block: Option<f32>,
+    max_inline: Option<f32>,
+    max_block: Option<f32>,
     has_start_edge: bool,
     has_end_edge: bool,
 }
 
 impl FragmentAccumulator {
-    fn include(&mut self, rect: PaintRect) {
-        self.include_inline_axis(rect.x, rect.width);
-        self.min_y = Some(self.min_y.map_or(rect.y, |value| value.min(rect.y)));
-        self.max_y = Some(self.max_y.map_or(rect.y + rect.height, |value| {
-            value.max(rect.y + rect.height)
-        }));
+    fn include(&mut self, rect: FlowRelativeRect) {
+        self.include_inline_axis(rect.inline_offset, rect.inline_size);
+        self.min_block = Some(
+            self.min_block
+                .map_or(rect.block_offset, |value| value.min(rect.block_offset)),
+        );
+        self.max_block = Some(
+            self.max_block
+                .map_or(rect.block_offset + rect.block_size, |value| {
+                    value.max(rect.block_offset + rect.block_size)
+                }),
+        );
     }
 
-    fn include_inline_axis(&mut self, x: f32, width: f32) {
-        self.min_x = Some(self.min_x.map_or(x, |value| value.min(x)));
-        self.max_x = Some(self.max_x.map_or(x + width, |value| value.max(x + width)));
+    fn include_inline_axis(&mut self, offset: f32, size: f32) {
+        self.min_inline = Some(self.min_inline.map_or(offset, |value| value.min(offset)));
+        self.max_inline = Some(
+            self.max_inline
+                .map_or(offset + size, |value| value.max(offset + size)),
+        );
     }
 
-    fn include_block_axis(&mut self, y: f32, height: f32) {
-        self.min_y = Some(self.min_y.map_or(y, |value| value.min(y)));
-        self.max_y = Some(self.max_y.map_or(y + height, |value| value.max(y + height)));
+    fn include_block_axis(&mut self, offset: f32, size: f32) {
+        self.min_block = Some(self.min_block.map_or(offset, |value| value.min(offset)));
+        self.max_block = Some(
+            self.max_block
+                .map_or(offset + size, |value| value.max(offset + size)),
+        );
     }
 
-    fn rect(self, fallback_block_rect: PaintRect) -> Option<PaintRect> {
-        let min_x = self.min_x?;
-        let min_y = self.min_y.unwrap_or(fallback_block_rect.y);
-        let max_y = self
-            .max_y
-            .unwrap_or(fallback_block_rect.y + fallback_block_rect.height);
-        Some(PaintRect::new(
-            min_x,
-            min_y,
-            (self.max_x? - min_x).max(0.0),
-            (max_y - min_y).max(0.0),
+    fn rect(self, fallback_block_rect: FlowRelativeRect) -> Option<FlowRelativeRect> {
+        let min_inline = self.min_inline?;
+        let min_block = self.min_block.unwrap_or(fallback_block_rect.block_offset);
+        let max_block = self
+            .max_block
+            .unwrap_or(fallback_block_rect.block_offset + fallback_block_rect.block_size);
+        Some(FlowRelativeRect::new(
+            min_inline,
+            min_block,
+            (self.max_inline? - min_inline).max(0.0),
+            (max_block - min_block).max(0.0),
         ))
     }
 }
@@ -1647,6 +2115,14 @@ impl InlineBuildInput {
         let mut styles = Vec::new();
         let mut style_parents = Vec::new();
         let mut style_samples = Vec::new();
+        let root_style_slot = intern_resolved_inline_style(
+            &mut styles,
+            &mut style_parents,
+            &mut style_samples,
+            root_text_style.clone(),
+            self.root_style,
+            None,
+        );
         let mut resolved_runs = Vec::<(Range<usize>, usize)>::new();
         for unit in &self.units {
             let mut base_style = world.boxes[unit.style_box.index()]
@@ -1693,32 +2169,76 @@ impl InlineBuildInput {
                 append_resolved_inline_run(&mut resolved_runs, start..end, style_slot);
             }
         }
+        let object_transition_style_slots = self
+            .objects
+            .iter()
+            .map(|(_, object, _)| {
+                let style_box = match object.role {
+                    InlineObjectRole::StartEdge => object.box_id,
+                    InlineObjectRole::EndEdge => {
+                        object.ancestors.last().copied().unwrap_or(self.root_style)
+                    }
+                    InlineObjectRole::Atomic
+                    | InlineObjectRole::Float
+                    | InlineObjectRole::OutOfFlow => return None,
+                };
+                let mut style = world.boxes[style_box.index()].style.parley_text_style();
+                parley.resolve_font_families(&mut style, None);
+                Some(intern_resolved_inline_style(
+                    &mut styles,
+                    &mut style_parents,
+                    &mut style_samples,
+                    style,
+                    style_box,
+                    None,
+                ))
+            })
+            .collect::<Vec<_>>();
         let mut builder = parley.layout_context.style_run_builder(
             &mut parley.font_context,
             &self.text,
             1.0,
             quantize,
         );
+        builder.reserve(styles.len(), resolved_runs.len().max(1));
         let style_indices = styles
             .iter()
             .map(|style| builder.push_style(style.clone()))
             .collect::<Vec<_>>();
+        builder.set_root_style(style_indices[root_style_slot]);
         if resolved_runs.is_empty() {
-            let style_index = builder.push_style(root_text_style.clone());
-            builder.push_style_run(style_index, 0..0);
+            builder.push_style_run(style_indices[root_style_slot], 0..0);
         } else {
             for (range, style_slot) in &resolved_runs {
                 builder.push_style_run(style_indices[*style_slot], range.clone());
             }
         }
-        for (object_id, (byte_index, _, kind)) in self.objects.iter().enumerate() {
-            builder.push_inline_box(InlineBox {
+        for (object_id, ((byte_index, object, kind), transition_style_slot)) in self
+            .objects
+            .iter()
+            .zip(&object_transition_style_slots)
+            .enumerate()
+        {
+            let kind = match object.role {
+                InlineObjectRole::StartEdge => InlineBoxKind::InlineStart,
+                InlineObjectRole::EndEdge => InlineBoxKind::InlineEnd,
+                InlineObjectRole::Atomic
+                | InlineObjectRole::Float
+                | InlineObjectRole::OutOfFlow => *kind,
+            };
+            let inline_box = InlineBox {
                 id: u64::try_from(object_id).expect("one IFC exceeded the u64 object limit"),
-                kind: *kind,
+                kind,
                 index: *byte_index,
                 width: 0.0,
                 height: 0.0,
-            });
+            };
+            if let Some(style_slot) = transition_style_slot {
+                builder
+                    .push_inline_box_with_style_transition(inline_box, style_indices[*style_slot]);
+            } else {
+                builder.push_inline_box(inline_box);
+            }
         }
         let layout = builder.build(&self.text);
         let font_metrics = styles
@@ -1755,6 +2275,9 @@ impl InlineBuildInput {
             .collect();
         InlineFormattingContext {
             root_style: self.root_style,
+            baseline_type: world.boxes[self.root_style.index()]
+                .style
+                .inline_baseline_type(),
             measurement_layout: Some(layout),
             laid_out: None,
             content_widths: InlineContentWidthsMemo::default(),
@@ -2401,6 +2924,133 @@ mod tests {
     use super::*;
 
     #[test]
+    fn line_relative_rects_cross_the_physical_boundary_once() {
+        let line = FlowRelativeRect::new(20.0, 10.0, 30.0, 20.0);
+        let child = LineRelativeRect::new(2.0, 0.0, 10.0, 5.0);
+        let outer = Size {
+            width: 150.0,
+            height: 225.0,
+        };
+        assert_eq!(
+            InlineCoordinateSpace::new(WritingMode::HorizontalTb)
+                .to_physical_line_rect(line, child, outer),
+            PaintRect::new(22.0, 10.0, 10.0, 5.0),
+        );
+        assert_eq!(
+            InlineCoordinateSpace::new(WritingMode::VerticalLr)
+                .to_physical_line_rect(line, child, outer),
+            PaintRect::new(25.0, 22.0, 5.0, 10.0),
+        );
+        assert_eq!(
+            InlineCoordinateSpace::new(WritingMode::VerticalRl)
+                .to_physical_line_rect(line, child, outer),
+            PaintRect::new(135.0, 22.0, 5.0, 10.0),
+        );
+    }
+
+    #[test]
+    fn vertical_lr_baseline_uses_line_over_instead_of_block_start() {
+        let baseline = InlineBaselinePlacement {
+            line: FlowRelativeRect::new(0.0, 10.0, 30.0, 20.0),
+            block_offset: 15.0,
+        };
+        assert_eq!(
+            InlineCoordinateSpace::new(WritingMode::VerticalLr).to_physical_line_baseline(
+                baseline,
+                Size {
+                    width: 150.0,
+                    height: 225.0,
+                },
+            ),
+            Point {
+                x: Some(25.0),
+                y: None,
+            }
+        );
+    }
+
+    #[test]
+    fn vertical_inline_fragments_share_one_physical_box_model() {
+        let fragment = InlineBoxFragment {
+            line_index: 0,
+            box_id: LayoutBoxId::from_index(0),
+            rect: PaintRect::new(50.0, 20.0, 20.0, 100.0),
+            has_start_edge: true,
+            has_end_edge: true,
+        };
+        let geometry = inline_fragment_box_geometry(
+            &fragment,
+            WritingDirection::new(WritingMode::VerticalRl, Direction::Ltr),
+            Rect {
+                left: 1.0,
+                right: 2.0,
+                top: 3.0,
+                bottom: 4.0,
+            },
+            Rect {
+                left: 5.0,
+                right: 6.0,
+                top: 7.0,
+                bottom: 8.0,
+            },
+            Rect {
+                left: 9.0,
+                right: 10.0,
+                top: 11.0,
+                bottom: 12.0,
+            },
+        );
+
+        assert_eq!(geometry.border_rect, PaintRect::new(36.0, 23.0, 50.0, 93.0));
+        assert_eq!(
+            geometry.padding_rect,
+            PaintRect::new(45.0, 34.0, 31.0, 70.0)
+        );
+        assert_eq!(
+            geometry.content_rect,
+            PaintRect::new(50.0, 41.0, 20.0, 55.0)
+        );
+        assert_eq!(
+            geometry.margin_rect,
+            PaintRect::new(35.0, 20.0, 53.0, 100.0)
+        );
+        assert_eq!(
+            geometry.border_widths,
+            PaintEdgeSizes::new(11.0, 10.0, 12.0, 9.0)
+        );
+        assert_eq!(
+            geometry.padding_widths,
+            PaintEdgeSizes::new(7.0, 6.0, 8.0, 5.0)
+        );
+    }
+
+    #[test]
+    fn inline_fragment_box_model_preserves_signed_margins() {
+        let fragment = InlineBoxFragment {
+            line_index: 0,
+            box_id: LayoutBoxId::from_index(0),
+            rect: PaintRect::new(10.0, 20.0, 40.0, 20.0),
+            has_start_edge: true,
+            has_end_edge: true,
+        };
+        let geometry = inline_fragment_box_geometry(
+            &fragment,
+            WritingDirection::new(WritingMode::HorizontalTb, Direction::Ltr),
+            Rect {
+                left: -5.0,
+                right: -3.0,
+                top: -2.0,
+                bottom: -4.0,
+            },
+            Rect::ZERO,
+            Rect::ZERO,
+        );
+
+        assert_eq!(geometry.border_rect, PaintRect::new(5.0, 20.0, 48.0, 20.0));
+        assert_eq!(geometry.margin_rect, PaintRect::new(10.0, 22.0, 40.0, 14.0));
+    }
+
+    #[test]
     fn ordered_output_range_lookup_handles_duplicates_gaps_and_bidi_order() {
         let source = |output_range: Range<usize>| InlineSourceMapEntry {
             output_range,
@@ -2662,6 +3312,7 @@ mod tests {
 
         let context = InlineFormattingContext {
             root_style: root,
+            baseline_type: InlineBaselineType::Alphabetic,
             measurement_layout: Some(layout.clone()),
             laid_out: None,
             content_widths: InlineContentWidthsMemo::default(),
@@ -2688,7 +3339,7 @@ mod tests {
                 .iter()
                 .find(|line| !line.phantom)
                 .map(|line| line.baseline),
-            summary.first_baseline
+            summary.first_baseline.map(|baseline| baseline.block_offset)
         );
         assert_eq!(
             placements
@@ -2696,7 +3347,7 @@ mod tests {
                 .rev()
                 .find(|line| !line.phantom)
                 .map(|line| line.baseline),
-            summary.last_baseline
+            summary.last_baseline.map(|baseline| baseline.block_offset)
         );
     }
 

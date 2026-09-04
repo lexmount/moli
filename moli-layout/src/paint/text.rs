@@ -4,7 +4,11 @@ use super::{PaintProjectionMetrics, cull::rects_intersect};
 use crate::{
     LayoutBox, LayoutBoxId, LayoutRect, LayoutTransform2D, PaintBrush, PaintColor, PaintFragment,
     PaintGlyph, PaintGlyphRun, PaintShape, PaintSnapshot, PaintTextDecoration, PaintTextShadow,
-    inline::{InlineFormattingContext, InlineObjectRole, InlinePaintBounds, InlineSelection},
+    inline::{
+        FlowRelativeRect, InlineCoordinateSpace, InlineFormattingContext, InlineObjectRole,
+        InlinePaintBounds, InlineSelection, LineRelativeOffset, LineRelativeRect,
+        flow_relative_line_rect,
+    },
 };
 
 const SELECTION_COLOR: PaintColor = PaintColor::new(180.0 / 255.0, 213.0 / 255.0, 1.0, 1.0);
@@ -100,6 +104,23 @@ fn project_text_phase<N>(
     let layout = layout_box.final_layout;
     let origin_x = layout.border.left + layout.padding.left;
     let origin_y = layout.border.top + layout.padding.top;
+    let content_box_size = taffy::Size {
+        width: (layout.size.width
+            - layout.border.left
+            - layout.border.right
+            - layout.padding.left
+            - layout.padding.right
+            - layout.scrollbar_size.width)
+            .max(0.0),
+        height: (layout.size.height
+            - layout.border.top
+            - layout.border.bottom
+            - layout.padding.top
+            - layout.padding.bottom
+            - layout.scrollbar_size.height)
+            .max(0.0),
+    };
+    let inline_coordinates = InlineCoordinateSpace::new(layout_box.style.writing_mode());
 
     if phase == TextPaintPhase::Foreground {
         project_selection(
@@ -107,6 +128,8 @@ fn project_text_phase<N>(
             text_layout,
             origin_x,
             origin_y,
+            inline_coordinates,
+            content_box_size,
             transform,
             local_cull,
             snapshot,
@@ -154,6 +177,7 @@ fn project_text_phase<N>(
             continue;
         }
         let line_placement = context.line_placements.get(line_index);
+        let line_rect = flow_relative_line_rect(&line, line_placement);
         for (item_index, item) in line.items().enumerate() {
             let glyph_run = match item {
                 PositionedLayoutItem::InlineBox(positioned) => {
@@ -176,10 +200,21 @@ fn project_text_phase<N>(
                 .unwrap_or_default();
             let glyphs = glyph_run
                 .positioned_glyphs()
-                .map(|glyph| PaintGlyph {
-                    id: glyph.id,
-                    x: origin_x + glyph.x,
-                    y: origin_y + glyph.y + vertical_offset,
+                .map(|glyph| {
+                    let point = inline_coordinates.to_physical_line_point(
+                        line_rect,
+                        LineRelativeOffset::new(
+                            glyph.x - line_rect.inline_offset,
+                            glyph.y + vertical_offset - line_rect.block_offset,
+                        ),
+                        taffy::Size::ZERO,
+                        content_box_size,
+                    );
+                    PaintGlyph {
+                        id: glyph.id,
+                        x: origin_x + point.x,
+                        y: origin_y + point.y,
+                    }
                 })
                 .collect::<Vec<_>>();
             if glyphs.is_empty() {
@@ -223,9 +258,9 @@ fn project_text_phase<N>(
             }
 
             let metrics = run.metrics();
-            let baseline = origin_y + glyph_run.baseline() + vertical_offset;
-            let x = origin_x + glyph_run.offset();
-            let width = glyph_run.advance().max(0.0);
+            let logical_baseline = glyph_run.baseline() + vertical_offset;
+            let inline_offset = glyph_run.offset();
+            let inline_advance = glyph_run.advance().max(0.0);
             let decoration = brush.decoration;
             let decoration_color = if phase == TextPaintPhase::ClipMask {
                 PaintColor::BLACK
@@ -236,31 +271,43 @@ fn project_text_phase<N>(
                 .thickness
                 .unwrap_or(metrics.underline_size.max(1.0))
                 .max(0.5);
-            let decoration_fragment = |y: f32| {
-                (width > 0.0 && decoration_color.alpha > 0.0).then_some(
-                    PaintFragment::TextDecoration(PaintTextDecoration {
-                        x,
-                        y,
-                        width,
-                        thickness,
-                        color: decoration_color,
-                        style: decoration.style,
-                        transform,
-                    }),
-                )
+            let decoration_fragment = |block_offset: f32| {
+                if inline_advance <= 0.0 || decoration_color.alpha <= 0.0 {
+                    return None;
+                }
+                let physical_point = |inline_offset| {
+                    let point = inline_coordinates.to_physical_line_point(
+                        line_rect,
+                        LineRelativeOffset::new(
+                            inline_offset - line_rect.inline_offset,
+                            block_offset - line_rect.block_offset,
+                        ),
+                        taffy::Size::ZERO,
+                        content_box_size,
+                    );
+                    crate::PaintPoint::new(origin_x + point.x, origin_y + point.y)
+                };
+                Some(PaintFragment::TextDecoration(PaintTextDecoration {
+                    start: physical_point(inline_offset),
+                    end: physical_point(inline_offset + inline_advance),
+                    thickness,
+                    color: decoration_color,
+                    style: decoration.style,
+                    transform,
+                }))
             };
             if decoration.underline {
-                let y = decoration.underline_offset.map_or_else(
-                    || baseline - metrics.underline_offset + thickness * 0.5,
-                    |offset| baseline + offset + thickness * 0.5,
+                let block_offset = decoration.underline_offset.map_or_else(
+                    || logical_baseline - metrics.underline_offset + thickness * 0.5,
+                    |offset| logical_baseline + offset + thickness * 0.5,
                 );
-                if let Some(fragment) = decoration_fragment(y) {
+                if let Some(fragment) = decoration_fragment(block_offset) {
                     snapshot.push_fragment(fragment);
                 }
             }
             if decoration.overline
                 && let Some(fragment) =
-                    decoration_fragment(baseline - metrics.ascent + thickness * 0.5)
+                    decoration_fragment(logical_baseline - metrics.ascent + thickness * 0.5)
             {
                 snapshot.push_fragment(fragment);
             }
@@ -268,8 +315,9 @@ fn project_text_phase<N>(
             snapshot.push_fragment(PaintFragment::GlyphRun(owned_run));
 
             if decoration.line_through
-                && let Some(fragment) =
-                    decoration_fragment(baseline - metrics.strikethrough_offset + thickness * 0.5)
+                && let Some(fragment) = decoration_fragment(
+                    logical_baseline - metrics.strikethrough_offset + thickness * 0.5,
+                )
             {
                 snapshot.push_fragment(fragment);
             }
@@ -297,6 +345,8 @@ fn project_selection(
     text_layout: &parley::Layout<crate::stylo_to_parley::TextBrush>,
     origin_x: f32,
     origin_y: f32,
+    inline_coordinates: InlineCoordinateSpace,
+    content_box_size: taffy::Size<f32>,
     transform: LayoutTransform2D,
     local_cull: Option<LayoutRect>,
     snapshot: &mut PaintSnapshot,
@@ -314,6 +364,8 @@ fn project_selection(
                     line_index,
                     origin_x,
                     origin_y,
+                    inline_coordinates,
+                    content_box_size,
                     rect.x0 as f32,
                     rect.y0 as f32,
                     (rect.x1 - rect.x0).max(0.0) as f32,
@@ -345,6 +397,8 @@ fn project_selection(
                 line_index,
                 origin_x,
                 origin_y,
+                inline_coordinates,
+                content_box_size,
                 rect.x0 as f32,
                 rect.y0 as f32,
                 (rect.x1 - rect.x0).max(1.5) as f32,
@@ -370,15 +424,35 @@ fn selection_rect(
     line_index: usize,
     origin_x: f32,
     origin_y: f32,
+    inline_coordinates: InlineCoordinateSpace,
+    content_box_size: taffy::Size<f32>,
     x: f32,
     fallback_y: f32,
     width: f32,
     fallback_height: f32,
 ) -> LayoutRect {
-    let (y, height) = context
+    let logical_content_size = inline_coordinates.to_logical_size(content_box_size);
+    let line = context
         .line_placements
         .get(line_index)
-        .map(|placement| (placement.rect.y, placement.rect.height))
-        .unwrap_or((fallback_y, fallback_height));
-    LayoutRect::new(origin_x + x, origin_y + y, width, height)
+        .map(|placement| placement.rect)
+        .unwrap_or_else(|| {
+            FlowRelativeRect::new(
+                0.0,
+                fallback_y,
+                logical_content_size.inline_size,
+                fallback_height,
+            )
+        });
+    let physical = inline_coordinates.to_physical_line_rect(
+        line,
+        LineRelativeRect::new(x - line.inline_offset, 0.0, width, line.block_size),
+        content_box_size,
+    );
+    LayoutRect::new(
+        origin_x + physical.x,
+        origin_y + physical.y,
+        physical.width,
+        physical.height,
+    )
 }

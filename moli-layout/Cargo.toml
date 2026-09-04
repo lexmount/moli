@@ -8,8 +8,9 @@ license = "MIT OR Apache-2.0"
 euclid = "=0.22.14"
 kurbo = "=0.13.1"
 moli-image = { path = "../moli-image" }
-parley = "=0.11.1"
+parley = { git = "https://github.com/ldm0/parley.git", rev = "7d4bab993c96505ba2ee2104a8807d6d7cee071c" }
 parking_lot = "0.12"
+skrifa = "=0.44.0"
 stylo = "0.20"
 stylo_taffy = { git = "https://github.com/DioxusLabs/blitz", rev = "5081c65811a4396f5a99b2e0aca542a4a4a6606f", default-features = false, features = ["std", "block", "flexbox", "grid", "floats"] }
 taffy = { version = "=0.13.0", default-features = false, features = ["std", "block_layout", "flexbox", "grid", "float_layout", "content_size", "calc", "detailed_layout_info"] }

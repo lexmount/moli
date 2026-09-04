@@ -1,10 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
+use moli_dom::html_microsyntax::parse_non_negative_integer;
 use moli_layout::{
-    LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
-    LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
-    LayoutListRole, LayoutNamespace, LayoutReplacedKind, LayoutSource, LayoutSourceKind,
-    LayoutTableData, LayoutTableRole, LayoutTextSelection, ReplacedMetrics,
+    LayoutDocumentContext, LayoutDocumentMode, LayoutElementCategory, LayoutElementMetadata,
+    LayoutElementSemantics, LayoutFormControlData, LayoutFormControlKind, LayoutImageResource,
+    LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace, LayoutReplacedKind,
+    LayoutSource, LayoutSourceKind, LayoutTableData, LayoutTableRole, LayoutTextSelection,
+    ReplacedMetrics, ReplacedNaturalSizing,
 };
 
 use crate::{
@@ -57,12 +59,27 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         self.root
     }
 
-    fn root_is_document_element(&self) -> bool {
-        self.document.and_then(|document| {
-            self.host()
-                .dom()
-                .document_element_handle_for_document(document)
-        }) == Some(self.root)
+    fn document_context(&self) -> Option<LayoutDocumentContext<Self::NodeId>> {
+        let document = self.document?;
+        let document_element = self
+            .host()
+            .dom()
+            .document_element_handle_for_document(document)?;
+        if document_element != self.root {
+            return None;
+        }
+        let mode = match self.host().document_quirks_mode_for_handle(document) {
+            Some(selectors::matching::QuirksMode::Quirks) => LayoutDocumentMode::Quirks,
+            Some(selectors::matching::QuirksMode::LimitedQuirks) => {
+                LayoutDocumentMode::LimitedQuirks
+            }
+            Some(selectors::matching::QuirksMode::NoQuirks) | None => LayoutDocumentMode::NoQuirks,
+        };
+        Some(LayoutDocumentContext::new(
+            document_element,
+            self.host().document_body_handle_for_document(document),
+            mode,
+        ))
     }
 
     fn flat_parent(&self, node: Self::NodeId) -> Option<Self::NodeId> {
@@ -140,17 +157,26 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
         if semantics.replaced == Some(LayoutReplacedKind::Svg) {
             return Some(super::inline_svg::replaced_metrics(element));
         }
-        let attribute_width = numeric_dimension_attribute(self.host(), node, "width");
-        let attribute_height = numeric_dimension_attribute(self.host(), node, "height");
-        let intrinsic = self.runtime.image_resource_intrinsic_size(node);
-        Some(ReplacedMetrics {
-            intrinsic_width: intrinsic.map(|(width, _)| width),
-            intrinsic_height: intrinsic.map(|(_, height)| height),
-            attribute_width,
-            attribute_height,
-            intrinsic_ratio: intrinsic
-                .and_then(|(width, height)| (height > 0.0).then_some(width / height)),
-        })
+        if semantics.replaced == Some(LayoutReplacedKind::Canvas) {
+            let width = canvas_dimension_attribute(self.host(), node, "width", 300);
+            let height = canvas_dimension_attribute(self.host(), node, "height", 150);
+            return Some(ReplacedMetrics {
+                natural_sizing: Some(ReplacedNaturalSizing {
+                    width: Some(width),
+                    height: Some(height),
+                    ratio: (height > 0.0).then_some(width / height),
+                }),
+            });
+        }
+        let natural_sizing =
+            self.runtime
+                .image_resource_sizing(node)
+                .map(|sizing| ReplacedNaturalSizing {
+                    width: sizing.natural_width,
+                    height: sizing.natural_height,
+                    ratio: sizing.natural_ratio,
+                });
+        Some(ReplacedMetrics { natural_sizing })
     }
 
     fn replaced_image(
@@ -170,8 +196,11 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             Some(LayoutReplacedKind::Image) => {
                 let ready = self.runtime.ready_image_for_layout(node)?;
                 Some(LayoutImageResource {
-                    intrinsic_width: ready.intrinsic_width,
-                    intrinsic_height: ready.intrinsic_height,
+                    natural_sizing: ReplacedNaturalSizing {
+                        width: ready.sizing.natural_width,
+                        height: ready.sizing.natural_height,
+                        ratio: ready.sizing.natural_ratio,
+                    },
                     pixels: ready.pixels,
                     svg: ready.svg,
                 })
@@ -181,9 +210,14 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             }
             Some(LayoutReplacedKind::Canvas) => {
                 let pixels = self.runtime.canvas_pixels_for_layout(node)?;
+                let width = pixels.width as f32;
+                let height = pixels.height as f32;
                 Some(LayoutImageResource {
-                    intrinsic_width: pixels.width as f32,
-                    intrinsic_height: pixels.height as f32,
+                    natural_sizing: ReplacedNaturalSizing {
+                        width: Some(width),
+                        height: Some(height),
+                        ratio: (height > 0.0).then_some(width / height),
+                    },
                     pixels: Some(pixels),
                     svg: None,
                 })
@@ -208,8 +242,11 @@ impl LayoutSource for NativeLayoutSourceView<'_> {
             .runtime
             .ready_css_image_for_layout(self.document?, parsed.as_str())?;
         Some(LayoutImageResource {
-            intrinsic_width: ready.intrinsic_width,
-            intrinsic_height: ready.intrinsic_height,
+            natural_sizing: ReplacedNaturalSizing {
+                width: ready.sizing.natural_width,
+                height: ready.sizing.natural_height,
+                ratio: ready.sizing.natural_ratio,
+            },
             pixels: ready.pixels,
             svg: ready.svg,
         })
@@ -645,10 +682,11 @@ fn html_input_control_kind(value: Option<&str>) -> LayoutInputControlKind {
     }
 }
 
-fn numeric_dimension_attribute(host: &DomHost, node: DomHandle, name: &str) -> Option<f32> {
-    let value = host.get_attribute(node, name)?;
-    let value = value.trim().parse::<f32>().ok()?;
-    value.is_finite().then_some(value.max(0.0))
+fn canvas_dimension_attribute(host: &DomHost, node: DomHandle, name: &str, default: u32) -> f32 {
+    host.get_attribute(node, name)
+        .and_then(|value| parse_non_negative_integer(&value))
+        .filter(|value| *value <= i32::MAX as u32)
+        .unwrap_or(default) as f32
 }
 
 #[cfg(test)]

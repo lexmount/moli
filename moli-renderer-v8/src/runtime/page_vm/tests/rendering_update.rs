@@ -1248,6 +1248,71 @@ offsets['shadow-action']=shadow.getElementById('shadow-action').offsetParent?.id
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn content_visibility_lock_uses_the_last_remembered_content_box_size() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/remembered-intrinsic-size.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+#target{position:absolute;display:inline-block;content-visibility:auto;contain-intrinsic-size:auto 10px;background:rgb(201,1,1)}
+#content{width:120px;height:45px;background:rgb(1,1,201)}
+</style>`;
+document.body.innerHTML = '<div id=target><div id=content></div></div>';
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let viewport = moli_layout::PaintViewport::new(320, 200, 1.0);
+        let first = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("visible content-visibility:auto layout");
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('target').style.contentVisibility='hidden';'locked'")?;
+        let locked = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("locked content-visibility layout");
+
+        let red = moli_layout::PaintColor::new(201.0 / 255.0, 1.0 / 255.0, 1.0 / 255.0, 1.0);
+        let blue = moli_layout::PaintColor::new(1.0 / 255.0, 1.0 / 255.0, 201.0 / 255.0, 1.0);
+        let solid_rect = |snapshot: &moli_layout::PaintSnapshot, expected| {
+            snapshot.fragments.iter().find_map(|fragment| {
+                fragment
+                    .solid_fill_in_surface()
+                    .filter(|(_, color)| *color == expected)
+                    .map(|(rect, _)| rect)
+            })
+        };
+        for (label, snapshot) in [("visible", &first), ("locked", &locked)] {
+            let rect = solid_rect(snapshot, red)
+                .unwrap_or_else(|| panic!("{label}: target background should paint"));
+            assert!(
+                (rect.width - 120.0).abs() <= 0.01 && (rect.height - 45.0).abs() <= 0.01,
+                "{label}: {rect:?}"
+            );
+        }
+        assert!(solid_rect(&first, blue).is_some());
+        assert!(
+            solid_rect(&locked, blue).is_none(),
+            "locked contents must not be constructed or painted"
+        );
+        Ok::<(), anyhow::Error>(())
+    })
+    .await
+    .expect("last remembered intrinsic-size fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn filters_establish_containing_blocks_except_on_the_document_element() {
     run_page_vm_async_test(async move {
         let loader =
@@ -1751,6 +1816,148 @@ document.body.innerHTML = `<div id=stage>
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn grid_cyclic_percentage_minimums_resolve_before_final_item_percentages() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/grid-percentage-minimums.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+#grid{
+  display:grid;
+  width:10px;
+  height:10px;
+  grid-template-columns:3px auto 4px;
+  grid-template-rows:1px auto 2px;
+  justify-items:start;
+  align-items:start;
+}
+#item{
+  grid-column:2;
+  grid-row:2;
+  width:100%;
+  height:100%;
+  min-width:100%;
+  min-height:100%;
+}
+#content{width:30px;height:30px}
+#tail{grid-column:3;grid-row:3;width:1px;height:1px}
+</style>`;
+document.body.innerHTML = `<div id=grid><div id=item><div id=content></div></div><div id=tail></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(20, 20, 1.0))?
+            .expect("grid percentage minimum fixture should have a document element");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['grid','item','tail'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in [
+            ("grid", [0.0, 0.0, 10.0, 10.0]),
+            ("item", [3.0, 1.0, 3.0, 7.0]),
+            ("tail", [6.0, 8.0, 1.0, 1.0]),
+        ] {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("grid percentage minimum fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn absolute_content_based_block_constraints_match_chromium_across_formatting_contexts() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/absolute-content-block-sizing.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.stage{position:relative;width:300px;height:200px}
+#block{display:block}
+#flex{display:flex}
+#grid{display:grid}
+.probe{position:absolute;width:100px}
+.content{width:40px;height:80px}
+.preferred{height:max-content}
+.minimum{height:0;min-height:max-content}
+.maximum{height:160px;max-height:min-content}
+.stretch{top:10px;bottom:10px;max-height:max-content}
+.ratio{aspect-ratio:2}
+</style>`;
+const cases = `
+  <div id=preferred class="probe preferred"><div class=content></div></div>
+  <div id=minimum class="probe minimum"><div class=content></div></div>
+  <div id=maximum class="probe maximum"><div class=content></div></div>
+  <div id=stretch class="probe stretch"><div class=content></div></div>
+  <div id=ratio class="probe ratio"><div class=content></div></div>`;
+document.body.innerHTML = ['block','flex','grid']
+  .map(display => `<div id=${display} class=stage>${cases.replaceAll('id=', `id=${display}-`)}</div>`)
+  .join('');
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(300, 600, 1.0))?
+            .expect("absolute block sizing fixture should have a document element");
+
+        let ids = ["block", "flex", "grid"].into_iter().flat_map(|display| {
+            ["preferred", "minimum", "maximum", "stretch", "ratio"]
+                .map(|case| format!("{display}-{case}"))
+        });
+        let ids = ids.collect::<Vec<_>>();
+        let geometry = page_vm.vm_mut().eval(&format!(
+            "JSON.stringify(Object.fromEntries({ids:?}.map(id=>{{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]}})))"
+        ))?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for id in ids {
+            let actual = geometry[&id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (axis, expected) in [("width", 100.0), ("height", 80.0)] {
+                let index = usize::from(axis == "height");
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id} {axis}: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("absolute content-based block sizing fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn floated_auto_width_inline_formatting_contexts_shrink_to_fit() {
     run_page_vm_async_test(async move {
         let loader =
@@ -2057,6 +2264,106 @@ document.body.innerHTML = `
     })
     .await
     .expect("intrinsic width fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn intrinsic_flex_basis_functions_reach_layout_across_adapter_edges() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/intrinsic-flex-basis.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}.fixture{display:flex;width:75px;height:75px}.column{flex-direction:column}.row-reverse{flex-direction:row-reverse}.wide{width:100px}.item{flex-grow:0;flex-shrink:0;min-width:0;min-height:0;font-size:0;background:rgb(1,2,3)}.vertical{writing-mode:vertical-lr}.piece{display:inline-block;width:50px;height:50px}.margined{margin-left:10px;margin-right:20px}.decorated{padding-left:10px;padding-right:10px;border-left:5px solid;border-right:5px solid}
+</style>`;
+const content='<span class=piece></span> <span class=piece></span>';
+const item=(id,style='',classes='')=>`<div class="item ${classes}" id="${id}" style="${style}">${content}</div>`;
+document.body.innerHTML = `
+<div class=fixture>${item('row-min','flex-basis:min-content')}</div>
+<div class=fixture>${item('row-max','flex-basis:max-content')}</div>
+<div class=fixture>${item('row-fit','flex-basis:fit-content')}</div>
+<div class="fixture column">${item('column-min','flex-basis:min-content')}</div>
+<div class="fixture column">${item('column-max','flex-basis:max-content')}</div>
+<div class="fixture column">${item('column-fit','flex-basis:fit-content')}</div>
+<div class=fixture>${item('orthogonal-row-min','flex-basis:min-content','vertical')}</div>
+<div class=fixture>${item('orthogonal-row-max','width:300px;flex-basis:max-content','vertical')}</div>
+<div class=fixture>${item('orthogonal-row-fit','flex-basis:fit-content','vertical')}</div>
+<div class="fixture column">${item('orthogonal-column-max','flex-basis:max-content','vertical')}</div>
+<div class="fixture row-reverse">${item('row-reverse-max','flex-basis:max-content')}</div>
+<div class=fixture>${item('authored-row','width:300px;flex-basis:max-content')}</div>
+<div class="fixture column">${item('authored-column','height:300px;flex-basis:max-content','vertical')}</div>
+<div class=fixture>${item('auto-row-min','width:min-content;flex-basis:auto')}</div>
+<div class="fixture wide">${item('margin-fit','flex-basis:fit-content','margined')}</div>
+<div class="fixture wide">${item('content-box-min','box-sizing:content-box;flex-basis:min-content','decorated')}</div>
+<div class="fixture wide">${item('border-box-max','box-sizing:border-box;flex-basis:max-content','decorated')}</div>
+<div class="fixture wide">${item('border-box-fit','box-sizing:border-box;flex-basis:fit-content','decorated')}</div>
+<div class="fixture wide">${item('minimum-clamp','flex-basis:min-content;min-width:80px')}</div>
+<div class="fixture wide">${item('maximum-clamp','flex-basis:max-content;max-width:90px')}</div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let supports = page_vm.vm_mut().eval(
+            r#"JSON.stringify(['min-content','max-content','fit-content'].map(value=>CSS.supports('flex-basis',value)))"#,
+        )?;
+        assert_eq!(supports, "[true,true,true]");
+
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(320, 1900, 1.0))?
+            .expect("intrinsic flex-basis fixture must retain a root");
+
+        let expected = [
+            ("row-min", [50.0, 75.0]),
+            ("row-max", [100.0, 75.0]),
+            ("row-fit", [75.0, 75.0]),
+            ("column-min", [75.0, 100.0]),
+            ("column-max", [75.0, 100.0]),
+            ("column-fit", [75.0, 100.0]),
+            ("orthogonal-row-min", [100.0, 75.0]),
+            ("orthogonal-row-max", [100.0, 75.0]),
+            ("orthogonal-row-fit", [100.0, 75.0]),
+            ("orthogonal-column-max", [75.0, 100.0]),
+            ("row-reverse-max", [100.0, 75.0]),
+            ("authored-row", [100.0, 75.0]),
+            ("authored-column", [75.0, 100.0]),
+            ("auto-row-min", [50.0, 75.0]),
+            ("margin-fit", [70.0, 75.0]),
+            ("content-box-min", [80.0, 75.0]),
+            ("border-box-max", [130.0, 75.0]),
+            ("border-box-fit", [100.0, 75.0]),
+            ("minimum-clamp", [80.0, 75.0]),
+            ("maximum-clamp", [90.0, 75.0]),
+        ];
+        let ids = expected.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        let geometry = page_vm.vm_mut().eval(&format!(
+            "JSON.stringify(Object.fromEntries({ids:?}.map(id=>{{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.width,r.height]]}})))"
+        ))?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        for (id, expected) in expected {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, (axis, expected)) in ["width", "height"].into_iter().zip(expected).enumerate() {
+                let actual = actual[index]
+                    .as_f64()
+                    .expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id} {axis}: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("intrinsic flex-basis fixture should run");
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -2747,6 +3054,126 @@ html,body{{margin:0;padding:0;background:white}}
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_cascades_html_dimensions_before_replaced_sizing() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/html-dimension-hints.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+.ratio{box-sizing:border-box;border:20px solid blue;display:block;padding:0}
+#author{width:120px;height:auto}
+canvas,input,iframe,object{display:block;margin:0;border:0;padding:0}
+</style>`;
+document.body.innerHTML = `
+<img id=mapped class=ratio width=80 height=40>
+<img id=author class=ratio width=80 height=40>
+<canvas id=canvas width="600.5" height="-1"></canvas>
+<iframe id=frame width="75" height="45"></iframe>
+<object id=object width="70" height="35"></object>
+<input id=hidden-input type=hidden width=90 height=45>
+<input id=dynamic-input type=text width=90 height=45>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+
+        let viewport = moli_layout::PaintViewport::new(800, 1200, 1.0);
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("HTML dimension fixture must retain a layout root");
+        let read_style_and_geometry = r#"(() => {
+const read = id => {
+  const element = document.getElementById(id);
+  const style = getComputedStyle(element);
+  return {style:[style.width,style.height,style.aspectRatio],box:[element.offsetWidth,element.offsetHeight]};
+};
+return JSON.stringify(Object.fromEntries(
+  ['mapped','author','canvas','frame','object','hidden-input','dynamic-input']
+    .map(id => [id,read(id)])));
+})()"#;
+        let initial: serde_json::Value =
+            serde_json::from_str(&page_vm.vm_mut().eval(read_style_and_geometry)?)?;
+        assert_eq!(
+            initial["mapped"],
+            serde_json::json!({"style":["80px","40px","auto 80 / 40"],"box":[80,40]}),
+            "legacy dimensions must enter the presentation-hint cascade while canvas dimensions remain intrinsic",
+        );
+        assert_eq!(
+            initial["author"],
+            serde_json::json!({"style":["120px","80px","auto 80 / 40"],"box":[120,80]}),
+        );
+        assert_eq!(
+            initial["canvas"],
+            serde_json::json!({"style":["600px","150px","auto"],"box":[600,150]}),
+        );
+        assert_eq!(
+            initial["frame"],
+            serde_json::json!({"style":["75px","45px","auto"],"box":[75,45]}),
+        );
+        assert_eq!(
+            initial["object"],
+            serde_json::json!({"style":["70px","35px","auto"],"box":[70,35]}),
+        );
+        assert_eq!(
+            initial["hidden-input"],
+            serde_json::json!({"style":["90px","45px","auto 90 / 45"],"box":[0,0]}),
+        );
+        assert_eq!(initial["dynamic-input"]["style"][2], "auto");
+        assert!(
+            initial["dynamic-input"]["style"][0]
+                .as_str()
+                .is_some_and(|width| width.ends_with("px"))
+                && initial["dynamic-input"]["style"][1]
+                    .as_str()
+                    .is_some_and(|height| height.ends_with("px")),
+            "resolved text-control dimensions must expose used pixels without pinning UA sizing",
+        );
+        assert!(
+            initial["dynamic-input"]["box"][0]
+                .as_u64()
+                .is_some_and(|width| width > 0)
+                && initial["dynamic-input"]["box"][1]
+                    .as_u64()
+                    .is_some_and(|height| height > 0),
+            "the test must start from a rendered text control without pinning unrelated UA sizing",
+        );
+
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('mapped').setAttribute('width','60')")?;
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('dynamic-input').setAttribute('type','image')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(viewport)?
+            .expect("mutated HTML dimension fixture must retain a layout root");
+        let mutated: serde_json::Value =
+            serde_json::from_str(&page_vm.vm_mut().eval(read_style_and_geometry)?)?;
+        assert_eq!(
+            mutated["mapped"],
+            serde_json::json!({"style":["60px","40px","auto 60 / 40"],"box":[60,40]}),
+            "dimension and input-type mutations must recascade presentation hints",
+        );
+        assert_eq!(
+            mutated["dynamic-input"],
+            serde_json::json!({"style":["90px","45px","auto 90 / 45"],"box":[90,45]}),
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("HTML dimension presentation-hint fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_recascades_nearest_table_cell_presentation_style() {
     run_page_vm_async_test(async move {
         let loader =
@@ -3171,6 +3598,20 @@ document.body.innerHTML = `
                     && (destination.height - 16.0).abs() <= 0.01
             })
             .expect("the Feishu-style 1em SVG must paint into a 16x16 destination");
+        first
+            .fragments
+            .iter()
+            .filter_map(|fragment| match fragment {
+                moli_layout::PaintFragment::SvgImage(image) => Some(image.destination),
+                _ => None,
+            })
+            .find(|destination| {
+                destination.x.abs() <= 0.01
+                    && (destination.y - 30.0).abs() <= 0.01
+                    && (destination.width - 205.0).abs() <= 0.01
+                    && (destination.height - 205.0).abs() <= 0.01
+            })
+            .expect("the ratio-only SVG must stretch against the containing block");
         assert!(first.diagnostics.iter().all(|diagnostic| {
             diagnostic.code != "replaced-content-placeholder"
                 && diagnostic.code != "svg-resource-unsupported"
@@ -3189,25 +3630,54 @@ document.body.innerHTML = `
         assert_eq!(first_pixel(65, 5), [100, 106, 115, 255]);
         assert_eq!(first_pixel(80, 5), [255, 255, 255, 255]);
         assert_eq!(first_pixel(140, 40), [0, 128, 0, 255]);
-        // A viewBox-only square uses its 1:1 ratio inside the CSS 300x150
-        // default object size, yielding a 150x150 replaced box rather than
-        // losing the ratio and stretching to 300x150.
-        assert_eq!(first_pixel(170, 40), [255, 255, 255, 255]);
+        // A viewBox-only square has a ratio but no natural dimensions.
+        // Chromium stretch-fits its inline size to the containing block and
+        // transfers the 205px post-scrollbar inline size through the 1:1
+        // ratio.
+        assert_eq!(first_pixel(170, 40), [0, 128, 0, 255]);
 
         page_vm.vm_mut().eval(
             "document.getElementById('icon').classList.add('blue');document.getElementById('shape').setAttribute('x','2');document.getElementById('feishu-time').setAttribute('width','2em');'mutated'",
         )?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 190, 1.0))?
+            .expect("the presentation-attribute mutation must publish a layout tree");
         assert_eq!(
             page_vm.vm_mut().eval(
-                "const icon=document.getElementById('feishu-time');const fromAttribute=getComputedStyle(icon).width;icon.classList.add('css-width');const fromCss=getComputedStyle(icon).width;icon.classList.remove('css-width');[fromAttribute,fromCss,getComputedStyle(icon).width].join('|')",
+                "getComputedStyle(document.getElementById('feishu-time')).width",
             )?,
-            "32px|24px|32px",
-            "mutated presentation attributes must recascade and author CSS must override them",
+            "32px",
+            "the published presentation-attribute mutation must update resolved geometry",
         );
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('feishu-time').classList.add('css-width')")?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 190, 1.0))?
+            .expect("the author CSS override must publish a layout tree");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "getComputedStyle(document.getElementById('feishu-time')).width",
+            )?,
+            "24px",
+            "author CSS must override the presentation attribute after layout publication",
+        );
+        page_vm
+            .vm_mut()
+            .eval("document.getElementById('feishu-time').classList.remove('css-width')")?;
         let second = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 190, 1.0))?
             .expect("mutated inline SVG fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "getComputedStyle(document.getElementById('feishu-time')).width",
+            )?,
+            "32px",
+            "removing author CSS must reveal the presentation attribute in the next layout",
+        );
         assert_eq!(second.svg_images.len(), 3);
         assert!(second.fragments.iter().any(|fragment| {
             matches!(
@@ -3518,6 +3988,69 @@ document.body.innerHTML = `<p id=line>All the <span id=atomic>words</span> after
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn atomic_inline_stream_respects_inherited_wrap_state_without_text_runs() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/atomic-inline-wrap-state.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.case{width:60px;font-size:0;line-height:0}
+.item{display:inline-block;width:40px;height:10px}
+#root-nowrap,.group{white-space:nowrap}
+</style>`;
+document.body.innerHTML = `
+<div id=root-nowrap class=case><i id=r0 class=item></i><i id=r1 class=item></i><i id=r2 class=item></i><i id=r3 class=item></i></div>
+<div id=nested class=case><span class=group><i id=n0 class=item></i><i id=n1 class=item></i></span><i id=n2 class=item></i></div>`;
+'installed'
+"#,
+        )?;
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(180, 80, 1.0))?
+            .ok_or_else(|| anyhow::anyhow!("atomic wrap-state fixture lost its layout root"))?;
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['r0','r1','r2','r3','n0','n1','n2'].map(id=>{const node=document.getElementById(id);const box=node.getBoundingClientRect();const parent=node.closest('.case').getBoundingClientRect();return [id,[box.x-parent.x,box.y-parent.y]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        let assert_point = |id: &str, expected: [f32; 2]| {
+            let actual = geometry[id]
+                .as_array()
+                .unwrap_or_else(|| panic!("missing geometry for {id}: {geometry}"));
+            for (index, expected) in expected.into_iter().enumerate() {
+                let actual = actual[index].as_f64().expect("numeric geometry") as f32;
+                assert!(
+                    (actual - expected).abs() <= 0.05,
+                    "{id}[{index}]: expected {expected}, got {actual}; geometry={geometry}"
+                );
+            }
+        };
+
+        for (id, point) in [
+            ("r0", [0.0, 0.0]),
+            ("r1", [40.0, 0.0]),
+            ("r2", [80.0, 0.0]),
+            ("r3", [120.0, 0.0]),
+            ("n0", [0.0, 0.0]),
+            ("n1", [40.0, 0.0]),
+            ("n2", [0.0, 10.0]),
+        ] {
+            assert_point(id, point);
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("atomic inline wrap-state fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn rounded_flex_max_content_width_does_not_rewrap_its_text() {
     run_page_vm_async_test(async move {
         let loader =
@@ -3541,13 +4074,15 @@ document.head.innerHTML = `<style>
 @font-face {{ font-family:MoliAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
 * {{ box-sizing:border-box }}
 html,body {{ margin:0 }}
+html {{ font:20px/normal MoliAhem }}
 .row {{ display:flex; justify-content:center; gap:8px; padding-top:20px }}
 .item {{ display:inline-flex; align-items:center; gap:8px; padding:10px 14px; border:1px solid; border-radius:24px }}
 .icon {{ width:20px; height:20px; flex:0 0 auto }}
 .text,#constrained {{ font-family:MoliAhem; font-size:9px }}
 #constrained {{ width:80px }}
+#metric-units {{ box-sizing:content-box; width:1ch; height:1lh; padding-left:1ex; padding-right:1cap; margin-top:1rlh }}
 </style>`;
-document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon></i><span class=text id=ask-text>Ask about files</span></div></div><div id=constrained>Ask about files</div>`;
+document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon></i><span class=text id=ask-text>Ask about files</span></div></div><div id=constrained>Ask about files</div><div id=metric-units></div>`;
 'installed'
 "#
         ))?;
@@ -3578,6 +4113,27 @@ document.body.innerHTML = `<div class=row><div class=item id=ask><i class=icon><
                 );
             }
         }
+        let metric_units = page_vm.vm_mut().eval(
+            r#"(() => {
+  const element = document.getElementById('metric-units');
+  const style = getComputedStyle(element);
+  const rect = element.getBoundingClientRect();
+  return [
+    style.width,
+    style.height,
+    style.paddingLeft,
+    style.paddingRight,
+    style.marginTop,
+    rect.width,
+    rect.height
+  ].join('|');
+})()"#,
+        )?;
+        assert_eq!(
+            metric_units,
+            "12px|20px|16px|16px|20px|44|20",
+            "font-relative units should use the same loaded face as text shaping"
+        );
         Ok::<_, anyhow::Error>(())
     })
     .await
@@ -3735,6 +4291,106 @@ document.body.innerHTML = `
     })
     .await
     .expect("inline offset fragment fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_settles_document_fonts_ready_after_loaded_font_layout() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_optional_resource_fetch_mask(
+            crate::protocol_types::OptionalResourceFetchMask::FONT,
+        );
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/font-ready-layout.html")?,
+        );
+        let encoded_font = include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../moli-layout/tests/fixtures/moli-ahem.woff2"
+        ));
+        let encoded = base64::engine::general_purpose::STANDARD.encode(encoded_font);
+
+        let initial = page_vm.vm_mut().eval(&format!(
+            r#"
+globalThis.__fontReadyBefore = document.fonts.ready;
+document.head.innerHTML = `<style>
+@font-face {{ font-family:MoliReadyAhem; src:url(data:font/woff2;base64,{encoded}) format('woff2') }}
+#text {{ display:inline-block; font:10px/normal MoliReadyAhem; height:1lh }}
+</style>`;
+document.body.innerHTML = '<span id=text>XXXX</span>';
+globalThis.__fontReadyDuring = document.fonts.ready;
+globalThis.__fontReadySettled = false;
+__fontReadyDuring.then(value => {{ __fontReadySettled = value === document.fonts; }});
+JSON.stringify({{
+  changed: __fontReadyBefore !== __fontReadyDuring,
+  stable: __fontReadyDuring === document.fonts.ready,
+  status: document.fonts.status,
+  settled: __fontReadySettled
+}})
+"#,
+        ))?;
+        assert_eq!(
+            initial,
+            r#"{"changed":true,"stable":true,"status":"loading","settled":false}"#,
+            "ready must reserve authored sources before task-boundary admission"
+        );
+        let document = page_vm.vm().document_handle_for_test();
+        let stylist = page_vm
+            .vm()
+            .retained_stylist_identity_for_document_for_test(document);
+
+        page_vm
+            .vm_mut()
+            .prime_document_lifecycle_processing_and_record_stylesheet_network_results();
+        assert_eq!(
+            page_vm.vm_mut().document_web_font_counts_for_test(),
+            (1, 1, 1)
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval("String(__fontReadySettled)")?,
+            "false",
+            "a font terminal must not resolve ready before fresh layout consumes it"
+        );
+
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(160, 80, 1.0))?
+            .expect("font-ready screenshot layout");
+        let expected_ttf = wuff::decompress_woff2(encoded_font).expect("valid WOFF2 fixture");
+        assert!(
+            snapshot
+                .fonts
+                .iter()
+                .any(|resource| resource.font.data.as_ref() == expected_ttf),
+            "the settling layout must consume the registered web font"
+        );
+        assert_eq!(
+            page_vm
+                .vm()
+                .retained_stylist_identity_for_document_for_test(document),
+            stylist,
+            "font availability should invalidate metric-dependent values without rebuilding the retained Stylist"
+        );
+        page_vm.vm_mut().eval("void 0")?;
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                r#"JSON.stringify({
+  settled: __fontReadySettled,
+  stable: __fontReadyDuring === document.fonts.ready,
+  status: document.fonts.status,
+  width: document.getElementById('text').getBoundingClientRect().width,
+  height: getComputedStyle(document.getElementById('text')).height
+})"#,
+            )?,
+            r#"{"settled":true,"stable":true,"status":"loaded","width":24,"height":"10px"}"#,
+            "ready must settle only after screenshot publishes Ahem-backed geometry and font-relative metrics"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("document FontFaceSet layout barrier fixture should run");
 }
 
 #[tokio::test(flavor = "current_thread")]

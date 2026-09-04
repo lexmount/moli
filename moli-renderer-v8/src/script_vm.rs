@@ -2559,6 +2559,21 @@ impl ScriptVm {
             // sampled geometry.
             tracing::warn!(?error, "failed to admit lazy images after layout refresh");
         }
+        if matches!(&result, Ok(Some(_)))
+            && let Err(error) = self.with_default_context_scope(|scope, runtime_ptr| {
+                let host = unsafe { &*runtime_ptr };
+                if let Some(cycle) = host.complete_document_web_font_cycle_after_layout() {
+                    crate::native_bridge::document::settle_document_font_face_set_load_cycle_for_document(
+                        scope,
+                        document,
+                        cycle,
+                    );
+                }
+                Ok(())
+            })
+        {
+            tracing::warn!(?error, "failed to settle document fonts after layout refresh");
+        }
         result
     }
 
@@ -2662,7 +2677,7 @@ impl ScriptVm {
         }
         let resources = resources.web_fonts().to_vec();
         self._context_host
-            .borrow()
+            .borrow_mut()
             .retain_document_web_font_slots(resources.iter());
         if resources.is_empty() {
             self._context_host
@@ -2790,7 +2805,7 @@ impl ScriptVm {
     ) {
         match self
             ._context_host
-            .borrow()
+            .borrow_mut()
             .complete_document_web_font(terminal)
         {
             web_fonts::DocumentWebFontCompletion::Registered(outcome) => tracing::debug!(

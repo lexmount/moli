@@ -434,6 +434,12 @@ _HARNESS_PROBE_EXPRESSION = """
   if (typeof window === 'undefined' || typeof location === 'undefined') return null;
   var trace = window.__bench_wpt_trace__;
   var bridgeInstalled = false;
+  var fontStatus = null;
+  try {
+    if (document.fonts && typeof document.fonts.status === 'string') {
+      fontStatus = document.fonts.status;
+    }
+  } catch (fontError) {}
   if (Array.isArray(trace)) {
     for (var i = 0; i < trace.length; i++) {
       if (trace[i] && trace[i].installing === true) {
@@ -444,10 +450,18 @@ _HARNESS_PROBE_EXPRESSION = """
   }
   return {
     bridgeInstalled: bridgeInstalled,
+    fontStatus: fontStatus,
     payload: typeof window.__bench_wpt__ === 'undefined' ? null : window.__bench_wpt__
   };
 })()
 """
+
+_SCREENSHOT_RENDERING_UPDATE_PARAMS = {
+    "format": "png",
+    "quality": 100,
+    "fromSurface": True,
+    "captureBeyondViewport": False,
+}
 
 
 def _normalized_case_path(value: str) -> str:
@@ -555,6 +569,7 @@ async def _run_one_case(
     case_path: str,
     url: str,
     timeout_seconds: float,
+    render_pending_fonts: bool = False,
 ) -> CaseResult:
     started = time.perf_counter()
     deadline = started + timeout_seconds
@@ -662,6 +677,35 @@ async def _run_one_case(
                         payload = candidate
                         if source in FINAL_PAYLOAD_SOURCES:
                             break
+            if (
+                render_pending_fonts
+                and navigation_observed
+                and value.get("fontStatus") == "loading"
+            ):
+                try:
+                    capture_id = await client.send(
+                        "Page.captureScreenshot",
+                        _SCREENSHOT_RENDERING_UPDATE_PARAMS,
+                        session_id=session_id,
+                    )
+                    _, capture_seen = await client.recv_until_id(
+                        capture_id,
+                        timeout=max(
+                            0.01,
+                            min(5.0, deadline - time.perf_counter()),
+                        ),
+                    )
+                    seen_messages.extend(capture_seen)
+                except (RawCdpError, asyncio.TimeoutError) as error:
+                    raise _PageSessionUnusable(
+                        CaseResult(
+                            case_path=case_path,
+                            url=url,
+                            status="error",
+                            duration_ms=(time.perf_counter() - started) * 1000.0,
+                            error=f"font rendering update failed: {_exception_text(error)}",
+                        )
+                    ) from error
         await asyncio.sleep(0.05)
 
     duration_ms = (time.perf_counter() - started) * 1000.0
@@ -821,12 +865,25 @@ async def _wait_for_reftest_ready(
         if (
             isinstance(value, dict)
             and value.get("href") == value.get("expectedHref")
+            and value.get("readyState") == "complete"
             and navigation_observed
         ):
             break
         await asyncio.sleep(0.025)
     else:
         raise asyncio.TimeoutError(f"navigation did not commit to {url}")
+
+    remaining = deadline - time.perf_counter()
+    if remaining <= 0:
+        raise asyncio.TimeoutError(f"reftest readiness timed out for {url}")
+    capture_id = await client.send(
+        "Page.captureScreenshot",
+        _SCREENSHOT_RENDERING_UPDATE_PARAMS,
+        session_id=session_id,
+    )
+    _, messages = await client.recv_until_id(capture_id, timeout=remaining)
+    seen_messages.extend(messages)
+    navigation_observed = navigation_observed or _has_navigation_evidence(messages, identity)
 
     remaining = deadline - time.perf_counter()
     if remaining <= 0:
@@ -907,12 +964,7 @@ async def _navigate_and_capture_reftest(
 
     capture_id = await client.send(
         "Page.captureScreenshot",
-        {
-            "format": "png",
-            "quality": 100,
-            "fromSurface": True,
-            "captureBeyondViewport": False,
-        },
+        _SCREENSHOT_RENDERING_UPDATE_PARAMS,
         session_id=session_id,
     )
     capture_response, capture_seen = await client.recv_until_id(
@@ -1473,6 +1525,7 @@ async def _run_async(
                         case_path=case_path,
                         url=url,
                         timeout_seconds=timeout_seconds,
+                        render_pending_fonts=effective_viewport is not None,
                     )
             except Exception as error:
                 # CDP / websocket / asyncio explosion mid-case.

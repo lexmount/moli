@@ -8,14 +8,32 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, HashMap},
+    fmt,
     sync::Arc,
 };
 
+use parking_lot::Mutex;
 use parley::{
-    FontContext, FontFamily, FontFamilyName, LayoutContext, TextStyle,
+    FontContext, FontFamily, FontFamilyName, FontVariation, FontVariations, LayoutContext,
+    TextStyle,
     fontique::{
-        Attributes, Blob, Collection, CollectionOptions, FontInfoOverride, FontStyle, FontWeight,
-        FontWidth, QueryFamily, QueryStatus,
+        Attributes, Blob, Collection, CollectionOptions, FallbackKey, FontInfoOverride, FontStyle,
+        FontWeight, FontWidth, Query, QueryFamily, QueryFont, QueryStatus, Script,
+    },
+};
+use skrifa::{
+    MetadataProvider as _,
+    charmap::Charmap,
+    instance::{LocationRef, Size},
+    metrics::{GlyphMetrics, Metrics},
+};
+use style::{
+    device::servo::FontMetricsProvider,
+    font_metrics::FontMetrics,
+    properties::style_structs::Font as StyloFont,
+    values::{
+        computed::{CSSPixelLength, Length, font::GenericFontFamily},
+        specified::font::QueryFontMetricsFlags,
     },
 };
 use thiserror::Error;
@@ -664,6 +682,397 @@ struct RegisteredWebFont {
     sfnt_bytes: Arc<[u8]>,
 }
 
+struct DocumentFontRegistrySnapshot {
+    system_font_policy: SystemFontPolicy,
+    generation: u64,
+    web_fonts: BTreeMap<String, RegisteredWebFont>,
+}
+
+/// Document-owned font selection state shared by Stylo metric resolution and
+/// Parley layout services.
+///
+/// The two consumers keep independent query/shaping caches, but they observe
+/// one validated web-font registry and therefore cannot disagree about which
+/// font generation is current for the document.
+#[derive(Clone)]
+pub struct DocumentFontMetricsProvider {
+    inner: Arc<Mutex<DocumentFontMetricsState>>,
+}
+
+struct DocumentFontMetricsState {
+    system_font_policy: SystemFontPolicy,
+    web_fonts: BTreeMap<String, RegisteredWebFont>,
+    registry_generation: u64,
+    document_context: FontMetricQueryContext,
+    system_context: Option<FontMetricQueryContext>,
+}
+
+struct FontMetricQueryContext {
+    font_context: FontContext,
+    system_font_family_resolver: Option<SystemFontFamilyResolver>,
+}
+
+struct PrimaryFontMetrics {
+    normal_line_height: Option<CSSPixelLength>,
+    x_height: Option<CSSPixelLength>,
+    cap_height: Option<CSSPixelLength>,
+    ascent: CSSPixelLength,
+}
+
+impl Default for PrimaryFontMetrics {
+    fn default() -> Self {
+        Self {
+            normal_line_height: None,
+            x_height: None,
+            cap_height: None,
+            ascent: CSSPixelLength::new(0.0),
+        }
+    }
+}
+
+fn find_font_for_character(query: &mut Query<'_>, character: char) -> Option<QueryFont> {
+    let mut selected = None;
+    query.matches_with(|candidate| {
+        if candidate
+            .charmap()
+            .is_some_and(|charmap| charmap.map(character).is_some())
+        {
+            selected = Some(candidate.clone());
+            QueryStatus::Stop
+        } else {
+            QueryStatus::Continue
+        }
+    });
+    selected
+}
+
+fn skrifa_location<'a>(
+    font_ref: &skrifa::FontRef<'a>,
+    variations: &[FontVariation],
+) -> skrifa::instance::Location {
+    font_ref.axes().location(variations.iter().map(|variation| {
+        (
+            skrifa::Tag::from_be_bytes(variation.tag.to_bytes()),
+            variation.value,
+        )
+    }))
+}
+
+fn rounded_normal_line_height(ascent: f32, descent: f32, leading: f32) -> f32 {
+    ascent.round() - descent.round() + leading.round()
+}
+
+fn primary_font_metrics(
+    query: &mut Query<'_>,
+    size: Size,
+    variations: &[FontVariation],
+) -> Option<PrimaryFontMetrics> {
+    // Blink selects the primary font with U+0020. This makes the metrics come
+    // from the same fallback-resolved face that supplies ordinary text rather
+    // than an arbitrary face that happens to match the CSS attributes.
+    let selected = find_font_for_character(query, ' ')?;
+    let font_ref = skrifa::FontRef::from_index(selected.blob.as_ref(), selected.index).ok()?;
+    let location = skrifa_location(&font_ref, variations);
+    let metrics = Metrics::new(&font_ref, size, LocationRef::from(&location));
+    // Blink's SimpleFontData establishes normal line spacing by rounding the
+    // ascent, descent, and leading independently. Preserve that boundary here
+    // instead of exposing font-table fractions through CSS `lh` geometry.
+    let normal_line_height =
+        rounded_normal_line_height(metrics.ascent, metrics.descent, metrics.leading);
+
+    Some(PrimaryFontMetrics {
+        normal_line_height: (normal_line_height > 0.0)
+            .then(|| CSSPixelLength::new(normal_line_height)),
+        x_height: metrics
+            .x_height
+            .filter(|height| *height != 0.0)
+            .map(CSSPixelLength::new),
+        cap_height: metrics.cap_height.map(CSSPixelLength::new),
+        ascent: CSSPixelLength::new(metrics.ascent.max(0.0)),
+    })
+}
+
+fn glyph_advance(
+    query: &mut Query<'_>,
+    character: char,
+    fallback_script: Script,
+    size: Size,
+    variations: &[FontVariation],
+) -> Option<CSSPixelLength> {
+    query.set_fallbacks(FallbackKey::new(fallback_script, None));
+    let selected = find_font_for_character(query, character)?;
+    let font_ref = skrifa::FontRef::from_index(selected.blob.as_ref(), selected.index).ok()?;
+    let location = skrifa_location(&font_ref, variations);
+    let glyph = Charmap::new(&font_ref).map(character)?;
+    GlyphMetrics::new(&font_ref, size, LocationRef::from(&location))
+        .advance_width(glyph)
+        .map(CSSPixelLength::new)
+}
+
+impl fmt::Debug for DocumentFontMetricsProvider {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("DocumentFontMetricsProvider")
+            .finish_non_exhaustive()
+    }
+}
+
+impl DocumentFontMetricsProvider {
+    pub fn new(system_font_policy: SystemFontPolicy) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(DocumentFontMetricsState::new(
+                system_font_policy,
+                BTreeMap::new(),
+            ))),
+        }
+    }
+
+    fn system_font_policy(&self) -> SystemFontPolicy {
+        self.inner.lock().system_font_policy
+    }
+
+    fn shares_registry_with(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+
+    pub fn clear_web_fonts(&self) {
+        let mut state = self.inner.lock();
+        if state.web_fonts.is_empty() {
+            return;
+        }
+        state.web_fonts.clear();
+        state.refresh_document_context();
+    }
+
+    fn register_web_font(
+        &self,
+        slot: String,
+        font: RegisteredWebFont,
+    ) -> WebFontRegistrationOutcome {
+        let mut state = self.inner.lock();
+        let outcome = match state.web_fonts.get(&slot) {
+            Some(current) if current == &font => WebFontRegistrationOutcome::Unchanged,
+            Some(_) => WebFontRegistrationOutcome::Replaced,
+            None => WebFontRegistrationOutcome::Added,
+        };
+        if outcome == WebFontRegistrationOutcome::Unchanged {
+            return outcome;
+        }
+        state.web_fonts.insert(slot, font);
+        state.refresh_document_context();
+        outcome
+    }
+
+    fn remove_web_font(&self, slot: &str) -> bool {
+        let mut state = self.inner.lock();
+        if state.web_fonts.remove(slot).is_none() {
+            return false;
+        }
+        state.refresh_document_context();
+        true
+    }
+
+    fn registry_snapshot_if_changed(
+        &self,
+        observed_generation: Option<u64>,
+    ) -> Option<DocumentFontRegistrySnapshot> {
+        let state = self.inner.lock();
+        if observed_generation == Some(state.registry_generation) {
+            return None;
+        }
+        Some(DocumentFontRegistrySnapshot {
+            system_font_policy: state.system_font_policy,
+            generation: state.registry_generation,
+            web_fonts: state.web_fonts.clone(),
+        })
+    }
+
+    fn web_font_count(&self) -> usize {
+        self.inner.lock().web_fonts.len()
+    }
+}
+
+impl DocumentFontMetricsState {
+    fn new(
+        system_font_policy: SystemFontPolicy,
+        web_fonts: BTreeMap<String, RegisteredWebFont>,
+    ) -> Self {
+        let document_context = FontMetricQueryContext::new(system_font_policy, &web_fonts);
+        Self {
+            system_font_policy,
+            web_fonts,
+            registry_generation: 0,
+            document_context,
+            system_context: None,
+        }
+    }
+
+    fn refresh_document_context(&mut self) {
+        self.document_context =
+            FontMetricQueryContext::new(self.system_font_policy, &self.web_fonts);
+        self.registry_generation = self
+            .registry_generation
+            .checked_add(1)
+            .expect("document font registry generation space exhausted");
+    }
+
+    fn query_font_metrics(
+        &mut self,
+        vertical: bool,
+        font: &StyloFont,
+        base_size: CSSPixelLength,
+        flags: QueryFontMetricsFlags,
+    ) -> FontMetrics {
+        let context = if flags.contains(QueryFontMetricsFlags::USE_USER_FONT_SET) {
+            &mut self.document_context
+        } else {
+            self.system_context.get_or_insert_with(|| {
+                FontMetricQueryContext::new(self.system_font_policy, &BTreeMap::new())
+            })
+        };
+        context.query_font_metrics(vertical, font, base_size, flags)
+    }
+}
+
+impl FontMetricQueryContext {
+    fn new(
+        system_font_policy: SystemFontPolicy,
+        web_fonts: &BTreeMap<String, RegisteredWebFont>,
+    ) -> Self {
+        let mut collection = Collection::new(CollectionOptions {
+            shared: false,
+            system_fonts: system_font_policy.is_enabled(),
+        });
+        let system_font_family_resolver = system_font_policy
+            .is_enabled()
+            .then(|| SystemFontFamilyResolver::new(&mut collection));
+        let mut font_context = FontContext {
+            collection,
+            source_cache: Default::default(),
+        };
+        for font in web_fonts.values() {
+            register_font(&mut font_context, font);
+        }
+        Self {
+            font_context,
+            system_font_family_resolver,
+        }
+    }
+
+    fn query_font_metrics(
+        &mut self,
+        vertical: bool,
+        font: &StyloFont,
+        base_size: CSSPixelLength,
+        flags: QueryFontMetricsFlags,
+    ) -> FontMetrics {
+        let mut query_style = TextStyle {
+            font_family: FontFamily::List(Cow::Owned(
+                font.font_family
+                    .families
+                    .list
+                    .iter()
+                    .map(crate::stylo_to_parley::font_family_name)
+                    .collect(),
+            )),
+            font_size: base_size.px(),
+            font_width: crate::stylo_to_parley::font_width(font.font_stretch),
+            font_style: crate::stylo_to_parley::font_style(font.font_style),
+            font_weight: FontWeight::new(font.font_weight.value()),
+            font_variations: FontVariations::List(Cow::Owned(
+                crate::stylo_to_parley::font_variations(&font.font_variation_settings),
+            )),
+            ..TextStyle::default()
+        };
+        if let Some(resolver) = self.system_font_family_resolver.as_mut() {
+            resolver.resolve_text_style(&mut self.font_context.collection, &mut query_style);
+        }
+
+        let parsed_source;
+        let families = match &query_style.font_family {
+            FontFamily::Single(family) => vec![family],
+            FontFamily::List(families) => families.iter().collect(),
+            FontFamily::Source(source) => {
+                parsed_source = FontFamilyName::parse_css_list(source)
+                    .filter_map(Result::ok)
+                    .collect::<Vec<_>>();
+                parsed_source.iter().collect()
+            }
+        };
+        let query_families = families.iter().map(|family| match family {
+            FontFamilyName::Named(name) => QueryFamily::Named(name),
+            FontFamilyName::Generic(family) => QueryFamily::Generic(*family),
+        });
+        let mut query = self
+            .font_context
+            .collection
+            .query(&mut self.font_context.source_cache);
+        query.set_families(query_families);
+        query.set_attributes(Attributes::new(
+            query_style.font_width,
+            query_style.font_style,
+            query_style.font_weight,
+        ));
+        // A CSS family list is followed by platform fallback. U+0020 and
+        // U+0030 use the ordinary Latin fallback chain; U+6C34 switches the
+        // same query to Han below. This mirrors Parley's shaping selector and
+        // Blink's character-specific primary-font lookup.
+        let latin_fallback = Script::from_bytes(*b"Latn");
+        query.set_fallbacks(FallbackKey::new(latin_fallback, None));
+        let variations = match &query_style.font_variations {
+            FontVariations::List(variations) => variations.as_ref(),
+            FontVariations::Source(_) => &[],
+        };
+        let size = Size::new(base_size.px());
+        let primary = primary_font_metrics(&mut query, size, variations).unwrap_or_default();
+
+        FontMetrics {
+            normal_line_height: primary.normal_line_height,
+            x_height: primary.x_height,
+            zero_advance_measure: (!vertical && flags.contains(QueryFontMetricsFlags::NEEDS_CH))
+                .then(|| glyph_advance(&mut query, '0', latin_fallback, size, variations))
+                .flatten(),
+            cap_height: primary.cap_height,
+            ic_width: (!vertical && flags.contains(QueryFontMetricsFlags::NEEDS_IC))
+                .then(|| {
+                    glyph_advance(
+                        &mut query,
+                        '\u{6c34}',
+                        Script::from_bytes(*b"Hani"),
+                        size,
+                        variations,
+                    )
+                })
+                .flatten(),
+            ascent: primary.ascent,
+            script_percent_scale_down: None,
+            script_script_percent_scale_down: None,
+        }
+    }
+}
+
+impl FontMetricsProvider for DocumentFontMetricsProvider {
+    fn query_font_metrics(
+        &self,
+        vertical: bool,
+        font: &StyloFont,
+        base_size: CSSPixelLength,
+        flags: QueryFontMetricsFlags,
+    ) -> FontMetrics {
+        self.inner
+            .lock()
+            .query_font_metrics(vertical, font, base_size, flags)
+    }
+
+    fn base_size_for_generic(&self, generic: GenericFontFamily) -> Length {
+        let size = match generic {
+            GenericFontFamily::Monospace => 13.0,
+            _ => 16.0,
+        };
+        Length::new(size)
+    }
+}
+
 /// Lazily initialized text resources reused by successive layout demands for
 /// one committed Document.
 ///
@@ -674,8 +1083,8 @@ pub struct DocumentLayoutServices {
     // FontContext and LayoutContext are both large. Keep them off the stack so
     // embedding this sidecar in ScriptVm does not inflate every VM frame.
     parley: Option<Box<ParleyDocumentServices>>,
-    system_font_policy: SystemFontPolicy,
-    web_fonts: BTreeMap<String, RegisteredWebFont>,
+    parley_registry_generation: Option<u64>,
+    font_metrics_provider: DocumentFontMetricsProvider,
     pub(crate) text_layout_passes: u64,
 }
 
@@ -687,27 +1096,31 @@ impl Default for DocumentLayoutServices {
 
 impl DocumentLayoutServices {
     /// Creates an uninitialized document sidecar.
-    pub const fn new() -> Self {
-        Self {
-            parley: None,
-            system_font_policy: SystemFontPolicy::Enabled,
-            web_fonts: BTreeMap::new(),
-            text_layout_passes: 0,
-        }
+    pub fn new() -> Self {
+        Self::with_system_font_policy(SystemFontPolicy::Enabled)
     }
 
     /// Creates a document sidecar with an explicit platform-font policy.
-    pub const fn with_system_font_policy(system_font_policy: SystemFontPolicy) -> Self {
+    pub fn with_system_font_policy(system_font_policy: SystemFontPolicy) -> Self {
+        Self::with_font_metrics_provider(DocumentFontMetricsProvider::new(system_font_policy))
+    }
+
+    /// Creates a shaping sidecar backed by an existing document font registry.
+    pub fn with_font_metrics_provider(font_metrics_provider: DocumentFontMetricsProvider) -> Self {
         Self {
             parley: None,
-            system_font_policy,
-            web_fonts: BTreeMap::new(),
+            parley_registry_generation: None,
+            font_metrics_provider,
             text_layout_passes: 0,
         }
     }
 
-    pub const fn system_font_policy(&self) -> SystemFontPolicy {
-        self.system_font_policy
+    pub fn system_font_policy(&self) -> SystemFontPolicy {
+        self.font_metrics_provider.system_font_policy()
+    }
+
+    pub fn shares_font_registry_with(&self, provider: &DocumentFontMetricsProvider) -> bool {
+        self.font_metrics_provider.shares_registry_with(provider)
     }
 
     /// Returns whether a demand with non-empty text has initialized Parley.
@@ -721,7 +1134,7 @@ impl DocumentLayoutServices {
     }
 
     pub fn web_font_count(&self) -> usize {
-        self.web_fonts.len()
+        self.font_metrics_provider.web_font_count()
     }
 
     /// Adds or replaces one owner-validated font face.
@@ -739,48 +1152,37 @@ impl DocumentLayoutServices {
         registration.face.validate()?;
         let sfnt_bytes = decode_web_font_bytes(&registration.bytes)?;
         validate_registered_font(&registration.face, Arc::clone(&sfnt_bytes))?;
-        let font = RegisteredWebFont {
-            face: registration.face,
-            sfnt_bytes,
-        };
-        let outcome = match self.web_fonts.get(&registration.slot) {
-            Some(current) if current == &font => WebFontRegistrationOutcome::Unchanged,
-            Some(_) => WebFontRegistrationOutcome::Replaced,
-            None => WebFontRegistrationOutcome::Added,
-        };
+        let outcome = self.font_metrics_provider.register_web_font(
+            registration.slot,
+            RegisteredWebFont {
+                face: registration.face,
+                sfnt_bytes,
+            },
+        );
         if outcome == WebFontRegistrationOutcome::Unchanged {
             return Ok(outcome);
-        }
-        self.web_fonts.insert(registration.slot, font);
-        if self.parley.is_some() {
-            self.parley = Some(Box::new(build_parley_services(
-                self.system_font_policy,
-                &self.web_fonts,
-            )));
         }
         Ok(outcome)
     }
 
     /// Removes a font slot. Returns whether a registered face was removed.
     pub fn remove_web_font(&mut self, slot: &str) -> bool {
-        if self.web_fonts.remove(slot).is_none() {
+        if !self.font_metrics_provider.remove_web_font(slot) {
             return false;
-        }
-        if self.parley.is_some() {
-            self.parley = Some(Box::new(build_parley_services(
-                self.system_font_policy,
-                &self.web_fonts,
-            )));
         }
         true
     }
 
     pub(crate) fn parley_mut(&mut self) -> &mut ParleyDocumentServices {
-        if self.parley.is_none() {
+        if let Some(snapshot) = self
+            .font_metrics_provider
+            .registry_snapshot_if_changed(self.parley_registry_generation)
+        {
             self.parley = Some(Box::new(build_parley_services(
-                self.system_font_policy,
-                &self.web_fonts,
+                snapshot.system_font_policy,
+                &snapshot.web_fonts,
             )));
+            self.parley_registry_generation = Some(snapshot.generation);
         }
         self.parley.as_deref_mut().expect("Parley was initialized")
     }
@@ -935,11 +1337,189 @@ fn decode_web_font_bytes(bytes: &[u8]) -> Result<Arc<[u8]>, WebFontRegistrationE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use style::values::computed::font::{
+        FamilyName, FontFamily as StyloFontFamily, FontFamilyList, FontFamilyNameSyntax,
+        SingleFontFamily,
+    };
 
     const TEST_TTF: &[u8] = include_bytes!("../tests/fixtures/moli-ahem.ttf");
     const TEST_CJK_TTF: &[u8] = include_bytes!("../tests/fixtures/moli-cjk.ttf");
     const TEST_WOFF: &[u8] = include_bytes!("../tests/fixtures/moli-ahem.woff");
     const TEST_WOFF2: &[u8] = include_bytes!("../tests/fixtures/moli-ahem.woff2");
+
+    fn stylo_font_with_families(families: &[&str]) -> StyloFont {
+        let mut font = StyloFont::initial_values();
+        font.font_family = StyloFontFamily {
+            families: FontFamilyList {
+                list: style::ArcSlice::from_iter(families.iter().map(|family| {
+                    SingleFontFamily::FamilyName(FamilyName {
+                        name: style::Atom::from(*family),
+                        syntax: FontFamilyNameSyntax::Quoted,
+                    })
+                })),
+            },
+            is_system_font: false,
+            is_initial: false,
+        };
+        font
+    }
+
+    fn stylo_font(family: &str) -> StyloFont {
+        stylo_font_with_families(&[family])
+    }
+
+    #[test]
+    fn normal_line_height_rounds_each_font_metric_like_blink() {
+        assert_eq!(rounded_normal_line_height(9.6, -2.04, 0.0), 12.0);
+        assert_eq!(rounded_normal_line_height(9.4, -2.49, 0.51), 12.0);
+    }
+
+    #[test]
+    fn stylo_metrics_and_parley_shaping_share_the_document_font_registry() {
+        let provider = DocumentFontMetricsProvider::new(SystemFontPolicy::Disabled);
+        let mut services = DocumentLayoutServices::with_font_metrics_provider(provider.clone());
+        services
+            .register_web_font(WebFontRegistration::new(
+                "ahem",
+                WebFontFace::new("Moli Metrics"),
+                TEST_TTF.to_vec(),
+            ))
+            .unwrap();
+
+        let font = stylo_font("Moli Metrics");
+        let size = CSSPixelLength::new(20.0);
+        let metrics = provider.query_font_metrics(
+            false,
+            &font,
+            size,
+            QueryFontMetricsFlags::USE_USER_FONT_SET
+                | QueryFontMetricsFlags::NEEDS_CH
+                | QueryFontMetricsFlags::NEEDS_IC,
+        );
+        let mut text_style = web_font_style("Moli Metrics", 400.0);
+        text_style.font_size = size.px();
+        let parley = services.parley_mut();
+        parley.resolve_font_families(&mut text_style, None);
+        let inline = parley
+            .inline_font_metrics(&text_style, None)
+            .expect("the registered font should provide primary inline metrics");
+
+        assert_eq!(
+            metrics.normal_line_height.map(|value| value.px()),
+            Some(inline.line_height)
+        );
+        let zero_advance = metrics
+            .zero_advance_measure
+            .expect("the registered font should expose its zero glyph advance")
+            .px();
+        assert!((zero_advance - 12.0).abs() < 0.001);
+        assert!(metrics.x_height.is_some());
+        assert!(metrics.cap_height.is_some());
+        assert!(metrics.ascent.px() > 0.0);
+    }
+
+    #[test]
+    fn metric_character_lookup_follows_the_css_family_fallback_chain() {
+        let provider = DocumentFontMetricsProvider::new(SystemFontPolicy::Disabled);
+        let mut services = DocumentLayoutServices::with_font_metrics_provider(provider.clone());
+        services
+            .register_web_font(WebFontRegistration::new(
+                "cjk",
+                WebFontFace::new("Moli CJK"),
+                TEST_CJK_TTF.to_vec(),
+            ))
+            .unwrap();
+        services
+            .register_web_font(WebFontRegistration::new(
+                "ahem",
+                WebFontFace::new("Moli Metrics"),
+                TEST_TTF.to_vec(),
+            ))
+            .unwrap();
+
+        let size = CSSPixelLength::new(20.0);
+        let cjk_only = provider.query_font_metrics(
+            false,
+            &stylo_font("Moli CJK"),
+            size,
+            QueryFontMetricsFlags::USE_USER_FONT_SET | QueryFontMetricsFlags::NEEDS_CH,
+        );
+        assert_eq!(
+            cjk_only.zero_advance_measure, None,
+            "the primary CJK fixture deliberately has no digit-zero glyph"
+        );
+
+        let with_fallback = provider.query_font_metrics(
+            false,
+            &stylo_font_with_families(&["Moli CJK", "Moli Metrics"]),
+            size,
+            QueryFontMetricsFlags::USE_USER_FONT_SET | QueryFontMetricsFlags::NEEDS_CH,
+        );
+        assert_eq!(
+            with_fallback.normal_line_height, cjk_only.normal_line_height,
+            "primary metrics must continue to come from the first family containing U+0020"
+        );
+        let zero_advance = with_fallback
+            .zero_advance_measure
+            .expect("the fallback family should supply U+0030")
+            .px();
+        assert!(
+            (zero_advance - 12.0).abs() < 0.001,
+            "ch must use the later family that actually supplies U+0030; got {zero_advance}"
+        );
+    }
+
+    #[test]
+    fn user_font_metrics_respect_query_flags_and_registry_removal() {
+        let provider = DocumentFontMetricsProvider::new(SystemFontPolicy::Disabled);
+        let mut services = DocumentLayoutServices::with_font_metrics_provider(provider.clone());
+        services
+            .register_web_font(WebFontRegistration::new(
+                "ahem",
+                WebFontFace::new("Moli Metrics"),
+                TEST_TTF.to_vec(),
+            ))
+            .unwrap();
+        let font = stylo_font("Moli Metrics");
+        let size = CSSPixelLength::new(20.0);
+
+        assert_eq!(
+            provider
+                .query_font_metrics(false, &font, size, QueryFontMetricsFlags::NEEDS_CH,)
+                .normal_line_height,
+            None,
+            "media-query metric resolution must not consult the document user-font set"
+        );
+        assert!(services.remove_web_font("ahem"));
+        assert_eq!(
+            provider
+                .query_font_metrics(false, &font, size, QueryFontMetricsFlags::USE_USER_FONT_SET,)
+                .normal_line_height,
+            None
+        );
+    }
+
+    #[test]
+    fn parley_rebuilds_after_the_shared_registry_is_cleared() {
+        let provider = DocumentFontMetricsProvider::new(SystemFontPolicy::Disabled);
+        let mut services = DocumentLayoutServices::with_font_metrics_provider(provider.clone());
+        services
+            .register_web_font(WebFontRegistration::new(
+                "ahem",
+                WebFontFace::new("Moli Metrics"),
+                TEST_TTF.to_vec(),
+            ))
+            .unwrap();
+        assert!(has_family(&mut services, "Moli Metrics"));
+
+        provider.clear_web_fonts();
+
+        assert_eq!(services.web_font_count(), 0);
+        assert!(
+            !has_family(&mut services, "Moli Metrics"),
+            "the next shaping query must observe document-level registry retirement"
+        );
+    }
 
     #[test]
     fn missing_x_height_uses_the_blink_ascent_fallback() {

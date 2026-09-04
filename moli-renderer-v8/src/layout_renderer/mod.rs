@@ -69,6 +69,12 @@ fn build_native_layout_pass_recursive(
         build_layout_pass_with_embedded_frames(&source, &mut styles, services, request, &mut frames)
     };
     styles.trace_profile(document);
+    if let Ok(pass) = result.as_ref() {
+        runtime.publish_remembered_layout_size_observations(
+            &pass.tree,
+            styles.take_remembered_size_observations(),
+        );
+    }
     document_stack.pop();
     result
 }
@@ -107,10 +113,14 @@ impl EmbeddedFrameRenderer<DomHandle> for NativeEmbeddedFrameRenderer<'_> {
         else {
             return Ok(None);
         };
+        let font_metrics_provider = self.runtime.document_font_metrics_provider(document);
         let mut services = self
             .embedded_document_services
             .remove(&document)
-            .unwrap_or_default();
+            .filter(|services| services.shares_font_registry_with(&font_metrics_provider))
+            .unwrap_or_else(|| {
+                DocumentLayoutServices::with_font_metrics_provider(font_metrics_provider)
+            });
         let request = if self.capture_paint {
             let mut capture = moli_layout::PaintCaptureRequest::viewport();
             capture.include_backgrounds = self.include_backgrounds;

@@ -7,8 +7,8 @@ use crate::LayoutError;
 use super::{
     hit_test::{LayoutCaretPosition, LayoutHit},
     model::{
-        LayoutBoxModel, LayoutFragmentId, LayoutOutputBoxId, LayoutPoint, LayoutQuad,
-        LayoutResolvedGridTracks, LayoutSize, LayoutViewport,
+        LayoutBoxModel, LayoutFragmentId, LayoutOutputBoxId, LayoutPhysicalBoxStrut, LayoutPoint,
+        LayoutQuad, LayoutResolvedGridTracks, LayoutSize, LayoutViewport,
     },
     pass_result::{LayoutFlushReason, LayoutPassMetrics},
     tree::FrozenLayoutTree,
@@ -97,6 +97,7 @@ pub struct LayoutIntersectionGeometry {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayoutQuery<N> {
     DocumentMetrics,
+    DocumentScrollingElement,
     BoxModel {
         source: N,
     },
@@ -115,6 +116,14 @@ pub enum LayoutQuery<N> {
     },
     /// Used Grid row and column tracks for a principal Grid container.
     UsedGridTracks {
+        source: N,
+    },
+    /// CSSOM resolved `width`/`height` for a principal CSS box.
+    UsedBoxSize {
+        source: N,
+    },
+    /// CSSOM resolved physical margins for a principal CSS box.
+    UsedMargin {
         source: N,
     },
     ScrollIntoViewGeometry {
@@ -161,12 +170,15 @@ impl<N> LayoutQueryBatch<N> {
 #[derive(Clone, Debug, PartialEq)]
 pub enum LayoutQueryAnswer<N> {
     DocumentMetrics(LayoutDocumentMetrics),
+    DocumentScrollingElement(Option<N>),
     BoxModel(Option<LayoutBoxModel>),
     ClientRects(Vec<LayoutQuad>),
     ContentQuads(Vec<LayoutQuad>),
     TextRangeRects(Vec<LayoutQuad>),
     ElementMetrics(Option<LayoutElementMetrics<N>>),
     UsedGridTracks(Option<LayoutResolvedGridTracks>),
+    UsedBoxSize(Option<LayoutSize>),
+    UsedMargin(Option<LayoutPhysicalBoxStrut>),
     ScrollIntoViewGeometry(Option<LayoutScrollIntoViewGeometry<N>>),
     IntersectionGeometry(Option<LayoutIntersectionGeometry>),
     HitTest(Option<LayoutHit<N>>),
@@ -219,6 +231,9 @@ where
                         content_size: self.content_size,
                     })
                 }
+                LayoutQuery::DocumentScrollingElement => {
+                    LayoutQueryAnswer::DocumentScrollingElement(self.document_scrolling_element())
+                }
                 LayoutQuery::BoxModel { source } => {
                     LayoutQueryAnswer::BoxModel(self.box_model_for_source(*source))
                 }
@@ -239,6 +254,12 @@ where
                 }
                 LayoutQuery::UsedGridTracks { source } => {
                     LayoutQueryAnswer::UsedGridTracks(self.used_grid_tracks_for_source(*source))
+                }
+                LayoutQuery::UsedBoxSize { source } => {
+                    LayoutQueryAnswer::UsedBoxSize(self.used_box_size_for_source(*source))
+                }
+                LayoutQuery::UsedMargin { source } => {
+                    LayoutQueryAnswer::UsedMargin(self.used_margin_for_source(*source))
                 }
                 LayoutQuery::ScrollIntoViewGeometry { source } => {
                     LayoutQueryAnswer::ScrollIntoViewGeometry(

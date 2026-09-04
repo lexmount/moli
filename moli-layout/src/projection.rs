@@ -3,17 +3,17 @@ use std::{collections::HashMap, fmt::Debug, hash::Hash, time::Instant};
 use taffy::ResolveOrZero;
 
 use crate::layout_tree::LayoutCoordinateSpace;
-use crate::overflow::{OverflowProjection, inset_rect, offset_rect, outset_rect};
+use crate::overflow::{OverflowProjection, offset_rect};
 use crate::stacking::{PaintOrderEvent, build_paint_order};
 use crate::style::ResolvedLayoutTransform;
 use crate::{
     FrozenCoordinateSpace, FrozenLayoutBox, FrozenLayoutTree, LayoutAnonymousReason,
     LayoutBoxGeometry, LayoutBoxId, LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId,
     LayoutError, LayoutFlushReason, LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId,
-    LayoutFragmentKind, LayoutOutputBoxId, LayoutPassMetrics, LayoutPassResult, LayoutPoint,
-    LayoutRect, LayoutScrollExtent, LayoutScrollbarAxis, LayoutScrollbarGeometry, LayoutSize,
-    LayoutTransform2D, LayoutViewport, LayoutWorld, PaintCaptureRequest, PaintDiagnostic,
-    PaintDiagnosticSeverity,
+    LayoutFragmentKind, LayoutInlineAxis, LayoutOutputBoxId, LayoutPassMetrics, LayoutPassResult,
+    LayoutPhysicalBoxStrut, LayoutPoint, LayoutRect, LayoutScrollExtent, LayoutScrollbarAxis,
+    LayoutScrollbarGeometry, LayoutSize, LayoutTransform2D, LayoutUsedBoxValues, LayoutViewport,
+    LayoutWorld, PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity,
 };
 
 pub(crate) struct LayoutPassPhaseMetrics {
@@ -429,9 +429,68 @@ where
                 .flatten()
             }));
             let semantics = layout_box.element_semantics();
+            let is_document_element = self.world.is_document_element(box_id);
+            let is_document_body = self.world.is_document_body(box_id);
+            let exposes_viewport_client_size = match self.world.document_mode() {
+                Some(crate::LayoutDocumentMode::Quirks) => is_document_body,
+                Some(
+                    crate::LayoutDocumentMode::NoQuirks | crate::LayoutDocumentMode::LimitedQuirks,
+                ) => is_document_element,
+                None => false,
+            };
+            let used_values = layout_box.is_css_box().then(|| {
+                let layout = layout_box.final_layout();
+                let mut used_margin = layout.margin;
+                let is_in_flow_grid_item = !layout_box.style.is_out_of_flow()
+                    && layout_box.layout_parent.is_some_and(|parent| {
+                        self.world.boxes[parent.index()]
+                            .style
+                            .display()
+                            .is_grid_container()
+                    });
+                if is_in_flow_grid_item {
+                    // Blink stores Grid auto-margin alignment in the fragment
+                    // offset, while its fragment margin strut keeps those auto
+                    // edges at zero. Taffy exposes the absorbed alignment
+                    // space through `Layout.margin`, so normalize only those
+                    // authored-auto edges at the browser fragment boundary.
+                    let authored_margin = layout_box.style.taffy.margin;
+                    if authored_margin.top.is_auto() {
+                        used_margin.top = 0.0;
+                    }
+                    if authored_margin.right.is_auto() {
+                        used_margin.right = 0.0;
+                    }
+                    if authored_margin.bottom.is_auto() {
+                        used_margin.bottom = 0.0;
+                    }
+                    if authored_margin.left.is_auto() {
+                        used_margin.left = 0.0;
+                    }
+                }
+                let margin = LayoutPhysicalBoxStrut::new(
+                    used_margin.top,
+                    used_margin.right,
+                    used_margin.bottom,
+                    used_margin.left,
+                );
+                let box_rect = match layout_box.style.taffy.box_sizing {
+                    taffy::BoxSizing::ContentBox => geometry.content_box,
+                    taffy::BoxSizing::BorderBox => geometry.border_box,
+                };
+                LayoutUsedBoxValues {
+                    size: LayoutSize::new(box_rect.width, box_rect.height),
+                    margin,
+                }
+            });
             self.boxes.push(LayoutBoxGeometry {
                 id,
                 effective_zoom: layout_box.style.effective_zoom(),
+                inline_axis: if layout_box.style.uses_horizontal_writing_mode() {
+                    LayoutInlineAxis::Horizontal
+                } else {
+                    LayoutInlineAxis::Vertical
+                },
                 structural_parent: layout_box
                     .structural_parent
                     .map(|parent| LayoutOutputBoxId::from_index(parent.index())),
@@ -448,9 +507,11 @@ where
                 padding_box: geometry.padding_box,
                 border_box: geometry.border_box,
                 margin_box: geometry.margin_box,
+                used_values,
                 fragments: Vec::new(),
                 layout_origin_in_document: layout_origins[index],
                 is_body_element: semantics.is_some_and(|element| element.is_html_element("body")),
+                exposes_viewport_client_size,
                 is_table_offset_parent: semantics.is_some_and(|element| {
                     element.is_html_element("table")
                         || element.is_html_element("td")
@@ -919,6 +980,7 @@ where
         embedded_frames_complete: bool,
     ) -> FrozenLayoutTree<N> {
         let root_box = LayoutOutputBoxId::from_index(self.world.root.index());
+        let document_scrolling_element = self.world.document_scrolling_element();
         let mut coordinate_spaces = self
             .coordinate_spaces
             .into_iter()
@@ -971,6 +1033,7 @@ where
             self.viewport_scroll,
             content_size,
             root_box,
+            document_scrolling_element,
             boxes,
             self.fragments,
             self.scroll_proxy_links,
@@ -1254,90 +1317,67 @@ where
         owner_layout.border.left + owner_layout.padding.left + vertical_leading_gutter,
         owner_layout.border.top + owner_layout.padding.top + horizontal_leading_gutter,
     );
-    let containing_width = (owner_layout.size.width
-        - owner_layout.border.left
-        - owner_layout.border.right
-        - owner_layout.padding.left
-        - owner_layout.padding.right)
-        - if owner_id == world.root || world.is_viewport_defining_body(owner_id) {
-            0.0
-        } else {
-            owner
-                .style
-                .scrollbar_gutter_thickness(LayoutScrollbarAxis::Vertical)
-        };
-    let containing_width = containing_width.max(0.0);
+    let has_viewport_scrollbars =
+        owner_id == world.root || world.is_viewport_defining_body(owner_id);
+    let content_box_size = taffy::Size {
+        width: (owner_layout.size.width
+            - owner_layout.border.left
+            - owner_layout.border.right
+            - owner_layout.padding.left
+            - owner_layout.padding.right
+            - if has_viewport_scrollbars {
+                0.0
+            } else {
+                owner
+                    .style
+                    .scrollbar_gutter_thickness(LayoutScrollbarAxis::Vertical)
+            })
+        .max(0.0),
+        height: (owner_layout.size.height
+            - owner_layout.border.top
+            - owner_layout.border.bottom
+            - owner_layout.padding.top
+            - owner_layout.padding.bottom
+            - if has_viewport_scrollbars {
+                0.0
+            } else {
+                owner
+                    .style
+                    .scrollbar_gutter_thickness(LayoutScrollbarAxis::Horizontal)
+            })
+        .max(0.0),
+    };
+    let containing_inline_size = owner
+        .style
+        .writing_mode()
+        .to_logical(content_box_size)
+        .inline_size;
     let inline_box = &world.boxes[fragment.box_id.index()];
     let style = &inline_box.style;
     let padding = style.taffy.padding.resolve_or_zero(
-        Some(containing_width),
+        Some(containing_inline_size),
         crate::style::resolve_stylo_calc_value,
     );
     let border = style.taffy.border.resolve_or_zero(
-        Some(containing_width),
+        Some(containing_inline_size),
         crate::style::resolve_stylo_calc_value,
     );
     let margin = style.taffy.margin.resolve_or_zero(
-        Some(containing_width),
+        Some(containing_inline_size),
         crate::style::resolve_stylo_calc_value,
     );
-    let ltr = style.direction() == crate::style::InlineDirection::Ltr;
-    let has_left_edge = if ltr {
-        fragment.has_start_edge
-    } else {
-        fragment.has_end_edge
-    };
-    let has_right_edge = if ltr {
-        fragment.has_end_edge
-    } else {
-        fragment.has_start_edge
-    };
-    let left_margin = if has_left_edge {
-        margin.left.max(0.0)
-    } else {
-        0.0
-    };
-    let right_margin = if has_right_edge {
-        margin.right.max(0.0)
-    } else {
-        0.0
-    };
-    let left_padding = if has_left_edge { padding.left } else { 0.0 };
-    let right_padding = if has_right_edge { padding.right } else { 0.0 };
-    let left_border = if has_left_edge { border.left } else { 0.0 };
-    let right_border = if has_right_edge { border.right } else { 0.0 };
-    let border_box = LayoutRect::new(
-        content_origin.x + fragment.rect.x + left_margin,
-        content_origin.y + fragment.rect.y - padding.top - border.top,
-        (fragment.rect.width - left_margin - right_margin).max(0.0),
-        fragment.rect.height + padding.top + padding.bottom + border.top + border.bottom,
-    );
-    let padding_box = inset_rect(
-        border_box,
-        border.top,
-        right_border,
-        border.bottom,
-        left_border,
-    );
-    let content_box = inset_rect(
-        padding_box,
-        padding.top,
-        right_padding,
-        padding.bottom,
-        left_padding,
-    );
-    let margin_box = outset_rect(
-        border_box,
-        margin.top,
-        right_margin,
-        margin.bottom,
-        left_margin,
+    let geometry = crate::inline::inline_fragment_box_geometry(
+        fragment,
+        style.writing_direction(),
+        margin,
+        padding,
+        border,
     );
     LayoutFragmentBoxModel {
-        content: content_box,
-        padding: padding_box,
-        border: border_box,
-        margin: margin_box,
+        content: offset_rect(geometry.content_rect, content_origin),
+        padding: offset_rect(geometry.padding_rect, content_origin),
+        border: offset_rect(geometry.border_rect, content_origin),
+        margin: offset_rect(geometry.margin_rect, content_origin),
     }
 }
 

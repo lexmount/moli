@@ -212,7 +212,7 @@ pub(crate) fn text_style(computed: &ComputedValues) -> TextStyle<'static, 'stati
     }
 }
 
-fn font_family_name(family: &SingleFontFamily) -> FontFamilyName<'static> {
+pub(crate) fn font_family_name(family: &SingleFontFamily) -> FontFamilyName<'static> {
     match family {
         SingleFontFamily::FamilyName(name) => {
             let name = name.name.as_ref();
@@ -251,11 +251,11 @@ fn generic_font_family(family: GenericFontFamily) -> GenericFamily {
     }
 }
 
-fn font_width(stretch: FontStretch) -> FontWidth {
+pub(crate) fn font_width(stretch: FontStretch) -> FontWidth {
     FontWidth::from_percentage(stretch.0.to_float())
 }
 
-fn font_style(style: StyloFontStyle) -> FontStyle {
+pub(crate) fn font_style(style: StyloFontStyle) -> FontStyle {
     match style {
         StyloFontStyle::NORMAL => FontStyle::Normal,
         StyloFontStyle::ITALIC => FontStyle::Italic,
@@ -263,7 +263,7 @@ fn font_style(style: StyloFontStyle) -> FontStyle {
     }
 }
 
-fn font_variations(settings: &FontVariationSettings) -> Vec<FontVariation> {
+pub(crate) fn font_variations(settings: &FontVariationSettings) -> Vec<FontVariation> {
     settings
         .0
         .iter()

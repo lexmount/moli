@@ -51,13 +51,14 @@ pub use layout_tree::{
     GeometryProvider, LayoutAnswers, LayoutBoxGeometry, LayoutBoxModel, LayoutCaretPosition,
     LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId, LayoutCssImageReference,
     LayoutDocumentMetrics, LayoutElementMetrics, LayoutFlushReason, LayoutFragment,
-    LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit,
+    LayoutFragmentBoxModel, LayoutFragmentId, LayoutFragmentKind, LayoutHit, LayoutInlineAxis,
     LayoutIntersectionGeometry, LayoutNodeOutput, LayoutOutputBoxId, LayoutPaintedSurfaceHit,
-    LayoutPassMetrics, LayoutPassResult, LayoutPoint, LayoutQuad, LayoutQuery, LayoutQueryAnswer,
-    LayoutQueryBatch, LayoutRect, LayoutResolvedGridTrackList, LayoutResolvedGridTracks,
-    LayoutScrollContainerMetrics, LayoutScrollExtent, LayoutScrollIntoViewGeometry, LayoutSize,
-    LayoutTransform2D, LayoutTreeRetentionMetrics, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES,
-    MAX_RETAINED_LAYOUT_FRAGMENTS, MAX_RETAINED_LAYOUT_TREE_BYTES,
+    LayoutPassMetrics, LayoutPassResult, LayoutPhysicalBoxStrut, LayoutPoint, LayoutQuad,
+    LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutRect, LayoutResolvedGridTrackList,
+    LayoutResolvedGridTracks, LayoutScrollContainerMetrics, LayoutScrollExtent,
+    LayoutScrollIntoViewGeometry, LayoutSize, LayoutTransform2D, LayoutTreeRetentionMetrics,
+    LayoutUsedBoxValues, LayoutViewport, MAX_RETAINED_LAYOUT_BOXES, MAX_RETAINED_LAYOUT_FRAGMENTS,
+    MAX_RETAINED_LAYOUT_TREE_BYTES,
 };
 pub use normalize::{NormalizedBoxNode, NormalizedBoxTree, NormalizedFormattingContext};
 pub use normalize_source::{
@@ -87,19 +88,21 @@ pub use snapshot::{
     pixel_snap_paint_rect,
 };
 pub use source::{
-    LayoutElementCategory, LayoutElementMetadata, LayoutElementSemantics, LayoutFormControlData,
-    LayoutFormControlKind, LayoutImageResource, LayoutInputControlKind, LayoutListData,
-    LayoutListRole, LayoutNamespace, LayoutPseudo, LayoutReplacedKind, LayoutSource,
-    LayoutSourceKind, LayoutStyleResolver, LayoutTableData, LayoutTableRole, LayoutTextSelection,
-    ReplacedMetrics, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
+    LayoutDocumentContext, LayoutDocumentMode, LayoutElementCategory, LayoutElementMetadata,
+    LayoutElementSemantics, LayoutFormControlData, LayoutFormControlKind, LayoutImageResource,
+    LayoutInputControlKind, LayoutListData, LayoutListRole, LayoutNamespace, LayoutPseudo,
+    LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
+    LayoutTableRole, LayoutTextSelection, ReplacedMetrics, ReplacedNaturalSizing,
+    ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
 };
 pub use style::{
     LayoutDisplay, LayoutInlineAlignment, LayoutListMarkerPosition, LayoutListMarkerType,
-    LayoutPosition, ResolvedLayoutStyle,
+    LayoutPosition, LayoutRememberedSize, LayoutRememberedSizePolicy, ResolvedLayoutStyle,
 };
 pub use text::{
-    DocumentLayoutServices, SystemFontPolicy, WebFontFace, WebFontRegistration,
-    WebFontRegistrationError, WebFontRegistrationOutcome, WebFontStyle, WebFontUnicodeRange,
+    DocumentFontMetricsProvider, DocumentLayoutServices, SystemFontPolicy, WebFontFace,
+    WebFontRegistration, WebFontRegistrationError, WebFontRegistrationOutcome, WebFontStyle,
+    WebFontUnicodeRange,
 };
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,

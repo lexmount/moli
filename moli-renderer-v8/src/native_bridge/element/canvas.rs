@@ -1,3 +1,5 @@
+use moli_dom::html_microsyntax::parse_non_negative_integer;
+
 use crate::{
     context_bootstrap::{
         CanvasContextKind, attach_canvas_like_context_object,
@@ -123,32 +125,9 @@ fn canvas_dimension_value<'s>(
         return default;
     };
     element_attribute(unsafe { &*runtime_ptr }, handle, name)
-        .and_then(|value| parse_unsigned_long_prefix(&value))
+        .and_then(|value| parse_non_negative_integer(&value))
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(default)
-}
-
-fn parse_unsigned_long_prefix(value: &str) -> Option<u32> {
-    let value = value.trim_start_matches(|ch: char| ch.is_ascii_whitespace());
-    let (value, negative) = if let Some(value) = value.strip_prefix('+') {
-        (value, false)
-    } else if let Some(value) = value.strip_prefix('-') {
-        (value, true)
-    } else {
-        (value, false)
-    };
-    let digits = value
-        .chars()
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
-    if digits.is_empty() {
-        return None;
-    }
-    let value = digits.parse::<u32>().ok()?;
-    if negative && value != 0 {
-        return None;
-    }
-    Some(value)
 }
 
 pub(crate) fn canvas_get_context_callback<'s>(
@@ -226,11 +205,11 @@ pub(crate) fn canvas_transfer_control_to_offscreen_callback<'s>(
         return;
     };
     let width = element_attribute(unsafe { &*runtime_ptr }, handle, "width")
-        .and_then(|value| parse_unsigned_long_prefix(&value))
+        .and_then(|value| parse_non_negative_integer(&value))
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(300);
     let height = element_attribute(unsafe { &*runtime_ptr }, handle, "height")
-        .and_then(|value| parse_unsigned_long_prefix(&value))
+        .and_then(|value| parse_non_negative_integer(&value))
         .filter(|value| *value <= i32::MAX as u32)
         .unwrap_or(150);
     let value = build_offscreen_canvas_object(scope, width, height)

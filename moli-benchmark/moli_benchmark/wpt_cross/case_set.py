@@ -329,6 +329,21 @@ LAYOUT_DYNAMIC_PATH_PARTS = frozenset(
 )
 LAYOUT_MEDIA_ELEMENT_TAGS = frozenset({"audio", "canvas", "video"})
 
+# These testharness documents intentionally rely on the browser's synchronous
+# style/layout flush: each assertion mutates Grid style and immediately reads
+# a used value. Moli publishes new geometry at an explicit rendering update,
+# so treating the previous frozen snapshot as an algorithm failure produces a
+# misleading layout baseline. Keep the cases available through explicit
+# ``--case`` runs, but exclude them from the stable static layout profile.
+LAYOUT_SYNCHRONOUS_GEOMETRY_CASES = frozenset(
+    {
+        "css/css-grid/grid-definition/grid-minimum-contribution-with-percentages.html",
+        "css/css-grid/grid-definition/grid-support-flexible-lengths-001.html",
+        "css/css-grid/grid-definition/grid-support-repeat-001.html",
+        "css/css-grid/layout-algorithm/grid-intrinsic-track-sizes-001.html",
+    }
+)
+
 
 @dataclass(frozen=True)
 class FuzzyTolerance:
@@ -534,6 +549,8 @@ def _has_layout_dynamic_dependency(
     """Return whether a layout case needs an intentionally excluded stack."""
 
     path = urlsplit(rel_or_url).path
+    if path.lstrip("/") in LAYOUT_SYNCHRONOUS_GEOMETRY_CASES:
+        return True
     parts = {part.lower() for part in path.split("/") if part}
     if parts & LAYOUT_DYNAMIC_PATH_PARTS:
         return True

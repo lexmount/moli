@@ -801,43 +801,50 @@ fn css_style_border_side_idl_setter_preserves_css_math_shorthand() {
 
 #[test]
 fn css_math_computed_values_resolve_known_percentage_basis() {
-    let mut vm = new_storage_test_vm("https://css-math-computed-basis.test/");
+    let mut vm = new_parsed_test_vm(
+        "https://css-math-computed-basis.test/",
+        r#"<html style="font-size:16px"><head></head><body></body></html>"#,
+    );
 
     let result = vm
         .eval(
             r#"
 (() => {
-  const root = document.documentElement || document.appendChild(document.createElement('html'));
-  const head = document.head || root.appendChild(document.createElement('head'));
-  const body = document.body || root.appendChild(document.createElement('body'));
+  const body = document.body;
   const parent = document.createElement('div');
   parent.style.cssText = 'width: 100px; height: 570px;';
   const target = document.createElement('div');
-  target.style.fontSize = '16px';
+  target.style.cssText = `
+    font-size: 16px;
+    background-position: calc(100% - 100% + 20em);
+    height: calc(60% - 50% + 3em);
+    margin-left: min(20px, 10%);
+    width: max((min(10%, 30px) + 10px) * 2 + 10px, 5em + 5%);
+  `;
   parent.appendChild(target);
   body.appendChild(parent);
 
-  target.style.backgroundPosition = 'calc(100% - 100% + 20em)';
-  const backgroundPosition = getComputedStyle(target).backgroundPosition;
-  target.style.height = 'calc(60% - 50% + 3em)';
-  const height = getComputedStyle(target).height;
-  target.style.marginLeft = 'min(20px, 10%)';
-  const marginLeft = getComputedStyle(target).marginLeft;
-  target.style.width = 'max((min(10%, 30px) + 10px) * 2 + 10px, 5em + 5%)';
-  const width = getComputedStyle(target).width;
-  target.style.marginLeft = 'min(1cm)';
-  const minCm = getComputedStyle(target).marginLeft;
-  target.style.marginLeft = '1cm';
-  const cm = getComputedStyle(target).marginLeft;
-  const absoluteLengthEquivalent = String(minCm === cm);
-
-  root.style.fontSize = '30px';
   const remParent = document.createElement('div');
   remParent.style.width = '520px';
   const remTarget = document.createElement('div');
+  remTarget.style.width = 'calc(5% + 4rem)';
   remParent.appendChild(remTarget);
   body.appendChild(remParent);
-  remTarget.style.width = 'calc(5% + 4rem)';
+
+  const minCmTarget = document.createElement('div');
+  minCmTarget.style.marginLeft = 'min(1cm)';
+  const cmTarget = document.createElement('div');
+  cmTarget.style.marginLeft = '1cm';
+  body.append(minCmTarget, cmTarget);
+
+  const computed = getComputedStyle(target);
+  const backgroundPosition = computed.backgroundPosition;
+  const height = computed.height;
+  const marginLeft = computed.marginLeft;
+  const width = computed.width;
+  const absoluteLengthEquivalent = String(
+    getComputedStyle(minCmTarget).marginLeft === getComputedStyle(cmTarget).marginLeft
+  );
   const remWidth = getComputedStyle(remTarget).width;
 
   return [backgroundPosition, height, marginLeft, width, absoluteLengthEquivalent, remWidth].join('|');
@@ -846,7 +853,7 @@ fn css_math_computed_values_resolve_known_percentage_basis() {
         )
         .expect("CSS math computed basis probe should evaluate");
 
-    assert_eq!(result, "calc(0% + 320px) 50%|105px|10px|85px|true|146px");
+    assert_eq!(result, "calc(0% + 320px) 50%|105px|10px|85px|true|90px");
 }
 
 #[test]

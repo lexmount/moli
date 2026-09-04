@@ -49,6 +49,62 @@ pub struct LayoutSize {
     pub height: f32,
 }
 
+/// Four physical used-value edges of a CSS box.
+///
+/// Unlike a bounding rectangle, a strut preserves negative and independently
+/// resolved opposite edges. That distinction matters for layout-dependent
+/// CSSOM values such as percentage and automatic margins.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LayoutPhysicalBoxStrut {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+impl LayoutPhysicalBoxStrut {
+    pub const ZERO: Self = Self::new(0.0, 0.0, 0.0, 0.0);
+
+    pub const fn new(top: f32, right: f32, bottom: f32, left: f32) -> Self {
+        Self {
+            top,
+            right,
+            bottom,
+            left,
+        }
+    }
+}
+
+/// CSSOM-observable used values retained for a principal CSS box.
+///
+/// Size and margin come from one numeric layout epoch. Keeping them behind a
+/// single applicability boundary prevents consumers from observing a partial
+/// box state for non-box layout objects.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayoutUsedBoxValues {
+    pub size: LayoutSize,
+    pub margin: LayoutPhysicalBoxStrut,
+}
+
+/// Physical axis corresponding to CSS inline progression for a frozen box.
+///
+/// Geometry in the frozen tree is physical, but caret and Range algorithms
+/// still need to know which physical axis came from logical inline flow. This
+/// survives the layout pass for exactly that purpose; query code must not
+/// infer writing mode from a rectangle's aspect ratio.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LayoutInlineAxis {
+    #[default]
+    Horizontal,
+    Vertical,
+}
+
+impl LayoutInlineAxis {
+    pub const fn is_horizontal(self) -> bool {
+        matches!(self, Self::Horizontal)
+    }
+}
+
 impl LayoutSize {
     pub const ZERO: Self = Self::new(0.0, 0.0);
 
@@ -133,6 +189,67 @@ impl LayoutRect {
         let right = self.right().max(other.right());
         let bottom = self.bottom().max(other.bottom());
         Self::new(left, top, (right - left).max(0.0), (bottom - top).max(0.0))
+    }
+}
+
+impl LayoutInlineAxis {
+    pub(crate) const fn point_coordinate(self, point: LayoutPoint) -> f32 {
+        match self {
+            Self::Horizontal => point.x,
+            Self::Vertical => point.y,
+        }
+    }
+
+    pub(crate) const fn inline_start(self, rect: LayoutRect) -> f32 {
+        match self {
+            Self::Horizontal => rect.x,
+            Self::Vertical => rect.y,
+        }
+    }
+
+    pub(crate) const fn inline_size(self, rect: LayoutRect) -> f32 {
+        match self {
+            Self::Horizontal => rect.width,
+            Self::Vertical => rect.height,
+        }
+    }
+
+    pub(crate) const fn block_start(self, rect: LayoutRect) -> f32 {
+        match self {
+            Self::Horizontal => rect.y,
+            Self::Vertical => rect.x,
+        }
+    }
+
+    pub(crate) const fn block_size(self, rect: LayoutRect) -> f32 {
+        match self {
+            Self::Horizontal => rect.height,
+            Self::Vertical => rect.width,
+        }
+    }
+
+    pub(crate) fn slice(self, rect: LayoutRect, start_ratio: f32, size_ratio: f32) -> LayoutRect {
+        match self {
+            Self::Horizontal => LayoutRect::new(
+                rect.x + rect.width * start_ratio,
+                rect.y,
+                rect.width * size_ratio,
+                rect.height,
+            ),
+            Self::Vertical => LayoutRect::new(
+                rect.x,
+                rect.y + rect.height * start_ratio,
+                rect.width,
+                rect.height * size_ratio,
+            ),
+        }
+    }
+
+    pub(crate) fn caret_rect(self, rect: LayoutRect, inline_offset: f32) -> LayoutRect {
+        match self {
+            Self::Horizontal => LayoutRect::new(inline_offset, rect.y, 0.0, rect.height),
+            Self::Vertical => LayoutRect::new(rect.x, inline_offset, rect.width, 0.0),
+        }
     }
 }
 
@@ -365,6 +482,8 @@ pub struct LayoutBoxGeometry {
     /// metrics divide their untransformed layout values by this factor, as
     /// Blink's `AdjustForAbsoluteZoom` does at its DOM binding boundary.
     pub effective_zoom: f32,
+    /// Physical axis selected by the box's inherited `writing-mode`.
+    pub inline_axis: LayoutInlineAxis,
     /// Source/LayoutObject ancestry before formatting-tree normalization.
     pub structural_parent: Option<LayoutOutputBoxId>,
     /// Parent in the normalized formatting tree.
@@ -378,10 +497,20 @@ pub struct LayoutBoxGeometry {
     pub padding_box: LayoutRect,
     pub border_box: LayoutRect,
     pub margin_box: LayoutRect,
+    /// CSSOM used size and physical margins selected during this layout epoch.
+    ///
+    /// Margins stay separate from `margin_box`: opposite negative margins can
+    /// make that rectangle degenerate, while CSSOM still exposes each edge.
+    /// Values remain in effective-zoomed layout space; query projection removes
+    /// the retained zoom. `None` means this is not a principal CSS box.
+    pub used_values: Option<LayoutUsedBoxValues>,
     pub fragments: Vec<LayoutFragmentId>,
     /// Untransformed border-box origin in document layout coordinates.
     pub layout_origin_in_document: LayoutPoint,
     pub is_body_element: bool,
+    /// Whether CSSOM View exposes the layout viewport, rather than this box's
+    /// padding box, through `clientWidth` and `clientHeight`.
+    pub exposes_viewport_client_size: bool,
     pub is_table_offset_parent: bool,
     pub establishes_positioned_containing_block: bool,
     pub establishes_fixed_containing_block: bool,

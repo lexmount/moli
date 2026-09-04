@@ -1,13 +1,13 @@
 use std::{collections::HashMap, fmt::Debug, hash::Hash, sync::Arc};
 
 use style::Atom;
-use taffy::{Cache, Layout, Point, Style};
+use taffy::{Cache, Layout, Point, Size, Style};
 
 use crate::{
-    LayoutCssImageReference, LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo,
-    LayoutResolvedGridTracks, LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarGutter,
-    LayoutScrollbarWidth, ResolvedLayoutStyle, inline::InlineFormattingContext,
-    replaced::ReplacedContext, style::LayoutOverflowMode,
+    LayoutCssImageReference, LayoutDocumentContext, LayoutDocumentMode, LayoutElementSemantics,
+    LayoutError, LayoutPoint, LayoutPseudo, LayoutResolvedGridTracks, LayoutScrollbarAxis,
+    LayoutScrollbarColors, LayoutScrollbarGutter, LayoutScrollbarWidth, ResolvedLayoutStyle,
+    inline::InlineFormattingContext, replaced::ReplacedContext, style::LayoutOverflowMode,
 };
 
 /// Dense identifier scoped to exactly one [`LayoutWorld`].
@@ -75,6 +75,28 @@ pub enum LayoutBoxKind {
 impl LayoutBoxKind {
     pub(crate) const fn is_text(self) -> bool {
         matches!(self, Self::Text)
+    }
+
+    /// Whether this box is one of CSS Display's internal table boxes.
+    ///
+    /// A table wrapper and its caption are deliberately excluded. Properties
+    /// such as `aspect-ratio` apply to those boxes, but not to row groups,
+    /// rows, columns, or cells. Anonymous repair boxes obey the same used-value
+    /// boundary as their source-backed counterparts.
+    pub(crate) const fn is_internal_table_box(self) -> bool {
+        matches!(
+            self,
+            Self::TableRowGroup
+                | Self::TableHeaderGroup
+                | Self::TableFooterGroup
+                | Self::TableColumnGroup
+                | Self::TableColumn
+                | Self::TableRow
+                | Self::TableCell
+                | Self::AnonymousTableRowGroup
+                | Self::AnonymousTableRow
+                | Self::AnonymousTableCell
+        )
     }
 
     pub(crate) const fn debug_name(self) -> &'static str {
@@ -270,6 +292,12 @@ pub struct LayoutBox<N> {
 #[derive(Debug)]
 pub(crate) struct ViewportLayoutState {
     pub(crate) children: Vec<LayoutBoxId>,
+    /// Physical content-box size of the initial containing block.
+    ///
+    /// This is browser-owned layout-view state. Orthogonal child constraint
+    /// spaces use it only when their immediate containing block has no
+    /// definite size along the child's inline axis.
+    pub(crate) initial_containing_block_size: Size<f32>,
     pub(crate) style: Style<Atom>,
     pub(crate) cache: Cache,
     pub(crate) unrounded_layout: Layout,
@@ -472,6 +500,7 @@ impl Default for ViewportLayoutState {
     fn default() -> Self {
         Self {
             children: Vec::new(),
+            initial_containing_block_size: Size::ZERO,
             style: Style::default(),
             cache: Cache::new(),
             unrounded_layout: Layout::with_order(0),
@@ -553,9 +582,18 @@ impl<N> LayoutBox<N> {
     /// Resolve the used ratio at the layout-node boundary, after both authored
     /// style and natural replaced-element sizing are available.
     pub(crate) fn resolved_aspect_ratio(&self) -> Option<taffy::ResolvedAspectRatio> {
-        let natural_ratio = self
-            .replaced_context
-            .and_then(|context| context.inherent_ratio());
+        if self.kind.is_internal_table_box() {
+            return None;
+        }
+        // Blink drops a replaced element's natural ratio when either used
+        // size-containment axis applies. An authored `<ratio>` remains
+        // authoritative, and `auto <ratio>` may still select its fallback.
+        let natural_ratio = (!self.applies_any_size_containment())
+            .then(|| {
+                self.replaced_context
+                    .and_then(|context| context.inherent_ratio())
+            })
+            .flatten();
         self.style.resolved_aspect_ratio(natural_ratio)
     }
 }
@@ -570,9 +608,8 @@ where
     pub(crate) source_mapping: HashMap<N, LayoutBoxId>,
     pub(crate) display_contents_mapping: HashMap<N, Vec<LayoutBoxId>>,
     pub(crate) root: LayoutBoxId,
-    /// The root is the document element only for a complete document source.
-    /// Subtree and synthetic sources still use the same internal root slot.
-    pub(crate) root_is_document_element: bool,
+    /// Present only when the source root is the canonical document element.
+    pub(crate) document_context: Option<LayoutDocumentContext<N>>,
     pub(crate) viewport_scroll_policy: ViewportScrollPolicy,
     pub(crate) viewport_layout: ViewportLayoutState,
     pub(crate) css_image_references: Vec<LayoutCssImageReference<N>>,
@@ -585,13 +622,16 @@ impl<N> LayoutWorld<N>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    pub(crate) fn new(root: LayoutBox<N>, root_is_document_element: bool) -> Self {
+    pub(crate) fn new(
+        root: LayoutBox<N>,
+        document_context: Option<LayoutDocumentContext<N>>,
+    ) -> Self {
         Self {
             boxes: vec![root],
             source_mapping: HashMap::new(),
             display_contents_mapping: HashMap::new(),
             root: LayoutBoxId::from_index(0),
-            root_is_document_element,
+            document_context,
             viewport_scroll_policy: ViewportScrollPolicy::default(),
             viewport_layout: ViewportLayoutState::default(),
             css_image_references: Vec::new(),
@@ -745,7 +785,74 @@ where
     }
 
     pub(crate) fn is_document_element(&self, id: LayoutBoxId) -> bool {
-        self.root_is_document_element && id == self.root
+        self.document_context.is_some() && id == self.root
+    }
+
+    pub(crate) fn is_document_body(&self, id: LayoutBoxId) -> bool {
+        self.document_context
+            .and_then(LayoutDocumentContext::body)
+            .is_some_and(|body| self.source_mapping.get(&body) == Some(&id))
+    }
+
+    pub(crate) fn document_mode(&self) -> Option<LayoutDocumentMode> {
+        self.document_context.map(LayoutDocumentContext::mode)
+    }
+
+    /// Whether this exact document box receives HTML's quirks-mode intrinsic
+    /// block-size floor.
+    pub(crate) fn is_quirky_viewport_filler(&self, id: LayoutBoxId) -> bool {
+        if self.document_mode() != Some(LayoutDocumentMode::Quirks)
+            || (!self.is_document_element(id) && !self.is_document_body(id))
+        {
+            return false;
+        }
+        let style = &self.boxes[id.index()].style;
+        !matches!(
+            style.display(),
+            crate::LayoutDisplay::None | crate::LayoutDisplay::Contents
+        ) && !style.display().is_inline_level()
+            && !style.is_absolute_positioned()
+            && !style.is_fixed_positioned()
+            && !style.is_floated()
+    }
+
+    /// Resolve CSSOM View's document scrolling element from the same styles
+    /// and source identities frozen for this layout pass.
+    pub(crate) fn document_scrolling_element(&self) -> Option<N> {
+        let context = self.document_context?;
+        if context.mode() != LayoutDocumentMode::Quirks {
+            return Some(context.document_element());
+        }
+        let body = context.body()?;
+        (!self.body_is_potentially_scrollable(body)).then_some(body)
+    }
+
+    fn body_is_potentially_scrollable(&self, body: N) -> bool {
+        let Some(body_box) = self.source_mapping.get(&body).copied() else {
+            return false;
+        };
+        let Some(context) = self.document_context else {
+            return false;
+        };
+        let Some(root_box) = self
+            .source_mapping
+            .get(&context.document_element())
+            .copied()
+        else {
+            return false;
+        };
+        [root_box, body_box].into_iter().all(|id| {
+            self.boxes[id.index()]
+                .style
+                .overflow_modes()
+                .into_iter()
+                .all(|overflow| {
+                    !matches!(
+                        overflow,
+                        LayoutOverflowMode::Visible | LayoutOverflowMode::Clip
+                    )
+                })
+        })
     }
 
     pub(crate) fn replace_children(
@@ -1061,9 +1168,18 @@ where
         element_semantics: Option<LayoutElementSemantics>,
         anonymous_reason: Option<LayoutAnonymousReason>,
         kind: LayoutBoxKind,
-        style: ResolvedLayoutStyle,
+        mut style: ResolvedLayoutStyle,
         text: Option<Arc<str>>,
     ) -> LayoutBox<N> {
+        if kind.is_internal_table_box() {
+            // Keep the authored/computed value in `preferred_aspect_ratio`.
+            // Only the numeric backend projection is suppressed: CSS Sizing
+            // excludes internal table boxes from `aspect-ratio`, and the table
+            // formatter supplies their used track and cell sizes. Chromium
+            // represents the same boundary with its table-cell constraint
+            // space before generic block-size resolution.
+            style.taffy.aspect_ratio = None;
+        }
         let capability_diagnostics =
             default_capability_diagnostics(kind, element_semantics.as_ref(), &style);
         LayoutBox {

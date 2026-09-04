@@ -45,6 +45,21 @@ pub(crate) fn answer_queries(
                     ),
                 })
             }
+            LayoutQuery::DocumentScrollingElement => {
+                let element = if runtime.dom_host().document_quirks_mode_for_handle(document)
+                    == Some(selectors::matching::QuirksMode::Quirks)
+                {
+                    runtime
+                        .dom_host()
+                        .document_body_handle_for_document(document)
+                } else {
+                    runtime
+                        .dom_host()
+                        .dom()
+                        .document_element_handle_for_document(document)
+                };
+                LayoutQueryAnswer::DocumentScrollingElement(element)
+            }
             LayoutQuery::BoxModel { source } => {
                 LayoutQueryAnswer::BoxModel(mock_box_model(runtime, *source))
             }
@@ -70,6 +85,8 @@ pub(crate) fn answer_queries(
                 LayoutQueryAnswer::ElementMetrics(mock_element_metrics(runtime, *source))
             }
             LayoutQuery::UsedGridTracks { .. } => LayoutQueryAnswer::UsedGridTracks(None),
+            LayoutQuery::UsedBoxSize { .. } => LayoutQueryAnswer::UsedBoxSize(None),
+            LayoutQuery::UsedMargin { .. } => LayoutQueryAnswer::UsedMargin(None),
             LayoutQuery::ScrollIntoViewGeometry { source } => {
                 LayoutQueryAnswer::ScrollIntoViewGeometry(mock_scroll_into_view_geometry(
                     runtime, document, *source,

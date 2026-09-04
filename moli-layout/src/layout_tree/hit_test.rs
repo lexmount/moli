@@ -271,17 +271,18 @@ where
         let space = self.coordinate_space(top_entry.coordinate_space)?;
         let inverse = space.local_to_viewport.inverse()?;
         let local_point = inverse.map_point(viewport_point);
-        let caret_x = if local_point.x <= fragment.rect.x + fragment.rect.width / 2.0 {
-            fragment.rect.x
-        } else {
-            fragment.rect.right()
-        };
-        let rect = space.local_to_viewport.map_rect(LayoutRect::new(
-            caret_x,
-            fragment.rect.y,
-            0.0,
-            fragment.rect.height,
-        ));
+        let inline_axis = self.boxes.get(top_box.index())?.geometry.inline_axis;
+        let inline_start = inline_axis.inline_start(fragment.rect);
+        let inline_size = inline_axis.inline_size(fragment.rect);
+        let caret_offset =
+            if inline_axis.point_coordinate(local_point) <= inline_start + inline_size / 2.0 {
+                inline_start
+            } else {
+                inline_start + inline_size
+            };
+        let rect = space
+            .local_to_viewport
+            .map_rect(inline_axis.caret_rect(fragment.rect, caret_offset));
         Some(LayoutCaretPosition {
             source: top_entry.source,
             utf16_offset: None,
@@ -343,26 +344,27 @@ where
         };
         let space = self.coordinate_space(entry.coordinate_space)?;
         let local_point = space.local_to_viewport.inverse()?.map_point(viewport_point);
+        let inline_axis = self.boxes.get(box_id.index())?.geometry.inline_axis;
         let source_len = source_utf16_range
             .end
             .saturating_sub(source_utf16_range.start);
-        let on_left_half = local_point.x <= fragment.rect.x + fragment.rect.width * 0.5;
-        let at_source_start = if *rtl { !on_left_half } else { on_left_half };
+        let inline_start = inline_axis.inline_start(fragment.rect);
+        let inline_size = inline_axis.inline_size(fragment.rect);
+        let on_low_half =
+            inline_axis.point_coordinate(local_point) <= inline_start + inline_size * 0.5;
+        let at_source_start = if *rtl { !on_low_half } else { on_low_half };
         let fragment_offset = if at_source_start { 0 } else { source_len };
-        let caret_x = if at_source_start == *rtl {
-            fragment.rect.right()
+        let caret_offset = if at_source_start == *rtl {
+            inline_start + inline_size
         } else {
-            fragment.rect.x
+            inline_start
         };
         Some(LayoutCaretPosition {
             source: entry.source,
             utf16_offset: Some(source_utf16_range.start + fragment_offset),
-            rect: space.local_to_viewport.map_rect(LayoutRect::new(
-                caret_x,
-                fragment.rect.y,
-                0.0,
-                fragment.rect.height,
-            )),
+            rect: space
+                .local_to_viewport
+                .map_rect(inline_axis.caret_rect(fragment.rect, caret_offset)),
             ancestor_boxes: self.ancestor_box_models(*box_id),
         })
     }

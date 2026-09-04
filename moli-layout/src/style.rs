@@ -29,7 +29,7 @@ use style::{
         generics::{
             box_::{
                 BaselineShift as GenericBaselineShift, BaselineShiftKeyword,
-                Perspective as GenericPerspective,
+                GenericContainIntrinsicSize, Perspective as GenericPerspective,
             },
             flex::GenericFlexBasis,
             grid::GenericGridTemplateComponent,
@@ -39,15 +39,17 @@ use style::{
             transform::{Rotate, Scale, Translate},
             ui::GenericScrollbarColor,
         },
-        specified::box_::{DisplayInside, DisplayOutside},
+        specified::box_::{ContainerType, DisplayInside, DisplayOutside},
         specified::{
             TextAlignKeyword, WillChangeBits,
+            align::AlignFlags,
             text::{TextTransform, TextTransformCase},
         },
     },
 };
 use taffy::{
-    BoxSizing, Display as TaffyDisplay, Position as TaffyPosition, ResolvedAspectRatio, Size, Style,
+    BoxSizing, Display as TaffyDisplay, LogicalSize, Position as TaffyPosition,
+    ResolvedAspectRatio, Size, SizeContainment, Style,
 };
 
 use crate::{
@@ -130,6 +132,39 @@ pub(crate) enum InlineDirection {
     Rtl,
 }
 
+impl InlineDirection {
+    pub(crate) const fn to_taffy(self) -> taffy::Direction {
+        match self {
+            Self::Ltr => taffy::Direction::Ltr,
+            Self::Rtl => taffy::Direction::Rtl,
+        }
+    }
+}
+
+/// Dominant baseline selected by the inline formatting context.
+///
+/// CSS Writing Modes uses the alphabetic baseline for horizontal flow and the
+/// ideographic baseline for vertical flow. Keeping this as an explicit layout
+/// protocol mirrors Blink's `FontBaseline`: descendants without a compatible
+/// baseline do not silently synthesize one from a physical bottom edge.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum InlineBaselineType {
+    #[default]
+    Alphabetic,
+    Ideographic,
+}
+
+impl InlineBaselineType {
+    pub(crate) const fn synthesized_ascent(self, block_size: f32) -> f32 {
+        match self {
+            Self::Alphabetic => block_size,
+            // Blink synthesizes an ideographic baseline at the block-axis
+            // center when a child cannot export one to this writing mode.
+            Self::Ideographic => block_size * 0.5,
+        }
+    }
+}
+
 /// Physical block-flow direction retained at the Stylo/Taffy boundary.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum LayoutWritingMode {
@@ -137,6 +172,8 @@ pub(crate) enum LayoutWritingMode {
     HorizontalTb,
     VerticalRl,
     VerticalLr,
+    SidewaysRl,
+    SidewaysLr,
 }
 
 impl LayoutWritingMode {
@@ -145,6 +182,18 @@ impl LayoutWritingMode {
             StyloWritingMode::HorizontalTb => Self::HorizontalTb,
             StyloWritingMode::VerticalRl => Self::VerticalRl,
             StyloWritingMode::VerticalLr => Self::VerticalLr,
+            StyloWritingMode::SidewaysRl => Self::SidewaysRl,
+            StyloWritingMode::SidewaysLr => Self::SidewaysLr,
+        }
+    }
+
+    const fn from_taffy(value: taffy::WritingMode) -> Self {
+        match value {
+            taffy::WritingMode::HorizontalTb => Self::HorizontalTb,
+            taffy::WritingMode::VerticalRl => Self::VerticalRl,
+            taffy::WritingMode::VerticalLr => Self::VerticalLr,
+            taffy::WritingMode::SidewaysRl => Self::SidewaysRl,
+            taffy::WritingMode::SidewaysLr => Self::SidewaysLr,
         }
     }
 
@@ -158,15 +207,174 @@ impl LayoutWritingMode {
             Self::HorizontalTb => taffy::WritingMode::HorizontalTb,
             Self::VerticalRl => taffy::WritingMode::VerticalRl,
             Self::VerticalLr => taffy::WritingMode::VerticalLr,
+            Self::SidewaysRl => taffy::WritingMode::SidewaysRl,
+            Self::SidewaysLr => taffy::WritingMode::SidewaysLr,
         }
     }
 
-    /// Physical edge used as block-start by vertical normal flow.
-    pub(crate) const fn vertical_block_start_is_right(self) -> Option<bool> {
+    fn to_physical_size<T>(self, size: LogicalSize<T>) -> Size<T> {
+        if self.is_horizontal() {
+            Size {
+                width: size.inline_size,
+                height: size.block_size,
+            }
+        } else {
+            Size {
+                width: size.block_size,
+                height: size.inline_size,
+            }
+        }
+    }
+
+    fn to_logical_size<T>(self, size: Size<T>) -> LogicalSize<T> {
+        if self.is_horizontal() {
+            LogicalSize {
+                inline_size: size.width,
+                block_size: size.height,
+            }
+        } else {
+            LogicalSize {
+                inline_size: size.height,
+                block_size: size.width,
+            }
+        }
+    }
+}
+
+/// Element-lifetime content-box dimensions retained for
+/// `contain-intrinsic-size: auto`.
+///
+/// Like Blink's `Element::LastRemembered*Size`, these values are logical and
+/// unzoomed CSS pixels. They intentionally live outside computed style and a
+/// pass-local layout tree.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LayoutRememberedSize {
+    inline_size: Option<f32>,
+    block_size: Option<f32>,
+}
+
+impl LayoutRememberedSize {
+    pub const NONE: Self = Self {
+        inline_size: None,
+        block_size: None,
+    };
+
+    const fn is_empty(self) -> bool {
+        self.inline_size.is_none() && self.block_size.is_none()
+    }
+}
+
+/// Policy captured from one element's computed style for updating its last
+/// remembered content-box size after a successful layout pass.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayoutRememberedSizePolicy {
+    writing_mode: LayoutWritingMode,
+    auto_axes: LogicalSize<bool>,
+    contents_skipped: bool,
+    effective_zoom: f32,
+}
+
+impl LayoutRememberedSizePolicy {
+    pub fn observes_any_axis(self) -> bool {
+        self.auto_axes.inline_size || self.auto_axes.block_size
+    }
+
+    /// Applies ResizeObserver-like update semantics to the retained value.
+    ///
+    /// An axis without `auto` is cleared. An auto axis records fresh geometry
+    /// only while contents are being laid out; a locked subtree preserves its
+    /// previous value. Missing geometry likewise leaves an auto axis alone.
+    pub fn updated_value(
+        self,
+        previous: Option<LayoutRememberedSize>,
+        content_box: Option<LayoutRect>,
+    ) -> Option<LayoutRememberedSize> {
+        let mut value = previous.unwrap_or(LayoutRememberedSize::NONE);
+        if !self.auto_axes.inline_size {
+            value.inline_size = None;
+        }
+        if !self.auto_axes.block_size {
+            value.block_size = None;
+        }
+
+        if !self.contents_skipped
+            && let Some(content_box) = content_box
+        {
+            let zoom = if self.effective_zoom.is_finite() && self.effective_zoom > 0.0 {
+                self.effective_zoom
+            } else {
+                1.0
+            };
+            let logical = self.writing_mode.to_logical_size(Size {
+                width: content_box.width.max(0.0) / zoom,
+                height: content_box.height.max(0.0) / zoom,
+            });
+            if self.auto_axes.inline_size {
+                value.inline_size = Some(logical.inline_size);
+            }
+            if self.auto_axes.block_size {
+                value.block_size = Some(logical.block_size);
+            }
+        }
+
+        (!value.is_empty()).then_some(value)
+    }
+}
+
+/// Computed `contain-intrinsic-{width,height}` without collapsing its `auto`
+/// lifetime semantics into the authored fallback.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+enum LayoutContainIntrinsicSize {
+    #[default]
+    None,
+    Length(f32),
+    Auto {
+        fallback: Option<f32>,
+    },
+}
+
+impl LayoutContainIntrinsicSize {
+    fn from_stylo(value: &style::values::computed::ContainIntrinsicSize, force_auto: bool) -> Self {
+        match value {
+            GenericContainIntrinsicSize::None => {
+                if force_auto {
+                    Self::Auto { fallback: None }
+                } else {
+                    Self::None
+                }
+            }
+            GenericContainIntrinsicSize::AutoNone => Self::Auto { fallback: None },
+            GenericContainIntrinsicSize::Length(length) => {
+                let length = length.px();
+                if force_auto {
+                    Self::Auto {
+                        fallback: Some(length),
+                    }
+                } else {
+                    Self::Length(length)
+                }
+            }
+            GenericContainIntrinsicSize::AutoLength(length) => Self::Auto {
+                fallback: Some(length.px()),
+            },
+        }
+    }
+
+    const fn has_auto(self) -> bool {
+        matches!(self, Self::Auto { .. })
+    }
+
+    const fn selected_size(self, remembered: Option<f32>, contents_skipped: bool) -> Option<f32> {
         match self {
-            Self::HorizontalTb => None,
-            Self::VerticalRl => Some(true),
-            Self::VerticalLr => Some(false),
+            Self::None => None,
+            Self::Length(length) => Some(length),
+            Self::Auto { fallback } => {
+                if contents_skipped && remembered.is_some() {
+                    remembered
+                } else {
+                    fallback
+                }
+            }
         }
     }
 }
@@ -529,6 +737,10 @@ pub struct ResolvedLayoutStyle {
     has_clip_path: bool,
     has_mask: bool,
     isolation: bool,
+    size_containment_axes: Size<bool>,
+    contain_intrinsic_size: Size<LayoutContainIntrinsicSize>,
+    remembered_intrinsic_size: Size<Option<f32>>,
+    contents_skipped: bool,
     layout_containment: bool,
     paint_containment: bool,
     will_change_containment: bool,
@@ -589,6 +801,9 @@ impl std::fmt::Debug for ResolvedLayoutStyle {
             .field("has_clip_path", &self.has_clip_path)
             .field("has_mask", &self.has_mask)
             .field("isolation", &self.isolation)
+            .field("size_containment_axes", &self.size_containment_axes)
+            .field("contain_intrinsic_size", &self.contain_intrinsic_size)
+            .field("contents_skipped", &self.contents_skipped)
             .field("layout_containment", &self.layout_containment)
             .field("paint_containment", &self.paint_containment)
             .field("will_change_containment", &self.will_change_containment)
@@ -764,9 +979,36 @@ impl ResolvedLayoutStyle {
             .any(|image| !matches!(image, GenericImage::None));
         let isolation = computed.clone_isolation() == StyloIsolation::Isolate;
         let contain = computed.clone_contain();
+        let content_visibility = computed.clone_content_visibility();
+        let contents_skipped = content_visibility == StyloContentVisibility::Hidden;
+        let container_type = computed.clone_container_type();
+        let logical_size_containment_axes = LogicalSize {
+            inline_size: contain.contains(style::values::computed::Contain::INLINE_SIZE)
+                || container_type.intersects(ContainerType::INLINE_SIZE | ContainerType::SIZE)
+                || contents_skipped,
+            block_size: contain.contains(style::values::computed::Contain::BLOCK_SIZE)
+                || container_type.intersects(ContainerType::SIZE)
+                || contents_skipped,
+        };
+        let size_containment_axes = writing_mode.to_physical_size(logical_size_containment_axes);
+        // Gecko's Stylo embedding performs this adjustment in StyleAdjuster.
+        // Standalone Stylo leaves it to the browser: content-visibility:auto
+        // makes both intrinsic-size declarations auto so a future locked pass
+        // can select the element's last remembered size.
+        let force_contain_intrinsic_auto = content_visibility == StyloContentVisibility::Auto;
+        let contain_intrinsic_size = Size {
+            width: LayoutContainIntrinsicSize::from_stylo(
+                &computed.clone_contain_intrinsic_width(),
+                force_contain_intrinsic_auto,
+            ),
+            height: LayoutContainIntrinsicSize::from_stylo(
+                &computed.clone_contain_intrinsic_height(),
+                force_contain_intrinsic_auto,
+            ),
+        };
         let mut layout_containment = contain.contains(style::values::computed::Contain::LAYOUT);
         let mut paint_containment = contain.contains(style::values::computed::Contain::PAINT);
-        if computed.clone_content_visibility() != StyloContentVisibility::Visible {
+        if content_visibility != StyloContentVisibility::Visible {
             // Blink folds `content-visibility:auto/hidden` into effective
             // layout and paint containment before asking the LayoutObject
             // whether containment applies to its principal box. Standalone
@@ -812,6 +1054,14 @@ impl ResolvedLayoutStyle {
             specified_aspect_ratio,
         );
         let mut taffy = stylo_taffy::to_taffy_style(&computed);
+        // The generic adapter predates Taffy's context-dependent `normal`
+        // self-alignment. Re-project all four self-alignment properties at the
+        // browser/layout boundary so `normal` reaches the formatting context
+        // instead of becoming an authored `stretch` value.
+        taffy.align_items = taffy_item_alignment(position_style.align_items.0);
+        taffy.align_self = taffy_item_alignment(position_style.align_self.0);
+        taffy.justify_items = taffy_item_alignment((position_style.justify_items.computed.0).0);
+        taffy.justify_self = taffy_item_alignment(position_style.justify_self.0);
         taffy.size = Size {
             width: taffy_size_dimension(&position_style.width, taffy.size.width),
             height: taffy_size_dimension(&position_style.height, taffy.size.height),
@@ -829,13 +1079,14 @@ impl ResolvedLayoutStyle {
         // infinite and NaN ratios as degenerate, so normalize them at the
         // Stylo/Taffy seam instead of relying only on replaced measurement.
         taffy.aspect_ratio = preferred_aspect_ratio.numeric_ratio();
-        if matches!(position_style.flex_basis, GenericFlexBasis::Content) {
-            // Blitz's fixed stylo_taffy revision predates Taffy's typed
-            // `content` flex-basis. Preserve the Stylo distinction here so
-            // Taffy ignores the preferred main size and follows the content
-            // flex-base-size algorithm instead of treating it as `auto`.
-            taffy.flex_basis = taffy::Dimension::content();
-        }
+        // Blitz's fixed stylo_taffy revision predates Taffy's typed flex-basis
+        // sizing functions. Preserve the complete Stylo value at this seam so
+        // Taffy can resolve content and intrinsic keywords in the flex-basis
+        // constraint space instead of collapsing them to `auto`.
+        taffy.flex_basis = match &position_style.flex_basis {
+            GenericFlexBasis::Content => taffy::Dimension::content(),
+            GenericFlexBasis::Size(size) => taffy_size_dimension(size, taffy.flex_basis),
+        };
         taffy.item_is_table = matches!(display, LayoutDisplay::Table | LayoutDisplay::InlineTable);
         let sticky_inset = taffy.inset;
         let establishes_transform_containing_block =
@@ -910,6 +1161,10 @@ impl ResolvedLayoutStyle {
             has_clip_path,
             has_mask,
             isolation,
+            size_containment_axes,
+            contain_intrinsic_size,
+            remembered_intrinsic_size: Size::NONE,
+            contents_skipped,
             layout_containment,
             paint_containment,
             will_change_containment,
@@ -987,6 +1242,16 @@ impl ResolvedLayoutStyle {
             has_clip_path: false,
             has_mask: false,
             isolation: false,
+            size_containment_axes: Size {
+                width: false,
+                height: false,
+            },
+            contain_intrinsic_size: Size {
+                width: LayoutContainIntrinsicSize::None,
+                height: LayoutContainIntrinsicSize::None,
+            },
+            remembered_intrinsic_size: Size::NONE,
+            contents_skipped: false,
             layout_containment: false,
             paint_containment: false,
             will_change_containment: false,
@@ -1026,6 +1291,12 @@ impl ResolvedLayoutStyle {
         self.font_size = font_size;
         self.line_height = line_height;
         self.include_used_font_metrics = false;
+        self
+    }
+
+    /// Selects a writing mode for DOM-free layout and geometry tests.
+    pub fn with_writing_mode(mut self, writing_mode: taffy::WritingMode) -> Self {
+        self.writing_mode = LayoutWritingMode::from_taffy(writing_mode);
         self
     }
 
@@ -1356,6 +1627,50 @@ impl ResolvedLayoutStyle {
         self.paint_containment
     }
 
+    /// Supplies element-lifetime remembered sizes to this pass-local style.
+    /// The retained values are unzoomed logical CSS pixels; Taffy's used-size
+    /// protocol consumes zoomed physical content-box dimensions.
+    pub fn select_last_remembered_size(&mut self, remembered: Option<LayoutRememberedSize>) {
+        let remembered = remembered.unwrap_or(LayoutRememberedSize::NONE);
+        let physical = self.writing_mode.to_physical_size(LogicalSize {
+            inline_size: remembered.inline_size,
+            block_size: remembered.block_size,
+        });
+        let zoom = self.effective_zoom();
+        self.remembered_intrinsic_size = physical.map(|value| value.map(|value| value * zoom));
+    }
+
+    /// Returns the post-layout observation policy for this primary element.
+    pub fn remembered_size_policy(&self) -> LayoutRememberedSizePolicy {
+        let physical_auto_axes = self.contain_intrinsic_size.map(|value| value.has_auto());
+        LayoutRememberedSizePolicy {
+            writing_mode: self.writing_mode,
+            auto_axes: self.writing_mode.to_logical_size(physical_auto_axes),
+            contents_skipped: self.contents_skipped,
+            effective_zoom: self.effective_zoom(),
+        }
+    }
+
+    pub(crate) fn size_containment(&self) -> SizeContainment {
+        SizeContainment::new(
+            self.size_containment_axes,
+            Size {
+                width: self
+                    .contain_intrinsic_size
+                    .width
+                    .selected_size(self.remembered_intrinsic_size.width, self.contents_skipped),
+                height: self
+                    .contain_intrinsic_size
+                    .height
+                    .selected_size(self.remembered_intrinsic_size.height, self.contents_skipped),
+            },
+        )
+    }
+
+    pub(crate) const fn skips_contents(&self) -> bool {
+        self.contents_skipped
+    }
+
     /// Returns the accumulated CSS `zoom` applied to this box's layout values.
     ///
     /// Stylo has already applied this factor to computed CSS lengths. Layout,
@@ -1465,10 +1780,21 @@ impl ResolvedLayoutStyle {
         self.list_marker_position
     }
 
-    pub(crate) fn table_layout_is_fixed(&self) -> bool {
-        self.computed.as_ref().is_some_and(|computed| {
+    /// Whether this table uses the fixed table-layout algorithm after the
+    /// preferred inline-size eligibility rule is applied.
+    ///
+    /// `table-layout: fixed` is not sufficient on its own. CSS Tables routes
+    /// an automatic or max-content-sized table through automatic layout;
+    /// Blink exposes this combined decision as `IsFixedTableLayout()`.
+    pub(crate) fn uses_fixed_table_layout(&self) -> bool {
+        let authored_fixed = self.computed.as_ref().is_some_and(|computed| {
             computed.clone_table_layout() == style::computed_values::table_layout::T::Fixed
-        })
+        });
+        if !authored_fixed {
+            return false;
+        }
+        let preferred_inline_size = self.writing_mode().to_logical(self.taffy.size).inline_size;
+        !preferred_inline_size.is_auto() && !preferred_inline_size.is_max_content()
     }
 
     pub(crate) fn table_border_is_collapsed(&self) -> bool {
@@ -1556,6 +1882,16 @@ impl ResolvedLayoutStyle {
         // principal box. Do not let copied containment or `will-change`
         // metadata turn it into a containing block, stacking context, or
         // descendant clip in the later projection passes.
+        placeholder.size_containment_axes = Size {
+            width: false,
+            height: false,
+        };
+        placeholder.contain_intrinsic_size = Size {
+            width: LayoutContainIntrinsicSize::None,
+            height: LayoutContainIntrinsicSize::None,
+        };
+        placeholder.remembered_intrinsic_size = Size::NONE;
+        placeholder.contents_skipped = false;
         placeholder.layout_containment = false;
         placeholder.paint_containment = false;
         placeholder.will_change_containment = false;
@@ -1935,13 +2271,26 @@ impl ResolvedLayoutStyle {
         self.writing_mode.is_horizontal()
     }
 
-    pub(crate) const fn vertical_block_start_is_right(&self) -> Option<bool> {
-        self.writing_mode.vertical_block_start_is_right()
-    }
-
     /// Returns the inherited writing mode used by the numeric layout tree.
     pub(crate) const fn writing_mode(&self) -> taffy::WritingMode {
         self.writing_mode.to_taffy()
+    }
+
+    /// Returns the dominant baseline selected by the inherited writing mode.
+    pub(crate) const fn inline_baseline_type(&self) -> InlineBaselineType {
+        if self.writing_mode.is_horizontal() {
+            InlineBaselineType::Alphabetic
+        } else {
+            InlineBaselineType::Ideographic
+        }
+    }
+
+    /// Returns the complete inherited flow direction used at logical layout
+    /// boundaries. Keeping writing mode and bidi direction paired prevents a
+    /// caller from converting edges with only half of the CSS coordinate
+    /// system.
+    pub(crate) const fn writing_direction(&self) -> taffy::WritingDirection {
+        taffy::WritingDirection::new(self.writing_mode.to_taffy(), self.direction.to_taffy())
     }
 
     pub(crate) fn text_leaf_from(parent: &Self) -> Self {
@@ -1999,6 +2348,16 @@ impl ResolvedLayoutStyle {
             has_clip_path: false,
             has_mask: false,
             isolation: false,
+            size_containment_axes: Size {
+                width: false,
+                height: false,
+            },
+            contain_intrinsic_size: Size {
+                width: LayoutContainIntrinsicSize::None,
+                height: LayoutContainIntrinsicSize::None,
+            },
+            remembered_intrinsic_size: Size::NONE,
+            contents_skipped: false,
             layout_containment: false,
             paint_containment: false,
             will_change_containment: false,
@@ -2066,6 +2425,16 @@ impl ResolvedLayoutStyle {
             has_clip_path: false,
             has_mask: false,
             isolation: false,
+            size_containment_axes: Size {
+                width: false,
+                height: false,
+            },
+            contain_intrinsic_size: Size {
+                width: LayoutContainIntrinsicSize::None,
+                height: LayoutContainIntrinsicSize::None,
+            },
+            remembered_intrinsic_size: Size::NONE,
+            contents_skipped: false,
             layout_containment: false,
             paint_containment: false,
             will_change_containment: false,
@@ -2122,6 +2491,21 @@ impl ResolvedLayoutStyle {
 
 fn usable_aspect_ratio(ratio: Option<f32>) -> Option<f32> {
     ratio.filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+}
+
+/// Project CSS self-alignment while retaining values whose semantics the
+/// pinned generic Stylo adapter cannot preserve. All other keywords remain
+/// owned by that adapter.
+fn taffy_item_alignment(input: AlignFlags) -> Option<taffy::AlignItems> {
+    match input.value() {
+        AlignFlags::NORMAL => Some(taffy::AlignItems::NORMAL),
+        // The pinned stylo_taffy revision predates Taffy's last-baseline
+        // support and therefore degrades this value to `end`. Preserve the
+        // authored value at the adapter boundary now that Taffy models its
+        // sharing group directly.
+        AlignFlags::LAST_BASELINE => Some(taffy::AlignItems::LAST_BASELINE),
+        _ => stylo_taffy::convert::item_alignment(input),
+    }
 }
 
 fn taffy_size_dimension(
@@ -2560,5 +2944,106 @@ mod aspect_ratio_tests {
             PreferredAspectRatio::Auto.resolve(None, BoxSizing::BorderBox),
             None
         );
+    }
+}
+
+#[cfg(test)]
+mod alignment_tests {
+    use super::*;
+
+    #[test]
+    fn stylo_item_alignment_preserves_contextual_and_baseline_semantics() {
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::NORMAL),
+            Some(taffy::AlignItems::NORMAL)
+        );
+        assert_ne!(
+            taffy_item_alignment(AlignFlags::NORMAL),
+            taffy_item_alignment(AlignFlags::STRETCH)
+        );
+        assert_eq!(taffy_item_alignment(AlignFlags::AUTO), None);
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::LAST_BASELINE),
+            Some(taffy::AlignItems::LAST_BASELINE)
+        );
+        assert_eq!(
+            taffy_item_alignment(AlignFlags::CENTER | AlignFlags::SAFE),
+            Some(taffy::AlignItems::SAFE_CENTER)
+        );
+    }
+}
+
+#[cfg(test)]
+mod size_containment_tests {
+    use super::*;
+
+    #[test]
+    fn auto_intrinsic_size_selects_remembered_value_only_while_contents_are_skipped() {
+        let value = LayoutContainIntrinsicSize::Auto {
+            fallback: Some(40.0),
+        };
+        assert_eq!(value.selected_size(Some(75.0), false), Some(40.0));
+        assert_eq!(value.selected_size(Some(75.0), true), Some(75.0));
+        assert_eq!(value.selected_size(None, true), Some(40.0));
+        assert_eq!(
+            LayoutContainIntrinsicSize::Auto { fallback: None }.selected_size(None, true),
+            None
+        );
+    }
+
+    #[test]
+    fn remembered_size_policy_records_unzoomed_logical_content_dimensions() {
+        let policy = LayoutRememberedSizePolicy {
+            writing_mode: LayoutWritingMode::VerticalRl,
+            auto_axes: LogicalSize {
+                inline_size: true,
+                block_size: true,
+            },
+            contents_skipped: false,
+            effective_zoom: 2.0,
+        };
+        assert_eq!(
+            policy.updated_value(None, Some(LayoutRect::new(0.0, 0.0, 80.0, 40.0))),
+            Some(LayoutRememberedSize {
+                inline_size: Some(20.0),
+                block_size: Some(40.0),
+            })
+        );
+    }
+
+    #[test]
+    fn remembered_size_policy_preserves_locked_auto_axes_and_clears_retired_axes() {
+        let previous = LayoutRememberedSize {
+            inline_size: Some(30.0),
+            block_size: Some(50.0),
+        };
+        let locked = LayoutRememberedSizePolicy {
+            writing_mode: LayoutWritingMode::HorizontalTb,
+            auto_axes: LogicalSize {
+                inline_size: true,
+                block_size: false,
+            },
+            contents_skipped: true,
+            effective_zoom: 1.0,
+        };
+        assert_eq!(
+            locked.updated_value(
+                Some(previous),
+                Some(LayoutRect::new(0.0, 0.0, 300.0, 500.0)),
+            ),
+            Some(LayoutRememberedSize {
+                inline_size: Some(30.0),
+                block_size: None,
+            })
+        );
+
+        let retired = LayoutRememberedSizePolicy {
+            auto_axes: LogicalSize {
+                inline_size: false,
+                block_size: false,
+            },
+            ..locked
+        };
+        assert_eq!(retired.updated_value(Some(previous), None), None);
     }
 }

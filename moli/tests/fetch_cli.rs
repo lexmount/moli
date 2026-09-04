@@ -2490,6 +2490,28 @@ fn cli_domstable_waits_for_late_content() -> Result<()> {
 }
 
 #[test]
+fn cli_default_done_waits_for_post_load_content() -> Result<()> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    let server = runtime.block_on(FixtureServer::spawn())?;
+    let url = server.url("/wait-until-delayed-fetch");
+    let output = run_fetch_cli_with_default_wait_and_dump(&url, "html")?;
+    runtime.block_on(server.shutdown());
+
+    assert!(
+        output.status.success(),
+        "moli fetch failed: stdout={}\nstderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let stdout = clean_output(&output.stdout);
+    assert!(stdout.contains("data-state=\"settled\""), "stdout={stdout}");
+    assert!(stdout.contains("id=\"late\""), "stdout={stdout}");
+    assert!(stdout.contains(">settled<"), "stdout={stdout}");
+    Ok(())
+}
+
+#[test]
 fn cli_networkidle_timeout_logs_warning_and_returns_best_effort_output() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
@@ -2595,6 +2617,15 @@ fn cli_networkidle_uses_only_the_deadline_left_after_a_slow_main_response() -> R
 fn cli_domstable_uses_only_the_deadline_left_after_a_slow_main_response() -> Result<()> {
     assert_cli_best_effort_stage_uses_remaining_deadline(
         "domstable",
+        "/wait-until-slow-interval-dom-mutation",
+        "id=\"mutation-count\"",
+    )
+}
+
+#[test]
+fn cli_done_uses_only_the_deadline_left_after_a_slow_main_response() -> Result<()> {
+    assert_cli_best_effort_stage_uses_remaining_deadline(
+        "done",
         "/wait-until-slow-interval-dom-mutation",
         "id=\"mutation-count\"",
     )
@@ -2738,6 +2769,11 @@ fn cli_quiet_page_networkidle_uses_remaining_best_effort_budget() -> Result<()> 
 #[test]
 fn cli_quiet_page_domstable_uses_remaining_best_effort_budget() -> Result<()> {
     assert_cli_quiet_page_uses_remaining_best_effort_budget("domstable")
+}
+
+#[test]
+fn cli_quiet_page_done_uses_remaining_best_effort_budget() -> Result<()> {
+    assert_cli_quiet_page_uses_remaining_best_effort_budget("done")
 }
 
 #[test]
@@ -2945,12 +2981,12 @@ fn cli_zero_redirect_wait_returns_terminal_302_before_delayed_page_work() -> Res
 }
 
 #[test]
-fn cli_slow_streaming_terminal_302_does_not_add_a_post_load_wait() -> Result<()> {
+fn cli_slow_streaming_terminal_302_exact_stage_does_not_add_a_post_load_wait() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-redirect-status-slow-streaming-302");
 
-    for wait_until in ["domcontentloaded", "load", "done"] {
+    for wait_until in ["domcontentloaded", "load"] {
         let output = run_fetch_cli_with_wait_until_and_dump(&url, wait_until, "json")?;
         assert!(
             output.status.success(),
@@ -3563,12 +3599,12 @@ fn cli_default_done_returns_raw_http_error_status_and_body() -> Result<()> {
 }
 
 #[test]
-fn cli_slow_streaming_500_returns_complete_body_without_an_additive_wait() -> Result<()> {
+fn cli_slow_streaming_500_exact_stage_has_no_additive_wait() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(FixtureServer::spawn())?;
     let url = server.url("/wait-until-http-error-slow-streaming-500");
 
-    for wait_until in ["domcontentloaded", "load", "done"] {
+    for wait_until in ["domcontentloaded", "load"] {
         let output = run_fetch_cli_with_wait_until_and_dump(&url, wait_until, "json")?;
         assert!(
             output.status.success(),

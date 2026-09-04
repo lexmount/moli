@@ -47,6 +47,48 @@ impl<N> LayoutBox<N> {
             )
     }
 
+    /// Mirrors Blink's narrower `IsEligibleForSizeContainment()` overrides.
+    ///
+    /// Every ordinary `LayoutBox` is eligible, but the table wrapper and all
+    /// internal table boxes reject size containment. A caption remains an
+    /// ordinary block box and is therefore intentionally not excluded.
+    pub(crate) fn is_eligible_for_size_containment(&self) -> bool {
+        self.is_css_box()
+            && !matches!(
+                self.kind,
+                LayoutBoxKind::TableWrapper
+                    | LayoutBoxKind::InlineTableWrapper
+                    | LayoutBoxKind::TableRowGroup
+                    | LayoutBoxKind::TableHeaderGroup
+                    | LayoutBoxKind::TableFooterGroup
+                    | LayoutBoxKind::TableColumnGroup
+                    | LayoutBoxKind::TableColumn
+                    | LayoutBoxKind::TableRow
+                    | LayoutBoxKind::TableCell
+                    | LayoutBoxKind::AnonymousTableWrapper
+                    | LayoutBoxKind::AnonymousTableRowGroup
+                    | LayoutBoxKind::AnonymousTableRow
+                    | LayoutBoxKind::AnonymousTableCell
+            )
+    }
+
+    pub(crate) fn used_size_containment(&self) -> taffy::SizeContainment {
+        if self.is_eligible_for_size_containment() {
+            self.style.size_containment()
+        } else {
+            taffy::SizeContainment::NONE
+        }
+    }
+
+    pub(crate) fn applies_any_size_containment(&self) -> bool {
+        let containment = self.used_size_containment();
+        containment.axes.width || containment.axes.height
+    }
+
+    pub(crate) fn skips_contents_for_content_visibility(&self) -> bool {
+        self.is_eligible_for_size_containment() && self.style.skips_contents()
+    }
+
     pub(crate) fn creates_stacking_context(
         &self,
         is_root: bool,

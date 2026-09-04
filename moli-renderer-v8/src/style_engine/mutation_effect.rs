@@ -198,52 +198,78 @@ fn shared_tree_roots<'a>(
         .unwrap_or_else(|| Arc::from(roots))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum StyleAttributeImpact {
-    None,
-    LayoutMetric,
-    ComputedStyle,
-    DescendantComputedStyle,
-    StylesheetLinkage,
-    LayoutMetricAndStylesheetLinkage,
-}
+/// Independent consequences of mutating a content attribute.
+///
+/// A compact flag set keeps combinations explicit without growing an enum
+/// variant for every attribute that participates in multiple subsystems.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct StyleAttributeImpact(u8);
 
 impl StyleAttributeImpact {
+    const LAYOUT_METRIC: Self = Self(1 << 0);
+    const COMPUTED_STYLE: Self = Self(1 << 1);
+    const DESCENDANT_COMPUTED_STYLE: Self = Self(1 << 2);
+    const STYLESHEET_LINKAGE: Self = Self(1 << 3);
+
+    const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
+
+    const fn intersects(self, other: Self) -> bool {
+        self.0 & other.0 != 0
+    }
+
     pub(crate) fn for_attribute_name(name: &str) -> Self {
         let name = name.to_ascii_lowercase();
         match name.as_str() {
-            "style" | "class" | "id" => Self::ComputedStyle,
-            "hidden" | "width" | "height" | "cols" | "rows" | "size" | "value" | "border"
-            | "slot" | "align" => Self::LayoutMetric,
-            "cellpadding" => Self::DescendantComputedStyle,
-            "href" | "rel" | "media" | "blocking" | "disabled" => Self::StylesheetLinkage,
-            "type" => Self::LayoutMetricAndStylesheetLinkage,
-            _ if moli_selector::is_svg_presentation_attribute_name(&name) => Self::LayoutMetric,
-            _ => Self::None,
+            "style" | "class" | "id" => Self::COMPUTED_STYLE,
+            "width" | "height" => Self::LAYOUT_METRIC.union(Self::COMPUTED_STYLE),
+            "hidden" | "cols" | "rows" | "size" | "value" | "border" | "slot" | "align" => {
+                Self::LAYOUT_METRIC
+            }
+            "cellpadding" => Self::DESCENDANT_COMPUTED_STYLE,
+            "href" | "rel" | "media" | "blocking" | "disabled" => Self::STYLESHEET_LINKAGE,
+            // Input type selects runtime behavior and whether width/height
+            // participate in the presentation-hint cascade.
+            "type" => Self::LAYOUT_METRIC
+                .union(Self::COMPUTED_STYLE)
+                .union(Self::STYLESHEET_LINKAGE),
+            _ if moli_selector::is_svg_presentation_attribute_name(&name) => {
+                Self::LAYOUT_METRIC.union(Self::COMPUTED_STYLE)
+            }
+            _ => Self::default(),
         }
     }
 
     pub(crate) fn affects_layout_metric(self) -> bool {
-        matches!(
-            self,
-            Self::LayoutMetric
-                | Self::ComputedStyle
-                | Self::DescendantComputedStyle
-                | Self::LayoutMetricAndStylesheetLinkage
+        self.intersects(
+            Self::LAYOUT_METRIC
+                .union(Self::COMPUTED_STYLE)
+                .union(Self::DESCENDANT_COMPUTED_STYLE),
+        )
+    }
+
+    pub(crate) fn has_non_css_runtime_side_effect(self) -> bool {
+        self.intersects(
+            Self::LAYOUT_METRIC
+                .union(Self::DESCENDANT_COMPUTED_STYLE)
+                .union(Self::STYLESHEET_LINKAGE),
         )
     }
 
     #[cfg(test)]
     pub(crate) fn changes_computed_style(self) -> bool {
-        matches!(self, Self::ComputedStyle | Self::DescendantComputedStyle)
+        self.intersects(Self::COMPUTED_STYLE.union(Self::DESCENDANT_COMPUTED_STYLE))
     }
 
     #[cfg(test)]
     pub(crate) fn changes_stylesheet_linkage(self) -> bool {
-        matches!(
-            self,
-            Self::StylesheetLinkage | Self::LayoutMetricAndStylesheetLinkage
-        )
+        self.intersects(Self::STYLESHEET_LINKAGE)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_none(self) -> bool {
+        self == Self::default()
     }
 }
 

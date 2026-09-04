@@ -8,8 +8,8 @@ use moli_layout::{
     LayoutReplacedKind, LayoutSource, LayoutSourceKind, LayoutStyleResolver, LayoutTableData,
     LayoutTableRole, LayoutTextSelection, PaintBrush, PaintColor, PaintFragment, PaintRect,
     PaintShape, PaintSnapshot, PaintTransform2D, PaintViewport, ReplacedMetrics,
-    ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle, ResolvedLayoutStyle,
-    ScreenshotLayoutRequest, build_screenshot_snapshot,
+    ReplacedNaturalSizing, ResolvedLayoutElementStyles, ResolvedLayoutPseudoStyle,
+    ResolvedLayoutStyle, ScreenshotLayoutRequest, build_screenshot_snapshot,
 };
 use style::Atom;
 use taffy::{
@@ -610,10 +610,11 @@ fn float_descendant_of_structural_inline_rounds_with_its_ifc_owner() {
             Vec::new(),
         )
         .with_metrics(ReplacedMetrics {
-            intrinsic_width: Some(166.0),
-            intrinsic_height: Some(42.0),
-            intrinsic_ratio: Some(166.0 / 42.0),
-            ..ReplacedMetrics::default()
+            natural_sizing: Some(ReplacedNaturalSizing {
+                width: Some(166.0),
+                height: Some(42.0),
+                ratio: Some(166.0 / 42.0),
+            }),
         }),
     ]);
     let mut styles = Styles::default();
@@ -910,6 +911,47 @@ fn html_list_metadata_and_marker_style_produce_inside_and_outside_glyph_geometry
 }
 
 #[test]
+fn outside_marker_only_flex_item_has_valid_empty_intrinsic_widths() {
+    let source = Source(vec![
+        Node::element(
+            "list",
+            "ul",
+            LayoutElementCategory::List(LayoutListRole::Container),
+            None,
+            vec![1],
+        ),
+        Node::element(
+            "empty-item",
+            "li",
+            LayoutElementCategory::List(LayoutListRole::Item),
+            None,
+            Vec::new(),
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        sized(LayoutDisplay::Flex, 240.0, 100.0, PaintColor::TRANSPARENT),
+    );
+    styles.primary.insert(
+        1,
+        style(LayoutDisplay::BlockListItem, RED).with_list_marker(
+            LayoutListMarkerType::Disc,
+            LayoutListMarkerPosition::Outside,
+        ),
+    );
+    styles.pseudo.insert(
+        (1, LayoutPseudo::Marker),
+        style(LayoutDisplay::Inline, PaintColor::TRANSPARENT).with_normal_generated_content(),
+    );
+
+    let snapshot = render(&source, &mut styles, 240, 100);
+    assert!(snapshot.fragments.iter().any(|fragment| {
+        matches!(fragment, PaintFragment::GlyphRun(run) if !run.glyphs_in_surface().is_empty())
+    }));
+}
+
+#[test]
 fn degenerate_css_ratio_falls_back_to_the_replaced_intrinsic_ratio() {
     let source = Source(vec![
         Node::element("root", "div", LayoutElementCategory::Generic, None, vec![1]),
@@ -921,11 +963,11 @@ fn degenerate_css_ratio_falls_back_to_the_replaced_intrinsic_ratio() {
             Vec::new(),
         )
         .with_metrics(ReplacedMetrics {
-            intrinsic_width: Some(80.0),
-            intrinsic_height: Some(40.0),
-            attribute_width: None,
-            attribute_height: None,
-            intrinsic_ratio: Some(2.0),
+            natural_sizing: Some(ReplacedNaturalSizing {
+                width: Some(80.0),
+                height: Some(40.0),
+                ratio: Some(2.0),
+            }),
         }),
     ]);
     let mut styles = Styles::default();
@@ -969,8 +1011,11 @@ fn fractional_replaced_images_project_contiguous_pre_transform_destinations() {
         .expect("fixture SVG should parse"),
     );
     let image = LayoutImageResource {
-        intrinsic_width: 96.0,
-        intrinsic_height: 12.0,
+        natural_sizing: ReplacedNaturalSizing {
+            width: None,
+            height: None,
+            ratio: Some(8.0),
+        },
         pixels: None,
         svg: Some(svg),
     };
@@ -993,10 +1038,11 @@ fn fractional_replaced_images_project_contiguous_pre_transform_destinations() {
             Vec::new(),
         )
         .with_metrics(ReplacedMetrics {
-            intrinsic_width: Some(96.0),
-            intrinsic_height: Some(12.0),
-            intrinsic_ratio: Some(8.0),
-            ..ReplacedMetrics::default()
+            natural_sizing: Some(ReplacedNaturalSizing {
+                width: Some(96.0),
+                height: Some(12.0),
+                ratio: Some(8.0),
+            }),
         })
         .with_image(image.clone())
     }));
@@ -1033,7 +1079,7 @@ fn fractional_replaced_images_project_contiguous_pre_transform_destinations() {
 }
 
 #[test]
-fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizing() {
+fn computed_size_hints_and_canvas_intrinsics_share_resource_free_sizing() {
     let source = Source(vec![
         Node::element(
             "root",
@@ -1048,12 +1094,7 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
             LayoutElementCategory::Generic,
             Some(LayoutReplacedKind::Image),
             Vec::new(),
-        )
-        .with_metrics(ReplacedMetrics {
-            attribute_width: Some(80.0),
-            attribute_height: Some(40.0),
-            ..ReplacedMetrics::default()
-        }),
+        ),
         Node::element(
             "canvas",
             "canvas",
@@ -1062,8 +1103,11 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
             Vec::new(),
         )
         .with_metrics(ReplacedMetrics {
-            attribute_width: Some(600.0),
-            ..ReplacedMetrics::default()
+            natural_sizing: Some(ReplacedNaturalSizing {
+                width: Some(600.0),
+                height: Some(150.0),
+                ratio: Some(4.0),
+            }),
         }),
         Node::element(
             "image-button",
@@ -1073,12 +1117,7 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
             )),
             Some(LayoutReplacedKind::FormControl),
             Vec::new(),
-        )
-        .with_metrics(ReplacedMetrics {
-            attribute_width: Some(90.0),
-            attribute_height: Some(45.0),
-            ..ReplacedMetrics::default()
-        }),
+        ),
     ]);
     let mut styles = Styles::default();
     styles.primary.insert(
@@ -1094,13 +1133,30 @@ fn replaced_attributes_canvas_defaults_and_image_button_share_resource_free_sizi
                     width: Dimension::length(120.0),
                     height: Dimension::auto(),
                 },
+                // Synthetic layout inputs receive the already-cascaded
+                // width/height declarations and mapped `auto 2 / 1` ratio.
+                aspect_ratio: Some(2.0),
                 ..Style::default()
             },
             RED,
         ),
     );
     styles.primary.insert(2, style(LayoutDisplay::Block, GREEN));
-    styles.primary.insert(3, style(LayoutDisplay::Block, BLUE));
+    styles.primary.insert(
+        3,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: Dimension::length(90.0),
+                    height: Dimension::length(45.0),
+                },
+                aspect_ratio: Some(2.0),
+                ..Style::default()
+            },
+            BLUE,
+        ),
+    );
 
     let snapshot = render(&source, &mut styles, 700, 400);
     assert_eq!(rect(&snapshot, RED), PaintRect::new(0.0, 0.0, 120.0, 60.0));
@@ -1154,12 +1210,7 @@ fn unavailable_images_use_zero_default_size_and_a_content_box_outline() {
             LayoutElementCategory::Generic,
             Some(LayoutReplacedKind::Image),
             Vec::new(),
-        )
-        .with_metrics(ReplacedMetrics {
-            attribute_width: Some(80.0),
-            attribute_height: Some(40.0),
-            ..ReplacedMetrics::default()
-        }),
+        ),
         Node::element(
             "unsized-image",
             "img",
@@ -1184,9 +1235,21 @@ fn unavailable_images_use_zero_default_size_and_a_content_box_outline() {
     styles
         .primary
         .insert(1, style(LayoutDisplay::Block, PaintColor::TRANSPARENT));
-    styles
-        .primary
-        .insert(2, style(LayoutDisplay::Block, PaintColor::TRANSPARENT));
+    styles.primary.insert(
+        2,
+        ResolvedLayoutStyle::synthetic(
+            LayoutDisplay::Block,
+            Style {
+                size: Size {
+                    width: Dimension::length(80.0),
+                    height: Dimension::length(40.0),
+                },
+                aspect_ratio: Some(2.0),
+                ..Style::default()
+            },
+            PaintColor::TRANSPARENT,
+        ),
+    );
     styles
         .primary
         .insert(3, style(LayoutDisplay::Block, PaintColor::TRANSPARENT));
@@ -1629,6 +1692,94 @@ fn inline_block_propagates_scroll_block_end_baseline_through_block_children() {
         assert_eq!(rect(&test, BLUE), rect(&reference, BLUE));
         assert_eq!(rect(&test, RED), rect(&reference, RED));
     }
+}
+
+#[test]
+fn inline_block_skips_orthogonal_block_children_when_exporting_last_baseline() {
+    let source = Source(vec![
+        Node::element(
+            "root",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            vec![1, 3, 6],
+        ),
+        Node::element(
+            "control",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![2],
+        ),
+        Node::text("control-text", "aaa"),
+        Node::element(
+            "visible-orthogonal",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![4, 5],
+        ),
+        Node::text("visible-text", "bbb"),
+        Node::element(
+            "visible-child",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+        Node::element(
+            "scroll-orthogonal",
+            "span",
+            LayoutElementCategory::Generic,
+            None,
+            vec![7, 8],
+        ),
+        Node::text("scroll-text", "ccc"),
+        Node::element(
+            "scroll-child",
+            "div",
+            LayoutElementCategory::Generic,
+            None,
+            Vec::new(),
+        ),
+    ]);
+    let mut styles = Styles::default();
+    styles.primary.insert(
+        0,
+        style(LayoutDisplay::Block, PaintColor::TRANSPARENT)
+            .tap_taffy(|taffy| taffy.size.width = Dimension::length(200.0))
+            .with_text_metrics(16.0, 20.0),
+    );
+    for (node, color) in [(1, RED), (3, GREEN), (6, BLUE)] {
+        styles.primary.insert(
+            node,
+            style(LayoutDisplay::InlineBlock, color).with_text_metrics(16.0, 20.0),
+        );
+    }
+    styles.primary.insert(
+        5,
+        sized(LayoutDisplay::Block, 20.0, 30.0, PaintColor::TRANSPARENT)
+            .with_writing_mode(taffy::WritingMode::VerticalRl),
+    );
+    styles.primary.insert(
+        8,
+        sized(LayoutDisplay::Block, 20.0, 30.0, PaintColor::TRANSPARENT)
+            .tap_taffy(|taffy| {
+                taffy.overflow = Point {
+                    x: Overflow::Hidden,
+                    y: Overflow::Hidden,
+                };
+            })
+            .with_writing_mode(taffy::WritingMode::VerticalRl),
+    );
+
+    let snapshot = render(&source, &mut styles, 200, 100);
+    let control = rect(&snapshot, RED);
+    let visible_orthogonal = rect(&snapshot, GREEN);
+    let scroll_orthogonal = rect(&snapshot, BLUE);
+
+    assert_close(visible_orthogonal.y, control.y);
+    assert_close(scroll_orthogonal.y, control.y);
 }
 
 #[test]

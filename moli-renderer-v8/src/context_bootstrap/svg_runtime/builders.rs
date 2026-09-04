@@ -721,7 +721,7 @@ fn svg_image_dimensions(
         svg_geometry_optional_length_attribute_for_handle(runtime, handle, "width").unwrap_or(0.0);
     let height =
         svg_geometry_optional_length_attribute_for_handle(runtime, handle, "height").unwrap_or(0.0);
-    let Some((intrinsic_width, intrinsic_height)) = runtime.image_resource_intrinsic_size(handle)
+    let Some((intrinsic_width, intrinsic_height)) = runtime.image_resource_concrete_size(handle)
     else {
         return (width, height);
     };

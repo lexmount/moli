@@ -14,7 +14,7 @@ use crate::{
 pub(crate) use css::{CssImageResourceAdmission, CssImageResourceRequestIdentity};
 pub(crate) use preload::{ScannedImagePreloadAdmission, SharedScannedImagePreloadLoad};
 pub(super) use state::ImageResourceStore;
-pub(crate) use state::ReadyImageForLayout;
+pub(crate) use state::{ImageResourceSizing, ReadyImageForLayout};
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(super) struct ImageResourceRequestIdentity {
@@ -308,19 +308,23 @@ impl super::JsContextHost {
         self.image_resources.has_ready_request(request_key)
     }
 
-    pub(crate) fn image_resource_intrinsic_dimensions(
+    pub(crate) fn image_resource_natural_dimensions(
         &self,
         element: DomHandle,
     ) -> Option<(u32, u32)> {
-        let (width, height) = self.image_resource_intrinsic_size(element)?;
+        let (width, height) = self.image_resource_concrete_size(element)?;
         Some((
             width.max(0.0).round() as u32,
             height.max(0.0).round() as u32,
         ))
     }
 
-    pub(crate) fn image_resource_intrinsic_size(&self, element: DomHandle) -> Option<(f32, f32)> {
-        self.image_resources.intrinsic_dimensions(element)
+    pub(crate) fn image_resource_sizing(&self, element: DomHandle) -> Option<ImageResourceSizing> {
+        self.image_resources.sizing(element)
+    }
+
+    pub(crate) fn image_resource_concrete_size(&self, element: DomHandle) -> Option<(f32, f32)> {
+        Some(self.image_resource_sizing(element)?.concrete_dimensions())
     }
 
     pub(crate) fn complete_pending_image_load_local_response_if_matches(

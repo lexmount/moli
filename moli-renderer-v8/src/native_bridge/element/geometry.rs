@@ -31,9 +31,10 @@ pub(crate) use mock::{
 };
 pub(crate) use provider::{
     observable_bounding_client_rect, observable_bounding_client_rects, observable_caret_position,
-    observable_client_rects, observable_element_metrics, observable_event_offset,
-    observable_geometry_batch, observable_hit_test_all, observable_scroll_adjusted_client_rect,
-    observable_sources_with_fragments, observable_used_grid_tracks,
+    observable_client_rects, observable_document_scrolling_element, observable_element_metrics,
+    observable_event_offset, observable_geometry_batch, observable_hit_test_all,
+    observable_scroll_adjusted_client_rect, observable_sources_with_fragments,
+    observable_used_box_size, observable_used_grid_tracks, observable_used_margin,
 };
 pub(in crate::native_bridge) use rects::{
     node_get_bounding_client_rect_callback, node_get_client_rects_callback,

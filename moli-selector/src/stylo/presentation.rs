@@ -5,6 +5,7 @@
 // cascade, inheritance, and relative-length resolver own the result instead
 // of teaching layout about authored attribute strings.
 
+use moli_dom::html_microsyntax::parse_non_negative_integer;
 use selectors::{Element as SelectorsElement, sink::Push};
 use style::{
     applicable_declarations::ApplicableDeclarationBlock,
@@ -18,7 +19,7 @@ use style::{
     stylesheets::{CssRuleType, Origin, UrlExtraData, layer_rule::LayerOrder},
     values::{
         generics::NonNegative,
-        specified::{LengthPercentage, NoCalcLength, NoCalcPercentage},
+        specified::{AspectRatio, LengthPercentage, NoCalcLength, NoCalcPercentage},
     },
 };
 use style_traits::{ParsingMode, ToCss};
@@ -96,6 +97,134 @@ const SVG_STYLE_PRESENTATION_ATTRIBUTES: &[&str] = &[
     "writing-mode",
 ];
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum HtmlDimension {
+    Absolute(f32),
+    Percentage(f32),
+    Relative,
+}
+
+/// Maps replaced-element HTML dimensions into the presentation-hint cascade.
+///
+/// Image-like elements expose width, height, and a mapped `auto <ratio>`.
+/// Frame and plug-in owners expose only width and height. Canvas dimensions
+/// instead define its intrinsic bitmap; only a valid pair contributes a
+/// mapped ratio here. This follows Blink's element-specific
+/// `CollectStyleForPresentationAttribute` ownership split.
+fn append_html_replaced_size_declarations(element: &Element, block: &mut PropertyDeclarationBlock) {
+    let name = element.local_name();
+    let input_maps_dimensions = name == "input"
+        && element.attribute("type").is_some_and(|value| {
+            value.eq_ignore_ascii_case("image") || value.eq_ignore_ascii_case("hidden")
+        });
+    let maps_dimensions =
+        matches!(name, "img" | "video" | "iframe" | "object" | "embed") || input_maps_dimensions;
+    let maps_ratio = matches!(name, "img" | "video") || input_maps_dimensions;
+
+    if name == "canvas" {
+        if let Some((width, height)) = element
+            .attribute("width")
+            .and_then(parse_non_negative_integer)
+            .zip(
+                element
+                    .attribute("height")
+                    .and_then(parse_non_negative_integer),
+            )
+        {
+            let _ = block.push(
+                PropertyDeclaration::AspectRatio(Box::new(AspectRatio::from_mapped_ratio(
+                    width as f32,
+                    height as f32,
+                ))),
+                Importance::Normal,
+            );
+        }
+        return;
+    }
+    if !maps_dimensions {
+        return;
+    }
+
+    let width = element
+        .attribute("width")
+        .and_then(parse_html_dimension_value);
+    let height = element
+        .attribute("height")
+        .and_then(parse_html_dimension_value);
+    if let Some(value) = width.and_then(html_dimension_length_percentage) {
+        use style::values::generics::length::Size;
+        let _ = block.push(
+            PropertyDeclaration::Width(Size::LengthPercentage(NonNegative(value))),
+            Importance::Normal,
+        );
+    }
+    if let Some(value) = height.and_then(html_dimension_length_percentage) {
+        use style::values::generics::length::Size;
+        let _ = block.push(
+            PropertyDeclaration::Height(Size::LengthPercentage(NonNegative(value))),
+            Importance::Normal,
+        );
+    }
+    if maps_ratio
+        && let (Some(HtmlDimension::Absolute(width)), Some(HtmlDimension::Absolute(height))) =
+            (width, height)
+    {
+        let _ = block.push(
+            PropertyDeclaration::AspectRatio(Box::new(AspectRatio::from_mapped_ratio(
+                width, height,
+            ))),
+            Importance::Normal,
+        );
+    }
+}
+
+fn html_dimension_length_percentage(dimension: HtmlDimension) -> Option<LengthPercentage> {
+    match dimension {
+        HtmlDimension::Absolute(value) => {
+            Some(LengthPercentage::Length(NoCalcLength::from_px(value)))
+        }
+        HtmlDimension::Percentage(value) => Some(LengthPercentage::Percentage(
+            NoCalcPercentage::new(value / 100.0),
+        )),
+        HtmlDimension::Relative => None,
+    }
+}
+
+/// Parses the numeric prefix used by Blink's legacy HTML dimension rules.
+fn parse_html_dimension_value(value: &str) -> Option<HtmlDimension> {
+    let value = value.trim_start_matches([' ', '\t', '\n', '\r', '\u{000c}']);
+    let bytes = value.as_bytes();
+    let integer_len = bytes
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if integer_len == 0 {
+        return None;
+    }
+
+    let mut number_len = integer_len;
+    if bytes.get(number_len) == Some(&b'.') {
+        number_len += 1;
+        number_len += bytes[number_len..]
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+    }
+    // Blink clamps the parsed double before storing it as a CSS value. The
+    // grammar above cannot produce NaN, while a very long digit run can
+    // overflow to infinity, so saturate it instead of rejecting an otherwise
+    // valid legacy dimension.
+    let number = value[..number_len]
+        .parse::<f64>()
+        .ok()?
+        .min(f64::from(f32::MAX)) as f32;
+    match bytes.get(number_len) {
+        Some(b'%') => Some(HtmlDimension::Percentage(number)),
+        Some(b'*') => Some(HtmlDimension::Relative),
+        _ => Some(HtmlDimension::Absolute(number)),
+    }
+}
+
 /// Whether changing an attribute can change an SVG element's computed style
 /// without any selector dependency on that attribute.
 pub fn is_svg_presentation_attribute_name(name: &str) -> bool {
@@ -117,27 +246,30 @@ impl QueryElement<'_> {
         }
         let element = self.element();
         let mut block = PropertyDeclarationBlock::new();
-        if element.namespace() == SVG_NAMESPACE {
-            if element.local_name() == "svg" {
-                append_root_svg_size_declarations(element, &mut block);
-            }
+        match element.namespace() {
+            SVG_NAMESPACE => {
+                if element.local_name() == "svg" {
+                    append_root_svg_size_declarations(element, &mut block);
+                }
 
-            let base_url = self
-                .host()
-                .owner_document_handle(self.handle())
-                .and_then(|document| self.host().document_base_url_for_handle(document));
-            if let Some(base_url) = base_url {
-                append_svg_style_presentation_declarations(
-                    element,
-                    &UrlExtraData::from(base_url),
-                    self.read_quirks_mode(),
-                    &mut block,
-                );
+                let base_url = self
+                    .host()
+                    .owner_document_handle(self.handle())
+                    .and_then(|document| self.host().document_base_url_for_handle(document));
+                if let Some(base_url) = base_url {
+                    append_svg_style_presentation_declarations(
+                        element,
+                        &UrlExtraData::from(base_url),
+                        self.read_quirks_mode(),
+                        &mut block,
+                    );
+                }
             }
-        } else if element.namespace() == HTML_NAMESPACE {
-            append_html_table_presentation_declarations(*self, &mut block);
-        } else {
-            return;
+            HTML_NAMESPACE => {
+                append_html_replaced_size_declarations(element, &mut block);
+                append_html_table_presentation_declarations(*self, &mut block);
+            }
+            _ => return,
         }
 
         if !block.is_empty() {
@@ -157,10 +289,7 @@ fn append_html_table_presentation_declarations(
     let native = element.element();
     let local_name = native.local_name();
     if local_name == "table" {
-        if let Some(width) = native
-            .attribute("width")
-            .and_then(|value| parse_html_dimension(value, true, false))
-        {
+        if let Some(width) = native.attribute("width").and_then(parse_html_table_width) {
             use style::values::generics::length::Size;
             block.push(
                 PropertyDeclaration::Width(Size::LengthPercentage(NonNegative(width))),
@@ -171,7 +300,7 @@ fn append_html_table_presentation_declarations(
         if let Some(spacing) = native
             .attribute("cellspacing")
             .filter(|value| !value.is_empty())
-            .and_then(|value| parse_html_dimension(value, false, true))
+            .and_then(parse_html_table_cell_spacing)
         {
             append_parsed_presentation_declaration(
                 element,
@@ -272,55 +401,26 @@ fn append_parsed_presentation_declaration(
     }
 }
 
-/// Parses the legacy HTML dimension grammar used by table attributes.
-///
-/// Blink accepts an initial run of ASCII digits, an optional fractional part,
-/// and then either `%` or arbitrary trailing garbage. Blink classifies an
-/// immediately trailing `*` as a relative dimension and omits the resulting
-/// presentation hint. A leading `+`, a leading decimal point, and percentage
-/// values in `cellspacing` remain invalid.
-fn parse_html_dimension(
-    value: &str,
-    allow_percentage: bool,
-    allow_zero: bool,
-) -> Option<LengthPercentage> {
-    let bytes = value.as_bytes();
-    let mut current = bytes
-        .iter()
-        .position(|byte| !is_html_space(*byte))
-        .unwrap_or(bytes.len());
-    let number_start = current;
-    if !bytes.get(current).is_some_and(u8::is_ascii_digit) {
-        return None;
-    }
-    current += 1;
-    while bytes.get(current).is_some_and(u8::is_ascii_digit) {
-        current += 1;
-    }
-    if bytes.get(current) == Some(&b'.') {
-        current += 1;
-        while bytes.get(current).is_some_and(u8::is_ascii_digit) {
-            current += 1;
+/// Applies the table `width` policy from Blink's `AddHTMLLengthToStyle`:
+/// percentages are accepted, while zero and relative dimensions are omitted.
+fn parse_html_table_width(value: &str) -> Option<LengthPercentage> {
+    match parse_html_dimension_value(value)? {
+        HtmlDimension::Absolute(0.0) | HtmlDimension::Percentage(0.0) | HtmlDimension::Relative => {
+            None
         }
+        dimension => html_dimension_length_percentage(dimension),
     }
-
-    let number = value[number_start..current].parse::<f64>().ok()?;
-    let number = number.min(f64::from(f32::MAX)) as f32;
-    if bytes.get(current) == Some(&b'*') {
-        return None;
-    }
-    if number == 0.0 && !allow_zero {
-        return None;
-    }
-    if bytes.get(current) == Some(&b'%') {
-        return allow_percentage
-            .then(|| LengthPercentage::Percentage(NoCalcPercentage::new(number / 100.0)));
-    }
-    Some(LengthPercentage::Length(NoCalcLength::from_px(number)))
 }
 
-fn is_html_space(byte: u8) -> bool {
-    matches!(byte, b'\t' | b'\n' | 0x0c | b'\r' | b' ')
+/// Applies the table `cellspacing` policy: zero is meaningful, but percentage
+/// and relative dimensions do not become a border-spacing declaration.
+fn parse_html_table_cell_spacing(value: &str) -> Option<LengthPercentage> {
+    match parse_html_dimension_value(value)? {
+        HtmlDimension::Absolute(value) => {
+            html_dimension_length_percentage(HtmlDimension::Absolute(value))
+        }
+        HtmlDimension::Percentage(_) | HtmlDimension::Relative => None,
+    }
 }
 
 /// Parses an HTML legacy color and returns an opaque CSS hex color.
@@ -642,24 +742,24 @@ mod tests {
     #[test]
     fn html_table_dimensions_match_blink_legacy_parsing() {
         assert_eq!(
-            parse_html_dimension("85%", true, false),
+            parse_html_table_width("85%"),
             Some(LengthPercentage::Percentage(NoCalcPercentage::new(0.85)))
         );
         assert_eq!(
-            parse_html_dimension(" 10foo", true, true),
+            parse_html_table_cell_spacing(" 10foo"),
             Some(LengthPercentage::Length(NoCalcLength::from_px(10.0)))
         );
         assert_eq!(
-            parse_html_dimension("10.%", true, true),
+            parse_html_table_width("10.%"),
             Some(LengthPercentage::Percentage(NoCalcPercentage::new(0.1)))
         );
-        assert!(parse_html_dimension("+10", true, true).is_none());
-        assert!(parse_html_dimension(".5", true, true).is_none());
-        assert!(parse_html_dimension("50%", false, true).is_none());
-        assert!(parse_html_dimension("0", true, false).is_none());
-        assert!(parse_html_dimension("10*", true, true).is_none());
+        assert!(parse_html_table_width("+10").is_none());
+        assert!(parse_html_table_width(".5").is_none());
+        assert!(parse_html_table_cell_spacing("50%").is_none());
+        assert!(parse_html_table_width("0").is_none());
+        assert!(parse_html_table_width("10*").is_none());
         assert_eq!(
-            parse_html_dimension("10 *", true, true),
+            parse_html_table_width("10 *"),
             Some(LengthPercentage::Length(NoCalcLength::from_px(10.0)))
         );
     }
@@ -678,5 +778,40 @@ mod tests {
         );
         assert_eq!(parse_html_legacy_color("transparent"), None);
         assert_eq!(parse_html_legacy_color(""), None);
+    }
+
+    #[test]
+    fn html_dimension_parser_matches_blink_numeric_prefix_rules() {
+        assert_eq!(
+            parse_html_dimension_value("  10"),
+            Some(HtmlDimension::Absolute(10.0))
+        );
+        assert_eq!(
+            parse_html_dimension_value("10.5px"),
+            Some(HtmlDimension::Absolute(10.5))
+        );
+        assert_eq!(
+            parse_html_dimension_value("10.%"),
+            Some(HtmlDimension::Percentage(10.0))
+        );
+        assert_eq!(
+            parse_html_dimension_value("10%garbage"),
+            Some(HtmlDimension::Percentage(10.0))
+        );
+        assert_eq!(
+            parse_html_dimension_value("10*"),
+            Some(HtmlDimension::Relative)
+        );
+        assert_eq!(
+            parse_html_dimension_value("10e10"),
+            Some(HtmlDimension::Absolute(10.0))
+        );
+        assert_eq!(parse_html_dimension_value("+10"), None);
+        assert_eq!(parse_html_dimension_value(".5"), None);
+        assert_eq!(parse_html_dimension_value(""), None);
+        assert_eq!(
+            parse_html_dimension_value(&"9".repeat(400)),
+            Some(HtmlDimension::Absolute(f32::MAX))
+        );
     }
 }

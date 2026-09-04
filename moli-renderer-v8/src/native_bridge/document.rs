@@ -17,6 +17,7 @@ use super::node::{
 };
 use super::{
     JsContextHost, callback_arg_namespace, callback_arg_string, collections,
+    element::observable_document_scrolling_element,
     identity::{CollectionKind, LiveCollectionDescriptor, LiveCollectionQueryKind},
     runtime_ptr_from_object, set_wrapped_handle_or_null, throw_dom_exception,
     validate_attribute_name, validate_element_name, validate_qualified_element_name_and_namespace,
@@ -134,7 +135,10 @@ pub(in crate::native_bridge) use css_state::{
 };
 pub(crate) use css_state::{
     apply_stylesheet_owner_css_projections, apply_stylesheet_source_css_projection,
-    clear_adopted_stylesheet_font_face_wrappers, sync_document_fonts_for_handle,
+    begin_document_font_face_set_load_cycle_for_document,
+    clear_adopted_stylesheet_font_face_wrappers,
+    settle_document_font_face_set_load_cycle_for_document, sync_document_fonts_for_handle,
+    synchronize_font_face_set_load_state_for_attribute,
 };
 use css_state::{detached_document_fonts_getter, document_fonts_getter_function};
 pub(crate) use css_state::{
@@ -1128,10 +1132,21 @@ fn document_scrolling_element_getter_function<'s>(
     };
     let runtime = unsafe { &*runtime_ptr };
     let dom = runtime.dom_host().dom();
-    let element = dom
-        .node(handle)
-        .and_then(Node::as_document)
-        .and_then(|document| document.document_element_handle(dom, handle));
+    let Some(document) = dom.node(handle).and_then(Node::as_document) else {
+        rv.set_null();
+        return;
+    };
+    let element = if document.quirks_mode() == selectors::matching::QuirksMode::Quirks {
+        let fallback = document.body_handle(dom, handle);
+        observable_document_scrolling_element(
+            runtime,
+            handle,
+            moli_layout::LayoutFlushReason::SynchronousGeometry,
+        )
+        .unwrap_or(fallback)
+    } else {
+        document.document_element_handle(dom, handle)
+    };
     set_document_node_return_value_for_receiver(scope, &mut rv, runtime_ptr, receiver, element);
 }
 
