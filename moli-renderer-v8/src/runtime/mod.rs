@@ -111,6 +111,7 @@ pub(crate) use self::page_vm::AuthorizedCurrentPageMiscPlatformApiTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageModuleReaction;
 pub(crate) use self::page_vm::AuthorizedCurrentPageNavigationApiTask;
 pub(crate) use self::page_vm::AuthorizedCurrentPageOpfsTask;
+pub(crate) use self::page_vm::AuthorizedCurrentPagePopupClose;
 pub(crate) use self::page_vm::AuthorizedCurrentPagePopupLoadEvent;
 pub(crate) use self::page_vm::AuthorizedCurrentPageRenderingUpdate;
 pub(crate) use self::page_vm::AuthorizedCurrentPageServiceWorkerClientMessage;
