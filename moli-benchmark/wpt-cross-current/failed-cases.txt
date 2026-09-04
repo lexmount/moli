@@ -2791,9 +2791,6 @@ html/browsers/browsing-the-web/navigating-across-documents/012.html
 html/browsers/browsing-the-web/navigating-across-documents/abort-document-load.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-204-fragment.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/iframe-src-204-pushState-replaceState.html
-html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/initial-content-replacement.html
-html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/load-event-iframe-element.html
-html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/load-pageshow-events-iframe-contentWindow.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-204-pushState-replaceState.html
 html/browsers/browsing-the-web/navigating-across-documents/initial-empty-document/window-open-204.html
 html/browsers/browsing-the-web/navigating-across-documents/multiple-globals/context-for-location-assign.html
@@ -2848,7 +2845,7 @@ html/browsers/history/the-location-interface/document_location.html
 html/browsers/history/the-location-interface/location-ancestor-origins-new-object.html
 html/browsers/history/the-location-interface/location-ancestor-origins-referrerpolicy-snapshot.html
 html/browsers/history/the-location-interface/location_hash.html
-html/browsers/history/the-location-interface/location_search.html
+html/browsers/history/the-location-interface/location_reload_javascript_url.html
 html/browsers/history/the-location-interface/reload_document_write_onload.html
 html/browsers/history/the-location-interface/same-hash.html
 html/browsers/history/the-location-interface/scripted_form_submit_assign_during_load.html
