@@ -544,6 +544,11 @@ impl DomHost {
         self.dom.text_content(handle)
     }
 
+    pub fn shared_text_content(&self, handle: DomHandle) -> Option<std::sync::Arc<str>> {
+        self.node(handle)
+            .map(|node| node.shared_text_content(&self.dom))
+    }
+
     pub fn inner_html(&self, handle: DomHandle) -> Option<String> {
         self.dom.inner_html(handle)
     }

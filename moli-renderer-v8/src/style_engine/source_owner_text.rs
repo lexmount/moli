@@ -94,7 +94,7 @@ impl OwnerStyleSheetSources {
     pub(super) fn set_source(
         &mut self,
         owner: DomHandle,
-        css_text: String,
+        css_text: Arc<str>,
         parser_base: url::Url,
     ) -> bool {
         self.cssom_authoritative_owners.remove(&owner);
@@ -105,7 +105,11 @@ impl OwnerStyleSheetSources {
         }) {
             return false;
         }
-        let processing_source = Arc::new(OwnerStyleSheetSource::new(owner, css_text, parser_base));
+        let processing_source = Arc::new(OwnerStyleSheetSource::from_shared_text(
+            owner,
+            css_text,
+            parser_base,
+        ));
         self.sources_by_owner.insert(
             owner,
             InstalledOwnerStyleSheet::from_processing_source(processing_source),
@@ -116,11 +120,15 @@ impl OwnerStyleSheetSources {
     pub(super) fn replace_processed_source(
         &mut self,
         owner: DomHandle,
-        css_text: String,
+        css_text: Arc<str>,
         parser_base: url::Url,
     ) {
         self.cssom_authoritative_owners.remove(&owner);
-        let processing_source = Arc::new(OwnerStyleSheetSource::new(owner, css_text, parser_base));
+        let processing_source = Arc::new(OwnerStyleSheetSource::from_shared_text(
+            owner,
+            css_text,
+            parser_base,
+        ));
         self.sources_by_owner.insert(
             owner,
             InstalledOwnerStyleSheet::from_processing_source(processing_source),

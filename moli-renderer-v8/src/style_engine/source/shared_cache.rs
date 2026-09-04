@@ -50,12 +50,18 @@ pub(super) fn shared_style_source_contents(
     css_text: String,
     base_url: url::Url,
 ) -> Arc<SharedStyleSourceContents> {
+    shared_style_source_contents_from_shared(css_text.into(), base_url)
+}
+
+pub(super) fn shared_style_source_contents_from_shared(
+    css_text: Arc<str>,
+    base_url: url::Url,
+) -> Arc<SharedStyleSourceContents> {
     let key = SharedStyleSourceCacheKey::new(&css_text, &base_url);
     if let Some(cached) = CACHE.lock().lookup(&key, &css_text, &base_url) {
         return cached;
     }
 
-    let css_text = Arc::<str>::from(css_text);
     let metadata = style_source_metadata_for_css_text(&css_text, &base_url);
     let source = Arc::new(SharedStyleSourceContents {
         source_metadata: SharedStyleSourceMetadata::from_metadata(
@@ -286,6 +292,17 @@ mod tests {
         assert!(cache.lookup(&key, css_text, &base_url).is_none());
         assert!(cache.entries.is_empty());
         assert_eq!(cache.retained_bytes, 0);
+    }
+
+    #[test]
+    fn shared_input_becomes_the_retained_css_text_backing() {
+        let css_text = Arc::<str>::from(".shared-input { color: green; }");
+        let source = shared_style_source_contents_from_shared(
+            Arc::clone(&css_text),
+            url::Url::parse("https://shared-input.test/style.css").expect("valid base URL"),
+        );
+
+        assert!(Arc::ptr_eq(&css_text, &source.css_text_handle()));
     }
 
     #[test]
