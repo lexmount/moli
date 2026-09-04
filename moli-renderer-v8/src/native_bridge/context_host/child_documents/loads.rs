@@ -639,6 +639,7 @@ impl JsContextHost {
                 };
                 entry.clear_cached_snapshot();
                 entry.clear_completed_document_network();
+                entry.clear_pending_top_level_history_length_increment();
                 self.reject_replaced_service_worker_child_client_navigation(
                     handle,
                     format!("Cannot navigate to URL: {error}"),
@@ -693,6 +694,7 @@ impl JsContextHost {
                     body_activity,
                 };
             };
+            self.commit_pending_child_joint_history_push(scope, handle);
             initial_classic_ready_work = install.initial_classic_ready_work;
             parser_stop_action = install.parser_stop_action;
             owner_transition = Some(install.owner_transition);

@@ -22,11 +22,7 @@ impl JsContextHost {
         &self,
         handle: DomHandle,
     ) -> bool {
-        let seed_is_initial_about_blank = self
-            .child_browsing_contexts
-            .get(&handle)
-            .is_some_and(ChildBrowsingContextEntry::navigation_seed_is_initial_about_blank_commit);
-        seed_is_initial_about_blank
+        self.child_current_document_is_initial_empty(handle)
             && self
                 .child_browsing_context_current_url(handle)
                 .is_some_and(|url| moli_url::is_about_blank(&url))

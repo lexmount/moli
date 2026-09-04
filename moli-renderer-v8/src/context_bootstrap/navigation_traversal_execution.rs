@@ -532,5 +532,6 @@ fn queue_child_cross_document_traversal(
         child_handle,
         target_url,
         seed,
+        false,
     );
 }
