@@ -570,10 +570,34 @@ fn location_writable_attribute_setter_callback<'s>(
             });
         }
         LocationAttribute::Protocol => {
-            let scheme = value.strip_suffix(':').unwrap_or(&value).to_owned();
-            navigate_modified_location_url(scope, holder, |current| {
-                current.set_scheme(&scheme).is_ok()
-            });
+            let Some(scheme) = location_protocol_scheme(&value) else {
+                crate::context_bootstrap::throw_dom_exception_value(
+                    scope,
+                    "The provided value is not a valid URL scheme.",
+                    "SyntaxError",
+                );
+                return;
+            };
+            let Some(current_href) = location_href_slot(scope, holder) else {
+                return;
+            };
+            let Ok(mut target) = url::Url::parse(&current_href) else {
+                return;
+            };
+            // A syntactically valid scheme can still be incompatible with the
+            // current URL (for example, changing an HTTP URL to `data`). URL's
+            // scheme-state override treats that as a non-failing no-op.
+            if target.set_scheme(&scheme).is_err() || !matches!(target.scheme(), "http" | "https") {
+                return;
+            }
+            // Unlike the other component setters, protocol assignment must
+            // navigate even when parsing leaves the serialized URL unchanged.
+            navigate_location_object(
+                scope,
+                holder,
+                LocationNavigationKind::Assign,
+                Some(target.to_string()),
+            );
         }
         LocationAttribute::Host => {
             navigate_modified_location_url(scope, holder, |current| {
@@ -602,6 +626,28 @@ fn location_writable_attribute_setter_callback<'s>(
         LocationAttribute::AncestorOrigins | LocationAttribute::Origin => {}
     }
     rv.set_undefined();
+}
+
+fn location_protocol_scheme(value: &str) -> Option<String> {
+    // Basic URL parsing removes ASCII tab and newline code points before the
+    // scheme-state override runs. The first colon terminates that state, so
+    // values such as `https::::` and `http:gunk` both provide only the scheme
+    // before their first colon.
+    let normalized = value
+        .chars()
+        .filter(|character| !matches!(character, '\t' | '\n' | '\r'))
+        .collect::<String>();
+    let candidate = normalized.split(':').next().unwrap_or_default();
+    let mut characters = candidate.chars();
+    let first = characters.next()?;
+    if !first.is_ascii_alphabetic()
+        || !characters.all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '+' | '-' | '.')
+        })
+    {
+        return None;
+    }
+    Some(candidate.to_ascii_lowercase())
 }
 
 fn location_hash_string(url: &url::Url) -> String {

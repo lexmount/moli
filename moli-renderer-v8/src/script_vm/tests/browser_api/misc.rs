@@ -24450,6 +24450,103 @@ fn location_navigation_throws_syntax_error_for_unparseable_urls() {
 }
 
 #[test]
+fn location_protocol_setter_rejects_invalid_schemes_without_navigation() {
+    let mut vm = new_storage_test_vm("https://example.com/path?x=1#frag");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const originalHref = location.href;
+  const invalid = [
+    "", "\u0000", "\u0001", "\u000c", " ", "!", "\u007f",
+    "\u0080", "\u00ff", ":", "\u2020", "x!", "1http"
+  ];
+  const errors = invalid.map(value => {
+    try {
+      location.protocol = value;
+      return "returned";
+    } catch (error) {
+      return `${error.name}:${error.code}:${error instanceof DOMException}`;
+    }
+  });
+  return JSON.stringify({
+    allSyntaxErrors: errors.every(value => value === "SyntaxError:12:true"),
+    hrefUnchanged: location.href === originalHref
+  });
+})()
+"#,
+        )
+        .expect("invalid Location protocol probe should evaluate");
+
+    assert_eq!(result, r#"{"allSyntaxErrors":true,"hrefUnchanged":true}"#);
+    assert!(
+        vm.take_pending_location_navigation_with_seed().is_none(),
+        "invalid Location protocols must not queue navigation"
+    );
+}
+
+#[test]
+fn location_protocol_setter_uses_scheme_state_override_navigation_rules() {
+    let original = "http://example.com/path?x=1#frag";
+    let mut ignored_vm = new_storage_test_vm(original);
+    let ignored = ignored_vm
+        .eval(
+            r#"
+(() => {
+  const results = [];
+  for (const scheme of ["x", "data", "file", "ftp", "http+x"]) {
+    try {
+      location.protocol = scheme;
+      results.push(location.href);
+    } catch (error) {
+      results.push(error.name);
+    }
+  }
+  return JSON.stringify(results);
+})()
+"#,
+        )
+        .expect("non-HTTP Location protocol probe should evaluate");
+    assert_eq!(
+        ignored,
+        r#"["http://example.com/path?x=1#frag","http://example.com/path?x=1#frag","http://example.com/path?x=1#frag","http://example.com/path?x=1#frag","http://example.com/path?x=1#frag"]"#
+    );
+    assert!(
+        ignored_vm
+            .take_pending_location_navigation_with_seed()
+            .is_none(),
+        "non-HTTP(S) protocol results must not queue navigation"
+    );
+
+    let mut same_vm = new_storage_test_vm(original);
+    same_vm
+        .eval(r#"location.protocol = "ht\ntp:gunk"; "queued""#)
+        .expect("same Location protocol probe should evaluate");
+    assert_eq!(
+        same_vm
+            .take_pending_location_navigation_with_seed()
+            .expect("same protocol assignment should still navigate")
+            .url
+            .as_str(),
+        original
+    );
+
+    let mut changed_vm = new_storage_test_vm(original);
+    changed_vm
+        .eval(r#"location.protocol = "https::::"; "queued""#)
+        .expect("changed Location protocol probe should evaluate");
+    assert_eq!(
+        changed_vm
+            .take_pending_location_navigation_with_seed()
+            .expect("HTTP(S) protocol assignment should navigate")
+            .url
+            .as_str(),
+        "https://example.com/path?x=1#frag"
+    );
+}
+
+#[test]
 fn location_accessors_throw_on_invalid_receivers_without_navigation() {
     let mut vm = new_storage_test_vm("https://example.com/path?x=1");
 
