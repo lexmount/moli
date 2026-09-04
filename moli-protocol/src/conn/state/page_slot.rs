@@ -816,20 +816,6 @@ impl TargetPageSlot {
         true
     }
 
-    pub(crate) fn clear_pending_document_navigation_if_loader_matches(
-        &mut self,
-        loader_id: &str,
-    ) -> bool {
-        let Some(pending) = self.pending_navigation_request.as_ref() else {
-            return false;
-        };
-        let navigation = pending.navigation_id;
-        if self.loader_id_for_navigation(navigation) != Some(loader_id) {
-            return false;
-        }
-        self.clear_pending_document_navigation_if_matches(&navigation)
-    }
-
     pub(crate) fn clear_pending_document_navigation_if_matches(
         &mut self,
         navigation: &NavigationId,
@@ -1641,7 +1627,7 @@ mod pending_renderer_page_tests {
 
         let second_page = renderer_page(8, 22);
         assert!(slot.bind_pending_document_navigation_renderer_page(&second, second_page));
-        assert!(slot.clear_pending_document_navigation_if_loader_matches("LOADER-second"));
+        assert!(slot.clear_pending_document_navigation_if_matches(&second));
         assert!(!slot.routes_renderer_page(second_page));
     }
 }
@@ -2528,7 +2514,7 @@ mod renderer_document_lifecycle_tests {
 
         assert!(slot.arm_root_post_load_observation("LOADER-12"));
         assert!(!slot.arm_root_post_load_observation("LOADER-12"));
-        slot.start_document_navigation("LOADER-13".to_owned());
+        let navigation = slot.start_document_navigation("LOADER-13".to_owned());
         assert!(slot.take_root_network_idle_binding().is_none());
         assert_eq!(
             slot.take_root_frame_stopped_loading_binding()
@@ -2537,7 +2523,7 @@ mod renderer_document_lifecycle_tests {
             "LOADER-12"
         );
         assert!(slot.take_root_frame_stopped_loading_binding().is_none());
-        assert!(slot.clear_pending_document_navigation_if_loader_matches("LOADER-13"));
+        assert!(slot.clear_pending_document_navigation_if_matches(&navigation));
         assert_eq!(
             slot.take_root_network_idle_binding()
                 .expect("network-idle observation after provisional navigation failure")

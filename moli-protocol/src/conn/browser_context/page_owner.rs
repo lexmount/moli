@@ -612,18 +612,6 @@ impl CdpConnection {
             .map(|owner_state| owner_state.has_attached_child_frame_id(frame_id))
     }
 
-    pub(crate) fn discard_uncommitted_main_document_resource_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        loader_id: &str,
-    ) {
-        let _ = self.with_target_owner_state_for_owner_mut(owner, |owner_state| {
-            owner_state
-                .page_resource_store
-                .discard_uncommitted_loader(loader_id);
-        });
-    }
-
     pub(crate) fn set_page_domain_enabled_for_session_owner(
         &mut self,
         session_id: Option<&str>,

@@ -1613,9 +1613,9 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
     assert!(pending.is_on_initial_empty_document());
     assert!(pending.pending_cross_document_navigation());
 
-    context.clear_pending_document_navigation_for_target_if_loader_matches(
+    context.clear_pending_document_navigation_for_target_if_matches(
         Some("TID-initial-active"),
-        "LOADER-initial-active",
+        &token,
     );
     let cleared = context
         .active_page_target()

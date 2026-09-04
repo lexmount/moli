@@ -722,15 +722,6 @@ impl BrowserContext {
         });
     }
 
-    pub(crate) fn clear_target_initial_empty_document_pending_cross_document_navigation(
-        &mut self,
-        target_id: &str,
-    ) {
-        self.mutate_target_owner_state_by_target_id(target_id, |owner_state| {
-            owner_state.clear_initial_empty_document_pending_cross_document_navigation();
-        });
-    }
-
     pub(crate) fn mark_target_initial_empty_document_exited(&mut self, target_id: &str) {
         self.mutate_target_owner_state_by_target_id(target_id, |owner_state| {
             owner_state.mark_initial_empty_document_exited();

@@ -395,12 +395,8 @@ impl TargetRuntimeSlot {
         &mut self,
         transaction: CommittedRendererAgentAttachment,
     ) -> Result<(), DevToolsRendererChannelError> {
-        let navigation = *transaction.navigation();
         self.devtools_renderer_channel
-            .rollback_committed_candidate(transaction)?;
-        self.page_slot
-            .clear_pending_document_navigation_if_matches(&navigation);
-        Ok(())
+            .rollback_committed_candidate(transaction)
     }
 
     pub(crate) fn bind_page_to_committed_renderer_agent_candidate(
@@ -645,12 +641,12 @@ impl TargetRuntimeSlot {
             .commit_pending_document_navigation_if_matches(token)
     }
 
-    pub(crate) fn clear_pending_document_navigation_if_loader_matches(
+    pub(crate) fn clear_pending_document_navigation_if_matches(
         &mut self,
-        loader_id: &str,
+        navigation: &NavigationId,
     ) -> bool {
         self.page_slot
-            .clear_pending_document_navigation_if_loader_matches(loader_id)
+            .clear_pending_document_navigation_if_matches(navigation)
     }
 
     pub(crate) fn clear_document_navigation_state(&mut self) {
