@@ -62,7 +62,32 @@ fn build_constructed_object<'s>(
 pub(super) fn build_webgl_debug_renderer_info_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    build_constructed_object(scope, "WEBGL_debug_renderer_info")
+    if let Some(object) = build_constructed_object(scope, "WEBGL_debug_renderer_info") {
+        return Some(object);
+    }
+
+    // Extension interfaces are not exposed as Worker globals in Chromium.
+    // Construct the extension object directly when WebGL is running in a
+    // worker realm, where no public constructor exists to instantiate.
+    let object = v8::Object::new(scope);
+    for (name, value) in [
+        ("UNMASKED_VENDOR_WEBGL", 0x9245),
+        ("UNMASKED_RENDERER_WEBGL", 0x9246),
+    ] {
+        let name = v8::String::new(scope, name)?;
+        let defined = object.define_own_property(
+            scope,
+            name.into(),
+            v8::Integer::new(scope, value).into(),
+            v8::PropertyAttribute::READ_ONLY
+                | v8::PropertyAttribute::DONT_DELETE
+                | v8::PropertyAttribute::DONT_ENUM,
+        );
+        if defined != Some(true) {
+            return None;
+        }
+    }
+    Some(object)
 }
 
 pub(super) fn build_webgl_lose_context_object<'s>(

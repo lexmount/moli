@@ -1058,7 +1058,7 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         name: "OffscreenCanvasRenderingContext2D",
-        parent: Some("CanvasRenderingContext2D"),
+        parent: None,
         kind: ConstructorKind::OffscreenCanvasRenderingContext2D,
     },
     ConstructorSpec {

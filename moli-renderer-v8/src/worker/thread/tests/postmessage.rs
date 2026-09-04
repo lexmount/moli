@@ -1863,6 +1863,43 @@ async fn worker_performance_now_uses_readonly_monotonic_time_origin() {
 }
 
 #[tokio::test]
+async fn worker_offscreen_canvas_exposes_webgl_identity_consistently() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        const canvas = new OffscreenCanvas(1, 1);
+        const gl = canvas.getContext("webgl");
+        const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+        const twoDimensional = new OffscreenCanvas(1, 1).getContext("2d");
+        postMessage({
+            offscreenCanvas: typeof OffscreenCanvas,
+            offscreen2d: typeof OffscreenCanvasRenderingContext2D,
+            webgl: typeof WebGLRenderingContext,
+            webgl2: typeof WebGL2RenderingContext,
+            extensionGlobal: typeof WEBGL_debug_renderer_info,
+            contextInstance: gl instanceof WebGLRenderingContext,
+            twoDimensionalInstance:
+                twoDimensional instanceof OffscreenCanvasRenderingContext2D,
+            vendor: gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL),
+            renderer: gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL)
+        });
+        close();
+        "#
+        .into(),
+        "test://worker_offscreen_canvas_webgl".into(),
+    );
+
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out")
+        .expect("channel closed");
+    assert_eq!(
+        expect_post_json(msg),
+        r#"{"offscreenCanvas":"function","offscreen2d":"function","webgl":"function","webgl2":"function","extensionGlobal":"undefined","contextInstance":true,"twoDimensionalInstance":true,"vendor":"","renderer":""}"#
+    );
+}
+
+#[tokio::test]
 async fn shared_worker_message_port_handler_can_reply_with_performance_now() {
     ensure_v8();
     let (port_wake_tx, mut port_wake_rx) = tokio::sync::mpsc::unbounded_channel();
