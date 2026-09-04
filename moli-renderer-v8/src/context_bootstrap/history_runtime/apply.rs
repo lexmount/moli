@@ -177,6 +177,7 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
                 scope,
                 child_handle,
                 &applied.url,
+                None,
             );
         }
     } else {

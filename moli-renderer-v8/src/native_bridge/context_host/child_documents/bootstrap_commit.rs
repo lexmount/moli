@@ -14,6 +14,7 @@ impl PageScriptHost {
         bootstrap: ChildBrowsingContextBootstrap,
         navigation_load: FrameDocumentNavigationLoadBinding,
         initiator: ChildDocumentNavigationInitiator,
+        navigation_initiator: Option<crate::runtime::RendererNavigationInitiator>,
     ) -> Option<ChildDocumentCommitResult> {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return None;
@@ -71,7 +72,13 @@ impl PageScriptHost {
 
         if requires_async_load {
             if self
-                .start_child_document_load(handle, bootstrap.clone(), navigation_load, initiator)
+                .start_child_document_load(
+                    handle,
+                    bootstrap.clone(),
+                    navigation_load,
+                    initiator,
+                    navigation_initiator,
+                )
                 .is_some()
             {
                 return Some(ChildDocumentCommitResult::pending());
