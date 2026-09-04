@@ -17,6 +17,7 @@ content-security-policy/inheritance/document-write-iframe.html
 content-security-policy/inheritance/location-reload.html
 content-security-policy/inside-worker/dedicatedworker-report-only.html
 content-security-policy/inside-worker/serviceworker-report-only.https.sub.html
+content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/resource-hints/prefetch-allowed-by-default.html
 content-security-policy/resource-hints/prefetch-allowed-no-default.html
 content-security-policy/resource-hints/prefetch-allowed-with-conflicting-permissive-policies.html
