@@ -12,7 +12,6 @@ use super::super::{
     source_id::{StyleScopeId, StyleSourceId, StyleSourceKind},
     source_key::{StyleSourceKey, StyleSourceSetKey},
 };
-use super::imports::stylesheet_top_level_import_urls;
 use super::shared_cache::{
     SharedStyleSourceContents, shared_style_source_contents,
     shared_style_source_contents_from_shared,
@@ -89,7 +88,6 @@ pub(in crate::style_engine) struct StyleSourceMetadata {
 pub(crate) struct OwnerStyleSheetSource {
     owner: DomHandle,
     source: StyloStylesheetSource,
-    import_urls: StdArc<[url::Url]>,
 }
 
 impl StyloStylesheetSource {
@@ -387,7 +385,7 @@ impl StyloStylesheetSource {
 
     pub(crate) fn import_urls(&self) -> StdArc<[url::Url]> {
         match &self.contents {
-            StyloStylesheetSourceContents::Text { shared } => shared.import_urls(),
+            StyloStylesheetSourceContents::Text { shared } => shared.import_urls_handle(),
             StyloStylesheetSourceContents::Live { stylesheet, .. } => {
                 let guard = stylesheet.shared_lock.read();
                 let mut urls = Vec::new();
@@ -570,20 +568,8 @@ impl OwnerStyleSheetSource {
     }
 
     fn from_source(owner: DomHandle, source: StyloStylesheetSource) -> Self {
-        let processing_contents = source
-            .processing_contents()
-            .expect("owner processing source must remain text-backed");
-        let import_urls = stylesheet_top_level_import_urls(
-            processing_contents.css_text(),
-            source.base_url(),
-            false,
-        )
-        .unwrap_or_default();
-        Self {
-            owner,
-            source,
-            import_urls: StdArc::from(import_urls),
-        }
+        debug_assert!(source.processing_contents().is_some());
+        Self { owner, source }
     }
 
     pub(in crate::style_engine) fn matches_processing_input(
@@ -610,7 +596,10 @@ impl OwnerStyleSheetSource {
     }
 
     pub(crate) fn import_urls(&self) -> &[url::Url] {
-        self.import_urls.as_ref()
+        self.source
+            .processing_contents()
+            .expect("owner processing source must remain text-backed")
+            .import_urls()
     }
 
     pub(crate) fn font_faces(&self) -> StdArc<[StylesheetFontFaceDescriptor]> {
