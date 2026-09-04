@@ -34,6 +34,11 @@ impl JsContextHost {
         bootstrap: &ChildBrowsingContextBootstrap,
     ) -> NavigationHistoryEntrySeed {
         let url = Self::child_browsing_context_navigation_entry_url(bootstrap);
+        if let Some(url) = url.as_ref().filter(|url| moli_url::is_about_blank(url)) {
+            let mut seed = page_child_browsing_context_single_entry_seed(None);
+            seed.entries[0].url = url.as_str().to_owned();
+            return seed;
+        }
         page_child_browsing_context_single_entry_seed(url.as_ref())
     }
 

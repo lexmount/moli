@@ -12,6 +12,7 @@ use url::Url;
 /// has no response body, parser input, or navigation completion to restore.
 #[derive(Clone, Debug)]
 pub(in crate::native_bridge::context_host) struct ChildInitialEmptyDocumentInit {
+    document_url: Url,
     creator_base_url: Url,
     inherited_origin: String,
     policy_container: DocumentPolicyContainer,
@@ -53,8 +54,13 @@ impl JsContextHost {
     pub(in crate::native_bridge::context_host) fn capture_child_initial_empty_document_init(
         &self,
         handle: DomHandle,
+        document_url: Url,
         policy_container: DocumentPolicyContainer,
     ) -> ChildInitialEmptyDocumentInit {
+        debug_assert!(
+            moli_url::is_about_blank(&document_url),
+            "an initial-empty child Document must match about:blank"
+        );
         let resource_authority = self
             .parent_document_resource_loader_for_child_context(handle)
             .expect("initial-empty child Document requires its exact parent authority")
@@ -65,6 +71,7 @@ impl JsContextHost {
             self.child_browsing_context_creator_network_partition_origin(handle)
         };
         ChildInitialEmptyDocumentInit {
+            document_url,
             creator_base_url: self.document_base_url_for_child_context(handle),
             inherited_origin,
             policy_container,
@@ -91,7 +98,7 @@ impl JsContextHost {
             "initial-empty Document initialization requires a vacant child owner slot"
         );
         let loader_id = self.allocate_child_document_loader_id();
-        let document_url = Url::parse("about:blank").expect("static about:blank must parse");
+        let document_url = init.document_url.clone();
         let document_handle =
             self.create_empty_live_child_html_document(document_url.clone(), Some("text/html"));
         self.dom_host_mut()

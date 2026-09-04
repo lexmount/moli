@@ -344,8 +344,13 @@ impl JsContextHost {
                 };
                 let initial_empty_document_init: Option<ChildInitialEmptyDocumentInit> = is_new
                     .then(|| {
+                        let document_url =
+                            Self::child_browsing_context_bootstrap_url(&live_bootstrap)
+                                .filter(moli_url::is_about_blank)
+                                .expect("an initial live child bootstrap must match about:blank");
                         self.capture_child_initial_empty_document_init(
                             handle,
+                            document_url,
                             document_policy_container.clone(),
                         )
                     });
@@ -842,6 +847,10 @@ fn child_browsing_context_bootstrap_is_initial_about_blank(
     bootstrap: &ChildBrowsingContextBootstrap,
 ) -> bool {
     matches!(bootstrap, ChildBrowsingContextBootstrap::AboutBlank)
+        || matches!(
+            bootstrap,
+            ChildBrowsingContextBootstrap::Url(url) if moli_url::is_about_blank(url)
+        )
 }
 
 fn child_browsing_context_bootstrap_uses_initial_empty_load(

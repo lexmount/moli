@@ -11411,6 +11411,73 @@ fn no_src_iframe_initial_about_blank_load_is_synchronous_at_connection() {
 }
 
 #[test]
+fn explicit_about_blank_iframe_variants_reuse_initial_empty_document_synchronously() {
+    let mut vm = new_storage_test_vm("https://iframe-explicit-initial-blank.test/page.html");
+
+    let result = vm
+        .eval(
+            r##"
+(() => {
+  const root = document.body || document.documentElement || document;
+  const variants = ["about:blank", "about:blank#foo", "about:blank?foo"];
+  globalThis.__explicitInitialBlankFrames = [];
+  const observed = variants.map(src => {
+    const frame = document.createElement("iframe");
+    const frameEvents = [];
+    frame.addEventListener("load", () => frameEvents.push("load"));
+    frame.src = src;
+    root.appendChild(frame);
+    const child = frame.contentWindow;
+    const windowEvents = [];
+    child.addEventListener("load", () => windowEvents.push("load"));
+    child.addEventListener("pageshow", () => windowEvents.push("pageshow"));
+    child.document.body.textContent = src;
+    globalThis.__explicitInitialBlankFrames.push({frame, child, windowEvents});
+    return [
+      frameEvents.join(","),
+      child.location.href,
+      child.document.URL,
+      child.document.body.textContent,
+      child.navigation.entries().map(entry => entry.url).join(","),
+      child.navigation.activation === null,
+    ].join("|");
+  });
+  return JSON.stringify(observed);
+})()
+"##,
+        )
+        .expect("explicit initial about:blank variants should evaluate");
+
+    assert_eq!(
+        result,
+        r##"["load|about:blank|about:blank|about:blank|about:blank|true","load|about:blank#foo|about:blank#foo|about:blank#foo|about:blank#foo|true","load|about:blank?foo|about:blank?foo|about:blank?foo|about:blank?foo|true"]"##
+    );
+    assert!(
+        !vm.has_pending_child_navigation_commit_for_test(),
+        "matching about:blank iframe URLs must not schedule a replacement NavigationCommit"
+    );
+    assert!(
+        !vm.has_ready_child_frame_semantic_turn_for_test(ChildFrameSemanticTurnKind::HostLoad),
+        "synchronous matching about:blank loads must not leave HostLoad work"
+    );
+
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval(
+            r##"
+JSON.stringify(__explicitInitialBlankFrames.map(({child, windowEvents}) => [
+  child.location.href,
+  child.document.body.textContent,
+  windowEvents.join(","),
+]))
+"##,
+        )
+        .expect("explicit initial about:blank state should remain stable"),
+        r##"[["about:blank","about:blank",""],["about:blank#foo","about:blank#foo",""],["about:blank?foo","about:blank?foo",""]]"##
+    );
+}
+
+#[test]
 fn no_src_iframe_initial_about_blank_has_a_quirks_empty_document() {
     let mut vm = new_storage_test_vm("https://iframe-initial-document.test/page.html");
     vm.document_runtime
