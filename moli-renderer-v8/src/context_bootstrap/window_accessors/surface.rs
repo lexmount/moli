@@ -149,6 +149,23 @@ pub(in crate::context_bootstrap) fn window_opener_getter<'s>(
     rv.set_null();
 }
 
+pub(in crate::context_bootstrap) fn window_closed_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(receiver) = window_receiver(scope, &args) else {
+        return;
+    };
+    if let Some(popup_id) = lightweight_popup_id_from_window(scope, receiver) {
+        let closed = window_host_ptr(scope, receiver)
+            .is_none_or(|host_ptr| !unsafe { &*host_ptr }.lightweight_popup_is_open(popup_id));
+        rv.set_bool(closed);
+        return;
+    }
+    rv.set_bool(window_has_discarded_child_browsing_context(scope, receiver));
+}
+
 pub(in crate::context_bootstrap) fn window_opener_setter<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
