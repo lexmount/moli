@@ -1,12 +1,12 @@
 use moli_core::{
-    browser::NavigationId,
+    browser::{DocumentLifecycle, NavigationId},
     page::{
         Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
         RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
         RendererDocumentLifecycleSnapshot, RendererDocumentLifecycleWaitOutcome,
         RendererDocumentLifecycleWaiter, RendererDocumentToken, RendererFrameToken,
         RendererLifecycleEpoch, RendererLifecycleEventStamp, RendererLifecycleStartReason,
-        RendererLifecycleTerminationStamp, RendererPageCreationArtifacts,
+        RendererPageCreationArtifacts,
     },
 };
 use tokio::sync::watch;
@@ -141,78 +141,9 @@ impl CommittedRendererDocumentBinding {
 #[derive(Debug, Default)]
 struct RendererDocumentLifecycleProtocolState {
     binding: Option<CommittedRendererDocumentBinding>,
-    authoritative: RendererDocumentLifecycleProtocolCursor,
-    visible: RendererDocumentLifecycleProtocolCursor,
+    authoritative: DocumentLifecycle,
+    visible: Option<RendererDocumentLifecycleSnapshot>,
     load_visibility: RendererDocumentLoadVisibility,
-}
-
-#[derive(Clone, Copy, Debug, Default)]
-struct RendererDocumentLifecycleProtocolCursor {
-    snapshot: Option<RendererDocumentLifecycleSnapshot>,
-    last_sequence: Option<u64>,
-}
-
-impl RendererDocumentLifecycleProtocolCursor {
-    fn from_snapshot(snapshot: RendererDocumentLifecycleSnapshot) -> Self {
-        Self {
-            snapshot: Some(snapshot),
-            last_sequence: None,
-        }
-    }
-
-    fn observe(&mut self, event: RendererDocumentLifecycleEvent) {
-        debug_assert!(
-            self.last_sequence
-                .is_none_or(|sequence| event.sequence > sequence),
-            "renderer lifecycle protocol cursors must advance monotonically"
-        );
-        self.last_sequence = Some(event.sequence);
-        let Some(snapshot) = self.snapshot.as_mut() else {
-            return;
-        };
-        apply_renderer_document_lifecycle_event_to_snapshot(snapshot, event);
-    }
-}
-
-fn apply_renderer_document_lifecycle_event_to_snapshot(
-    snapshot: &mut RendererDocumentLifecycleSnapshot,
-    event: RendererDocumentLifecycleEvent,
-) {
-    match event.kind {
-        RendererDocumentLifecycleEventKind::Started { .. } => {
-            snapshot.frame = event.frame;
-            snapshot.document = event.document;
-            snapshot.epoch = event.epoch;
-            snapshot.started = RendererLifecycleEventStamp {
-                sequence: event.sequence,
-                timestamp_micros: event.timestamp_micros,
-            };
-            snapshot.dom_content_loaded = None;
-            snapshot.load = None;
-            snapshot.terminated = None;
-        }
-        RendererDocumentLifecycleEventKind::Milestone(
-            RendererDocumentLifecycleMilestone::DomContentLoaded,
-        ) => {
-            snapshot.dom_content_loaded = Some(RendererLifecycleEventStamp {
-                sequence: event.sequence,
-                timestamp_micros: event.timestamp_micros,
-            });
-        }
-        RendererDocumentLifecycleEventKind::Milestone(RendererDocumentLifecycleMilestone::Load) => {
-            snapshot.load = Some(RendererLifecycleEventStamp {
-                sequence: event.sequence,
-                timestamp_micros: event.timestamp_micros,
-            });
-        }
-        RendererDocumentLifecycleEventKind::Terminated { reason, .. } => {
-            snapshot.terminated = Some(RendererLifecycleTerminationStamp {
-                sequence: event.sequence,
-                timestamp_micros: event.timestamp_micros,
-                reason,
-            });
-        }
-    }
 }
 
 #[derive(Debug, Default)]
@@ -929,12 +860,10 @@ impl TargetPageSlot {
             page_attachment_id = binding.page_attachment_id.get(),
             "bound renderer document lifecycle to committed protocol document"
         );
-        let lifecycle_cursor =
-            RendererDocumentLifecycleProtocolCursor::from_snapshot(initial_snapshot);
         self.renderer_document_lifecycle = RendererDocumentLifecycleProtocolState {
             binding: Some(binding),
-            authoritative: lifecycle_cursor,
-            visible: lifecycle_cursor,
+            authoritative: DocumentLifecycle::from_snapshot(initial_snapshot),
+            visible: Some(initial_snapshot),
             load_visibility: RendererDocumentLoadVisibility::default(),
         };
         self.root_post_load_observation = None;
@@ -996,8 +925,10 @@ impl TargetPageSlot {
                 .load_visibility
                 .deferred_tail,
         );
-        for event in &deferred_tail {
-            self.renderer_document_lifecycle.visible.observe(*event);
+        if let Some(snapshot) = self.renderer_document_lifecycle.visible.as_mut() {
+            for event in &deferred_tail {
+                snapshot.apply_event(*event);
+            }
         }
         Some(deferred_tail)
     }
@@ -1076,52 +1007,21 @@ impl TargetPageSlot {
                             RendererDocumentLifecycleMilestone::Load
                         )
                     ));
-            let Some(binding) = self.renderer_document_lifecycle.binding.as_ref().cloned() else {
-                tracing::debug!(
-                    sequence = event.sequence,
-                    "dropping renderer lifecycle event without committed binding"
-                );
-                continue;
-            };
-            if event.frame != binding.renderer_frame || event.document != binding.renderer_document
-            {
-                tracing::debug!(
-                    sequence = event.sequence,
-                    event_document = ?event.document,
-                    bound_document = ?binding.renderer_document,
-                    "dropping stale renderer lifecycle event for another document"
-                );
-                continue;
-            }
-            if self
+            let restarts_same_document = self
+                .renderer_document_lifecycle
+                .binding
+                .as_ref()
+                .is_some_and(|binding| event.epoch != binding.renderer_epoch);
+            if !self
                 .renderer_document_lifecycle
                 .authoritative
-                .last_sequence
-                .is_some_and(|sequence| event.sequence <= sequence)
+                .observe(event)
             {
-                tracing::debug!(
-                    sequence = event.sequence,
-                    "dropping duplicate or reordered renderer lifecycle event"
-                );
-                continue;
-            }
-            let restarts_same_document = event.epoch != binding.renderer_epoch
-                && matches!(
-                    event.kind,
-                    RendererDocumentLifecycleEventKind::Started { .. }
-                )
-                && event.epoch.0 > binding.renderer_epoch.0
-                && self
-                    .renderer_document_lifecycle
-                    .authoritative
-                    .snapshot
-                    .is_some_and(|snapshot| snapshot.terminated.is_some());
-            if event.epoch != binding.renderer_epoch && !restarts_same_document {
                 tracing::debug!(
                     sequence = event.sequence,
                     event_epoch = event.epoch.0,
-                    bound_epoch = binding.renderer_epoch.0,
-                    "dropping stale renderer lifecycle event for another epoch"
+                    event_document = ?event.document,
+                    "dropping stale or reordered renderer lifecycle event"
                 );
                 continue;
             }
@@ -1170,16 +1070,15 @@ impl TargetPageSlot {
                                 .is_terminal()
                         })
                 });
-            self.renderer_document_lifecycle
-                .authoritative
-                .observe(event);
             if defer_load_visibility {
                 self.renderer_document_lifecycle
                     .load_visibility
                     .deferred_tail
                     .push(event);
             } else {
-                self.renderer_document_lifecycle.visible.observe(event);
+                if let Some(snapshot) = self.renderer_document_lifecycle.visible.as_mut() {
+                    snapshot.apply_event(event);
+                }
                 accepted.push(event);
             }
         }
@@ -1204,13 +1103,13 @@ impl TargetPageSlot {
     pub(crate) fn renderer_document_lifecycle_authoritative_snapshot(
         &self,
     ) -> Option<RendererDocumentLifecycleSnapshot> {
-        self.renderer_document_lifecycle.authoritative.snapshot
+        self.renderer_document_lifecycle.authoritative.snapshot()
     }
 
     pub(crate) fn renderer_document_lifecycle_visible_snapshot(
         &self,
     ) -> Option<RendererDocumentLifecycleSnapshot> {
-        self.renderer_document_lifecycle.visible.snapshot
+        self.renderer_document_lifecycle.visible
     }
 
     pub(crate) fn register_renderer_document_lifecycle_waiter(
@@ -1225,7 +1124,7 @@ impl TargetPageSlot {
         if binding.loader_id != expected_loader_id {
             return None;
         }
-        let snapshot = self.renderer_document_lifecycle.authoritative.snapshot?;
+        let snapshot = self.renderer_document_lifecycle.authoritative.snapshot()?;
         let id = self
             .next_renderer_document_lifecycle_waiter_id
             .allocate_next();
@@ -1257,7 +1156,7 @@ impl TargetPageSlot {
                 RendererDocumentLifecycleObservation::Superseded,
             );
         }
-        let Some(snapshot) = self.renderer_document_lifecycle.authoritative.snapshot else {
+        let Some(snapshot) = self.renderer_document_lifecycle.authoritative.snapshot() else {
             return RendererDocumentLifecycleObserver::resolved(
                 RendererDocumentLifecycleObservation::Unavailable,
             );
@@ -1369,7 +1268,7 @@ impl TargetPageSlot {
         let snapshot_reached_load = self
             .renderer_document_lifecycle
             .authoritative
-            .snapshot
+            .snapshot()
             .is_some_and(|snapshot| {
                 snapshot.document == binding.renderer_document
                     && snapshot.epoch == binding.renderer_epoch
@@ -1446,7 +1345,7 @@ impl TargetPageSlot {
         };
         self.renderer_document_lifecycle
             .authoritative
-            .snapshot
+            .snapshot()
             .is_some_and(|snapshot| {
                 snapshot.document == observation.binding.renderer_document
                     && snapshot.epoch == observation.binding.renderer_epoch
@@ -1637,7 +1536,7 @@ mod renderer_document_lifecycle_tests {
     use super::*;
     use moli_core::page::{
         RendererDocumentLifecycleEventKind, RendererDocumentTerminationReason,
-        RendererLifecycleStartReason,
+        RendererLifecycleStartReason, RendererLifecycleTerminationStamp,
     };
 
     fn event(

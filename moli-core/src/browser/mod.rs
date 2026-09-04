@@ -1,8 +1,12 @@
-//! Protocol-neutral identities for browser-owned objects.
+//! Protocol-neutral identities and lifecycle state for browser-owned objects.
 //!
 //! These identities name physical browser object incarnations. They are not
 //! CDP wire identifiers and their numeric representation does not define an
 //! ordering relationship.
+
+mod document_lifecycle;
+
+pub use document_lifecycle::DocumentLifecycle;
 
 use std::{
     num::NonZeroU64,
