@@ -296,7 +296,7 @@ mod tests {
             .commit_renderer_agent_candidate_for_owner(
                 &owner,
                 candidate,
-                RendererPageResidenceIdentity::new(
+                RendererPageResidenceIdentity::from_parts(
                     moli_core::RendererOwnerLocalHostId::new_for_testing(7),
                     moli_core::PageId::new_for_testing(8),
                 ),

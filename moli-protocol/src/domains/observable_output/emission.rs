@@ -429,7 +429,7 @@ mod tests {
             .expect("browser context should be loaded");
         let prepared_outputs = queue.console_log_backlog_ranges(
             bc.target_url(),
-            bc.page_attachment_id()
+            bc.document_id()
                 .expect("loaded Page must have an attachment id"),
             bc.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
@@ -660,7 +660,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn prepared_console_backlog_range_is_bound_to_page_attachment_id() {
+    async fn prepared_console_backlog_range_is_bound_to_document_id() {
         let mut ctx = TestContext::new();
         let page_url = "data:text/html,observable-prepared-attachment-test";
         let mut bc = BrowserContext::new("BID-1".into());
@@ -857,11 +857,11 @@ mod tests {
             (
                 bc.active_page_target()
                     .runtime_slot
-                    .page_attachment_id()
+                    .document_id()
                     .expect("active Page attachment"),
                 bc.background_target("TID-activated")
                     .expect("activated target")
-                    .page_attachment_id()
+                    .document_id()
                     .expect("activated Page attachment"),
             )
         };
@@ -885,14 +885,14 @@ mod tests {
             let bc = ctx.conn.browser_context.as_ref().expect("browser context");
             assert_eq!(bc.active_target_id(), Some("TID-activated"));
             assert_eq!(
-                bc.active_page_target().runtime_slot.page_attachment_id(),
+                bc.active_page_target().runtime_slot.document_id(),
                 Some(activated_attachment),
                 "activation must preserve the selected target's Page attachment"
             );
             assert_eq!(
                 bc.background_target("TID-active")
                     .expect("previous active target should be background")
-                    .page_attachment_id(),
+                    .document_id(),
                 Some(old_active_attachment),
                 "deactivation must leave the Page attachment with its original target host"
             );
@@ -1228,7 +1228,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn prepared_runtime_observable_source_payload_is_bound_to_page_attachment_id() {
+    async fn prepared_runtime_observable_source_payload_is_bound_to_document_id() {
         let mut ctx = TestContext::new();
         let page_url = "data:text/html,observable-runtime-source-payload-attachment-test";
         let mut bc = BrowserContext::new("BID-1".into());
@@ -1290,7 +1290,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn prepared_runtime_observable_range_is_bound_to_page_attachment_id() {
+    async fn prepared_runtime_observable_range_is_bound_to_document_id() {
         let mut ctx = TestContext::new();
         let page_url = "data:text/html,observable-runtime-attachment-test";
         let mut bc = BrowserContext::new("BID-1".into());

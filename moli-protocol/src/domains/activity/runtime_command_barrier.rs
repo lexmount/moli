@@ -989,7 +989,7 @@ mod tests {
         let permit = admit_registered_command(&mut conn, &mut barriers, 21);
         conn.runtime_session_owner_slot_mut(Some(SESSION_ID))
             .expect("runtime slot should remain installed")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         let mut command_context = CommandDispatchContext::default();
 
         route_same_document_navigation(
@@ -1039,7 +1039,7 @@ mod tests {
 
         conn.runtime_session_owner_slot_mut(Some(SESSION_ID))
             .expect("runtime slot should remain installed")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         assert_eq!(
             barriers
                 .release(&mut conn, permit, &mut command_context)

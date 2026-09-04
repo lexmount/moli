@@ -3456,7 +3456,7 @@ pub(crate) async fn emit_same_document_navigation_background_events_async(
                 ?source_document,
                 browser_context_id = navigation.owner().browser_context_id(),
                 target_id = navigation.owner().target_id(),
-                page_attachment_id = navigation.owner().page_attachment_id().get(),
+                document_id = navigation.owner().document_id().get(),
                 "dropping same-document navigation produced by a stale Page residence"
             );
             continue;

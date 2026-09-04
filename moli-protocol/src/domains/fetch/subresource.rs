@@ -699,7 +699,7 @@ mod tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
             .target_page_residence_identity_for_session(None)
@@ -778,7 +778,7 @@ mod tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
             .target_page_residence_identity_for_session(None)
@@ -823,7 +823,7 @@ mod tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
             .target_page_residence_identity_for_session(None)
@@ -833,7 +833,7 @@ mod tests {
             .expect("browser context should remain installed")
             .active_page_target_mut()
             .runtime_slot
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         let owner = CommandOwnerScope::capture(&conn, None);
 
         let mut events = Vec::new();
@@ -879,7 +879,7 @@ mod tests {
         conn.install_browser_context_fixture_for_test(bc);
         conn.runtime_session_owner_slot_mut(Some("SID-background"))
             .expect("background test target runtime slot")
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         let page_owner = conn
             .target_page_residence_identity_for_session(Some("SID-background"))
             .expect("background test target should expose a Page residence identity");

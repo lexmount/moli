@@ -498,7 +498,7 @@ mod tests {
     }
 
     fn page_owner(page_id: PageId) -> RendererPublicationOwner {
-        let renderer_page = crate::conn::RendererPageResidenceIdentity::new(
+        let renderer_page = crate::conn::RendererPageResidenceIdentity::from_parts(
             moli_core::RendererOwnerLocalHostId::new_for_testing(1),
             page_id,
         );

@@ -276,7 +276,7 @@ async fn pending_fetch_command_state_is_bound_to_page_attachment() {
     ctx.conn
         .runtime_session_owner_slot_mut(Some("SID-1"))
         .expect("runtime owner should remain addressable")
-        .replace_page_attachment_id_for_test();
+        .replace_document_id_for_test();
     assert!(
         ctx.conn
             .take_pending_subresource_fetch_request_for_owner(
@@ -370,7 +370,7 @@ async fn completed_continue_atomically_claims_a_pause_still_pending_publication(
     ctx.conn
         .runtime_session_owner_slot_mut(Some("SID-1"))
         .expect("runtime owner should remain addressable")
-        .replace_page_attachment_id_for_test();
+        .replace_document_id_for_test();
     let replacement_owner = ctx
         .conn
         .target_page_residence_identity_for_session(Some("SID-1"))
@@ -434,7 +434,7 @@ async fn continuation_claim_preserves_state_owned_by_a_different_page_residence(
     ctx.conn
         .runtime_session_owner_slot_mut(Some("SID-1"))
         .expect("runtime owner should remain addressable")
-        .replace_page_attachment_id_for_test();
+        .replace_document_id_for_test();
     let replacement_owner = ctx
         .conn
         .target_page_residence_identity_for_session(Some("SID-1"))
@@ -466,7 +466,7 @@ async fn continuation_claim_preserves_state_owned_by_a_different_page_residence(
     ctx.conn
         .runtime_session_owner_slot_mut(Some("SID-1"))
         .expect("runtime owner should remain addressable")
-        .install_page_attachment_id_for_test(retired_owner.page_attachment_id());
+        .install_document_id_for_test(retired_owner.document_id());
     let ClaimedSubresourceContinueRequest::InFlight(in_flight) = ctx
         .conn
         .claim_subresource_continue_request_for_owner(
@@ -518,7 +518,7 @@ async fn pending_fetch_auth_state_is_bound_to_page_attachment() {
     ctx.conn
         .runtime_session_owner_slot_mut(Some("SID-1"))
         .expect("runtime owner should remain addressable")
-        .replace_page_attachment_id_for_test();
+        .replace_document_id_for_test();
     assert!(
         ctx.conn
             .take_pending_subresource_fetch_auth_request_for_owner(
@@ -576,7 +576,7 @@ async fn pending_fetch_response_state_is_bound_to_page_attachment() {
     ctx.conn
         .runtime_session_owner_slot_mut(Some("SID-1"))
         .expect("runtime owner should remain addressable")
-        .replace_page_attachment_id_for_test();
+        .replace_document_id_for_test();
     assert!(
         ctx.conn
             .take_pending_subresource_fetch_response_request_for_owner(

@@ -175,7 +175,7 @@ fn resolve_devtools_opener(
         tracing::debug!(
             browser_context_id = page_owner.browser_context_id(),
             target_id = page_owner.target_id(),
-            page_attachment_id = page_owner.page_attachment_id().get(),
+            document_id = page_owner.document_id().get(),
             ?root_document,
             ?window,
             "popup action retained after its exact opener browsing context disappeared"

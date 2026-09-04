@@ -1,6 +1,6 @@
 use super::super::state::{
-    CommittedRendererAgentAttachment, PreparedRendererAgentAttachment, TargetPageAbsenceReason,
-    TargetPageAttachmentId,
+    CommittedRendererAgentAttachment, DocumentId, PreparedRendererAgentAttachment,
+    TargetPageAbsenceReason,
 };
 use super::super::{BrowserContext, PageTargetHost, TargetRuntimeSlot};
 use crate::conn::TargetPageResidenceIdentity;
@@ -35,10 +35,10 @@ impl BrowserContext {
             .is_some_and(|host| host.runtime_slot.has_loaded_page())
     }
 
-    pub(crate) fn page_attachment_id(&self) -> Option<TargetPageAttachmentId> {
+    pub(crate) fn document_id(&self) -> Option<DocumentId> {
         self.page_targets
             .active()
-            .and_then(|host| host.runtime_slot.page_attachment_id())
+            .and_then(|host| host.runtime_slot.document_id())
     }
 
     #[cfg(test)]
@@ -136,16 +136,13 @@ impl PageTargetHost {
     ) -> anyhow::Result<LoadedNavigationPageCommit> {
         let committed_document_post_response_continuation =
             page.take_committed_document_post_response_continuation();
-        let previous_page_owner =
-            self.runtime_slot
-                .page_attachment_id()
-                .map(|page_attachment_id| {
-                    TargetPageResidenceIdentity::new(
-                        browser_context_id.to_owned(),
-                        Some(self.target_id().to_owned()),
-                        page_attachment_id,
-                    )
-                });
+        let previous_page_owner = self.runtime_slot.document_id().map(|document_id| {
+            TargetPageResidenceIdentity::new(
+                browser_context_id.to_owned(),
+                Some(self.target_id().to_owned()),
+                document_id,
+            )
+        });
         let primary_session_id = self.session_id().map(str::to_owned);
         let previous_title = self
             .owner_state
@@ -258,8 +255,8 @@ impl PageTargetHost {
     }
 
     #[cfg(test)]
-    pub(crate) fn page_attachment_id(&self) -> Option<TargetPageAttachmentId> {
-        self.runtime_slot.page_attachment_id()
+    pub(crate) fn document_id(&self) -> Option<DocumentId> {
+        self.runtime_slot.document_id()
     }
 
     pub(crate) async fn close_page_async(&mut self) {

@@ -128,7 +128,7 @@ impl PageTargetHost {
     }
 
     pub fn current_document_id(&self) -> Option<DocumentId> {
-        self.runtime_slot.page_attachment_id()
+        self.runtime_slot.document_id()
     }
 
     fn replace_target_id(&mut self, target_id: String) {

@@ -5,7 +5,7 @@ use moli_core::page::ScriptObservableOutputItem;
 use crate::conn::DevToolsConsoleOutputSessionState;
 use crate::conn::TargetRuntimeSlot;
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, TargetOwnerState, TargetPageAttachmentId,
+    BackgroundProtocolEvent, CdpConnection, DocumentId, TargetOwnerState,
     TargetPageProtocolAttachmentIdentity,
 };
 use crate::domains::activity::ProtocolOutputSink;
@@ -41,7 +41,7 @@ pub(crate) struct ObservablePreparedOutputSlot {
 pub(in crate::domains::observable_output) struct ObservableConsoleLogPreparedRange {
     domain: ObservableConsoleLogDomain,
     url: String,
-    page_attachment_id: TargetPageAttachmentId,
+    document_id: DocumentId,
     items: Vec<ObservableOutputItem>,
     console_end: usize,
     lifecycle_end: usize,
@@ -61,7 +61,7 @@ pub(in crate::domains::observable_output) struct ObservableSessionAuditsPrepared
     source_document: moli_core::RendererDocumentLifecycleIdentity,
     frame_id: String,
     loader_id: String,
-    page_attachment_id: TargetPageAttachmentId,
+    document_id: DocumentId,
     issues: Vec<moli_core::page::InspectorIssueSnapshot>,
     cursor: TargetAuditsOutputCursor,
 }
@@ -237,8 +237,7 @@ impl ObservablePreparedOutputs {
         range: ObservableSessionAuditsPreparedRange,
     ) {
         if self.audits.iter().any(|prepared| {
-            prepared.session_id() == range.session_id()
-                && prepared.page_attachment_id == range.page_attachment_id
+            prepared.session_id() == range.session_id() && prepared.document_id == range.document_id
         }) {
             return;
         }
@@ -300,7 +299,7 @@ impl ObservableSessionAuditsPreparedRange {
         source_document: moli_core::RendererDocumentLifecycleIdentity,
         frame_id: String,
         loader_id: String,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
         issues: Vec<moli_core::page::InspectorIssueSnapshot>,
         cursor: TargetAuditsOutputCursor,
     ) -> Self {
@@ -309,7 +308,7 @@ impl ObservableSessionAuditsPreparedRange {
             source_document,
             frame_id,
             loader_id,
-            page_attachment_id,
+            document_id,
             issues,
             cursor,
         }
@@ -329,7 +328,7 @@ impl ObservableSessionAuditsPreparedRange {
         let owner_state = conn.target_owner_state_for_session(session_id)?;
         let session_state = conn.target_page_session_state_for_session(session_id)?;
         if document_binding.renderer_document_identity() != self.source_document
-            || document_binding.page_attachment_id != self.page_attachment_id
+            || document_binding.document_id != self.document_id
             || document_binding.frame_id != self.frame_id
             || document_binding.loader_id != self.loader_id
             || session_state
@@ -376,7 +375,7 @@ impl ObservableSessionRuntimePreparedItems {
             .runtime_session_owner_slot(session_id.as_deref())
             .ok()?;
         runtime_slot
-            .page_attachment_id()
+            .document_id()
             .is_some_and(|attachment_id| self.items.matches_source_identity(&url, attachment_id))
             .then_some((session_id, self.items))
     }
@@ -424,7 +423,7 @@ impl ObservableConsoleLogPreparedRange {
     pub(in crate::domains::observable_output) fn new(
         domain: ObservableConsoleLogDomain,
         url: String,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
         items: Vec<ObservableOutputItem>,
         console_end: usize,
         lifecycle_end: usize,
@@ -434,7 +433,7 @@ impl ObservableConsoleLogPreparedRange {
         Self {
             domain,
             url,
-            page_attachment_id,
+            document_id,
             items,
             console_end,
             lifecycle_end,
@@ -446,7 +445,7 @@ impl ObservableConsoleLogPreparedRange {
     fn for_domain(
         domain: ObservableConsoleLogDomain,
         url: String,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
         input: ConsoleLogPreparedRangeInput<'_>,
         log_cursor: Option<TargetLogOutputCursor>,
     ) -> Option<Self> {
@@ -454,7 +453,7 @@ impl ObservableConsoleLogPreparedRange {
         Some(Self::new(
             domain,
             url,
-            page_attachment_id,
+            document_id,
             items,
             input.console_end,
             input.lifecycle_end,
@@ -471,10 +470,8 @@ impl ObservableConsoleLogPreparedRange {
         &self.url
     }
 
-    pub(in crate::domains::observable_output) fn page_attachment_id(
-        &self,
-    ) -> TargetPageAttachmentId {
-        self.page_attachment_id
+    pub(in crate::domains::observable_output) fn document_id(&self) -> DocumentId {
+        self.document_id
     }
 
     pub(in crate::domains::observable_output) fn items(&self) -> &[ObservableOutputItem] {
@@ -516,7 +513,7 @@ impl ObservableConsoleLogPreparedRange {
         let url = conn.runtime_session_owner_target_url(session_id)?;
         if !self.domain.enabled_for_session(conn, session_id)?
             || url != self.url()
-            || runtime_slot.page_attachment_id() != Some(self.page_attachment_id())
+            || runtime_slot.document_id() != Some(self.document_id())
         {
             return None;
         }
@@ -727,7 +724,7 @@ impl TargetObservableOutputQueue {
     pub(super) fn console_log_backlog_ranges(
         &self,
         url: &str,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
         console_enabled: bool,
         log_enabled: bool,
         include_console_api_messages: bool,
@@ -744,7 +741,7 @@ impl TargetObservableOutputQueue {
                 &mut prepared,
                 ObservableConsoleLogDomain::Console,
                 url,
-                page_attachment_id,
+                document_id,
                 console_end,
                 lifecycle_end,
                 network_end,
@@ -759,7 +756,7 @@ impl TargetObservableOutputQueue {
                 &mut prepared,
                 ObservableConsoleLogDomain::Log,
                 url,
-                page_attachment_id,
+                document_id,
                 console_end,
                 lifecycle_end,
                 network_end,
@@ -777,7 +774,7 @@ impl TargetObservableOutputQueue {
         prepared: &mut ObservablePreparedOutputs,
         domain: ObservableConsoleLogDomain,
         url: &str,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
         console_end: usize,
         lifecycle_end: usize,
         network_end: usize,
@@ -821,7 +818,7 @@ impl TargetObservableOutputQueue {
         let range = ObservableConsoleLogPreparedRange::for_domain(
             domain,
             url.to_owned(),
-            page_attachment_id,
+            document_id,
             ConsoleLogPreparedRangeInput {
                 console_start,
                 console_end,
@@ -1020,13 +1017,13 @@ mod tests {
         TargetObservableOutputQueue,
     };
     use crate::conn::{
-        BrowserContext, TargetPageAttachmentId, TargetPageProtocolAttachmentIdentity,
+        BrowserContext, DocumentId, TargetPageProtocolAttachmentIdentity,
         TargetPageResidenceIdentity, TargetRuntimeSlot,
     };
     use crate::domains::log_output_state::TargetLogOutputCursor;
 
-    fn page_attachment_id(raw: u64) -> TargetPageAttachmentId {
-        TargetPageAttachmentId::from_raw_for_test(raw)
+    fn document_id(raw: u64) -> DocumentId {
+        DocumentId::from_raw_for_test(raw)
     }
 
     fn protocol_attachment(
@@ -1037,7 +1034,7 @@ mod tests {
             TargetPageResidenceIdentity::new(
                 "BID-observable-output".to_owned(),
                 Some("TID-observable-output".to_owned()),
-                page_attachment_id(raw),
+                document_id(raw),
             ),
             session_id.map(str::to_owned),
         )
@@ -1052,7 +1049,7 @@ mod tests {
     #[test]
     fn observable_source_queue_captures_runtime_observable_output() {
         let mut runtime_slot = TargetRuntimeSlot::default();
-        runtime_slot.set_page_attachment_id_for_test(42);
+        runtime_slot.set_document_id_for_test(42);
         let source_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(5),
@@ -1097,7 +1094,7 @@ mod tests {
             "runtime observable source URL should come from the owner snapshot boundary, not be patched from the current BrowserContext later"
         );
         assert_eq!(
-            source.page_attachment_id().get(),
+            source.document_id().get(),
             42,
             "runtime observable Page attachment should come from the owner snapshot boundary, not be recomputed by the observable domain"
         );
@@ -1107,7 +1104,7 @@ mod tests {
     fn observable_source_queue_materializes_runtime_items_from_owner_cursor() {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut runtime_slot = TargetRuntimeSlot::default();
-        runtime_slot.set_page_attachment_id_for_test(43);
+        runtime_slot.set_document_id_for_test(43);
         let source_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(5),
@@ -1188,7 +1185,7 @@ mod tests {
     fn observable_source_queue_advances_contextless_lifecycle_source_items() {
         let bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut runtime_slot = TargetRuntimeSlot::default();
-        runtime_slot.set_page_attachment_id_for_test(44);
+        runtime_slot.set_document_id_for_test(44);
         let source_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 None,
@@ -1228,7 +1225,7 @@ mod tests {
     fn observable_source_queue_materializes_renderer_producer_source_items() {
         let bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut runtime_slot = TargetRuntimeSlot::default();
-        runtime_slot.set_page_attachment_id_for_test(46);
+        runtime_slot.set_document_id_for_test(46);
         let source = RendererRuntimeObservableSourceSummary::from_source_items(
             Some(7),
             vec![RendererRuntimeObservableSourceItem::LifecycleError {
@@ -1272,7 +1269,7 @@ mod tests {
     fn observable_source_queue_materializes_latest_appended_runtime_source_item() {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut runtime_slot = TargetRuntimeSlot::default();
-        runtime_slot.set_page_attachment_id_for_test(47);
+        runtime_slot.set_document_id_for_test(47);
         let first_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(5),
@@ -1363,7 +1360,7 @@ mod tests {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         let mut runtime_slot = TargetRuntimeSlot::default();
         runtime_slot.set_loaded_page_for_test(page);
-        runtime_slot.set_page_attachment_id_for_test(45);
+        runtime_slot.set_document_id_for_test(45);
         let source_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(5),
@@ -1413,7 +1410,7 @@ mod tests {
         let first = ObservableConsoleLogPreparedRange::new(
             ObservableConsoleLogDomain::Console,
             "http://example.test/first".to_owned(),
-            page_attachment_id(1),
+            document_id(1),
             vec![ObservableOutputItem::ConsoleMessageAdded {
                 source: "console-api".to_owned(),
                 level: "warning".to_owned(),
@@ -1428,7 +1425,7 @@ mod tests {
         let second = ObservableConsoleLogPreparedRange::new(
             ObservableConsoleLogDomain::Console,
             "http://example.test/second".to_owned(),
-            page_attachment_id(2),
+            document_id(2),
             vec![ObservableOutputItem::ConsoleMessageAdded {
                 source: "console-api".to_owned(),
                 level: "warning".to_owned(),
@@ -1461,7 +1458,7 @@ mod tests {
             ObservableConsoleLogPreparedRange::new(
                 ObservableConsoleLogDomain::Log,
                 "http://example.test/log".to_owned(),
-                page_attachment_id(1),
+                document_id(1),
                 vec![ObservableOutputItem::LogEntryAdded {
                     source: "javascript".to_owned(),
                     level: "error".to_owned(),
@@ -1508,7 +1505,7 @@ mod tests {
         let console_range = ObservableConsoleLogPreparedRange::new(
             ObservableConsoleLogDomain::Console,
             "http://example.test/console".to_owned(),
-            page_attachment_id(1),
+            document_id(1),
             vec![ObservableOutputItem::ConsoleMessageAdded {
                 source: "console-api".to_owned(),
                 level: "warning".to_owned(),
@@ -1523,7 +1520,7 @@ mod tests {
         let log_range = ObservableConsoleLogPreparedRange::new(
             ObservableConsoleLogDomain::Log,
             "http://example.test/log".to_owned(),
-            page_attachment_id(1),
+            document_id(1),
             vec![ObservableOutputItem::LogEntryAdded {
                 source: "javascript".to_owned(),
                 level: "warning".to_owned(),
@@ -1625,7 +1622,7 @@ mod tests {
 
         let mut prepared = queue.console_log_backlog_ranges(
             bc.target_url(),
-            page_attachment_id(1),
+            document_id(1),
             bc.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled,
@@ -1700,7 +1697,7 @@ mod tests {
 
         let mut prepared = queue.console_log_backlog_ranges(
             bc.target_url(),
-            page_attachment_id(1),
+            document_id(1),
             bc.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .console_output_session_state
                 .console_enabled,

@@ -966,7 +966,7 @@ mod tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
 
         let page_id = moli_core::PageId::new_for_testing(71);
@@ -1322,7 +1322,7 @@ mod tests {
             navigation: None,
             frame_id: "FRAME-1".to_owned(),
             loader_id: "LID-1".to_owned(),
-            page_attachment_id: crate::conn::TargetPageAttachmentId::from_raw_for_test(1),
+            document_id: crate::conn::DocumentId::from_raw_for_test(1),
             document_open_replacement_epoch: None,
         };
         let renderer_lifecycle_events = vec![
