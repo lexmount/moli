@@ -1,8 +1,11 @@
-cookiestore/serviceworker_cookieStore_cross_origin.https.sub.html
+css/css-flexbox/align-items-baseline-column-vert-rl-table-item.html
 css/selectors/invalidation/has-complexity.html
+dom/nodes/NodeList-static-length-getter-tampered-1.html
 dom/ranges/Range-insertNode.html
 dom/ranges/Range-mutations-dataChange.html
 dom/ranges/Range-surroundContents.html
+editing/run/delete.html?1-1000
+encoding/legacy-mb-tchinese/big5/big5-decode.html?5001-6000
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-1.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-2.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_block_modals-3.html
@@ -12,3 +15,4 @@ infrastructure/expected-fail/user-prompt.html?type=confirm
 infrastructure/expected-fail/user-prompt.html?type=confirm&wait
 infrastructure/expected-fail/user-prompt.html?type=prompt
 infrastructure/expected-fail/user-prompt.html?type=prompt&wait
+shadow-dom/declarative/gethtml.html
