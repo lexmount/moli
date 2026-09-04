@@ -1478,6 +1478,7 @@ css/css-flexbox/text-as-flexitem-size-001.html
 css/css-flexbox/text-overflow-on-flexbox-001.html
 css/css-flexbox/total-min-max-violation-zero.html
 css/css-flexbox/webkit-box-vertical-writing-mode.html
+css/css-flexbox/whitespace-in-flexitem-001.html
 css/css-font-loading/empty-family-load.html
 css/css-font-loading/font-face-reject.html
 css/css-font-loading/fontface-font-variation-settings-persisted-js-api.html
@@ -1563,9 +1564,7 @@ css/css-grid/abspos/positioned-grid-descendants-006.html
 css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-descendants-010.html
-css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
-css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
 css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-016.html
@@ -3741,6 +3740,7 @@ dom/nodes/Node-removeChild.html
 dom/nodes/Node-replaceChild.html
 dom/nodes/Node-textContent.html
 dom/nodes/NodeList-Iterable.html
+dom/nodes/NodeList-static-length-getter-tampered-1.html
 dom/nodes/NodeList-static-length-getter-tampered-2.html
 dom/nodes/NodeList-static-length-getter-tampered-3.html
 dom/nodes/NodeList-static-length-getter-tampered-indexOf-1.html
@@ -4979,6 +4979,7 @@ encoding/legacy-mb-tchinese/big5/big5-decode.html?14001-last
 encoding/legacy-mb-tchinese/big5/big5-decode.html?2001-3000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?3001-4000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?4001-5000
+encoding/legacy-mb-tchinese/big5/big5-decode.html?5001-6000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?6001-7000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?7001-8000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?8001-9000
@@ -5405,6 +5406,9 @@ html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate.html
 html/browsers/history/the-history-interface/traverse-during-beforeunload.html
 html/browsers/history/the-history-interface/traverse-during-unload.html
+html/browsers/history/the-location-interface/assign-replace-from-iframe.html
+html/browsers/history/the-location-interface/assign-replace-from-top-to-nested-iframe.html
+html/browsers/history/the-location-interface/assign-with-nested-iframe.html
 html/browsers/history/the-location-interface/assign_after_load.html
 html/browsers/history/the-location-interface/document_location.html
 html/browsers/history/the-location-interface/location-ancestor-origins-new-object.html
@@ -5438,6 +5442,7 @@ html/browsers/history/the-location-interface/location_reload_javascript_url.html
 html/browsers/history/the-location-interface/location_replace.html
 html/browsers/history/the-location-interface/location_search.html
 html/browsers/history/the-location-interface/reload_document_write.html
+html/browsers/history/the-location-interface/replace-with-nested-iframe.html
 html/browsers/history/the-location-interface/security_location_0.htm
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-caching.html
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-length.html
@@ -7154,6 +7159,7 @@ import-maps/module-map-key.html
 import-maps/multiple-import-maps/basic.html
 import-maps/multiple-import-maps/conflict-first-persists.html
 import-maps/multiple-import-maps/resolution-consistency-in-module-tree-inline.html
+import-maps/multiple-import-maps/resolution-consistency-in-module-tree.html
 import-maps/multiple-import-maps/scope-ordering-reverse.html
 import-maps/multiple-import-maps/scope-ordering.html
 import-maps/multiple-import-maps/url-resolution-conflict.html
@@ -9173,7 +9179,6 @@ xhr/xmlhttprequest-timeout-overrides.html?timeout disabled after initially set
 xhr/xmlhttprequest-timeout-overrides.html?timeout enabled after initially disabled
 xhr/xmlhttprequest-timeout-overrides.html?timeout overrides load after a delay
 xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to expired value before load fires
-xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to expiring value after load fires
 xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to non-expiring value after timeout fires
 xhr/xmlhttprequest-timeout-simple.html?load fires normally
 xhr/xmlhttprequest-timeout-simple.html?no time out scheduled, load fires normally
