@@ -264,10 +264,7 @@ pub(crate) use self::geometry_clone::{
     geometry_clone_payload_from_object,
 };
 use self::geometry_runtime::{build_dom_point_object, optional_dom_point_init_arg};
-pub(crate) use self::history_runtime::{
-    increment_top_level_history_length_for_runtime_owner,
-    set_top_level_history_length_at_least_for_runtime_owner,
-};
+pub(crate) use self::history_runtime::increment_top_level_history_length_for_runtime_owner;
 pub(crate) use self::image_data::{
     ImageDataClonePayload, build_image_data_object_from_clone_payload,
     image_data_clone_payload_from_object, is_image_data_object,

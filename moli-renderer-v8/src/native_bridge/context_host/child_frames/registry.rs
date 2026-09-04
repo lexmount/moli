@@ -591,16 +591,6 @@ impl JsContextHost {
         had_handles
     }
 
-    pub(crate) fn sync_child_browsing_context_subtree_and_initial_history_floor(
-        &mut self,
-        scope: &mut v8::PinScope<'_, '_>,
-        root: DomHandle,
-    ) {
-        if self.sync_child_browsing_context_subtree(scope, root) {
-            self.sync_initial_child_browsing_context_history_floor(scope);
-        }
-    }
-
     pub(crate) fn drop_child_browsing_context_subtree(&mut self, root: DomHandle) {
         let mut handles = Vec::new();
         self.collect_child_browsing_context_host_handles(root, &mut handles);
@@ -831,7 +821,7 @@ impl JsContextHost {
             .collect()
     }
 
-    pub(crate) fn refresh_child_browsing_context_and_initial_history_floor(
+    pub(crate) fn refresh_child_browsing_context_and_queue_ready_work(
         &mut self,
         scope: &mut v8::PinScope<'_, '_>,
         handle: DomHandle,
@@ -839,7 +829,6 @@ impl JsContextHost {
         if let Some(work) = self.refresh_child_browsing_context(scope, handle) {
             self.push_child_document_script_ready_input(work);
         }
-        self.sync_initial_child_browsing_context_history_floor(scope);
     }
 }
 

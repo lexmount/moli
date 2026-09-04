@@ -11420,6 +11420,7 @@ fn explicit_about_blank_iframe_variants_reuse_initial_empty_document_synchronous
 (() => {
   const root = document.body || document.documentElement || document;
   const variants = ["about:blank", "about:blank#foo", "about:blank?foo"];
+  const initialJointLength = history.length;
   globalThis.__explicitInitialBlankFrames = [];
   const observed = variants.map(src => {
     const frame = document.createElement("iframe");
@@ -11440,9 +11441,11 @@ fn explicit_about_blank_iframe_variants_reuse_initial_empty_document_synchronous
       child.document.body.textContent,
       child.navigation.entries().map(entry => entry.url).join(","),
       child.navigation.activation === null,
+      child.history.length,
+      history.length,
     ].join("|");
   });
-  return JSON.stringify(observed);
+  return JSON.stringify({initialJointLength, observed});
 })()
 "##,
         )
@@ -11450,7 +11453,7 @@ fn explicit_about_blank_iframe_variants_reuse_initial_empty_document_synchronous
 
     assert_eq!(
         result,
-        r##"["load|about:blank|about:blank|about:blank|about:blank|true","load|about:blank#foo|about:blank#foo|about:blank#foo|about:blank#foo|true","load|about:blank?foo|about:blank?foo|about:blank?foo|about:blank?foo|true"]"##
+        r##"{"initialJointLength":1,"observed":["load|about:blank|about:blank|about:blank|about:blank|true|1|1","load|about:blank#foo|about:blank#foo|about:blank#foo|about:blank#foo|true|1|1","load|about:blank?foo|about:blank?foo|about:blank?foo|about:blank?foo|true|1|1"]}"##
     );
     assert!(
         !vm.has_pending_child_navigation_commit_for_test(),
@@ -11465,15 +11468,19 @@ fn explicit_about_blank_iframe_variants_reuse_initial_empty_document_synchronous
     assert_eq!(
         vm.eval(
             r##"
-JSON.stringify(__explicitInitialBlankFrames.map(({child, windowEvents}) => [
-  child.location.href,
-  child.document.body.textContent,
-  windowEvents.join(","),
-]))
+JSON.stringify({
+  jointLength: history.length,
+  frames: __explicitInitialBlankFrames.map(({child, windowEvents}) => [
+    child.location.href,
+    child.document.body.textContent,
+    child.history.length,
+    windowEvents.join(","),
+  ]),
+})
 "##,
         )
         .expect("explicit initial about:blank state should remain stable"),
-        r##"[["about:blank","about:blank",""],["about:blank#foo","about:blank#foo",""],["about:blank?foo","about:blank?foo",""]]"##
+        r##"{"jointLength":1,"frames":[["about:blank","about:blank",1,""],["about:blank#foo","about:blank#foo",1,""],["about:blank?foo","about:blank?foo",1,""]]}"##
     );
 }
 
@@ -11565,7 +11572,7 @@ async fn top_history_back_routes_to_child_joint_history_entry() {
 
     assert_eq!(
         setup,
-        "https://joint-child-back.test/page.html|3|3|https://joint-child-back.test/page.html#child"
+        "https://joint-child-back.test/page.html|2|2|https://joint-child-back.test/page.html#child"
     );
     let _ = vm
         .run_one_oldest_ready_page_task_executor_turn(&loader)
@@ -11647,7 +11654,7 @@ async fn top_history_back_ignores_removed_child_joint_history_entry() {
 
     assert_eq!(
         setup,
-        "https://removed-child-joint-back.test/page.html|1|0|3|3|https://removed-child-joint-back.test/page.html#child"
+        "https://removed-child-joint-back.test/page.html|1|0|2|2|https://removed-child-joint-back.test/page.html#child"
     );
 
     vm.eval("document.querySelector('iframe').remove(); history.back(); 'queued'")
@@ -11669,7 +11676,7 @@ async fn top_history_back_ignores_removed_child_joint_history_entry() {
 
     assert_eq!(
         result,
-        "https://removed-child-joint-back.test/page.html|1|0|3|true"
+        "https://removed-child-joint-back.test/page.html|1|0|2|true"
     );
 }
 
@@ -11717,7 +11724,7 @@ async fn child_cross_document_pending_navigation_exposes_back_availability() {
 
     assert_eq!(
         state,
-        "about:srcdoc|2|0:about:srcdoc|0:about:srcdoc|true|false"
+        "about:srcdoc|1|0:about:srcdoc|0:about:srcdoc|true|false"
     );
 }
 #[tokio::test]

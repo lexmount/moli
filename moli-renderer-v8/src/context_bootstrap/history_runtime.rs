@@ -4,10 +4,7 @@ mod results;
 mod traversal;
 
 pub(super) use self::apply::apply_history_entry;
-pub(crate) use self::length::{
-    increment_top_level_history_length_for_runtime_owner,
-    set_top_level_history_length_at_least_for_runtime_owner,
-};
+pub(crate) use self::length::increment_top_level_history_length_for_runtime_owner;
 pub(super) use self::results::reject_pending_navigation_results;
 pub(super) use self::traversal::{
     apply_pending_history_traversal, cancel_active_history_traversal_intercept_settlement,

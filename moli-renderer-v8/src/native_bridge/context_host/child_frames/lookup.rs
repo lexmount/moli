@@ -13,32 +13,23 @@ impl JsContextHost {
             .is_some_and(ChildBrowsingContextEntry::has_cached_snapshot)
     }
 
-    pub(crate) fn sync_initial_child_browsing_context_history_floor(
-        &self,
-        scope: &mut v8::PinScope<'_, '_>,
-    ) {
-        let main_document_child_count = self
-            .top_level_child_browsing_context_handles_in_frame_tree_order()
-            .into_iter()
-            .filter(|handle| {
-                self.child_browsing_context_popup_owner_id(*handle)
-                    .is_none()
-            })
-            .count();
-        if main_document_child_count == 0 {
-            return;
-        }
-        let owner = scope.get_current_context().global(scope);
-        set_top_level_history_length_at_least_for_runtime_owner(
-            scope,
-            owner,
-            1.0 + main_document_child_count as f64,
-        );
-    }
-
     pub(crate) fn child_browsing_context_count(&self) -> usize {
         self.top_level_child_browsing_context_handles_in_frame_tree_order()
             .len()
+    }
+
+    pub(crate) fn child_browsing_context_is_on_initial_about_blank_entry(
+        &self,
+        handle: DomHandle,
+    ) -> bool {
+        let seed_is_initial_about_blank = self
+            .child_browsing_contexts
+            .get(&handle)
+            .is_some_and(ChildBrowsingContextEntry::navigation_seed_is_initial_about_blank_commit);
+        seed_is_initial_about_blank
+            && self
+                .child_browsing_context_current_url(handle)
+                .is_some_and(|url| moli_url::is_about_blank(&url))
     }
 
     pub(crate) fn child_browsing_context_count_for_document(&self, document: DomHandle) -> usize {
