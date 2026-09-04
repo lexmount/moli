@@ -220,6 +220,9 @@ struct WindowIdentityAccessorsDeclaration {
     #[webapi(accessor_property, getter = window_frames_getter)]
     frames: (),
 
+    #[webapi(accessor_property, getter = window_closed_getter)]
+    closed: (),
+
     #[webapi(accessor_property, getter = window_frame_element_getter)]
     frame_element: (),
 
