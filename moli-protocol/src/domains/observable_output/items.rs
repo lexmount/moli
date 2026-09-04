@@ -6,7 +6,7 @@ use crate::devtools_runtime::{
 };
 use serde_json::{Value, json};
 
-use crate::conn::{BackgroundProtocolEvent, TargetPageAttachmentId};
+use crate::conn::{BackgroundProtocolEvent, DocumentId};
 use crate::domains::log_output_state::TargetNetworkLogEntry;
 use moli_core::page::{InspectorIssueSnapshot, SubresourceNetworkRequestHandle};
 
@@ -68,22 +68,19 @@ pub(in crate::domains::observable_output) struct ObservableRuntimeEmissionCursor
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::domains::observable_output) struct ObservableRuntimePreparedSourceIdentity {
     url: String,
-    page_attachment_id: TargetPageAttachmentId,
+    document_id: DocumentId,
 }
 
 impl ObservableRuntimePreparedItems {
     pub(in crate::domains::observable_output) fn from_runtime_source_items(
         url: String,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
         items: Vec<ObservableRuntimePreparedItem>,
         context_console_counts: HashMap<i64, usize>,
         exception_end: usize,
     ) -> Self {
         Self {
-            source_identity: Some(ObservableRuntimePreparedSourceIdentity {
-                url,
-                page_attachment_id,
-            }),
+            source_identity: Some(ObservableRuntimePreparedSourceIdentity { url, document_id }),
             items,
             cursor: ObservableRuntimeEmissionCursor::new(context_console_counts, exception_end),
         }
@@ -108,11 +105,11 @@ impl ObservableRuntimePreparedItems {
     pub(in crate::domains::observable_output) fn matches_source_identity(
         &self,
         url: &str,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
     ) -> bool {
-        self.source_identity.as_ref().is_none_or(|identity| {
-            identity.url == url && identity.page_attachment_id == page_attachment_id
-        })
+        self.source_identity
+            .as_ref()
+            .is_none_or(|identity| identity.url == url && identity.document_id == document_id)
     }
 
     pub(super) fn into_emission_parts(

@@ -1,6 +1,6 @@
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandDispatchContext, CommandOwnerScope,
-    TargetPageResidenceIdentity, TargetPageResidenceObservation, TargetPageResidenceToken,
+    TargetPageResidenceIdentity,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
@@ -11,6 +11,7 @@ use crate::devtools_runtime::{
     DevToolsTouchEventType, DevToolsTouchPoint,
 };
 use crate::domains::command_output::CommandOutputPlan;
+use moli_core::browser::{DocumentLifetimeObserver, DocumentRetirement};
 use moli_core::page::{
     CompletedPageCommand, Page, PageInputExt, PendingPageCommand, RendererCommandTurnCompletion,
     RendererDragData, RendererDragDataItem, RendererDraggedFile, RendererInputDispatchOutcome,
@@ -61,7 +62,7 @@ pub(crate) struct PendingInputCommandDispatch {
     command_id: Option<u64>,
     session_id: Option<String>,
     owner: TargetPageResidenceIdentity,
-    page_residence_token: Option<TargetPageResidenceToken>,
+    document_lifetime_observer: Option<DocumentLifetimeObserver>,
     kind: PendingInputCommandKind,
     pending: PendingInputOperation,
 }
@@ -144,21 +145,21 @@ enum CompletedInputOperation {
 
 enum RendererInputWaitOutcome<T> {
     Completed(T),
-    PageResidence(TargetPageResidenceObservation),
+    PageResidence(DocumentRetirement),
 }
 
 async fn wait_for_renderer_input_or_page_replacement<T>(
     completion: impl std::future::Future<Output = T>,
-    page_residence_token: Option<TargetPageResidenceToken>,
+    document_lifetime_observer: Option<DocumentLifetimeObserver>,
 ) -> RendererInputWaitOutcome<T> {
-    let Some(page_residence_token) = page_residence_token else {
+    let Some(document_lifetime_observer) = document_lifetime_observer else {
         return RendererInputWaitOutcome::Completed(completion.await);
     };
     tokio::pin!(completion);
     tokio::select! {
         biased;
         result = &mut completion => RendererInputWaitOutcome::Completed(result),
-        observation = page_residence_token.wait() => {
+        observation = document_lifetime_observer.wait() => {
             RendererInputWaitOutcome::PageResidence(observation)
         }
     }
@@ -170,36 +171,36 @@ impl PendingInputCommandDispatch {
             PendingInputOperation::Page(pending) => {
                 match wait_for_renderer_input_or_page_replacement(
                     pending.wait(),
-                    self.page_residence_token,
+                    self.document_lifetime_observer,
                 )
                 .await
                 {
                     RendererInputWaitOutcome::Completed(result) => CompletedInputOperation::Page(
                         Box::new(result.map_err(|error| error.to_string())),
                     ),
-                    RendererInputWaitOutcome::PageResidence(
-                        TargetPageResidenceObservation::Superseded,
-                    ) => CompletedInputOperation::PageResidenceSuperseded,
-                    RendererInputWaitOutcome::PageResidence(
-                        TargetPageResidenceObservation::Unavailable,
-                    ) => CompletedInputOperation::PageResidenceUnavailable,
+                    RendererInputWaitOutcome::PageResidence(DocumentRetirement::Superseded) => {
+                        CompletedInputOperation::PageResidenceSuperseded
+                    }
+                    RendererInputWaitOutcome::PageResidence(DocumentRetirement::Unavailable) => {
+                        CompletedInputOperation::PageResidenceUnavailable
+                    }
                 }
             }
             #[cfg(test)]
             PendingInputOperation::RendererAckHeldForTest => {
                 match wait_for_renderer_input_or_page_replacement(
                     std::future::pending::<std::convert::Infallible>(),
-                    self.page_residence_token,
+                    self.document_lifetime_observer,
                 )
                 .await
                 {
                     RendererInputWaitOutcome::Completed(never) => match never {},
-                    RendererInputWaitOutcome::PageResidence(
-                        TargetPageResidenceObservation::Superseded,
-                    ) => CompletedInputOperation::PageResidenceSuperseded,
-                    RendererInputWaitOutcome::PageResidence(
-                        TargetPageResidenceObservation::Unavailable,
-                    ) => CompletedInputOperation::PageResidenceUnavailable,
+                    RendererInputWaitOutcome::PageResidence(DocumentRetirement::Superseded) => {
+                        CompletedInputOperation::PageResidenceSuperseded
+                    }
+                    RendererInputWaitOutcome::PageResidence(DocumentRetirement::Unavailable) => {
+                        CompletedInputOperation::PageResidenceUnavailable
+                    }
                 }
             }
         };
@@ -219,7 +220,8 @@ impl PendingInputCommandDispatch {
         // gives lifecycle smoke tests a deterministic outstanding callback;
         // public CDP intentionally cannot pause that callback while also
         // scheduling a replacement of the same Page owner.
-        if !self.kind.uses_renderer_host_ack_cleanup() || self.page_residence_token.is_none() {
+        if !self.kind.uses_renderer_host_ack_cleanup() || self.document_lifetime_observer.is_none()
+        {
             return false;
         }
         self.pending = PendingInputOperation::RendererAckHeldForTest;
@@ -1006,9 +1008,9 @@ fn start_page_input_command(
     let page_owner = conn
         .target_page_residence_identity_for_owner(command_owner)
         .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
-    let page_residence_token = if kind.uses_renderer_host_ack_cleanup() {
+    let document_lifetime_observer = if kind.uses_renderer_host_ack_cleanup() {
         Some(
-            conn.capture_target_page_residence_token_for_owner(command_owner)
+            conn.capture_document_lifetime_for_owner(command_owner)
                 .ok_or_else(PendingInputCommandStartError::no_document_loaded)?,
         )
     } else {
@@ -1023,7 +1025,7 @@ fn start_page_input_command(
         command_id,
         session_id: command_owner.session_id().map(str::to_owned),
         owner: page_owner,
-        page_residence_token,
+        document_lifetime_observer,
         kind,
         pending: PendingInputOperation::Page(pending),
     }))
@@ -1986,8 +1988,8 @@ mod producer_tests {
         let runtime_slot = conn
             .runtime_session_owner_slot_mut(Some(session_id))
             .expect("test target should expose a runtime owner slot");
-        if runtime_slot.page_attachment_id().is_none() {
-            runtime_slot.set_page_attachment_id_for_test(identity.document.page_id.as_u64());
+        if runtime_slot.document_id().is_none() {
+            runtime_slot.set_document_id_for_test(identity.document.page_id.as_u64());
         }
         let lifecycle_snapshot = RendererDocumentLifecycleSnapshot {
             frame: identity.frame,
@@ -2344,7 +2346,7 @@ mod producer_tests {
         .expect("source file chooser should prepare");
         conn.runtime_session_owner_slot_mut(Some("SID-page-replacement"))
             .expect("test runtime slot should exist")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         let replacement_document = renderer_document_identity_for_test(2, 2);
         bind_renderer_document_for_test(
             &mut conn,

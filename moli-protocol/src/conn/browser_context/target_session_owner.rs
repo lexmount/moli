@@ -1724,14 +1724,14 @@ impl CdpConnection {
                 .and_then(|browser_context| browser_context.active_target_id())
                 .map(str::to_owned)
         });
-        let page_attachment_id = self
+        let document_id = self
             .runtime_session_owner_slot_for_owner(owner)
             .ok()?
-            .page_attachment_id()?;
+            .document_id()?;
         Some(TargetPageResidenceIdentity::new(
             browser_context_id,
             target_id,
-            page_attachment_id,
+            document_id,
         ))
     }
 
@@ -1752,14 +1752,14 @@ impl CdpConnection {
                 .and_then(|browser_context| browser_context.active_target_id())
                 .map(str::to_owned)
         });
-        let page_attachment_id = self
+        let document_id = self
             .runtime_session_owner_slot_for_owner(owner)
             .ok()?
-            .pending_page_attachment_id()?;
+            .pending_document_id()?;
         Some(TargetPageResidenceIdentity::new(
             browser_context_id,
             target_id,
-            page_attachment_id,
+            document_id,
         ))
     }
 
@@ -1774,14 +1774,14 @@ impl CdpConnection {
                 .and_then(|browser_context| browser_context.active_target_id())
                 .map(str::to_owned)
         });
-        let page_attachment_id = self
+        let document_id = self
             .runtime_session_owner_slot_mut_for_owner(owner)
             .ok()?
-            .reserve_renderer_page_attachment(renderer_page);
+            .reserve_renderer_document(renderer_page);
         Some(TargetPageResidenceIdentity::new(
             browser_context_id,
             target_id,
-            page_attachment_id,
+            document_id,
         ))
     }
 
@@ -1797,14 +1797,14 @@ impl CdpConnection {
             })
     }
 
-    pub(crate) fn capture_target_page_residence_token_for_owner(
+    pub(crate) fn capture_document_lifetime_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-    ) -> Option<crate::conn::TargetPageResidenceToken> {
+    ) -> Option<moli_core::browser::DocumentLifetimeObserver> {
         self.runtime_session_owner_slot_mut_for_owner(owner)
             .ok()?
             .page_slot_mut()
-            .page_residence_token()
+            .document_lifetime_observer()
     }
 
     /// Captures the exact protocol attachment currently addressing a Page.
@@ -2572,7 +2572,7 @@ mod tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         browser_context.insert_page_target_host(crate::conn::PageTargetHost::with_url(
             "TID-background".to_owned(),
             Some("SID-background-primary".to_owned()),
@@ -2582,7 +2582,7 @@ mod tests {
             .background_target_mut("TID-background")
             .expect("background target")
             .runtime_slot
-            .set_page_attachment_id_for_test(2);
+            .set_document_id_for_test(2);
         assert!(
             browser_context
                 .assign_attached_session_to_target("TID-active", "SID-active-attached".to_owned(),)
@@ -3397,7 +3397,7 @@ mod tests {
         let initial_attachment_id = background
             .background_target("TID-background")
             .expect("background target")
-            .page_attachment_id();
+            .document_id();
 
         {
             let mut owner = TargetSessionOwnerMut {
@@ -3421,10 +3421,7 @@ mod tests {
             .background_target("TID-background")
             .expect("background target");
         assert!(target.has_loaded_page());
-        assert!(
-            target.page_attachment_id().is_some()
-                && target.page_attachment_id() != initial_attachment_id
-        );
+        assert!(target.document_id().is_some() && target.document_id() != initial_attachment_id);
         let (_, entries) = background
             .background_target_mut("TID-background")
             .expect("background target must exist")
@@ -3443,7 +3440,7 @@ mod tests {
         conn.install_browser_context_fixture_for_test(browser_context);
         conn.runtime_session_owner_slot_mut(Some("SID-page-residence"))
             .expect("active target runtime slot")
-            .set_page_attachment_id_for_test(41);
+            .set_document_id_for_test(41);
 
         let current = conn
             .target_page_residence_identity_for_session(Some("SID-page-residence"))
@@ -3454,17 +3451,17 @@ mod tests {
             TargetPageResidenceIdentity::new(
                 "BID-other".to_owned(),
                 Some("TID-page-residence".to_owned()),
-                current.page_attachment_id(),
+                current.document_id(),
             ),
             TargetPageResidenceIdentity::new(
                 "BID-page-residence".to_owned(),
                 Some("TID-other".to_owned()),
-                current.page_attachment_id(),
+                current.document_id(),
             ),
             TargetPageResidenceIdentity::new(
                 "BID-page-residence".to_owned(),
                 Some("TID-page-residence".to_owned()),
-                crate::conn::TargetPageAttachmentId::allocate(),
+                crate::conn::DocumentId::allocate(),
             ),
         ] {
             assert!(
@@ -3514,7 +3511,7 @@ mod tests {
         conn.install_browser_context_fixture_for_test(browser_context);
         conn.runtime_session_owner_slot_mut(None)
             .expect("implicit active runtime slot")
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
 
         let original = conn
             .target_page_residence_identity_for_session(None)
@@ -3668,7 +3665,7 @@ mod tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(41);
+            .set_document_id_for_test(41);
         conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.with_target_devtools_session_state_for_session_mut(Some("SID-runtime-b"), |state| {
@@ -3796,40 +3793,40 @@ mod tests {
 
         conn.runtime_session_owner_slot_mut(Some("SID-active"))
             .expect("active runtime slot should be mutable")
-            .set_page_attachment_id_for_test(11);
+            .set_document_id_for_test(11);
         conn.runtime_session_owner_slot_mut(Some("SID-background"))
             .expect("background runtime slot should be mutable")
-            .set_page_attachment_id_for_test(22);
+            .set_document_id_for_test(22);
         conn.runtime_session_owner_slot_mut(Some("SID-attached-inactive"))
             .expect("inactive attached runtime slot should be mutable")
-            .set_page_attachment_id_for_test(33);
+            .set_document_id_for_test(33);
 
         assert_eq!(
             conn.runtime_session_owner_slot(Some("SID-active"))
                 .expect("active runtime slot should be readable")
-                .page_attachment_id()
-                .map(crate::conn::TargetPageAttachmentId::get),
+                .document_id()
+                .map(crate::conn::DocumentId::get),
             Some(11)
         );
         assert_eq!(
             conn.runtime_session_owner_slot(Some("SID-background"))
                 .expect("background runtime slot should be readable")
-                .page_attachment_id()
-                .map(crate::conn::TargetPageAttachmentId::get),
+                .document_id()
+                .map(crate::conn::DocumentId::get),
             Some(22)
         );
         assert_eq!(
             conn.runtime_session_owner_slot(Some("SID-attached-background"))
                 .expect("background attached runtime slot should be readable")
-                .page_attachment_id()
-                .map(crate::conn::TargetPageAttachmentId::get),
+                .document_id()
+                .map(crate::conn::DocumentId::get),
             Some(22)
         );
         assert_eq!(
             conn.runtime_session_owner_slot(Some("SID-attached-inactive"))
                 .expect("inactive attached runtime slot should be readable")
-                .page_attachment_id()
-                .map(crate::conn::TargetPageAttachmentId::get),
+                .document_id()
+                .map(crate::conn::DocumentId::get),
             Some(33)
         );
         assert_eq!(

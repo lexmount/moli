@@ -900,7 +900,7 @@ impl BrowserContext {
             "activeTargetId": self.active_target_id(),
             "hasActiveSession": self.has_active_session(),
             "activeLoadedPage": self.has_loaded_page(),
-            "activePageAttachment": self.page_attachment_id().map(|attachment_id| json!({
+            "activePageAttachment": self.document_id().map(|attachment_id| json!({
                 "id": attachment_id.get(),
                 "targetId": self.active_target_id(),
             })),

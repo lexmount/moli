@@ -12,7 +12,6 @@ mod inspector;
 mod javascript_dialog;
 mod navigation;
 mod navigation_outcome;
-mod page_residence_token;
 mod page_resource;
 mod page_slot;
 mod page_target_host;
@@ -35,11 +34,10 @@ pub(crate) use browser_identity::BaseBrowserIdentityOverrideState;
 pub use identity::TargetPageResidenceIdentity as DevToolsPageResidenceIdentity;
 pub use identity::URL_BASE;
 pub(crate) use identity::{
-    RendererPageResidenceIdentity, TargetIdentityState, TargetPageProtocolAttachmentIdentity,
-    TargetPageResidenceIdentity, TargetRootDocumentProtocolAttachmentIdentity,
+    TargetIdentityState, TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity,
+    TargetRootDocumentProtocolAttachmentIdentity,
 };
-pub(crate) use moli_core::browser::DocumentId as TargetPageAttachmentId;
-pub(crate) use moli_core::browser::NavigationId;
+pub(crate) use moli_core::browser::{DocumentId, NavigationId, RendererPageResidenceIdentity};
 
 pub(crate) use devtools_renderer_channel::{
     CommittedRendererAgentAttachment, DevToolsRendererChannelError,
@@ -58,7 +56,6 @@ pub(crate) use devtools_session::{
 pub(crate) use document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
 };
-pub(crate) use page_residence_token::{TargetPageResidenceObservation, TargetPageResidenceToken};
 
 pub use bounds::BrowserWindowBounds;
 

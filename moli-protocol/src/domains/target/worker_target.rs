@@ -3760,17 +3760,17 @@ mod tests {
         let mut conn = CdpConnection::default();
         let mut context = BrowserContext::new("BID-1".to_owned());
         context.set_active_target_id("TID-page");
-        let page_attachment_id = context
+        let document_id = context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         let owner_page = TargetPageResidenceIdentity::new(
             "BID-1".to_owned(),
             Some("TID-page".to_owned()),
-            page_attachment_id,
+            document_id,
         );
         conn.install_browser_context_fixture_for_test(context);
-        let owner_renderer_page = RendererPageResidenceIdentity::new(
+        let owner_renderer_page = RendererPageResidenceIdentity::from_parts(
             moli_core::RendererOwnerLocalHostId::new_for_testing(17),
             moli_core::PageId::new_for_testing(23),
         );
@@ -4751,7 +4751,7 @@ mod tests {
             .unwrap()
             .active_page_target_mut()
             .runtime_slot
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         let messages = protocol_messages(
             &retire_dedicated_worker_targets_for_replaced_page_async(&mut conn, &owner_page).await,
         );

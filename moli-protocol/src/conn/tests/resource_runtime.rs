@@ -1574,7 +1574,7 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
     browser_context
         .active_page_target_mut()
         .runtime_slot
-        .set_page_attachment_id_for_test(901);
+        .set_document_id_for_test(901);
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let page_id = moli_core::PageId::new_for_testing(901);
@@ -1706,7 +1706,7 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
     replacement_context
         .active_page_target_mut()
         .runtime_slot
-        .set_page_attachment_id_for_test(902);
+        .set_document_id_for_test(902);
     conn.install_browser_context_fixture_for_test(replacement_context);
     let (_, accepted) = conn.bind_renderer_document_lifecycle_for_owner(
         &crate::conn::CommandOwnerScope::for_session("SID-lifecycle-wait"),
@@ -1750,7 +1750,7 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
     browser_context
         .active_page_target_mut()
         .runtime_slot
-        .set_page_attachment_id_for_test(1001);
+        .set_document_id_for_test(1001);
     assert!(
         browser_context.insert_page_target_host(PageTargetHost::with_url(
             "TID-background".to_owned(),
@@ -1761,9 +1761,7 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
     let background = browser_context
         .background_target_mut("TID-background")
         .expect("background PageTargetHost");
-    background
-        .runtime_slot
-        .set_page_attachment_id_for_test(1002);
+    background.runtime_slot.set_document_id_for_test(1002);
     background
         .runtime_slot
         .start_document_navigation("LID-background".to_owned());

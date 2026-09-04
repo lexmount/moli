@@ -633,7 +633,7 @@ async fn devtools_script_navigation_exact_cursor_rejects_replaced_page_owner_act
             route.clone(),
         ))
         .expect("created target runtime slot")
-        .replace_page_attachment_id_for_test();
+        .replace_document_id_for_test();
 
     let sent_start = ctx.sent.len();
     ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
@@ -2416,7 +2416,7 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         .browser_context
         .as_ref()
         .expect("browser context")
-        .page_attachment_id();
+        .document_id();
 
     let completed = pending
         .wait()
@@ -2544,7 +2544,7 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
 
     let browser_context = conn.browser_context.as_ref().expect("browser context");
     assert_eq!(
-        browser_context.page_attachment_id(),
+        browser_context.document_id(),
         attachment_after_real_page,
         "discarding stale initial document build must not replace the current page"
     );

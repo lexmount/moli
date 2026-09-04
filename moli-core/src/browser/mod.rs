@@ -5,8 +5,12 @@
 //! ordering relationship.
 
 mod document_lifecycle;
+mod document_lifetime;
+mod renderer_residence;
 
 pub use document_lifecycle::DocumentLifecycle;
+pub use document_lifetime::{DocumentLifetime, DocumentLifetimeObserver, DocumentRetirement};
+pub use renderer_residence::RendererPageResidenceIdentity;
 
 use std::{
     num::NonZeroU64,

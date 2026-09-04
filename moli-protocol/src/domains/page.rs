@@ -2343,7 +2343,7 @@ pub(crate) async fn navigate_page_owned_top_level_location_background_events_asy
             ?source_document,
             browser_context_id = owner.browser_context_id(),
             target_id = owner.target_id(),
-            page_attachment_id = owner.page_attachment_id().get(),
+            document_id = owner.document_id().get(),
             url = navigation.url(),
             "dropping top-level location navigation produced by a stale Page residence"
         );
@@ -2537,8 +2537,8 @@ mod producer_tests {
         let runtime_slot = conn
             .runtime_session_owner_slot_mut(Some(session_id))
             .expect("test target should expose a runtime owner slot");
-        if runtime_slot.page_attachment_id().is_none() {
-            runtime_slot.set_page_attachment_id_for_test(identity.document.page_id.as_u64());
+        if runtime_slot.document_id().is_none() {
+            runtime_slot.set_document_id_for_test(identity.document.page_id.as_u64());
         }
         let lifecycle_snapshot = RendererDocumentLifecycleSnapshot {
             frame: identity.frame,
@@ -2575,8 +2575,8 @@ mod producer_tests {
         let runtime_slot = conn
             .runtime_session_owner_slot_mut(Some(session_id))
             .expect("test target should expose a runtime owner slot");
-        if runtime_slot.page_attachment_id().is_none() {
-            runtime_slot.replace_page_attachment_id_for_test();
+        if runtime_slot.document_id().is_none() {
+            runtime_slot.replace_document_id_for_test();
         }
         conn.target_page_residence_identity_for_session(Some(session_id))
             .expect("test target should expose a Page residence identity")
@@ -3348,7 +3348,7 @@ mod producer_tests {
             ));
         conn.runtime_session_owner_slot_mut(Some("SID-dialog-stale-page"))
             .expect("test target runtime slot")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
 
         let mut out = Vec::new();
         super::emit_javascript_dialog_activity_background_events_async(
@@ -4520,7 +4520,7 @@ mod producer_tests {
         );
         conn.runtime_session_owner_slot_mut(Some("SID-child-page-owner"))
             .expect("test runtime owner")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
 
         let mut events = Vec::new();
         super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
@@ -5056,7 +5056,7 @@ mod producer_tests {
         let owner = page_residence_identity_for_test(&mut conn, "SID-stale-page-same-document");
         conn.runtime_session_owner_slot_mut(Some("SID-stale-page-same-document"))
             .expect("test runtime slot should exist")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_same_document_navigations_for_test(
@@ -5246,7 +5246,7 @@ mod producer_tests {
         let owner = page_residence_identity_for_test(&mut conn, "SID-stale-page-location");
         conn.runtime_session_owner_slot_mut(Some("SID-stale-page-location"))
             .expect("test runtime slot should exist")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_top_level_location_navigation_for_test(

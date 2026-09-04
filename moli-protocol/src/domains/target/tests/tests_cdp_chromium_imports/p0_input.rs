@@ -25,7 +25,7 @@ async fn expect_page_replacement_cleans_up_pending_input_ack(
         .conn
         .runtime_session_owner_slot(Some(&page.session_id))
         .expect("the input command should route to a Page slot")
-        .page_attachment_id()
+        .document_id()
         .expect("the input command should have a concrete Page attachment");
     let raw = json!({
         "id": command_id,
@@ -66,7 +66,7 @@ async fn expect_page_replacement_cleans_up_pending_input_ack(
         .conn
         .runtime_session_owner_slot(Some(&page.session_id))
         .expect("the replacement should route to a Page slot")
-        .page_attachment_id()
+        .document_id()
         .expect("the replacement should have a concrete Page attachment");
     assert_ne!(original_owner, replacement_owner);
     assert_ne!(original_attachment, replacement_attachment);

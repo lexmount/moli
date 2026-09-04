@@ -586,7 +586,7 @@ mod tests {
         bc.attach_active_session("SID-1");
         bc.active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(bc);
         let page_owner = conn
             .target_page_residence_identity_for_session(Some("SID-1"))
@@ -679,7 +679,7 @@ mod tests {
         bc.attach_active_session("SID-collision");
         bc.active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(bc);
 
         let old_owner = conn
@@ -717,7 +717,7 @@ mod tests {
 
         conn.runtime_session_owner_slot_mut(Some("SID-collision"))
             .expect("runtime owner should remain addressable")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         let replacement_owner = conn
             .target_page_residence_identity_for_session(Some("SID-collision"))
             .expect("replacement Page residence should exist");
@@ -761,7 +761,7 @@ mod tests {
         assert!(bc.assign_attached_session_to_target("TID-1", "FETCH-SID".to_owned()));
         bc.active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(bc);
         assert!(conn.enable_network_listener_for_session_owner(Some("FETCH-SID")));
         let page_owner = conn
@@ -820,7 +820,7 @@ mod tests {
         assert!(bc.assign_attached_session_to_target("TID-1", "FETCH-SID".to_owned()));
         bc.active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(bc);
         let page_owner = conn
             .target_page_residence_identity_for_session(Some("SID-1"))

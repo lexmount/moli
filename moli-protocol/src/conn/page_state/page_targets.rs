@@ -933,17 +933,17 @@ impl BrowserContext {
         }
         let current_attachment = match expected.target_id() {
             Some(target_id) if self.is_active_target(target_id) => {
-                self.active_page_target().runtime_slot.page_attachment_id()
+                self.active_page_target().runtime_slot.document_id()
             }
             Some(target_id) => self
                 .background_target(target_id)
-                .and_then(|target| target.runtime_slot.page_attachment_id()),
+                .and_then(|target| target.runtime_slot.document_id()),
             None if self.active_target_id().is_none() => {
-                self.active_page_target().runtime_slot.page_attachment_id()
+                self.active_page_target().runtime_slot.document_id()
             }
             None => None,
         };
-        current_attachment == Some(expected.page_attachment_id())
+        current_attachment == Some(expected.document_id())
     }
 
     pub(crate) fn dedicated_worker_target_id_for_renderer_instance(

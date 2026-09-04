@@ -6831,7 +6831,7 @@ mod tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         conn
     }
@@ -8163,7 +8163,7 @@ mod tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.try_register_renderer_call_for_session_owner(
@@ -8394,7 +8394,7 @@ mod tests {
 
         conn.runtime_session_owner_slot_mut(Some("SID-active"))
             .expect("test runtime slot")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
 
         let mut direct_events = Vec::new();
         let mut claimed_events = Vec::new();
@@ -8524,7 +8524,7 @@ mod tests {
 
         conn.runtime_session_owner_slot_mut(Some("SID-active"))
             .expect("test runtime slot")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         conn.register_runtime_remote_object_ids_for_session_owner_with_group(
             Some("SID-active"),
             vec!["replacement-object".to_owned()],
@@ -8551,7 +8551,7 @@ mod tests {
 
         conn.runtime_session_owner_slot_mut(Some("SID-active"))
             .expect("test runtime slot")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         conn.register_runtime_remote_object_ids_for_session_owner_with_group(
             Some("SID-active"),
             vec!["replacement-object".to_owned()],

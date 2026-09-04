@@ -290,7 +290,7 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         command_id: Some(104),
         session_id: None,
         owner: original_owner.clone(),
-        page_residence_token: None,
+        document_lifetime_observer: None,
         kind: PendingInputCommandKind::DispatchMouseEvent,
         pending: PendingInputOperation::Page(pending),
     }
@@ -334,9 +334,9 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
         .target_page_residence_identity_for_session(None)
         .expect("the original Page should have a residence identity");
     let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let page_residence_token = ctx
+    let document_lifetime_observer = ctx
         .conn
-        .capture_target_page_residence_token_for_owner(&command_owner)
+        .capture_document_lifetime_for_owner(&command_owner)
         .expect("the original Page should expose its attachment lifetime");
 
     let replacement_url = "data:text/html,<body>replacement-before-completion</body>";
@@ -345,14 +345,14 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
 
     let wait = wait_for_renderer_input_or_page_replacement(
         std::future::pending::<()>(),
-        Some(page_residence_token),
+        Some(document_lifetime_observer),
     );
     let outcome = tokio::time::timeout(std::time::Duration::from_secs(1), wait)
         .await
         .expect("Page replacement should settle the pending input wait");
     assert!(matches!(
         outcome,
-        RendererInputWaitOutcome::PageResidence(TargetPageResidenceObservation::Superseded)
+        RendererInputWaitOutcome::PageResidence(DocumentRetirement::Superseded)
     ));
 
     let completed = complete_pending_input_command(
@@ -377,9 +377,9 @@ async fn completed_renderer_ack_wins_when_page_replacement_is_already_observable
     with_loaded_document(&mut ctx, "<body>origin</body>").await;
 
     let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let page_residence_token = ctx
+    let document_lifetime_observer = ctx
         .conn
-        .capture_target_page_residence_token_for_owner(&command_owner)
+        .capture_document_lifetime_for_owner(&command_owner)
         .expect("the original Page should expose its attachment lifetime");
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>replacement-after-ack</body>",
@@ -389,7 +389,7 @@ async fn completed_renderer_ack_wins_when_page_replacement_is_already_observable
 
     let outcome = wait_for_renderer_input_or_page_replacement(
         std::future::ready("renderer-ack"),
-        Some(page_residence_token),
+        Some(document_lifetime_observer),
     )
     .await;
     assert!(matches!(

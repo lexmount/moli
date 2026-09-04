@@ -148,7 +148,7 @@ fn trace_stale_activation(session_id: Option<&str>, activation: &PreparedFileCho
         backend_node_id = activation.backend_node_id,
         browser_context_id = activation.page_owner.browser_context_id(),
         target_id = activation.page_owner.target_id(),
-        page_attachment_id = activation.page_owner.page_attachment_id().get(),
+        document_id = activation.page_owner.document_id().get(),
         "dropping file chooser produced by a stale Page residence"
     );
 }
