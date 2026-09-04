@@ -1589,6 +1589,7 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
             .active_page_target()
             .runtime_slot
             .page_slot()
+            .contents
             .navigation
             .initial_empty_document_pending_cross_document_navigation()
     );
@@ -1615,6 +1616,7 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
             .active_page_target()
             .runtime_slot
             .page_slot()
+            .contents
             .navigation
             .initial_empty_document_pending_cross_document_navigation()
     );
@@ -1633,6 +1635,7 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
             .active_page_target()
             .runtime_slot
             .page_slot()
+            .contents
             .navigation
             .initial_empty_document_pending_cross_document_navigation()
     );
@@ -1651,6 +1654,7 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
             .active_page_target()
             .runtime_slot
             .page_slot()
+            .contents
             .navigation
             .initial_empty_document_pending_cross_document_navigation()
     );
@@ -1788,6 +1792,7 @@ fn background_target_initial_empty_document_record_tracks_navigation_lifecycle()
             .expect("background target must exist")
             .runtime_slot
             .page_slot()
+            .contents
             .navigation
             .initial_empty_document_pending_cross_document_navigation()
     );
@@ -1805,6 +1810,7 @@ fn background_target_initial_empty_document_record_tracks_navigation_lifecycle()
             .unwrap()
             .runtime_slot
             .page_slot()
+            .contents
             .navigation
             .initial_empty_document_pending_cross_document_navigation()
     );

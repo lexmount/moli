@@ -2005,6 +2005,7 @@ impl CdpConnection {
                 // An admitted renderer lifecycle transition exits the initial
                 // Document immediately, without waiting for a later snapshot.
                 slot.page_slot_mut()
+                    .contents
                     .navigation
                     .mark_initial_empty_document_exited();
             }

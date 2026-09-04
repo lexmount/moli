@@ -4,20 +4,20 @@ use moli_core::network::{
     SharedWebStorageStore, deep_clone_shared_web_storage_store, new_shared_web_storage_store,
 };
 
-#[derive(Clone, Default)]
-pub(crate) struct TargetSessionStorageNamespace {
+#[derive(Default)]
+pub(crate) struct SessionStorageNamespace {
     store: OnceLock<SharedWebStorageStore>,
 }
 
-impl std::fmt::Debug for TargetSessionStorageNamespace {
+impl std::fmt::Debug for SessionStorageNamespace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("TargetSessionStorageNamespace")
+        f.debug_struct("SessionStorageNamespace")
             .field("initialized", &self.store.get().is_some())
             .finish()
     }
 }
 
-impl TargetSessionStorageNamespace {
+impl SessionStorageNamespace {
     pub(crate) fn from_store(store: SharedWebStorageStore) -> Self {
         Self {
             store: OnceLock::from(store),

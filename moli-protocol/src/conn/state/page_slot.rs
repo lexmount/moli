@@ -19,9 +19,7 @@ use super::document_lifecycle_observer::{
     RendererDocumentLifecycleObserver,
 };
 
-mod document_host;
-use super::navigation_controller::NavigationController;
-use document_host::DocumentHost;
+use super::web_contents::{DocumentHost, WebContents};
 
 #[cfg(test)]
 mod document_host_tests;
@@ -208,12 +206,12 @@ impl PendingRendererPageBinding {
 
 #[derive(Debug, Default)]
 pub(crate) struct TargetPageSlot {
-    current_document: Option<DocumentHost>,
+    // Browser subtree, moved out with the typed API cutover (Commit 24b).
+    // DevTools binding/output state and legacy fixtures remain outside it.
+    pub(in crate::conn) contents: WebContents,
     loaded_page_absence_reason: TargetPageAbsenceReason,
     #[cfg(test)]
     document_fixture: Option<DocumentFixture>,
-    // Private in this residence until WebContents extraction (Commit 6).
-    pub(in crate::conn) navigation: NavigationController,
     // Frontend correlation only. Selection comes from the navigation state;
     // retain at most the pending and committed navigation's loader mappings.
     cdp_navigation_loaders: Vec<(NavigationId, String)>,
@@ -254,36 +252,42 @@ impl TargetPageSlot {
 
     #[cfg(test)]
     pub(crate) fn with_loaded_page_for_test(loaded_page: Page) -> Self {
-        Self {
-            current_document: Some(DocumentHost::new(DocumentId::allocate(), loaded_page)),
-            ..Default::default()
-        }
+        let mut slot = Self::default();
+        slot.contents.main_frame.current_document =
+            Some(DocumentHost::new(DocumentId::allocate(), loaded_page));
+        slot
     }
 
     pub(crate) fn loaded_page(&self) -> Option<&Page> {
-        self.current_document
+        self.contents
+            .main_frame
+            .current_document
             .as_ref()
             .map(|document| &document.page)
     }
 
     pub(crate) fn loaded_page_mut(&mut self) -> Option<&mut Page> {
-        self.current_document
+        self.contents
+            .main_frame
+            .current_document
             .as_mut()
             .map(|document| &mut document.page)
     }
 
     pub(crate) fn has_loaded_page(&self) -> bool {
-        self.current_document.is_some()
+        self.contents.main_frame.current_document.is_some()
     }
 
     pub(crate) fn loaded_page_absence_reason(&self) -> Option<TargetPageAbsenceReason> {
-        self.current_document
+        self.contents
+            .main_frame
+            .current_document
             .is_none()
             .then_some(self.loaded_page_absence_reason)
     }
 
     pub(crate) fn mark_loaded_page_absent(&mut self, reason: TargetPageAbsenceReason) {
-        if self.current_document.is_none() {
+        if self.contents.main_frame.current_document.is_none() {
             if self.loaded_page_absence_reason
                 == TargetPageAbsenceReason::InitialDocumentPageBuildInProgress
                 && reason != TargetPageAbsenceReason::InitialDocumentPageBuildInProgress
@@ -295,7 +299,7 @@ impl TargetPageSlot {
     }
 
     pub(crate) fn start_initial_document_page_build(&mut self) {
-        if self.current_document.is_none() {
+        if self.contents.main_frame.current_document.is_none() {
             self.loaded_page_absence_reason =
                 TargetPageAbsenceReason::InitialDocumentPageBuildInProgress;
         }
@@ -308,7 +312,7 @@ impl TargetPageSlot {
         &mut self,
         renderer_page: RendererPageResidenceIdentity,
     ) -> bool {
-        if self.current_document.is_some()
+        if self.contents.main_frame.current_document.is_some()
             || self.loaded_page_absence_reason
                 != TargetPageAbsenceReason::InitialDocumentPageBuildInProgress
             || self.initial_document_page_build_completion.is_none()
@@ -400,7 +404,7 @@ impl TargetPageSlot {
         if let Some(fixture) = self.document_fixture.take() {
             fixture.lifetime.supersede();
         }
-        std::mem::replace(&mut self.current_document, next_document).map(DocumentHost::retire)
+        self.contents.main_frame.replace_document(next_document)
     }
 
     pub(crate) fn replace_loaded_page(&mut self, page: Option<Page>) -> Option<Page> {
@@ -413,7 +417,12 @@ impl TargetPageSlot {
     }
 
     pub(crate) fn document_id(&self) -> Option<DocumentId> {
-        let id = self.current_document.as_ref().map(|document| document.id);
+        let id = self
+            .contents
+            .main_frame
+            .current_document
+            .as_ref()
+            .map(|document| document.id);
         #[cfg(test)]
         let id = id.or_else(|| self.document_fixture.as_ref().map(|fixture| fixture.id));
         id
@@ -421,6 +430,8 @@ impl TargetPageSlot {
 
     fn document_lifecycle(&self) -> Option<&DocumentLifecycle> {
         let lifecycle = self
+            .contents
+            .main_frame
             .current_document
             .as_ref()
             .map(|document| &document.lifecycle);
@@ -435,6 +446,8 @@ impl TargetPageSlot {
 
     fn document_lifecycle_mut(&mut self) -> Option<&mut DocumentLifecycle> {
         let lifecycle = self
+            .contents
+            .main_frame
             .current_document
             .as_mut()
             .map(|document| &mut document.lifecycle);
@@ -449,6 +462,8 @@ impl TargetPageSlot {
 
     fn document_lifetime_mut(&mut self) -> Option<&mut DocumentLifetime> {
         let lifetime = self
+            .contents
+            .main_frame
             .current_document
             .as_mut()
             .map(|document| &mut document.lifetime);
@@ -466,7 +481,8 @@ impl TargetPageSlot {
             .as_ref()
             .map(PendingRendererPageBinding::document_id)
             .or_else(|| {
-                self.navigation
+                self.contents
+                    .navigation
                     .pending_document()
                     .map(|(_, document)| document)
             })
@@ -486,7 +502,7 @@ impl TargetPageSlot {
             self.pending_renderer_page = None;
         }
 
-        if let Some((navigation, document_id)) = self.navigation.pending_document() {
+        if let Some((navigation, document_id)) = self.contents.navigation.pending_document() {
             self.pending_renderer_page = Some(PendingRendererPageBinding::DocumentNavigation {
                 navigation,
                 renderer_page,
@@ -535,7 +551,7 @@ impl TargetPageSlot {
         if let Some(lifetime) = self.document_lifetime_mut() {
             std::mem::take(lifetime).supersede();
         }
-        if let Some(document) = self.current_document.as_mut() {
+        if let Some(document) = self.contents.main_frame.current_document.as_mut() {
             document.id = document_id;
             document.lifecycle = DocumentLifecycle::default();
         } else {
@@ -553,7 +569,7 @@ impl TargetPageSlot {
         self.finish_renderer_document_lifecycle_observers(
             RendererDocumentLifecycleObservation::Superseded,
         );
-        let token = self.navigation.start_document_navigation();
+        let token = self.contents.navigation.start_document_navigation();
         self.pending_renderer_page = None;
         self.retain_navigation_projections();
         self.cdp_navigation_loaders.push((token, loader_id));
@@ -564,7 +580,8 @@ impl TargetPageSlot {
         &self,
         token: &NavigationId,
     ) -> Option<moli_fetch::FetchCancelHandle> {
-        self.navigation
+        self.contents
+            .navigation
             .document_navigation_cancellation_handle(token)
     }
 
@@ -573,17 +590,21 @@ impl TargetPageSlot {
         token: &NavigationId,
         additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
     ) -> bool {
-        self.navigation
+        self.contents
+            .navigation
             .arm_background_navigation_completion(token, additional_cancellation)
     }
 
     pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
-        self.navigation
+        self.contents
+            .navigation
             .settle_background_navigation_completion(token)
     }
 
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
-        self.navigation.has_inflight_background_navigation()
+        self.contents
+            .navigation
+            .has_inflight_background_navigation()
     }
 
     pub(crate) fn bind_pending_document_navigation_renderer_page(
@@ -592,6 +613,7 @@ impl TargetPageSlot {
         renderer_page: RendererPageResidenceIdentity,
     ) -> bool {
         let Some((navigation, document_id)) = self
+            .contents
             .navigation
             .pending_document()
             .filter(|(navigation, _)| navigation == token)
@@ -631,25 +653,27 @@ impl TargetPageSlot {
     }
 
     pub(crate) fn accepts_pending_document_navigation_event(&self, token: &NavigationId) -> bool {
-        self.navigation
+        self.contents
+            .navigation
             .accepts_pending_document_navigation_event(token)
     }
 
     pub(crate) fn accepts_document_body_completion_event(&self, token: &NavigationId) -> bool {
-        self.navigation
+        self.contents
+            .navigation
             .accepts_document_body_completion_event(token)
     }
 
     pub(crate) fn has_pending_document_navigation(&self) -> bool {
-        self.navigation.has_pending_document_navigation()
+        self.contents.navigation.has_pending_document_navigation()
     }
 
     pub(crate) fn current_document_loader_id(&self) -> Option<&str> {
-        self.loader_id_for_navigation(self.navigation.current_document_navigation()?)
+        self.loader_id_for_navigation(self.contents.navigation.current_document_navigation()?)
     }
 
     pub(crate) fn committed_document_loader_id(&self) -> Option<&str> {
-        self.loader_id_for_navigation(self.navigation.committed_document_navigation()?)
+        self.loader_id_for_navigation(self.contents.navigation.committed_document_navigation()?)
     }
 
     fn loader_id_for_navigation(&self, navigation: NavigationId) -> Option<&str> {
@@ -661,7 +685,7 @@ impl TargetPageSlot {
 
     fn retain_navigation_projections(&mut self) {
         self.cdp_navigation_loaders
-            .retain(|(id, _)| self.navigation.retains_navigation(*id));
+            .retain(|(id, _)| self.contents.navigation.retains_navigation(*id));
     }
 
     pub(crate) fn commit_pending_document_navigation_if_matches(
@@ -669,6 +693,7 @@ impl TargetPageSlot {
         token: &NavigationId,
     ) -> bool {
         if !self
+            .contents
             .navigation
             .commit_pending_document_navigation_if_matches(token)
         {
@@ -683,6 +708,7 @@ impl TargetPageSlot {
         navigation: &NavigationId,
     ) -> bool {
         if self
+            .contents
             .navigation
             .clear_pending_document_navigation_if_matches(navigation)
         {
@@ -705,7 +731,7 @@ impl TargetPageSlot {
         self.finish_renderer_document_lifecycle_observers(
             RendererDocumentLifecycleObservation::Unavailable,
         );
-        self.navigation.clear_document_navigation_state();
+        self.contents.navigation.clear_document_navigation_state();
         self.cdp_navigation_loaders.clear();
         self.pending_renderer_page = None;
         self.renderer_document_lifecycle = RendererDocumentLifecycleProtocolState::default();
@@ -910,7 +936,11 @@ impl TargetPageSlot {
             .is_some_and(|binding| {
                 Some(binding.document_id) == self.document_id()
                     && binding.navigation.as_ref().is_none_or(|navigation| {
-                        self.navigation.committed_document_navigation().as_ref() == Some(navigation)
+                        self.contents
+                            .navigation
+                            .committed_document_navigation()
+                            .as_ref()
+                            == Some(navigation)
                     })
             });
         if !binding_is_current {
@@ -1028,7 +1058,11 @@ impl TargetPageSlot {
             .filter(|binding| {
                 Some(binding.document_id) == self.document_id()
                     && binding.navigation.as_ref().is_none_or(|navigation| {
-                        self.navigation.committed_document_navigation().as_ref() == Some(navigation)
+                        self.contents
+                            .navigation
+                            .committed_document_navigation()
+                            .as_ref()
+                            == Some(navigation)
                     })
             })
     }
