@@ -1715,8 +1715,8 @@ pub fn next_parser_image_fetch_policy_token() -> String {
     routes_core::next_parser_image_fetch_policy_token()
 }
 
-pub fn parser_image_fetch_policy_asset_request_count(token: &str) -> usize {
-    routes_core::parser_image_fetch_policy_asset_request_count(token)
+pub fn parser_image_fetch_policy_asset_request_count(token: &str, source: &str) -> usize {
+    routes_core::parser_image_fetch_policy_asset_request_count(token, source)
 }
 
 pub fn scrapling_dynamic_fetcher_smoke_script() -> PathBuf {

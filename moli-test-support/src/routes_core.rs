@@ -7,7 +7,7 @@ use std::sync::{Arc, OnceLock};
 static NET_UPSTREAM_XHR_404_THEN_200_REQUESTS: AtomicUsize = AtomicUsize::new(0);
 static CONCURRENT_SHARED_STATE_REQUESTS_IN_FLIGHT: AtomicUsize = AtomicUsize::new(0);
 static PARSER_IMAGE_FETCH_POLICY_TOKEN_COUNTER: AtomicUsize = AtomicUsize::new(0);
-static PARSER_IMAGE_FETCH_POLICY_ASSET_REQUESTS: OnceLock<Mutex<HashMap<String, usize>>> =
+static PARSER_IMAGE_FETCH_POLICY_ASSET_REQUESTS: OnceLock<Mutex<HashMap<(String, String), usize>>> =
     OnceLock::new();
 static PARSE_TIME_ASYNC_CHUNKED_TAIL_GATES: OnceLock<
     Mutex<HashMap<String, Arc<tokio::sync::Notify>>>,
@@ -39,19 +39,21 @@ pub(super) fn next_parser_image_fetch_policy_token() -> String {
     format!("parser-image-fetch-policy-{token}")
 }
 
-fn parser_image_fetch_policy_asset_requests() -> &'static Mutex<HashMap<String, usize>> {
+fn parser_image_fetch_policy_asset_requests() -> &'static Mutex<HashMap<(String, String), usize>> {
     PARSER_IMAGE_FETCH_POLICY_ASSET_REQUESTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn record_parser_image_fetch_policy_asset_request(token: &str) {
+fn record_parser_image_fetch_policy_asset_request(token: &str, source: &str) {
     let mut requests = parser_image_fetch_policy_asset_requests().lock();
-    *requests.entry(token.to_owned()).or_default() += 1;
+    *requests
+        .entry((token.to_owned(), source.to_owned()))
+        .or_default() += 1;
 }
 
-pub(super) fn parser_image_fetch_policy_asset_request_count(token: &str) -> usize {
+pub(super) fn parser_image_fetch_policy_asset_request_count(token: &str, source: &str) -> usize {
     parser_image_fetch_policy_asset_requests()
         .lock()
-        .get(token)
+        .get(&(token.to_owned(), source.to_owned()))
         .copied()
         .unwrap_or(0)
 }
@@ -4114,8 +4116,8 @@ pub(super) async fn detached_eager_images_delay_load_page() -> Html<&'static str
 pub(super) async fn asset_parser_image_fetch_policy_svg(
     Query(params): Query<HashMap<String, String>>,
 ) -> Response {
-    if let Some(token) = params.get("token") {
-        record_parser_image_fetch_policy_asset_request(token);
+    if let (Some(token), Some(source)) = (params.get("token"), params.get("source")) {
+        record_parser_image_fetch_policy_asset_request(token, source);
     }
     Response::builder()
         .header(CONTENT_TYPE, HeaderValue::from_static("image/svg+xml"))

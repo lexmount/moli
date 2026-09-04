@@ -438,7 +438,9 @@ struct ScriptExecutionReportSnapshotSignature {
     globals: usize,
     globals_snapshot_state: crate::types::ScriptGlobalsSnapshotState,
     observable_outputs: usize,
-    network_outputs: usize,
+    subresource_network_records: usize,
+    websocket_network_events: usize,
+    websocket_lifecycle_events: usize,
 }
 
 impl ScriptExecutionReportSnapshotSignature {
@@ -448,7 +450,9 @@ impl ScriptExecutionReportSnapshotSignature {
             globals: report.globals().len(),
             globals_snapshot_state: report.globals_snapshot_state(),
             observable_outputs: report.observable_output_items().len(),
-            network_outputs: report.network_output_items().len(),
+            subresource_network_records: report.subresource_network_records().len(),
+            websocket_network_events: report.websocket_network_events().len(),
+            websocket_lifecycle_events: report.websocket_lifecycle_events().len(),
         }
     }
 }

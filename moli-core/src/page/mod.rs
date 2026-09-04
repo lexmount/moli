@@ -167,8 +167,7 @@ pub use protocol_support::{
 };
 pub use renderer_command_support::DocumentNodeClientRectResolution;
 pub use renderer_command_support::{
-    DocumentNodeRuntimeObjectResolution, PageNetworkOutputUpdate, PageObservableOutputUpdate,
-    TestingOutcome,
+    DocumentNodeRuntimeObjectResolution, PageObservableOutputUpdate, TestingOutcome,
 };
 
 #[cfg(test)]

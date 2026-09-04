@@ -5,9 +5,8 @@ use url::Url;
 
 use super::dom_protocol_support::DocumentNodeObjectSnapshot;
 use super::protocol_support::{
-    ChildFrameTreeSnapshot, ScriptExecutionReport, ScriptNetworkOutputItem,
-    ScriptObservableOutputItem, SubresourceNetworkRecord, WebSocketLifecycleEvent,
-    WebSocketNetworkEvent,
+    ChildFrameTreeSnapshot, ScriptExecutionReport, ScriptObservableOutputItem,
+    SubresourceNetworkRecord, WebSocketLifecycleEvent, WebSocketNetworkEvent,
 };
 use super::{CompletedPageCommand, Page, PendingPageCommand};
 use crate::renderer::{
@@ -33,11 +32,6 @@ use crate::renderer::{
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone, Copy)]
-pub struct PageNetworkOutputUpdate<'a> {
-    network_output_items: &'a [ScriptNetworkOutputItem],
-}
 
 #[derive(Debug)]
 pub struct PageObservableOutputUpdate<'a> {
@@ -66,20 +60,8 @@ pub enum DocumentNodeClientRectResolution {
 }
 
 // ---------------------------------------------------------------------------
-// PageNetworkOutputUpdate / PageObservableOutputUpdate / TestingOutcome impls
+// PageObservableOutputUpdate / TestingOutcome impls
 // ---------------------------------------------------------------------------
-
-impl<'a> PageNetworkOutputUpdate<'a> {
-    pub fn append(network_output_items: &'a [ScriptNetworkOutputItem]) -> Self {
-        Self {
-            network_output_items,
-        }
-    }
-
-    pub fn network_output_items(&self) -> &'a [ScriptNetworkOutputItem] {
-        self.network_output_items
-    }
-}
 
 impl<'a> PageObservableOutputUpdate<'a> {
     pub fn append(observable_output_items: &'a [ScriptObservableOutputItem]) -> Self {
@@ -228,11 +210,6 @@ impl Page {
             self.subresource_network_records().len(),
             self.websocket_network_events().len(),
         )
-    }
-
-    pub fn take_network_output_update(&mut self) -> PageNetworkOutputUpdate<'_> {
-        let network_output_items = self.page_state.script_execution().network_output_items();
-        PageNetworkOutputUpdate::append(network_output_items)
     }
 
     pub fn take_observable_output_update(&mut self) -> PageObservableOutputUpdate<'_> {

@@ -3778,7 +3778,7 @@ fn page_report_capture_reuses_unchanged_network_report() {
     let first = page_vm
         .capture_page_state()
         .expect("first page state capture");
-    assert_eq!(first.report.network_output_items().len(), 1);
+    assert_eq!(first.report.subresource_network_records().len(), 1);
     let second = page_vm
         .capture_page_state()
         .expect("second page state capture");

@@ -545,7 +545,6 @@ pub struct ScriptExecutionReport {
     console_messages: Vec<String>,
     lifecycle_errors: Vec<String>,
     inspector_issues: Vec<InspectorIssueSnapshot>,
-    network_output_items: Vec<ScriptNetworkOutputItem>,
     subresource_network_records: Vec<SubresourceNetworkRecord>,
     staged_subresource_lifecycle: Option<Box<StagedSubresourceReportState>>,
     websocket_network_events: Vec<WebSocketNetworkEvent>,
@@ -563,9 +562,6 @@ struct StagedSubresourceReportState {
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ScriptNetworkOutput {
     items: Vec<ScriptNetworkOutputItem>,
-    subresource_network_records: Vec<SubresourceNetworkRecord>,
-    websocket_network_events: Vec<WebSocketNetworkEvent>,
-    websocket_lifecycle_events: Vec<WebSocketLifecycleEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -757,23 +753,7 @@ impl ScriptNetworkOutput {
     }
 
     pub fn push_item(&mut self, item: ScriptNetworkOutputItem) {
-        self.items.push(item.clone());
-        match item {
-            ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => {
-                self.subresource_network_records.push(*record);
-            }
-            ScriptNetworkOutputItem::SubresourceRequestStarted(_)
-            | ScriptNetworkOutputItem::SubresourceResponseStarted(_)
-            | ScriptNetworkOutputItem::SubresourceDataReceived(_)
-            | ScriptNetworkOutputItem::SubresourceEventSourceMessageReceived(_)
-            | ScriptNetworkOutputItem::SubresourceBodyFinished(_) => {}
-            ScriptNetworkOutputItem::WebSocketNetworkEvent(event) => {
-                self.websocket_network_events.push(event);
-            }
-            ScriptNetworkOutputItem::WebSocketLifecycleEvent(event) => {
-                self.websocket_lifecycle_events.push(event);
-            }
-        }
+        self.items.push(item);
     }
 }
 
@@ -890,10 +870,6 @@ impl ScriptExecutionReport {
         &self.websocket_lifecycle_events
     }
 
-    pub fn network_output_items(&self) -> &[ScriptNetworkOutputItem] {
-        &self.network_output_items
-    }
-
     pub fn observable_output_items(&self) -> &[ScriptObservableOutputItem] {
         &self.observable_output_items
     }
@@ -926,7 +902,6 @@ impl ScriptExecutionReport {
     }
 
     fn push_network_output_item(&mut self, item: ScriptNetworkOutputItem) {
-        self.network_output_items.push(item.clone());
         match item {
             ScriptNetworkOutputItem::SubresourceNetworkRecord(record) => {
                 if let Some(handle) = record.request_handle() {
@@ -3752,14 +3727,6 @@ mod tests {
             report.websocket_lifecycle_events(),
             std::slice::from_ref(&lifecycle_event)
         );
-        assert_eq!(
-            report.network_output_items(),
-            &[
-                ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record.clone())),
-                ScriptNetworkOutputItem::WebSocketNetworkEvent(websocket_event.clone()),
-                ScriptNetworkOutputItem::WebSocketLifecycleEvent(lifecycle_event.clone()),
-            ],
-        );
     }
 
     #[test]
@@ -3820,14 +3787,6 @@ mod tests {
         };
         assert_eq!(*status, 200);
         assert_eq!(response_body.try_bytes().unwrap().as_ref(), &[1, 2, 3]);
-        assert_eq!(
-            report.network_output_items(),
-            &[
-                ScriptNetworkOutputItem::SubresourceRequestStarted(Box::new(request)),
-                ScriptNetworkOutputItem::SubresourceResponseStarted(Box::new(response)),
-                ScriptNetworkOutputItem::SubresourceBodyFinished(Box::new(body)),
-            ],
-        );
     }
 
     #[test]
@@ -3869,102 +3828,6 @@ mod tests {
                 ScriptNetworkOutputItem::WebSocketNetworkEvent(websocket_event),
             ],
             "script network output iteration should preserve explicit producer append order"
-        );
-    }
-
-    #[test]
-    fn script_network_output_from_items_materializes_grouped_report_shape() {
-        let document_url = test_url("/");
-        let record = SubresourceNetworkRecord::failure(
-            Some("FRAME".to_owned()),
-            document_url.clone(),
-            test_url("/api"),
-            "GET".to_owned(),
-            Vec::new(),
-            None,
-            SubresourceResourceType::Fetch,
-            "network failed".to_owned(),
-        );
-        let websocket_event = WebSocketNetworkEvent::new(
-            7,
-            document_url.clone(),
-            test_url("/socket"),
-            WebSocketFrameDirection::Received,
-            WebSocketFrameOpcode::Text,
-            5,
-        );
-        let lifecycle_event =
-            WebSocketLifecycleEvent::open(7, document_url.clone(), test_url("/socket"));
-
-        let output = ScriptNetworkOutput::from_items([
-            ScriptNetworkOutputItem::WebSocketLifecycleEvent(lifecycle_event.clone()),
-            ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record.clone())),
-            ScriptNetworkOutputItem::WebSocketNetworkEvent(websocket_event.clone()),
-        ]);
-
-        assert_eq!(
-            output.subresource_network_records.as_slice(),
-            std::slice::from_ref(&record)
-        );
-        assert_eq!(
-            output.websocket_network_events.as_slice(),
-            std::slice::from_ref(&websocket_event)
-        );
-        assert_eq!(
-            output.websocket_lifecycle_events.as_slice(),
-            std::slice::from_ref(&lifecycle_event)
-        );
-        assert_eq!(
-            output.items.as_slice(),
-            &[
-                ScriptNetworkOutputItem::WebSocketLifecycleEvent(lifecycle_event.clone()),
-                ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record.clone())),
-                ScriptNetworkOutputItem::WebSocketNetworkEvent(websocket_event.clone()),
-            ],
-            "producer item order should survive materialization into grouped views"
-        );
-    }
-
-    #[test]
-    fn script_execution_report_preserves_network_output_item_order_from_producer_batch() {
-        let document_url = test_url("/");
-        let record = SubresourceNetworkRecord::failure(
-            Some("FRAME".to_owned()),
-            document_url.clone(),
-            test_url("/api"),
-            "GET".to_owned(),
-            Vec::new(),
-            None,
-            SubresourceResourceType::Fetch,
-            "network failed".to_owned(),
-        );
-        let websocket_event = WebSocketNetworkEvent::new(
-            7,
-            document_url.clone(),
-            test_url("/socket"),
-            WebSocketFrameDirection::Received,
-            WebSocketFrameOpcode::Text,
-            5,
-        );
-        let lifecycle_event =
-            WebSocketLifecycleEvent::open(7, document_url.clone(), test_url("/socket"));
-        let output = ScriptNetworkOutput::from_items([
-            ScriptNetworkOutputItem::WebSocketLifecycleEvent(lifecycle_event.clone()),
-            ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record.clone())),
-            ScriptNetworkOutputItem::WebSocketNetworkEvent(websocket_event.clone()),
-        ]);
-
-        let mut report = ScriptExecutionReport::default();
-        report.extend_network_output(output);
-
-        assert_eq!(
-            report.network_output_items(),
-            &[
-                ScriptNetworkOutputItem::WebSocketLifecycleEvent(lifecycle_event),
-                ScriptNetworkOutputItem::SubresourceNetworkRecord(Box::new(record)),
-                ScriptNetworkOutputItem::WebSocketNetworkEvent(websocket_event),
-            ],
-            "report should keep producer item order for later core/CDP output queues"
         );
     }
 

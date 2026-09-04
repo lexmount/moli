@@ -2,9 +2,7 @@ use moli_test_support as support;
 
 use anyhow::{Context, Result, anyhow};
 use moli_core::{
-    page::{
-        Page, ScriptNetworkOutputItem, SubresourceRequestInitiatorType, SubresourceResourceType,
-    },
+    page::{Page, SubresourceResourceType},
     runtime::{Browser, BrowserConfig as AppConfig, FetchDeadline, RenderedDomWaitUntil},
     testing::{JsValueSnapshot, ScriptRunOutcome, ScriptSkipReason},
 };
@@ -16,41 +14,21 @@ fn diagnostic_global<'a>(page: &'a Page, name: &str) -> Option<&'a JsValueSnapsh
     page.script_execution().global(name)
 }
 
-fn page_started_image_request(
-    page: &Page,
-    token: &str,
-    source: &str,
-    initiator_type: SubresourceRequestInitiatorType,
-) -> bool {
-    page.script_execution()
-        .network_output_items()
-        .iter()
-        .any(|item| match item {
-            ScriptNetworkOutputItem::SubresourceRequestStarted(request) => {
-                request.resource_type() == SubresourceResourceType::Image
-                    && request.request_initiator_type() == initiator_type
-                    && request.url().path() == "/assets/parser-image-fetch-policy.svg"
-                    && request.url().query().is_some_and(|query| {
-                        query.contains(token) && query.contains(&format!("source={source}"))
-                    })
-            }
-            _ => false,
-        })
-}
-
 async fn wait_for_parser_image_fetch_policy_asset_requests(
     token: &str,
+    source: &str,
     expected_count: usize,
 ) -> Result<()> {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
-        if support::parser_image_fetch_policy_asset_request_count(token) >= expected_count {
+        if support::parser_image_fetch_policy_asset_request_count(token, source) >= expected_count {
             return Ok(());
         }
         if Instant::now() >= deadline {
-            let actual_count = support::parser_image_fetch_policy_asset_request_count(token);
+            let actual_count =
+                support::parser_image_fetch_policy_asset_request_count(token, source);
             return Err(anyhow!(
-                "timed out waiting for {expected_count} parser image fixture request(s) token `{token}`; observed {actual_count}"
+                "timed out waiting for {expected_count} parser image fixture request(s) token `{token}`, source `{source}`; observed {actual_count}"
             ));
         }
         tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1155,20 +1133,12 @@ async fn fetch_with_load_skips_parser_image_fetch_by_default() -> Result<()> {
         )
         .await?;
 
-    assert!(!page_started_image_request(
-        &page,
-        &token,
-        "html",
-        SubresourceRequestInitiatorType::Parser
-    ));
-    assert!(!page_started_image_request(
-        &page,
-        &token,
-        "css",
-        SubresourceRequestInitiatorType::Css
-    ));
     assert_eq!(
-        support::parser_image_fetch_policy_asset_request_count(&token),
+        support::parser_image_fetch_policy_asset_request_count(&token, "html"),
+        0
+    );
+    assert_eq!(
+        support::parser_image_fetch_policy_asset_request_count(&token, "css"),
         0
     );
     assert!(
@@ -1198,34 +1168,24 @@ async fn fetch_with_load_defers_css_images_until_a_paint_layout() -> Result<()> 
             Duration::from_secs(5),
         )
         .await?;
-    wait_for_parser_image_fetch_policy_asset_requests(&token, 1).await?;
+    wait_for_parser_image_fetch_policy_asset_requests(&token, "html", 1).await?;
 
     assert!(
-        page_started_image_request(
-            &page,
-            &token,
-            "html",
-            SubresourceRequestInitiatorType::Parser
-        ),
-        "parser-discovered HTML image requests must preserve their parser initiator; network output: {:#?}",
-        page.script_execution().network_output_items()
+        support::parser_image_fetch_policy_asset_request_count(&token, "html") >= 1,
+        "the parser-discovered HTML image request must reach the network"
     );
-    assert!(
-        !page_started_image_request(&page, &token, "css", SubresourceRequestInitiatorType::Css),
+    assert_eq!(
+        support::parser_image_fetch_policy_asset_request_count(&token, "css"),
+        0,
         "a load-only observation must not scan CSS text or start an unrendered CSS image"
     );
 
     let pending = page.start_capture_screenshot()?;
     let completion = pending.wait().await?;
     let _ = page.finish_capture_screenshot(completion)?;
-    wait_for_parser_image_fetch_policy_asset_requests(&token, 2).await?;
+    wait_for_parser_image_fetch_policy_asset_requests(&token, "css", 1).await?;
 
-    assert!(page_started_image_request(
-        &page,
-        &token,
-        "css",
-        SubresourceRequestInitiatorType::Css
-    ));
+    assert!(support::parser_image_fetch_policy_asset_request_count(&token, "css") >= 1);
 
     server.shutdown().await;
     Ok(())
