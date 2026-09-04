@@ -6,6 +6,49 @@ use crate::{
 };
 
 #[tokio::test(flavor = "current_thread")]
+async fn user_agent_popstate_is_trusted_but_author_constructed_event_is_not() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let document_url = Url::parse("https://example.com/popstate-event-trust").unwrap();
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(
+            r##"
+history.pushState(null, "", "#one");
+globalThis.__popStateTrust = null;
+addEventListener("popstate", event => {
+  __popStateTrust = JSON.stringify([
+    event.isTrusted,
+    event instanceof PopStateEvent,
+    new PopStateEvent("popstate").isTrusted
+  ]);
+}, { once: true });
+history.back();
+"queued"
+"##,
+        )?;
+
+        assert!(
+            page_vm
+                .run_exact_selected_page_task_for_test(
+                    PageSelectedTaskTestSelector::HistoryTraversal,
+                    &loader
+                )
+                .await?,
+            "one exact history traversal should dispatch popstate"
+        );
+        assert_eq!(
+            page_vm.vm_mut().eval("__popStateTrust")?,
+            "[true,true,false]"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("popstate trust test should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn history_traversal_body_leaves_reaction_for_selected_completion() {
     run_page_vm_async_test(async move {
         let loader =
