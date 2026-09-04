@@ -296,14 +296,32 @@ impl JsContextHost {
                 } else {
                     existing_document_policy.as_ref()
                 };
+                // The internal initial empty Document starts with the creator
+                // URL. A later explicit about:blank navigation must run that
+                // URL through Referrer Policy even though it sends no request.
+                let document_referrer = if !is_new
+                    && attribute_bootstrap_changed
+                    && let ChildBrowsingContextBootstrap::Url(target) = &attribute_bootstrap
+                    && target.as_str() == "about:blank"
+                {
+                    let creator_policy =
+                        self.initial_child_about_blank_policy_container_from_parent(handle);
+                    moli_fetch::referrer_value(
+                        &creator_document_url,
+                        target,
+                        None,
+                        creator_policy.referrer_policy.as_deref(),
+                    )
+                    .unwrap_or_default()
+                } else if attribute_bootstrap_changed || is_new {
+                    creator_document_url.to_string()
+                } else {
+                    refresh_policy_source
+                        .map(|policy| policy.document_referrer.clone())
+                        .unwrap_or_else(|| creator_document_url.to_string())
+                };
                 let document_policy_container = ChildDocumentPolicyContainer {
-                    document_referrer: if attribute_bootstrap_changed || is_new {
-                        creator_document_url.to_string()
-                    } else {
-                        refresh_policy_source
-                            .map(|policy| policy.document_referrer.clone())
-                            .unwrap_or_else(|| creator_document_url.to_string())
-                    },
+                    document_referrer,
                     referrer_policy: refresh_policy_source
                         .and_then(|policy| policy.referrer_policy.clone()),
                     cross_origin_embedder_policy: refresh_policy_source
