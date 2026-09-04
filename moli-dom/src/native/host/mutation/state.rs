@@ -987,7 +987,20 @@ impl DomHost {
     }
 
     pub(in crate::native) fn finish_parsing_script_children(&mut self, handle: DomHandle) -> bool {
-        let Some(source) = self.dom.direct_text_content(handle) else {
+        let children = self.child_handles(handle).collect::<Vec<_>>();
+        for child in children {
+            if let Some(text) = self
+                .node_mut(child)
+                .and_then(|node| node.data_mut().as_text_mut())
+            {
+                text.finish_appending();
+            }
+        }
+        let Some(source) = self
+            .dom
+            .node(handle)
+            .map(|node| node.shared_direct_text_content(&self.dom))
+        else {
             return false;
         };
         let did_change = {
@@ -997,7 +1010,7 @@ impl DomHost {
             else {
                 return false;
             };
-            element.finish_parsing_script_children(&source)
+            element.finish_parsing_script_children(source)
         };
         if did_change {
             self.record_mutation(MutationScope::LocalState);
