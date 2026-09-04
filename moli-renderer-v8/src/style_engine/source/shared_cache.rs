@@ -99,7 +99,11 @@ impl SharedStyleSourceContents {
         Arc::clone(&self.source_metadata.font_faces)
     }
 
-    pub(super) fn import_urls(&self) -> Arc<[url::Url]> {
+    pub(super) fn import_urls(&self) -> &[url::Url] {
+        self.source_metadata.import_urls.as_ref()
+    }
+
+    pub(super) fn import_urls_handle(&self) -> Arc<[url::Url]> {
         Arc::clone(&self.source_metadata.import_urls)
     }
 
