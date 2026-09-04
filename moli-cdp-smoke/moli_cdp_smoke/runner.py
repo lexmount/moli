@@ -339,7 +339,7 @@ PAGE_GROUPS: tuple[SmokeGroup, ...] = (
 BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
     SmokeGroup(
         "emulation-storage",
-        "Playwright screenshot-clip boundary, viewport, storage/cookie isolation, IndexedDB, and profile overrides.",
+        "Viewport, storage, profile, and detailed locale/timezone override contracts.",
         "browser",
         run_emulation_storage_group,
     ),

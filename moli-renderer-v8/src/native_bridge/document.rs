@@ -944,12 +944,13 @@ fn document_last_modified_getter_function<'s>(
         return;
     };
     let runtime = unsafe { &*runtime_ptr };
+    let timezone_override = runtime.timezone_override();
     let value = moli_time::format_document_last_modified_value(
         runtime
             .dom_host()
             .document_source_last_modified_for_handle(handle),
         moli_time::unix_epoch_millis(),
-        runtime.timezone_override(),
+        timezone_override.as_deref(),
     );
     set_document_string_return_value(scope, &mut rv, &value);
 }

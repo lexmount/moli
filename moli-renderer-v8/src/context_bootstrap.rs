@@ -153,9 +153,6 @@ pub(crate) use selection_surface::{
     selection_value_for_window, sync_selection_owner_document_for_window,
 };
 pub(crate) use shared::{dom_time_since_origin_millis, unix_epoch_millis};
-pub(crate) use window_runtime::{
-    set_date_locale_override_for_current_context, set_date_timezone_override_for_current_context,
-};
 mod specs;
 mod stream_adapter;
 mod stream_objects;

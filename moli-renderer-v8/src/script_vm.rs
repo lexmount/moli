@@ -627,9 +627,7 @@ use super::native_bridge::element::ClientRect;
 use super::{
     context_bootstrap::{
         dispatch_media_query_list_change_events as dispatch_media_query_list_change_events_for_scope,
-        set_date_locale_override_for_current_context,
-        set_date_timezone_override_for_current_context, set_window_navigator_identity,
-        sync_global_location_runtime_state,
+        set_window_navigator_identity, sync_global_location_runtime_state,
     },
     custom_elements,
     document_runtime::{CurrentScriptContextSpec, DocumentRuntime, DomHandle},
@@ -5002,38 +5000,12 @@ impl ScriptVm {
             .set_permission_overrides(overrides);
     }
 
-    pub(super) fn set_locale_override(&mut self, locale: Option<&str>) {
-        self._context_host.borrow_mut().set_locale_override(locale);
+    pub(super) fn set_locale_override(&self, locale: Option<&str>) {
+        self._context_host.borrow().set_locale_override(locale);
     }
 
-    pub(super) fn set_locale_override_and_sync_surface(
-        &mut self,
-        locale: Option<&str>,
-    ) -> Result<()> {
-        self.set_locale_override(locale);
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
-        self.with_context_scope_by_ptr(context_ptr, |scope, _| {
-            set_date_locale_override_for_current_context(scope, locale);
-            Ok(())
-        })
-    }
-
-    pub(super) fn set_timezone_override(&mut self, timezone: Option<&str>) {
-        self._context_host
-            .borrow_mut()
-            .set_timezone_override(timezone);
-    }
-
-    pub(super) fn set_timezone_override_and_sync_surface(
-        &mut self,
-        timezone: Option<&str>,
-    ) -> Result<()> {
-        self.set_timezone_override(timezone);
-        let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
-        self.with_context_scope_by_ptr(context_ptr, |scope, _| {
-            set_date_timezone_override_for_current_context(scope, timezone);
-            Ok(())
-        })
+    pub(super) fn set_timezone_override(&self, timezone: Option<&str>) {
+        self._context_host.borrow().set_timezone_override(timezone);
     }
 
     pub(super) fn set_emulated_media(
