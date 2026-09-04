@@ -37,7 +37,7 @@ pub(super) use surface::{
     window_inner_surface_width, window_inner_width_getter, window_navigator_getter,
     window_opener_getter, window_opener_setter, window_outer_height_getter,
     window_outer_width_getter, window_parent_getter, window_performance_getter,
-    window_screen_getter, window_scroll_x_getter,
-    window_scroll_y_getter, window_self_getter, window_speech_synthesis_getter, window_top_getter,
-    window_visual_viewport_getter, window_window_getter,
+    window_screen_getter, window_scroll_x_getter, window_scroll_y_getter, window_self_getter,
+    window_speech_synthesis_getter, window_top_getter, window_visual_viewport_getter,
+    window_window_getter,
 };
