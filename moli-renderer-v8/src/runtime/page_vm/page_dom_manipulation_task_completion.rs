@@ -37,6 +37,7 @@ impl PageVm {
             PageDomManipulationTurnAction::PopupLoadEvent(action) => {
                 action.into_page_task_completion()
             }
+            PageDomManipulationTurnAction::PopupClose(action) => action.into_page_task_completion(),
             PageDomManipulationTurnAction::ConnectedStyleEvent(action) => {
                 return self
                     .finish_selected_page_connected_style_event_task(action, loader)
