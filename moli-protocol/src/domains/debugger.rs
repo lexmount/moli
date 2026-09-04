@@ -186,10 +186,7 @@ mod tests {
             .conn
             .finish_renderer_document_navigation_for_owner(&navigation_owner, &navigation);
         ctx.conn
-            .clear_pending_document_navigation_for_owner_if_loader_matches(
-                &navigation_owner,
-                "LOADER-debugger-interrupt",
-            );
+            .clear_pending_document_navigation_for_owner_if_matches(&navigation_owner, &navigation);
     }
 
     #[tokio::test]

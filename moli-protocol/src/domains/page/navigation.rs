@@ -3245,7 +3245,6 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
 ) {
     let navigation_owner = state.owner.clone();
     let navigation_session_id = navigation_owner.session_id().map(str::to_owned);
-    let navigation_loader_id = state.loader_id.clone();
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
@@ -3395,10 +3394,7 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             ),
         }
     }
-    conn.clear_pending_document_navigation_for_owner_if_loader_matches(
-        &navigation_owner,
-        &navigation_loader_id,
-    );
+    conn.clear_pending_document_navigation_for_owner_if_matches(&navigation_owner, &token);
 }
 
 fn push_navigation_commit_error(

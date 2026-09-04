@@ -2352,22 +2352,22 @@ impl CdpConnection {
             .is_ok_and(|slot| slot.accepts_document_body_completion_event(token))
     }
 
-    pub(crate) fn clear_pending_document_navigation_for_owner_if_loader_matches(
+    pub(crate) fn clear_pending_document_navigation_for_owner_if_matches(
         &mut self,
         owner: &CommandOwnerScope,
-        loader_id: &str,
-    ) {
+        navigation: &NavigationId,
+    ) -> bool {
         let Some((browser_context_id, target_id)) = self.target_owner_identity_for_owner(owner)
         else {
-            return;
+            return false;
         };
-        if let Some(browser_context) = self.browser_context_by_id_mut(&browser_context_id) {
-            browser_context.clear_pending_document_navigation_for_target_if_loader_matches(
-                target_id.as_deref(),
-                loader_id,
-            );
-        }
-        self.discard_uncommitted_main_document_resource_for_owner(owner, loader_id);
+        self.browser_context_by_id_mut(&browser_context_id)
+            .is_some_and(|browser_context| {
+                browser_context.clear_pending_document_navigation_for_target_if_matches(
+                    target_id.as_deref(),
+                    navigation,
+                )
+            })
     }
 
     pub fn take_scheduler_events(&mut self) -> Vec<CdpSchedulerEvent> {

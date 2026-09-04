@@ -1158,6 +1158,14 @@ impl BrowserContext {
         loader_id: String,
     ) -> Option<NavigationId> {
         let target = self.page_target_mut(target_id)?;
+        if target.runtime_slot.has_pending_document_navigation()
+            && let Some(loader_id) = target.runtime_slot.current_document_loader_id()
+        {
+            target
+                .owner_state
+                .page_resource_store
+                .discard_uncommitted_loader(loader_id);
+        }
         let token = target.runtime_slot.start_document_navigation(loader_id);
         self.mark_target_initial_empty_document_pending_cross_document_navigation(target_id);
         Some(token)
@@ -1241,22 +1249,37 @@ impl BrowserContext {
             .is_some_and(|target| target.runtime_slot().has_pending_document_navigation())
     }
 
-    pub(crate) fn clear_pending_document_navigation_for_target_if_loader_matches(
+    pub(crate) fn clear_pending_document_navigation_for_target_if_matches(
         &mut self,
         target_id: Option<&str>,
-        loader_id: &str,
-    ) {
-        let Some(target_id) = target_id else {
-            return;
+        navigation: &NavigationId,
+    ) -> bool {
+        let Some(target) = target_id.and_then(|target_id| self.page_target_mut(target_id)) else {
+            return false;
         };
-        let cleared = self.page_target_mut(target_id).is_some_and(|target| {
-            target
-                .runtime_slot
-                .clear_pending_document_navigation_if_loader_matches(loader_id)
-        });
-        if cleared {
-            self.clear_target_initial_empty_document_pending_cross_document_navigation(target_id);
+        if !target
+            .runtime_slot
+            .accepts_document_body_completion_event(navigation)
+        {
+            return false;
         }
+        // A committed error page can still leave an uncommitted response body.
+        // Retire that projection without cancelling the committed navigation.
+        if let Some(loader_id) = target.runtime_slot.current_document_loader_id() {
+            target
+                .owner_state
+                .page_resource_store
+                .discard_uncommitted_loader(loader_id);
+        }
+        let cleared = target
+            .runtime_slot
+            .clear_pending_document_navigation_if_matches(navigation);
+        if cleared {
+            target
+                .owner_state
+                .clear_initial_empty_document_pending_cross_document_navigation();
+        }
+        cleared
     }
 
     pub(crate) fn commit_document_navigation_if_matches(&mut self, token: &NavigationId) {

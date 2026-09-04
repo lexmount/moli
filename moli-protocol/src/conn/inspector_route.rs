@@ -171,9 +171,12 @@ impl CdpConnection {
         transaction: CommittedRendererAgentAttachment,
     ) -> Result<(), String> {
         self.validate_navigation_target_owner_for_scope(owner, transaction.navigation())?;
+        let navigation = *transaction.navigation();
         self.runtime_session_owner_slot_mut_for_owner(owner)?
             .rollback_committed_renderer_agent_candidate(transaction)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        self.clear_pending_document_navigation_for_owner_if_matches(owner, &navigation);
+        Ok(())
     }
 
     pub(crate) fn finish_renderer_document_navigation_for_owner(
@@ -253,6 +256,181 @@ mod tests {
     use crate::testing::TestContext;
 
     #[test]
+    fn rollback_retires_navigation_initial_document_and_resource_state() {
+        let mut context = BrowserContext::new("BID-rollback".to_owned());
+        context.set_active_target_id("TID-rollback");
+        context.begin_active_target_initial_empty_document("about:blank".to_owned());
+        let navigation = context
+            .start_document_navigation_for_target("TID-rollback", "LOADER-rollback".to_owned())
+            .unwrap();
+        let cancellation = context
+            .document_navigation_cancellation_handle(&navigation)
+            .unwrap();
+        context
+            .active_page_target_mut()
+            .owner_state
+            .page_resource_store
+            .record_main_document_body(
+                "TID-rollback".to_owned(),
+                "LOADER-rollback".to_owned(),
+                "https://example.test/".parse().unwrap(),
+                Vec::new(),
+                false,
+                crate::conn::CapturedBody::from_string("candidate".to_owned()),
+            );
+        let mut conn = CdpConnection::new();
+        conn.install_browser_context_fixture_for_test(context);
+        let owner = CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: "BID-rollback".to_owned(),
+            target_id: "TID-rollback".to_owned(),
+            session_key: DevToolsSessionKey::Primary,
+        });
+        let candidate = conn
+            .prepare_renderer_agent_candidate_token_for_owner(
+                &owner,
+                &navigation,
+                RendererDevToolsAgentToken::allocate(),
+            )
+            .unwrap();
+        let transaction = conn
+            .commit_renderer_agent_candidate_for_owner(
+                &owner,
+                candidate,
+                RendererPageResidenceIdentity::new(
+                    moli_core::RendererOwnerLocalHostId::new_for_testing(7),
+                    moli_core::PageId::new_for_testing(8),
+                ),
+            )
+            .unwrap();
+
+        conn.rollback_committed_renderer_agent_candidate_for_owner(&owner, transaction)
+            .unwrap();
+
+        assert!(cancellation.is_cancelled());
+        assert!(!conn.accepts_pending_document_navigation_for_owner(&owner, &navigation));
+        let target = conn.browser_context.as_ref().unwrap().active_page_target();
+        assert!(
+            !target
+                .owner_state
+                .initial_empty_document_pending_cross_document_navigation(),
+            "rollback must retire the initial document's pending state with its navigation"
+        );
+        assert!(target.owner_state.page_resource_store.is_empty());
+    }
+
+    #[test]
+    fn navigation_cleanup_uses_exact_identity_for_requests_and_resources() {
+        let mut context = BrowserContext::new("BID-cleanup".to_owned());
+        context.set_active_target_id("TID-cleanup");
+        context.begin_active_target_initial_empty_document("about:blank".to_owned());
+        let mut conn = CdpConnection::new();
+        conn.install_browser_context_fixture_for_test(context);
+        let owner = CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: "BID-cleanup".to_owned(),
+            target_id: "TID-cleanup".to_owned(),
+            session_key: DevToolsSessionKey::Primary,
+        });
+        let record_candidate_body = |conn: &mut CdpConnection| {
+            assert!(conn.record_main_document_resource_body_for_owner(
+                &owner,
+                "TID-cleanup".to_owned(),
+                "LOADER-reused".to_owned(),
+                "https://example.test/".parse().unwrap(),
+                Vec::new(),
+                false,
+                crate::conn::CapturedBody::from_string("candidate".to_owned()),
+            ));
+        };
+        let first = conn
+            .start_document_navigation_for_owner(&owner, "LOADER-reused".to_owned())
+            .unwrap();
+        record_candidate_body(&mut conn);
+        let second = conn
+            .start_document_navigation_for_owner(&owner, "LOADER-reused".to_owned())
+            .unwrap();
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .owner_state
+                .page_resource_store
+                .is_empty(),
+            "superseding a request must retire its candidate body"
+        );
+        record_candidate_body(&mut conn);
+        let cancellation = conn
+            .document_navigation_cancellation_handle(&second)
+            .unwrap();
+
+        assert!(!conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &first));
+        assert!(!cancellation.is_cancelled());
+        assert!(conn.accepts_pending_document_navigation_for_owner(&owner, &second));
+        let target = conn.browser_context.as_ref().unwrap().active_page_target();
+        assert!(
+            target
+                .owner_state
+                .initial_empty_document_pending_cross_document_navigation()
+        );
+        assert_eq!(
+            target.owner_state.page_resource_store.retained_body_bytes(),
+            9
+        );
+
+        assert!(conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &second));
+        assert!(cancellation.is_cancelled());
+        assert!(!conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &second));
+        let target = conn.browser_context.as_ref().unwrap().active_page_target();
+        assert!(
+            !target
+                .owner_state
+                .initial_empty_document_pending_cross_document_navigation()
+        );
+        assert!(target.owner_state.page_resource_store.is_empty());
+
+        let committed = conn
+            .start_document_navigation_for_owner(&owner, "LOADER-reused".to_owned())
+            .unwrap();
+        let cancellation = conn
+            .document_navigation_cancellation_handle(&committed)
+            .unwrap();
+        record_candidate_body(&mut conn);
+        conn.commit_document_navigation_for_owner_if_matches(&owner, &committed);
+        assert!(!conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &committed));
+        assert!(!cancellation.is_cancelled());
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .owner_state
+                .page_resource_store
+                .is_empty()
+        );
+
+        record_candidate_body(&mut conn);
+        assert!(conn.commit_main_document_resource_for_owner(
+            &owner,
+            "TID-cleanup".to_owned(),
+            "LOADER-reused".to_owned(),
+            "https://example.test/".parse().unwrap(),
+            Vec::new(),
+            false,
+            None,
+        ));
+        assert!(!conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &committed));
+        let target = conn.browser_context.as_ref().unwrap().active_page_target();
+        assert_eq!(
+            target.runtime_slot.current_document_loader_id(),
+            Some("LOADER-reused")
+        );
+        assert_eq!(
+            target.owner_state.page_resource_store.retained_body_bytes(),
+            9
+        );
+    }
+
+    #[test]
     fn navigation_identity_cannot_authorize_a_different_target_with_the_same_loader() {
         let mut context = BrowserContext::new("BID-navigation-route".to_owned());
         context.set_active_target_id("TID-first");
@@ -276,6 +454,7 @@ mod tests {
         });
         assert!(!conn.accepts_pending_document_navigation_for_owner(&owner, &first));
         conn.commit_document_navigation_for_owner_if_matches(&owner, &first);
+        assert!(!conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &first));
         assert!(conn.accepts_pending_document_navigation_for_owner(&owner, &second));
         assert!(
             conn.prepare_renderer_agent_candidate_token_for_owner(
