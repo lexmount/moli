@@ -31,7 +31,7 @@ impl JsContextHost {
             }
         }
         self.sync_existing_child_browsing_context_runtime_surface_from_seed(scope, handle);
-        self.queue_child_browsing_context_navigation_to_url(handle, &url)
+        self.queue_child_browsing_context_navigation_to_url(handle, &url, None)
     }
 
     pub(crate) fn navigate_child_browsing_context_with_request(
@@ -74,13 +74,14 @@ impl JsContextHost {
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.apply_queued_navigation_to_entry_seed(&url, replace_current);
         }
-        self.queue_child_browsing_context_navigation_to_url(handle, &url)
+        self.queue_child_browsing_context_navigation_to_url(handle, &url, None)
     }
 
     pub(crate) fn queue_child_browsing_context_navigation_without_seed_update(
         &mut self,
         handle: DomHandle,
         resolved_url: &str,
+        initiator_url: Option<Url>,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -88,7 +89,7 @@ impl JsContextHost {
         let Some(url) = Url::parse(resolved_url).ok() else {
             return false;
         };
-        self.queue_child_browsing_context_navigation_to_url(handle, &url)
+        self.queue_child_browsing_context_navigation_to_url(handle, &url, initiator_url)
     }
 
     pub(crate) fn queue_deferred_child_browsing_context_navigation_from_entry_seed(
@@ -110,6 +111,7 @@ impl JsContextHost {
             .set_child_browsing_context_pending_navigation(
                 handle,
                 ChildBrowsingContextBootstrap::Url(url),
+                None,
                 false,
             )
             .is_none()
@@ -156,6 +158,7 @@ impl JsContextHost {
             .set_child_browsing_context_pending_navigation(
                 handle,
                 ChildBrowsingContextBootstrap::Url(url),
+                None,
                 false,
             )
             .is_none()
@@ -184,6 +187,7 @@ impl JsContextHost {
             .set_child_browsing_context_pending_navigation(
                 handle,
                 ChildBrowsingContextBootstrap::Request(request),
+                None,
                 false,
             )
             .is_none()
@@ -197,10 +201,11 @@ impl JsContextHost {
         &mut self,
         handle: DomHandle,
         resolved_url: &str,
+        initiator_url: Option<Url>,
     ) -> bool {
         let Some(url) = Url::parse(resolved_url).ok() else {
             return false;
         };
-        self.queue_child_browsing_context_navigation_to_url(handle, &url)
+        self.queue_child_browsing_context_navigation_to_url(handle, &url, initiator_url)
     }
 }
