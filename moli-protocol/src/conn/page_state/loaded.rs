@@ -177,19 +177,26 @@ impl PageTargetHost {
                 .install_pending_renderer_call_replacements(replacements);
         }
 
-        self.owner_state.mark_initial_empty_document_exited();
+        self.runtime_slot
+            .page_slot_mut()
+            .navigation
+            .mark_initial_empty_document_exited();
         if let Some(previous_title) = previous_title {
-            self.owner_state
+            self.runtime_slot
+                .page_slot_mut()
+                .navigation
                 .refresh_current_navigation_history_title(previous_title);
         }
         let committed_document_title = page.document_title();
-        self.owner_state.record_loaded_page_navigation_history((
-            history_url.to_string(),
-            committed_document_title.clone(),
-        ));
+        self.runtime_slot
+            .page_slot_mut()
+            .navigation
+            .record_loaded_page_navigation_history((
+                history_url.to_string(),
+                committed_document_title.clone(),
+            ));
         self.owner_state.clear_committed_document_navigation_state();
-        self.owner_state
-            .commit_document_title(committed_document_title);
+        self.commit_document_title(committed_document_title);
         for session in self.devtools_sessions.states_mut() {
             session.clear_runtime_remote_object_tracking();
             session

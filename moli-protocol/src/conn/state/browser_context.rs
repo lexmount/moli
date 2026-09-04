@@ -35,7 +35,6 @@ use super::{
     page_target_host::{PageTargetHost, PageTargetRegistry},
     service_worker_target::ServiceWorkerTargetState,
     shared_worker_target::SharedWorkerTargetState,
-    target_state::TargetOwnerState,
 };
 
 pub struct BrowserContext {
@@ -887,7 +886,7 @@ impl BrowserContext {
                 .count(),
             "ownerStates": self.page_targets.iter().map(|target| json!({
                 "targetId": target.target_id(),
-                "ownerState": target.owner_state.moli_memory_diagnostics(),
+                "ownerState": self.target_owner_diagnostics(target),
             })).collect::<Vec<_>>(),
         });
         json!({
@@ -957,9 +956,36 @@ impl BrowserContext {
             "activeFetch": active_target
                 .map(|target| target.fetch_owner.moli_memory_diagnostics()),
             "activeOwnerState": active_target
-                .map(|target| target.owner_state.moli_memory_diagnostics()),
+                .map(|target| self.target_owner_diagnostics(target)),
             "targetHosts": target_host_state_diagnostics,
         })
+    }
+
+    fn target_owner_diagnostics(&self, target: &PageTargetHost) -> Value {
+        let navigation = &target.runtime_slot.page_slot().navigation;
+        let initial = navigation.initial_empty_document_state().map(|document| {
+            let creator = document.creator().map(|creator| json!({
+                "targetId": self.page_targets.iter()
+                    .find(|target| target.web_contents_id() == creator.web_contents_id())
+                    .map(PageTargetHost::target_id),
+                "securityOrigin": creator.security_origin(),
+                "secureContextType": creator.secure_context_type(),
+            }));
+            json!({
+                "targetId": target.target_id(),
+                "initialUrl": document.initial_url(),
+                "creator": creator,
+                "materialized": document.materialized(),
+                "exited": document.exited(),
+                "pendingCrossDocumentNavigation": navigation.initial_empty_document_pending_cross_document_navigation(),
+                "isOnInitialEmptyDocument": document.is_on_initial_empty_document(),
+            })
+        });
+        let mut diagnostics = target.owner_state.moli_memory_diagnostics();
+        diagnostics["initialEmptyDocument"] = json!(initial);
+        diagnostics["isDefault"] =
+            json!(target.owner_state.is_default() && navigation.is_default());
+        diagnostics
     }
 
     pub(crate) fn loaded_document_page_count(&self) -> usize {
@@ -1006,12 +1032,7 @@ impl BrowserContext {
         let Some(target) = self.page_target(target_id) else {
             return Ok(());
         };
-        materialized_initial_empty_document_missing_page_error(
-            target_id,
-            &target.owner_state,
-            target.has_loaded_page(),
-        )
-        .map_or(Ok(()), Err)
+        materialized_initial_empty_document_missing_page_error(target).map_or(Ok(()), Err)
     }
 
     pub(crate) fn can_install_current_initial_empty_document_page(&self, target_id: &str) -> bool {
@@ -1020,7 +1041,9 @@ impl BrowserContext {
         };
         !target.has_loaded_page()
             && target
-                .owner_state
+                .runtime_slot
+                .page_slot()
+                .navigation
                 .can_install_current_initial_empty_document_page()
     }
 
@@ -1034,12 +1057,12 @@ impl BrowserContext {
         let Some(target) = self.page_target(target_id) else {
             return false;
         };
-        let owner_state = &target.owner_state;
-        let Some(initial_url) = owner_state.initial_empty_document_url_if_current() else {
+        let navigation = &target.runtime_slot.page_slot().navigation;
+        let Some(initial_url) = navigation.initial_empty_document_url_if_current() else {
             return false;
         };
         target.target_url() != initial_url
-            && !owner_state.initial_empty_document_pending_cross_document_navigation()
+            && !navigation.initial_empty_document_pending_cross_document_navigation()
     }
 
     pub(crate) fn loaded_document_renderer_owner_ids_for_diagnostics(&self) -> HashSet<u64> {
@@ -1167,7 +1190,6 @@ impl BrowserContext {
                 .discard_uncommitted_loader(loader_id);
         }
         let token = target.runtime_slot.start_document_navigation(loader_id);
-        self.mark_target_initial_empty_document_pending_cross_document_navigation(target_id);
         Some(token)
     }
 
@@ -1271,26 +1293,19 @@ impl BrowserContext {
                 .page_resource_store
                 .discard_uncommitted_loader(loader_id);
         }
-        let cleared = target
+        target
             .runtime_slot
-            .clear_pending_document_navigation_if_matches(navigation);
-        if cleared {
-            target
-                .owner_state
-                .clear_initial_empty_document_pending_cross_document_navigation();
-        }
-        cleared
+            .clear_pending_document_navigation_if_matches(navigation)
     }
 
     pub(crate) fn commit_document_navigation_if_matches(&mut self, token: &NavigationId) {
-        let committed_target = self.page_targets.iter_mut().find_map(|target| {
-            target
+        for target in self.page_targets.iter_mut() {
+            if target
                 .runtime_slot
                 .commit_pending_document_navigation_if_matches(token)
-                .then(|| target.target_id().to_owned())
-        });
-        if let Some(target_id) = committed_target {
-            self.mark_target_initial_empty_document_exited(&target_id);
+            {
+                break;
+            }
         }
     }
 
@@ -1756,11 +1771,16 @@ impl BrowserContext {
 }
 
 fn materialized_initial_empty_document_missing_page_error(
-    target_id: &str,
-    owner_state: &TargetOwnerState,
-    has_loaded_page: bool,
+    target: &PageTargetHost,
 ) -> Option<String> {
-    if owner_state.has_materialized_current_initial_empty_document() && !has_loaded_page {
+    if target
+        .runtime_slot
+        .page_slot()
+        .navigation
+        .has_materialized_current_initial_empty_document()
+        && !target.has_loaded_page()
+    {
+        let target_id = target.target_id();
         return Some(format!(
             "TargetInitialEmptyDocumentMissingPage: target {target_id} has materialized current initial empty document without loaded Page"
         ));

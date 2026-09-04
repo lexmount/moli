@@ -311,7 +311,9 @@ mod tests {
         let target = conn.browser_context.as_ref().unwrap().active_page_target();
         assert!(
             !target
-                .owner_state
+                .runtime_slot
+                .page_slot()
+                .navigation
                 .initial_empty_document_pending_cross_document_navigation(),
             "rollback must retire the initial document's pending state with its navigation"
         );
@@ -369,7 +371,9 @@ mod tests {
         let target = conn.browser_context.as_ref().unwrap().active_page_target();
         assert!(
             target
-                .owner_state
+                .runtime_slot
+                .page_slot()
+                .navigation
                 .initial_empty_document_pending_cross_document_navigation()
         );
         assert_eq!(
@@ -383,7 +387,9 @@ mod tests {
         let target = conn.browser_context.as_ref().unwrap().active_page_target();
         assert!(
             !target
-                .owner_state
+                .runtime_slot
+                .page_slot()
+                .navigation
                 .initial_empty_document_pending_cross_document_navigation()
         );
         assert!(target.owner_state.page_resource_store.is_empty());
