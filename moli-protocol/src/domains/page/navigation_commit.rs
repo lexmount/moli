@@ -2,7 +2,7 @@ use url::Url;
 
 use crate::conn::{
     CdpConnection, CommandDispatchContext, CommittedRendererAgentAttachment,
-    DocumentNavigationToken, LoadedNavigationRendererAttachmentCommit, NavigationDispatchState,
+    LoadedNavigationRendererAttachmentCommit, NavigationDispatchState, NavigationId,
 };
 use crate::domains::activity::{
     MainDocumentDownloadNavigationActivity, MainDocumentNavigationActivity,
@@ -24,7 +24,7 @@ struct LoadedPageCommitOutcome {
 pub(super) async fn commit_loaded_navigation_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
-    token: Option<&DocumentNavigationToken>,
+    token: Option<&NavigationId>,
     state: NavigationDispatchState,
     navigation: MaterializedLoadedDocumentProgress,
     committed_renderer_attachment: Option<CommittedRendererAgentAttachment>,
@@ -231,7 +231,7 @@ pub(super) async fn commit_download_navigation_async(
 async fn restore_and_commit_loaded_navigation_page_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
-    token: Option<&DocumentNavigationToken>,
+    token: Option<&NavigationId>,
     state: &NavigationDispatchState,
     page: Page,
     final_url: &Url,
@@ -276,7 +276,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
                     tracing::debug!(
                         %error,
                         session_id = state.owner.session_id(),
-                        loader_id = token.loader_id,
+                        navigation_id = token.get(),
                         "dropping superseded renderer navigation candidate before commit"
                     );
                     return None;

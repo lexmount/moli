@@ -23,7 +23,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use super::{
     CdpConnection, CommandOwnerScope, DevToolsDocumentLifecycleWaitKey,
-    state::{BrowserContext, DocumentNavigationToken},
+    state::{BrowserContext, NavigationId},
 };
 
 mod delivery_route;
@@ -4315,23 +4315,20 @@ fn strip_moli_private_protocol_fields(mut message: Value) -> Value {
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct NavigationBackgroundEvent {
-    token: DocumentNavigationToken,
+    token: NavigationId,
     event: BackgroundProtocolEvent,
 }
 
 impl NavigationBackgroundEvent {
     #[cfg(test)]
-    pub(crate) fn protocol_message(token: DocumentNavigationToken, message: Value) -> Self {
+    pub(crate) fn protocol_message(token: NavigationId, message: Value) -> Self {
         Self {
             token,
             event: BackgroundProtocolEvent::immediate(message),
         }
     }
 
-    pub(crate) fn background_event(
-        token: DocumentNavigationToken,
-        event: BackgroundProtocolEvent,
-    ) -> Self {
+    pub(crate) fn background_event(token: NavigationId, event: BackgroundProtocolEvent) -> Self {
         Self { token, event }
     }
 

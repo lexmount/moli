@@ -537,7 +537,7 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         request_id: String,
-        document_navigation_token: Option<crate::conn::DocumentNavigationToken>,
+        document_navigation_token: Option<crate::conn::NavigationId>,
         navigation: crate::conn::NavigationDispatchState,
         body: crate::conn::DocumentBodySource,
     ) -> bool {
@@ -1270,7 +1270,7 @@ impl TargetSessionOwnerMut<'_> {
     fn register_pending_fetch_response_navigation(
         &mut self,
         request_id: String,
-        document_navigation_token: Option<crate::conn::DocumentNavigationToken>,
+        document_navigation_token: Option<crate::conn::NavigationId>,
         navigation: crate::conn::NavigationDispatchState,
         body: crate::conn::DocumentBodySource,
     ) -> bool {

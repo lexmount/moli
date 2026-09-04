@@ -188,7 +188,7 @@ mod tests {
         ctx.conn
             .clear_pending_document_navigation_for_owner_if_loader_matches(
                 &navigation_owner,
-                &navigation.loader_id,
+                "LOADER-debugger-interrupt",
             );
     }
 

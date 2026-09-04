@@ -7,7 +7,7 @@ use moli_cookie_jar::{
     BrowserCookieStore, CookieSource, NetworkCookieRequestContext, SharedBrowserCookieStore,
     StoredCookie, StoredCookieQueryReport, new_shared_browser_cookie_store,
 };
-use moli_core::browser::BrowserContextId;
+use moli_core::browser::{BrowserContextId, NavigationId};
 use moli_core::network::{SharedWebStorageStore, new_shared_web_storage_store};
 use moli_core::runtime::{
     NavigationEngine, NavigationPageStorageHandles, NavigationResourceStorageHandles,
@@ -31,7 +31,7 @@ use super::{
         EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedNetworkConditions,
     },
     javascript_dialog::TargetPreparedJavaScriptDialog,
-    page_slot::{DocumentNavigationToken, DocumentStartScript},
+    page_slot::DocumentStartScript,
     page_target_host::{PageTargetHost, PageTargetRegistry},
     service_worker_target::ServiceWorkerTargetState,
     shared_worker_target::SharedWorkerTargetState,
@@ -1147,7 +1147,7 @@ impl BrowserContext {
     pub(crate) fn start_document_navigation_for_active_target(
         &mut self,
         loader_id: String,
-    ) -> Option<DocumentNavigationToken> {
+    ) -> Option<NavigationId> {
         let target_id = self.active_target_id()?.to_owned();
         self.start_document_navigation_for_target(&target_id, loader_id)
     }
@@ -1156,20 +1156,15 @@ impl BrowserContext {
         &mut self,
         target_id: &str,
         loader_id: String,
-    ) -> Option<DocumentNavigationToken> {
+    ) -> Option<NavigationId> {
         let target = self.page_target_mut(target_id)?;
-        let token = target
-            .runtime_slot
-            .start_document_navigation(target_id.to_owned(), loader_id);
+        let token = target.runtime_slot.start_document_navigation(loader_id);
         self.mark_target_initial_empty_document_pending_cross_document_navigation(target_id);
         Some(token)
     }
 
-    pub(crate) fn accepts_pending_document_navigation_event(
-        &self,
-        token: &DocumentNavigationToken,
-    ) -> bool {
-        self.page_target(&token.target_id).is_some_and(|target| {
+    pub(crate) fn accepts_pending_document_navigation_event(&self, token: &NavigationId) -> bool {
+        self.page_targets.iter().any(|target| {
             target
                 .runtime_slot()
                 .accepts_pending_document_navigation_event(token)
@@ -1178,9 +1173,9 @@ impl BrowserContext {
 
     pub(crate) fn document_navigation_cancellation_handle(
         &self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
     ) -> Option<moli_fetch::FetchCancelHandle> {
-        self.page_target(&token.target_id).and_then(|target| {
+        self.page_targets.iter().find_map(|target| {
             target
                 .runtime_slot()
                 .document_navigation_cancellation_handle(token)
@@ -1189,10 +1184,14 @@ impl BrowserContext {
 
     pub(crate) fn arm_background_navigation_completion(
         &mut self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
     ) -> bool {
-        let Some(target) = self.page_target_mut(&token.target_id) else {
+        let Some(target) = self.page_targets.iter_mut().find(|target| {
+            target
+                .runtime_slot()
+                .accepts_pending_document_navigation_event(token)
+        }) else {
             if let Some(cancellation) = additional_cancellation {
                 cancellation.cancel();
             }
@@ -1203,16 +1202,12 @@ impl BrowserContext {
             .arm_background_navigation_completion(token, additional_cancellation)
     }
 
-    pub(crate) fn settle_background_navigation_completion(
-        &mut self,
-        token: &DocumentNavigationToken,
-    ) -> bool {
-        self.page_target_mut(&token.target_id)
-            .is_some_and(|target| {
-                target
-                    .runtime_slot
-                    .settle_background_navigation_completion(token)
-            })
+    pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
+        self.page_targets.iter_mut().any(|target| {
+            target
+                .runtime_slot
+                .settle_background_navigation_completion(token)
+        })
     }
 
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
@@ -1226,11 +1221,9 @@ impl BrowserContext {
             .is_some_and(|target| target.runtime_slot().has_inflight_background_navigation())
     }
 
-    pub(crate) fn accepts_document_body_completion_event(
-        &self,
-        token: &DocumentNavigationToken,
-    ) -> bool {
-        self.page_target(&token.target_id).is_some_and(|target| {
+    #[cfg(test)]
+    pub(crate) fn accepts_document_body_completion_event(&self, token: &NavigationId) -> bool {
+        self.page_targets.iter().any(|target| {
             target
                 .runtime_slot()
                 .accepts_document_body_completion_event(token)
@@ -1266,19 +1259,15 @@ impl BrowserContext {
         }
     }
 
-    pub(crate) fn commit_document_navigation_if_matches(
-        &mut self,
-        token: &DocumentNavigationToken,
-    ) {
-        let committed = self
-            .page_target_mut(&token.target_id)
-            .is_some_and(|target| {
-                target
-                    .runtime_slot
-                    .commit_pending_document_navigation_if_matches(token)
-            });
-        if committed {
-            self.mark_target_initial_empty_document_exited(&token.target_id);
+    pub(crate) fn commit_document_navigation_if_matches(&mut self, token: &NavigationId) {
+        let committed_target = self.page_targets.iter_mut().find_map(|target| {
+            target
+                .runtime_slot
+                .commit_pending_document_navigation_if_matches(token)
+                .then(|| target.target_id().to_owned())
+        });
+        if let Some(target_id) = committed_target {
+            self.mark_target_initial_empty_document_exited(&target_id);
         }
     }
 

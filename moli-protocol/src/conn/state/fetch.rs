@@ -533,7 +533,7 @@ impl TargetFetchState {
     pub(crate) fn register_pending_fetch_response_navigation(
         &mut self,
         request_id: String,
-        document_navigation_token: Option<super::DocumentNavigationToken>,
+        document_navigation_token: Option<super::NavigationId>,
         navigation: NavigationDispatchState,
         body: DocumentBodySource,
     ) {
@@ -1890,7 +1890,7 @@ impl TargetFetchOwner {
     pub(crate) fn register_pending_fetch_response_navigation(
         &mut self,
         request_id: String,
-        document_navigation_token: Option<super::DocumentNavigationToken>,
+        document_navigation_token: Option<super::NavigationId>,
         navigation: NavigationDispatchState,
         body: DocumentBodySource,
     ) {
