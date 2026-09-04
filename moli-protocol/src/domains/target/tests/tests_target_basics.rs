@@ -60,6 +60,15 @@ async fn cross_document_navigation_keeps_target_session_and_replaces_page_reside
         session_id,
         moli_page_types::DevToolsSessionKey::Primary,
     );
+    let (browser_context_id, web_contents_id, main_frame_slot_id) = {
+        let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
+        let target = browser_context.active_page_target();
+        (
+            browser_context.browser_context_id(),
+            target.web_contents_id(),
+            target.main_frame_slot_id(),
+        )
+    };
     let before = ctx
         .conn
         .target_page_residence_identity_for_session(Some(session_id))
@@ -97,12 +106,23 @@ async fn cross_document_navigation_keeps_target_session_and_replaces_page_reside
         .conn
         .target_page_residence_identity_for_session(Some(session_id))
         .expect("replacement Page residence");
+    let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
+    let target = browser_context.active_page_target();
+    assert_eq!(browser_context.browser_context_id(), browser_context_id);
+    assert_eq!(target.web_contents_id(), web_contents_id);
+    assert_eq!(target.main_frame_slot_id(), main_frame_slot_id);
+    assert_eq!(target.current_document_id(), Some(after.document_id()));
     assert_eq!(after.browser_context_id(), before.browser_context_id());
     assert_eq!(after.target_id(), before.target_id());
     assert_ne!(
-        after.page_attachment_id(),
-        before.page_attachment_id(),
-        "cross-document navigation must replace the concrete Page residence"
+        after.document_id(),
+        before.document_id(),
+        "cross-document navigation must replace the concrete Document"
+    );
+    assert!(browser_context.target_page_residence_is_current(&after));
+    assert!(
+        !browser_context.target_page_residence_is_current(&before),
+        "the previous Document identity must be stale after replacement"
     );
     assert_eq!(
         ctx.conn.non_browser_target_id_for_session(Some(session_id)),

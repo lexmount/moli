@@ -468,7 +468,7 @@ mod tests {
         DocumentNavigationToken {
             target_id: "TID-channel".to_owned(),
             loader_id: format!("LID-{label}"),
-            request_id: crate::conn::state::NavigationRequestId::allocate(),
+            navigation_id: moli_core::browser::NavigationId::allocate(),
         }
     }
 

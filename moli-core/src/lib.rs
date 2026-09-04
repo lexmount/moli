@@ -4,6 +4,7 @@
 //! `runtime`, `page`, `network`, and `protocol_types`, while the heavier
 //! implementation now lives in the split internal crates.
 
+pub mod browser;
 mod config;
 mod dom;
 pub mod network;

@@ -1,4 +1,7 @@
-use moli_core::{PageId, RendererOutputResidenceIdentity, RendererOwnerLocalHostId, page::Page};
+use moli_core::{
+    PageId, RendererOutputResidenceIdentity, RendererOwnerLocalHostId, browser::DocumentId,
+    page::Page,
+};
 
 use super::TargetPageAttachmentId;
 
@@ -120,6 +123,10 @@ impl TargetPageResidenceIdentity {
     }
 
     pub(crate) fn page_attachment_id(&self) -> TargetPageAttachmentId {
+        self.page_attachment_id
+    }
+
+    pub fn document_id(&self) -> DocumentId {
         self.page_attachment_id
     }
 }
