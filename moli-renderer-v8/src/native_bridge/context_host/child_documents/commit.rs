@@ -321,6 +321,12 @@ impl JsContextHost {
                     .expect("committed child document"),
             ),
         );
+        let ancestor_origins_refreshed =
+            self.refresh_current_child_document_ancestor_origins(handle);
+        debug_assert!(
+            ancestor_origins_refreshed,
+            "committed child Document must capture its ancestor origins"
+        );
 
         match owner_transition.local_window_owner_transition() {
             FrameLocalWindowOwnerTransition::Replaced { .. } => {
