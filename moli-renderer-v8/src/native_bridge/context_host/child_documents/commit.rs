@@ -317,6 +317,12 @@ impl JsContextHost {
                 expected_current_owner,
             )?;
         debug_assert_eq!(owner_transition.retired_owner(), expected_current_owner);
+        let ancestor_origins_refreshed =
+            self.refresh_current_child_document_ancestor_origins(handle);
+        debug_assert!(
+            ancestor_origins_refreshed,
+            "committed child Document must capture its ancestor origins"
+        );
 
         match owner_transition.local_window_owner_transition() {
             FrameLocalWindowOwnerTransition::Replaced { .. } => {

@@ -17,6 +17,7 @@ impl JsContextHost {
     ) -> Option<crate::frame_owner_model::FrameDocumentOwnerTransition> {
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.clear_current_document_loader_id();
+            entry.clear_document_internal_ancestor_origins();
         }
         let transition = self.frame_owner_store.detach_current_child_document(handle);
         let retired_owner = transition.and_then(|item| item.retired_owner());
@@ -194,6 +195,19 @@ impl JsContextHost {
                 let sandbox_policy_from_owner = super::document_sandbox_policy_from_attribute(
                     self.dom_host().get_attribute(handle, "sandbox").as_deref(),
                 );
+                let ancestor_origins_referrer_policy_snapshot =
+                    if is_new || attribute_bootstrap_changed {
+                        self.child_ancestor_origins_referrer_policy_from_owner_attribute(handle)
+                    } else {
+                        existing
+                            .as_ref()
+                            .map(|entry| entry.ancestor_origins_referrer_policy_snapshot())
+                            .unwrap_or_default()
+                    };
+                let document_internal_ancestor_origins = existing
+                    .as_ref()
+                    .map(|entry| entry.document_internal_ancestor_origins())
+                    .unwrap_or_default();
                 let document_credentialless = if is_new {
                     self.child_browsing_context_document_credentialless_for_owner(
                         handle,
@@ -361,6 +375,8 @@ impl JsContextHost {
                         committed_navigation_entry_seed,
                         cached_snapshot,
                         document_policy_container,
+                        document_internal_ancestor_origins,
+                        ancestor_origins_referrer_policy_snapshot,
                         completed_document_network: existing.as_ref().and_then(|entry| {
                             entry
                                 .completed_document_network_for_refresh(attribute_bootstrap_changed)

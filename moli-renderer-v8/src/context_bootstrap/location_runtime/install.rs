@@ -1,6 +1,6 @@
 use super::super::constructors::illegal_constructor_callback;
 use super::super::navigation_window::{
-    navigation_document_has_opaque_origin, runtime_window_owner,
+    navigation_document_has_opaque_origin, runtime_window_dispatch_scope, runtime_window_owner,
 };
 use super::helpers::{
     location_host_string, navigate_modified_location_url, parsed_location_url,
@@ -10,9 +10,16 @@ use super::methods::{
     location_assign_callback, location_reload_callback, location_replace_callback,
     location_to_string_callback,
 };
-use super::slots::{location_href_slot, sync_location_object_fields};
+use super::slots::{
+    clear_location_ancestor_origins_slot, location_ancestor_origins_slot,
+    location_empty_ancestor_origins_slot, location_href_slot, location_relevant_document_id_slot,
+    location_relevant_local_window_id_slot, set_location_ancestor_origins_slot,
+    set_location_empty_ancestor_origins_slot, set_location_relevant_document_id_slot,
+    set_location_relevant_local_window_id_slot, sync_location_object_fields,
+};
 use super::*;
 use crate::context_bootstrap::exposed_interfaces::build_intrinsic_interface_instance;
+use crate::context_bootstrap::indexed_db::new_dom_string_list;
 use crate::util::{callback_data_index_value, callback_data_item};
 use anyhow::{Result, anyhow};
 use moli_webapi_declare::WebApiObject;
@@ -232,7 +239,154 @@ pub(in crate::context_bootstrap) fn install_location_runtime_state<'s>(
             .initialize(scope, location)
             .map_err(|error| anyhow!("failed to initialize Location own surface: {error}"))?;
     }
+    install_location_ancestor_origins_state(scope, location);
     Ok(())
+}
+
+fn install_location_ancestor_origins_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+) {
+    let Some((local_window_id, document_id)) = current_location_owner_ids(scope, location) else {
+        return;
+    };
+    if location_relevant_local_window_id_slot(scope, location) == Some(local_window_id)
+        && location_relevant_document_id_slot(scope, location) == Some(document_id)
+    {
+        return;
+    }
+    // DOMStringList is otherwise a lazy interface. Record the relevant
+    // Document now, but materialize its list only when script first reads it.
+    clear_location_ancestor_origins_slot(scope, location);
+    set_location_relevant_local_window_id_slot(scope, location, local_window_id);
+    set_location_relevant_document_id_slot(scope, location, document_id);
+}
+
+fn new_location_dom_string_list<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+    values: &[String],
+) -> v8::Local<'s, v8::Object> {
+    let Some(relevant_context) = location.get_creation_context(scope) else {
+        return new_dom_string_list(scope, values);
+    };
+    if relevant_context == scope.get_current_context() {
+        return new_dom_string_list(scope, values);
+    }
+    let list = {
+        let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+        let list = new_dom_string_list(target_scope, values);
+        v8::Global::new(target_scope, list)
+    };
+    v8::Local::new(scope, &list)
+}
+
+fn current_location_document_state<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+) -> Option<(u64, u64, Vec<String>)> {
+    let owner = runtime_window_owner(scope, location);
+    let dispatch_scope = runtime_window_dispatch_scope(scope, owner)?;
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    let host = unsafe { &*host_ptr };
+    let (local_window_id, document_id) =
+        location_owner_ids_for_dispatch_scope(host, dispatch_scope)?;
+    let ancestor_origins = match dispatch_scope {
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+            host.child_browsing_context_ancestor_origins(handle)?
+        }
+        crate::native_bridge::OwnerDispatchScope::Top
+        | crate::native_bridge::OwnerDispatchScope::LightweightPopup(_) => Vec::new(),
+    };
+    Some((local_window_id, document_id, ancestor_origins))
+}
+
+fn current_location_owner_ids<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+) -> Option<(u64, u64)> {
+    let owner = runtime_window_owner(scope, location);
+    let dispatch_scope = runtime_window_dispatch_scope(scope, owner)?;
+    let host_ptr = context_host_ptr_from_global_bridge(scope)?;
+    location_owner_ids_for_dispatch_scope(unsafe { &*host_ptr }, dispatch_scope)
+}
+
+fn location_owner_ids_for_dispatch_scope(
+    host: &crate::native_bridge::JsContextHost,
+    dispatch_scope: crate::native_bridge::OwnerDispatchScope,
+) -> Option<(u64, u64)> {
+    match dispatch_scope {
+        crate::native_bridge::OwnerDispatchScope::Top => host
+            .current_main_document_task_owner()
+            .map(|owner| (owner.local_window_id.0, owner.document_id.0)),
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => host
+            .current_child_document_task_owner(handle)
+            .map(|owner| (owner.local_window_id.0, owner.document_id.0)),
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => Some((
+            host.current_lightweight_popup_local_window_id(popup_id)?
+                .as_u64(),
+            host.current_lightweight_popup_document_owner(popup_id)?
+                .document_id()
+                .as_u64(),
+        )),
+    }
+}
+
+pub(in crate::context_bootstrap) fn location_belongs_to_current_local_window<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+) -> bool {
+    location_relevant_local_window_id_slot(scope, location).is_some_and(|local_window_id| {
+        current_location_owner_ids(scope, location)
+            .is_some_and(|(current_local_window_id, _)| current_local_window_id == local_window_id)
+    })
+}
+
+pub(in crate::context_bootstrap) fn location_owner_has_current_realm<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+) -> bool {
+    let Some(dispatch_scope) = runtime_window_dispatch_scope(scope, owner) else {
+        return false;
+    };
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return false;
+    };
+    unsafe { &*host_ptr }
+        .current_runtime_window_execution_context_identity_for_dispatch_scope(scope, dispatch_scope)
+        .is_some()
+}
+
+fn location_ancestor_origins_for_holder<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    holder: v8::Local<'s, v8::Object>,
+) -> v8::Local<'s, v8::Object> {
+    let relevant_owner = location_relevant_local_window_id_slot(scope, holder)
+        .zip(location_relevant_document_id_slot(scope, holder));
+    if let Some((local_window_id, document_id, ancestor_origins)) =
+        current_location_document_state(scope, holder)
+        && relevant_owner == Some((local_window_id, document_id))
+    {
+        if let Some(origins) = location_ancestor_origins_slot(scope, holder) {
+            return origins;
+        }
+        let origins = new_location_dom_string_list(scope, holder, &ancestor_origins);
+        set_location_ancestor_origins_slot(scope, holder, origins);
+        // The Location can outlive its Document and realm. Cache its required
+        // inactive value while that realm can still supply DOMStringList's
+        // prototype, but only after script has requested ancestorOrigins.
+        if location_empty_ancestor_origins_slot(scope, holder).is_none() {
+            let empty = new_location_dom_string_list(scope, holder, &[]);
+            set_location_empty_ancestor_origins_slot(scope, holder, empty);
+        }
+        return origins;
+    }
+    if let Some(empty) = location_empty_ancestor_origins_slot(scope, holder) {
+        return empty;
+    }
+    let empty = new_location_dom_string_list(scope, holder, &[]);
+    set_location_empty_ancestor_origins_slot(scope, holder, empty);
+    empty
 }
 
 fn location_own_surface_installed(
@@ -288,7 +442,9 @@ fn location_attribute_getter<'s>(
         return;
     };
     match attribute {
-        LocationAttribute::AncestorOrigins => rv.set(v8::Array::new(scope, 0).into()),
+        LocationAttribute::AncestorOrigins => {
+            rv.set(location_ancestor_origins_for_holder(scope, holder).into());
+        }
         LocationAttribute::Href => {
             set_return_string(scope, rv, &current_href);
         }

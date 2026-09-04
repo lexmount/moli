@@ -14693,6 +14693,130 @@ addEventListener("message", event => {{
 }
 
 #[test]
+fn location_ancestor_origins_is_a_stable_document_list_with_a_detached_empty_list() {
+    let mut vm = new_storage_test_vm("https://ancestor-origins.test/page.html");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(frame);
+  const location = frame.contentWindow.location;
+  const ChildDOMStringList = frame.contentWindow.DOMStringList;
+  const active = location.ancestorOrigins;
+  const activeAgain = location.ancestorOrigins;
+  const activeSnapshot = {
+    values: Array.from(active),
+    sameObject: active === activeAgain,
+    brand: active instanceof ChildDOMStringList,
+    topRealmBrand: active instanceof DOMStringList,
+    isArray: Array.isArray(active),
+    length: active.length,
+    item0: active.item(0),
+    item1IsNull: active.item(1) === null,
+    containsParent: active.contains(window.origin)
+  };
+  frame.remove();
+  const detached = location.ancestorOrigins;
+
+  const unreadFrame = document.createElement("iframe");
+  (document.body || document.documentElement || document).appendChild(unreadFrame);
+  const unreadLocation = unreadFrame.contentWindow.location;
+  unreadFrame.remove();
+  const unreadDetached = unreadLocation.ancestorOrigins;
+  return JSON.stringify({
+    active: activeSnapshot,
+    detachedValues: Array.from(detached),
+    detachedIsDifferent: detached !== active,
+    detachedIsStable: detached === location.ancestorOrigins,
+    detachedBrand: detached instanceof ChildDOMStringList,
+    unreadDetachedValues: Array.from(unreadDetached),
+    unreadDetachedIsArray: Array.isArray(unreadDetached),
+    unreadDetachedConstructor: unreadDetached.constructor.name
+  });
+})()
+"#,
+        )
+        .expect("Location ancestor origins lifetime probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"active":{"values":["https://ancestor-origins.test"],"sameObject":true,"brand":true,"topRealmBrand":false,"isArray":false,"length":1,"item0":"https://ancestor-origins.test","item1IsNull":true,"containsParent":true},"detachedValues":[],"detachedIsDifferent":true,"detachedIsStable":true,"detachedBrand":true,"unreadDetachedValues":[],"unreadDetachedIsArray":false,"unreadDetachedConstructor":"DOMStringList"}"#
+    );
+}
+
+#[test]
+fn location_ancestor_origins_snapshots_frame_referrer_policy_per_navigation() {
+    let mut vm = new_storage_test_vm("https://ancestor-policy.test/page.html");
+
+    let initial = vm
+        .eval(
+            r#"
+(() => {
+  const mount = document.body || document.documentElement || document;
+
+  const snapshotted = document.createElement("iframe");
+  snapshotted.srcdoc = "<!doctype html><p>snapshotted</p>";
+  snapshotted.referrerPolicy = "no-referrer";
+  mount.appendChild(snapshotted);
+  const snapshottedLocation = snapshotted.contentWindow.location;
+  const snapshottedInitialList = snapshottedLocation.ancestorOrigins;
+  snapshotted.referrerPolicy = "";
+
+  const futureNavigation = document.createElement("iframe");
+  futureNavigation.referrerPolicy = "no-referrer";
+  mount.appendChild(futureNavigation);
+  const futureLocation = futureNavigation.contentWindow.location;
+  const futureInitialList = futureLocation.ancestorOrigins;
+  futureNavigation.referrerPolicy = "";
+  futureNavigation.srcdoc = "<!doctype html><p>future navigation</p>";
+
+  Object.assign(globalThis, {
+    __ancestorPolicySnapshottedLocation: snapshottedLocation,
+    __ancestorPolicySnapshottedInitialList: snapshottedInitialList,
+    __ancestorPolicyFutureLocation: futureLocation,
+    __ancestorPolicyFutureInitialList: futureInitialList
+  });
+  return JSON.stringify({
+    snapshotted: Array.from(snapshottedInitialList),
+    future: Array.from(futureInitialList)
+  });
+})()
+"#,
+        )
+        .expect("initial Location ancestor policy probe should evaluate");
+    assert_eq!(initial, r#"{"snapshotted":["null"],"future":["null"]}"#);
+
+    vm.drain_pending_child_frame_work_for_test();
+
+    let committed = vm
+        .eval(
+            r#"
+(() => {
+  const snapshotted = __ancestorPolicySnapshottedLocation.ancestorOrigins;
+  const future = __ancestorPolicyFutureLocation.ancestorOrigins;
+  return JSON.stringify({
+    snapshotted: Array.from(snapshotted),
+    snapshottedNewDocumentList:
+      snapshotted !== __ancestorPolicySnapshottedInitialList,
+    snapshottedStable:
+      snapshotted === __ancestorPolicySnapshottedLocation.ancestorOrigins,
+    future: Array.from(future),
+    futureNewDocumentList: future !== __ancestorPolicyFutureInitialList,
+    futureStable: future === __ancestorPolicyFutureLocation.ancestorOrigins
+  });
+})()
+"#,
+        )
+        .expect("committed Location ancestor policy probe should evaluate");
+    assert_eq!(
+        committed,
+        r#"{"snapshotted":["null"],"snapshottedNewDocumentList":true,"snapshottedStable":true,"future":["https://ancestor-policy.test"],"futureNewDocumentList":true,"futureStable":true}"#
+    );
+}
+
+#[test]
 fn same_origin_child_window_migration_to_cross_origin_installs_denied_surface() {
     let mut vm = new_storage_test_vm("https://child-cross-origin-migration.test/");
 
