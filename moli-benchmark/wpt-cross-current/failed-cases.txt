@@ -2701,6 +2701,7 @@ focus/focus-restoration-in-different-site-iframes.html
 focus/focus-restoration-in-same-site-iframes-window.html
 focus/hasfocus-different-site.html
 focus/hasfocus-same-site.html
+focus/iframe-activeelement-after-focusing-out-iframes.html
 focus/iframe-contentwindow-focus-with-different-site-intermediate-frame.html
 focus/iframe-contentwindow-focus-with-same-as-top-intermediate-frame.html
 font-access/permissions-policy/local-fonts-supported-by-permissions-policy.html
@@ -2904,6 +2905,7 @@ html/semantics/document-metadata/the-style-element/tentative/style-element-csp-a
 html/semantics/document-metadata/the-style-element/tentative/style-element-csp-nonce-allowed.html
 html/semantics/document-metadata/the-style-element/tentative/style-element-csp-script-src-allowed.html
 html/semantics/document-metadata/the-style-element/tentative/style-element-fixed.html
+html/semantics/embedded-content/image-maps/image-map-processing-model/hash-name-reference.html
 html/semantics/embedded-content/the-area-element/area-coords.html
 html/semantics/embedded-content/the-area-element/area-processing.html
 html/semantics/embedded-content/the-area-element/area-shape.html
@@ -2953,7 +2955,10 @@ html/semantics/embedded-content/the-img-element/natural-size-orientation.html
 html/semantics/embedded-content/the-img-element/naturalWidth-naturalHeight-width-height.html
 html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/svg-img-density-vs-zoom.html
 html/semantics/embedded-content/the-img-element/update-src-complete.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/current-request-microtask-002.html
@@ -2980,8 +2985,6 @@ html/semantics/interactive-elements/the-dialog-element/dialog-showModal.html
 html/semantics/interactive-elements/the-dialog-element/modal-dialog-scroll-height.html
 html/semantics/interactive-elements/the-dialog-element/multiple-centered-dialogs.html
 html/semantics/interactive-elements/the-dialog-element/non-modal-dialog-layout.html
-html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_noopener.html
-html/semantics/links/links-created-by-a-and-area-elements/rel-attribute-clearing.html
 html/semantics/menu/tentative/button-invoke-menulist.html
 html/semantics/menu/tentative/checkable.html
 html/semantics/menu/tentative/menubar-invoke-menulist.html
@@ -3101,11 +3104,6 @@ navigation-api/navigate-event/intercept-detach-multiple.html
 navigation-api/navigate-event/navigation-traverseTo-in-iframe-same-document-preventDefault.html
 navigation-api/navigate-event/traverseTo-detach.html
 navigation-api/navigation-methods/reload-service-worker-fetch-event.html
-navigation-api/navigation-methods/return-value/navigate-pagehide.html
-navigation-api/navigation-methods/return-value/navigate-rejection-order-invalidurl-pagehide.html
-navigation-api/navigation-methods/return-value/navigate-rejection-order-pagehide-unserializablestate.html
-navigation-api/navigation-methods/return-value/reload-pagehide.html
-navigation-api/navigation-methods/return-value/reload-rejection-order-pagehide-unserializablestate.html
 navigation-api/navigation-methods/traverseTo-detach-between-navigate-and-navigatesuccess.html
 navigation-api/ordering-and-transition/navigate-in-transition-finished.html?currententrychange
 navigation-api/ordering-and-transition/navigate-in-transition-finished.html?no-currententrychange

@@ -136,7 +136,6 @@ html/browsers/windows/browsing-context-names/choose-_blank-003.html
 html/browsers/windows/browsing-context-names/choose-_top-001.html
 html/browsers/windows/browsing-context-names/choose-_top-002.html
 html/browsers/windows/browsing-context-names/choose-_top-003.html
-html/browsers/windows/embedded-opener-remove-frame.html
 html/cross-origin-embedder-policy/cache-storage-reporting-service-worker.https.html
 html/dom/documents/dom-tree-accessors/Document.currentScript.html
 html/dom/elements/global-attributes/cdata-dir_auto.html
@@ -145,6 +144,7 @@ html/editing/the-hidden-attribute/beforematch-attribute-removal-002.html
 html/editing/the-hidden-attribute/beforematch-element-removal-001.html
 html/editing/the-hidden-attribute/beforematch-element-removal-002.html
 html/editing/the-hidden-attribute/hidden-until-found-and-details.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-1.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/remove-from-document.html
 html/semantics/embedded-content/the-embed-element/embed-change-src.html
 html/semantics/embedded-content/the-iframe-element/change_parentage.html
@@ -157,6 +157,7 @@ html/semantics/embedded-content/the-iframe-element/move_iframe_in_dom_03.html
 html/semantics/embedded-content/the-iframe-element/move_iframe_in_dom_04.html
 html/semantics/embedded-content/the-img-element/below-viewport-image-loading-lazy-load-event.html
 html/semantics/embedded-content/the-img-element/empty-src-no-current-request.html
+html/semantics/embedded-content/the-img-element/environment-changes/viewport-change.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-empty-src.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-move-document.html
 html/semantics/embedded-content/the-img-element/image-loading-lazy-move-into-script-disabled-iframe.html
