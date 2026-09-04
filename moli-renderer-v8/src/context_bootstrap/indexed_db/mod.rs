@@ -146,6 +146,15 @@ pub(crate) use self::typed_state::indexed_db_request_state_entries_for_test;
 pub(crate) use self::typed_state::retain_indexed_db_state_in_retired_realm;
 pub(in crate::context_bootstrap::indexed_db) use self::typed_state::schedule_indexed_db_transaction_deactivation_after_microtask_checkpoint;
 
+pub(in crate::context_bootstrap) fn new_dom_string_list<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    values: &[String],
+) -> v8::Local<'s, v8::Object> {
+    super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "DOMStringList")
+        .expect("DOMStringList constructor should materialize before creating an instance");
+    new_idb_dom_string_list(scope, values)
+}
+
 pub(in crate::context_bootstrap) use self::core::indexed_db_usage_bytes_for_storage_key;
 pub(crate) use self::core::set_indexed_db_manager_for_context;
 #[cfg(test)]
