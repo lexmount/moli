@@ -661,40 +661,50 @@ pub(crate) struct DevToolsNetworkSessionState {
     pub(crate) service_worker_fetch_diagnostic_entries: usize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DevToolsEmulationSessionState {
     // UA, Accept-Language, and platform are independent handler contributions.
     pub(crate) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
     // Locale and timezone are exclusive controller claims, unlike UA fields.
     pub(crate) locale_override: Option<String>,
     pub(crate) timezone_override: Option<String>,
-    pub(crate) network_conditions: Option<super::EmulatedNetworkConditions>,
-    pub(crate) geolocation_override: Option<super::EmulatedGeolocationOverrideState>,
-    pub(crate) emulated_media: super::EmulatedMediaOverrides,
-    pub(crate) emulated_device_metrics: Option<super::EmulatedDeviceMetrics>,
-    pub(crate) cpu_throttling_rate: f64,
-    pub(crate) touch_emulation_enabled: bool,
-    pub(crate) emit_touch_events_for_mouse: bool,
-    pub(crate) focus_emulation_enabled: bool,
-    pub(crate) script_execution_disabled: bool,
+    pub(crate) overrides: super::EmulationPolicy,
 }
 
-impl Default for DevToolsEmulationSessionState {
-    fn default() -> Self {
-        Self {
-            browser_identity_override: None,
-            locale_override: None,
-            timezone_override: None,
-            network_conditions: None,
-            geolocation_override: None,
-            emulated_media: super::EmulatedMediaOverrides::default(),
-            emulated_device_metrics: None,
-            cpu_throttling_rate: 1.0,
-            touch_emulation_enabled: false,
-            emit_touch_events_for_mouse: false,
-            focus_emulation_enabled: false,
-            script_execution_disabled: false,
+impl DevToolsEmulationSessionState {
+    /// Handler-disable semantics belong to DevTools. Browser receives only
+    /// source-free changes, without learning which session caused a reset or
+    /// requiring a read-modify-write round trip through Browser state.
+    pub(in crate::conn) fn disable_policy_changes(&self) -> Vec<super::EmulationPolicyChange> {
+        use super::EmulationPolicyChange;
+        let raw = &self.overrides;
+        // Blink clears media and script execution on every handler disable.
+        let mut changes = vec![
+            EmulationPolicyChange::Media(super::EmulatedMediaOverrides::default()),
+            EmulationPolicyChange::ScriptExecutionDisabled(false),
+        ];
+        if raw.network_conditions.is_some() {
+            changes.push(EmulationPolicyChange::NetworkConditions(None));
         }
+        if raw.geolocation_override.is_some() {
+            changes.push(EmulationPolicyChange::Geolocation(None));
+        }
+        if raw.emulated_device_metrics.is_some() {
+            changes.push(EmulationPolicyChange::DeviceMetrics(None));
+        }
+        if raw.cpu_throttling_rate != 1.0 {
+            changes.push(EmulationPolicyChange::CpuThrottlingRate(1.0));
+        }
+        if raw.touch_emulation_enabled {
+            changes.push(EmulationPolicyChange::TouchEnabled(false));
+        }
+        if raw.emit_touch_events_for_mouse {
+            changes.push(EmulationPolicyChange::EmitTouchEventsForMouse(false));
+        }
+        if raw.focus_emulation_enabled {
+            changes.push(EmulationPolicyChange::FocusEnabled(false));
+        }
+        changes
     }
 }
 
@@ -1163,6 +1173,48 @@ impl DevToolsDomStorageSessionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn handler_disable_uses_raw_state_for_conditional_target_resets() {
+        let mut effective = crate::conn::EmulationPolicy {
+            focus_emulation_enabled: true,
+            script_execution_disabled: true,
+            emulated_media: crate::conn::EmulatedMediaOverrides {
+                color_scheme: Some("dark".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let raw = DevToolsEmulationSessionState::default();
+        let delta = effective.apply_changes(raw.disable_policy_changes());
+
+        assert!(
+            effective.focus_emulation_enabled,
+            "an untouched handler must not clear another session's focus setting"
+        );
+        assert!(
+            effective.emulated_media.color_scheme.is_none(),
+            "Blink clears the shared media override on every handler disable"
+        );
+        assert!(!delta.focus_emulation_enabled);
+        assert!(delta.emulated_media);
+        assert!(!effective.script_execution_disabled);
+        assert!(delta.script_execution_disabled);
+    }
+
+    #[test]
+    fn prepared_handler_reset_preserves_unrelated_later_policy_updates() {
+        let mut target = crate::conn::PageTargetHost::empty("TID-policy-reset".into());
+        let handler = DevToolsEmulationSessionState::default();
+        let reset = handler.disable_policy_changes();
+        target
+            .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::FocusEnabled(true));
+        target.apply_emulation_policy_changes(reset);
+        assert!(
+            target.emulation_policy().focus_emulation_enabled,
+            "a prepared reset must not overwrite a field this handler never controlled"
+        );
+    }
 
     fn binding(name: &str) -> RuntimeBindingDefinition {
         RuntimeBindingDefinition {

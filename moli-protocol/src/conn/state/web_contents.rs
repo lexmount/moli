@@ -7,9 +7,11 @@ use moli_core::{
 use super::navigation_controller::NavigationController;
 
 mod document_host;
+mod emulation_policy;
 mod session_storage;
 mod window;
 pub(in crate::conn) use document_host::DocumentHost;
+pub(crate) use emulation_policy::{EmulationPolicy, EmulationPolicyChange, EmulationPolicyDelta};
 pub(crate) use session_storage::SessionStorageNamespace;
 pub(in crate::conn) use window::{Window, WindowOpener};
 pub(crate) use window::{WindowSurface, WindowSurfaceState};
@@ -28,6 +30,7 @@ pub(in crate::conn) struct WebContents {
     pub(in crate::conn) session_storage: SessionStorageNamespace,
     pub(in crate::conn) window: Window,
     pub(in crate::conn) crashed: bool,
+    pub(in crate::conn) emulation_policy: EmulationPolicy,
 }
 
 impl Default for WebContents {
@@ -40,6 +43,7 @@ impl Default for WebContents {
             session_storage: SessionStorageNamespace::default(),
             window: Window::default(),
             crashed: false,
+            emulation_policy: EmulationPolicy::default(),
         }
     }
 }

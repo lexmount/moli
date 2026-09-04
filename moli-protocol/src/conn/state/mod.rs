@@ -47,11 +47,12 @@ pub(crate) use devtools_renderer_channel::{
 pub(crate) use dedicated_worker_target::{
     DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot, DedicatedWorkerTargetState,
 };
+#[cfg(test)]
+pub(crate) use devtools_session::DevToolsEmulationSessionState;
 pub(crate) use devtools_session::{
     DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
-    DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DevToolsNetworkSessionState,
-    DevToolsSessionState, PreparedRendererCallReplacements, SessionRendererCallReplay,
-    SessionRendererCallTermination,
+    DevToolsLogViolationThreshold, DevToolsNetworkSessionState, DevToolsSessionState,
+    PreparedRendererCallReplacements, SessionRendererCallReplay, SessionRendererCallTermination,
 };
 pub(crate) use document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
@@ -106,7 +107,10 @@ pub(crate) use shared_worker_attachment::{
 };
 pub(crate) use shared_worker_target::SharedWorkerTargetState;
 pub(in crate::conn) use web_contents::WindowOpener;
-pub(crate) use web_contents::{SessionStorageNamespace, WindowSurface, WindowSurfaceState};
+pub(crate) use web_contents::{
+    EmulationPolicy, EmulationPolicyChange, EmulationPolicyDelta, SessionStorageNamespace,
+    WindowSurface, WindowSurfaceState,
+};
 
 pub use browser_context::BrowserContext;
 pub(crate) use browser_context::{
@@ -117,13 +121,12 @@ pub(crate) use browser_context::{
 pub(crate) use navigation_controller::{InitialDocument, InitialDocumentCreator};
 pub use navigation_controller::{PageNavigationHistoryEntry, PendingNavigationHistoryUpdate};
 
-pub(crate) use emulation::{
-    EffectiveTargetEmulationState, EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions,
-    EmulatedViewportSurface, viewport_surface_install_script,
-};
 pub use emulation::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
     EmulatedMediaOverrides,
+};
+pub(crate) use emulation::{
+    EmulatedNetworkConditions, EmulatedViewportSurface, viewport_surface_install_script,
 };
 pub use page_target_host::PageTargetHost;
 pub(crate) use target_state::{

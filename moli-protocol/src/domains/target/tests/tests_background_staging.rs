@@ -1321,7 +1321,7 @@ async fn same_context_background_session_can_stage_its_own_emulated_media_before
         assert_eq!(
             active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .emulated_media
                 .color_scheme
                 .as_deref(),
@@ -1333,7 +1333,7 @@ async fn same_context_background_session_can_stage_its_own_emulated_media_before
             .expect("second target should have staged background page session state");
         assert_eq!(
             staged
-                .effective_emulation_state
+                .emulation_policy()
                 .emulated_media
                 .color_scheme
                 .as_deref(),
@@ -1468,7 +1468,7 @@ async fn same_context_background_session_can_clear_its_own_emulated_media_before
         assert!(
             active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .emulated_media
                 .color_scheme
                 .is_none(),
@@ -3521,7 +3521,7 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
         assert_eq!(
             active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .emulated_device_metrics
                 .as_ref()
                 .map(|metrics| (
@@ -3536,13 +3536,13 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
         assert!(
             active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .touch_emulation_enabled
         );
         assert!(
             active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .focus_emulation_enabled
         );
 
@@ -3552,7 +3552,7 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
             .expect("second target should have staged background page session state");
         assert_eq!(
             staged
-                .effective_emulation_state
+                .emulation_policy()
                 .emulated_device_metrics
                 .as_ref()
                 .map(|metrics| (
@@ -3564,8 +3564,8 @@ async fn same_context_background_session_can_stage_its_own_emulation_overrides_b
                 )),
             Some((640, 360, 1.0, 800, 600))
         );
-        assert!(!staged.effective_emulation_state.touch_emulation_enabled);
-        assert!(!staged.effective_emulation_state.focus_emulation_enabled);
+        assert!(!staged.emulation_policy().touch_emulation_enabled);
+        assert!(!staged.emulation_policy().focus_emulation_enabled);
     }
 
     ctx.process_async(json!({
@@ -3893,7 +3893,7 @@ async fn same_context_background_session_can_clear_its_own_device_metrics_before
         assert!(
             active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .emulated_device_metrics
                 .is_none(),
             "active target should keep its default device metrics",
@@ -4070,14 +4070,14 @@ async fn same_context_background_session_can_clear_its_own_touch_and_focus_befor
         assert!(
             !active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .touch_emulation_enabled,
             "active target should keep default touch emulation"
         );
         assert!(
             !active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .focus_emulation_enabled,
             "active target should keep default focus emulation"
         );
@@ -4228,14 +4228,14 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
         assert!(
             !active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .script_execution_disabled
         );
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged background page session state");
-        assert!(staged.effective_emulation_state.script_execution_disabled);
+        assert!(staged.emulation_policy().script_execution_disabled);
     }
 
     ctx.process_async(json!({
@@ -4309,7 +4309,7 @@ async fn same_context_background_session_can_stage_its_own_script_execution_disa
         assert!(
             activated
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .script_execution_disabled
         );
     }
@@ -4405,7 +4405,7 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
         assert!(
             !active
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .script_execution_disabled
         );
         // A completed renderer call may retain its monotonic correlation
@@ -4415,7 +4415,7 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
             active
                 .background_target(&second_target_id)
                 .filter(|target| target.has_non_default_session_state())
-                .is_none_or(|state| { !state.effective_emulation_state.script_execution_disabled }),
+                .is_none_or(|state| { !state.emulation_policy().script_execution_disabled }),
             "script execution re-enable should clear the staged background setting: {:#?}",
             active
                 .background_target(&second_target_id)
@@ -4494,7 +4494,7 @@ async fn same_context_background_session_can_reenable_its_own_script_execution_b
         assert!(
             !activated
                 .active_page_target()
-                .effective_emulation_state
+                .emulation_policy()
                 .script_execution_disabled
         );
     }

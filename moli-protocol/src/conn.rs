@@ -76,8 +76,7 @@ pub(crate) use bidi_channel_work::{
 pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter};
 pub(crate) use browser_context::{
     PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
-    SessionOwnerRuntimeFrontendEnableResult, TargetEmulationStateUpdate,
-    TargetNavigationLoadInputs,
+    SessionOwnerRuntimeFrontendEnableResult, TargetNavigationLoadInputs,
 };
 pub(crate) use command_owner_scope::CommandOwnerScope;
 pub use command_view::Cmd;
@@ -557,11 +556,10 @@ pub(crate) use state::{
     CommittedRendererDocumentBinding, CompletedDownloadBody, CompletedDownloadBodyArtifact,
     DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot,
     DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
-    DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DocumentId,
-    DuplicatePendingRendererCommand, EffectiveTargetEmulationState,
-    EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions, EmulatedViewportSurface,
-    InitialDocumentCreator, InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationId,
-    NavigationResultProjection, NavigationSourceDocumentSecurityContext,
+    DevToolsLogViolationThreshold, DocumentId, DuplicatePendingRendererCommand,
+    EmulatedNetworkConditions, EmulatedViewportSurface, EmulationPolicyChange,
+    EmulationPolicyDelta, InitialDocumentCreator, InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL,
+    NavigationId, NavigationResultProjection, NavigationSourceDocumentSecurityContext,
     NetworkErrorPageNavigation, PageScreencastConfig, PageScreencastFormat,
     PendingBidiChannelListener, PendingInspectorAwait, PendingRendererCommandKey,
     PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,
@@ -582,8 +580,8 @@ pub(crate) use state::{
 };
 #[cfg(test)]
 pub(crate) use state::{
-    DevToolsSessionState, TargetJavaScriptDialog, TargetJavaScriptDialogScopeObserver,
-    TargetPageSlot, TargetRuntimeSessionState,
+    DevToolsEmulationSessionState, DevToolsSessionState, EmulationPolicy, TargetJavaScriptDialog,
+    TargetJavaScriptDialogScopeObserver, TargetPageSlot, TargetRuntimeSessionState,
 };
 pub(crate) use target::{
     PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,

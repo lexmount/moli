@@ -184,7 +184,7 @@ impl PageTargetHost {
             || self.tls_verify_host_override.is_some()
             || self.base_locale_override.is_some()
             || self.base_timezone_override.is_some()
-            || self.effective_emulation_state != super::EffectiveTargetEmulationState::default()
+            || *self.emulation_policy() != super::EmulationPolicy::default()
             || self.input_intercept_drags_enabled
             || self.input_drag_intercepted
             || self.css_enabled
@@ -735,6 +735,7 @@ mod tests {
             .devtools_sessions
             .primary_mut()
             .emulation_session_state
+            .overrides
             .cpu_throttling_rate = 4.0;
         let effective = state.effective_policy();
         assert_eq!(effective.locale_override(), Some("fr-FR"));
@@ -756,6 +757,7 @@ mod tests {
                 .devtools_sessions
                 .primary()
                 .emulation_session_state
+                .overrides
                 .cpu_throttling_rate,
             4.0,
             "clearing policy contributions must leave the handler's renderer state intact"

@@ -1615,7 +1615,7 @@ impl BrowserContext {
     pub(crate) fn effective_active_network_conditions(&self) -> Option<EmulatedNetworkConditions> {
         self.page_targets
             .active()
-            .and_then(|host| host.effective_emulation_state.network_conditions)
+            .and_then(|host| host.emulation_policy().network_conditions)
             .or(self.default_network_conditions)
             .or(self.global_network_conditions)
     }
@@ -1646,7 +1646,7 @@ impl BrowserContext {
     ) -> Option<EmulatedGeolocationOverrideState> {
         self.page_targets
             .active()
-            .and_then(|host| host.effective_emulation_state.geolocation_override.clone())
+            .and_then(|host| host.emulation_policy().geolocation_override.clone())
             .or_else(|| self.default_geolocation_override.clone())
             .or_else(|| self.global_geolocation_override.clone())
     }
@@ -1661,7 +1661,7 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<EmulatedNetworkConditions> {
         self.page_target(target_id)
-            .and_then(|state| state.effective_emulation_state.network_conditions)
+            .and_then(|state| state.emulation_policy().network_conditions)
             .or(self.default_network_conditions)
             .or(self.global_network_conditions)
     }

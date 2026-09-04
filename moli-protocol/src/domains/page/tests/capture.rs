@@ -515,14 +515,15 @@ async fn capture_screenshot_targets_loaded_background_owner_without_activation()
         .expect("browser context")
         .background_target_mut("TID-background")
         .expect("background target must exist")
-        .effective_emulation_state
-        .emulated_device_metrics = Some(EmulatedDeviceMetrics {
-        width: 320,
-        height: 240,
-        device_scale_factor: 2.0,
-        screen_width: 320,
-        screen_height: 240,
-    });
+        .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::DeviceMetrics(Some(
+            EmulatedDeviceMetrics {
+                width: 320,
+                height: 240,
+                device_scale_factor: 2.0,
+                screen_width: 320,
+                screen_height: 240,
+            },
+        )));
 
     ctx.process_async(json!({
         "id": 114,
@@ -563,14 +564,15 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
     inactive.attach_active_session("SID-inactive".to_owned());
     inactive
         .active_page_target_mut()
-        .effective_emulation_state
-        .emulated_device_metrics = Some(EmulatedDeviceMetrics {
-        width: 500,
-        height: 300,
-        device_scale_factor: 1.5,
-        screen_width: 500,
-        screen_height: 300,
-    });
+        .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::DeviceMetrics(Some(
+            EmulatedDeviceMetrics {
+                width: 500,
+                height: 300,
+                device_scale_factor: 1.5,
+                screen_width: 500,
+                screen_height: 300,
+            },
+        )));
     inactive.replace_loaded_page(Some(page));
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);
