@@ -52,7 +52,10 @@ pub struct ResponseHead {
 
 #[derive(Debug)]
 pub enum ResponseBody {
-    MaterializedText { text: String, bytes: Vec<u8> },
+    MaterializedText {
+        text: String,
+        exact_bytes: Option<Vec<u8>>,
+    },
     MaterializedBytes(Vec<u8>),
     StreamingText(Box<StreamingHtmlResponse>),
     StreamingBytes(Box<StreamingRawResponse>),
@@ -60,7 +63,27 @@ pub enum ResponseBody {
 
 impl ResponseBody {
     pub fn materialized_text(text: String, bytes: Vec<u8>) -> Self {
-        Self::MaterializedText { text, bytes }
+        let exact_bytes = (!bytes.is_empty()).then_some(bytes);
+        Self::MaterializedText { text, exact_bytes }
+    }
+
+    /// Builds a text body from exact bytes without retaining a second copy
+    /// when the bytes are already valid UTF-8.
+    pub fn lossy_text_from_bytes(bytes: Vec<u8>) -> Self {
+        match String::from_utf8(bytes) {
+            Ok(text) => Self::MaterializedText {
+                text,
+                exact_bytes: None,
+            },
+            Err(error) => {
+                let bytes = error.into_bytes();
+                let text = String::from_utf8_lossy(&bytes).into_owned();
+                Self::MaterializedText {
+                    text,
+                    exact_bytes: Some(bytes),
+                }
+            }
+        }
     }
 
     pub fn materialized_bytes(bytes: Vec<u8>) -> Self {
@@ -74,12 +97,8 @@ impl ResponseBody {
     pub fn try_into_materialized_bytes(self) -> std::result::Result<Vec<u8>, Self> {
         match self {
             Self::MaterializedBytes(bytes) => Ok(bytes),
-            Self::MaterializedText { text, bytes } => {
-                if bytes.is_empty() && !text.is_empty() {
-                    Ok(text.into_bytes())
-                } else {
-                    Ok(bytes)
-                }
+            Self::MaterializedText { text, exact_bytes } => {
+                Ok(exact_bytes.unwrap_or_else(|| text.into_bytes()))
             }
             Self::StreamingText(_) | Self::StreamingBytes(_) => Err(self),
         }
@@ -88,12 +107,8 @@ impl ResponseBody {
     pub fn as_materialized_bytes(&self) -> Option<&[u8]> {
         match self {
             Self::MaterializedBytes(bytes) => Some(bytes),
-            Self::MaterializedText { text, bytes } => {
-                if bytes.is_empty() && !text.is_empty() {
-                    Some(text.as_bytes())
-                } else {
-                    Some(bytes)
-                }
+            Self::MaterializedText { text, exact_bytes } => {
+                Some(exact_bytes.as_deref().unwrap_or(text.as_bytes()))
             }
             Self::StreamingText(_) | Self::StreamingBytes(_) => None,
         }
@@ -102,9 +117,9 @@ impl ResponseBody {
     pub fn clone_materialized(&self) -> Option<Self> {
         match self {
             Self::MaterializedBytes(bytes) => Some(Self::MaterializedBytes(bytes.clone())),
-            Self::MaterializedText { text, bytes } => Some(Self::MaterializedText {
+            Self::MaterializedText { text, exact_bytes } => Some(Self::MaterializedText {
                 text: text.clone(),
-                bytes: bytes.clone(),
+                exact_bytes: exact_bytes.clone(),
             }),
             Self::StreamingText(_) | Self::StreamingBytes(_) => None,
         }
@@ -119,11 +134,23 @@ impl ResponseBody {
 
     pub fn try_into_lossy_materialized_text(self) -> std::result::Result<(String, Vec<u8>), Self> {
         match self {
-            Self::MaterializedText { text, bytes } => Ok((text, bytes)),
+            Self::MaterializedText { text, exact_bytes } => {
+                let bytes = exact_bytes.unwrap_or_else(|| text.as_bytes().to_vec());
+                Ok((text, bytes))
+            }
             Self::MaterializedBytes(bytes) => {
                 let text = String::from_utf8_lossy(&bytes).into_owned();
                 Ok((text, bytes))
             }
+            Self::StreamingText(_) | Self::StreamingBytes(_) => Err(self),
+        }
+    }
+
+    /// Converts an already-materialized body to its text representation.
+    pub fn try_into_materialized_text_body(self) -> std::result::Result<Self, Self> {
+        match self {
+            Self::MaterializedText { .. } => Ok(self),
+            Self::MaterializedBytes(bytes) => Ok(Self::lossy_text_from_bytes(bytes)),
             Self::StreamingText(_) | Self::StreamingBytes(_) => Err(self),
         }
     }
@@ -135,12 +162,8 @@ impl ResponseBody {
     pub async fn into_materialized_bytes(self) -> Result<Vec<u8>> {
         match self {
             Self::MaterializedBytes(bytes) => Ok(bytes),
-            Self::MaterializedText { text, bytes } => {
-                if bytes.is_empty() && !text.is_empty() {
-                    Ok(text.into_bytes())
-                } else {
-                    Ok(bytes)
-                }
+            Self::MaterializedText { text, exact_bytes } => {
+                Ok(exact_bytes.unwrap_or_else(|| text.into_bytes()))
             }
             Self::StreamingText(response) => {
                 let mut response = *response;
@@ -167,7 +190,10 @@ impl ResponseBody {
     /// the exact bytes used to derive it.
     pub async fn into_lossy_materialized_text(self) -> Result<(String, Vec<u8>)> {
         match self {
-            Self::MaterializedText { text, bytes } => Ok((text, bytes)),
+            Self::MaterializedText { text, exact_bytes } => {
+                let bytes = exact_bytes.unwrap_or_else(|| text.as_bytes().to_vec());
+                Ok((text, bytes))
+            }
             Self::MaterializedBytes(bytes) => {
                 let text = String::from_utf8_lossy(&bytes).into_owned();
                 Ok((text, bytes))
@@ -188,6 +214,32 @@ impl ResponseBody {
                     .await?;
                 let text = String::from_utf8_lossy(&bytes).into_owned();
                 Ok((text, bytes))
+            }
+        }
+    }
+
+    /// Drains a body source and returns a materialized text body.
+    pub async fn into_materialized_text_body(self) -> Result<Self> {
+        match self {
+            Self::MaterializedText { .. } => Ok(self),
+            Self::MaterializedBytes(bytes) => Ok(Self::lossy_text_from_bytes(bytes)),
+            Self::StreamingText(response) => {
+                let mut response = *response;
+                let mut text = String::new();
+                while let Some(chunk) = response.next_chunk().await {
+                    text.push_str(&chunk);
+                }
+                response.finish().await?;
+                Ok(Self::MaterializedText {
+                    text,
+                    exact_bytes: None,
+                })
+            }
+            Self::StreamingBytes(response) => {
+                let bytes = Self::StreamingBytes(response)
+                    .into_materialized_bytes()
+                    .await?;
+                Ok(Self::lossy_text_from_bytes(bytes))
             }
         }
     }
@@ -289,26 +341,25 @@ impl Response {
     }
 
     pub fn from_head_and_text_body(head: ResponseHead, body: String) -> Self {
-        let body_bytes = body.as_bytes().to_vec();
-        Self::from_head_and_body(head, body, body_bytes)
+        Self::from_head_and_body(head, body, Vec::new())
     }
 
     /// Builds a materialized text response from exact bytes by deriving the
     /// compatibility text view with UTF-8 replacement semantics.
     pub fn from_head_and_lossy_body_bytes(head: ResponseHead, body_bytes: Vec<u8>) -> Self {
-        let body = String::from_utf8_lossy(&body_bytes).into_owned();
-        Self::from_head_and_body(head, body, body_bytes)
+        Self::from_head_and_materialized_body(head, ResponseBody::lossy_text_from_bytes(body_bytes))
+            .expect("materialized text body should build a Response")
     }
 
     pub fn from_head_and_materialized_body(head: ResponseHead, body: ResponseBody) -> Result<Self> {
-        let (body, body_bytes) = body.try_into_lossy_materialized_text().map_err(|_| {
+        let body = body.try_into_materialized_text_body().map_err(|_| {
             anyhow!("cannot build materialized Response from streaming response body")
         })?;
         Ok(Self {
             final_url: head.final_url,
             status: head.status,
             headers: head.headers,
-            body: ResponseBody::materialized_text(body, body_bytes),
+            body,
             request_cookie_report: head.request_cookie_report,
             cookie_set_reports: head.cookie_set_reports,
             redirected: head.redirected,
@@ -320,12 +371,12 @@ impl Response {
     }
 
     pub async fn from_head_and_body_source(head: ResponseHead, body: ResponseBody) -> Result<Self> {
-        let (body, body_bytes) = body.into_lossy_materialized_text().await?;
+        let body = body.into_materialized_text_body().await?;
         Ok(Self {
             final_url: head.final_url,
             status: head.status,
             headers: head.headers,
-            body: ResponseBody::materialized_text(body, body_bytes),
+            body,
             request_cookie_report: head.request_cookie_report,
             cookie_set_reports: head.cookie_set_reports,
             redirected: head.redirected,
