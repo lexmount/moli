@@ -991,6 +991,32 @@ mod tests {
     }
 
     #[test]
+    fn named_candidate_index_shares_values_between_directions() {
+        let mut host = test_host();
+        let element = host.create_element("div");
+        assert!(host.set_attribute(element, "id", "shared-identifier"));
+        assert!(host.append_child(host.document_handle(), element));
+
+        assert_eq!(
+            host.element_handle_by_id("shared-identifier"),
+            Some(element)
+        );
+
+        let index = host.id_index.borrow();
+        let index = index.as_ref().expect("materialized ID index");
+        let forward = index
+            .handles_by_value
+            .keys()
+            .find(|value| value.as_ref() == "shared-identifier")
+            .expect("forward index key");
+        let reverse = index
+            .value_by_handle
+            .get(&element)
+            .expect("reverse index value");
+        assert!(std::sync::Arc::ptr_eq(forward, reverse));
+    }
+
+    #[test]
     fn document_root_named_subtree_lookups_use_indexes_without_widening_nested_scope() {
         let mut host = test_host();
         let document = host.document_handle();

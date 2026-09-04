@@ -303,7 +303,7 @@ impl DomHost {
         handle: DomHandle,
         current_value: Option<&str>,
     ) {
-        if index.value_by_handle.get(&handle).map(String::as_str) == current_value {
+        if index.value_by_handle.get(&handle).map(AsRef::as_ref) == current_value {
             return;
         }
         if let Some(previous_value) = index.value_by_handle.remove(&handle) {
@@ -320,14 +320,13 @@ impl DomHost {
             }
         }
         if let Some(current_value) = current_value {
+            let current_value = std::sync::Arc::<str>::from(current_value);
             index
                 .handles_by_value
-                .entry(current_value.to_owned())
+                .entry(current_value.clone())
                 .or_default()
                 .insert(handle);
-            index
-                .value_by_handle
-                .insert(handle, current_value.to_owned());
+            index.value_by_handle.insert(handle, current_value);
         }
     }
 

@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 pub type DomHandle = NativeNodeId;
 
@@ -9,8 +10,8 @@ pub struct HostElementSnapshot {
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct NamedElementIndex {
-    pub(super) handles_by_value: HashMap<String, IndexSet<DomHandle>>,
-    pub(super) value_by_handle: HashMap<DomHandle, String>,
+    pub(super) handles_by_value: HashMap<Arc<str>, IndexSet<DomHandle>>,
+    pub(super) value_by_handle: HashMap<DomHandle, Arc<str>>,
 }
 
 #[derive(Debug, Clone, Default)]
