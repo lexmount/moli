@@ -94,8 +94,6 @@ html/browsers/history/the-history-interface/traverse_the_history_write_after_loa
 html/browsers/history/the-history-interface/traverse_the_history_write_after_load_2.html
 html/browsers/history/the-history-interface/traverse_the_history_write_onload_1.html
 html/browsers/history/the-history-interface/traverse_the_history_write_onload_2.html
-html/browsers/history/the-location-interface/location-protocol-setter-non-broken.html
-html/browsers/history/the-location-interface/location-protocol-setter-sameish.html
 html/browsers/history/the-location-interface/location_replace_session_history.html
 html/browsers/history/the-location-interface/reload_document_open_write.html
 html/browsers/history/the-location-interface/scripted_click_assign_during_load.html
