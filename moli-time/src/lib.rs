@@ -52,8 +52,11 @@ pub fn monotonic_timestamp_micros() -> u64 {
 }
 
 pub fn coarsened_dom_time_millis(millis: f64) -> f64 {
-    const FIVE_MICROSECONDS_PER_MILLISECOND: f64 = 200.0;
-    (millis * FIVE_MICROSECONDS_PER_MILLISECOND).floor() / FIVE_MICROSECONDS_PER_MILLISECOND
+    // High Resolution Time requires the default, non-isolated clock to expose
+    // no finer than 100 microseconds. Keep the shared clock on that safe
+    // default; cross-origin-isolated realms may opt into a finer clock later.
+    const TEN_TICKS_PER_MILLISECOND: f64 = 10.0;
+    (millis * TEN_TICKS_PER_MILLISECOND).floor() / TEN_TICKS_PER_MILLISECOND
 }
 
 pub fn dom_time_since_origin_millis(time_origin: f64) -> f64 {
@@ -241,9 +244,10 @@ mod tests {
     }
 
     #[test]
-    fn dom_time_coarsening_uses_five_microsecond_resolution() {
-        assert_eq!(coarsened_dom_time_millis(1.234_567), 1.23);
-        assert_eq!(coarsened_dom_time_millis(1.239_999), 1.235);
+    fn dom_time_coarsening_uses_default_hundred_microsecond_resolution() {
+        assert_eq!(coarsened_dom_time_millis(1.234_567), 1.2);
+        assert_eq!(coarsened_dom_time_millis(1.299_999), 1.2);
+        assert_eq!(coarsened_dom_time_millis(1.3), 1.3);
         assert_eq!(
             dom_time_since_origin_millis(unix_epoch_millis() + 1000.0),
             0.0
