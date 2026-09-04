@@ -124,6 +124,7 @@ html/editing/the-hidden-attribute/beforematch-attribute-removal-002.html
 html/editing/the-hidden-attribute/beforematch-element-removal-001.html
 html/editing/the-hidden-attribute/beforematch-element-removal-002.html
 html/editing/the-hidden-attribute/hidden-until-found-and-details.html
+html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/allow-scripts-flag-changing-2.html
 html/semantics/document-metadata/the-meta-element/pragma-directives/attr-meta-http-equiv-refresh/remove-from-document.html
 html/semantics/embedded-content/the-embed-element/embed-change-src.html
 html/semantics/embedded-content/the-iframe-element/change_parentage.html
