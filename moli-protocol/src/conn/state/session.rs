@@ -1,6 +1,7 @@
 use super::devtools_session::DevToolsNetworkSessionState;
 use super::javascript_dialog::TargetJavaScriptDialogState;
 use super::page_target_host::PageTargetHost;
+use super::web_contents::NetworkRequestPolicy;
 use crate::domains::audits_output_state::TargetAuditsSessionState;
 use moli_core::page::V8InspectorSessionState;
 
@@ -70,15 +71,13 @@ impl PageTargetHost {
     }
 
     pub(crate) fn effective_policy(&self) -> EffectiveTargetPolicy {
-        let devtools_network = self.devtools_sessions.effective_network_policy();
-        let mut extra_headers = self.network_policy.base_extra_headers.clone();
-        overlay_extra_headers(&mut extra_headers, &devtools_network.extra_headers);
         EffectiveTargetPolicy {
-            cache_disabled: self.network_policy.base_cache_disabled
-                || devtools_network.cache_disabled,
-            bypass_service_worker: devtools_network.bypass_service_worker,
-            blocked_url_patterns: devtools_network.blocked_url_patterns,
-            extra_headers,
+            network_request: self
+                .runtime_slot
+                .page_slot()
+                .contents
+                .network_request_policy
+                .clone(),
             browser_identity_override: self
                 .devtools_sessions
                 .effective_network_browser_identity_override()
@@ -100,6 +99,39 @@ impl PageTargetHost {
         }
     }
 
+    // Only contribution writes aggregate DevTools state. Replace this in-place
+    // install with AgentHost -> BrowserHandle in Commits 14/22, before 24b.
+    fn install_effective_network_request_policy(&mut self) {
+        let mut policy = self.devtools_sessions.effective_network_policy();
+        policy.cache_disabled |= self.network_policy.base_cache_disabled;
+        let mut headers = self.network_policy.base_extra_headers.clone();
+        overlay_extra_headers(&mut headers, &policy.extra_headers);
+        policy.extra_headers = headers;
+        self.runtime_slot
+            .page_slot_mut()
+            .contents
+            .set_network_request_policy(policy);
+    }
+
+    pub(crate) fn set_base_cache_disabled(&mut self, disabled: bool) {
+        self.network_policy.base_cache_disabled = disabled;
+        self.install_effective_network_request_policy();
+        let effective = self
+            .runtime_slot
+            .page_slot()
+            .contents
+            .network_request_policy
+            .cache_disabled;
+        if let Some(engine) = self.navigation_engine_mut() {
+            engine.set_cache_disabled(effective);
+        }
+    }
+
+    pub(crate) fn set_base_extra_headers(&mut self, headers: Vec<(String, String)>) {
+        self.network_policy.base_extra_headers = headers;
+        self.install_effective_network_request_policy();
+    }
+
     pub(crate) fn effective_renderer_browser_identity_override_owned(
         &self,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
@@ -113,7 +145,9 @@ impl PageTargetHost {
         f: impl FnOnce(&mut DevToolsNetworkSessionState) -> T,
     ) -> T {
         let session = self.devtools_sessions.ensure_session(session_key);
-        f(&mut session.network_session_state)
+        let result = f(&mut session.network_session_state);
+        self.install_effective_network_request_policy();
+        result
     }
 
     pub(crate) fn set_devtools_browser_identity_override(
@@ -156,6 +190,7 @@ impl PageTargetHost {
         session_key: &moli_page_types::DevToolsSessionKey,
     ) {
         self.devtools_sessions.clear_network_state(session_key);
+        self.install_effective_network_request_policy();
     }
 
     pub(crate) fn clear_devtools_emulation_policy_state(
@@ -185,6 +220,12 @@ impl PageTargetHost {
             || self.base_locale_override.is_some()
             || self.base_timezone_override.is_some()
             || *self.emulation_policy() != super::EmulationPolicy::default()
+            || self
+                .runtime_slot
+                .page_slot()
+                .contents
+                .network_request_policy
+                != NetworkRequestPolicy::default()
             || self.input_intercept_drags_enabled
             || self.input_drag_intercepted
             || self.css_enabled
@@ -214,15 +255,11 @@ fn overlay_extra_headers(effective: &mut Vec<(String, String)>, layer: &[(String
     }
 }
 
-/// Immutable policy derived from target-owned base state and every attached
-/// DevTools session. It is deliberately not stored on `PageTargetHost`: the
-/// session registry remains the only source of truth.
+/// Migration snapshot: request values come from WebContents; identity/locale
+/// still come from frontend contributions until their separate policy cutover.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct EffectiveTargetPolicy {
-    cache_disabled: bool,
-    bypass_service_worker: bool,
-    blocked_url_patterns: Vec<String>,
-    extra_headers: Vec<(String, String)>,
+    network_request: NetworkRequestPolicy,
     browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
     renderer_browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
     locale_override: Option<String>,
@@ -232,10 +269,7 @@ pub(crate) struct EffectiveTargetPolicy {
 impl EffectiveTargetPolicy {
     pub(crate) fn delta(&self, next: &Self) -> EffectiveTargetPolicyDelta {
         EffectiveTargetPolicyDelta {
-            network_request: self.cache_disabled != next.cache_disabled
-                || self.bypass_service_worker != next.bypass_service_worker
-                || self.blocked_url_patterns != next.blocked_url_patterns
-                || self.extra_headers != next.extra_headers,
+            network_request: self.network_request != next.network_request,
             browser_identity: self.browser_identity_override != next.browser_identity_override,
             renderer_browser_identity: self.renderer_browser_identity_override
                 != next.renderer_browser_identity_override,
@@ -245,19 +279,19 @@ impl EffectiveTargetPolicy {
     }
 
     pub(crate) fn cache_disabled(&self) -> bool {
-        self.cache_disabled
+        self.network_request.cache_disabled
     }
 
     pub(crate) fn bypass_service_worker(&self) -> bool {
-        self.bypass_service_worker
+        self.network_request.bypass_service_worker
     }
 
     pub(crate) fn blocked_url_patterns(&self) -> &[String] {
-        &self.blocked_url_patterns
+        &self.network_request.blocked_url_patterns
     }
 
     pub(crate) fn extra_headers(&self) -> &[(String, String)] {
-        &self.extra_headers
+        &self.network_request.extra_headers
     }
 
     pub(crate) fn browser_identity_override(
@@ -589,10 +623,6 @@ impl Default for TargetNetworkPolicyState {
 }
 
 impl TargetNetworkPolicyState {
-    pub(crate) fn set_base_cache_disabled(&mut self, cache_disabled: bool) {
-        self.base_cache_disabled = cache_disabled;
-    }
-
     pub(crate) fn clear_session_scoped_state(&mut self) {
         let base_cache_disabled = self.base_cache_disabled;
         let base_extra_headers = std::mem::take(&mut self.base_extra_headers);
@@ -610,17 +640,6 @@ impl TargetNetworkPolicyState {
     #[cfg(test)]
     pub(crate) fn set_network_offline(&mut self, network_offline: bool) {
         self.network_offline = network_offline;
-    }
-
-    pub(crate) fn replace_base_extra_headers(&mut self, extra_headers: Vec<(String, String)>) {
-        self.base_extra_headers = extra_headers;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn push_extra_header(&mut self, header: (String, String)) {
-        let mut headers = self.base_extra_headers.clone();
-        headers.push(header);
-        self.replace_base_extra_headers(headers);
     }
 
     #[cfg(test)]
@@ -702,6 +721,106 @@ mod tests {
     use super::{PageScreencastConfig, PageScreencastFormat, PageScreencastSessionState};
     use crate::conn::PageTargetHost;
     use moli_page_types::DevToolsSessionKey;
+
+    #[test]
+    fn network_request_policy_survives_projection_drop_and_updates_without_sessions() {
+        let mut target = PageTargetHost::empty("TID-independent-policy".into());
+        target.mutate_devtools_network_session_state(&DevToolsSessionKey::Primary, |raw| {
+            raw.network_enabled = true;
+            raw.cache_disabled = true;
+            raw.bypass_service_worker = true;
+            raw.blocked_url_patterns = vec!["blocked/*".into()];
+            raw.extra_headers = vec![("X-Owner".into(), "browser".into())];
+        });
+        let installed = target.effective_policy().network_request;
+        // A Browser-side value update must be observable without rebuilding it
+        // from the unchanged frontend contributions on every read.
+        let independent = super::NetworkRequestPolicy {
+            cache_disabled: false,
+            ..installed.clone()
+        };
+        target
+            .runtime_slot
+            .page_slot_mut()
+            .contents
+            .set_network_request_policy(independent.clone());
+        assert_eq!(target.effective_policy().network_request, independent);
+        assert!(
+            target
+                .devtools_sessions
+                .primary()
+                .network_session_state
+                .cache_disabled
+        );
+        let id = target.web_contents_id();
+        let mut contents = std::mem::take(&mut target.runtime_slot.page_slot_mut().contents);
+        drop(target);
+        assert_eq!(contents.id(), id);
+        assert_eq!(contents.network_request_policy, independent);
+        contents.set_network_request_policy(installed.clone());
+        assert_eq!(contents.network_request_policy, installed);
+    }
+
+    #[test]
+    fn network_policy_preserves_enable_disable_and_base_precedence() {
+        let mut target = PageTargetHost::empty("TID-network-policy".into());
+        target.set_base_cache_disabled(true);
+        let base_headers = vec![("X-Shared".into(), "base".into())];
+        target.set_base_extra_headers(base_headers.clone());
+        target.mutate_devtools_network_session_state(&DevToolsSessionKey::Primary, |raw| {
+            raw.bypass_service_worker = true;
+            raw.blocked_url_patterns = vec!["primary/*".into()];
+            raw.extra_headers = vec![("x-shared".into(), "primary".into())];
+        });
+        let disabled = target.effective_policy();
+        assert!(disabled.cache_disabled());
+        assert!(!disabled.bypass_service_worker());
+        assert!(disabled.blocked_url_patterns().is_empty());
+        assert_eq!(disabled.extra_headers(), base_headers);
+
+        target.mutate_devtools_network_session_state(&DevToolsSessionKey::Primary, |raw| {
+            raw.network_enabled = true;
+        });
+        // Deliberately reverse lexical order: header precedence is attachment order.
+        for session in ["SID-z", "SID-a"] {
+            target.mutate_devtools_network_session_state(
+                &DevToolsSessionKey::Attached(session.into()),
+                |raw| {
+                    raw.network_enabled = true;
+                    raw.blocked_url_patterns = vec!["primary/*".into(), format!("{session}/*")];
+                    raw.extra_headers = vec![("X-SHARED".into(), session.into())];
+                },
+            );
+        }
+        let combined = target.effective_policy();
+        assert!(combined.cache_disabled());
+        assert!(combined.bypass_service_worker());
+        assert_eq!(
+            combined.blocked_url_patterns(),
+            ["primary/*", "SID-z/*", "SID-a/*"]
+        );
+        assert_eq!(
+            combined.extra_headers(),
+            [("X-SHARED".into(), "SID-a".into())]
+        );
+        target.clear_devtools_network_state(&DevToolsSessionKey::Attached("SID-a".into()));
+        assert_eq!(
+            target.effective_policy().extra_headers(),
+            [("X-SHARED".into(), "SID-z".into())]
+        );
+        target.clear_devtools_network_state(&DevToolsSessionKey::Primary);
+        assert!(!target.effective_policy().bypass_service_worker());
+        target.clear_devtools_network_state(&DevToolsSessionKey::Attached("SID-z".into()));
+        assert_eq!(target.effective_policy().extra_headers(), base_headers);
+        assert!(target.effective_policy().blocked_url_patterns().is_empty());
+        assert!(target.effective_policy().cache_disabled());
+        target.set_base_cache_disabled(false);
+        assert!(!target.effective_policy().cache_disabled());
+        assert_eq!(
+            combined.extra_headers(),
+            [("X-SHARED".into(), "SID-a".into())]
+        );
+    }
 
     #[test]
     fn devtools_emulation_overrides_reveal_target_base_state_when_cleared() {

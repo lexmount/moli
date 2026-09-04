@@ -1235,10 +1235,7 @@ fn background_target_identity_for_initial_url(
 mod tests {
     use super::*;
     use crate::conn::state::{PerformanceTimeDomain, TargetPerformanceSessionState};
-    use crate::conn::{
-        DevToolsSessionState, DocumentStartScript, TargetPageSessionState,
-        TargetRuntimeSessionState,
-    };
+    use crate::conn::{DocumentStartScript, TargetPageSessionState, TargetRuntimeSessionState};
     use crate::testing::TestContext;
     use serde_json::json;
     use std::sync::Arc;
@@ -1577,14 +1574,11 @@ mod tests {
                 .background_target_mut("TID-bg")
                 .expect("background target must exist");
             state.owner_state.next_document_start_script_id = 7;
-            state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-                DevToolsSessionState {
-                    runtime_session_state: TargetRuntimeSessionState {
-                        runtime_frontend_enabled: true,
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                };
+            state
+                .devtools_sessions
+                .primary_mut()
+                .runtime_session_state
+                .runtime_frontend_enabled = true;
         }
 
         let host = context
@@ -2112,35 +2106,32 @@ mod tests {
             None,
             None,
         );
-        let mut devtools_session_state = DevToolsSessionState {
-            runtime_session_state: TargetRuntimeSessionState {
-                runtime_frontend_enabled: true,
-                runtime_contexts_reported_to_frontend: false,
-                inspector_enabled: true,
-                inspector_target_crashed_delivered: false,
+        let devtools_session_state = context
+            .background_target_mut("TID-bg")
+            .expect("background target must exist")
+            .devtools_sessions
+            .primary_mut();
+        devtools_session_state.runtime_session_state = TargetRuntimeSessionState {
+            runtime_frontend_enabled: true,
+            runtime_contexts_reported_to_frontend: false,
+            inspector_enabled: true,
+            inspector_target_crashed_delivered: false,
+        };
+        devtools_session_state.page_session_state = TargetPageSessionState {
+            page_lifecycle_events: true,
+            log_enabled: true,
+            performance: {
+                let mut performance = TargetPerformanceSessionState::default();
+                assert!(performance.enable(PerformanceTimeDomain::ThreadTicks));
+                performance
             },
-            page_session_state: TargetPageSessionState {
-                page_lifecycle_events: true,
-                log_enabled: true,
-                performance: {
-                    let mut performance = TargetPerformanceSessionState::default();
-                    assert!(performance.enable(PerformanceTimeDomain::ThreadTicks));
-                    performance
-                },
-                page_file_chooser_opened_event_enabled: true,
-                page_intercept_file_chooser_dialog_enabled: true,
-                ..Default::default()
-            },
+            page_file_chooser_opened_event_enabled: true,
+            page_intercept_file_chooser_dialog_enabled: true,
             ..Default::default()
         };
         devtools_session_state
             .console_output_session_state
             .console_enabled = true;
-        context
-            .background_target_mut("TID-bg")
-            .expect("background target must exist")
-            .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-            devtools_session_state;
         context
             .background_target_mut("TID-bg")
             .expect("background target")

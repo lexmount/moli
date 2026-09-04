@@ -3056,9 +3056,7 @@ mod tests {
                 .background_target_mut("TID-background")
                 .expect("background target must exist");
             state.runtime_slot.enable_primary_network_events();
-            state
-                .network_policy
-                .push_extra_header(("X-Owner".to_owned(), "background".to_owned()));
+            state.set_base_extra_headers(vec![("X-Owner".to_owned(), "background".to_owned())]);
             state.fetch_owner.configure(
                 Some("SID-background".to_owned()),
                 false,
@@ -3227,12 +3225,11 @@ mod tests {
                 .network_policy
                 .set_user_agent_override("OwnerUA/1.0".to_owned());
             state.network_policy.set_network_offline(true);
-            let network = &mut state.devtools_sessions.primary_mut().network_session_state;
-            network.network_enabled = true;
-            network.blocked_url_patterns = vec!["*.blocked.test".to_owned()];
-            state
-                .network_policy
-                .push_extra_header(("X-Owner".to_owned(), "background".to_owned()));
+            state.mutate_devtools_network_session_state(&DevToolsSessionKey::Primary, |network| {
+                network.network_enabled = true;
+                network.blocked_url_patterns = vec!["*.blocked.test".to_owned()];
+            });
+            state.set_base_extra_headers(vec![("X-Owner".to_owned(), "background".to_owned())]);
             state.apply_emulation_policy_change(crate::conn::EmulationPolicyChange::Media(
                 crate::conn::EmulatedMediaOverrides {
                     media: Some("print".to_owned()),

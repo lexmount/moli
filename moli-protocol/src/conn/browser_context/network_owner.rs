@@ -229,9 +229,7 @@ impl TargetSessionOwnerMut<'_> {
         extra_headers: Vec<(String, String)>,
     ) -> Result<Option<PendingPageCommand>, String> {
         let headers = self.mutate_page_state(|state, _session_key| {
-            state
-                .network_policy
-                .replace_base_extra_headers(extra_headers);
+            state.set_base_extra_headers(extra_headers);
             state.effective_policy().extra_headers().to_vec()
         });
         let effective_headers = self.effective_extra_headers_for_target_policy(headers);
@@ -946,18 +944,15 @@ mod tests {
     #[test]
     fn target_session_state_mut_applies_active_and_background_network_fields() {
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
-        {
-            let network = &mut active
-                .active_page_target_mut()
-                .devtools_sessions
-                .primary_mut()
-                .network_session_state;
-            network.network_enabled = true;
-            network.cache_disabled = true;
-            network.bypass_service_worker = true;
-            network.blocked_url_patterns = vec!["*://blocked.test/*".to_owned()];
-            network.extra_headers = vec![("X-Test".to_owned(), "active".to_owned())];
-        }
+        active
+            .active_page_target_mut()
+            .mutate_devtools_network_session_state(&DevToolsSessionKey::Primary, |network| {
+                network.network_enabled = true;
+                network.cache_disabled = true;
+                network.bypass_service_worker = true;
+                network.blocked_url_patterns = vec!["*://blocked.test/*".to_owned()];
+                network.extra_headers = vec![("X-Test".to_owned(), "active".to_owned())];
+            });
         let active_offline = active_session_state_mut(&mut active).set_emulated_network_conditions(
             true,
             25.0,
@@ -1024,17 +1019,13 @@ mod tests {
         );
 
         let mut background = PageTargetHost::empty("TID-network-owner-test".to_owned());
-        {
-            let network = &mut background
-                .devtools_sessions
-                .primary_mut()
-                .network_session_state;
+        background.mutate_devtools_network_session_state(&DevToolsSessionKey::Primary, |network| {
             network.network_enabled = true;
             network.cache_disabled = true;
             network.bypass_service_worker = true;
             network.blocked_url_patterns = vec!["*://background-blocked.test/*".to_owned()];
             network.extra_headers = vec![("X-Test".to_owned(), "background".to_owned())];
-        }
+        });
         let background_offline = background_session_state_mut(&mut background)
             .set_emulated_network_conditions(
                 true,

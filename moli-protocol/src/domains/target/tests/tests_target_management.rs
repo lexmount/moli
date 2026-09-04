@@ -521,14 +521,10 @@ async fn close_background_target_emits_detached_events_and_clears_attached_sessi
     assert!(bc.assign_attached_session_to_target("TID-000000000B", "SID-attached".into()));
     bc.background_target_mut("TID-000000000B")
         .expect("background target must exist")
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-        crate::conn::DevToolsSessionState {
-            runtime_session_state: crate::conn::TargetRuntimeSessionState {
-                inspector_enabled: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        .devtools_sessions
+        .primary_mut()
+        .runtime_session_state
+        .inspector_enabled = true;
 
     ctx.process_async(json!({
         "id": 121,

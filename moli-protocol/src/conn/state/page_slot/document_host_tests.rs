@@ -26,6 +26,17 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
     let window = target.window_surface();
     target
         .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::CpuThrottlingRate(4.0));
+    target.mutate_devtools_network_session_state(
+        &moli_page_types::DevToolsSessionKey::Primary,
+        |raw| {
+            raw.network_enabled = true;
+            raw.cache_disabled = true;
+            raw.bypass_service_worker = true;
+            raw.blocked_url_patterns = vec!["blocked/*".into()];
+            raw.extra_headers = vec![("X-Stable".into(), "contents".into())];
+        },
+    );
+    let policy = target.effective_policy();
     let first_document = target.current_document_id().unwrap();
     let storage = target.session_storage_store().clone();
     assert!(
@@ -82,6 +93,7 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
     assert_eq!(target.current_document_id(), Some(reserved));
     assert_eq!(target.window_surface(), window);
     assert_eq!(target.emulation_policy().cpu_throttling_rate, 4.0);
+    assert_eq!(target.effective_policy(), policy);
     assert_ne!(first_document, reserved);
     assert_eq!(
         target

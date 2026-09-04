@@ -293,22 +293,11 @@ impl PageTargetHost {
             .as_mut()
     }
 
-    pub(crate) fn install_navigation_engine(&mut self, mut engine: NavigationEngine) {
-        let policy = self.effective_policy();
-        engine.set_bypass_service_worker(policy.bypass_service_worker());
-        engine.set_cache_disabled(policy.cache_disabled());
+    pub(crate) fn install_navigation_engine(&mut self, engine: NavigationEngine) {
         self.runtime_slot
             .page_slot_mut()
             .contents
             .install_navigation_engine(engine);
-    }
-
-    pub(crate) fn set_base_cache_disabled(&mut self, disabled: bool) {
-        self.network_policy.set_base_cache_disabled(disabled);
-        let effective = self.effective_policy().cache_disabled();
-        if let Some(engine) = self.navigation_engine_mut() {
-            engine.set_cache_disabled(effective);
-        }
     }
 
     pub(crate) fn has_page_domain_enabled_session(&self) -> bool {

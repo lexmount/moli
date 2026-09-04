@@ -1797,7 +1797,7 @@ async fn same_context_background_session_can_stage_its_own_blocked_urls_before_a
             staged
                 .devtools_sessions
                 .primary()
-                .network_session_state
+                .network_session_state()
                 .blocked_url_patterns,
             ["http://example.test/blocked/*".to_owned()],
             "the disabled handler must retain its staged contribution until enable"
