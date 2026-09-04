@@ -294,6 +294,11 @@ impl CallbackInvoker {
             invocation.relevant_context,
             invocation.incumbent_context,
             |scope| {
+                let relevant_dispatch_scope = invocation
+                    .relevant_identity
+                    .map(WindowExecutionContextIdentity::dispatch_scope);
+                let previous_relevant_dispatch_scope =
+                    relevant_dispatch_scope.map(|dispatch_scope| dispatch_scope.enter(scope));
                 let relevant_context = invocation.relevant_context;
                 let previous_window_event =
                     invocation
@@ -359,6 +364,11 @@ impl CallbackInvoker {
                         let global = relevant_context.global(scope);
                         set_private_value(scope, global, WINDOW_EVENT_SLOT, previous);
                     }
+                }
+                if let (Some(dispatch_scope), Some(previous_dispatch_scope)) =
+                    (relevant_dispatch_scope, previous_relevant_dispatch_scope)
+                {
+                    dispatch_scope.restore(scope, previous_dispatch_scope);
                 }
                 completed
             },
