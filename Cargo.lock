@@ -5056,6 +5056,7 @@ dependencies = [
  "serde",
  "serde_json",
  "servo_arc",
+ "smol_str",
  "strum 0.28.0",
  "thin-vec",
  "url",
