@@ -37,6 +37,81 @@ async fn create_browser_context_adds_inactive_context() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cross_document_navigation_keeps_target_session_and_replaces_page_residence() {
+    let mut ctx = TestContext::new();
+    let target_id = "TID-stable-across-navigation";
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-stable-across-navigation",
+        target_id,
+        "<title>before navigation</title>",
+    )
+    .await;
+    let session_id = "SID-stable-across-navigation";
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .expect("browser context")
+        .attach_active_session(session_id);
+    register_page_session_route(
+        &mut ctx,
+        "BID-stable-across-navigation",
+        target_id,
+        session_id,
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
+    let before = ctx
+        .conn
+        .target_page_residence_identity_for_session(Some(session_id))
+        .expect("initial Page residence");
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 1041001,
+        "method": "Page.navigate",
+        "sessionId": session_id,
+        "params": {
+            "url": "data:text/html,<title>after navigation</title>"
+        }
+    }))
+    .await;
+    consume_main_document_navigation_start(&mut ctx);
+    let navigation = take_response_by_id(&mut ctx, 1041001);
+    assert_eq!(navigation["result"]["frameId"], json!(target_id));
+    assert!(
+        navigation["result"]["loaderId"].is_string(),
+        "cross-document navigation must create a new loader"
+    );
+    let navigation_output = ctx.take_all();
+    assert!(
+        navigation_output.iter().all(|message| {
+            !matches!(
+                message["method"].as_str(),
+                Some("Target.targetCreated" | "Target.targetDestroyed")
+            )
+        }),
+        "replacing a Document must not replace its stable DevTools target: {navigation_output:?}"
+    );
+
+    let after = ctx
+        .conn
+        .target_page_residence_identity_for_session(Some(session_id))
+        .expect("replacement Page residence");
+    assert_eq!(after.browser_context_id(), before.browser_context_id());
+    assert_eq!(after.target_id(), before.target_id());
+    assert_ne!(
+        after.page_attachment_id(),
+        before.page_attachment_id(),
+        "cross-document navigation must replace the concrete Page residence"
+    );
+    assert_eq!(
+        ctx.conn.non_browser_target_id_for_session(Some(session_id)),
+        Some(target_id.to_owned()),
+        "the attached DevTools session must remain on the stable target"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn close_active_target_fails_only_active_owner_pending_awaits() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-await-owner".into());
