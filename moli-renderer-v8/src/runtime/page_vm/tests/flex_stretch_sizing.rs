@@ -71,3 +71,51 @@ document.body.append(root);
     .await
     .expect("flex stretch fixture should run");
 }
+
+#[tokio::test(flavor = "current_thread")]
+async fn cross_axis_auto_margins_suppress_stretch_without_making_percentages_definite() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-auto-margin-cross-size.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;padding:0}
+x-flexbox{display:flex;width:100px;height:200px}
+#item{margin:auto;background:green}
+#percentage{height:100%;width:100px;background:red}
+#fixed{height:100px}
+</style>`;
+document.body.innerHTML = `<x-flexbox><div id="item"><div id="percentage"></div><div id="fixed"></div></div></x-flexbox>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 240, 1.0))?
+            .expect("flex auto-margin fixture must retain a layout root");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['item','percentage','fixed'].map(id=>{const rect=document.getElementById(id).getBoundingClientRect();return [id,[rect.x,rect.y,rect.width,rect.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        assert_eq!(
+            geometry,
+            serde_json::json!({
+                "item": [0, 50, 100, 100],
+                "percentage": [0, 50, 100, 0],
+                "fixed": [0, 50, 100, 100]
+            }),
+            "cross-axis auto margins must keep an auto block size indefinite for descendants"
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("flex auto-margin fixture should run");
+}
