@@ -2,7 +2,7 @@ use super::{
     ChildBrowsingContextBootstrap, ChildBrowsingContextSnapshot, ChildFrameAttachmentSnapshot,
     JsContextHost, NavigationActivationSeed, NavigationHistoryDocumentId, NavigationHistoryEntryId,
     NavigationHistoryEntryKey, NavigationHistoryEntrySeed, NavigationHistorySerializedEntry,
-    child_documents::CompletedFrameOwnerResourceTiming,
+    child_documents::CompletedFrameOwnerResourceTiming, window_security_tokens::WindowAccessOrigin,
 };
 use crate::{
     document_runtime::{DocumentPolicyContainer, DocumentSandboxPolicy, DomHandle},
@@ -53,6 +53,8 @@ pub(super) struct ChildBrowsingContextEntry {
     committed_navigation_entry_seed: NavigationHistoryEntrySeed,
     cached_snapshot: Option<ChildBrowsingContextSnapshot>,
     document_policy_container: ChildDocumentPolicyContainer,
+    document_internal_ancestor_origins: Vec<WindowAccessOrigin>,
+    ancestor_origins_referrer_policy_snapshot: ChildAncestorOriginsReferrerPolicy,
     completed_document_network: Option<CompletedChildDocumentNetwork>,
     completed_frame_owner_resource_timing: Option<CompletedFrameOwnerResourceTiming>,
     performance_time_origin: ChildPerformanceTimeOrigin,
@@ -72,6 +74,14 @@ struct CompletedChildDocumentNetwork {
 }
 
 pub(super) type ChildDocumentPolicyContainer = DocumentPolicyContainer;
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(in crate::native_bridge::context_host) enum ChildAncestorOriginsReferrerPolicy {
+    #[default]
+    Default,
+    NoReferrer,
+    SameOrigin,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct ChildPerformanceTimeOrigin(u64);
@@ -236,6 +246,34 @@ impl ChildBrowsingContextEntry {
 
     pub(super) fn document_policy_container_snapshot(&self) -> ChildDocumentPolicyContainer {
         self.document_policy_container.clone()
+    }
+
+    pub(super) fn document_internal_ancestor_origins(&self) -> Vec<WindowAccessOrigin> {
+        self.document_internal_ancestor_origins.clone()
+    }
+
+    pub(super) fn set_document_internal_ancestor_origins(
+        &mut self,
+        origins: Vec<WindowAccessOrigin>,
+    ) {
+        self.document_internal_ancestor_origins = origins;
+    }
+
+    pub(super) fn clear_document_internal_ancestor_origins(&mut self) {
+        self.document_internal_ancestor_origins.clear();
+    }
+
+    pub(super) fn ancestor_origins_referrer_policy_snapshot(
+        &self,
+    ) -> ChildAncestorOriginsReferrerPolicy {
+        self.ancestor_origins_referrer_policy_snapshot
+    }
+
+    pub(super) fn set_ancestor_origins_referrer_policy_snapshot(
+        &mut self,
+        policy: ChildAncestorOriginsReferrerPolicy,
+    ) {
+        self.ancestor_origins_referrer_policy_snapshot = policy;
     }
 
     pub(super) fn set_document_permissions_policy(
