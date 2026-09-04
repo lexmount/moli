@@ -14,6 +14,7 @@ impl JsContextHost {
         bootstrap: ChildBrowsingContextBootstrap,
         navigation_load: FrameDocumentNavigationLoadBinding,
         initiator: ChildDocumentNavigationInitiator,
+        initiator_url: Option<Url>,
     ) -> Option<ChildDocumentCommitResult> {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return None;
@@ -53,7 +54,13 @@ impl JsContextHost {
 
         if requires_async_load {
             if self
-                .start_child_document_load(handle, bootstrap.clone(), navigation_load, initiator)
+                .start_child_document_load(
+                    handle,
+                    bootstrap.clone(),
+                    navigation_load,
+                    initiator,
+                    initiator_url,
+                )
                 .is_some()
             {
                 return Some(ChildDocumentCommitResult::pending());
