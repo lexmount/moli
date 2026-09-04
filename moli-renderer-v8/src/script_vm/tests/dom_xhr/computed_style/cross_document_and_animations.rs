@@ -41,7 +41,7 @@ fn popup_target_selector_invalidation_uses_popup_document_world() {
   newTarget.id = 'popup-new-target';
   newTarget.className = 'probe';
   popupBody.append(oldTarget, newTarget);
-  popup.history.replaceState(null, '', '#popup-old-target');
+  popup.history.replaceState(null, '', 'about:blank#popup-old-target');
   globalThis.__popupTargetOldStyle = popup.getComputedStyle(oldTarget);
   globalThis.__popupTargetNewStyle = popup.getComputedStyle(newTarget);
 
@@ -70,7 +70,7 @@ fn popup_target_selector_invalidation_uses_popup_document_world() {
         .eval(
             r#"
 (() => {
-  __popupTargetWindow.history.replaceState(null, '', '#popup-new-target');
+  __popupTargetWindow.history.replaceState(null, '', 'about:blank#popup-new-target');
   const result = [
     globalThis.__popupTargetOldStyle.color,
     globalThis.__popupTargetNewStyle.color
