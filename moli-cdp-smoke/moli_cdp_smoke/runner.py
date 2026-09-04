@@ -67,6 +67,7 @@ from .groups.tracing import run_raw_tracing_group, run_tracing_group
 from .groups.url_policy import run_url_policy_group
 from .groups.webgl_viewport import run_webgl_viewport_group
 from .groups.media_error import run_media_error_group
+from .groups.font_face import run_font_face_payload_group
 from .groups.workers import run_workers_group
 from .groups.xhr_sync_semantics import run_xhr_sync_semantics_group
 from .helpers import attach_cdp_event_collector
@@ -359,6 +360,12 @@ BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
         "HTMLMediaElement MediaError publication, identity, and reset lifecycle.",
         "browser",
         run_media_error_group,
+    ),
+    SmokeGroup(
+        "font-face",
+        "FontFace malformed-payload rejection and valid payload control contracts.",
+        "browser",
+        run_font_face_payload_group,
     ),
     SmokeGroup(
         "emulation-storage",
