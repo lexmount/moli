@@ -1918,6 +1918,9 @@ where
         inputs: LayoutInput,
     ) -> IntrinsicSizeResult {
         let id = LayoutBoxId::from_taffy(node_id);
+        if let Some(result) = self.compute_replaced_size(id, inputs) {
+            return result;
+        }
         if self.boxes[id.index()].inline_formatting_context {
             let result = self.compute_inline_formatting_context(id, inputs, None);
             let mut intrinsic = result.output.into_intrinsic_size_result();
@@ -1926,6 +1929,25 @@ where
         }
         self.compute_child_layout_for_box(node_id, inputs, None)
             .into_intrinsic_size_result()
+    }
+
+    /// Run Moli's browser-owned replaced-element algorithm while preserving
+    /// intrinsic sizing provenance for Taffy's typed measurement cache.
+    fn compute_replaced_size(
+        &self,
+        id: LayoutBoxId,
+        inputs: LayoutInput,
+    ) -> Option<IntrinsicSizeResult> {
+        let layout_box = &self.boxes[id.index()];
+        let context = layout_box.replaced_context?;
+        Some(measure_replaced(
+            inputs,
+            &context,
+            layout_box.style.writing_mode(),
+            layout_box.resolved_aspect_ratio(),
+            layout_box.used_size_containment(),
+            &layout_box.style.taffy,
+        ))
     }
 
     fn compute_child_layout_for_box(
@@ -2017,38 +2039,17 @@ where
     }
 
     fn compute_leaf(&mut self, id: LayoutBoxId, inputs: LayoutInput) -> LayoutOutput {
+        if let Some(result) = self.compute_replaced_size(id, inputs) {
+            return LayoutOutput::from_sizes(result.size, result.size);
+        }
+
         let layout_box = &self.boxes[id.index()];
         let style = layout_box.style.taffy.clone();
         let text = layout_box.text.clone();
         let font_size = layout_box.style.font_size();
         let line_height = layout_box.style.line_height();
         let writing_mode = layout_box.style.writing_mode();
-        let replaced_context = layout_box.replaced_context;
         let resolved_aspect_ratio = layout_box.resolved_aspect_ratio();
-        let size_containment = layout_box.used_size_containment();
-
-        if let Some(context) = replaced_context {
-            // `measure_replaced` is the complete CSS replaced-element sizing
-            // algorithm ported from Blitz: it resolves preferred/min/max
-            // sizes and returns a border-box size. Taffy's generic leaf
-            // helper instead expects a content-box measurement callback and
-            // adds CSS padding and borders itself. Routing the complete
-            // replaced result through that helper would therefore apply the
-            // box model twice (most visibly on padded form controls).
-            let size = measure_replaced(
-                inputs.known_dimensions,
-                inputs.parent_size,
-                inputs.available_space,
-                &context,
-                writing_mode,
-                resolved_aspect_ratio,
-                size_containment,
-                &style,
-                inputs.sizing_mode,
-                inputs.axis,
-            );
-            return LayoutOutput::from_sizes(size, size);
-        }
 
         let node_sizing = resolve_leaf_node_sizing(self, id.to_taffy(), inputs);
         let scrollbar_insets = self.get_scrollbar_insets(id.to_taffy());

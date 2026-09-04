@@ -7,9 +7,10 @@
 
 use style::Atom;
 use taffy::{
-    AbsoluteAxis, AvailableSpace, BoxSizing, CoreStyle as _, MaybeMath, MaybeResolve,
-    RequestedAxis, ResolveOrZero as _, ResolvedAspectRatio, Size, SizeContainment, SizingMode,
-    WritingMode,
+    AbsoluteAxis, AvailableSpace, BoxSizing, CoreStyle as _, FormattingContextSizeInput,
+    IntrinsicSizeResult, LayoutInput, MaybeMath, MaybeResolve, ResolveOrZero as _,
+    ResolvedAspectRatio, RunMode, Size, SizeContainment, WritingMode,
+    resolve_formatting_context_size, stretch_border_box_available_space,
 };
 
 use crate::{
@@ -284,33 +285,18 @@ fn normalize_natural_content_size(
 }
 
 fn ratio_only_stretch_fit_content_size(
-    available_space: Size<AvailableSpace>,
-    parent_size: Size<Option<f32>>,
+    stretch_available_space: Size<AvailableSpace>,
     context: &ReplacedContext,
     style: &taffy::Style<Atom>,
-    padding_border: taffy::Rect<f32>,
     padding_border_sum: Size<f32>,
     writing_mode: WritingMode,
     aspect_ratio: ResolvedAspectRatio,
 ) -> Size<f32> {
     let inline_axis = writing_mode.inline_axis();
-    let margin = style
-        .margin()
-        .resolve_or_zero(parent_size.width, resolve_stylo_calc_value);
-    let (inline_margin, inline_padding_border) = match inline_axis {
-        AbsoluteAxis::Horizontal => (
-            margin.left + margin.right,
-            padding_border.left + padding_border.right,
-        ),
-        AbsoluteAxis::Vertical => (
-            margin.top + margin.bottom,
-            padding_border.top + padding_border.bottom,
-        ),
-    };
     let inline_style_size = style.size.get_abs(inline_axis);
-    let inline_content_size = match available_space.get_abs(inline_axis) {
+    let inline_content_size = match stretch_available_space.get_abs(inline_axis) {
         AvailableSpace::Definite(available) => {
-            (available - inline_margin - inline_padding_border).max(0.0)
+            (available - padding_border_sum.get_abs(inline_axis)).max(0.0)
         }
         AvailableSpace::MinContent | AvailableSpace::MaxContent
             if inline_style_size.may_have_percentage_dependence() =>
@@ -362,24 +348,59 @@ fn resolve_replaced_content_box_size(
         .maybe_max(Size::ZERO)
 }
 
+/// Whether an intrinsic inline-size probe must be keyed by its block-axis
+/// constraint.
+///
+/// This is the replaced-element equivalent of Blink's
+/// `BlockNode::ComputeMinMaxSizes()` dependency predicate. Block-axis
+/// percentages and `stretch` observe the containing block directly. An
+/// authored `auto` block size does so when the current formatting context has
+/// selected stretch for that axis. Keeping this provenance beside the
+/// browser-owned replaced sizing algorithm prevents Taffy's block-independent
+/// intrinsic cache from reusing the result in a different grid/flex area.
+fn intrinsic_inline_size_depends_on_block_constraints(
+    inputs: LayoutInput,
+    writing_mode: WritingMode,
+    style: &taffy::Style<Atom>,
+) -> bool {
+    if inputs.run_mode != RunMode::ComputeSize || !inputs.axis.contains(writing_mode.inline_axis())
+    {
+        return false;
+    }
+
+    let logical_size = writing_mode.to_logical(style.size);
+    let logical_min_size = writing_mode.to_logical(style.min_size);
+    let logical_max_size = writing_mode.to_logical(style.max_size);
+    [
+        logical_size.block_size,
+        logical_min_size.block_size,
+        logical_max_size.block_size,
+    ]
+    .into_iter()
+    .any(|value| value.may_have_percentage_dependence() || value.is_stretch())
+        || (logical_size.block_size.is_auto() && !inputs.block_auto_behavior.is_fit_content())
+}
+
 pub(crate) fn measure_replaced(
-    known_dimensions: Size<Option<f32>>,
-    parent_size: Size<Option<f32>>,
-    available_space: Size<AvailableSpace>,
+    inputs: LayoutInput,
     context: &ReplacedContext,
     writing_mode: WritingMode,
     resolved_aspect_ratio: Option<ResolvedAspectRatio>,
     size_containment: SizeContainment,
     style: &taffy::Style<Atom>,
-    sizing_mode: SizingMode,
-    requested_axis: RequestedAxis,
-) -> Size<f32> {
+) -> IntrinsicSizeResult {
+    let percentage_basis = inputs
+        .constraint_space(writing_mode)
+        .margin_padding_percentage_basis();
     let padding = style
         .padding()
-        .resolve_or_zero(parent_size.width, resolve_stylo_calc_value);
+        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
     let border = style
         .border()
-        .resolve_or_zero(parent_size.width, resolve_stylo_calc_value);
+        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
+    let margin = style
+        .margin()
+        .resolve_or_zero(percentage_basis, resolve_stylo_calc_value);
     let padding_border = padding + border;
     let padding_border_sum = Size {
         width: padding_border.left + padding_border.right,
@@ -433,21 +454,24 @@ pub(crate) fn measure_replaced(
     // (`auto`, `<ratio>`, and `auto <ratio>`) against the natural ratio. Do not
     // reconstruct that precedence from Taffy's lossy numeric field here.
     let preferred_basis = Size {
-        width: if available_space.width == AvailableSpace::MinContent {
+        width: if inputs.available_space.width == AvailableSpace::MinContent {
             Some(0.0)
         } else {
-            parent_size.width
+            inputs.parent_size.width
         },
-        height: if available_space.height == AvailableSpace::MinContent {
+        height: if inputs.available_space.height == AvailableSpace::MinContent {
             Some(0.0)
         } else {
-            parent_size.height
+            inputs.parent_size.height
         },
     };
     let mut preferred_size =
         resolve_replaced_content_box_size(style.size, preferred_basis, box_sizing_adjustment);
-    let mut min_size =
-        resolve_replaced_content_box_size(style.min_size, parent_size, box_sizing_adjustment);
+    let mut min_size = resolve_replaced_content_box_size(
+        style.min_size,
+        inputs.parent_size,
+        box_sizing_adjustment,
+    );
     // Available space is not an implicit `max-width`/`max-height`. Blink
     // resolves a replaced atomic inline's used size before line breaking and
     // lets an oversized result overflow; only authored max-size constraints
@@ -502,46 +526,99 @@ pub(crate) fn measure_replaced(
         }
     }
 
-    if sizing_mode == SizingMode::ContentSize {
-        match requested_axis {
-            RequestedAxis::Horizontal => {
+    if inputs.sizing_mode == taffy::SizingMode::ContentSize {
+        match inputs.axis {
+            taffy::RequestedAxis::Horizontal => {
                 preferred_size.width = None;
                 min_size.width = None;
             }
-            RequestedAxis::Vertical => {
+            taffy::RequestedAxis::Vertical => {
                 preferred_size.height = None;
                 min_size.height = None;
             }
-            RequestedAxis::Both => {}
+            taffy::RequestedAxis::Both => {}
         }
     }
 
-    if known_dimensions.width.is_some() || known_dimensions.height.is_some() {
+    // Replaced-element sizing is browser-owned, but automatic sizing policy
+    // belongs to the containing formatting context. Consume the same typed
+    // constraint-space state used by Taffy's ordinary leaf and container
+    // algorithms so Grid/Flex/Block stretch is resolved before ratio transfer.
+    // Parent-fixed dimensions remain authoritative and are therefore excluded
+    // from authored-auto replacement below.
+    let stretch_available_space = stretch_border_box_available_space(
+        inputs.available_space,
+        margin,
+        inputs.ignored_margins_for_stretch,
+    );
+    let size_is_auto = style
+        .size
+        .map(taffy::Dimension::is_auto)
+        .zip_map(inputs.known_dimensions, |is_auto, known| {
+            is_auto && known.is_none()
+        });
+    let initial_outer_size = inputs
+        .known_dimensions
+        .or(preferred_size.maybe_add(padding_border_sum))
+        .maybe_max(padding_border_sum);
+    let formatting_context_result = resolve_formatting_context_size(FormattingContextSizeInput {
+        size: initial_outer_size,
+        size_is_auto,
+        writing_mode,
+        inline_auto_behavior: inputs.inline_auto_behavior,
+        block_auto_behavior: inputs.block_auto_behavior,
+        stretch_size: stretch_available_space.into_options(),
+        aspect_ratio: resolved_aspect_ratio,
+        padding_border: padding_border_sum,
+    });
+    let formatting_context_content_size = formatting_context_result
+        .size
+        .maybe_sub(padding_border_sum)
+        .maybe_max(Size::ZERO);
+    let finish = |size| IntrinsicSizeResult {
+        size,
+        depends_on_block_constraints: intrinsic_inline_size_depends_on_block_constraints(
+            inputs,
+            writing_mode,
+            style,
+        ),
+        applied_aspect_ratio: inputs.run_mode == RunMode::ComputeSize
+            && inputs.axis.contains(writing_mode.inline_axis())
+            && formatting_context_result
+                .aspect_ratio_applied
+                .get_abs(writing_mode.inline_axis()),
+    };
+
+    if inputs.known_dimensions.width.is_some() || inputs.known_dimensions.height.is_some() {
         let style_max_size = resolve_replaced_content_box_size(
             style.max_size,
             preferred_basis,
             box_sizing_adjustment,
         )
         .maybe_max(min_size);
-        let content_known = known_dimensions
+        let content_known = inputs
+            .known_dimensions
             .maybe_sub(padding_border_sum)
             .maybe_max(Size::ZERO);
-        let transferred = normalized_natural_size.complete(
-            apply_aspect_ratio_to_content_size(
-                content_known.maybe_clamp(min_size, style_max_size),
-                resolved_aspect_ratio,
-                padding_border_sum,
-            ),
+        let transferred = apply_aspect_ratio_to_content_size(
+            content_known.maybe_clamp(min_size, style_max_size),
+            resolved_aspect_ratio,
+            padding_border_sum,
+        );
+        let resolved = normalized_natural_size.complete(
+            formatting_context_content_size.or(transferred),
             "known replaced dimensions or natural sizing must resolve both axes",
         );
-        let size = content_known.unwrap_or(transferred.maybe_clamp(min_size, style_max_size));
-        return size.map(|value| value.max(0.0)) + padding_border_sum;
+        let size = content_known.unwrap_or(resolved.maybe_clamp(min_size, style_max_size));
+        return finish(size.map(|value| value.max(0.0)) + padding_border_sum);
     }
 
-    let unclamped = if preferred_size.width.is_some() || preferred_size.height.is_some() {
+    let unclamped = if formatting_context_content_size.width.is_some()
+        || formatting_context_content_size.height.is_some()
+    {
         normalized_natural_size.complete(
             apply_aspect_ratio_to_content_size(
-                preferred_size,
+                formatting_context_content_size,
                 resolved_aspect_ratio,
                 padding_border_sum,
             ),
@@ -551,11 +628,9 @@ pub(crate) fn measure_replaced(
         match normalized_natural_size {
             NormalizedNaturalSize::Concrete(size) => size,
             NormalizedNaturalSize::RatioOnly(aspect_ratio) => ratio_only_stretch_fit_content_size(
-                available_space,
-                parent_size,
+                stretch_available_space,
                 context,
                 style,
-                padding_border,
                 padding_border_sum,
                 writing_mode,
                 aspect_ratio,
@@ -569,8 +644,8 @@ pub(crate) fn measure_replaced(
     // the normalized natural block size first, and the inline size is then
     // transferred from that result. Apart from matching logical sizing order,
     // this preserves the ratio when padding or border floors the block axis.
-    if preferred_size.width.is_none()
-        && preferred_size.height.is_none()
+    if formatting_context_content_size.width.is_none()
+        && formatting_context_content_size.height.is_none()
         && let Some(resolved_aspect_ratio) = resolved_aspect_ratio
     {
         size = match writing_mode.block_axis() {
@@ -615,7 +690,7 @@ pub(crate) fn measure_replaced(
         Violation::None
     };
     let Some(resolved_aspect_ratio) = resolved_aspect_ratio else {
-        return size.maybe_clamp(min_size, max_size) + padding_border_sum;
+        return finish(size.maybe_clamp(min_size, max_size) + padding_border_sum);
     };
     let size = match (width_violation, height_violation) {
         (Violation::None, Violation::None) => size,
@@ -738,7 +813,7 @@ pub(crate) fn measure_replaced(
             height: min_size.height.expect("min-height violation has a bound"),
         },
     };
-    size + padding_border_sum
+    finish(size + padding_border_sum)
 }
 
 fn is_min_or_max_content(dimension: taffy::Dimension) -> bool {
@@ -749,6 +824,35 @@ fn is_min_or_max_content(dimension: taffy::Dimension) -> bool {
 mod tests {
     use super::*;
     use crate::ReplacedNaturalSizing;
+    use taffy::{
+        AutoSizeBehavior, Line, OrthogonalFallback, Rect, RequestedAxis, RunMode, SizingMode,
+        SizingPurpose,
+    };
+
+    fn layout_input(
+        known_dimensions: Size<Option<f32>>,
+        parent_size: Size<Option<f32>>,
+        available_space: Size<AvailableSpace>,
+        sizing_mode: SizingMode,
+        axis: RequestedAxis,
+    ) -> LayoutInput {
+        LayoutInput {
+            run_mode: RunMode::ComputeSize,
+            sizing_mode,
+            sizing_purpose: SizingPurpose::Layout,
+            axis,
+            inline_auto_behavior: AutoSizeBehavior::FitContent,
+            block_auto_behavior: AutoSizeBehavior::FitContent,
+            orthogonal_fallback: OrthogonalFallback::UseInitialContainingBlock,
+            known_dimensions,
+            definite_dimensions: known_dimensions,
+            parent_size,
+            parent_writing_mode: WritingMode::HorizontalTb,
+            available_space,
+            ignored_margins_for_stretch: Rect::default(),
+            vertical_margins_are_collapsible: Line::FALSE,
+        }
+    }
 
     fn image_context() -> ReplacedContext {
         ReplacedContext::for_element(
@@ -774,6 +878,44 @@ mod tests {
                 }),
             }),
         )
+    }
+
+    #[test]
+    fn formatting_context_block_stretch_transfers_through_the_natural_ratio() {
+        let mut inputs = layout_input(
+            Size::NONE,
+            Size {
+                width: None,
+                height: Some(100.0),
+            },
+            Size {
+                width: AvailableSpace::MinContent,
+                height: AvailableSpace::Definite(100.0),
+            },
+            SizingMode::InherentSize,
+            RequestedAxis::Horizontal,
+        );
+        inputs.sizing_purpose = SizingPurpose::IntrinsicContribution;
+        inputs.block_auto_behavior = AutoSizeBehavior::StretchExplicit;
+
+        let result = measure_replaced(
+            inputs,
+            &image_context(),
+            WritingMode::HorizontalTb,
+            ResolvedAspectRatio::new(1.0, BoxSizing::ContentBox),
+            SizeContainment::NONE,
+            &taffy::Style::default(),
+        );
+        assert_eq!(
+            result.size,
+            Size {
+                width: 100.0,
+                height: 100.0,
+            },
+            "the Grid area's definite block size must reach the replaced sizing boundary before its ratio supplies the inline contribution",
+        );
+        assert!(result.depends_on_block_constraints);
+        assert!(result.applied_aspect_ratio);
     }
 
     #[test]
@@ -849,12 +991,16 @@ mod tests {
                 ..taffy::Style::default()
             };
             measure_replaced(
-                Size::NONE,
-                Size {
-                    width: Some(100.0),
-                    height: Some(100.0),
-                },
-                available_space,
+                layout_input(
+                    Size::NONE,
+                    Size {
+                        width: Some(100.0),
+                        height: Some(100.0),
+                    },
+                    available_space,
+                    SizingMode::InherentSize,
+                    RequestedAxis::Both,
+                ),
                 &context,
                 writing_mode,
                 // An intrinsic replaced ratio always constrains the content
@@ -862,9 +1008,8 @@ mod tests {
                 ResolvedAspectRatio::new(1.0, BoxSizing::ContentBox),
                 SizeContainment::NONE,
                 &style,
-                SizingMode::InherentSize,
-                RequestedAxis::Both,
             )
+            .size
         };
 
         for box_sizing in [BoxSizing::ContentBox, BoxSizing::BorderBox] {
@@ -918,20 +1063,23 @@ mod tests {
         };
         let measured = |style: &taffy::Style<Atom>| {
             measure_replaced(
-                Size::NONE,
-                Size::NONE,
-                Size {
-                    width: AvailableSpace::MaxContent,
-                    height: AvailableSpace::MaxContent,
-                },
+                layout_input(
+                    Size::NONE,
+                    Size::NONE,
+                    Size {
+                        width: AvailableSpace::MaxContent,
+                        height: AvailableSpace::MaxContent,
+                    },
+                    SizingMode::InherentSize,
+                    RequestedAxis::Both,
+                ),
                 &context,
                 WritingMode::HorizontalTb,
                 ResolvedAspectRatio::new(1.0, BoxSizing::ContentBox),
                 SizeContainment::NONE,
                 style,
-                SizingMode::InherentSize,
-                RequestedAxis::Both,
             )
+            .size
         };
         assert_eq!(
             measured(&percentage_style),
@@ -1075,12 +1223,16 @@ mod tests {
         style: &taffy::Style<Atom>,
     ) -> Size<f32> {
         measure_replaced(
-            known_dimensions,
-            Size::NONE,
-            Size {
-                width: AvailableSpace::MaxContent,
-                height: AvailableSpace::MaxContent,
-            },
+            layout_input(
+                known_dimensions,
+                Size::NONE,
+                Size {
+                    width: AvailableSpace::MaxContent,
+                    height: AvailableSpace::MaxContent,
+                },
+                SizingMode::InherentSize,
+                RequestedAxis::Both,
+            ),
             &image_context(),
             WritingMode::HorizontalTb,
             style
@@ -1090,9 +1242,8 @@ mod tests {
                 .and_then(|ratio| ResolvedAspectRatio::new(ratio, style.box_sizing)),
             SizeContainment::NONE,
             style,
-            SizingMode::InherentSize,
-            RequestedAxis::Both,
         )
+        .size
     }
 
     fn measure(style: &taffy::Style<Atom>) -> Size<f32> {
@@ -1106,20 +1257,23 @@ mod tests {
         aspect_ratio: Option<ResolvedAspectRatio>,
     ) -> Size<f32> {
         measure_replaced(
-            Size::NONE,
-            Size::NONE,
-            Size {
-                width: AvailableSpace::MaxContent,
-                height: AvailableSpace::MaxContent,
-            },
+            layout_input(
+                Size::NONE,
+                Size::NONE,
+                Size {
+                    width: AvailableSpace::MaxContent,
+                    height: AvailableSpace::MaxContent,
+                },
+                SizingMode::InherentSize,
+                RequestedAxis::Both,
+            ),
             context,
             WritingMode::HorizontalTb,
             aspect_ratio,
             containment,
             style,
-            SizingMode::InherentSize,
-            RequestedAxis::Both,
         )
+        .size
     }
 
     #[test]
@@ -1262,20 +1416,23 @@ mod tests {
         };
         let measure_with_basis = |box_sizing| {
             measure_replaced(
-                Size::NONE,
-                Size::NONE,
-                Size {
-                    width: AvailableSpace::MaxContent,
-                    height: AvailableSpace::MaxContent,
-                },
+                layout_input(
+                    Size::NONE,
+                    Size::NONE,
+                    Size {
+                        width: AvailableSpace::MaxContent,
+                        height: AvailableSpace::MaxContent,
+                    },
+                    SizingMode::InherentSize,
+                    RequestedAxis::Both,
+                ),
                 &image_context(),
                 WritingMode::HorizontalTb,
                 ResolvedAspectRatio::new(2.0, box_sizing),
                 SizeContainment::NONE,
                 &style,
-                SizingMode::InherentSize,
-                RequestedAxis::Both,
             )
+            .size
         };
 
         assert_eq!(

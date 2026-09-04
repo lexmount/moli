@@ -437,6 +437,187 @@ for (const [sourceName, source] of Object.entries(sources)) {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_sizes_inline_grid_tracks_from_replaced_cross_axis_stretch() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_image_fetch_enabled(true);
+        let document_url =
+            Url::parse("https://example.com/grid-replaced-intrinsic-track.html")?;
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+#grid{display:inline-grid;grid-template-rows:100px;background:green}
+#image{align-self:stretch;opacity:0}
+</style>`;
+const source = '<svg xmlns="http://www.w3.org/2000/svg" width="50" height="50"></svg>';
+document.body.innerHTML = `<div id=grid><img id=image src="data:image/svg+xml,${encodeURIComponent(source)}"></div>`;
+'installed'
+"#,
+        )?;
+
+        let task = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if let Some(task) = page_vm.take_dom_manipulation_body_task_for_test(
+                    PageDomManipulationTestFamily::ImageLoadEvent,
+                ) {
+                    break task;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("the local SVG decode should publish an image-load task");
+        let crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(
+            image_task,
+        ) = task
+        else {
+            unreachable!("exact image-load selection preserves its task variant")
+        };
+        assert_eq!(
+            image_task.kind(),
+            crate::page_task_queue::RendererPageImageLoadEventKind::Load,
+        );
+        page_vm
+            .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(
+                    image_task,
+                ),
+                &loader,
+            )
+            .await?;
+
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(200, 160, 1.0))?
+            .expect("intrinsically sized Grid screenshot layout");
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify((()=>{const host=grid.getBoundingClientRect(),item=image.getBoundingClientRect();return [host.width,host.height,item.x-host.x,item.y-host.y,item.width,item.height]})())"#,
+        )?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&geometry)?,
+            serde_json::json!([100, 100, 0, 0, 100, 100]),
+            "a definite row stretch must transfer through the image ratio while Grid computes its intrinsic column track",
+        );
+
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| -> [u8; 4] {
+            let offset = ((y * raster.width + x) * 4) as usize;
+            raster.rgba[offset..offset + 4].try_into().unwrap()
+        };
+        assert_eq!(pixel(99, 50), [0, 128, 0, 255]);
+        assert_eq!(pixel(100, 50), [255, 255, 255, 255]);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("intrinsically sized replaced Grid fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn screenshot_transfers_replaced_sizes_into_indefinite_grid_track_axes() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        loader.set_image_fetch_enabled(true);
+        let document_url =
+            Url::parse("https://example.com/grid-replaced-automatic-minimum.html")?;
+        let (mut page_vm, _resource_source, _owner_wake_rx) =
+            page_vm_with_bound_task_sources_and_owner_wake(&loader, document_url);
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0;background:white}
+.grid{position:absolute;top:0;display:grid;width:10px;height:10px;background:red}
+.grid>img{display:block;place-self:stretch;background:green}
+#rows{left:0;grid-template-columns:auto auto}
+#columns{left:120px}
+#rows>img{width:50px}
+#columns>img{height:50px}
+</style>`;
+const rowSource = '<svg xmlns="http://www.w3.org/2000/svg" width="25" height="50"></svg>';
+const columnSource = '<svg xmlns="http://www.w3.org/2000/svg" width="50" height="25"></svg>';
+const image = (id, source) => `<img id="${id}" src="data:image/svg+xml,${encodeURIComponent(source)}">`;
+document.body.innerHTML = `
+<div class=grid id=rows>${image('row-a',rowSource)}${image('row-b',rowSource)}</div>
+<div class=grid id=columns>${image('column-a',columnSource)}${image('column-b',columnSource)}</div>`;
+'installed'
+"#,
+        )?;
+
+        for _ in 0..4 {
+            let task = tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                loop {
+                    if let Some(task) = page_vm.take_dom_manipulation_body_task_for_test(
+                        PageDomManipulationTestFamily::ImageLoadEvent,
+                    ) {
+                        break task;
+                    }
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("each local SVG decode should publish an image-load task");
+            let crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(
+                image_task,
+            ) = task
+            else {
+                unreachable!("exact image-load selection preserves its task variant")
+            };
+            assert_eq!(
+                image_task.kind(),
+                crate::page_task_queue::RendererPageImageLoadEventKind::Load,
+            );
+            page_vm
+                .run_claimed_dom_manipulation_task_through_selected_dispatcher_for_test(
+                    crate::page_task_queue::RendererPageDomManipulationTask::ImageLoadEvent(
+                        image_task,
+                    ),
+                    &loader,
+                )
+                .await?;
+        }
+
+        page_vm.vm_mut().sync_live_document_style_sources();
+        let snapshot = page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(240, 120, 1.0))?
+            .expect("replaced automatic-minimum Grid screenshot layout");
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['rows','columns','row-a','row-b','column-a','column-b'].map(id=>{const r=document.getElementById(id).getBoundingClientRect();return [id,[r.x,r.y,r.width,r.height]]})))"#,
+        )?;
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&geometry)?,
+            serde_json::json!({
+                "rows": [0, 0, 10, 10],
+                "columns": [120, 0, 10, 10],
+                "row-a": [0, 0, 50, 100],
+                "row-b": [50, 0, 50, 100],
+                "column-a": [120, 0, 100, 50],
+                "column-b": [120, 50, 100, 50],
+            }),
+            "an authored replaced size must transfer through its natural ratio while the target Grid track axis is indefinite",
+        );
+
+        let raster = moli_paint::raster_snapshot(&snapshot)?;
+        let pixel = |x: u32, y: u32| -> [u8; 4] {
+            let offset = ((y * raster.width + x) * 4) as usize;
+            raster.rgba[offset..offset + 4].try_into().unwrap()
+        };
+        assert_eq!(pixel(99, 99), [0, 128, 0, 255]);
+        assert_eq!(pixel(100, 99), [255, 255, 255, 255]);
+        assert_eq!(pixel(219, 99), [0, 128, 0, 255]);
+        assert_eq!(pixel(220, 99), [255, 255, 255, 255]);
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("replaced automatic-minimum Grid fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_resolves_percentage_maximum_after_grid_intrinsic_image_probe() {
     run_page_vm_async_test(async move {
         let loader =
