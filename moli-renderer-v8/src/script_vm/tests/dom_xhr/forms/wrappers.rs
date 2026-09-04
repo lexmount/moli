@@ -209,11 +209,14 @@ async fn assert_lightweight_popup_form_submission(method: &str) {
     }
 }
 
-#[test]
-fn form_wrappers_popup_submission_respects_cancellation_and_closed_documents() {
-    let mut vm = new_storage_test_vm("https://form-popup-cancellation.test/");
-    assert_eq!(
-        vm.eval(r#"(() => {
+#[tokio::test(flavor = "current_thread")]
+async fn form_wrappers_popup_submission_respects_cancellation_and_closed_documents() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://form-popup-cancellation.test/",
+        &loader,
+    );
+    vm.eval(r#"(() => {
           globalThis.popup = open();
           const original = popup.document;
           const form = original.body.appendChild(original.createElement('form'));
@@ -229,14 +232,26 @@ fn form_wrappers_popup_submission_respects_cancellation_and_closed_documents() {
             HTMLFormElement.prototype.submit.call(form);
             if (popup.document !== original || popup.location.href !== 'about:blank') throw Error('canceled navigation');
           }
+          globalThis.__submitFromClosedPopup = () => {
+            for (const method of ['get', 'post']) {
+              form.method = method;
+              HTMLFormElement.prototype.submit.call(form);
+            }
+            return JSON.stringify(events);
+          };
           popup.close();
-          for (const method of ['get', 'post']) {
-            form.method = method;
-            HTMLFormElement.prototype.submit.call(form);
-          }
-          return JSON.stringify(events);
-        })()"#).unwrap(),
-        "[[true,null],[true,\"data\"]]"
+        })()"#).unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(popup.closed && popup.opener === null)",
+        "true",
+        "popup Document retirement",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("__submitFromClosedPopup()").unwrap(),
+        r#"[[true,null],[true,"data"]]"#
     );
     assert!(vm.take_pending_location_navigation_with_seed().is_none());
     assert!(

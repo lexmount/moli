@@ -344,25 +344,41 @@ fn inert_node_execution_context_survives_creation_realm_and_wrapper_cache_retire
     }
 }
 
-#[test]
-fn popup_document_event_authority_follows_its_window_instead_of_parser_provenance() {
+#[tokio::test(flavor = "current_thread")]
+async fn popup_document_event_authority_follows_its_window_instead_of_parser_provenance() {
     for policy in [
         moli_page_types::LayoutPolicy::Mock,
         moli_page_types::LayoutPolicy::OnDemand,
         moli_page_types::LayoutPolicy::Realtime,
     ] {
-        let mut vm = new_storage_test_vm("https://popup-node-events.test/");
+        let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://popup-node-events.test/",
+            &loader,
+        );
         vm.set_layout_policy(policy);
-        let facts=vm.eval(r#"(()=>{
+        vm.eval(r#"(()=>{
             const popup=window.open('about:blank');
             const oldDocument=popup.document,node=oldDocument.createElement('input');node.type='checkbox';
             let called=0;node.addEventListener('click',()=>called++);
             const before=node.dispatchEvent(new MouseEvent('click'));
+            globalThis.__retainedPopupForNodeEvents = popup;
+            globalThis.__retiredPopupNodeFacts = () => {
+                const after=node.dispatchEvent(new MouseEvent('click'));
+                return JSON.stringify([before,after,called,node.checked,
+                    oldDocument.cloneNode(false)===null,popup.closed]);
+            };
             popup.close();
-            const after=node.dispatchEvent(new MouseEvent('click'));
-            return JSON.stringify([before,after,called,node.checked,
-                oldDocument.cloneNode(false)===null,popup.closed]);
         })()"#).unwrap();
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(__retainedPopupForNodeEvents.closed && __retainedPopupForNodeEvents.opener === null)",
+            "true",
+            "popup Document retirement",
+        )
+        .await;
+        let facts = vm.eval("__retiredPopupNodeFacts()").unwrap();
         assert_eq!(facts, "[true,false,1,true,true,true]", "{policy:?}");
     }
 }

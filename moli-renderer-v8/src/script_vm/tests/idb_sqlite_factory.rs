@@ -544,7 +544,6 @@ async fn idb_sqlite_popup_close_retires_its_connection_and_preserves_the_opener(
     let mut page = page(&manager, &loader);
     let output = run(&mut page, &loader, r#"
         const keeper = await open('opener-retained', 1, db => db.createObjectStore('records').put('opener',1));
-        const popup = window.open('about:blank');
         const opened = new Promise((resolve,reject) => {
             const listener = event => {
                 if (event.source !== popup) return;
@@ -553,17 +552,23 @@ async fn idb_sqlite_popup_close_retires_its_connection_and_preserves_the_opener(
             };
             window.addEventListener('message',listener);
         });
-        popup.onmessage = async () => {
-            try {
-                // Keep the wrapper reachable in the shared realm: closing the
-                // popup must retire its native connection even without GC.
-                globalThis.popupHeldDatabase = await open('popup-retired',1, db => db.createObjectStore('records').put('popup',1));
-                popup.opener.postMessage('opened','*');
-            } catch (error) { popup.opener.postMessage(String(error),'*'); }
-        };
-        popup.postMessage('open','*');
+        const html = `<script>
+            const request = indexedDB.open('popup-retired', 1);
+            request.onupgradeneeded = () => {
+                request.result.createObjectStore('records').put('popup', 1);
+            };
+            request.onerror = () => opener.postMessage(String(request.error), '*');
+            request.onsuccess = () => {
+                window.popupHeldDatabase = request.result;
+                opener.postMessage('opened', '*');
+            };
+        <\/script>`;
+        const popup = window.open(URL.createObjectURL(new Blob([html], {type:'text/html'})));
         await opened;
         popup.close();
+        while (!popup.closed || popup.opener !== null) {
+            await new Promise(resolve => setTimeout(resolve, 0));
+        }
         const upgraded = await new Promise((resolve,reject) => {
             const request = indexedDB.open('popup-retired',2);
             request.onblocked = () => reject(Error('closed popup still blocks upgrade'));

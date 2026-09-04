@@ -127,8 +127,8 @@ fn retired_sqlite_storage_reports_unknown_error_through_all_read_surfaces() {
     assert_eq!(vm.eval("typeof storage.key").unwrap(), "function");
 }
 
-#[test]
-fn sqlite_areas_follow_window_lifetime_without_storage_wrapper_finalizers() {
+#[tokio::test(flavor = "current_thread")]
+async fn sqlite_areas_follow_window_lifetime_without_storage_wrapper_finalizers() {
     let directory = tempfile::tempdir().unwrap();
     let runtime = moli_sqlite::Runtime::new().unwrap();
     let (local, owner) = moli_web_storage::new_lazy_sqlite_web_storage_store(
@@ -139,7 +139,11 @@ fn sqlite_areas_follow_window_lifetime_without_storage_wrapper_finalizers() {
     .unwrap();
     let handles =
         crate::RendererWebStorageHandles::new(local, crate::new_shared_web_storage_store());
-    let mut vm = new_storage_test_vm("https://window-storage-lifetime.test/");
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://window-storage-lifetime.test/",
+        &loader,
+    );
     vm.set_web_storage_handles(&handles);
     let host = vm.context_host_weak_for_test().upgrade().unwrap();
     assert_eq!(host.borrow().local_storage_area_count_for_test(), 0);
@@ -157,6 +161,14 @@ fn sqlite_areas_follow_window_lifetime_without_storage_wrapper_finalizers() {
     vm.eval("globalThis.storagePopup = open('about:blank'); globalThis.retainedPopupStorage = storagePopup.localStorage; retainedPopupStorage.getItem('key');").unwrap();
     assert_eq!(host.borrow().local_storage_area_count_for_test(), 2);
     vm.eval("storagePopup.close()").unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(storagePopup.closed && storagePopup.opener === null)",
+        "true",
+        "popup storage is retired by the close task",
+    )
+    .await;
     assert_eq!(
         host.borrow().local_storage_area_count_for_test(),
         1,
@@ -164,7 +176,15 @@ fn sqlite_areas_follow_window_lifetime_without_storage_wrapper_finalizers() {
     );
 
     vm.eval("globalThis.storageFrame = document.createElement('iframe'); document.body.appendChild(storageFrame);").unwrap();
-    materialize_single_child_default_realm_for_test(&mut vm, "storage lifetime child");
+    vm.eval("void storageFrame.contentWindow").unwrap();
+    assert!(
+        vm.run_one_child_frame_task_executor_turn(
+            ChildFrameSemanticTurnKind::RealmMaterialization,
+            &loader,
+        )
+        .await
+        .unwrap()
+    );
     vm.eval("globalThis.retainedChildStorage = storageFrame.contentWindow.localStorage; retainedChildStorage.getItem('key');").unwrap();
     assert_eq!(host.borrow().local_storage_area_count_for_test(), 2);
     vm.eval("storageFrame.remove()").unwrap();

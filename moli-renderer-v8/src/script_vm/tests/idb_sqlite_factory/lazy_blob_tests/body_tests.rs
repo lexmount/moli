@@ -50,7 +50,7 @@ async fn check_popup_blob_continuation_policy(in_memory: bool) {
     let read_expression = if in_memory {
         "new Blob(['memory'])"
     } else {
-        "controlledBlob.slice(0, 7)"
+        "opener.controlledBlob.slice(0, 7)"
     };
     page.eval(&format!(
         r#"
@@ -59,20 +59,18 @@ async fn check_popup_blob_continuation_policy(in_memory: bool) {
         document.head.appendChild(topPolicy);
         globalThis.popupBlobReadStarted = false;
         globalThis.popupBlobPolicyResult = 'pending';
-        globalThis.blobPolicyPopup = window.open('about:blank');
-        const popupPolicy = blobPolicyPopup.document.createElement('meta');
-        popupPolicy.name = 'referrer'; popupPolicy.content = 'no-referrer';
-        blobPolicyPopup.document.head.appendChild(popupPolicy);
-        blobPolicyPopup.onmessage = async () => {{
-            popupBlobReadStarted = true;
-            await ({read_expression}).text();
-            const xhr = new XMLHttpRequest();
-            xhr.open('GET', 'http://{address}/popup-probe');
-            xhr.onload = () => {{ popupBlobPolicyResult = xhr.responseText; }};
-            xhr.onerror = () => {{ popupBlobPolicyResult = 'error'; }};
-            xhr.send();
-        }};
-        blobPolicyPopup.postMessage('read', '*');
+        const html = `<!doctype html><meta name="referrer" content="no-referrer"><script>
+            (async () => {{
+                opener.popupBlobReadStarted = true;
+                await ({read_expression}).text();
+                const xhr = new XMLHttpRequest();
+                xhr.open('GET', 'http://{address}/popup-probe');
+                xhr.onload = () => {{ opener.popupBlobPolicyResult = xhr.responseText; }};
+                xhr.onerror = () => {{ opener.popupBlobPolicyResult = 'error'; }};
+                xhr.send();
+            }})()
+        <\/script>`;
+        globalThis.blobPolicyPopup = window.open(URL.createObjectURL(new Blob([html], {{type:'text/html'}})));
         'queued';
     "#
     ))
