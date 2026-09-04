@@ -3,7 +3,7 @@ use crate::conn::state::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles, DevToolsSessionState,
     PageNavigationHistoryEntry, PageTargetHost, RendererMainDocumentCommitSeed, TargetFetchConfig,
     TargetNetworkPolicyState, TargetOwnerState, TargetPageAbsenceReason,
-    TargetPageResidenceIdentity, TargetRuntimeSessionState, TargetRuntimeSlot,
+    TargetPageResidenceIdentity, TargetRuntimeSessionState, TargetRuntimeSlot, WindowSurfaceState,
 };
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
@@ -799,7 +799,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
 
     pub(super) async fn mark_target_crashed_async(&mut self) -> Option<()> {
         let target = self.target_mut();
-        target.owner_state.target_crash_state.mark_crashed();
+        target.mark_crashed();
         target
             .runtime_slot
             .page_slot_mut()
@@ -1639,6 +1639,43 @@ impl CdpConnection {
             self.target_session_owner_ref(session_id)?
                 .target_owner_state(),
         )
+    }
+
+    // In-place Browser operations; replaced by BrowserHandle at Commit 22.
+    pub(crate) fn target_is_crashed_for_owner(&self, owner: &CommandOwnerScope) -> bool {
+        self.target_session_owner_ref_for_owner(owner)
+            .is_some_and(|owner| owner.target().is_crashed())
+    }
+
+    pub(crate) fn clear_target_crash_state_for_owner(&mut self, owner: &CommandOwnerScope) {
+        if let Some(mut owner) = self.target_session_owner_mut_for_owner(owner) {
+            owner.target_mut().clear_crash_state();
+        }
+    }
+
+    pub(crate) fn set_window_surface_state_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        state: WindowSurfaceState,
+    ) -> Option<()> {
+        self.target_session_owner_mut_for_owner(owner)?
+            .target_mut()
+            .set_window_surface_state(state);
+        Some(())
+    }
+
+    pub(crate) fn set_window_surface_geometry_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        width: Option<u32>,
+        height: Option<u32>,
+        x: Option<i32>,
+        y: Option<i32>,
+    ) -> Option<()> {
+        self.target_session_owner_mut_for_owner(owner)?
+            .target_mut()
+            .set_window_surface_geometry(width, height, x, y);
+        Some(())
     }
 
     pub(crate) fn target_owner_state_for_owner(
@@ -2592,15 +2629,15 @@ mod tests {
                 session_key: DevToolsSessionKey::Primary,
             };
             owner.mutate_target_owner_state(|owner_state| {
-                owner_state.target_crash_state.mark_crashed();
+                owner_state.next_document_start_script_id = 7;
             });
         }
-        assert!(
+        assert_eq!(
             active
                 .active_page_target()
                 .owner_state
-                .target_crash_state
-                .is_crashed()
+                .next_document_start_script_id,
+            7
         );
 
         let mut background = background_target_context();
@@ -2612,16 +2649,16 @@ mod tests {
                 session_key: DevToolsSessionKey::Primary,
             };
             owner.mutate_target_owner_state(|owner_state| {
-                owner_state.target_crash_state.mark_crashed();
+                owner_state.next_document_start_script_id = 9;
             });
         }
-        assert!(
+        assert_eq!(
             background
                 .background_target("TID-background")
                 .expect("background target must exist")
                 .owner_state
-                .target_crash_state
-                .is_crashed()
+                .next_document_start_script_id,
+            9
         );
     }
 
@@ -3637,7 +3674,7 @@ mod tests {
         conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.with_target_owner_state_for_session_mut(Some("SID-active"), |owner_state| {
-            owner_state.target_crash_state.mark_crashed();
+            owner_state.next_document_start_script_id = 7;
         })
         .expect("active target owner state should be mutable");
         conn.with_target_devtools_session_state_for_session_mut(Some("SID-background"), |state| {
@@ -3653,11 +3690,11 @@ mod tests {
             .target_runtime_session_state_for_session(Some("SID-background"))
             .expect("background runtime state should be readable");
         assert!(background_runtime_state.inspector_enabled);
-        assert!(
+        assert_eq!(
             conn.target_owner_state_for_session(Some("SID-active"))
                 .expect("active owner state should be readable")
-                .target_crash_state
-                .is_crashed()
+                .next_document_start_script_id,
+            7
         );
         assert!(
             conn.target_devtools_session_state_for_session(Some("SID-background"))

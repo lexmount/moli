@@ -2,7 +2,7 @@ use crate::conn::{
     BrowserContext, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope, EmulatedDeviceMetrics,
     EmulatedGeolocationOverrideState, EmulatedViewportSurface, PageTargetHost,
     RendererCommandCorrelation, RendererCommandDescriptor, RuntimeInspectorAsyncCompletionReceiver,
-    TargetWindowSurfaceState,
+    WindowSurfaceState,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandResult, DevToolsDevicePixelRatioSetting, DevToolsError,
@@ -2088,9 +2088,7 @@ async fn execute_devtools_set_window_state_for_owner(
 ) -> Result<DevToolsCommandResult, DevToolsError> {
     let state = target_window_surface_state_from_devtools(command.state);
     if conn
-        .with_target_owner_state_for_owner_mut(&owner, |owner_state| {
-            owner_state.set_window_surface_state(state);
-        })
+        .set_window_surface_state_for_owner(&owner, state)
         .is_none()
     {
         return Err(DevToolsError::new(
@@ -2127,14 +2125,13 @@ async fn execute_devtools_set_client_window_state_command_async(
     match result {
         Ok(_) => {
             let owner = CommandOwnerScope::for_route(route);
-            let _ = conn.with_target_owner_state_for_owner_mut(&owner, |owner_state| {
-                owner_state.set_window_surface_geometry(
-                    command.width,
-                    command.height,
-                    command.x,
-                    command.y,
-                );
-            });
+            let _ = conn.set_window_surface_geometry_for_owner(
+                &owner,
+                command.width,
+                command.height,
+                command.x,
+                command.y,
+            );
             super::target::devtools_client_window_info_for_target(conn, &command.client_window)
                 .map(|client_window| {
                     DevToolsCommandResult::ClientWindow(DevToolsSetClientWindowStateResult {
@@ -2147,14 +2144,12 @@ async fn execute_devtools_set_client_window_state_command_async(
     }
 }
 
-fn target_window_surface_state_from_devtools(
-    state: DevToolsWindowState,
-) -> TargetWindowSurfaceState {
+fn target_window_surface_state_from_devtools(state: DevToolsWindowState) -> WindowSurfaceState {
     match state {
-        DevToolsWindowState::Normal => TargetWindowSurfaceState::Normal,
-        DevToolsWindowState::Maximized => TargetWindowSurfaceState::Maximized,
-        DevToolsWindowState::Minimized => TargetWindowSurfaceState::Minimized,
-        DevToolsWindowState::Fullscreen => TargetWindowSurfaceState::Fullscreen,
+        DevToolsWindowState::Normal => WindowSurfaceState::Normal,
+        DevToolsWindowState::Maximized => WindowSurfaceState::Maximized,
+        DevToolsWindowState::Minimized => WindowSurfaceState::Minimized,
+        DevToolsWindowState::Fullscreen => WindowSurfaceState::Fullscreen,
     }
 }
 

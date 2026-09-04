@@ -4,8 +4,7 @@ use serde_json::json;
 use moli_browser_profile::{DEFAULT_PROFILE_PARTITION_ID, ProfilePartitionId};
 
 use crate::conn::{
-    BackgroundProtocolEvent, TargetOwnerState, TargetWindowSurfaceState,
-    monotonic_timestamp_seconds,
+    BackgroundProtocolEvent, WindowSurface, WindowSurfaceState, monotonic_timestamp_seconds,
 };
 use crate::devtools_runtime::{
     DevToolsClientWindowInfo, DevToolsCommand, DevToolsCommandResult,
@@ -222,47 +221,39 @@ pub(in crate::domains) fn devtools_client_window_info_for_target(
         .map(|context| context.id.as_str());
     for browser_context in conn.browser_contexts() {
         if let Some(target) = browser_context.page_target(target_id.as_str()) {
-            return Some(devtools_client_window_info_from_owner_state(
+            return Some(devtools_client_window_info_from_surface(
                 target_id.clone(),
                 active_browser_context_id == Some(browser_context.id.as_str())
                     && browser_context.is_active_target(target_id.as_str()),
-                Some(&target.owner_state),
+                target.window_surface(),
             ));
         }
     }
     None
 }
 
-fn devtools_client_window_info_from_owner_state(
+fn devtools_client_window_info_from_surface(
     target_id: DevToolsTargetId,
     active: bool,
-    owner_state: Option<&TargetOwnerState>,
+    surface: WindowSurface,
 ) -> DevToolsClientWindowInfo {
-    let state = owner_state
-        .map(|owner_state| {
-            devtools_window_state_from_target_surface(owner_state.window_surface_state)
-        })
-        .unwrap_or(DevToolsWindowState::Normal);
-    let geometry = owner_state.map(|owner_state| owner_state.window_surface_geometry);
     DevToolsClientWindowInfo {
         client_window: target_id,
         active,
-        state,
-        width: geometry.map(|geometry| geometry.width).unwrap_or(0),
-        height: geometry.map(|geometry| geometry.height).unwrap_or(0),
-        x: geometry.map(|geometry| geometry.x).unwrap_or(0),
-        y: geometry.map(|geometry| geometry.y).unwrap_or(0),
+        state: devtools_window_state_from_target_surface(surface.state),
+        width: surface.width,
+        height: surface.height,
+        x: surface.x,
+        y: surface.y,
     }
 }
 
-fn devtools_window_state_from_target_surface(
-    state: TargetWindowSurfaceState,
-) -> DevToolsWindowState {
+fn devtools_window_state_from_target_surface(state: WindowSurfaceState) -> DevToolsWindowState {
     match state {
-        TargetWindowSurfaceState::Normal => DevToolsWindowState::Normal,
-        TargetWindowSurfaceState::Maximized => DevToolsWindowState::Maximized,
-        TargetWindowSurfaceState::Minimized => DevToolsWindowState::Minimized,
-        TargetWindowSurfaceState::Fullscreen => DevToolsWindowState::Fullscreen,
+        WindowSurfaceState::Normal => DevToolsWindowState::Normal,
+        WindowSurfaceState::Maximized => DevToolsWindowState::Maximized,
+        WindowSurfaceState::Minimized => DevToolsWindowState::Minimized,
+        WindowSurfaceState::Fullscreen => DevToolsWindowState::Fullscreen,
     }
 }
 

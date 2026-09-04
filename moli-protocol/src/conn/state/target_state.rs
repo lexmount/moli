@@ -27,25 +27,6 @@ use super::{
     },
 };
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct TargetCrashState {
-    crashed: bool,
-}
-
-impl TargetCrashState {
-    pub(crate) fn mark_crashed(&mut self) {
-        self.crashed = true;
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.crashed = false;
-    }
-
-    pub(crate) fn is_crashed(self) -> bool {
-        self.crashed
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PendingBidiChannelListener {
     target_id: DevToolsTargetId,
@@ -311,42 +292,6 @@ impl TargetPendingInspectorAwaitRegistry {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) enum TargetWindowSurfaceState {
-    #[default]
-    Normal,
-    Maximized,
-    Minimized,
-    Fullscreen,
-}
-
-impl TargetWindowSurfaceState {
-    pub(crate) fn document_hidden(self) -> bool {
-        matches!(self, Self::Minimized)
-    }
-
-    pub(crate) fn is_fullscreen(self) -> bool {
-        matches!(self, Self::Fullscreen)
-    }
-
-    pub(crate) fn label(self) -> &'static str {
-        match self {
-            Self::Normal => "normal",
-            Self::Maximized => "maximized",
-            Self::Minimized => "minimized",
-            Self::Fullscreen => "fullscreen",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct TargetWindowSurfaceGeometry {
-    pub(crate) width: u32,
-    pub(crate) height: u32,
-    pub(crate) x: i32,
-    pub(crate) y: i32,
-}
-
 #[derive(Debug, Clone, Default)]
 pub(crate) struct TargetOwnerState {
     pub(crate) committed_document_title: Option<String>,
@@ -357,9 +302,6 @@ pub(crate) struct TargetOwnerState {
     pub(crate) console_output_state: TargetConsoleOutputState,
     pub(crate) audits_storage_state: TargetAuditsStorageState,
     pub(crate) log_storage_state: TargetLogStorageState,
-    pub(crate) target_crash_state: TargetCrashState,
-    pub(crate) window_surface_state: TargetWindowSurfaceState,
-    pub(crate) window_surface_geometry: TargetWindowSurfaceGeometry,
     pub(crate) attached_child_frame_ids: HashSet<String>,
 }
 
@@ -420,9 +362,7 @@ impl TargetOwnerState {
                 .filter(|(_, script)| script.devtools_session.is_some())
                 .count(),
             "retainedPageResourceBodyBytes": self.page_resource_store.retained_body_bytes(),
-            "windowSurfaceState": self.window_surface_state.label(),
             "attachedChildFrameIdCount": self.attached_child_frame_ids.len(),
-            "targetCrashed": self.target_crash_state.is_crashed(),
             "isDefault": self.is_default(),
         })
     }
@@ -444,39 +384,6 @@ impl TargetOwnerState {
         self.log_storage_state.reset_for_new_document();
     }
 
-    pub(crate) fn set_window_surface_state(&mut self, state: TargetWindowSurfaceState) {
-        self.window_surface_state = state;
-    }
-
-    pub(crate) fn set_window_surface_geometry(
-        &mut self,
-        width: Option<u32>,
-        height: Option<u32>,
-        x: Option<i32>,
-        y: Option<i32>,
-    ) {
-        if let Some(width) = width {
-            self.window_surface_geometry.width = width;
-        }
-        if let Some(height) = height {
-            self.window_surface_geometry.height = height;
-        }
-        if let Some(x) = x {
-            self.window_surface_geometry.x = x;
-        }
-        if let Some(y) = y {
-            self.window_surface_geometry.y = y;
-        }
-    }
-
-    pub(crate) fn window_document_hidden(&self) -> bool {
-        self.window_surface_state.document_hidden()
-    }
-
-    pub(crate) fn window_fullscreen(&self) -> bool {
-        self.window_surface_state.is_fullscreen()
-    }
-
     pub(crate) fn is_default(&self) -> bool {
         self.committed_document_title.is_none()
             && self.next_document_start_script_id == 0
@@ -485,9 +392,6 @@ impl TargetOwnerState {
             && self.runtime_observable_state == TargetRuntimeObservableState::default()
             && self.console_output_state == TargetConsoleOutputState::default()
             && self.log_storage_state.is_empty()
-            && !self.target_crash_state.is_crashed()
-            && self.window_surface_state == TargetWindowSurfaceState::default()
-            && self.window_surface_geometry == TargetWindowSurfaceGeometry::default()
             && self.attached_child_frame_ids.is_empty()
     }
 

@@ -45,17 +45,6 @@ pub struct BrowserContext {
     /// Policy retained while the context has no page target yet. The first
     /// target inherits it; once targets exist, each target owns its surface.
     pub(crate) default_document_cookie_manager_surface: BrowserContextCookieManagerSurface,
-    // Chromium exposes the live creator target, immutable creator frame, and
-    // window.opener access as three independent TargetInfo properties.
-    pub target_opener_ids: HashMap<String, String>,
-    pub target_opener_frame_ids: HashMap<String, String>,
-    /// Targets whose DOM Window retains script access to its opener.
-    ///
-    /// DevTools creator identity is stored separately in the opener maps:
-    /// an implicit-noopener `_blank` target still has an `openerId`, but is
-    /// intentionally absent from this set.
-    pub(crate) target_can_access_opener: HashSet<String>,
-    pub target_window_names: HashMap<String, String>,
     pub target_popup_ids: HashMap<String, u64>,
     pending_popup_javascript_dialogs: HashMap<u64, Vec<TargetPreparedJavaScriptDialog>>,
     pub(crate) shared_worker_targets: BTreeMap<SharedWorkerInstanceId, SharedWorkerTargetState>,
@@ -510,10 +499,6 @@ impl BrowserContext {
             storage_partition,
             page_targets: PageTargetRegistry::default(),
             default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
-            target_opener_ids: HashMap::new(),
-            target_opener_frame_ids: HashMap::new(),
-            target_can_access_opener: HashSet::new(),
-            target_window_names: HashMap::new(),
             target_popup_ids: HashMap::new(),
             pending_popup_javascript_dialogs: HashMap::new(),
             shared_worker_targets: BTreeMap::new(),
@@ -918,10 +903,14 @@ impl BrowserContext {
                 .iter()
                 .map(|target| target.devtools_sessions.attached_len())
                 .sum::<usize>(),
-            "targetOpenerCount": self.target_opener_ids.len(),
-            "targetOpenerFrameCount": self.target_opener_frame_ids.len(),
-            "targetCanAccessOpenerCount": self.target_can_access_opener.len(),
-            "targetWindowNameCount": self.target_window_names.len(),
+            "targetOpenerCount": self.page_targets.iter()
+                .filter(|target| target.runtime_slot.page_slot().contents.window.opener.is_some()).count(),
+            "targetOpenerFrameCount": self.page_targets.iter()
+                .filter(|target| target.opener_frame_id.is_some()).count(),
+            "targetCanAccessOpenerCount": self.page_targets.iter()
+                .filter(|target| target.runtime_slot.page_slot().contents.window.opener.is_some_and(|opener| opener.can_access)).count(),
+            "targetWindowNameCount": self.page_targets.iter()
+                .filter(|target| target.runtime_slot.page_slot().contents.window.name.is_some()).count(),
             "defaultDocumentStartScriptCount": self.default_document_start_scripts.len(),
             "domRemoteObjectNodeCacheCount": active_target
                 .map_or(0, |target| target.dom_remote_object_node_cache.len()),
@@ -983,8 +972,14 @@ impl BrowserContext {
         });
         let mut diagnostics = target.owner_state.moli_memory_diagnostics();
         diagnostics["initialEmptyDocument"] = json!(initial);
-        diagnostics["isDefault"] =
-            json!(target.owner_state.is_default() && navigation.is_default());
+        diagnostics["windowSurfaceState"] = json!(target.window_surface().state.label());
+        diagnostics["targetCrashed"] = json!(target.is_crashed());
+        diagnostics["isDefault"] = json!(
+            target.owner_state.is_default()
+                && navigation.is_default()
+                && !target.is_crashed()
+                && target.window_surface() == super::WindowSurface::default()
+        );
         diagnostics
     }
 

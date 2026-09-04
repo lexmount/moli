@@ -408,8 +408,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_switching() {
         .as_mut()
         .unwrap()
         .active_page_target_mut()
-        .owner_state
-        .target_crash_state
         .mark_crashed();
     ctx.conn
         .browser_context
@@ -500,8 +498,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_switching() {
             .as_ref()
             .expect("active browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 
@@ -527,8 +523,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_switching() {
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 }
@@ -1303,8 +1297,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
         .as_mut()
         .unwrap()
         .active_page_target_mut()
-        .owner_state
-        .target_crash_state
         .mark_crashed();
     ctx.conn
         .browser_context
@@ -1370,8 +1362,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
             .as_ref()
             .expect("active browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 
@@ -1421,8 +1411,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 
@@ -1445,8 +1433,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 }

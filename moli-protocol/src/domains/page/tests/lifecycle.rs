@@ -2594,12 +2594,7 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
     assert_eq!(attached_inspector["sessionId"], "SID-attached");
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!(bc.active_page_target().is_crashed());
     assert!(
         bc.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
@@ -2647,8 +2642,6 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 }
@@ -2721,8 +2714,6 @@ async fn crash_targets_background_owner_without_activation() {
     assert!(
         bc.background_target("TID-background")
             .expect("background target must exist")
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 }
@@ -2995,10 +2986,7 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
             request_stage: FetchRequestStage::Response,
         }],
     );
-    bc.active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
+    bc.active_page_target_mut().mark_crashed();
     let _ = bc
         .active_page_target_mut()
         .runtime_slot
@@ -3018,10 +3006,13 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
         .set_next_subresource_fetch_request_id_for_test(5);
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
     bc.remember_target_window_name("close-me", "TID-1");
-    bc.target_opener_ids
-        .insert("TID-popup-after-close".into(), "TID-1".into());
-    bc.target_opener_frame_ids
-        .insert("TID-popup-after-close".into(), "FRAME-1".into());
+    // An unknown popup cannot retain an orphaned opener side record.
+    bc.remember_target_opener(
+        "TID-popup-after-close",
+        "TID-1".into(),
+        "FRAME-1".into(),
+        false,
+    );
     bc.record_captured_response_body("REQ-old".into(), "body".into(), [Some("SID-1".into())]);
     bc.insert_io_stream("STREAM-old".into(), b"body".to_vec(), 0);
 
@@ -3051,11 +3042,9 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
     assert!(!bc.has_active_session());
     assert!(bc.attached_target_id_for_session("SID-attached").is_none());
     assert!(bc.target_id_for_window_name("close-me").is_none());
-    assert!(!bc.target_opener_ids.contains_key("TID-popup-after-close"));
-    assert!(
-        !bc.target_opener_frame_ids
-            .contains_key("TID-popup-after-close")
-    );
+    assert!(bc.target_info("TID-popup-after-close").is_none());
+    assert_eq!(bc.moli_memory_diagnostics()["targetOpenerCount"], 0);
+    assert_eq!(bc.moli_memory_diagnostics()["targetOpenerFrameCount"], 0);
     assert!(!bc.has_loaded_page());
     assert!(
         !bc.accepts_document_body_completion_event(&close_document_token),

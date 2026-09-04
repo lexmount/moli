@@ -2533,10 +2533,7 @@ fn reloaded_after_crash_session_ids(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Vec<Option<String>> {
-    if !conn
-        .target_owner_state_for_owner(owner)
-        .is_some_and(|owner_state| owner_state.target_crash_state.is_crashed())
-    {
+    if !conn.target_is_crashed_for_owner(owner) {
         return Vec::new();
     }
     conn.page_event_session_ids_for_owner(owner)
@@ -2554,9 +2551,7 @@ fn clear_crash_state_after_navigation(
     owner: &CommandOwnerScope,
     reloaded_after_crash_session_ids: &[Option<String>],
 ) {
-    let _ = conn.with_target_owner_state_for_owner_mut(owner, |owner_state| {
-        owner_state.target_crash_state.clear();
-    });
+    conn.clear_target_crash_state_for_owner(owner);
     for session_id in reloaded_after_crash_session_ids {
         out.push(inspector_target_reloaded_after_crash_event(
             session_id.as_deref(),
@@ -2570,9 +2565,7 @@ fn clear_crash_state_after_navigation_into_plan(
     owner: &CommandOwnerScope,
     reloaded_after_crash_session_ids: &[Option<String>],
 ) {
-    let _ = conn.with_target_owner_state_for_owner_mut(owner, |owner_state| {
-        owner_state.target_crash_state.clear();
-    });
+    conn.clear_target_crash_state_for_owner(owner);
     for session_id in reloaded_after_crash_session_ids {
         plan.push_background_event(inspector_target_reloaded_after_crash_event(
             session_id.as_deref(),

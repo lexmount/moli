@@ -105,7 +105,8 @@ pub(crate) use shared_worker_attachment::{
     TargetSharedWorkerProtocolAttachmentIdentity, TargetSharedWorkerProtocolAttachmentRetirement,
 };
 pub(crate) use shared_worker_target::SharedWorkerTargetState;
-pub(crate) use web_contents::SessionStorageNamespace;
+pub(in crate::conn) use web_contents::WindowOpener;
+pub(crate) use web_contents::{SessionStorageNamespace, WindowSurface, WindowSurfaceState};
 
 pub use browser_context::BrowserContext;
 pub(crate) use browser_context::{
@@ -126,7 +127,7 @@ pub use emulation::{
 };
 pub use page_target_host::PageTargetHost;
 pub(crate) use target_state::{
-    PendingBidiChannelListener, PendingInspectorAwait, TargetOwnerState, TargetWindowSurfaceState,
+    PendingBidiChannelListener, PendingInspectorAwait, TargetOwnerState,
 };
 
 pub(crate) use navigation_outcome::{CompletedDownloadBody, CompletedDownloadBodyArtifact};

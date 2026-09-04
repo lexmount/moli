@@ -15,8 +15,6 @@ use moli_core::network::SharedWebStorageStore;
 impl BrowserContext {
     pub(crate) fn take_page_target_for_close(&mut self, target_id: &str) -> Option<PageTargetHost> {
         let target = self.page_targets.remove(target_id)?;
-        self.forget_target_opener_references_for_target(target_id);
-        self.forget_target_window_names_for_target(target_id);
         self.forget_target_popup_id_for_target(target_id);
         Some(target)
     }
@@ -72,8 +70,7 @@ impl BrowserContext {
     ) -> Option<SessionStorageNamespace> {
         creator.and_then(|creator| {
             self.page_targets
-                .iter()
-                .find(|target| target.web_contents_id() == creator.web_contents_id())
+                .get_for_web_contents(creator.web_contents_id())
                 .map(PageTargetHost::deep_clone_session_storage_namespace)
         })
     }
@@ -130,16 +127,28 @@ impl BrowserContext {
         debug_assert!(selected, "newly inserted page target must be selectable");
     }
 
-    pub(crate) fn reusable_window_open_target_name(target_name: &str) -> Option<String> {
+    pub(crate) fn reusable_window_open_target_name(target_name: &str) -> Option<&str> {
         if target_name.is_empty() || target_name.eq_ignore_ascii_case("_blank") {
             return None;
         }
-        Some(target_name.to_owned())
+        Some(target_name)
     }
 
     pub(crate) fn target_id_for_window_name(&self, target_name: &str) -> Option<&str> {
         let name = Self::reusable_window_open_target_name(target_name)?;
-        self.target_window_names.get(&name).map(String::as_str)
+        self.page_targets
+            .iter()
+            .find(|target| {
+                target
+                    .runtime_slot
+                    .page_slot()
+                    .contents
+                    .window
+                    .name
+                    .as_deref()
+                    == Some(name)
+            })
+            .map(PageTargetHost::target_id)
     }
 
     pub(crate) fn has_attached_child_frame_id(&self, frame_id: &str) -> bool {
@@ -149,8 +158,19 @@ impl BrowserContext {
     }
 
     pub(crate) fn remember_target_window_name(&mut self, target_name: &str, target_id: &str) {
-        if let Some(name) = Self::reusable_window_open_target_name(target_name) {
-            self.target_window_names.insert(name, target_id.to_owned());
+        if self.page_target(target_id).is_none() {
+            return;
+        }
+        let name = Self::reusable_window_open_target_name(target_name).map(str::to_owned);
+        for target in self.page_targets.iter_mut() {
+            let is_target = target.is_target(target_id);
+            let window = &mut target.runtime_slot.page_slot_mut().contents.window;
+            if is_target {
+                window.name = name.clone();
+            } else if name.is_some() && window.name == name {
+                // Preserve the existing last-assignment-wins lookup rule.
+                window.name = None;
+            }
         }
     }
 
@@ -162,11 +182,6 @@ impl BrowserContext {
         {
             self.dismiss_pending_popup_javascript_dialogs(replaced_popup_id);
         }
-    }
-
-    pub(crate) fn forget_target_window_names_for_target(&mut self, target_id: &str) {
-        self.target_window_names
-            .retain(|_, mapped_target_id| mapped_target_id != target_id);
     }
 
     pub(crate) fn forget_target_popup_id_for_target(&mut self, target_id: &str) {
@@ -195,39 +210,15 @@ impl BrowserContext {
         opener_frame_id: String,
         can_access_opener: bool,
     ) {
-        self.target_opener_ids
-            .insert(target_id.to_owned(), opener_target_id);
-        self.target_opener_frame_ids
-            .insert(target_id.to_owned(), opener_frame_id);
-        if can_access_opener {
-            self.target_can_access_opener.insert(target_id.to_owned());
-        } else {
-            self.target_can_access_opener.remove(target_id);
-        }
-    }
-
-    pub(crate) fn forget_target_opener_references_for_target(&mut self, target_id: &str) {
-        let targets_with_removed_opener = self
-            .target_opener_ids
-            .iter()
-            .filter_map(|(candidate_target_id, opener_target_id)| {
-                (opener_target_id == target_id).then_some(candidate_target_id.clone())
-            })
-            .collect::<Vec<_>>();
-        self.target_opener_ids.remove(target_id);
-        self.target_can_access_opener.remove(target_id);
-        self.target_opener_ids
-            .retain(|_, opener_target_id| opener_target_id != target_id);
-        self.target_opener_frame_ids.remove(target_id);
-        for candidate_target_id in targets_with_removed_opener {
-            self.target_can_access_opener.remove(&candidate_target_id);
-            // Chromium keeps openerFrameId as immutable DevTools attribution
-            // after the opener target closes, while openerId and script access
-            // disappear. Drop the frame id only when the attributed target is
-            // itself no longer live.
-            if self.devtools_target_info(&candidate_target_id).is_none() {
-                self.target_opener_frame_ids.remove(&candidate_target_id);
-            }
+        let opener =
+            self.page_target(&opener_target_id)
+                .map(|target| crate::conn::state::WindowOpener {
+                    web_contents_id: target.web_contents_id(),
+                    can_access: can_access_opener,
+                });
+        if let Some(target) = self.page_target_mut(target_id) {
+            target.runtime_slot.page_slot_mut().contents.window.opener = opener;
+            target.opener_frame_id = Some(opener_frame_id);
         }
     }
 
@@ -238,7 +229,7 @@ impl BrowserContext {
         };
         target.set_target_url(url);
         if is_active {
-            target.owner_state.target_crash_state.clear();
+            target.clear_crash_state();
         }
         true
     }
@@ -749,6 +740,17 @@ impl BrowserContext {
 
     pub(crate) fn devtools_target_info(&self, target_id: &str) -> Option<DevToolsTargetInfo> {
         if let Some(target) = self.page_target(target_id) {
+            let opener = target
+                .runtime_slot
+                .page_slot()
+                .contents
+                .window
+                .opener
+                .and_then(|opener| {
+                    self.page_targets
+                        .get_for_web_contents(opener.web_contents_id)
+                        .map(|target| (target, opener.can_access))
+                });
             let attached =
                 target.has_session() || !self.attached_session_ids_for_target(target_id).is_empty();
             return Some(DevToolsTargetInfo {
@@ -762,15 +764,12 @@ impl BrowserContext {
                     .unwrap_or_default(),
                 url: target.target_url().to_owned(),
                 attached,
-                opener_id: self
-                    .target_opener_ids
-                    .get(target_id)
-                    .map(|id| DevToolsTargetId::from(id.as_str())),
-                opener_frame_id: self
-                    .target_opener_frame_ids
-                    .get(target_id)
-                    .map(|id| crate::devtools_runtime::DevToolsFrameId::from(id.as_str())),
-                can_access_opener: self.target_can_access_opener.contains(target_id),
+                opener_id: opener.map(|(target, _)| DevToolsTargetId::from(target.target_id())),
+                opener_frame_id: target
+                    .opener_frame_id
+                    .as_deref()
+                    .map(crate::devtools_runtime::DevToolsFrameId::from),
+                can_access_opener: opener.is_some_and(|(_, can_access)| can_access),
                 browser_context_id: Some(DevToolsBrowserContextId::from(self.id.as_str())),
                 moli_popup_id: None,
             });
@@ -1459,6 +1458,79 @@ mod tests {
     }
 
     #[test]
+    fn opener_follows_web_contents_across_target_rekey_and_id_reuse() {
+        let mut context = BrowserContext::new("BC-opener-rekey".into());
+        context.set_active_target_id("TID-opener");
+        let opener = context.active_page_target().web_contents_id();
+        context.stage_background_target("TID-popup".into(), None, "about:blank".into(), None, None);
+        context.remember_target_opener(
+            "TID-popup",
+            "TID-opener".into(),
+            "FRAME-opener".into(),
+            true,
+        );
+
+        assert!(context.rekey_active_target("TID-renamed"));
+        context.stage_background_target(
+            "TID-opener".into(),
+            None,
+            "about:blank".into(),
+            None,
+            None,
+        );
+        assert_eq!(context.active_page_target().web_contents_id(), opener);
+        assert_eq!(
+            context.target_info("TID-popup").unwrap()["openerId"],
+            "TID-renamed"
+        );
+        drop(context.take_page_target_for_close("TID-opener"));
+        let popup = context.target_info("TID-popup").unwrap();
+        assert_eq!(popup["openerId"], "TID-renamed");
+        assert_eq!(popup["canAccessOpener"], true);
+
+        drop(context.take_page_target_for_close("TID-renamed"));
+        context.set_active_target_id("TID-renamed");
+        let popup = context.target_info("TID-popup").unwrap();
+        assert!(popup.get("openerId").is_none());
+        assert_eq!(popup["canAccessOpener"], false);
+        assert_eq!(popup["openerFrameId"], "FRAME-opener");
+    }
+
+    #[test]
+    fn window_name_follows_web_contents_and_dies_with_its_owner() {
+        let mut context = BrowserContext::new("BC-window-rekey".into());
+        context.set_active_target_id("TID-window");
+        context.remember_target_window_name("report", "TID-window");
+        assert!(context.rekey_active_target("TID-renamed"));
+        context.stage_background_target(
+            "TID-window".into(),
+            None,
+            "about:blank".into(),
+            None,
+            None,
+        );
+        assert_eq!(
+            context.target_id_for_window_name("report"),
+            Some("TID-renamed")
+        );
+        drop(context.take_page_target_for_close("TID-window"));
+        assert_eq!(
+            context.target_id_for_window_name("report"),
+            Some("TID-renamed")
+        );
+
+        context.remember_target_window_name("renamed-report", "TID-renamed");
+        assert_eq!(context.target_id_for_window_name("report"), None);
+        assert_eq!(
+            context.target_id_for_window_name("renamed-report"),
+            Some("TID-renamed")
+        );
+        drop(context.take_page_target_for_close("TID-renamed"));
+        context.set_active_target_id("TID-renamed");
+        assert_eq!(context.target_id_for_window_name("renamed-report"), None);
+    }
+
+    #[test]
     fn window_open_target_registry_preserves_named_target_bytes() {
         assert_eq!(
             BrowserContext::reusable_window_open_target_name("_BlAnK"),
@@ -1466,14 +1538,17 @@ mod tests {
         );
         assert_eq!(
             BrowserContext::reusable_window_open_target_name(" _blank "),
-            Some(" _blank ".to_owned())
+            Some(" _blank ")
         );
         assert_eq!(
             BrowserContext::reusable_window_open_target_name("ReportWindow"),
-            Some("ReportWindow".to_owned())
+            Some("ReportWindow")
         );
 
         let mut context = BrowserContext::new("BC-window-name".to_owned());
+        for id in ["TID-spaced", "TID-exact"] {
+            context.stage_background_target(id.into(), None, "about:blank".into(), None, None);
+        }
         context.remember_target_window_name(" ReportWindow ", "TID-spaced");
         context.remember_target_window_name("ReportWindow", "TID-exact");
         assert_eq!(

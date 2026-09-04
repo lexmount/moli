@@ -577,7 +577,7 @@ pub(crate) use state::{
     TargetServiceWorkerRunIdentity, TargetServiceWorkerRunRetirement,
     TargetServiceWorkerRuntimeAttachmentIdentity, TargetServiceWorkerVersionIdentity,
     TargetServiceWorkerVersionRetirement, TargetSharedWorkerProtocolAttachmentIdentity,
-    TargetSharedWorkerProtocolAttachmentRetirement, TargetWindowSurfaceState,
+    TargetSharedWorkerProtocolAttachmentRetirement, WindowSurface, WindowSurfaceState,
     viewport_surface_install_script,
 };
 #[cfg(test)]
