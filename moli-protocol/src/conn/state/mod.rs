@@ -39,6 +39,7 @@ pub(crate) use identity::{
     TargetPageResidenceIdentity, TargetRootDocumentProtocolAttachmentIdentity,
 };
 pub(crate) use moli_core::browser::DocumentId as TargetPageAttachmentId;
+pub(crate) use moli_core::browser::NavigationId;
 
 pub(crate) use devtools_renderer_channel::{
     CommittedRendererAgentAttachment, DevToolsRendererChannelError,
@@ -65,7 +66,7 @@ pub(crate) use page_resource::MainDocumentResourceSnapshot;
 #[cfg(test)]
 pub(crate) use page_slot::TargetPageSlot;
 pub(crate) use page_slot::{
-    CommittedRendererDocumentBinding, DocumentNavigationToken, InitialDocumentPageBuildWaiter,
+    CommittedRendererDocumentBinding, InitialDocumentPageBuildWaiter,
     RendererDocumentLifecycleWaiterId, TargetPageAbsenceReason,
 };
 pub use page_slot::{DocumentStartScript, IsolatedWorldDefinition, RuntimeBindingDefinition};

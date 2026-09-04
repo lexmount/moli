@@ -1,8 +1,7 @@
 use super::super::{BrowserContext, ConnectionNetworkRequestIdAllocator, PageTargetHost};
 #[cfg(test)]
 use super::super::{
-    DocumentBodySource, DocumentNavigationToken, NavigationDispatchState,
-    PendingSubresourceFetchRequest,
+    DocumentBodySource, NavigationDispatchState, NavigationId, PendingSubresourceFetchRequest,
 };
 
 fn document_navigation_loader_id(sequence: u64) -> String {
@@ -106,7 +105,7 @@ impl BrowserContext {
     pub(crate) fn register_pending_fetch_response_navigation(
         &mut self,
         request_id: String,
-        document_navigation_token: Option<DocumentNavigationToken>,
+        document_navigation_token: Option<NavigationId>,
         navigation: NavigationDispatchState,
         body: DocumentBodySource,
     ) {

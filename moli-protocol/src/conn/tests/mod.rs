@@ -1425,7 +1425,7 @@ fn navigation_background_event_queue_preserves_order_for_current_token() {
         stale_message,
     ));
     conn.enqueue_navigation_background_event(NavigationBackgroundEvent::protocol_message(
-        current.clone(),
+        current,
         current_first_message.clone(),
     ));
     conn.enqueue_navigation_background_event(NavigationBackgroundEvent::protocol_message(

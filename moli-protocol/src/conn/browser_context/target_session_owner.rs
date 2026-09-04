@@ -3490,10 +3490,7 @@ mod tests {
 
         conn.runtime_session_owner_slot_mut(Some("SID-pending-residence"))
             .expect("active target runtime slot")
-            .start_document_navigation(
-                "TID-pending-residence".to_owned(),
-                "LOADER-pending-residence".to_owned(),
-            );
+            .start_document_navigation("LOADER-pending-residence".to_owned());
 
         assert_eq!(
             conn.target_page_residence_identity_for_session(Some("SID-pending-residence")),

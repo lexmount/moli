@@ -1766,7 +1766,7 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
         .set_page_attachment_id_for_test(1002);
     background
         .runtime_slot
-        .start_document_navigation("TID-background".to_owned(), "LID-background".to_owned());
+        .start_document_navigation("LID-background".to_owned());
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let context = crate::devtools_runtime::DevToolsCommandContext {

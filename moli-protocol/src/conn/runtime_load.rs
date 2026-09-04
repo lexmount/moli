@@ -719,7 +719,7 @@ pub(crate) struct BackgroundNavigationEarlyResult {
 pub(crate) struct BackgroundNavigationBodyCompletionSink {
     sender:
         tokio::sync::mpsc::UnboundedSender<crate::domains::page::BackgroundNavigationCompletion>,
-    token: DocumentNavigationToken,
+    token: NavigationId,
     state: NavigationDispatchState,
 }
 
@@ -728,7 +728,7 @@ impl BackgroundNavigationBodyCompletionSink {
         sender: tokio::sync::mpsc::UnboundedSender<
             crate::domains::page::BackgroundNavigationCompletion,
         >,
-        token: DocumentNavigationToken,
+        token: NavigationId,
         state: NavigationDispatchState,
     ) -> Self {
         Self {
@@ -2396,7 +2396,7 @@ impl CdpConnection {
 
     pub(crate) fn navigation_load_job_for_navigation(
         &mut self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         navigation: &NavigationDispatchState,
         body_progress_source: MainDocumentBodyProgressSource,
         early_result: Option<BackgroundNavigationEarlyResult>,
@@ -2428,7 +2428,7 @@ impl CdpConnection {
 
     pub(crate) fn background_navigation_load_job_for_navigation(
         &mut self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         navigation: &NavigationDispatchState,
         body_progress_source: MainDocumentBodyProgressSource,
         early_result: Option<BackgroundNavigationEarlyResult>,

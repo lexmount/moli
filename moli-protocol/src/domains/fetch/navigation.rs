@@ -1,6 +1,6 @@
 use crate::conn::{
-    CdpConnection, CommandOwnerScope, DocumentBodySource, DocumentNavigationToken,
-    FetchAuthChallenge, NavigationDispatchState, NavigationLoadOutcome, PendingFetchNavigation,
+    CdpConnection, CommandOwnerScope, DocumentBodySource, FetchAuthChallenge,
+    NavigationDispatchState, NavigationId, NavigationLoadOutcome, PendingFetchNavigation,
     PendingSubresourceFetchAuthStage, PendingSubresourceFetchAuthStageChain,
     PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest, decode_data_url_response,
 };
@@ -371,7 +371,7 @@ pub(super) async fn cancel_navigation_auth_as_background_events_async(
 pub(super) async fn complete_tokened_materialized_navigation_as_background_events_async(
     conn: &mut CdpConnection,
     out: &mut FetchCommandOutput,
-    token: Option<DocumentNavigationToken>,
+    token: Option<NavigationId>,
     navigation_state: NavigationDispatchState,
     navigation: network::MaterializedNavigationLoadOutcome,
 ) {
@@ -396,7 +396,7 @@ pub(super) async fn complete_tokened_materialized_navigation_as_background_event
 pub(super) async fn complete_tokened_materialized_navigation_into_buffer_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
-    token: Option<DocumentNavigationToken>,
+    token: Option<NavigationId>,
     navigation_state: NavigationDispatchState,
     navigation: network::MaterializedNavigationLoadOutcome,
 ) {
@@ -575,7 +575,7 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
     conn.register_pending_fetch_response_navigation_for_owner(
         &pending.navigation.owner,
         pending.fetch_request_id.clone(),
-        pending.document_navigation_token.clone(),
+        pending.document_navigation_token,
         pending.navigation.clone(),
         DocumentBodySource::StreamingRaw {
             requested_url: pending.navigation.requested_url.clone(),
@@ -684,7 +684,7 @@ fn pause_buffered_raw_response_stage_navigation_into_buffer(
     conn.register_pending_fetch_response_navigation_for_owner(
         &pending.navigation.owner,
         pending.fetch_request_id.clone(),
-        pending.document_navigation_token.clone(),
+        pending.document_navigation_token,
         pending.navigation.clone(),
         DocumentBodySource::BufferedRaw {
             requested_url: pending.navigation.requested_url.clone(),
@@ -844,7 +844,7 @@ fn register_navigation_auth_required_event(
         owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
         fetch_request_id: pending.fetch_request_id.clone(),
         response_stage_request_id: pending.fetch_request_id.clone(),
-        document_navigation_token: pending.document_navigation_token.clone(),
+        document_navigation_token: pending.document_navigation_token,
         navigation: pending.navigation.clone(),
         request_cookie_report,
         auth_response: std::sync::Arc::new(response),

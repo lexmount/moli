@@ -2457,7 +2457,7 @@ async fn page_navigate_network_failure_commits_error_document() {
         .expect("error Document loader id");
     let stale_request_id = "REQ-before-network-error";
     let stale_body_completion = BackgroundNavigationCompletion::main_document_body(
-        old_document_token.clone(),
+        old_document_token,
         crate::conn::NavigationDispatchState {
             navigate_id: None,
             owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
@@ -2465,7 +2465,7 @@ async fn page_navigate_network_failure_commits_error_document() {
             frame_id: "TID-1".to_owned(),
             session_id: Some("SID-1".to_owned()),
             request_id: Some(stale_request_id.to_owned()),
-            loader_id: old_document_token.loader_id.clone(),
+            loader_id: "LOADER-before-network-error".to_owned(),
             request_announced: true,
             requested_url: url::Url::parse("https://stale.example.test/old-body").unwrap(),
             request_method: "GET".to_owned(),

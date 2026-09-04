@@ -6,7 +6,7 @@ use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
     CommittedRendererDocumentBinding, CompletedDownloadBodyArtifact,
-    DeferredMainDocumentLoadObservationId, DocumentNavigationToken, NavigationDispatchState,
+    DeferredMainDocumentLoadObservationId, NavigationDispatchState, NavigationId,
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
     RendererPageResidenceIdentity,
 };
@@ -28,7 +28,7 @@ pub(crate) struct MainDocumentNavigationActivity {
     final_url: Url,
     progress_gate: MainDocumentProgressGate,
     result_mode: LoadedNavigationResultMode,
-    document_navigation_token: Option<DocumentNavigationToken>,
+    document_navigation_token: Option<NavigationId>,
     deferred_initial_renderer_document_lifecycle_events: Vec<RendererDocumentLifecycleEvent>,
 }
 
@@ -59,6 +59,7 @@ pub(crate) struct DeferredMainDocumentLoadCompletionAdmission {
 }
 
 pub(crate) struct DeferredMainDocumentLoadCompletionActivity {
+    target_id: String,
     state: DeferredMainDocumentLoadCompletionState,
     observation_id: DeferredMainDocumentLoadObservationId,
     renderer_page_residence_identity: Option<RendererPageResidenceIdentity>,
@@ -80,7 +81,7 @@ impl MainDocumentNavigationActivity {
         state: NavigationDispatchState,
         final_url: Url,
         progress_gate: MainDocumentProgressGate,
-        document_navigation_token: Option<DocumentNavigationToken>,
+        document_navigation_token: Option<NavigationId>,
     ) -> Self {
         Self {
             state,
@@ -679,6 +680,10 @@ impl DeferredMainDocumentLoadCompletionAdmission {
             )
         };
         DeferredMainDocumentLoadCompletionActivity {
+            target_id: conn
+                .target_owner_identity_for_owner(self.owner_scope())
+                .and_then(|(_, target_id)| target_id)
+                .unwrap_or_else(|| self.state.navigation_activity.state.frame_id.clone()),
             state: self.state,
             observation_id,
             renderer_page_residence_identity,
@@ -701,14 +706,7 @@ impl DeferredMainDocumentLoadCompletionActivity {
     }
 
     pub(crate) fn target_id(&self) -> &str {
-        self.state
-            .navigation_activity
-            .document_navigation_token
-            .as_ref()
-            .map_or(
-                self.state.navigation_activity.state.frame_id.as_str(),
-                |token| token.target_id.as_str(),
-            )
+        &self.target_id
     }
 
     pub(crate) fn observation_id(&self) -> DeferredMainDocumentLoadObservationId {
@@ -782,6 +780,7 @@ impl PendingDeferredMainDocumentLoadCompletionActivity {
 
     pub(crate) async fn wait(self) -> CompletedDeferredMainDocumentLoadCompletionActivity {
         let DeferredMainDocumentLoadCompletionActivity {
+            target_id: _,
             state,
             observation_id,
             renderer_page_residence_identity: _,

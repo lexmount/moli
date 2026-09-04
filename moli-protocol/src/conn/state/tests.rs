@@ -1469,16 +1469,24 @@ fn browser_navigation_identity_rejects_stale_tokens_without_ordering() {
     assert!(context.accepts_pending_document_navigation_event(&first));
 
     let second = context
-        .start_document_navigation_for_active_target("LOADER-2".to_owned())
+        .start_document_navigation_for_active_target("LOADER-1".to_owned())
         .expect("active target should create second navigation token");
     assert!(context.accepts_pending_document_navigation_event(&second));
     assert!(
         !context.accepts_pending_document_navigation_event(&first),
         "a new navigation request identity must make previous events stale"
     );
-    assert_ne!(second.navigation_id, first.navigation_id);
-    assert_eq!(second.target_id, "TID-nav");
-    assert_eq!(second.loader_id, "LOADER-2");
+    assert_ne!(
+        second, first,
+        "even reusing a frontend loader must allocate a distinct navigation"
+    );
+    assert_eq!(
+        context
+            .active_page_target()
+            .runtime_slot()
+            .current_document_loader_id(),
+        Some("LOADER-1")
+    );
 }
 
 #[test]
@@ -1505,6 +1513,35 @@ fn reused_devtools_ids_do_not_reuse_browser_object_identities() {
         context.active_page_target().main_frame_slot_id(),
         first_main_frame_slot
     );
+}
+
+#[test]
+fn navigation_lifetime_survives_devtools_target_rekey_but_not_recreation() {
+    let mut context = BrowserContext::new("CTX-nav-rekey".to_owned());
+    context.set_active_target_id("TID-before");
+    let navigation = context
+        .start_document_navigation_for_active_target("LOADER-reused".to_owned())
+        .unwrap();
+    let cancellation = context
+        .document_navigation_cancellation_handle(&navigation)
+        .unwrap();
+    assert!(context.rekey_active_target("TID-after"));
+    assert!(context.accepts_pending_document_navigation_event(&navigation));
+    assert!(context.arm_background_navigation_completion(&navigation, None));
+    context.commit_document_navigation_if_matches(&navigation);
+    assert!(context.settle_background_navigation_completion(&navigation));
+    assert!(!cancellation.is_cancelled());
+    assert!(context.accepts_document_body_completion_event(&navigation));
+
+    drop(context.take_page_target_for_close("TID-after"));
+    context.set_active_target_id("TID-after");
+    let replacement = context
+        .start_document_navigation_for_active_target("LOADER-reused".to_owned())
+        .unwrap();
+    assert_ne!(navigation, replacement);
+    assert!(!context.accepts_document_body_completion_event(&navigation));
+    assert!(!context.settle_background_navigation_completion(&navigation));
+    assert!(context.accepts_pending_document_navigation_event(&replacement));
 }
 
 #[test]

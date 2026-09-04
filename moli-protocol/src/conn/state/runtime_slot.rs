@@ -22,13 +22,10 @@ use crate::{
 };
 
 use super::devtools_renderer_channel::{DevToolsRendererChannel, RendererAgentDetachReason};
-use super::page_slot::{
-    DocumentNavigationToken, InitialDocumentPageBuildWaiter, TargetPageAbsenceReason,
-    TargetPageSlot,
-};
+use super::page_slot::{InitialDocumentPageBuildWaiter, TargetPageAbsenceReason, TargetPageSlot};
 use super::{
     CommittedRendererAgentAttachment, CommittedRendererDocumentBinding,
-    DevToolsRendererChannelError, PreparedRendererAgentAttachment,
+    DevToolsRendererChannelError, NavigationId, PreparedRendererAgentAttachment,
     PreparedRendererCallReplacements, RendererAgentAttachment, RendererPageResidenceIdentity,
     TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver, TargetPageAttachmentId,
 };
@@ -338,17 +335,11 @@ impl TargetRuntimeSlot {
         self.javascript_dialog_scope.retire();
     }
 
-    pub(crate) fn start_document_navigation(
-        &mut self,
-        target_id: String,
-        loader_id: String,
-    ) -> DocumentNavigationToken {
+    pub(crate) fn start_document_navigation(&mut self, loader_id: String) -> NavigationId {
         self.devtools_renderer_channel.reopen_after_target_crash();
-        let token = self
-            .page_slot
-            .start_document_navigation(target_id, loader_id);
+        let token = self.page_slot.start_document_navigation(loader_id);
         self.devtools_renderer_channel
-            .navigation_started(token.clone())
+            .navigation_started(token)
             .expect("an open target runtime slot must accept a new document navigation");
         token
     }
@@ -356,7 +347,7 @@ impl TargetRuntimeSlot {
     #[cfg(test)]
     pub(crate) fn prepare_renderer_agent_candidate(
         &self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         page: &mut Page,
     ) -> Result<PreparedRendererAgentAttachment, DevToolsRendererChannelError> {
         let candidate = self
@@ -367,7 +358,7 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn prepare_renderer_agent_candidate_token(
         &self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         agent_token: RendererDevToolsAgentToken,
     ) -> Result<PreparedRendererAgentAttachment, DevToolsRendererChannelError> {
         self.devtools_renderer_channel
@@ -404,11 +395,11 @@ impl TargetRuntimeSlot {
         &mut self,
         transaction: CommittedRendererAgentAttachment,
     ) -> Result<(), DevToolsRendererChannelError> {
-        let loader_id = transaction.navigation().loader_id.clone();
+        let navigation = *transaction.navigation();
         self.devtools_renderer_channel
             .rollback_committed_candidate(transaction)?;
         self.page_slot
-            .clear_pending_document_navigation_if_loader_matches(&loader_id);
+            .clear_pending_document_navigation_if_matches(&navigation);
         Ok(())
     }
 
@@ -452,7 +443,7 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn finish_renderer_document_navigation(
         &mut self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
     ) -> Result<FinishedRendererDocumentNavigation, DevToolsRendererChannelError> {
         let resume = self.devtools_renderer_channel.navigation_finished(token)?;
         let renderer_call_replacements = resume
@@ -537,17 +528,14 @@ impl TargetRuntimeSlot {
         Ok(previous)
     }
 
-    pub(crate) fn accepts_pending_document_navigation_event(
-        &self,
-        token: &DocumentNavigationToken,
-    ) -> bool {
+    pub(crate) fn accepts_pending_document_navigation_event(&self, token: &NavigationId) -> bool {
         self.page_slot
             .accepts_pending_document_navigation_event(token)
     }
 
     pub(crate) fn document_navigation_cancellation_handle(
         &self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
     ) -> Option<moli_fetch::FetchCancelHandle> {
         self.page_slot
             .document_navigation_cancellation_handle(token)
@@ -555,17 +543,14 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn arm_background_navigation_completion(
         &mut self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
     ) -> bool {
         self.page_slot
             .arm_background_navigation_completion(token, additional_cancellation)
     }
 
-    pub(crate) fn settle_background_navigation_completion(
-        &mut self,
-        token: &DocumentNavigationToken,
-    ) -> bool {
+    pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
         self.page_slot
             .settle_background_navigation_completion(token)
     }
@@ -574,10 +559,11 @@ impl TargetRuntimeSlot {
         self.page_slot.has_inflight_background_navigation()
     }
 
-    pub(crate) fn accepts_document_body_completion_event(
-        &self,
-        token: &DocumentNavigationToken,
-    ) -> bool {
+    pub(crate) fn has_renderer_navigation(&self, navigation: &NavigationId) -> bool {
+        self.devtools_renderer_channel.has_navigation(navigation)
+    }
+
+    pub(crate) fn accepts_document_body_completion_event(&self, token: &NavigationId) -> bool {
         self.page_slot.accepts_document_body_completion_event(token)
     }
 
@@ -653,7 +639,7 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn commit_pending_document_navigation_if_matches(
         &mut self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
     ) -> bool {
         self.page_slot
             .commit_pending_document_navigation_if_matches(token)

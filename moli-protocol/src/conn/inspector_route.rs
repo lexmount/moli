@@ -7,7 +7,7 @@ use super::state::{
     CommittedRendererAgentAttachment, FinishedRendererDocumentNavigation,
     PreparedRendererAgentAttachment, RendererAgentAttachment, RendererPageResidenceIdentity,
 };
-use super::{CdpConnection, CommandOwnerScope, DocumentNavigationToken};
+use super::{CdpConnection, CommandOwnerScope, NavigationId};
 
 impl CdpConnection {
     pub(crate) fn renderer_agent_attachment_is_current_for_session_owner(
@@ -34,7 +34,7 @@ impl CdpConnection {
     pub(crate) fn prepare_renderer_agent_candidate_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         page: &mut Page,
     ) -> Result<PreparedRendererAgentAttachment, String> {
         let candidate = self.prepare_renderer_agent_candidate_token_for_owner(
@@ -49,7 +49,7 @@ impl CdpConnection {
     pub(crate) fn prepare_renderer_agent_candidate_token_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         agent_token: RendererDevToolsAgentToken,
     ) -> Result<PreparedRendererAgentAttachment, String> {
         self.validate_navigation_target_owner_for_scope(owner, token)?;
@@ -179,7 +179,7 @@ impl CdpConnection {
     pub(crate) fn finish_renderer_document_navigation_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
     ) -> Option<FinishedRendererDocumentNavigation> {
         if self
             .validate_navigation_target_owner_for_scope(owner, token)
@@ -198,7 +198,7 @@ impl CdpConnection {
                 tracing::debug!(
                     %error,
                     session_id = owner.session_id(),
-                    loader_id = token.loader_id,
+                    navigation_id = token.get(),
                     "renderer channel rejected navigation completion"
                 );
                 None
@@ -228,12 +228,12 @@ impl CdpConnection {
     fn validate_navigation_target_owner_for_scope(
         &self,
         owner: &CommandOwnerScope,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
     ) -> Result<(), String> {
-        let (_, target_id) = self
-            .target_owner_identity_for_owner(owner)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        if target_id.as_deref() != Some(token.target_id.as_str()) {
+        if !self
+            .runtime_session_owner_slot_for_owner(owner)?
+            .has_renderer_navigation(token)
+        {
             return Err("renderer channel navigation target owner mismatch".to_owned());
         }
         Ok(())
@@ -251,6 +251,53 @@ mod tests {
     use super::*;
     use crate::conn::{BrowserContext, PageTargetHost};
     use crate::testing::TestContext;
+
+    #[test]
+    fn navigation_identity_cannot_authorize_a_different_target_with_the_same_loader() {
+        let mut context = BrowserContext::new("BID-navigation-route".to_owned());
+        context.set_active_target_id("TID-first");
+        context.insert_page_target_host(PageTargetHost::with_url(
+            "TID-second".to_owned(),
+            None,
+            "about:blank".to_owned(),
+        ));
+        let first = context
+            .start_document_navigation_for_target("TID-first", "LOADER-shared".to_owned())
+            .unwrap();
+        let second = context
+            .start_document_navigation_for_target("TID-second", "LOADER-shared".to_owned())
+            .unwrap();
+        let mut conn = CdpConnection::new();
+        conn.install_browser_context_fixture_for_test(context);
+        let owner = CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: "BID-navigation-route".to_owned(),
+            target_id: "TID-second".to_owned(),
+            session_key: DevToolsSessionKey::Primary,
+        });
+        assert!(!conn.accepts_pending_document_navigation_for_owner(&owner, &first));
+        conn.commit_document_navigation_for_owner_if_matches(&owner, &first);
+        assert!(conn.accepts_pending_document_navigation_for_owner(&owner, &second));
+        assert!(
+            conn.prepare_renderer_agent_candidate_token_for_owner(
+                &owner,
+                &first,
+                RendererDevToolsAgentToken::allocate()
+            )
+            .is_err()
+        );
+        assert!(
+            conn.finish_renderer_document_navigation_for_owner(&owner, &first)
+                .is_none()
+        );
+        assert!(
+            conn.prepare_renderer_agent_candidate_token_for_owner(
+                &owner,
+                &second,
+                RendererDevToolsAgentToken::allocate()
+            )
+            .is_ok()
+        );
+    }
 
     fn batch(session: DevToolsSessionKey) -> RendererRuntimeInspectorMessageBatch {
         RendererRuntimeInspectorMessageBatch::new(
