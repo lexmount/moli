@@ -6742,7 +6742,9 @@ fn worker_performance_now_callback<'s>(
     rv.set(
         v8::Number::new(
             scope,
-            (monotonic_unix_epoch_millis() - time_origin).max(0.0),
+            moli_time::coarsened_dom_time_millis(
+                (monotonic_unix_epoch_millis() - time_origin).max(0.0),
+            ),
         )
         .into(),
     );
