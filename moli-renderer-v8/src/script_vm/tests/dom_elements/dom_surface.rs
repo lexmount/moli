@@ -6672,7 +6672,7 @@ async fn element_matches_delegates_loaded_child_document_elements() {
             r##"
 (() => {
   const doc = document.querySelector("iframe").contentDocument;
-  doc.defaultView.history.replaceState(null, "", "#target");
+  doc.defaultView.history.replaceState(null, "", "about:srcdoc#target");
   const code = doc.getElementById("code");
   return [
     code.ownerDocument === doc,
@@ -10718,9 +10718,9 @@ const frame = document.createElement('iframe');
 frame.name = 'target';
 const root = document.body || document.documentElement || document;
 root.appendChild(frame);
-frame.contentWindow.history.pushState(null, '', '/child.html');
+frame.contentWindow.history.replaceState(null, '', 'about:blank#child');
 const link = document.createElement('a');
-link.href = '/child.html#next';
+link.href = 'about:blank#next';
 link.target = 'target';
 root.appendChild(link);
 let seen = [];
@@ -10738,10 +10738,7 @@ seen.join('|')
         )
         .expect("targeted same-document anchor click should dispatch child navigate");
 
-    assert_eq!(
-        result,
-        "true,true,https://targeted-child-hash.test/child.html#next,-1"
-    );
+    assert_eq!(result, "true,true,about:blank#next,-1");
 }
 #[test]
 fn anchor_click_to_identical_url_dispatches_replace_navigate_event() {
@@ -11545,7 +11542,7 @@ globalThis.__firstJointLengthFrame = first;
 (() => {
   const child = __firstJointLengthFrame.contentWindow;
   const before = history.length;
-  child.history.pushState(null, '', '#first');
+  child.history.pushState(null, '', 'about:srcdoc#first');
   return [before, history.length, child.history.length].join('|');
 })()
 "#,
@@ -11572,13 +11569,72 @@ globalThis.__secondJointLengthFrame = second;
 (() => {
   const child = __secondJointLengthFrame.contentWindow;
   const before = history.length;
-  child.history.pushState(null, '', '#second');
+  child.history.pushState(null, '', 'about:srcdoc#second');
   return [before, history.length, child.history.length].join('|');
 })()
 "#,
         )
         .expect("second child history push should evaluate"),
         "2|3|3"
+    );
+}
+
+#[test]
+fn initial_empty_child_history_can_rewrite_about_blank_fragment() {
+    let mut vm = new_storage_test_vm("https://initial-empty-history.test/page.html");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  (document.body || document.documentElement || document).appendChild(frame);
+  const child = frame.contentWindow;
+  const before = history.length;
+  child.history.pushState({ step: 1 }, '', 'about:blank#pushed');
+  child.history.replaceState({ step: 2 }, '', 'about:blank#replaced');
+  return [
+    child.location.href,
+    child.history.state.step,
+    history.length,
+    before,
+  ].join('|');
+})()
+"#,
+        )
+        .expect("initial empty child history mutation should evaluate"),
+        "about:blank#replaced|2|1|1"
+    );
+}
+
+#[test]
+fn initial_empty_child_history_mutation_preserves_pending_srcdoc_navigation() {
+    let mut vm = new_storage_test_vm("https://pending-child-history.test/page.html");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  frame.srcdoc = '<p id="committed">child</p>';
+  (document.body || document.documentElement || document).appendChild(frame);
+  frame.contentWindow.history.pushState(null, '', 'about:blank#before-commit');
+  globalThis.__pendingHistoryFrame = frame;
+  return frame.contentWindow.location.href;
+})()
+"#,
+        )
+        .expect("pending child history mutation should evaluate"),
+        "about:blank#before-commit"
+    );
+
+    vm.drain_pending_child_frame_work_for_test();
+    assert_eq!(
+        vm.eval(
+            "[__pendingHistoryFrame.contentWindow.location.href, Boolean(__pendingHistoryFrame.contentDocument.getElementById('committed'))].join('|')"
+        )
+        .expect("pending srcdoc navigation should still commit"),
+        "about:srcdoc|true"
     );
 }
 
@@ -11616,7 +11672,11 @@ async fn top_history_back_routes_to_child_joint_history_entry() {
             r#"
 (() => {
   const frame = document.querySelector('iframe');
-  frame.contentWindow.history.pushState({ child: true }, '', '#child');
+  frame.contentWindow.history.pushState(
+    { child: true },
+    '',
+    'about:srcdoc#child'
+  );
   return [
     location.href,
     history.length,
@@ -11630,7 +11690,7 @@ async fn top_history_back_routes_to_child_joint_history_entry() {
 
     assert_eq!(
         setup,
-        "https://joint-child-back.test/page.html|2|2|https://joint-child-back.test/page.html#child"
+        "https://joint-child-back.test/page.html|2|2|about:srcdoc#child"
     );
     let _ = vm
         .run_one_oldest_ready_page_task_executor_turn(&loader)
@@ -11696,7 +11756,11 @@ async fn top_history_back_ignores_removed_child_joint_history_entry() {
             r#"
 (() => {
   const frame = document.querySelector('iframe');
-  frame.contentWindow.history.pushState({ child: true }, '', '#child');
+  frame.contentWindow.history.pushState(
+    { child: true },
+    '',
+    'about:srcdoc#child'
+  );
   return [
     location.href,
     navigation.entries().length,
@@ -11712,7 +11776,7 @@ async fn top_history_back_ignores_removed_child_joint_history_entry() {
 
     assert_eq!(
         setup,
-        "https://removed-child-joint-back.test/page.html|1|0|2|2|https://removed-child-joint-back.test/page.html#child"
+        "https://removed-child-joint-back.test/page.html|1|0|2|2|about:srcdoc#child"
     );
 
     vm.eval("document.querySelector('iframe').remove(); history.back(); 'queued'")
@@ -11820,7 +11884,7 @@ async fn detached_child_navigation_error_exposes_committed_entry_during_dispatch
 (() => {
   globalThis.__lmDetachedChildNavigateErrorLog = [];
   const child = document.querySelector('iframe').contentWindow;
-  child.history.pushState({ child: true }, "", "#one");
+  child.history.pushState({ child: true }, "", "about:srcdoc#one");
   return [
     child.navigation.entries().length,
     child.navigation.currentEntry.index,
@@ -11830,10 +11894,7 @@ async fn detached_child_navigation_error_exposes_committed_entry_during_dispatch
 "##,
         )
         .expect("child initial same-document navigation should evaluate");
-    assert_eq!(
-        initial,
-        "2|1|https://child-detach-navigation-error.test/page.html#one"
-    );
+    assert_eq!(initial, "2|1|about:srcdoc#one");
 
     let setup = vm
         .eval(

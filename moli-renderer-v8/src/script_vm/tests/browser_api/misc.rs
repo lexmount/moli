@@ -25545,6 +25545,39 @@ JSON.stringify({
     );
 }
 
+#[test]
+fn window_open_named_reuse_before_first_commit_pushes_history() {
+    let mut vm = new_storage_test_vm("https://example.com/base/page.html");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const firstUrl = URL.createObjectURL(
+    new Blob(['<!doctype html><p>first</p>'], { type: 'text/html' })
+  );
+  const secondUrl = URL.createObjectURL(
+    new Blob(['<!doctype html><p>second</p>'], { type: 'text/html' })
+  );
+  const popup = open(firstUrl, 'pendingNamedPopup');
+  const reopened = open(secondUrl, 'pendingNamedPopup');
+  const result = [
+    popup === reopened,
+    reopened.location.href === secondUrl,
+    reopened.history.length,
+  ].join('|');
+  popup.close();
+  URL.revokeObjectURL(firstUrl);
+  URL.revokeObjectURL(secondUrl);
+  return result;
+})()
+"#,
+        )
+        .expect("pending named popup reuse should evaluate"),
+        "true|true|2"
+    );
+}
+
 #[tokio::test]
 async fn lightweight_popup_cross_document_navigation_clears_old_onload_handler() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
@@ -26843,6 +26876,32 @@ async fn window_open_204_popup_ignores_navigation_and_preserves_initial_empty_hi
         )
         .expect("popup 204 loaded result should evaluate"),
         format!("{}|1|loaded", after_navigation_parts[0])
+    );
+}
+
+#[test]
+fn window_open_initial_empty_history_push_is_a_replacement() {
+    let mut vm = new_storage_test_vm("https://initial-popup-history.test/page.html");
+
+    assert_eq!(
+        vm.eval(
+            r#"
+(() => {
+  const popup = open();
+  popup.history.pushState({ step: 1 }, '', 'about:blank#pushed');
+  popup.history.replaceState({ step: 2 }, '', 'about:blank#replaced');
+  const result = [
+    popup.location.href,
+    popup.history.state.step,
+    popup.history.length,
+  ].join('|');
+  popup.close();
+  return result;
+})()
+"#,
+        )
+        .expect("initial empty popup history mutation should evaluate"),
+        "about:blank#replaced|2|1"
     );
 }
 

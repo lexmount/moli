@@ -385,6 +385,7 @@ pub(super) struct LightweightPopupDocumentState {
 struct LightweightPopupDocumentRecord {
     owner: LightweightPopupDocumentOwner,
     local_window_id: LightweightPopupLocalWindowId,
+    is_initial_empty_document: bool,
     url: Url,
     access_origin: super::window_security_tokens::WindowAccessOrigin,
     state: LightweightPopupDocumentState,
@@ -684,15 +685,25 @@ impl JsContextHost {
         true
     }
 
-    fn set_lightweight_popup_same_document_url(&mut self, popup_id: u64, url: Url) -> bool {
-        let Some(record) = self.lightweight_popup_record_mut(popup_id) else {
-            return false;
+    pub(crate) fn set_lightweight_popup_same_document_url(
+        &mut self,
+        popup_id: u64,
+        url: Url,
+    ) -> bool {
+        let document_handle = {
+            let Some(record) = self.lightweight_popup_record_mut(popup_id) else {
+                return false;
+            };
+            let LightweightPopupLifecycle::Open(open) = &mut record.lifecycle else {
+                return false;
+            };
+            record.location_url = url.clone();
+            open.document.url = url.clone();
+            open.document.handle
         };
-        let LightweightPopupLifecycle::Open(open) = &mut record.lifecycle else {
-            return false;
-        };
-        record.location_url = url.clone();
-        open.document.url = url;
+        if let Some(document_handle) = document_handle {
+            let _ = self.set_dom_document_url_for_handle(document_handle, url);
+        }
         true
     }
 
@@ -932,6 +943,7 @@ impl JsContextHost {
                     document: LightweightPopupDocumentRecord {
                         owner: initial_document_owner,
                         local_window_id: initial_local_window_id,
+                        is_initial_empty_document: true,
                         url: initial_url.clone(),
                         access_origin: initial_origin,
                         state: initial_document_state.clone(),
@@ -1080,7 +1092,6 @@ impl JsContextHost {
             window,
             &target_url,
             crate::context_bootstrap::LocationNavigationKind::Assign,
-            Some(&previous_url),
         );
         let queue_synthetic_load = if moli_url::is_about_blank(&target_url) {
             let storage_scope = self.lightweight_popup_storage_scope_for_initiated_navigation(
@@ -1225,6 +1236,14 @@ impl JsContextHost {
     pub(crate) fn lightweight_popup_document_url(&self, popup_id: u64) -> Option<Url> {
         self.lightweight_popup_document_record(popup_id)
             .map(|document| document.url.clone())
+    }
+
+    pub(crate) fn lightweight_popup_current_document_is_initial_empty(
+        &self,
+        popup_id: u64,
+    ) -> bool {
+        self.lightweight_popup_document_record(popup_id)
+            .is_some_and(|document| document.is_initial_empty_document)
     }
 
     pub(crate) fn lightweight_popup_session_storage_store(
@@ -1494,9 +1513,7 @@ impl JsContextHost {
         window: v8::Local<'s, v8::Object>,
         target_url: &Url,
         kind: crate::context_bootstrap::LocationNavigationKind,
-        current_url: Option<&Url>,
     ) {
-        let effective_kind = lightweight_popup_effective_navigation_kind(current_url, kind);
         let base_url = self
             .lightweight_popup_base_url(scope, popup_id)
             .unwrap_or_else(|| target_url.clone());
@@ -1511,7 +1528,7 @@ impl JsContextHost {
             &base_url,
             &document_referrer,
         );
-        apply_local_window_location_navigation(scope, window, target_url, effective_kind);
+        apply_local_window_location_navigation(scope, window, target_url, kind);
         sync_window_location_history_navigation_runtime_surface(scope, window);
     }
 
@@ -1565,6 +1582,10 @@ impl JsContextHost {
         let Some(window) = self.lightweight_popup_window(scope, popup_id) else {
             return false;
         };
+        let kind = lightweight_popup_effective_navigation_kind(
+            self.lightweight_popup_current_document_is_initial_empty(popup_id),
+            kind,
+        );
         let current_url = lightweight_popup_location_href(scope, window)
             .or_else(|| self.lightweight_popup_location_url(popup_id));
         if !matches!(
@@ -1695,7 +1716,6 @@ impl JsContextHost {
                 window,
                 &target_url,
                 kind,
-                current_url.as_ref(),
             );
             self.install_lightweight_popup_empty_document(scope, popup_id, window, target_url);
             self.queue_lightweight_popup_load_event(navigation_task);
@@ -1708,7 +1728,6 @@ impl JsContextHost {
             window,
             &target_url,
             kind,
-            current_url.as_ref(),
         );
         if self
             .start_lightweight_popup_document_load(
@@ -1950,6 +1969,7 @@ impl JsContextHost {
                 LightweightPopupDocumentRecord {
                     owner: commit.owner,
                     local_window_id: current_local_window_id,
+                    is_initial_empty_document: false,
                     url: commit.location_url.clone(),
                     access_origin,
                     state: commit.state,
@@ -4896,13 +4916,13 @@ fn set_lightweight_popup_persisted_script_global<'s>(
 }
 
 fn lightweight_popup_effective_navigation_kind(
-    current_url: Option<&Url>,
+    current_document_is_initial_empty: bool,
     kind: crate::context_bootstrap::LocationNavigationKind,
 ) -> crate::context_bootstrap::LocationNavigationKind {
     if matches!(
         kind,
         crate::context_bootstrap::LocationNavigationKind::Assign
-    ) && current_url.is_some_and(moli_url::is_about_blank)
+    ) && current_document_is_initial_empty
     {
         return crate::context_bootstrap::LocationNavigationKind::Replace;
     }

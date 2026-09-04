@@ -728,8 +728,9 @@ impl ChildBrowsingContextEntry {
         self.navigation_entry_seed = entry_seed.clone();
         if same_document_update {
             self.committed_navigation_entry_seed = entry_seed;
-            self.pending_attribute_bootstrap_commit = false;
-            self.pending_live_navigation_reflects_window_state = false;
+            if !self.pending_attribute_bootstrap_commit {
+                self.pending_live_navigation_reflects_window_state = false;
+            }
         }
         same_document_update
     }
