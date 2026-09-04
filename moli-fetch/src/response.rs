@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
+use std::sync::Arc;
 use url::Url;
 
 use crate::{StreamingHtmlResponse, StreamingRawResponse};
@@ -50,21 +51,77 @@ pub struct ResponseHead {
     pub negotiated_http_version: Option<NegotiatedHttpVersion>,
 }
 
+#[derive(Clone, Debug)]
+pub struct SharedResponseBodyBytes {
+    backing: SharedResponseBodyBytesBacking,
+}
+
+#[derive(Clone, Debug)]
+enum SharedResponseBodyBytesBacking {
+    Text(Arc<String>),
+    Bytes(Arc<Vec<u8>>),
+}
+
+impl SharedResponseBodyBytes {
+    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+        Self {
+            backing: SharedResponseBodyBytesBacking::Bytes(Arc::new(bytes)),
+        }
+    }
+
+    fn from_text(text: Arc<String>) -> Self {
+        Self {
+            backing: SharedResponseBodyBytesBacking::Text(text),
+        }
+    }
+
+    fn from_shared_bytes(bytes: Arc<Vec<u8>>) -> Self {
+        Self {
+            backing: SharedResponseBodyBytesBacking::Bytes(bytes),
+        }
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        match &self.backing {
+            SharedResponseBodyBytesBacking::Text(text) => text.as_bytes(),
+            SharedResponseBodyBytesBacking::Bytes(bytes) => bytes,
+        }
+    }
+
+    pub fn capacity(&self) -> usize {
+        match &self.backing {
+            SharedResponseBodyBytesBacking::Text(text) => text.capacity(),
+            SharedResponseBodyBytesBacking::Bytes(bytes) => bytes.capacity(),
+        }
+    }
+}
+
+fn unwrap_shared_string(value: Arc<String>) -> String {
+    Arc::try_unwrap(value).unwrap_or_else(|shared| (*shared).clone())
+}
+
+fn unwrap_shared_bytes(value: Arc<Vec<u8>>) -> Vec<u8> {
+    Arc::try_unwrap(value).unwrap_or_else(|shared| (*shared).clone())
+}
+
 #[derive(Debug)]
 pub enum ResponseBody {
     MaterializedText {
-        text: String,
-        exact_bytes: Option<Vec<u8>>,
+        text: Arc<String>,
+        exact_bytes: Option<Arc<Vec<u8>>>,
     },
-    MaterializedBytes(Vec<u8>),
+    MaterializedBytes(Arc<Vec<u8>>),
     StreamingText(Box<StreamingHtmlResponse>),
     StreamingBytes(Box<StreamingRawResponse>),
 }
 
 impl ResponseBody {
     pub fn materialized_text(text: String, bytes: Vec<u8>) -> Self {
-        let exact_bytes = (!bytes.is_empty()).then_some(bytes);
-        Self::MaterializedText { text, exact_bytes }
+        let exact_bytes = (!bytes.is_empty()).then(|| Arc::new(bytes));
+        Self::MaterializedText {
+            text: Arc::new(text),
+            exact_bytes,
+        }
     }
 
     /// Builds a text body from exact bytes without retaining a second copy
@@ -72,22 +129,22 @@ impl ResponseBody {
     pub fn lossy_text_from_bytes(bytes: Vec<u8>) -> Self {
         match String::from_utf8(bytes) {
             Ok(text) => Self::MaterializedText {
-                text,
+                text: Arc::new(text),
                 exact_bytes: None,
             },
             Err(error) => {
                 let bytes = error.into_bytes();
                 let text = String::from_utf8_lossy(&bytes).into_owned();
                 Self::MaterializedText {
-                    text,
-                    exact_bytes: Some(bytes),
+                    text: Arc::new(text),
+                    exact_bytes: Some(Arc::new(bytes)),
                 }
             }
         }
     }
 
     pub fn materialized_bytes(bytes: Vec<u8>) -> Self {
-        Self::MaterializedBytes(bytes)
+        Self::MaterializedBytes(Arc::new(bytes))
     }
 
     pub fn is_streaming(&self) -> bool {
@@ -96,10 +153,11 @@ impl ResponseBody {
 
     pub fn try_into_materialized_bytes(self) -> std::result::Result<Vec<u8>, Self> {
         match self {
-            Self::MaterializedBytes(bytes) => Ok(bytes),
-            Self::MaterializedText { text, exact_bytes } => {
-                Ok(exact_bytes.unwrap_or_else(|| text.into_bytes()))
-            }
+            Self::MaterializedBytes(bytes) => Ok(unwrap_shared_bytes(bytes)),
+            Self::MaterializedText { text, exact_bytes } => Ok(exact_bytes.map_or_else(
+                || unwrap_shared_string(text).into_bytes(),
+                unwrap_shared_bytes,
+            )),
             Self::StreamingText(_) | Self::StreamingBytes(_) => Err(self),
         }
     }
@@ -107,9 +165,11 @@ impl ResponseBody {
     pub fn as_materialized_bytes(&self) -> Option<&[u8]> {
         match self {
             Self::MaterializedBytes(bytes) => Some(bytes),
-            Self::MaterializedText { text, exact_bytes } => {
-                Some(exact_bytes.as_deref().unwrap_or(text.as_bytes()))
-            }
+            Self::MaterializedText { text, exact_bytes } => Some(
+                exact_bytes
+                    .as_deref()
+                    .map_or(text.as_bytes(), Vec::as_slice),
+            ),
             Self::StreamingText(_) | Self::StreamingBytes(_) => None,
         }
     }
@@ -135,10 +195,13 @@ impl ResponseBody {
     pub fn try_into_lossy_materialized_text(self) -> std::result::Result<(String, Vec<u8>), Self> {
         match self {
             Self::MaterializedText { text, exact_bytes } => {
-                let bytes = exact_bytes.unwrap_or_else(|| text.as_bytes().to_vec());
+                let bytes =
+                    exact_bytes.map_or_else(|| text.as_bytes().to_vec(), unwrap_shared_bytes);
+                let text = unwrap_shared_string(text);
                 Ok((text, bytes))
             }
             Self::MaterializedBytes(bytes) => {
+                let bytes = unwrap_shared_bytes(bytes);
                 let text = String::from_utf8_lossy(&bytes).into_owned();
                 Ok((text, bytes))
             }
@@ -150,7 +213,9 @@ impl ResponseBody {
     pub fn try_into_materialized_text_body(self) -> std::result::Result<Self, Self> {
         match self {
             Self::MaterializedText { .. } => Ok(self),
-            Self::MaterializedBytes(bytes) => Ok(Self::lossy_text_from_bytes(bytes)),
+            Self::MaterializedBytes(bytes) => {
+                Ok(Self::lossy_text_from_bytes(unwrap_shared_bytes(bytes)))
+            }
             Self::StreamingText(_) | Self::StreamingBytes(_) => Err(self),
         }
     }
@@ -161,10 +226,11 @@ impl ResponseBody {
     /// when the caller can avoid building a full response body in memory.
     pub async fn into_materialized_bytes(self) -> Result<Vec<u8>> {
         match self {
-            Self::MaterializedBytes(bytes) => Ok(bytes),
-            Self::MaterializedText { text, exact_bytes } => {
-                Ok(exact_bytes.unwrap_or_else(|| text.into_bytes()))
-            }
+            Self::MaterializedBytes(bytes) => Ok(unwrap_shared_bytes(bytes)),
+            Self::MaterializedText { text, exact_bytes } => Ok(exact_bytes.map_or_else(
+                || unwrap_shared_string(text).into_bytes(),
+                unwrap_shared_bytes,
+            )),
             Self::StreamingText(response) => {
                 let mut response = *response;
                 let mut bytes = Vec::new();
@@ -191,10 +257,13 @@ impl ResponseBody {
     pub async fn into_lossy_materialized_text(self) -> Result<(String, Vec<u8>)> {
         match self {
             Self::MaterializedText { text, exact_bytes } => {
-                let bytes = exact_bytes.unwrap_or_else(|| text.as_bytes().to_vec());
+                let bytes =
+                    exact_bytes.map_or_else(|| text.as_bytes().to_vec(), unwrap_shared_bytes);
+                let text = unwrap_shared_string(text);
                 Ok((text, bytes))
             }
             Self::MaterializedBytes(bytes) => {
+                let bytes = unwrap_shared_bytes(bytes);
                 let text = String::from_utf8_lossy(&bytes).into_owned();
                 Ok((text, bytes))
             }
@@ -222,7 +291,9 @@ impl ResponseBody {
     pub async fn into_materialized_text_body(self) -> Result<Self> {
         match self {
             Self::MaterializedText { .. } => Ok(self),
-            Self::MaterializedBytes(bytes) => Ok(Self::lossy_text_from_bytes(bytes)),
+            Self::MaterializedBytes(bytes) => {
+                Ok(Self::lossy_text_from_bytes(unwrap_shared_bytes(bytes)))
+            }
             Self::StreamingText(response) => {
                 let mut response = *response;
                 let mut text = String::new();
@@ -231,7 +302,7 @@ impl ResponseBody {
                 }
                 response.finish().await?;
                 Ok(Self::MaterializedText {
-                    text,
+                    text: Arc::new(text),
                     exact_bytes: None,
                 })
             }
@@ -241,6 +312,19 @@ impl ResponseBody {
                     .await?;
                 Ok(Self::lossy_text_from_bytes(bytes))
             }
+        }
+    }
+
+    pub fn shared_materialized_bytes(&self) -> Option<SharedResponseBodyBytes> {
+        match self {
+            Self::MaterializedText { text, exact_bytes } => Some(exact_bytes.as_ref().map_or_else(
+                || SharedResponseBodyBytes::from_text(Arc::clone(text)),
+                |bytes| SharedResponseBodyBytes::from_shared_bytes(Arc::clone(bytes)),
+            )),
+            Self::MaterializedBytes(bytes) => Some(SharedResponseBodyBytes::from_shared_bytes(
+                Arc::clone(bytes),
+            )),
+            Self::StreamingText(_) | Self::StreamingBytes(_) => None,
         }
     }
 }
@@ -310,6 +394,12 @@ impl Response {
     /// whose public contract requires an owned full-body buffer.
     pub fn clone_body_bytes(&self) -> Vec<u8> {
         self.body_bytes().to_vec()
+    }
+
+    pub fn shared_body_bytes(&self) -> SharedResponseBodyBytes {
+        self.body
+            .shared_materialized_bytes()
+            .expect("Response body should remain materialized")
     }
 
     pub fn materialized_body(&self) -> ResponseBody {

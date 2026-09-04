@@ -252,6 +252,11 @@ fn response_body_reuses_valid_utf8_bytes_as_text_storage() {
     let body = ResponseBody::lossy_text_from_bytes(b"hello".to_vec());
     assert_eq!(body.as_materialized_text(), Some("hello"));
     assert_eq!(body.as_materialized_bytes(), Some(b"hello".as_slice()));
+    let storage = body.as_materialized_bytes().unwrap().as_ptr();
+    let shared = body.shared_materialized_bytes().unwrap();
+    assert_eq!(shared.as_slice().as_ptr(), storage);
+    let cloned = body.clone_materialized().unwrap();
+    assert_eq!(cloned.as_materialized_bytes().unwrap().as_ptr(), storage);
     assert!(matches!(
         body,
         ResponseBody::MaterializedText {
@@ -275,12 +280,20 @@ fn response_body_keeps_invalid_utf8_bytes_beside_lossy_text() {
         body.as_materialized_bytes(),
         Some([b'a', 0xff, b'b'].as_slice())
     );
+    let storage = body.as_materialized_bytes().unwrap().as_ptr();
+    assert_eq!(
+        body.shared_materialized_bytes()
+            .unwrap()
+            .as_slice()
+            .as_ptr(),
+        storage
+    );
     assert!(matches!(
         body,
         ResponseBody::MaterializedText {
             exact_bytes: Some(ref bytes),
             ..
-        } if bytes == &[b'a', 0xff, b'b']
+        } if bytes.as_slice() == [b'a', 0xff, b'b']
     ));
 }
 
