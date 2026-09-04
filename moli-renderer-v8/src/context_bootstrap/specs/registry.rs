@@ -370,7 +370,7 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
     },
     ConstructorSpec {
         interface: web_api_interfaces::HashChangeEvent::DESCRIPTOR,
-        kind: ConstructorKind::Illegal,
+        kind: ConstructorKind::HashChangeEvent,
     },
     ConstructorSpec {
         interface: web_api_interfaces::MediaQueryListEvent::DESCRIPTOR,
