@@ -28,7 +28,7 @@ async fn element_matches_delegates_loaded_child_document_elements() {
             r##"
 (() => {
   const doc = document.querySelector("iframe").contentDocument;
-  doc.defaultView.history.replaceState(null, "", "#target");
+  doc.defaultView.history.replaceState(null, "", "about:srcdoc#target");
   const code = doc.getElementById("code");
   return [
     code.ownerDocument === doc,

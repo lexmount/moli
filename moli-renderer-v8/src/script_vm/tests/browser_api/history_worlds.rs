@@ -1242,6 +1242,16 @@ async fn history_worlds_child_mutations_share_only_the_child_window_history() {
         .await
         .unwrap()
     );
+    vm.eval("document.querySelector('iframe').srcdoc = '<p>child</p>';")
+        .unwrap();
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(frame.contentDocument.URL === 'about:srcdoc' && frame.contentDocument.readyState === 'complete')",
+        "true",
+        "shared child history requires a committed Document",
+    )
+    .await;
     let child = vm
         .live_child_default_runtime_realm_inventory()
         .into_iter()
@@ -1257,7 +1267,7 @@ async fn history_worlds_child_mutations_share_only_the_child_window_history() {
     vm.eval_in_child_default_context(
         child,
         r##"
-        history.replaceState({owner: 'child'}, '', '#child');
+        history.replaceState({owner: 'child'}, '', 'about:srcdoc#child');
         history.scrollRestoration = 'manual';
         'ready'
     "##,
@@ -1277,7 +1287,7 @@ async fn history_worlds_child_mutations_share_only_the_child_window_history() {
     vm.eval_in_isolated_context(
         isolated,
         r##"
-        history.pushState({owner: 'isolated-child'}, '', '#next');
+        history.pushState({owner: 'isolated-child'}, '', 'about:srcdoc#next');
         history.scrollRestoration = 'auto';
         'pushed'
     "##,
@@ -1410,7 +1420,7 @@ async fn history_worlds_preserve_the_shared_backing_when_initial_child_window_is
     vm.eval_in_isolated_context(
         isolated,
         r##"
-        originalHistory.replaceState({rebound: true}, '', '#rebound');
+        originalHistory.replaceState({rebound: true}, '', 'about:srcdoc#rebound');
         'replaced'
     "##,
     )
