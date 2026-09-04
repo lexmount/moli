@@ -217,7 +217,8 @@ fn entry_origin_url<'s>(
 }
 
 fn child_navigation_entry_url_inherits_origin(url: &url::Url) -> bool {
-    url.scheme() == "about" && matches!(url.as_str(), "about:blank" | "about:srcdoc")
+    url.scheme() == "about"
+        && (url.path().eq_ignore_ascii_case("blank") || url.path().eq_ignore_ascii_case("srcdoc"))
 }
 
 pub(super) fn set_history_length_from_visible_entries<'s>(
@@ -277,4 +278,27 @@ fn history_length_floor_from_visible_entries<'s>(
         .unwrap_or(visible_length)
         .max(0.0);
     visible_length.max(top_length)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::child_navigation_entry_url_inherits_origin;
+    use url::Url;
+
+    #[test]
+    fn about_document_history_urls_inherit_origin_with_fragments() {
+        for raw_url in [
+            "about:blank",
+            "about:blank#history",
+            "about:srcdoc",
+            "about:srcdoc#history",
+        ] {
+            assert!(child_navigation_entry_url_inherits_origin(
+                &Url::parse(raw_url).expect("about URL should parse")
+            ));
+        }
+        assert!(!child_navigation_entry_url_inherits_origin(
+            &Url::parse("about:other#history").expect("about URL should parse")
+        ));
+    }
 }

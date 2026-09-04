@@ -23,8 +23,8 @@ use super::navigation_result::{
 };
 use super::navigation_serialize::sync_child_navigation_entry_seed_from_owner;
 use super::navigation_window::{
-    history_owner_if_fully_active, runtime_window_is_global, window_location_for_holder,
-    window_navigation_for_holder,
+    child_browsing_context_handle_for_runtime_owner, history_owner_if_fully_active,
+    runtime_window_is_global, window_location_for_holder, window_navigation_for_holder,
 };
 use super::*;
 use crate::webidl;
@@ -107,6 +107,7 @@ fn mutate_history_object<'s>(
     let Some(owner) = history_owner_if_fully_active(scope, history) else {
         return;
     };
+    let kind = effective_history_mutation_kind(scope, owner, kind);
     let Some(state) = structured_clone_value_for_storage(scope, parsed.state) else {
         return;
     };
@@ -116,9 +117,9 @@ fn mutate_history_object<'s>(
     };
     let current_href =
         location_href_slot(scope, location).unwrap_or_else(|| "about:blank".to_owned());
-    let current_url = match history_same_origin_reference_url(scope, owner, &current_href) {
-        Ok(url) => url,
-        Err(_) => {
+    let current_url = match history_document_url(scope, owner, &current_href) {
+        Some(url) => url,
+        None => {
             throw_history_security_error(
                 scope,
                 "Failed to execute 'pushState' or 'replaceState' on 'History': The current URL is invalid.",
@@ -126,13 +127,9 @@ fn mutate_history_object<'s>(
             return;
         }
     };
-    let resolve_base_href = if history_url_inherits_origin(scope, owner, &current_href) {
-        current_url.as_str()
-    } else {
-        &current_href
-    };
+    let api_base_url = history_api_base_url(scope, owner, &current_url);
     let url = match parsed.url {
-        Some(target) if !target.is_empty() => resolve_history_state_url(resolve_base_href, &target),
+        Some(target) if !target.is_empty() => resolve_history_state_url(&api_base_url, &target),
         _ => Some(current_url.clone()),
     };
     let Some(url) = url else {
@@ -142,7 +139,7 @@ fn mutate_history_object<'s>(
         );
         return;
     };
-    if !moli_url::same_origin(&url, &current_url) {
+    if !document_can_have_url_rewritten(&current_url, &url) {
         throw_history_security_error(
             scope,
             "Failed to execute 'pushState' or 'replaceState' on 'History': A history state object with URL of a different origin cannot be created in a document with origin.",
@@ -305,18 +302,16 @@ fn mutate_history_object<'s>(
     } else if let Some(popup_id) =
         crate::native_bridge::lightweight_popup_id_from_window(scope, owner)
         && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-        && let Some(document_handle) =
-            unsafe { &*host_ptr }.lightweight_popup_document_handle(popup_id)
     {
-        let _ = unsafe { &mut *host_ptr }.set_dom_document_url_for_handle(document_handle, url);
+        let _ = unsafe { &mut *host_ptr }.set_lightweight_popup_same_document_url(popup_id, url);
     }
 }
 
-fn resolve_history_state_url(base_href: &str, target: &str) -> Option<url::Url> {
+fn resolve_history_state_url(base_url: &url::Url, target: &str) -> Option<url::Url> {
     if let Ok(absolute) = url::Url::parse(target) {
         return Some(absolute);
     }
-    url::Url::parse(base_href).ok()?.join(target).ok()
+    base_url.join(target).ok()
 }
 
 fn parse_history_mutation_args<'s>(
@@ -344,28 +339,155 @@ fn parse_history_mutation_args<'s>(
     }
 }
 
-fn history_same_origin_reference_url<'s>(
+fn history_api_base_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
-    current_href: &str,
-) -> Result<url::Url, url::ParseError> {
-    if history_url_inherits_origin(scope, owner, current_href)
-        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
-    {
-        return Ok(unsafe { &mut *host_ptr }.host_document().url().clone());
+    current_url: &url::Url,
+) -> url::Url {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return current_url.clone();
+    };
+    let host = unsafe { &*host_ptr };
+    if runtime_window_is_global(scope, owner) {
+        return host
+            .dom_host()
+            .document_base_url()
+            .unwrap_or_else(|| current_url.clone());
     }
-    url::Url::parse(current_href)
+    if let Some(handle) = child_browsing_context_handle_for_runtime_owner(scope, owner) {
+        return host
+            .child_browsing_context_base_url(handle)
+            .unwrap_or_else(|| current_url.clone());
+    }
+    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner) {
+        return host
+            .lightweight_popup_request_base_url(scope, popup_id)
+            .unwrap_or_else(|| current_url.clone());
+    }
+    current_url.clone()
 }
 
-fn history_url_inherits_origin<'s>(
+fn history_document_url<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     owner: v8::Local<'s, v8::Object>,
     current_href: &str,
-) -> bool {
-    !runtime_window_is_global(scope, owner)
-        && matches!(current_href, "about:blank" | "about:srcdoc")
+) -> Option<url::Url> {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return url::Url::parse(current_href).ok();
+    };
+    let host = unsafe { &*host_ptr };
+    if runtime_window_is_global(scope, owner) {
+        return Some(host.document_url().clone());
+    }
+    if let Some(handle) = child_browsing_context_handle_for_runtime_owner(scope, owner) {
+        return host.child_browsing_context_current_url(handle);
+    }
+    if let Some(popup_id) = crate::native_bridge::lightweight_popup_id_from_window(scope, owner) {
+        if host.lightweight_popup_current_document_is_initial_empty(popup_id) {
+            return url::Url::parse("about:blank").ok();
+        }
+        return host.lightweight_popup_document_url(popup_id);
+    }
+    url::Url::parse(current_href).ok()
+}
+
+fn effective_history_mutation_kind<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    owner: v8::Local<'s, v8::Object>,
+    kind: HistoryMutationKind,
+) -> HistoryMutationKind {
+    if !matches!(kind, HistoryMutationKind::Push) {
+        return kind;
+    }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return kind;
+    };
+    let host = unsafe { &*host_ptr };
+    let is_initial_empty = child_browsing_context_handle_for_runtime_owner(scope, owner)
+        .is_some_and(|handle| host.child_browsing_context_is_on_initial_about_blank_entry(handle))
+        || crate::native_bridge::lightweight_popup_id_from_window(scope, owner).is_some_and(
+            |popup_id| host.lightweight_popup_current_document_is_initial_empty(popup_id),
+        );
+    if is_initial_empty {
+        HistoryMutationKind::Replace
+    } else {
+        kind
+    }
+}
+
+fn document_can_have_url_rewritten(document_url: &url::Url, target_url: &url::Url) -> bool {
+    if document_url.scheme() != target_url.scheme()
+        || document_url.username() != target_url.username()
+        || document_url.password() != target_url.password()
+        || document_url.host() != target_url.host()
+        || document_url.port() != target_url.port()
+    {
+        return false;
+    }
+    if matches!(target_url.scheme(), "http" | "https") {
+        return true;
+    }
+    if target_url.scheme() == "file" {
+        return document_url.path() == target_url.path();
+    }
+    document_url.path() == target_url.path() && document_url.query() == target_url.query()
 }
 
 fn throw_history_security_error(scope: &mut v8::PinScope<'_, '_>, message: &str) {
     crate::context_bootstrap::throw_dom_exception_value(scope, message, "SecurityError");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::document_can_have_url_rewritten;
+    use url::Url;
+
+    fn url(value: &str) -> Url {
+        Url::parse(value).expect("test URL should parse")
+    }
+
+    #[test]
+    fn history_url_rewrite_rules_match_url_component_boundaries() {
+        let cases = [
+            (
+                "https://example.test/home",
+                "https://example.test/shop",
+                true,
+            ),
+            (
+                "https://example.test/home",
+                "https://user:pass@example.test/home",
+                false,
+            ),
+            ("file:///path/to/x", "file:///path/to/x?search", true),
+            ("file:///path/to/x", "file:///path/to/y", false),
+            ("about:blank", "about:blank#hash", true),
+            ("about:blank", "about:blank?search", false),
+            ("about:blank", "about:srcdoc", false),
+            ("data:text/html,body", "data:text/html,body#hash", true),
+            ("data:text/html,body", "data:text/html,body?search", false),
+            (
+                "blob:https://example.test/00000000-0000-0000-0000-000000000001",
+                "blob:https://example.test/00000000-0000-0000-0000-000000000001#hash",
+                true,
+            ),
+            (
+                "blob:https://example.test/00000000-0000-0000-0000-000000000001",
+                "blob:https://example.test/00000000-0000-0000-0000-000000000001?search",
+                false,
+            ),
+            (
+                "blob:https://example.test/00000000-0000-0000-0000-000000000001",
+                "blob:https://example.test/00000000-0000-0000-0000-000000000002",
+                false,
+            ),
+        ];
+        for (document, target, expected) in cases {
+            assert_eq!(
+                document_can_have_url_rewritten(&url(document), &url(target)),
+                expected,
+                "rewrite result for {document} -> {target}"
+            );
+        }
+    }
 }
