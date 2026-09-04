@@ -1,27 +1,28 @@
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
+use moli_core::browser::{DocumentId, MainFrameSlotId, WebContentsId};
 use moli_core::network::SharedWebStorageStore;
 use moli_core::runtime::NavigationEngine;
 use serde_json::Value;
 
 use super::{
-    devtools_session::DevToolsSessionRegistry, emulation::EffectiveTargetEmulationState,
-    fetch::TargetFetchOwner, identity::TargetIdentityState, page_slot::TargetPageSlot,
-    runtime_slot::TargetRuntimeSlot, session::TargetNetworkPolicyState,
-    session_storage::TargetSessionStorageNamespace, target_state::TargetOwnerState,
+    SessionStorageNamespace, devtools_session::DevToolsSessionRegistry,
+    emulation::EffectiveTargetEmulationState, fetch::TargetFetchOwner,
+    identity::TargetIdentityState, page_slot::TargetPageSlot, runtime_slot::TargetRuntimeSlot,
+    session::TargetNetworkPolicyState, target_state::TargetOwnerState,
 };
 use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 
-/// The stable owner of all state that belongs to one page target.
+/// DevTools page projection with a temporarily embedded Browser residence.
 ///
 /// Selecting another page never replaces or reconstructs this object. The
 /// browser context registry keeps every page host alive and records foreground
-/// selection separately.
+/// selection separately. Browser identity and document ownership live in the
+/// embedded WebContents, which moves out at the typed API cutover (Commit 24b).
 #[derive(Debug)]
 pub struct PageTargetHost {
     target_id: String,
-    navigation_engine: Option<NavigationEngine>,
     pub(crate) target_identity: TargetIdentityState,
     pub(crate) devtools_sessions: DevToolsSessionRegistry,
     pub(crate) network_policy: TargetNetworkPolicyState,
@@ -38,15 +39,27 @@ pub struct PageTargetHost {
     pub(crate) runtime_slot: TargetRuntimeSlot,
     pub(crate) fetch_owner: TargetFetchOwner,
     pub(crate) owner_state: TargetOwnerState,
-    pub(crate) session_storage_namespace: TargetSessionStorageNamespace,
 }
 
 impl PageTargetHost {
     pub(crate) fn empty(target_id: String) -> Self {
-        Self {
+        Self::new(
             target_id,
-            navigation_engine: None,
-            target_identity: TargetIdentityState::about_blank(),
+            None,
+            TargetIdentityState::about_blank(),
+            TargetPageSlot::default(),
+        )
+    }
+
+    pub(crate) fn new(
+        target_id: String,
+        primary_session_id: Option<String>,
+        target_identity: TargetIdentityState,
+        target_page_slot: TargetPageSlot,
+    ) -> Self {
+        let mut host = Self {
+            target_id,
+            target_identity,
             devtools_sessions: DevToolsSessionRegistry::default(),
             network_policy: TargetNetworkPolicyState::default(),
             http_proxy_override: None,
@@ -59,22 +72,10 @@ impl PageTargetHost {
             css_enabled: false,
             document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
             dom_remote_object_node_cache: HashMap::new(),
-            runtime_slot: TargetRuntimeSlot::default(),
+            runtime_slot: TargetRuntimeSlot::from_page_slot(target_page_slot),
             fetch_owner: TargetFetchOwner::default(),
             owner_state: TargetOwnerState::default(),
-            session_storage_namespace: TargetSessionStorageNamespace::default(),
-        }
-    }
-
-    pub(crate) fn new(
-        target_id: String,
-        primary_session_id: Option<String>,
-        target_identity: TargetIdentityState,
-        target_page_slot: TargetPageSlot,
-    ) -> Self {
-        let mut host = Self::empty(target_id);
-        host.target_identity = target_identity;
-        host.runtime_slot = TargetRuntimeSlot::from_page_slot(target_page_slot);
+        };
         if let Some(session_id) = primary_session_id {
             host.devtools_sessions.attach_primary(session_id);
         }
@@ -112,6 +113,47 @@ impl PageTargetHost {
         &self.target_id
     }
 
+    pub fn web_contents_id(&self) -> WebContentsId {
+        self.runtime_slot.page_slot().contents.id()
+    }
+
+    pub fn main_frame_slot_id(&self) -> MainFrameSlotId {
+        self.runtime_slot.page_slot().contents.main_frame.id()
+    }
+
+    pub fn current_document_id(&self) -> Option<DocumentId> {
+        self.runtime_slot.document_id()
+    }
+
+    pub(crate) fn initial_empty_document_state(&self) -> Option<&super::InitialDocument> {
+        self.runtime_slot
+            .page_slot()
+            .contents
+            .navigation
+            .initial_empty_document_state()
+    }
+
+    pub(in crate::conn) fn initial_empty_document_loader_id_if_current(&self) -> Option<String> {
+        self.initial_empty_document_state()
+            .filter(|document| document.is_on_initial_empty_document())
+            .map(|_| format!("LID-INITIAL-{}", self.target_id()))
+    }
+
+    pub(in crate::conn) fn commit_document_title(&mut self, title: String) -> bool {
+        let changed = self
+            .owner_state
+            .committed_document_title()
+            .unwrap_or_default()
+            != title;
+        self.owner_state.committed_document_title = Some(title.clone());
+        self.runtime_slot
+            .page_slot_mut()
+            .contents
+            .navigation
+            .refresh_current_navigation_history_title(title);
+        changed
+    }
+
     fn replace_target_id(&mut self, target_id: String) {
         self.target_id = target_id;
     }
@@ -142,52 +184,57 @@ impl PageTargetHost {
     }
 
     pub(crate) fn session_storage_store(&self) -> &SharedWebStorageStore {
-        self.session_storage_namespace.store()
+        self.runtime_slot
+            .page_slot()
+            .contents
+            .session_storage
+            .store()
     }
 
-    pub(crate) fn deep_clone_session_storage_namespace(&self) -> TargetSessionStorageNamespace {
-        self.session_storage_namespace.deep_clone()
+    pub(crate) fn deep_clone_session_storage_namespace(&self) -> SessionStorageNamespace {
+        self.runtime_slot
+            .page_slot()
+            .contents
+            .session_storage
+            .deep_clone()
     }
 
-    pub(crate) fn replace_session_storage_namespace(
-        &mut self,
-        namespace: TargetSessionStorageNamespace,
-    ) {
-        self.session_storage_namespace = namespace;
+    pub(crate) fn replace_session_storage_namespace(&mut self, namespace: SessionStorageNamespace) {
+        self.runtime_slot.page_slot_mut().contents.session_storage = namespace;
     }
 
     pub(crate) fn navigation_engine(&self) -> Option<&NavigationEngine> {
-        self.navigation_engine.as_ref()
+        self.runtime_slot
+            .page_slot()
+            .contents
+            .navigation_engine
+            .as_ref()
     }
 
     pub(crate) fn navigation_engine_mut(&mut self) -> Option<&mut NavigationEngine> {
-        self.navigation_engine.as_mut()
+        self.runtime_slot
+            .page_slot_mut()
+            .contents
+            .navigation_engine
+            .as_mut()
     }
 
     pub(crate) fn install_navigation_engine(&mut self, mut engine: NavigationEngine) {
-        assert!(
-            self.navigation_engine.is_none(),
-            "PageTargetHost must retain its first installed NavigationEngine"
-        );
         let policy = self.effective_policy();
         engine.set_bypass_service_worker(policy.bypass_service_worker());
         engine.set_cache_disabled(policy.cache_disabled());
-        self.navigation_engine = Some(engine);
+        self.runtime_slot
+            .page_slot_mut()
+            .contents
+            .install_navigation_engine(engine);
     }
 
     pub(crate) fn set_base_cache_disabled(&mut self, disabled: bool) {
         self.network_policy.set_base_cache_disabled(disabled);
         let effective = self.effective_policy().cache_disabled();
-        if let Some(engine) = self.navigation_engine.as_mut() {
+        if let Some(engine) = self.navigation_engine_mut() {
             engine.set_cache_disabled(effective);
         }
-    }
-
-    pub(crate) fn navigation_engine_and_runtime_slot_mut(
-        &mut self,
-    ) -> Option<(&mut NavigationEngine, &mut TargetRuntimeSlot)> {
-        let engine = self.navigation_engine.as_mut()?;
-        Some((engine, &mut self.runtime_slot))
     }
 
     pub(crate) fn has_page_domain_enabled_session(&self) -> bool {

@@ -7,6 +7,7 @@ use moli_cookie_jar::{
     BrowserCookieStore, CookieSource, NetworkCookieRequestContext, SharedBrowserCookieStore,
     StoredCookie, StoredCookieQueryReport, new_shared_browser_cookie_store,
 };
+use moli_core::browser::{BrowserContextId, NavigationId};
 use moli_core::network::{SharedWebStorageStore, new_shared_web_storage_store};
 use moli_core::runtime::{
     NavigationEngine, NavigationPageStorageHandles, NavigationResourceStorageHandles,
@@ -30,14 +31,14 @@ use super::{
         EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedNetworkConditions,
     },
     javascript_dialog::TargetPreparedJavaScriptDialog,
-    page_slot::{DocumentNavigationToken, DocumentStartScript},
+    page_slot::DocumentStartScript,
     page_target_host::{PageTargetHost, PageTargetRegistry},
     service_worker_target::ServiceWorkerTargetState,
     shared_worker_target::SharedWorkerTargetState,
-    target_state::TargetOwnerState,
 };
 
 pub struct BrowserContext {
+    browser_context_id: BrowserContextId,
     pub id: String,
     storage_partition: BrowserContextStoragePartition,
     pub(crate) page_targets: PageTargetRegistry,
@@ -346,6 +347,7 @@ pub(crate) struct SiteDataClearOptions {
 impl std::fmt::Debug for BrowserContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BrowserContext")
+            .field("browser_context_id", &self.browser_context_id)
             .field("id", &self.id)
             .field("storage_partition", &self.storage_partition)
             .field("active_target_id", &self.active_target_id())
@@ -360,6 +362,10 @@ fn usize_to_u64_saturating(value: usize) -> u64 {
 }
 
 impl BrowserContext {
+    pub fn browser_context_id(&self) -> BrowserContextId {
+        self.browser_context_id
+    }
+
     pub(crate) fn active_page_target(&self) -> &PageTargetHost {
         self.page_targets
             .active()
@@ -498,6 +504,7 @@ impl BrowserContext {
         let storage_partition = BrowserContextStoragePartition::new(identity, partition);
 
         Self {
+            browser_context_id: BrowserContextId::allocate(),
             id,
             storage_partition,
             page_targets: PageTargetRegistry::default(),
@@ -619,7 +626,7 @@ impl BrowserContext {
         let session_storage_store = self
             .page_targets
             .active()
-            .map(|target| target.session_storage_namespace.store().clone())
+            .map(|target| target.session_storage_store().clone())
             .unwrap_or_else(new_shared_web_storage_store);
         self.storage_partition
             .handles
@@ -630,7 +637,7 @@ impl BrowserContext {
         let session_storage_store = self
             .page_targets
             .active()
-            .map(|target| target.session_storage_namespace.store().clone())
+            .map(|target| target.session_storage_store().clone())
             .unwrap_or_else(new_shared_web_storage_store);
         self.storage_partition
             .handles
@@ -877,7 +884,7 @@ impl BrowserContext {
                 .count(),
             "ownerStates": self.page_targets.iter().map(|target| json!({
                 "targetId": target.target_id(),
-                "ownerState": target.owner_state.moli_memory_diagnostics(),
+                "ownerState": self.target_owner_diagnostics(target),
             })).collect::<Vec<_>>(),
         });
         json!({
@@ -890,7 +897,7 @@ impl BrowserContext {
             "activeTargetId": self.active_target_id(),
             "hasActiveSession": self.has_active_session(),
             "activeLoadedPage": self.has_loaded_page(),
-            "activePageAttachment": self.page_attachment_id().map(|attachment_id| json!({
+            "activePageAttachment": self.document_id().map(|attachment_id| json!({
                 "id": attachment_id.get(),
                 "targetId": self.active_target_id(),
             })),
@@ -947,9 +954,36 @@ impl BrowserContext {
             "activeFetch": active_target
                 .map(|target| target.fetch_owner.moli_memory_diagnostics()),
             "activeOwnerState": active_target
-                .map(|target| target.owner_state.moli_memory_diagnostics()),
+                .map(|target| self.target_owner_diagnostics(target)),
             "targetHosts": target_host_state_diagnostics,
         })
+    }
+
+    fn target_owner_diagnostics(&self, target: &PageTargetHost) -> Value {
+        let navigation = &target.runtime_slot.page_slot().contents.navigation;
+        let initial = navigation.initial_empty_document_state().map(|document| {
+            let creator = document.creator().map(|creator| json!({
+                "targetId": self.page_targets.iter()
+                    .find(|target| target.web_contents_id() == creator.web_contents_id())
+                    .map(PageTargetHost::target_id),
+                "securityOrigin": creator.security_origin(),
+                "secureContextType": creator.secure_context_type(),
+            }));
+            json!({
+                "targetId": target.target_id(),
+                "initialUrl": document.initial_url(),
+                "creator": creator,
+                "materialized": document.materialized(),
+                "exited": document.exited(),
+                "pendingCrossDocumentNavigation": navigation.initial_empty_document_pending_cross_document_navigation(),
+                "isOnInitialEmptyDocument": document.is_on_initial_empty_document(),
+            })
+        });
+        let mut diagnostics = target.owner_state.moli_memory_diagnostics();
+        diagnostics["initialEmptyDocument"] = json!(initial);
+        diagnostics["isDefault"] =
+            json!(target.owner_state.is_default() && navigation.is_default());
+        diagnostics
     }
 
     pub(crate) fn loaded_document_page_count(&self) -> usize {
@@ -996,12 +1030,7 @@ impl BrowserContext {
         let Some(target) = self.page_target(target_id) else {
             return Ok(());
         };
-        materialized_initial_empty_document_missing_page_error(
-            target_id,
-            &target.owner_state,
-            target.has_loaded_page(),
-        )
-        .map_or(Ok(()), Err)
+        materialized_initial_empty_document_missing_page_error(target).map_or(Ok(()), Err)
     }
 
     pub(crate) fn can_install_current_initial_empty_document_page(&self, target_id: &str) -> bool {
@@ -1010,7 +1039,10 @@ impl BrowserContext {
         };
         !target.has_loaded_page()
             && target
-                .owner_state
+                .runtime_slot
+                .page_slot()
+                .contents
+                .navigation
                 .can_install_current_initial_empty_document_page()
     }
 
@@ -1024,12 +1056,12 @@ impl BrowserContext {
         let Some(target) = self.page_target(target_id) else {
             return false;
         };
-        let owner_state = &target.owner_state;
-        let Some(initial_url) = owner_state.initial_empty_document_url_if_current() else {
+        let navigation = &target.runtime_slot.page_slot().contents.navigation;
+        let Some(initial_url) = navigation.initial_empty_document_url_if_current() else {
             return false;
         };
         target.target_url() != initial_url
-            && !owner_state.initial_empty_document_pending_cross_document_navigation()
+            && !navigation.initial_empty_document_pending_cross_document_navigation()
     }
 
     pub(crate) fn loaded_document_renderer_owner_ids_for_diagnostics(&self) -> HashSet<u64> {
@@ -1137,7 +1169,7 @@ impl BrowserContext {
     pub(crate) fn start_document_navigation_for_active_target(
         &mut self,
         loader_id: String,
-    ) -> Option<DocumentNavigationToken> {
+    ) -> Option<NavigationId> {
         let target_id = self.active_target_id()?.to_owned();
         self.start_document_navigation_for_target(&target_id, loader_id)
     }
@@ -1146,20 +1178,22 @@ impl BrowserContext {
         &mut self,
         target_id: &str,
         loader_id: String,
-    ) -> Option<DocumentNavigationToken> {
+    ) -> Option<NavigationId> {
         let target = self.page_target_mut(target_id)?;
-        let token = target
-            .runtime_slot
-            .start_document_navigation(target_id.to_owned(), loader_id);
-        self.mark_target_initial_empty_document_pending_cross_document_navigation(target_id);
+        if target.runtime_slot.has_pending_document_navigation()
+            && let Some(loader_id) = target.runtime_slot.current_document_loader_id()
+        {
+            target
+                .owner_state
+                .page_resource_store
+                .discard_uncommitted_loader(loader_id);
+        }
+        let token = target.runtime_slot.start_document_navigation(loader_id);
         Some(token)
     }
 
-    pub(crate) fn accepts_pending_document_navigation_event(
-        &self,
-        token: &DocumentNavigationToken,
-    ) -> bool {
-        self.page_target(&token.target_id).is_some_and(|target| {
+    pub(crate) fn accepts_pending_document_navigation_event(&self, token: &NavigationId) -> bool {
+        self.page_targets.iter().any(|target| {
             target
                 .runtime_slot()
                 .accepts_pending_document_navigation_event(token)
@@ -1168,9 +1202,9 @@ impl BrowserContext {
 
     pub(crate) fn document_navigation_cancellation_handle(
         &self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
     ) -> Option<moli_fetch::FetchCancelHandle> {
-        self.page_target(&token.target_id).and_then(|target| {
+        self.page_targets.iter().find_map(|target| {
             target
                 .runtime_slot()
                 .document_navigation_cancellation_handle(token)
@@ -1179,10 +1213,14 @@ impl BrowserContext {
 
     pub(crate) fn arm_background_navigation_completion(
         &mut self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
     ) -> bool {
-        let Some(target) = self.page_target_mut(&token.target_id) else {
+        let Some(target) = self.page_targets.iter_mut().find(|target| {
+            target
+                .runtime_slot()
+                .accepts_pending_document_navigation_event(token)
+        }) else {
             if let Some(cancellation) = additional_cancellation {
                 cancellation.cancel();
             }
@@ -1193,16 +1231,12 @@ impl BrowserContext {
             .arm_background_navigation_completion(token, additional_cancellation)
     }
 
-    pub(crate) fn settle_background_navigation_completion(
-        &mut self,
-        token: &DocumentNavigationToken,
-    ) -> bool {
-        self.page_target_mut(&token.target_id)
-            .is_some_and(|target| {
-                target
-                    .runtime_slot
-                    .settle_background_navigation_completion(token)
-            })
+    pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
+        self.page_targets.iter_mut().any(|target| {
+            target
+                .runtime_slot
+                .settle_background_navigation_completion(token)
+        })
     }
 
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
@@ -1216,11 +1250,9 @@ impl BrowserContext {
             .is_some_and(|target| target.runtime_slot().has_inflight_background_navigation())
     }
 
-    pub(crate) fn accepts_document_body_completion_event(
-        &self,
-        token: &DocumentNavigationToken,
-    ) -> bool {
-        self.page_target(&token.target_id).is_some_and(|target| {
+    #[cfg(test)]
+    pub(crate) fn accepts_document_body_completion_event(&self, token: &NavigationId) -> bool {
+        self.page_targets.iter().any(|target| {
             target
                 .runtime_slot()
                 .accepts_document_body_completion_event(token)
@@ -1238,37 +1270,41 @@ impl BrowserContext {
             .is_some_and(|target| target.runtime_slot().has_pending_document_navigation())
     }
 
-    pub(crate) fn clear_pending_document_navigation_for_target_if_loader_matches(
+    pub(crate) fn clear_pending_document_navigation_for_target_if_matches(
         &mut self,
         target_id: Option<&str>,
-        loader_id: &str,
-    ) {
-        let Some(target_id) = target_id else {
-            return;
+        navigation: &NavigationId,
+    ) -> bool {
+        let Some(target) = target_id.and_then(|target_id| self.page_target_mut(target_id)) else {
+            return false;
         };
-        let cleared = self.page_target_mut(target_id).is_some_and(|target| {
-            target
-                .runtime_slot
-                .clear_pending_document_navigation_if_loader_matches(loader_id)
-        });
-        if cleared {
-            self.clear_target_initial_empty_document_pending_cross_document_navigation(target_id);
+        if !target
+            .runtime_slot
+            .accepts_document_body_completion_event(navigation)
+        {
+            return false;
         }
+        // A committed error page can still leave an uncommitted response body.
+        // Retire that projection without cancelling the committed navigation.
+        if let Some(loader_id) = target.runtime_slot.current_document_loader_id() {
+            target
+                .owner_state
+                .page_resource_store
+                .discard_uncommitted_loader(loader_id);
+        }
+        target
+            .runtime_slot
+            .clear_pending_document_navigation_if_matches(navigation)
     }
 
-    pub(crate) fn commit_document_navigation_if_matches(
-        &mut self,
-        token: &DocumentNavigationToken,
-    ) {
-        let committed = self
-            .page_target_mut(&token.target_id)
-            .is_some_and(|target| {
-                target
-                    .runtime_slot
-                    .commit_pending_document_navigation_if_matches(token)
-            });
-        if committed {
-            self.mark_target_initial_empty_document_exited(&token.target_id);
+    pub(crate) fn commit_document_navigation_if_matches(&mut self, token: &NavigationId) {
+        for target in self.page_targets.iter_mut() {
+            if target
+                .runtime_slot
+                .commit_pending_document_navigation_if_matches(token)
+            {
+                break;
+            }
         }
     }
 
@@ -1420,7 +1456,7 @@ impl BrowserContext {
 
     #[cfg(test)]
     pub(crate) fn session_storage_store_for_test(&self) -> &SharedWebStorageStore {
-        self.active_page_target().session_storage_namespace.store()
+        self.active_page_target().session_storage_store()
     }
 
     #[cfg(test)]
@@ -1710,11 +1746,17 @@ impl BrowserContext {
 }
 
 fn materialized_initial_empty_document_missing_page_error(
-    target_id: &str,
-    owner_state: &TargetOwnerState,
-    has_loaded_page: bool,
+    target: &PageTargetHost,
 ) -> Option<String> {
-    if owner_state.has_materialized_current_initial_empty_document() && !has_loaded_page {
+    if target
+        .runtime_slot
+        .page_slot()
+        .contents
+        .navigation
+        .has_materialized_current_initial_empty_document()
+        && !target.has_loaded_page()
+    {
+        let target_id = target.target_id();
         return Some(format!(
             "TargetInitialEmptyDocumentMissingPage: target {target_id} has materialized current initial empty document without loaded Page"
         ));

@@ -168,7 +168,7 @@ mod tests {
         conn.install_browser_context_fixture_for_test(browser_context);
         conn.runtime_session_owner_slot_mut(Some("SID-owner"))
             .expect("test runtime slot")
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn
     }
 
@@ -184,7 +184,7 @@ mod tests {
 
         conn.runtime_session_owner_slot_mut(Some("SID-owner"))
             .expect("test runtime slot")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
 
         assert!(
             !owner.is_current(&conn),

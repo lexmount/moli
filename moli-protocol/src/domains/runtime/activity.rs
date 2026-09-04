@@ -648,7 +648,7 @@ mod tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         let attachment = conn
             .target_page_protocol_attachment_identity_for_session(Some("SID-1"))
@@ -947,7 +947,7 @@ mod tests {
         let mut prepared = prepared_runtime_binding_calls(attachment);
         conn.runtime_session_owner_slot_mut(Some("SID-1"))
             .expect("Runtime binding target")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         let owner = crate::conn::CommandOwnerScope::for_session("SID-1");
         let mut command_context = CommandDispatchContext::default();
         let mut context = ProtocolOutputProjectionContext::new(&owner, &mut command_context);
@@ -967,7 +967,7 @@ mod tests {
         let mut outputs = runtime_binding_outputs(retired_attachment, "retired-page");
         conn.runtime_session_owner_slot_mut(Some("SID-1"))
             .expect("Runtime binding target")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         let current_attachment = conn
             .target_page_protocol_attachment_identity_for_session(Some("SID-1"))
             .expect("replacement Runtime binding attachment");
@@ -1075,7 +1075,7 @@ mod tests {
         ctx.conn
             .runtime_session_owner_slot_mut(Some("SID-1"))
             .expect("Runtime inspector target")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         let events = drain_runtime_inspector_outputs(&mut ctx.conn, outputs, Some("SID-1")).await;
 
         assert!(
@@ -1167,7 +1167,7 @@ mod tests {
         ctx.conn
             .runtime_session_owner_slot_mut(Some("SID-1"))
             .expect("Runtime inspector target")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         outputs.extend(renderer_inspector_outputs(
             &mut ctx.conn,
             Some("SID-1"),

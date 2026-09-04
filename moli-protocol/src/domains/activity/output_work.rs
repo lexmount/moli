@@ -96,7 +96,7 @@ impl ProtocolOutputWork {
         let page_owner = TargetPageResidenceIdentity::new(
             browser_context_id,
             Some(target_id),
-            crate::conn::TargetPageAttachmentId::allocate(),
+            crate::conn::DocumentId::allocate(),
         );
         let attachments = session_ids
             .into_iter()

@@ -17,8 +17,8 @@ fn page_owner_for_test(
         .conn
         .runtime_session_owner_slot_mut(session_id)
         .expect("target session should expose a runtime owner slot");
-    if runtime_slot.page_attachment_id().is_none() {
-        runtime_slot.replace_page_attachment_id_for_test();
+    if runtime_slot.document_id().is_none() {
+        runtime_slot.replace_document_id_for_test();
     }
     ctx.conn
         .target_page_residence_identity_for_session(session_id)

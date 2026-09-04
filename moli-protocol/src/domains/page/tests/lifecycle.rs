@@ -568,6 +568,10 @@ async fn document_open_exits_initial_empty_document_record() {
         create_response["result"]["targetId"].as_str().is_some(),
         "Target.createTarget should return target id: {create_response}"
     );
+    let target_id = create_response["result"]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     ctx.process_async(json!({
         "id": 131,
@@ -577,8 +581,10 @@ async fn document_open_exits_initial_empty_document_record() {
     ctx.expect_result(131, json!({}), None);
     let before = ctx
         .conn
-        .target_owner_state_for_session(None)
-        .and_then(|owner_state| owner_state.initial_empty_document_state())
+        .browser_context
+        .as_ref()
+        .and_then(|context| context.page_target(&target_id))
+        .and_then(|target| target.initial_empty_document_state())
         .expect("initial empty document record should survive materialization");
     assert!(before.materialized());
     assert!(before.is_on_initial_empty_document());
@@ -595,8 +601,10 @@ async fn document_open_exits_initial_empty_document_record() {
 
     let after = ctx
         .conn
-        .target_owner_state_for_session(None)
-        .and_then(|owner_state| owner_state.initial_empty_document_state())
+        .browser_context
+        .as_ref()
+        .and_then(|context| context.page_target(&target_id))
+        .and_then(|target| target.initial_empty_document_state())
         .expect("initial empty document record should remain for diagnostics");
     assert!(after.exited());
     assert!(!after.is_on_initial_empty_document());

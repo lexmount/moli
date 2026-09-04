@@ -5,7 +5,7 @@ use moli_core::page::{
     RendererAgentAttachmentId, RendererDevToolsAgentToken, RendererRuntimeInspectorMessageBatch,
 };
 
-use super::DocumentNavigationToken;
+use super::NavigationId;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RendererAgentAttachment {
@@ -32,12 +32,12 @@ impl RendererAgentAttachment {
 
 #[derive(Debug)]
 pub(crate) struct PreparedRendererAgentAttachment {
-    navigation: DocumentNavigationToken,
+    navigation: NavigationId,
     attachment: RendererAgentAttachment,
 }
 
 impl PreparedRendererAgentAttachment {
-    pub(crate) fn navigation(&self) -> &DocumentNavigationToken {
+    pub(crate) fn navigation(&self) -> &NavigationId {
         &self.navigation
     }
 
@@ -53,13 +53,13 @@ impl PreparedRendererAgentAttachment {
 
 #[derive(Debug)]
 pub(crate) struct CommittedRendererAgentAttachment {
-    navigation: DocumentNavigationToken,
+    navigation: NavigationId,
     current: RendererAgentAttachment,
     previous: Option<RendererAgentAttachment>,
 }
 
 impl CommittedRendererAgentAttachment {
-    pub(crate) fn navigation(&self) -> &DocumentNavigationToken {
+    pub(crate) fn navigation(&self) -> &NavigationId {
         &self.navigation
     }
 
@@ -90,10 +90,10 @@ enum DevToolsRendererChannelLifecycle {
 pub(crate) struct DevToolsRendererChannel {
     lifecycle: DevToolsRendererChannelLifecycle,
     current: Option<RendererAgentAttachment>,
-    inflight_cross_document_navigations: HashSet<DocumentNavigationToken>,
+    inflight_cross_document_navigations: HashSet<NavigationId>,
     suspended_attachment: Option<RendererAgentAttachment>,
-    latest_started_navigation: Option<DocumentNavigationToken>,
-    committed_latest_navigation: Option<DocumentNavigationToken>,
+    latest_started_navigation: Option<NavigationId>,
+    committed_latest_navigation: Option<NavigationId>,
     buffered_output: Vec<BufferedRendererInspectorBatch>,
 }
 
@@ -137,14 +137,11 @@ impl DevToolsRendererChannel {
 
     pub(crate) fn navigation_started(
         &mut self,
-        navigation: DocumentNavigationToken,
+        navigation: NavigationId,
     ) -> Result<(), DevToolsRendererChannelError> {
         self.ensure_open()?;
         let was_suspended = self.output_is_suspended();
-        if !self
-            .inflight_cross_document_navigations
-            .insert(navigation.clone())
-        {
+        if !self.inflight_cross_document_navigations.insert(navigation) {
             return Err(DevToolsRendererChannelError::DuplicateNavigation);
         }
         if !was_suspended {
@@ -157,7 +154,7 @@ impl DevToolsRendererChannel {
 
     pub(crate) fn attach_candidate(
         &self,
-        navigation: &DocumentNavigationToken,
+        navigation: &NavigationId,
         agent_token: RendererDevToolsAgentToken,
     ) -> Result<PreparedRendererAgentAttachment, DevToolsRendererChannelError> {
         self.ensure_open()?;
@@ -168,7 +165,7 @@ impl DevToolsRendererChannel {
             return Err(DevToolsRendererChannelError::UnknownNavigation);
         }
         Ok(PreparedRendererAgentAttachment {
-            navigation: navigation.clone(),
+            navigation: *navigation,
             attachment: RendererAgentAttachment::new(agent_token),
         })
     }
@@ -200,7 +197,7 @@ impl DevToolsRendererChannel {
         }
         self.inflight_cross_document_navigations
             .retain(|navigation| navigation == candidate.navigation());
-        self.committed_latest_navigation = Some(candidate.navigation.clone());
+        self.committed_latest_navigation = Some(candidate.navigation);
         let current = candidate.attachment;
         let previous = self.current.replace(current);
         Ok(CommittedRendererAgentAttachment {
@@ -268,7 +265,7 @@ impl DevToolsRendererChannel {
 
     pub(crate) fn navigation_finished(
         &mut self,
-        navigation: &DocumentNavigationToken,
+        navigation: &NavigationId,
     ) -> Result<Option<RendererChannelResume>, DevToolsRendererChannelError> {
         self.ensure_open()?;
         if !self.inflight_cross_document_navigations.remove(navigation)
@@ -284,6 +281,11 @@ impl DevToolsRendererChannel {
 
     pub(crate) fn output_is_suspended(&self) -> bool {
         !self.inflight_cross_document_navigations.is_empty()
+    }
+
+    pub(crate) fn has_navigation(&self, navigation: &NavigationId) -> bool {
+        self.inflight_cross_document_navigations
+            .contains(navigation)
     }
 
     pub(crate) fn inflight_navigation_count(&self) -> usize {
@@ -464,14 +466,6 @@ mod tests {
     use moli_core::page::{DevToolsSessionKey, RendererRuntimeInspectorMessage};
     use serde_json::json;
 
-    fn navigation(label: u64) -> DocumentNavigationToken {
-        DocumentNavigationToken {
-            target_id: "TID-channel".to_owned(),
-            loader_id: format!("LID-{label}"),
-            request_id: crate::conn::state::NavigationRequestId::allocate(),
-        }
-    }
-
     fn batch(
         agent_token: RendererDevToolsAgentToken,
         marker: &str,
@@ -533,7 +527,7 @@ mod tests {
     fn failed_candidate_keeps_current_attachment() {
         let current_agent = RendererDevToolsAgentToken::allocate();
         let candidate_agent = RendererDevToolsAgentToken::allocate();
-        let request = navigation(1);
+        let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
             .attach_current(current_agent)
@@ -541,7 +535,7 @@ mod tests {
         let current = channel.current();
 
         channel
-            .navigation_started(request.clone())
+            .navigation_started(request)
             .expect("navigation start");
         let _candidate = channel
             .attach_candidate(&request, candidate_agent)
@@ -564,21 +558,17 @@ mod tests {
         let initial_agent = RendererDevToolsAgentToken::allocate();
         let candidate_a_agent = RendererDevToolsAgentToken::allocate();
         let candidate_b_agent = RendererDevToolsAgentToken::allocate();
-        let request_a = navigation(1);
-        let request_b = navigation(2);
+        let request_a = NavigationId::allocate();
+        let request_b = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
             .attach_current(initial_agent)
             .expect("initial attach");
-        channel
-            .navigation_started(request_a.clone())
-            .expect("navigation A");
+        channel.navigation_started(request_a).expect("navigation A");
         let candidate_a = channel
             .attach_candidate(&request_a, candidate_a_agent)
             .expect("candidate A");
-        channel
-            .navigation_started(request_b.clone())
-            .expect("navigation B");
+        channel.navigation_started(request_b).expect("navigation B");
         let candidate_b = channel
             .attach_candidate(&request_b, candidate_b_agent)
             .expect("candidate B");
@@ -614,14 +604,14 @@ mod tests {
     fn committed_candidate_transaction_rolls_back_to_exact_previous_attachment() {
         let initial_agent = RendererDevToolsAgentToken::allocate();
         let candidate_agent = RendererDevToolsAgentToken::allocate();
-        let request = navigation(1);
+        let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
             .attach_current(initial_agent)
             .expect("initial attach");
         let initial = channel.current().expect("initial attachment");
         channel
-            .navigation_started(request.clone())
+            .navigation_started(request)
             .expect("navigation start");
         let candidate = channel
             .attach_candidate(&request, candidate_agent)
@@ -655,16 +645,12 @@ mod tests {
 
     #[test]
     fn output_remains_suspended_until_all_overlapping_navigations_finish() {
-        let request_a = navigation(1);
-        let request_b = navigation(2);
+        let request_a = NavigationId::allocate();
+        let request_b = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
 
-        channel
-            .navigation_started(request_a.clone())
-            .expect("navigation A");
-        channel
-            .navigation_started(request_b.clone())
-            .expect("navigation B");
+        channel.navigation_started(request_a).expect("navigation A");
+        channel.navigation_started(request_b).expect("navigation B");
         assert_eq!(channel.inflight_navigation_count(), 2);
         assert!(channel.output_is_suspended());
 
@@ -681,14 +667,14 @@ mod tests {
 
     #[test]
     fn navigation_transition_rejects_duplicate_unknown_and_second_commit() {
-        let request = navigation(1);
-        let unknown = navigation(2);
+        let request = NavigationId::allocate();
+        let unknown = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .navigation_started(request.clone())
+            .navigation_started(request)
             .expect("navigation start");
         assert_eq!(
-            channel.navigation_started(request.clone()),
+            channel.navigation_started(request),
             Err(DevToolsRendererChannelError::DuplicateNavigation)
         );
         assert!(matches!(
@@ -712,12 +698,12 @@ mod tests {
 
     #[test]
     fn closed_channel_cannot_attach_or_restart() {
-        let request = navigation(1);
+        let request = NavigationId::allocate();
         let agent = RendererDevToolsAgentToken::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel.attach_current(agent).expect("initial attach");
         channel
-            .navigation_started(request.clone())
+            .navigation_started(request)
             .expect("navigation start");
         let candidate = channel
             .attach_candidate(&request, RendererDevToolsAgentToken::allocate())
@@ -734,7 +720,7 @@ mod tests {
             Err(DevToolsRendererChannelError::Closed)
         );
         assert_eq!(
-            channel.navigation_started(navigation(2)),
+            channel.navigation_started(NavigationId::allocate()),
             Err(DevToolsRendererChannelError::Closed)
         );
         assert_eq!(
@@ -759,19 +745,19 @@ mod tests {
         assert!(channel.reopen_after_target_crash());
         assert!(!channel.is_closed());
         assert!(!channel.reopen_after_target_crash());
-        assert!(channel.navigation_started(navigation(1)).is_ok());
+        assert!(channel.navigation_started(NavigationId::allocate()).is_ok());
     }
 
     #[test]
     fn successful_cutover_releases_only_current_attachment_output() {
         let old_agent = RendererDevToolsAgentToken::allocate();
         let new_agent = RendererDevToolsAgentToken::allocate();
-        let request = navigation(1);
+        let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel.attach_current(old_agent).expect("old attach");
         let old_attachment = channel.current().expect("old attachment");
         channel
-            .navigation_started(request.clone())
+            .navigation_started(request)
             .expect("navigation start");
         let candidate = channel
             .attach_candidate(&request, new_agent)
@@ -809,12 +795,12 @@ mod tests {
     #[test]
     fn failed_navigation_releases_buffered_current_output() {
         let agent = RendererDevToolsAgentToken::allocate();
-        let request = navigation(1);
+        let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel.attach_current(agent).expect("current attach");
         let attachment = channel.current().expect("current attachment");
         channel
-            .navigation_started(request.clone())
+            .navigation_started(request)
             .expect("navigation start");
         assert!(
             channel
@@ -836,12 +822,12 @@ mod tests {
     #[test]
     fn current_session_response_releases_its_buffered_prefix_during_navigation() {
         let agent = RendererDevToolsAgentToken::allocate();
-        let request = navigation(1);
+        let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel.attach_current(agent).expect("current attach");
         let attachment = channel.current().expect("current attachment");
         channel
-            .navigation_started(request.clone())
+            .navigation_started(request)
             .expect("navigation start");
 
         assert!(

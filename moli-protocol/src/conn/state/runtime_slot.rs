@@ -22,15 +22,12 @@ use crate::{
 };
 
 use super::devtools_renderer_channel::{DevToolsRendererChannel, RendererAgentDetachReason};
-use super::page_slot::{
-    DocumentNavigationToken, InitialDocumentPageBuildWaiter, TargetPageAbsenceReason,
-    TargetPageSlot,
-};
+use super::page_slot::{InitialDocumentPageBuildWaiter, TargetPageAbsenceReason, TargetPageSlot};
 use super::{
     CommittedRendererAgentAttachment, CommittedRendererDocumentBinding,
-    DevToolsRendererChannelError, PreparedRendererAgentAttachment,
+    DevToolsRendererChannelError, DocumentId, NavigationId, PreparedRendererAgentAttachment,
     PreparedRendererCallReplacements, RendererAgentAttachment, RendererPageResidenceIdentity,
-    TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver, TargetPageAttachmentId,
+    TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver,
 };
 
 pub(crate) struct FinishedRendererDocumentNavigation {
@@ -41,7 +38,7 @@ pub(crate) struct FinishedRendererDocumentNavigation {
 #[derive(Debug)]
 struct RetiringRendererDocumentOutput {
     renderer_page: RendererPageResidenceIdentity,
-    page_attachment_id: TargetPageAttachmentId,
+    document_id: DocumentId,
     binding: CommittedRendererDocumentBinding,
     network_agent: RetiringTargetNetworkAgentState,
 }
@@ -205,19 +202,18 @@ impl TargetRuntimeSlot {
             .map(|(loaded_page, binding)| {
                 (
                     RendererPageResidenceIdentity::from_page(loaded_page),
-                    binding.page_attachment_id,
+                    binding.document_id,
                     binding.clone(),
                 )
             });
-        let retiring_document =
-            retiring_document.map(|(renderer_page, page_attachment_id, binding)| {
-                RetiringRendererDocumentOutput {
-                    renderer_page,
-                    page_attachment_id,
-                    binding,
-                    network_agent: self.network_agent.rotate_document_for_replacement(),
-                }
-            });
+        let retiring_document = retiring_document.map(|(renderer_page, document_id, binding)| {
+            RetiringRendererDocumentOutput {
+                renderer_page,
+                document_id,
+                binding,
+                network_agent: self.network_agent.rotate_document_for_replacement(),
+            }
+        });
         self.ensure_renderer_attachment_for_replacement(page.as_mut());
         let previous = self.page_slot.replace_loaded_page(page);
         if let Some(retiring_document) = retiring_document {
@@ -276,51 +272,42 @@ impl TargetRuntimeSlot {
         let _ = self.replace_loaded_page(Some(page));
     }
 
-    pub(crate) fn page_attachment_id(&self) -> Option<TargetPageAttachmentId> {
-        self.page_slot.page_attachment_id()
+    pub(crate) fn document_id(&self) -> Option<DocumentId> {
+        self.page_slot.document_id()
     }
 
-    pub(crate) fn pending_page_attachment_id(&self) -> Option<TargetPageAttachmentId> {
-        self.page_slot.pending_page_attachment_id()
+    pub(crate) fn pending_document_id(&self) -> Option<DocumentId> {
+        self.page_slot.pending_document_id()
     }
 
-    pub(crate) fn reserve_renderer_page_attachment(
+    pub(crate) fn reserve_renderer_document(
         &mut self,
         renderer_page: RendererPageResidenceIdentity,
-    ) -> TargetPageAttachmentId {
-        self.page_slot
-            .reserve_renderer_page_attachment(renderer_page)
+    ) -> DocumentId {
+        self.page_slot.reserve_renderer_document(renderer_page)
     }
 
     #[cfg(test)]
-    pub(crate) fn set_page_attachment_id_for_test(&mut self, raw: u64) -> TargetPageAttachmentId {
-        let attachment_changed = self
-            .page_slot
-            .page_attachment_id()
-            .map(TargetPageAttachmentId::get)
-            != Some(raw);
+    pub(crate) fn set_document_id_for_test(&mut self, raw: u64) -> DocumentId {
+        let attachment_changed = self.page_slot.document_id().map(DocumentId::get) != Some(raw);
         if attachment_changed {
             self.javascript_dialog_scope.retire();
         }
-        self.page_slot.set_page_attachment_id_for_test(raw)
+        self.page_slot.set_document_id_for_test(raw)
     }
 
     #[cfg(test)]
-    pub(crate) fn replace_page_attachment_id_for_test(&mut self) -> TargetPageAttachmentId {
+    pub(crate) fn replace_document_id_for_test(&mut self) -> DocumentId {
         self.javascript_dialog_scope.retire();
-        self.page_slot.replace_page_attachment_id_for_test()
+        self.page_slot.replace_document_id_for_test()
     }
 
     #[cfg(test)]
-    pub(crate) fn install_page_attachment_id_for_test(
-        &mut self,
-        attachment_id: TargetPageAttachmentId,
-    ) {
-        if self.page_slot.page_attachment_id() != Some(attachment_id) {
+    pub(crate) fn install_document_id_for_test(&mut self, attachment_id: DocumentId) {
+        if self.page_slot.document_id() != Some(attachment_id) {
             self.javascript_dialog_scope.retire();
         }
-        self.page_slot
-            .install_page_attachment_id_for_test(attachment_id);
+        self.page_slot.install_document_id_for_test(attachment_id);
     }
 
     pub(crate) fn javascript_dialog_scope_observer(&self) -> TargetJavaScriptDialogScopeObserver {
@@ -338,17 +325,11 @@ impl TargetRuntimeSlot {
         self.javascript_dialog_scope.retire();
     }
 
-    pub(crate) fn start_document_navigation(
-        &mut self,
-        target_id: String,
-        loader_id: String,
-    ) -> DocumentNavigationToken {
+    pub(crate) fn start_document_navigation(&mut self, loader_id: String) -> NavigationId {
         self.devtools_renderer_channel.reopen_after_target_crash();
-        let token = self
-            .page_slot
-            .start_document_navigation(target_id, loader_id);
+        let token = self.page_slot.start_document_navigation(loader_id);
         self.devtools_renderer_channel
-            .navigation_started(token.clone())
+            .navigation_started(token)
             .expect("an open target runtime slot must accept a new document navigation");
         token
     }
@@ -356,7 +337,7 @@ impl TargetRuntimeSlot {
     #[cfg(test)]
     pub(crate) fn prepare_renderer_agent_candidate(
         &self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         page: &mut Page,
     ) -> Result<PreparedRendererAgentAttachment, DevToolsRendererChannelError> {
         let candidate = self
@@ -367,7 +348,7 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn prepare_renderer_agent_candidate_token(
         &self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         agent_token: RendererDevToolsAgentToken,
     ) -> Result<PreparedRendererAgentAttachment, DevToolsRendererChannelError> {
         self.devtools_renderer_channel
@@ -404,12 +385,8 @@ impl TargetRuntimeSlot {
         &mut self,
         transaction: CommittedRendererAgentAttachment,
     ) -> Result<(), DevToolsRendererChannelError> {
-        let loader_id = transaction.navigation().loader_id.clone();
         self.devtools_renderer_channel
-            .rollback_committed_candidate(transaction)?;
-        self.page_slot
-            .clear_pending_document_navigation_if_loader_matches(&loader_id);
-        Ok(())
+            .rollback_committed_candidate(transaction)
     }
 
     pub(crate) fn bind_page_to_committed_renderer_agent_candidate(
@@ -452,7 +429,7 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn finish_renderer_document_navigation(
         &mut self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
     ) -> Result<FinishedRendererDocumentNavigation, DevToolsRendererChannelError> {
         let resume = self.devtools_renderer_channel.navigation_finished(token)?;
         let renderer_call_replacements = resume
@@ -483,20 +460,20 @@ impl TargetRuntimeSlot {
     pub(crate) fn routes_current_renderer_page_owner(
         &self,
         renderer_page: RendererPageResidenceIdentity,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
     ) -> bool {
-        self.page_slot.page_attachment_id() == Some(page_attachment_id)
+        self.page_slot.document_id() == Some(document_id)
             && self.page_slot.routes_renderer_page(renderer_page)
     }
 
     pub(crate) fn routes_retiring_renderer_page_owner(
         &self,
         renderer_page: RendererPageResidenceIdentity,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
     ) -> bool {
-        self.retiring_renderer_document_outputs.iter().any(|entry| {
-            entry.renderer_page == renderer_page && entry.page_attachment_id == page_attachment_id
-        })
+        self.retiring_renderer_document_outputs
+            .iter()
+            .any(|entry| entry.renderer_page == renderer_page && entry.document_id == document_id)
     }
 
     pub(crate) fn finish_renderer_page_output_retirement(
@@ -537,17 +514,14 @@ impl TargetRuntimeSlot {
         Ok(previous)
     }
 
-    pub(crate) fn accepts_pending_document_navigation_event(
-        &self,
-        token: &DocumentNavigationToken,
-    ) -> bool {
+    pub(crate) fn accepts_pending_document_navigation_event(&self, token: &NavigationId) -> bool {
         self.page_slot
             .accepts_pending_document_navigation_event(token)
     }
 
     pub(crate) fn document_navigation_cancellation_handle(
         &self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
     ) -> Option<moli_fetch::FetchCancelHandle> {
         self.page_slot
             .document_navigation_cancellation_handle(token)
@@ -555,17 +529,14 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn arm_background_navigation_completion(
         &mut self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
     ) -> bool {
         self.page_slot
             .arm_background_navigation_completion(token, additional_cancellation)
     }
 
-    pub(crate) fn settle_background_navigation_completion(
-        &mut self,
-        token: &DocumentNavigationToken,
-    ) -> bool {
+    pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
         self.page_slot
             .settle_background_navigation_completion(token)
     }
@@ -574,10 +545,11 @@ impl TargetRuntimeSlot {
         self.page_slot.has_inflight_background_navigation()
     }
 
-    pub(crate) fn accepts_document_body_completion_event(
-        &self,
-        token: &DocumentNavigationToken,
-    ) -> bool {
+    pub(crate) fn has_renderer_navigation(&self, navigation: &NavigationId) -> bool {
+        self.devtools_renderer_channel.has_navigation(navigation)
+    }
+
+    pub(crate) fn accepts_document_body_completion_event(&self, token: &NavigationId) -> bool {
         self.page_slot.accepts_document_body_completion_event(token)
     }
 
@@ -592,7 +564,7 @@ impl TargetRuntimeSlot {
                 .page_slot
                 .loaded_page_absence_reason()
                 .map(TargetPageAbsenceReason::label),
-            "pageAttachmentId": self.page_attachment_id().map(TargetPageAttachmentId::get),
+            "pageAttachmentId": self.document_id().map(DocumentId::get),
             "hasPendingDocumentNavigation": self.has_pending_document_navigation(),
             "rendererChannelClosed": self.devtools_renderer_channel.is_closed(),
             "rendererChannelHasCurrentAttachment":
@@ -653,18 +625,18 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn commit_pending_document_navigation_if_matches(
         &mut self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
     ) -> bool {
         self.page_slot
             .commit_pending_document_navigation_if_matches(token)
     }
 
-    pub(crate) fn clear_pending_document_navigation_if_loader_matches(
+    pub(crate) fn clear_pending_document_navigation_if_matches(
         &mut self,
-        loader_id: &str,
+        navigation: &NavigationId,
     ) -> bool {
         self.page_slot
-            .clear_pending_document_navigation_if_loader_matches(loader_id)
+            .clear_pending_document_navigation_if_matches(navigation)
     }
 
     pub(crate) fn clear_document_navigation_state(&mut self) {
@@ -848,9 +820,9 @@ impl TargetRuntimeSlot {
         url: String,
         source: &RendererPageDiagnosticsSnapshot,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
-        let page_attachment_id = self.page_attachment_id()?;
+        let document_id = self.document_id()?;
         self.observable_queue
-            .sync_source_from_renderer_snapshot(url, page_attachment_id, source)
+            .sync_source_from_renderer_snapshot(url, document_id, source)
     }
 
     #[cfg(test)]
@@ -859,9 +831,9 @@ impl TargetRuntimeSlot {
         url: String,
         source: &RendererRuntimeObservableSourceSummary,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
-        let page_attachment_id = self.page_attachment_id()?;
+        let document_id = self.document_id()?;
         self.observable_queue
-            .sync_source_from_renderer_runtime_source(url, page_attachment_id, source)
+            .sync_source_from_renderer_runtime_source(url, document_id, source)
     }
 
     pub(crate) fn append_renderer_runtime_console_message(
@@ -869,9 +841,9 @@ impl TargetRuntimeSlot {
         url: String,
         message: moli_core::page::RuntimeConsoleMessageSnapshot,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
-        let page_attachment_id = self.page_attachment_id()?;
+        let document_id = self.document_id()?;
         self.observable_queue
-            .append_renderer_console_message(url, page_attachment_id, message)
+            .append_renderer_console_message(url, document_id, message)
     }
 
     pub(crate) fn append_renderer_runtime_lifecycle_error(
@@ -880,10 +852,10 @@ impl TargetRuntimeSlot {
         text: String,
         execution_context_id: Option<i64>,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
-        let page_attachment_id = self.page_attachment_id()?;
+        let document_id = self.document_id()?;
         self.observable_queue.append_renderer_lifecycle_error(
             url,
-            page_attachment_id,
+            document_id,
             text,
             execution_context_id,
         )
@@ -1398,11 +1370,11 @@ mod tests {
         let mut slot = TargetRuntimeSlot::default();
         slot.retiring_renderer_document_outputs
             .push(RetiringRendererDocumentOutput {
-                renderer_page: RendererPageResidenceIdentity::new(
+                renderer_page: RendererPageResidenceIdentity::from_parts(
                     moli_core::RendererOwnerLocalHostId::new_for_testing(3),
                     page_id,
                 ),
-                page_attachment_id: TargetPageAttachmentId::from_raw_for_test(1),
+                document_id: DocumentId::from_raw_for_test(1),
                 binding: CommittedRendererDocumentBinding {
                     renderer_frame: RendererFrameToken { page_id },
                     renderer_document: RendererDocumentToken::new_for_testing(page_id, 1),
@@ -1410,7 +1382,7 @@ mod tests {
                     navigation: None,
                     frame_id: "FRAME-old".to_owned(),
                     loader_id: "LOADER-old".to_owned(),
-                    page_attachment_id: TargetPageAttachmentId::from_raw_for_test(1),
+                    document_id: DocumentId::from_raw_for_test(1),
                     document_open_replacement_epoch: None,
                 },
                 network_agent: retiring_agent,

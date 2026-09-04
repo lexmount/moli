@@ -18,7 +18,7 @@ pub enum PendingNavigationHistoryUpdate {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TargetNavigationHistoryState {
+pub(in crate::conn) struct NavigationHistoryState {
     entries: Vec<PageNavigationHistoryEntry>,
     current_index: Option<usize>,
     next_entry_id: i32,
@@ -26,7 +26,7 @@ pub struct TargetNavigationHistoryState {
     pending_update: Option<PendingNavigationHistoryUpdate>,
 }
 
-impl Default for TargetNavigationHistoryState {
+impl Default for NavigationHistoryState {
     fn default() -> Self {
         Self {
             entries: Vec::new(),
@@ -38,7 +38,7 @@ impl Default for TargetNavigationHistoryState {
     }
 }
 
-impl TargetNavigationHistoryState {
+impl NavigationHistoryState {
     pub(crate) fn clear(&mut self) {
         *self = Self::default();
     }
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn same_document_traversal_moves_cursor_without_allocating_or_appending() {
-        let mut history = TargetNavigationHistoryState::default();
+        let mut history = NavigationHistoryState::default();
         assert!(history.record_session_history_update(
             "https://example.test/a".to_owned(),
             "A".to_owned(),
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn same_document_replace_preserves_entry_id_and_out_of_range_traverse_is_atomic() {
-        let mut history = TargetNavigationHistoryState::default();
+        let mut history = NavigationHistoryState::default();
         assert!(history.record_session_history_update(
             "https://example.test/a".to_owned(),
             "A".to_owned(),
@@ -372,7 +372,7 @@ mod tests {
 
     #[test]
     fn title_refresh_updates_only_current_entry_metadata() {
-        let mut history = TargetNavigationHistoryState::default();
+        let mut history = NavigationHistoryState::default();
         let first_id = history.allocate_entry_id();
         history.seed_entry(PageNavigationHistoryEntry {
             id: first_id,

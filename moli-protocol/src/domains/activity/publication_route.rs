@@ -148,12 +148,12 @@ impl RendererPublicationOwner {
                     let projection_for = |runtime_slot: &crate::conn::TargetRuntimeSlot| {
                         if runtime_slot.routes_current_renderer_page_owner(
                             *renderer_page,
-                            page_owner.page_attachment_id(),
+                            page_owner.document_id(),
                         ) {
                             Some(RendererPublicationProjection::CurrentOwner)
                         } else if runtime_slot.routes_retiring_renderer_page_owner(
                             *renderer_page,
-                            page_owner.page_attachment_id(),
+                            page_owner.document_id(),
                         ) {
                             Some(RendererPublicationProjection::RetiringNetworkOnly)
                         } else {

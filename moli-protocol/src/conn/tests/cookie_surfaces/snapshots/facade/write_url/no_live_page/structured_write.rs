@@ -11,7 +11,7 @@ async fn browser_context_document_cookie_facade_snapshot_keeps_structured_write_
         .document_cookie_facade_snapshot();
 
     assert!(!snapshot.has_loaded_page);
-    assert_eq!(snapshot.page_attachment_id, None);
+    assert_eq!(snapshot.document_id, None);
     assert_eq!(snapshot.cookie_store_generation, Some(0));
     assert_eq!(snapshot.structured_write.default_cookie_write_url, None);
     assert_eq!(
