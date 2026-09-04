@@ -398,10 +398,17 @@ async fn hashchange_discards_a_retired_child_local_window() {
             r#"
 const frame = document.createElement("iframe");
 frame.id = "stale-hashchange-recipient";
+frame.srcdoc = "<!doctype html><p>child</p>";
 document.body.appendChild(frame);
 "created"
 "#,
         )?;
+        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+            &mut page_vm,
+            ChildFrameSemanticTurnKind::NavigationCommit,
+            "stale hashchange child srcdoc commit",
+        )
+        .await;
         materialize_child_realm_through_page_turn_for_test(
             &mut page_vm,
             "stale-hashchange-recipient",
@@ -411,7 +418,7 @@ document.body.appendChild(frame);
 globalThis.__staleHashChanges = 0;
 const staleFrame = document.getElementById("stale-hashchange-recipient");
 staleFrame.contentWindow.addEventListener("hashchange", () => parent.__staleHashChanges++);
-staleFrame.contentWindow.history.replaceState(null, "", "/child-hashchange");
+staleFrame.contentWindow.history.replaceState(null, "", "about:srcdoc#child-hashchange");
 staleFrame.contentWindow.location.hash = "#queued";
 staleFrame.remove();
 "retired"
@@ -447,7 +454,7 @@ async fn hashchange_discards_a_retired_lightweight_popup_local_window() {
             r##"
 globalThis.__popupHashChanges = [];
 globalThis.__hashPopup = open("about:blank", "hashchange-owner-popup");
-__hashPopup.history.replaceState(null, "", "/popup-hashchange");
+__hashPopup.history.replaceState(null, "", "about:blank#popup-hashchange");
 __hashPopup.addEventListener("hashchange", () => __popupHashChanges.push("retired"));
 __hashPopup.location.hash = "#queued-before-replacement";
 open("about:blank", "hashchange-owner-popup");
@@ -479,7 +486,7 @@ open("about:blank", "hashchange-owner-popup");
 
         page_vm.vm_mut().eval(
             r##"
-__hashPopup.history.replaceState(null, "", "/replacement-popup-hashchange");
+__hashPopup.history.replaceState(null, "", "about:blank#replacement-popup-hashchange");
 __hashPopup.addEventListener("hashchange", () => __popupHashChanges.push("current"));
 __hashPopup.location.hash = "#queued-after-replacement";
 "queued-current"

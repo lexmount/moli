@@ -4700,7 +4700,7 @@ async fn reset_navigation_history_updates_all_live_window_realms() {
         .clone();
     vm.eval_in_child_default_context(
         child_context_id,
-        r##"history.pushState({ realm: "child-default" }, "", "#child-default")"##,
+        r##"history.pushState({ realm: "child-default" }, "", "about:srcdoc#child-default")"##,
     )
     .expect("child default history setup should evaluate");
 
@@ -4717,7 +4717,7 @@ async fn reset_navigation_history_updates_all_live_window_realms() {
     .expect("top isolated history setup should evaluate");
     vm.eval_in_isolated_context(
         child_isolated_context_id,
-        r##"history.pushState({ realm: "child-isolated" }, "", "#child-isolated")"##,
+        r##"history.pushState({ realm: "child-isolated" }, "", "about:srcdoc#child-isolated")"##,
     )
     .expect("child isolated history setup should evaluate");
 
@@ -4849,7 +4849,11 @@ async fn reset_navigation_history_preserves_child_entry_created_by_top_dispose_l
         child_context_id,
         r##"
 (() => {
-  history.pushState({ realm: "child-before-reset" }, "", "#child-before-reset");
+  history.pushState(
+    { realm: "child-before-reset" },
+    "",
+    "about:srcdoc#child-before-reset"
+  );
   globalThis.__lmChildCurrentBeforeReset = navigation.currentEntry;
   globalThis.__lmChildEntriesBeforeReset = navigation.entries();
   globalThis.__lmChildDisposed = [];
@@ -4866,7 +4870,7 @@ navigation.entries()[0].addEventListener("dispose", () => {
   document.querySelector("iframe").contentWindow.history.pushState(
     { realm: "child-during-top-dispose" },
     "",
-    "#child-during-top-dispose"
+    "about:srcdoc#child-during-top-dispose"
   );
 });
 "##,

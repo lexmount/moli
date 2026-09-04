@@ -9888,7 +9888,7 @@ fn child_frame_target_selector_invalidation_uses_child_document_world() {
     </body>
   `);
   childDocument.close();
-  childWindow.history.replaceState(null, '', '#old');
+  childWindow.history.replaceState(null, '', 'about:blank#old');
   globalThis.__childTargetFrame = frame;
   globalThis.__childTargetOldStyle =
     childWindow.getComputedStyle(childDocument.getElementById('old'));
@@ -9920,7 +9920,7 @@ fn child_frame_target_selector_invalidation_uses_child_document_world() {
             r#"
 (() => {
   const childWindow = globalThis.__childTargetFrame.contentWindow;
-  childWindow.history.replaceState(null, '', '#new');
+  childWindow.history.replaceState(null, '', 'about:blank#new');
   const result = [
     globalThis.__childTargetOldStyle.color,
     globalThis.__childTargetNewStyle.color
@@ -9988,7 +9988,7 @@ fn popup_target_selector_invalidation_uses_popup_document_world() {
   newTarget.id = 'popup-new-target';
   newTarget.className = 'probe';
   popupBody.append(oldTarget, newTarget);
-  popup.history.replaceState(null, '', '#popup-old-target');
+  popup.history.replaceState(null, '', 'about:blank#popup-old-target');
   globalThis.__popupTargetOldStyle = popup.getComputedStyle(oldTarget);
   globalThis.__popupTargetNewStyle = popup.getComputedStyle(newTarget);
 
@@ -10017,7 +10017,7 @@ fn popup_target_selector_invalidation_uses_popup_document_world() {
         .eval(
             r#"
 (() => {
-  __popupTargetWindow.history.replaceState(null, '', '#popup-new-target');
+  __popupTargetWindow.history.replaceState(null, '', 'about:blank#popup-new-target');
   const result = [
     globalThis.__popupTargetOldStyle.color,
     globalThis.__popupTargetNewStyle.color
