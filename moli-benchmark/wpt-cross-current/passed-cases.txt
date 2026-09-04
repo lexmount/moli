@@ -5237,6 +5237,7 @@ html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child
 html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child-function-parent.html
 html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child-function-src.html
 html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child-function.html
+html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child-src-about-blank.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/anchor-fragment-history-back-on-click.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-same-document-nav.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-stop.html
