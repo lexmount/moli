@@ -2764,8 +2764,6 @@ html/browsers/history/the-history-interface/traverse_the_history_4.html
 html/browsers/history/the-history-interface/traverse_the_history_5.html
 html/browsers/history/the-location-interface/assign_after_load.html
 html/browsers/history/the-location-interface/assign_before_load.html
-html/browsers/history/the-location-interface/location-ancestor-origins-new-object.html
-html/browsers/history/the-location-interface/location-ancestor-origins-referrerpolicy-snapshot.html
 html/browsers/history/the-location-interface/location-protocol-setter-non-broken-weird.html
 html/browsers/history/the-location-interface/location-protocol-setter.html
 html/browsers/history/the-location-interface/location_assign_about_blank.html
