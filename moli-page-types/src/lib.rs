@@ -383,19 +383,10 @@ impl NavigationResponse {
     }
 
     pub fn from_head_and_body(head: ResponseHead, body: String, body_bytes: Vec<u8>) -> Self {
-        Self {
-            final_url: head.final_url,
-            status: head.status,
-            headers: head.headers,
-            body: ResponseBody::materialized_text(body, body_bytes),
-            request_cookie_report: head.request_cookie_report,
-            cookie_set_reports: head.cookie_set_reports,
-            redirected: head.redirected,
-            redirect_chain: head.redirect_chain.into_iter().map(Into::into).collect(),
-            from_cache: head.from_cache,
-            negotiated_http_version: head.negotiated_http_version,
-            network_request_headers: None,
-        }
+        Self::from_head_and_materialized_body(
+            head,
+            ResponseBody::materialized_text(body, body_bytes),
+        )
     }
 
     /// Headers configured on the HTTP transfer that produced this response.
@@ -414,15 +405,26 @@ impl NavigationResponse {
     }
 
     pub fn from_head_and_materialized_body(head: ResponseHead, body: ResponseBody) -> Self {
-        let (body, body_bytes) = body
-            .try_into_lossy_materialized_text()
+        let body = body
+            .try_into_materialized_text_body()
             .expect("NavigationResponse body should remain materialized text");
-        Self::from_head_and_body(head, body, body_bytes)
+        Self {
+            final_url: head.final_url,
+            status: head.status,
+            headers: head.headers,
+            body,
+            request_cookie_report: head.request_cookie_report,
+            cookie_set_reports: head.cookie_set_reports,
+            redirected: head.redirected,
+            redirect_chain: head.redirect_chain.into_iter().map(Into::into).collect(),
+            from_cache: head.from_cache,
+            negotiated_http_version: head.negotiated_http_version,
+            network_request_headers: None,
+        }
     }
 
     pub fn from_head_and_text_body(head: ResponseHead, body: String) -> Self {
-        let body_bytes = body.as_bytes().to_vec();
-        Self::from_head_and_body(head, body, body_bytes)
+        Self::from_head_and_body(head, body, Vec::new())
     }
 
     pub fn from_text_body(
