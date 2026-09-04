@@ -2559,7 +2559,6 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
     );
     let initial = browser_context
         .active_page_target()
-        .owner_state
         .initial_empty_document_state()
         .expect("initial empty document state should remain recorded");
     assert!(

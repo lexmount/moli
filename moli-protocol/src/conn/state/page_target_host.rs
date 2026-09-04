@@ -131,6 +131,33 @@ impl PageTargetHost {
         self.runtime_slot.document_id()
     }
 
+    pub(crate) fn initial_empty_document_state(&self) -> Option<&super::InitialDocument> {
+        self.runtime_slot
+            .page_slot()
+            .navigation
+            .initial_empty_document_state()
+    }
+
+    pub(in crate::conn) fn initial_empty_document_loader_id_if_current(&self) -> Option<String> {
+        self.initial_empty_document_state()
+            .filter(|document| document.is_on_initial_empty_document())
+            .map(|_| format!("LID-INITIAL-{}", self.target_id()))
+    }
+
+    pub(in crate::conn) fn commit_document_title(&mut self, title: String) -> bool {
+        let changed = self
+            .owner_state
+            .committed_document_title()
+            .unwrap_or_default()
+            != title;
+        self.owner_state.committed_document_title = Some(title.clone());
+        self.runtime_slot
+            .page_slot_mut()
+            .navigation
+            .refresh_current_navigation_history_title(title);
+        changed
+    }
+
     fn replace_target_id(&mut self, target_id: String) {
         self.target_id = target_id;
     }

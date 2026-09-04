@@ -519,7 +519,9 @@ impl<'a> TargetSessionOwnerRef<'a> {
     }
 
     pub(super) fn initial_empty_document_url_if_current(&self) -> Option<String> {
-        self.target_owner_state()
+        self.runtime_slot()
+            .page_slot()
+            .navigation
             .initial_empty_document_url_if_current()
             .map(str::to_owned)
     }
@@ -527,17 +529,24 @@ impl<'a> TargetSessionOwnerRef<'a> {
     pub(super) fn initial_empty_document_storage_key_if_current(
         &self,
     ) -> Option<moli_storage_key::MoliStorageKey> {
-        self.target_owner_state()
+        self.runtime_slot()
+            .page_slot()
+            .navigation
             .initial_empty_document_storage_key_if_current()
             .cloned()
     }
 
     pub(super) fn is_on_initial_empty_document(&self) -> Option<bool> {
-        self.target_owner_state().is_on_initial_empty_document()
+        self.runtime_slot()
+            .page_slot()
+            .navigation
+            .is_on_initial_empty_document()
     }
 
     pub(super) fn initial_empty_document_has_pending_cross_document_navigation(&self) -> bool {
-        self.target_owner_state()
+        self.runtime_slot()
+            .page_slot()
+            .navigation
             .initial_empty_document_pending_cross_document_navigation()
     }
 
@@ -585,11 +594,7 @@ impl<'a> TargetSessionOwnerRef<'a> {
         self.runtime_slot()
             .committed_document_loader_id()
             .map(str::to_owned)
-            .or_else(|| {
-                self.target_owner_state()
-                    .initial_empty_document_loader_id_if_current()
-                    .map(str::to_owned)
-            })
+            .or_else(|| self.target().initial_empty_document_loader_id_if_current())
     }
 
     pub(super) fn emulated_device_metrics(&self) -> Option<EmulatedDeviceMetrics> {
@@ -655,10 +660,16 @@ impl<'a> TargetSessionOwnerMut<'a> {
 
     fn page_snapshot(&self) -> Option<(String, String)> {
         let target = self.target();
-        target
-            .runtime_slot()
-            .loaded_page()
-            .map(|page| (target.target_url().to_owned(), page.document_title()))
+        target.runtime_slot().loaded_page().map(|page| {
+            (
+                target.target_url().to_owned(),
+                target
+                    .owner_state
+                    .committed_document_title()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| page.document_title()),
+            )
+        })
     }
 
     pub(super) fn target_url(&self) -> String {
@@ -785,7 +796,11 @@ impl<'a> TargetSessionOwnerMut<'a> {
     pub(super) async fn mark_target_crashed_async(&mut self) -> Option<()> {
         let target = self.target_mut();
         target.owner_state.target_crash_state.mark_crashed();
-        target.owner_state.navigation_history_state.clear();
+        target
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
+            .clear_navigation_history();
         target.owner_state.clear_loaded_document_context_state();
         clear_page_loaded_document_session_state(target);
         target.fetch_owner.clear_pending();
@@ -812,7 +827,11 @@ impl<'a> TargetSessionOwnerMut<'a> {
         let target = self.target_mut();
         target.set_target_url(next_url);
         target.set_target_security_origin(security_origin);
-        target.owner_state.mark_initial_empty_document_exited();
+        target
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
+            .mark_initial_empty_document_exited();
         target
             .owner_state
             .clear_committed_document_navigation_state();
@@ -843,19 +862,23 @@ impl<'a> TargetSessionOwnerMut<'a> {
         let page_snapshot = self.page_snapshot();
         Some(
             self.target_mut()
-                .owner_state
+                .runtime_slot
+                .page_slot_mut()
+                .navigation
                 .navigation_history_snapshot(page_snapshot),
         )
     }
 
     pub(super) fn apply_renderer_document_title(&mut self, title: String) -> Option<bool> {
-        Some(self.target_mut().owner_state.commit_document_title(title))
+        Some(self.target_mut().commit_document_title(title))
     }
 
     pub(super) fn navigation_history_entry_url(&mut self, entry_id: i32) -> Option<String> {
         let page_snapshot = self.page_snapshot();
         self.target_mut()
-            .owner_state
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
             .navigation_history_entry_url(page_snapshot, entry_id)
     }
 
@@ -863,7 +886,9 @@ impl<'a> TargetSessionOwnerMut<'a> {
         let page_snapshot = self.page_snapshot();
         Some(
             self.target_mut()
-                .owner_state
+                .runtime_slot
+                .page_slot_mut()
+                .navigation
                 .reset_navigation_history(page_snapshot),
         )
     }
@@ -872,14 +897,18 @@ impl<'a> TargetSessionOwnerMut<'a> {
         let page_snapshot = self.page_snapshot();
         Some(
             self.target_mut()
-                .owner_state
+                .runtime_slot
+                .page_slot_mut()
+                .navigation
                 .can_reset_navigation_history(page_snapshot),
         )
     }
 
     pub(super) fn mark_next_navigation_history_replace_current(&mut self) -> Option<()> {
         self.target_mut()
-            .owner_state
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
             .mark_next_navigation_history_replace_current();
         Some(())
     }
@@ -889,7 +918,9 @@ impl<'a> TargetSessionOwnerMut<'a> {
         entry_id: i32,
     ) -> Option<()> {
         self.target_mut()
-            .owner_state
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
             .mark_next_navigation_history_traverse_to_entry(entry_id);
         Some(())
     }
@@ -905,14 +936,24 @@ impl<'a> TargetSessionOwnerMut<'a> {
         let title = page_snapshot
             .as_ref()
             .map(|(_, title)| title.clone())
+            .or_else(|| {
+                self.target()
+                    .owner_state
+                    .committed_document_title()
+                    .map(str::to_owned)
+            })
             .unwrap_or_default();
         let target = self.target_mut();
-        target.owner_state.record_same_document_navigation_history(
-            page_snapshot,
-            next_url.clone(),
-            title,
-            history_update,
-        );
+        target
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
+            .record_same_document_navigation_history(
+                page_snapshot,
+                next_url.clone(),
+                title,
+                history_update,
+            );
         target.set_target_url(next_url);
         target.set_target_security_origin(security_origin);
         Some(target.target_id().to_owned())
@@ -1081,13 +1122,19 @@ impl<'a> TargetSessionOwnerMut<'a> {
         target.set_target_url(next_url);
         target.set_target_security_origin(security_origin);
         target.set_target_secure_context_type(secure_context_type);
-        target.owner_state.mark_initial_empty_document_exited();
+        target
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
+            .mark_initial_empty_document_exited();
         Some(())
     }
 
     pub(super) fn clear_pending_navigation_history_update(&mut self) -> Option<()> {
         self.target_mut()
-            .owner_state
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
             .clear_pending_navigation_history_update();
         Some(())
     }
@@ -1262,12 +1309,11 @@ impl CdpConnection {
             let _ = page.close_async().await;
             return Err("TargetNotLoaded".to_owned());
         };
-        let loader_id = target
-            .owner_state
-            .initial_empty_document_loader_id_if_current()
-            .map(str::to_owned);
+        let loader_id = target.initial_empty_document_loader_id_if_current();
         target
-            .owner_state
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
             .mark_initial_empty_document_materialized();
         target
             .owner_state
@@ -2785,7 +2831,9 @@ mod tests {
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         active
             .active_page_target_mut()
-            .owner_state
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
             .record_loaded_page_navigation_history((
                 "https://active.example/".to_owned(),
                 "active".to_owned(),
@@ -2809,7 +2857,9 @@ mod tests {
         background
             .background_target_mut("TID-background")
             .expect("background target must exist")
-            .owner_state
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
             .record_loaded_page_navigation_history((
                 "https://background.example/".to_owned(),
                 "background".to_owned(),
@@ -3336,15 +3386,17 @@ mod tests {
             "about:blank".to_owned(),
         ));
         {
-            let owner_state = &mut background
+            let navigation = &mut background
                 .background_target_mut("TID-background")
                 .expect("background target must exist")
-                .owner_state;
-            owner_state.record_loaded_page_navigation_history((
+                .runtime_slot
+                .page_slot_mut()
+                .navigation;
+            navigation.record_loaded_page_navigation_history((
                 "https://old.example/".to_owned(),
                 "old".to_owned(),
             ));
-            owner_state.mark_next_navigation_history_replace_current();
+            navigation.mark_next_navigation_history_replace_current();
         }
         {
             let mut owner = TargetSessionOwnerMut {
@@ -3360,7 +3412,9 @@ mod tests {
         background
             .background_target_mut("TID-background")
             .expect("background target must exist")
-            .owner_state
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
             .record_loaded_page_navigation_history((
                 "https://new.example/".to_owned(),
                 "new".to_owned(),
@@ -3368,7 +3422,9 @@ mod tests {
         let (_, entries) = background
             .background_target_mut("TID-background")
             .expect("background target must exist")
-            .owner_state
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
             .navigation_history_snapshot(None);
         assert_eq!(
             entries
@@ -3425,7 +3481,9 @@ mod tests {
         let (_, entries) = background
             .background_target_mut("TID-background")
             .expect("background target must exist")
-            .owner_state
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
             .navigation_history_snapshot(None);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].title, "background commit");

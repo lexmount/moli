@@ -1551,13 +1551,18 @@ async fn popup_initial_empty_document_record_captures_creator_identity() {
     let initial = browser_context
         .background_target(popup_target_id)
         .expect("background target must exist")
-        .owner_state
         .initial_empty_document_state()
         .expect("popup target should record initial empty document");
     let creator = initial
         .creator()
         .expect("window.open initial empty document should record creator identity");
-    assert_eq!(creator.target_id(), "TID-opener-creator");
+    assert_eq!(
+        creator.web_contents_id(),
+        browser_context
+            .page_target("TID-opener-creator")
+            .unwrap()
+            .web_contents_id()
+    );
     assert_eq!(creator.security_origin(), "https://opener.example");
     assert_eq!(creator.secure_context_type(), "Secure");
 }
@@ -1637,7 +1642,6 @@ async fn popup_initial_empty_document_frame_tree_inherits_opener_origin() {
     let initial = browser_context
         .background_target(&popup_target_id)
         .expect("background target must exist")
-        .owner_state
         .initial_empty_document_state()
         .expect("popup target should still record initial empty document");
     assert!(initial.is_on_initial_empty_document());

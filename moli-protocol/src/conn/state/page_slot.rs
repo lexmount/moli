@@ -20,6 +20,7 @@ use super::document_lifecycle_observer::{
 };
 
 mod document_host;
+use super::navigation_controller::NavigationController;
 use document_host::DocumentHost;
 
 #[cfg(test)]
@@ -50,76 +51,6 @@ impl TargetPageAbsenceReason {
             #[cfg(test)]
             Self::TestFixture => "test-fixture",
         }
-    }
-}
-
-/// The target-owned lifetime of one cross-Document navigation request.
-///
-/// The exact token remains here from navigation admission until the request
-/// either commits or fails. Background navigation additionally keeps this
-/// owner alive until its lifecycle completion is drained; transport
-/// cancellation is therefore retired by the same exact-token transition as
-/// the protocol gate instead of by a scheduler-side mirror.
-#[derive(Debug)]
-pub(crate) struct PendingNavigationRequest {
-    navigation_id: NavigationId,
-    document_id: DocumentId,
-    cancellation_handles: Vec<moli_fetch::FetchCancelHandle>,
-    background_completion_pending: bool,
-    committed: bool,
-}
-
-impl PendingNavigationRequest {
-    fn new(navigation_id: NavigationId) -> Self {
-        Self {
-            navigation_id,
-            document_id: DocumentId::allocate(),
-            cancellation_handles: vec![moli_fetch::FetchCancelHandle::new()],
-            background_completion_pending: false,
-            committed: false,
-        }
-    }
-
-    fn matches(&self, token: &NavigationId) -> bool {
-        self.navigation_id == *token
-    }
-
-    fn cancellation_handle(&self) -> moli_fetch::FetchCancelHandle {
-        self.cancellation_handles
-            .first()
-            .expect("a pending navigation request must own cancellation authority")
-            .clone()
-    }
-
-    fn arm_background_completion(
-        &mut self,
-        additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
-    ) {
-        if let Some(cancellation) = additional_cancellation {
-            self.cancellation_handles.push(cancellation);
-        }
-        self.background_completion_pending = true;
-    }
-
-    fn settle_background_completion(&mut self) {
-        self.background_completion_pending = false;
-        self.cancellation_handles.clear();
-    }
-
-    fn retire_without_cancellation(&mut self) {
-        self.cancellation_handles.clear();
-    }
-
-    fn cancel(&self) {
-        for cancellation in &self.cancellation_handles {
-            cancellation.cancel();
-        }
-    }
-}
-
-impl Drop for PendingNavigationRequest {
-    fn drop(&mut self) {
-        self.cancel();
     }
 }
 
@@ -281,8 +212,8 @@ pub(crate) struct TargetPageSlot {
     loaded_page_absence_reason: TargetPageAbsenceReason,
     #[cfg(test)]
     document_fixture: Option<DocumentFixture>,
-    pending_navigation_request: Option<PendingNavigationRequest>,
-    committed_document_navigation: Option<NavigationId>,
+    // Private in this residence until WebContents extraction (Commit 6).
+    pub(in crate::conn) navigation: NavigationController,
     // Frontend correlation only. Selection comes from the navigation state;
     // retain at most the pending and committed navigation's loader mappings.
     cdp_navigation_loaders: Vec<(NavigationId, String)>,
@@ -535,10 +466,9 @@ impl TargetPageSlot {
             .as_ref()
             .map(PendingRendererPageBinding::document_id)
             .or_else(|| {
-                self.pending_navigation_request
-                    .as_ref()
-                    .filter(|request| !request.committed)
-                    .map(|request| request.document_id)
+                self.navigation
+                    .pending_document()
+                    .map(|(_, document)| document)
             })
     }
 
@@ -556,14 +486,9 @@ impl TargetPageSlot {
             self.pending_renderer_page = None;
         }
 
-        if let Some(request) = self
-            .pending_navigation_request
-            .as_ref()
-            .filter(|request| !request.committed)
-        {
-            let document_id = request.document_id;
+        if let Some((navigation, document_id)) = self.navigation.pending_document() {
             self.pending_renderer_page = Some(PendingRendererPageBinding::DocumentNavigation {
-                navigation: request.navigation_id,
+                navigation,
                 renderer_page,
                 document_id,
             });
@@ -628,9 +553,8 @@ impl TargetPageSlot {
         self.finish_renderer_document_lifecycle_observers(
             RendererDocumentLifecycleObservation::Superseded,
         );
-        let token = NavigationId::allocate();
+        let token = self.navigation.start_document_navigation();
         self.pending_renderer_page = None;
-        self.pending_navigation_request = Some(PendingNavigationRequest::new(token));
         self.retain_navigation_projections();
         self.cdp_navigation_loaders.push((token, loader_id));
         token
@@ -640,10 +564,8 @@ impl TargetPageSlot {
         &self,
         token: &NavigationId,
     ) -> Option<moli_fetch::FetchCancelHandle> {
-        self.pending_navigation_request
-            .as_ref()
-            .filter(|request| request.matches(token) && !request.committed)
-            .map(PendingNavigationRequest::cancellation_handle)
+        self.navigation
+            .document_navigation_cancellation_handle(token)
     }
 
     pub(crate) fn arm_background_navigation_completion(
@@ -651,37 +573,17 @@ impl TargetPageSlot {
         token: &NavigationId,
         additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
     ) -> bool {
-        let Some(request) = self.pending_navigation_request.as_mut().filter(|request| {
-            request.matches(token) && !request.committed && !request.background_completion_pending
-        }) else {
-            if let Some(cancellation) = additional_cancellation {
-                cancellation.cancel();
-            }
-            return false;
-        };
-        request.arm_background_completion(additional_cancellation);
-        true
+        self.navigation
+            .arm_background_navigation_completion(token, additional_cancellation)
     }
 
     pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
-        let Some(request) = self
-            .pending_navigation_request
-            .as_mut()
-            .filter(|request| request.matches(token) && request.background_completion_pending)
-        else {
-            return false;
-        };
-        request.settle_background_completion();
-        if request.committed {
-            self.pending_navigation_request = None;
-        }
-        true
+        self.navigation
+            .settle_background_navigation_completion(token)
     }
 
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
-        self.pending_navigation_request
-            .as_ref()
-            .is_some_and(|request| request.background_completion_pending)
+        self.navigation.has_inflight_background_navigation()
     }
 
     pub(crate) fn bind_pending_document_navigation_renderer_page(
@@ -689,37 +591,29 @@ impl TargetPageSlot {
         token: &NavigationId,
         renderer_page: RendererPageResidenceIdentity,
     ) -> bool {
-        if !self
-            .pending_navigation_request
-            .as_ref()
-            .is_some_and(|request| request.matches(token) && !request.committed)
-        {
+        let Some((navigation, document_id)) = self
+            .navigation
+            .pending_document()
+            .filter(|(navigation, _)| navigation == token)
+        else {
             return false;
-        }
+        };
         if let Some(binding) = self.pending_renderer_page.as_ref() {
             return matches!(
                 binding,
                 PendingRendererPageBinding::DocumentNavigation {
-                    navigation,
+                    navigation: bound_navigation,
                     renderer_page: bound_renderer_page,
-                    document_id,
-                } if navigation == token
+                    document_id: bound_document_id,
+                } if *bound_navigation == navigation
                     && *bound_renderer_page == renderer_page
-                    && Some(*document_id)
-                        == self
-                            .pending_navigation_request
-                            .as_ref()
-                            .map(|request| request.document_id)
+                    && *bound_document_id == document_id
             );
         }
         self.pending_renderer_page = Some(PendingRendererPageBinding::DocumentNavigation {
-            navigation: *token,
+            navigation,
             renderer_page,
-            document_id: self
-                .pending_navigation_request
-                .as_ref()
-                .expect("validated pending navigation request must remain installed")
-                .document_id,
+            document_id,
         });
         true
     }
@@ -737,36 +631,25 @@ impl TargetPageSlot {
     }
 
     pub(crate) fn accepts_pending_document_navigation_event(&self, token: &NavigationId) -> bool {
-        self.pending_navigation_request
-            .as_ref()
-            .is_some_and(|request| request.matches(token) && !request.committed)
+        self.navigation
+            .accepts_pending_document_navigation_event(token)
     }
 
     pub(crate) fn accepts_document_body_completion_event(&self, token: &NavigationId) -> bool {
-        match self.pending_navigation_request.as_ref() {
-            Some(pending) => pending.matches(token),
-            None => self.committed_document_navigation.as_ref() == Some(token),
-        }
+        self.navigation
+            .accepts_document_body_completion_event(token)
     }
 
     pub(crate) fn has_pending_document_navigation(&self) -> bool {
-        self.pending_navigation_request
-            .as_ref()
-            .is_some_and(|request| !request.committed)
+        self.navigation.has_pending_document_navigation()
     }
 
     pub(crate) fn current_document_loader_id(&self) -> Option<&str> {
-        let navigation = self
-            .pending_navigation_request
-            .as_ref()
-            .filter(|request| !request.committed)
-            .map(|request| request.navigation_id)
-            .or(self.committed_document_navigation)?;
-        self.loader_id_for_navigation(navigation)
+        self.loader_id_for_navigation(self.navigation.current_document_navigation()?)
     }
 
     pub(crate) fn committed_document_loader_id(&self) -> Option<&str> {
-        self.loader_id_for_navigation(self.committed_document_navigation?)
+        self.loader_id_for_navigation(self.navigation.committed_document_navigation()?)
     }
 
     fn loader_id_for_navigation(&self, navigation: NavigationId) -> Option<&str> {
@@ -777,31 +660,19 @@ impl TargetPageSlot {
     }
 
     fn retain_navigation_projections(&mut self) {
-        let pending = self
-            .pending_navigation_request
-            .as_ref()
-            .map(|request| request.navigation_id);
-        let committed = self.committed_document_navigation;
         self.cdp_navigation_loaders
-            .retain(|(id, _)| Some(*id) == pending || Some(*id) == committed);
+            .retain(|(id, _)| self.navigation.retains_navigation(*id));
     }
 
     pub(crate) fn commit_pending_document_navigation_if_matches(
         &mut self,
         token: &NavigationId,
     ) -> bool {
-        let Some(request) = self
-            .pending_navigation_request
-            .as_mut()
-            .filter(|request| request.matches(token) && !request.committed)
-        else {
+        if !self
+            .navigation
+            .commit_pending_document_navigation_if_matches(token)
+        {
             return false;
-        };
-        self.committed_document_navigation = Some(*token);
-        request.committed = true;
-        if !request.background_completion_pending {
-            request.retire_without_cancellation();
-            self.pending_navigation_request = None;
         }
         self.retain_navigation_projections();
         true
@@ -811,7 +682,10 @@ impl TargetPageSlot {
         &mut self,
         navigation: &NavigationId,
     ) -> bool {
-        if self.accepts_pending_document_navigation_event(navigation) {
+        if self
+            .navigation
+            .clear_pending_document_navigation_if_matches(navigation)
+        {
             if matches!(
                 self.pending_renderer_page.as_ref(),
                 Some(PendingRendererPageBinding::DocumentNavigation {
@@ -821,7 +695,6 @@ impl TargetPageSlot {
             ) {
                 self.pending_renderer_page = None;
             }
-            self.pending_navigation_request = None;
             self.retain_navigation_projections();
             return true;
         }
@@ -832,8 +705,7 @@ impl TargetPageSlot {
         self.finish_renderer_document_lifecycle_observers(
             RendererDocumentLifecycleObservation::Unavailable,
         );
-        self.pending_navigation_request = None;
-        self.committed_document_navigation = None;
+        self.navigation.clear_document_navigation_state();
         self.cdp_navigation_loaders.clear();
         self.pending_renderer_page = None;
         self.renderer_document_lifecycle = RendererDocumentLifecycleProtocolState::default();
@@ -1038,7 +910,7 @@ impl TargetPageSlot {
             .is_some_and(|binding| {
                 Some(binding.document_id) == self.document_id()
                     && binding.navigation.as_ref().is_none_or(|navigation| {
-                        self.committed_document_navigation.as_ref() == Some(navigation)
+                        self.navigation.committed_document_navigation().as_ref() == Some(navigation)
                     })
             });
         if !binding_is_current {
@@ -1156,7 +1028,7 @@ impl TargetPageSlot {
             .filter(|binding| {
                 Some(binding.document_id) == self.document_id()
                     && binding.navigation.as_ref().is_none_or(|navigation| {
-                        self.committed_document_navigation.as_ref() == Some(navigation)
+                        self.navigation.committed_document_navigation().as_ref() == Some(navigation)
                     })
             })
     }

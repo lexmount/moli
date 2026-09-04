@@ -4,9 +4,8 @@ use super::super::state::{
     EffectiveTargetPolicy, TargetPageAbsenceReason, TargetSessionStorageNamespace,
 };
 use super::super::{
-    BrowserContext, DedicatedWorkerTargetState, PageTargetHost, ServiceWorkerTargetState,
-    SharedWorkerTargetState, TargetIdentityState, TargetInitialEmptyDocumentCreator,
-    TargetOwnerState,
+    BrowserContext, DedicatedWorkerTargetState, InitialDocumentCreator, PageTargetHost,
+    ServiceWorkerTargetState, SharedWorkerTargetState, TargetIdentityState,
 };
 use crate::devtools_runtime::{
     DevToolsBrowserContextId, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
@@ -28,7 +27,7 @@ impl BrowserContext {
         session_id: Option<String>,
         url: String,
         initial_empty_document_url: Option<String>,
-        creator: Option<TargetInitialEmptyDocumentCreator>,
+        creator: Option<InitialDocumentCreator>,
     ) {
         let session_storage_namespace =
             self.deep_cloned_session_storage_namespace_for_creator(creator.as_ref());
@@ -49,7 +48,7 @@ impl BrowserContext {
         session_id: Option<String>,
         url: String,
         initial_empty_document_url: Option<String>,
-        creator: Option<TargetInitialEmptyDocumentCreator>,
+        creator: Option<InitialDocumentCreator>,
         session_storage_store: Option<SharedWebStorageStore>,
         initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
     ) {
@@ -69,10 +68,12 @@ impl BrowserContext {
 
     fn deep_cloned_session_storage_namespace_for_creator(
         &self,
-        creator: Option<&TargetInitialEmptyDocumentCreator>,
+        creator: Option<&InitialDocumentCreator>,
     ) -> Option<TargetSessionStorageNamespace> {
         creator.and_then(|creator| {
-            self.page_target(creator.target_id())
+            self.page_targets
+                .iter()
+                .find(|target| target.web_contents_id() == creator.web_contents_id())
                 .map(PageTargetHost::deep_clone_session_storage_namespace)
         })
     }
@@ -83,19 +84,21 @@ impl BrowserContext {
         session_id: Option<String>,
         url: String,
         initial_empty_document_url: Option<String>,
-        creator: Option<TargetInitialEmptyDocumentCreator>,
+        creator: Option<InitialDocumentCreator>,
         initial_empty_document_storage_key: Option<moli_storage_key::MoliStorageKey>,
         session_storage_namespace: Option<TargetSessionStorageNamespace>,
     ) {
         let target_identity = background_target_identity_for_initial_url(&url, creator.as_ref());
         let mut target = PageTargetHost::with_identity(target_id, session_id, target_identity);
-        let target_id = target.target_id().to_owned();
-        target.owner_state.begin_initial_empty_document(
-            target_id,
-            initial_empty_document_url.unwrap_or_else(|| url.clone()),
-            creator,
-            initial_empty_document_storage_key,
-        );
+        target
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
+            .begin_initial_empty_document(
+                initial_empty_document_url.unwrap_or_else(|| url.clone()),
+                creator,
+                initial_empty_document_storage_key,
+            );
         if let Some(namespace) = session_storage_namespace {
             target.replace_session_storage_namespace(namespace);
         }
@@ -115,12 +118,10 @@ impl BrowserContext {
             session_id,
             TargetIdentityState::with_url(url.clone()),
         );
-        host.owner_state.begin_initial_empty_document(
-            target_id.clone(),
-            initial_empty_document_url.unwrap_or(url),
-            None,
-            None,
-        );
+        host.runtime_slot
+            .page_slot_mut()
+            .navigation
+            .begin_initial_empty_document(initial_empty_document_url.unwrap_or(url), None, None);
         let inserted = self.insert_page_target_host(host);
         debug_assert!(inserted, "new active page target id must be unique");
         let selected = self.page_targets.select(&target_id);
@@ -569,10 +570,10 @@ impl BrowserContext {
     pub(crate) fn initial_empty_document_creator_for_target(
         &self,
         target_id: &str,
-    ) -> Option<TargetInitialEmptyDocumentCreator> {
+    ) -> Option<InitialDocumentCreator> {
         let target = self.page_target(target_id)?;
-        Some(TargetInitialEmptyDocumentCreator::new(
-            target.target_id().to_owned(),
+        Some(InitialDocumentCreator::new(
+            target.web_contents_id(),
             target.target_identity().security_origin().to_owned(),
             target.target_identity().secure_context_type().to_owned(),
         ))
@@ -689,51 +690,49 @@ impl BrowserContext {
         initial_url: String,
         storage_key: Option<moli_storage_key::MoliStorageKey>,
     ) {
-        let Some(target_id) = self.active_target_id_owned() else {
+        let Some(target) = self.page_targets.active_mut() else {
             return;
         };
-        self.active_page_target_mut()
+        target
             .runtime_slot
             .mark_loaded_page_absent(TargetPageAbsenceReason::InitialDocumentPageBuildPending);
-        self.active_page_target_mut()
-            .owner_state
-            .begin_initial_empty_document(target_id, initial_url, None, storage_key);
+        target
+            .runtime_slot
+            .page_slot_mut()
+            .navigation
+            .begin_initial_empty_document(initial_url, None, storage_key);
     }
 
     #[cfg(test)]
     pub(crate) fn mark_target_initial_empty_document_materialized(&mut self, target_id: &str) {
-        self.mutate_target_owner_state_by_target_id(target_id, |owner_state| {
-            owner_state.mark_initial_empty_document_materialized();
-        });
+        if let Some(target) = self.page_target_mut(target_id) {
+            target
+                .runtime_slot
+                .page_slot_mut()
+                .navigation
+                .mark_initial_empty_document_materialized();
+        }
     }
 
     pub(crate) fn mark_target_initial_url_replaces_empty_document(&mut self, target_id: &str) {
-        self.mutate_target_owner_state_by_target_id(target_id, |owner_state| {
-            owner_state.mark_next_navigation_history_replace_initial_empty_document();
-        });
+        if let Some(target) = self.page_target_mut(target_id) {
+            target
+                .runtime_slot
+                .page_slot_mut()
+                .navigation
+                .mark_next_navigation_history_replace_initial_empty_document();
+        }
     }
 
-    pub(crate) fn mark_target_initial_empty_document_pending_cross_document_navigation(
-        &mut self,
-        target_id: &str,
-    ) {
-        self.mutate_target_owner_state_by_target_id(target_id, |owner_state| {
-            owner_state.mark_initial_empty_document_pending_cross_document_navigation();
-        });
-    }
-
+    #[cfg(test)]
     pub(crate) fn mark_target_initial_empty_document_exited(&mut self, target_id: &str) {
-        self.mutate_target_owner_state_by_target_id(target_id, |owner_state| {
-            owner_state.mark_initial_empty_document_exited();
-        });
-    }
-
-    fn mutate_target_owner_state_by_target_id<T>(
-        &mut self,
-        target_id: &str,
-        mutate: impl FnOnce(&mut TargetOwnerState) -> T,
-    ) -> Option<T> {
-        Some(mutate(&mut self.page_target_mut(target_id)?.owner_state))
+        if let Some(target) = self.page_target_mut(target_id) {
+            target
+                .runtime_slot
+                .page_slot_mut()
+                .navigation
+                .mark_initial_empty_document_exited();
+        }
     }
 
     #[cfg(test)]
@@ -1208,7 +1207,7 @@ impl BrowserContext {
 
 fn background_target_identity_for_initial_url(
     url: &str,
-    creator: Option<&TargetInitialEmptyDocumentCreator>,
+    creator: Option<&InitialDocumentCreator>,
 ) -> TargetIdentityState {
     let Some(creator) = creator else {
         return TargetIdentityState::with_url(url.to_owned());
@@ -1335,6 +1334,82 @@ mod tests {
                 .lock()
                 .get_item("https://same.test", "session"),
             Some("opener".to_owned())
+        );
+    }
+
+    #[test]
+    fn initial_document_creator_survives_target_rekey_without_following_reused_ids() {
+        let mut context = BrowserContext::new("BC-creator-rekey".into());
+        context.set_active_target_id("TID-opener");
+        let opener_storage = context.page_storage_handles().session_storage_store;
+        assert!(
+            opener_storage
+                .lock()
+                .set_item("https://same.test", "session", "opener")
+        );
+        let creator = context
+            .initial_empty_document_creator_for_target("TID-opener")
+            .unwrap();
+
+        assert!(context.rekey_active_target("TID-renamed-opener"));
+        context.stage_background_target(
+            "TID-opener".into(),
+            None,
+            "about:blank".into(),
+            None,
+            None,
+        );
+        let replacement_storage = context
+            .page_storage_handles_for_target("TID-opener")
+            .unwrap()
+            .session_storage_store;
+        assert!(
+            replacement_storage
+                .lock()
+                .set_item("https://same.test", "session", "replacement")
+        );
+
+        context.stage_background_target(
+            "TID-popup".into(),
+            None,
+            "about:blank".into(),
+            None,
+            Some(creator.clone()),
+        );
+        let popup_storage = context
+            .page_storage_handles_for_target("TID-popup")
+            .unwrap()
+            .session_storage_store;
+        assert_eq!(
+            popup_storage
+                .lock()
+                .get_item("https://same.test", "session"),
+            Some("opener".into())
+        );
+        assert!(!Arc::ptr_eq(&opener_storage, &popup_storage));
+
+        drop(
+            context
+                .take_page_target_for_close("TID-renamed-opener")
+                .unwrap(),
+        );
+        context.stage_background_target(
+            "TID-orphan-popup".into(),
+            None,
+            "about:blank".into(),
+            None,
+            Some(creator),
+        );
+        let orphan_storage = context
+            .page_storage_handles_for_target("TID-orphan-popup")
+            .unwrap()
+            .session_storage_store;
+        assert_eq!(
+            orphan_storage
+                .lock()
+                .get_item("https://same.test", "session"),
+            None,
+            "an expired creator must not resolve to the new WebContents using its old public TargetId"
         );
     }
 

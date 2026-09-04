@@ -10,7 +10,7 @@ mod fetch;
 mod identity;
 mod inspector;
 mod javascript_dialog;
-mod navigation;
+mod navigation_controller;
 mod navigation_outcome;
 mod page_resource;
 mod page_slot;
@@ -113,7 +113,8 @@ pub(crate) use browser_context::{
     BrowserContextStoragePartitionHandles, SiteDataClearOptions,
 };
 
-pub use navigation::{PageNavigationHistoryEntry, PendingNavigationHistoryUpdate};
+pub(crate) use navigation_controller::{InitialDocument, InitialDocumentCreator};
+pub use navigation_controller::{PageNavigationHistoryEntry, PendingNavigationHistoryUpdate};
 
 pub(crate) use emulation::{
     EffectiveTargetEmulationState, EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions,
@@ -125,8 +126,7 @@ pub use emulation::{
 };
 pub use page_target_host::PageTargetHost;
 pub(crate) use target_state::{
-    PendingBidiChannelListener, PendingInspectorAwait, TargetInitialEmptyDocumentCreator,
-    TargetOwnerState, TargetWindowSurfaceState,
+    PendingBidiChannelListener, PendingInspectorAwait, TargetOwnerState, TargetWindowSurfaceState,
 };
 
 pub(crate) use navigation_outcome::{CompletedDownloadBody, CompletedDownloadBodyArtifact};

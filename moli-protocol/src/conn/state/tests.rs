@@ -12,7 +12,9 @@ use super::fetch::{
     FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter, TargetFetchOwner,
     TargetFetchState,
 };
-use super::navigation::{PageNavigationHistoryEntry, TargetNavigationHistoryState};
+use super::navigation_controller::{
+    NavigationController, NavigationHistoryState, PageNavigationHistoryEntry,
+};
 use super::navigation_outcome::{NavigationDispatchState, NavigationResultProjection};
 use super::page_slot::DocumentStartScript;
 use super::runtime_slot::TargetRuntimeSlot;
@@ -1041,7 +1043,7 @@ fn background_target_owns_fetch_state() {
 
 #[test]
 fn navigation_history_seed_entry_preserves_pending_update() {
-    let mut history = TargetNavigationHistoryState::default();
+    let mut history = NavigationHistoryState::default();
     history.mark_replace_current();
 
     let seed_id = history.allocate_entry_id();
@@ -1074,14 +1076,9 @@ fn navigation_history_seed_entry_preserves_pending_update() {
 
 #[test]
 fn initial_empty_document_seeds_browser_navigation_history_metadata() {
-    let mut owner = TargetOwnerState::default();
+    let mut owner = NavigationController::default();
 
-    owner.begin_initial_empty_document(
-        "TID-initial".to_owned(),
-        "about:blank".to_owned(),
-        None,
-        None,
-    );
+    owner.begin_initial_empty_document("about:blank".to_owned(), None, None);
 
     let (current_index, entries) = owner.navigation_history_snapshot(None);
     assert_eq!(current_index, 0);
@@ -1093,14 +1090,9 @@ fn initial_empty_document_seeds_browser_navigation_history_metadata() {
 
 #[test]
 fn direct_target_initial_url_replaces_empty_document_history_entry() {
-    let mut owner = TargetOwnerState::default();
+    let mut owner = NavigationController::default();
 
-    owner.begin_initial_empty_document(
-        "TID-direct".to_owned(),
-        "about:blank".to_owned(),
-        None,
-        None,
-    );
+    owner.begin_initial_empty_document("about:blank".to_owned(), None, None);
     owner.mark_next_navigation_history_replace_initial_empty_document();
     owner.record_loaded_page_navigation_history((
         "https://example.test/direct".to_owned(),
@@ -1118,7 +1110,7 @@ fn direct_target_initial_url_replaces_empty_document_history_entry() {
 
 #[test]
 fn navigation_history_prune_rejects_only_pending_existing_entry_traversal() {
-    let mut history = TargetNavigationHistoryState::default();
+    let mut history = NavigationHistoryState::default();
     let initial_id = history.allocate_entry_id();
     history.seed_entry(PageNavigationHistoryEntry {
         id: initial_id,
@@ -1156,7 +1148,7 @@ fn navigation_history_prune_rejects_only_pending_existing_entry_traversal() {
 
 #[test]
 fn navigation_history_traversal_reuses_same_document_entries() {
-    let mut history = TargetNavigationHistoryState::default();
+    let mut history = NavigationHistoryState::default();
     let initial_id = history.allocate_entry_id();
     history.seed_entry(PageNavigationHistoryEntry {
         id: initial_id,
@@ -1583,20 +1575,28 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
 
     let initial = context
         .active_page_target()
-        .owner_state
         .initial_empty_document_state()
         .expect("active target should record initial empty document");
-    assert_eq!(initial.target_id(), "TID-initial-active");
+    assert_eq!(
+        context.moli_memory_diagnostics()["activeOwnerState"]["initialEmptyDocument"]["targetId"],
+        "TID-initial-active"
+    );
     assert_eq!(initial.initial_url(), "about:blank#active");
     assert!(initial.is_on_initial_empty_document());
     assert!(!initial.materialized());
-    assert!(!initial.pending_cross_document_navigation());
+    assert!(
+        !context
+            .active_page_target()
+            .runtime_slot
+            .page_slot()
+            .navigation
+            .initial_empty_document_pending_cross_document_navigation()
+    );
 
     context.mark_target_initial_empty_document_materialized("TID-initial-active");
     assert!(
         context
             .active_page_target()
-            .owner_state
             .initial_empty_document_state()
             .expect("initial empty document state")
             .materialized()
@@ -1607,11 +1607,17 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
         .expect("active target should start document navigation");
     let pending = context
         .active_page_target()
-        .owner_state
         .initial_empty_document_state()
         .expect("initial empty document state");
     assert!(pending.is_on_initial_empty_document());
-    assert!(pending.pending_cross_document_navigation());
+    assert!(
+        context
+            .active_page_target()
+            .runtime_slot
+            .page_slot()
+            .navigation
+            .initial_empty_document_pending_cross_document_navigation()
+    );
 
     context.clear_pending_document_navigation_for_target_if_matches(
         Some("TID-initial-active"),
@@ -1619,11 +1625,17 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
     );
     let cleared = context
         .active_page_target()
-        .owner_state
         .initial_empty_document_state()
         .expect("initial empty document state");
     assert!(cleared.is_on_initial_empty_document());
-    assert!(!cleared.pending_cross_document_navigation());
+    assert!(
+        !context
+            .active_page_target()
+            .runtime_slot
+            .page_slot()
+            .navigation
+            .initial_empty_document_pending_cross_document_navigation()
+    );
 
     let committed = context
         .start_document_navigation_for_active_target("LOADER-initial-active-2".to_owned())
@@ -1631,16 +1643,61 @@ fn active_target_initial_empty_document_record_tracks_navigation_lifecycle() {
     context.commit_document_navigation_if_matches(&committed);
     let exited = context
         .active_page_target()
-        .owner_state
         .initial_empty_document_state()
         .expect("initial empty document state");
     assert!(exited.exited());
-    assert!(!exited.pending_cross_document_navigation());
+    assert!(
+        !context
+            .active_page_target()
+            .runtime_slot
+            .page_slot()
+            .navigation
+            .initial_empty_document_pending_cross_document_navigation()
+    );
     assert!(!exited.is_on_initial_empty_document());
     assert!(
         !context.accepts_pending_document_navigation_event(&token),
         "cleared navigation must stay rejected"
     );
+}
+
+#[test]
+fn initial_document_admission_tracks_navigation_owner_without_a_pending_mirror() {
+    let mut context = BrowserContext::new("CTX-initial-navigation-owner".into());
+    context.set_active_target_id("TID-initial-navigation-owner");
+    context.begin_active_target_initial_empty_document("about:blank".into());
+    assert!(
+        context.can_install_current_initial_empty_document_page("TID-initial-navigation-owner")
+    );
+
+    let navigation = context
+        .active_page_target_mut()
+        .runtime_slot
+        .start_document_navigation("LOADER-reused".into());
+    assert!(
+        !context.can_install_current_initial_empty_document_page("TID-initial-navigation-owner"),
+        "the navigation owner alone must close initial Document admission"
+    );
+    let cancellation = context
+        .active_page_target()
+        .runtime_slot
+        .document_navigation_cancellation_handle(&navigation)
+        .unwrap();
+    context.clear_document_navigation_state_for_active_target();
+    assert!(cancellation.is_cancelled());
+    assert!(
+        context.can_install_current_initial_empty_document_page("TID-initial-navigation-owner")
+    );
+
+    let navigation = context
+        .start_document_navigation_for_active_target("LOADER-reused".into())
+        .unwrap();
+    context.clear_document_navigation_state_for_active_target();
+    assert!(
+        context.can_install_current_initial_empty_document_page("TID-initial-navigation-owner"),
+        "clearing the exact navigation state must not leave an initial Document pending flag"
+    );
+    assert!(!context.accepts_pending_document_navigation_event(&navigation));
 }
 
 #[test]
@@ -1699,10 +1756,15 @@ fn background_target_initial_empty_document_record_tracks_navigation_lifecycle()
     let initial = context
         .background_target("TID-initial-bg")
         .expect("background target must exist")
-        .owner_state
         .initial_empty_document_state()
         .expect("background target should record initial empty document");
-    assert_eq!(initial.target_id(), "TID-initial-bg");
+    assert_eq!(
+        context
+            .background_target("TID-initial-bg")
+            .unwrap()
+            .target_id(),
+        "TID-initial-bg"
+    );
     assert_eq!(initial.initial_url(), "about:blank#background");
     assert!(initial.is_on_initial_empty_document());
     assert!(!initial.materialized());
@@ -1712,7 +1774,6 @@ fn background_target_initial_empty_document_record_tracks_navigation_lifecycle()
         context
             .background_target("TID-initial-bg")
             .expect("background target must exist")
-            .owner_state
             .initial_empty_document_state()
             .expect("initial empty document state")
             .materialized()
@@ -1725,21 +1786,28 @@ fn background_target_initial_empty_document_record_tracks_navigation_lifecycle()
         context
             .background_target("TID-initial-bg")
             .expect("background target must exist")
-            .owner_state
-            .initial_empty_document_state()
-            .expect("initial empty document state")
-            .pending_cross_document_navigation()
+            .runtime_slot
+            .page_slot()
+            .navigation
+            .initial_empty_document_pending_cross_document_navigation()
     );
 
     context.commit_document_navigation_if_matches(&token);
     let exited = context
         .background_target("TID-initial-bg")
         .expect("background target must exist")
-        .owner_state
         .initial_empty_document_state()
         .expect("initial empty document state");
     assert!(exited.exited());
-    assert!(!exited.pending_cross_document_navigation());
+    assert!(
+        !context
+            .background_target("TID-initial-bg")
+            .unwrap()
+            .runtime_slot
+            .page_slot()
+            .navigation
+            .initial_empty_document_pending_cross_document_navigation()
+    );
     assert!(!exited.is_on_initial_empty_document());
 }
 

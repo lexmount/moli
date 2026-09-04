@@ -560,15 +560,16 @@ pub(crate) use state::{
     DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DocumentId,
     DuplicatePendingRendererCommand, EffectiveTargetEmulationState,
     EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions, EmulatedViewportSurface,
-    InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationId, NavigationResultProjection,
-    NavigationSourceDocumentSecurityContext, NetworkErrorPageNavigation, PageScreencastConfig,
-    PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait,
-    PendingRendererCommandKey, PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction,
-    ProfilerInspectorCommand, RendererCommandCorrelation, RendererCommandDescriptor,
-    RendererCommandReplay, RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
+    InitialDocumentCreator, InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationId,
+    NavigationResultProjection, NavigationSourceDocumentSecurityContext,
+    NetworkErrorPageNavigation, PageScreencastConfig, PageScreencastFormat,
+    PendingBidiChannelListener, PendingInspectorAwait, PendingRendererCommandKey,
+    PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,
+    RendererCommandCorrelation, RendererCommandDescriptor, RendererCommandReplay,
+    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
     RendererMainDocumentCommitSeed, RendererPageResidenceIdentity,
     ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
-    SiteDataClearOptions, TargetIdentityState, TargetInitialEmptyDocumentCreator, TargetOwnerState,
+    SiteDataClearOptions, TargetIdentityState, TargetOwnerState,
     TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity, TargetPageSessionState,
     TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
     TargetRootDocumentProtocolAttachmentIdentity, TargetRuntimeSlot,
@@ -1979,7 +1980,7 @@ impl CdpConnection {
         Option<CommittedRendererDocumentBinding>,
         Vec<moli_core::page::RendererDocumentLifecycleEvent>,
     ) {
-        let (binding, events, document_scope_changed, document_input_stream_opened) = {
+        let (binding, events, document_scope_changed) = {
             let Ok(slot) = self.runtime_session_owner_slot_mut_for_owner(owner) else {
                 return (None, Vec::new());
             };
@@ -2000,25 +2001,21 @@ impl CdpConnection {
             let document_input_stream_opened = binding.as_ref().is_some_and(|binding| {
                 binding.document_open_replacement_epoch == Some(binding.renderer_epoch)
             });
+            if document_input_stream_opened {
+                // An admitted renderer lifecycle transition exits the initial
+                // Document immediately, without waiting for a later snapshot.
+                slot.page_slot_mut()
+                    .navigation
+                    .mark_initial_empty_document_exited();
+            }
             (
                 binding,
                 events,
                 current_document_scope != previous_document_scope,
-                document_input_stream_opened,
             )
         };
         if document_scope_changed {
             self.retire_javascript_dialogs_for_owner(owner);
-        }
-        if document_input_stream_opened {
-            // The concrete lifecycle record is the authoritative notification
-            // that `document.open()` replaced the initial empty Document. Do
-            // not defer this state transition to a later diagnostics snapshot:
-            // that would make a later owner turn rediscover and settle output
-            // produced by this renderer turn.
-            self.with_target_owner_state_for_owner_mut(owner, |owner_state| {
-                owner_state.mark_initial_empty_document_exited()
-            });
         }
         (binding, events)
     }
