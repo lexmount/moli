@@ -5386,6 +5386,7 @@ html/browsers/the-window-object/named-access-on-the-window-object/nested-context
 html/browsers/the-window-object/named-access-on-the-window-object/prototype.html
 html/browsers/the-window-object/named-access-on-the-window-object/removing.html
 html/browsers/the-window-object/named-access-on-the-window-object/strict-mode-redefine-readonly-property.html
+html/browsers/the-window-object/named-access-on-the-window-object/window-named-properties.html
 html/browsers/the-window-object/named-access-on-the-window-object/window-null-names.html
 html/browsers/the-window-object/navigate-to-about-blank-while-initial-load-pending.html
 html/browsers/the-window-object/open-close/closed-after-close.html
@@ -5409,6 +5410,7 @@ html/browsers/windows/browsing-context-names/choose-_parent-001.html
 html/browsers/windows/browsing-context-names/choose-_parent-002.html
 html/browsers/windows/browsing-context-names/choose-_parent-003.html
 html/browsers/windows/browsing-context-names/choose-_parent-004.html
+html/browsers/windows/browsing-context-names/choose-_self-001.html
 html/browsers/windows/browsing-context-names/choose-_self-002.html
 html/browsers/windows/browsing-context-names/choose-default-001.html
 html/browsers/windows/browsing-context-names/choose-default-002.html
