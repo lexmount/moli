@@ -83,15 +83,29 @@ pub(in crate::context_bootstrap) fn append_console_message<'s>(
 }
 
 pub(crate) fn current_console_stack(scope: &mut v8::PinScope<'_, '_>) -> Option<String> {
-    let message = v8_string(scope, "Console").unwrap_or_else(|| v8::String::empty(scope));
-    let error = v8::Exception::error(scope, message);
-    let object = v8::Local::<v8::Object>::try_from(error).ok()?;
-    let stack_key = v8_string(scope, "stack")?;
-    let stack = object.get(scope, stack_key.into())?;
-    stack
-        .to_string(scope)
-        .map(|value| value.to_rust_string_lossy(scope))
-        .filter(|stack| !stack.is_empty())
+    let stack = v8::StackTrace::current_stack_trace(scope, 32)?;
+    let mut frames = Vec::with_capacity(stack.get_frame_count());
+    for index in 0..stack.get_frame_count() {
+        let Some(frame) = stack.get_frame(scope, index) else {
+            continue;
+        };
+        let function_name = frame
+            .get_function_name(scope)
+            .map(|name| name.to_rust_string_lossy(scope))
+            .unwrap_or_default();
+        let url = frame
+            .get_script_name_or_source_url(scope)
+            .map(|name| name.to_rust_string_lossy(scope))
+            .filter(|url| !url.is_empty())
+            .unwrap_or_else(|| "<anonymous>".to_owned());
+        let location = format!("{url}:{}:{}", frame.get_line_number(), frame.get_column());
+        if function_name.is_empty() {
+            frames.push(format!("at {location}"));
+        } else {
+            frames.push(format!("at {function_name} ({location})"));
+        }
+    }
+    (!frames.is_empty()).then(|| frames.join("\n"))
 }
 
 pub(crate) fn console_arg_remote_object_json(

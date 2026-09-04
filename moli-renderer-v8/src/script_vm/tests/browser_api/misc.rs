@@ -7292,6 +7292,37 @@ fn console_debug_is_present_and_does_not_double_read_error_stack() {
         r#"{"beforeAccess":"","afterAccess":"","afterSpoof":"__moliWindowConsole","publicSpoof":true,"sameConsole":true,"debugType":"function","reads":1}"#
     );
 }
+
+#[test]
+fn console_does_not_invoke_error_prepare_stack_trace() {
+    let mut vm = new_storage_test_vm("https://example.com/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              let accessed = false;
+              const originalPrepareStackTrace = Error.prepareStackTrace;
+              try {
+                Error.prepareStackTrace = () => {
+                  accessed = true;
+                  return "detected";
+                };
+                console.log(new Error(""));
+                const afterConsole = accessed;
+                void new Error("explicit stack access").stack;
+                return `${afterConsole}|${accessed}`;
+              } finally {
+                Error.prepareStackTrace = originalPrepareStackTrace;
+              }
+            })()
+            "#,
+        )
+        .expect("console Error.prepareStackTrace probe should evaluate");
+
+    assert_eq!(result, "false|true");
+}
+
 #[test]
 fn zhihu_probe_navigator_profile_is_chromium_like() {
     let mut vm = new_storage_test_vm("https://example.com/");
