@@ -1915,6 +1915,97 @@ fn display_none_root_uses_an_unmapped_internal_carrier() {
 }
 
 #[test]
+fn frozen_used_size_keeps_its_sizing_basis_after_style_inputs_are_discarded() {
+    for box_sizing in [BoxSizing::ContentBox, BoxSizing::BorderBox] {
+        let source = Source(vec![
+            Node::element("root", vec![1]),
+            Node::element("sized", Vec::new()),
+        ]);
+        let mut styles = Styles::default();
+        styles
+            .0
+            .insert(0, fixed_size(LayoutDisplay::Block, 320.0, 240.0));
+        styles.0.insert(
+            1,
+            resolved(
+                LayoutDisplay::Block,
+                Style {
+                    box_sizing,
+                    size: Size {
+                        width: length(100.25),
+                        height: length(50.5),
+                    },
+                    padding: Rect {
+                        left: length(10.0),
+                        right: length(10.0),
+                        top: length(10.0),
+                        bottom: length(10.0),
+                    },
+                    border: Rect {
+                        left: length(5.0),
+                        right: length(5.0),
+                        top: length(5.0),
+                        bottom: length(5.0),
+                    },
+                    ..Style::default()
+                },
+            ),
+        );
+        let output = build(&source, &mut styles);
+        drop(styles);
+        drop(source);
+        assert_eq!(
+            output.used_size_for_source(1),
+            Some(moli_layout::LayoutSize::new(100.25, 50.5))
+        );
+        let model = output.box_model_for_source(1).expect("sized box");
+        let expected_border_width = if box_sizing == BoxSizing::ContentBox {
+            130.25
+        } else {
+            100.25
+        };
+        assert_close(model.border.bounding_rect().width, expected_border_width);
+        assert!(output.paint_snapshot().is_none());
+    }
+}
+
+#[test]
+fn frozen_used_size_excludes_non_replaced_inlines_and_suppressed_boxes() {
+    let source = Source(vec![
+        Node::element("root", vec![1, 2, 3]),
+        Node::element("inline", Vec::new()),
+        Node::element("none", Vec::new()),
+        Node::element("contents", vec![4]),
+        Node::element("child", Vec::new()),
+    ]);
+    let mut styles = Styles::default();
+    for (index, display) in [
+        LayoutDisplay::Block,
+        LayoutDisplay::Inline,
+        LayoutDisplay::None,
+        LayoutDisplay::Contents,
+        LayoutDisplay::Block,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        styles.0.insert(index, fixed_size(display, 60.0, 25.0));
+    }
+    let output = build(&source, &mut styles);
+    for source in [1, 2, 3, usize::MAX] {
+        assert_eq!(
+            output.used_size_for_source(source),
+            None,
+            "source {source} must not have a CSS sizing box"
+        );
+    }
+    assert_eq!(
+        output.used_size_for_source(4),
+        Some(moli_layout::LayoutSize::new(60.0, 25.0))
+    );
+}
+
+#[test]
 fn pass_result_owns_complete_box_models_and_answers_a_batch_from_one_pass() {
     let source = Source(vec![Node::element("root", Vec::new())]);
     let mut styles = Styles::default();

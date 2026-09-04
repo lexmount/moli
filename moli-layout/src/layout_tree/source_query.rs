@@ -11,7 +11,7 @@ use super::{
         LayoutSize, LayoutTransform2D,
     },
     query::{LayoutElementMetrics, LayoutNodeOutput},
-    tree::FrozenLayoutTree,
+    tree::{CssSizingBox, FrozenLayoutTree},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -59,6 +59,24 @@ where
 
     pub fn element_metrics_for_source(&self, source: N) -> Option<LayoutElementMetrics<N>> {
         self.element_metrics_for_source_with_offset_parent_filter(source, |_| true)
+    }
+
+    /// CSSOM width/height from this snapshot's sizing box, without transforms,
+    /// integer rounding, or absolute CSS zoom. A source without an applicable
+    /// principal box has no used size; consumers keep its computed value.
+    pub fn used_size_for_source(&self, source: N) -> Option<LayoutSize> {
+        let layout_box = self
+            .boxes
+            .iter()
+            .find(|layout_box| layout_box.principal_source == Some(source))?;
+        let rect = match layout_box.css_sizing_box? {
+            CssSizingBox::Content => layout_box.content_box,
+            CssSizingBox::Border => layout_box.border_box,
+        };
+        Some(
+            CssomAbsoluteZoom::new(layout_box.effective_zoom)
+                .size(LayoutSize::new(rect.width, rect.height)),
+        )
     }
 
     /// Returns the exact unprojected content box produced for a source's
@@ -472,7 +490,7 @@ where
 }
 
 /// Converts effective-zoomed layout scalars to the coordinate space exposed
-/// by CSSOM integer box and scroll metrics. Viewport quads intentionally stay
+/// by CSSOM box sizes and scroll metrics. Viewport quads intentionally stay
 /// zoomed: their normalized bases map points back into these unzoomed sizes.
 #[derive(Clone, Copy)]
 struct CssomAbsoluteZoom(f32);
@@ -783,6 +801,7 @@ mod tests {
                 geometry_source: Some(1),
                 principal_source: Some(1),
                 hit_source: Some(1),
+                css_sizing_box: None,
                 resolved_grid_tracks: None,
                 control_paint_order: None,
             }],

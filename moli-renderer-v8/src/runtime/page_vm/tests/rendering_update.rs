@@ -3145,6 +3145,15 @@ document.body.innerHTML = `
             "16px|16px",
             "SVG presentation attributes must resolve 1em through the element's computed font size like Chromium",
         );
+        // Before layout exists, CSSOM exposes the live style-only values.
+        // Keep cascade precedence separate from sampled used-size semantics.
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "const icon=document.getElementById('feishu-time');icon.setAttribute('width','2em');const fromAttribute=getComputedStyle(icon).width;icon.classList.add('css-width');const fromCss=getComputedStyle(icon).width;icon.classList.remove('css-width');const restored=getComputedStyle(icon).width;icon.setAttribute('width','1em');[fromAttribute,fromCss,restored].join('|')",
+            )?,
+            "32px|24px|32px",
+            "mutated presentation attributes must recascade and author CSS must override them",
+        );
 
         let first = page_vm
             .vm_mut()
@@ -3199,15 +3208,22 @@ document.body.innerHTML = `
         )?;
         assert_eq!(
             page_vm.vm_mut().eval(
-                "const icon=document.getElementById('feishu-time');const fromAttribute=getComputedStyle(icon).width;icon.classList.add('css-width');const fromCss=getComputedStyle(icon).width;icon.classList.remove('css-width');[fromAttribute,fromCss,getComputedStyle(icon).width].join('|')",
+                "getComputedStyle(document.getElementById('feishu-time')).width",
             )?,
-            "32px|24px|32px",
-            "mutated presentation attributes must recascade and author CSS must override them",
+            "16px",
+            "CSSOM must reuse the existing used size until an explicit layout refresh",
         );
         let second = page_vm
             .vm_mut()
             .screenshot_layout_snapshot(moli_layout::PaintViewport::new(220, 190, 1.0))?
             .expect("mutated inline SVG fixture must retain a layout root");
+        assert_eq!(
+            page_vm.vm_mut().eval(
+                "getComputedStyle(document.getElementById('feishu-time')).width",
+            )?,
+            "32px",
+            "fresh layout must sample the mutated style rather than the old CSSOM used size",
+        );
         assert_eq!(second.svg_images.len(), 3);
         assert!(second.fragments.iter().any(|fragment| {
             matches!(

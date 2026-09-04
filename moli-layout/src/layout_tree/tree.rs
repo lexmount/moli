@@ -10,6 +10,12 @@ use super::model::{
     LayoutSize, LayoutViewport,
 };
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum CssSizingBox {
+    Content,
+    Border,
+}
+
 /// One node in the immutable layout tree retained after a full pass.
 ///
 /// `geometry_source` associates ordinary CSSOM geometry with its source. A
@@ -25,6 +31,11 @@ pub struct FrozenLayoutBox<N> {
     pub geometry_source: Option<N>,
     pub principal_source: Option<N>,
     pub hit_source: Option<N>,
+    /// Sizing basis for CSSOM width/height, sampled with the geometry. `None`
+    /// means these properties have no used size (for example, a non-replaced
+    /// inline). Retaining this discriminator avoids consulting live display
+    /// or box-sizing when an ordinary read reuses an older layout snapshot.
+    pub(crate) css_sizing_box: Option<CssSizingBox>,
     pub resolved_grid_tracks: Option<super::model::LayoutResolvedGridTracks>,
     /// Paint ordinal of this box's scrollbar/corner surface, if any.
     pub(crate) control_paint_order: Option<u32>,

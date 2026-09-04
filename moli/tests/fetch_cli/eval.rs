@@ -66,6 +66,65 @@ fn run_eval_source(
 }
 
 #[test]
+fn eval_computed_sizes_only_use_existing_geometry_with_or_without_css() -> Result<()> {
+    let url = "data:text/html,<!doctype html><div id=target style=\"max-width:20px\"></div><canvas id=canvas style=\"max-width:40px\"></canvas>";
+    let script = r#"(() => {
+      const target = document.getElementById('target');
+      const canvas = document.getElementById('canvas');
+      const targetStyle = getComputedStyle(target), canvasStyle = getComputedStyle(canvas);
+      const read = () => [targetStyle.width, targetStyle.height, canvasStyle.width, canvasStyle.height];
+      const before = read();
+      const geometry = [target.offsetWidth, target.offsetHeight, canvas.offsetWidth, canvas.offsetHeight];
+      return { before, geometry, after: read() };
+    })()"#;
+    for args in [
+        vec![],
+        vec!["--disable-css"],
+        vec!["--layout"],
+        vec!["--layout", "--disable-css"],
+    ] {
+        let output = run_eval(url, script, &args)?;
+        assert!(
+            output.status.success(),
+            "{args:?}: {}",
+            clean_output(&output.stderr)
+        );
+        let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(
+            value["before"],
+            serde_json::json!(["auto", "auto", "auto", "auto"]),
+            "width/height must not initiate layout: {args:?}: {value}"
+        );
+        if args.contains(&"--layout") {
+            let expected = value["geometry"]
+                .as_array()
+                .expect("geometry array")
+                .iter()
+                .map(|value| format!("{}px", value.as_i64().expect("integer offset size")))
+                .collect::<Vec<_>>();
+            assert_eq!(
+                value["after"],
+                serde_json::json!(expected),
+                "{args:?}: {value}"
+            );
+            if args.contains(&"--disable-css") {
+                assert!(value["geometry"][0].as_i64().expect("block width") > 20);
+                assert_eq!(value["geometry"][2], 300);
+                assert_eq!(value["geometry"][3], 150);
+            } else {
+                assert_eq!(value["geometry"], serde_json::json!([20, 0, 40, 20]));
+            }
+        } else {
+            assert_eq!(
+                value["after"], value["before"],
+                "Mock geometry must not manufacture a real layout snapshot"
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn eval_uses_standard_document_apis_and_writes_text() -> Result<()> {
     let runtime = tokio::runtime::Runtime::new()?;
     let server = runtime.block_on(FixtureServer::spawn())?;

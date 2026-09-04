@@ -5125,6 +5125,16 @@ fn resolve_moli_computed_style_value(
     {
         return tracks;
     }
+    if matches!(property, "width" | "height")
+        && let Some(size) = used_size_from_layout_snapshot(runtime, handle)
+    {
+        let value = if property == "width" {
+            size.width
+        } else {
+            size.height
+        };
+        return format_non_negative_used_css_px(f64::from(value));
+    }
     if property == "width"
         && let Some(width) =
             resolve_computed_width_with_inline_fallback(runtime, handle, value, context, resolution)
@@ -5169,6 +5179,21 @@ fn resolve_moli_computed_style_value(
         return resolve_computed_auto_min_size(runtime, handle, resolution);
     }
     value.to_owned()
+}
+
+fn used_size_from_layout_snapshot(
+    runtime: &JsContextHost,
+    handle: DomHandle,
+) -> Option<moli_layout::LayoutSize> {
+    if !runtime.layout_policy().uses_real_layout() || !runtime.dom_host().is_connected(handle) {
+        return None;
+    }
+    let document = runtime.layout_document_for_source(handle)?;
+    // Reading a CSSOM size never creates or refreshes layout. Use the sizing
+    // basis frozen with the existing geometry, or keep the style-only path.
+    runtime
+        .with_latest_layout_tree_for_document(document, |tree| tree.used_size_for_source(handle))
+        .flatten()
 }
 
 fn resolved_grid_template_tracks(
