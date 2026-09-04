@@ -10,30 +10,30 @@
       const iframe = document.createElement('iframe');
       iframe.id = 'child';
       iframe.src = 'about:blank';
+      let child = null;
+      let loadCount = 0;
+      iframe.addEventListener('load', () => {
+        loadCount += 1;
+        if (loadCount === 1) {
+          iframe.src = '/compat/window-child-browsing-context-target-name-a';
+          return;
+        }
+        document.body.dataset.windowSame = String(child === iframe.contentWindow);
+        document.body.dataset.locationUpdated = String(
+          iframe.contentWindow?.location?.href ?? 'null'
+        );
+        document.body.dataset.documentUpdated = String(
+          iframe.contentWindow?.document?.body?.textContent?.trim() ?? 'null'
+        );
+        iframe.contentWindow?.postMessage('kept', '*');
+      });
       document.body.appendChild(iframe);
-
-      const child = iframe.contentWindow;
+      child = iframe.contentWindow;
       if (!child) {
         document.body.dataset.windowSame = 'no-child';
       } else {
-        let loadCount = 0;
         child.addEventListener('message', (event) => {
           document.body.dataset.listenerPreserved = String(event.data);
-        });
-        iframe.addEventListener('load', () => {
-          loadCount += 1;
-          if (loadCount === 1) {
-            iframe.src = '/compat/window-child-browsing-context-target-name-a';
-            return;
-          }
-          document.body.dataset.windowSame = String(child === iframe.contentWindow);
-          document.body.dataset.locationUpdated = String(
-            iframe.contentWindow?.location?.href ?? 'null'
-          );
-          document.body.dataset.documentUpdated = String(
-            iframe.contentWindow?.document?.body?.textContent?.trim() ?? 'null'
-          );
-          iframe.contentWindow?.postMessage('kept', '*');
         });
       }
     </script>
