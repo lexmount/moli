@@ -25,6 +25,19 @@ observed, but it does not replace the executable probe when one can be run. If
 Chromium cannot be tested, document that limitation explicitly instead of
 presenting an inferred expectation as verified behavior.
 
+The detailed `emulation-storage` locale/timezone matrix was calibrated on
+2026-09-01 against Debian Chromium 145.0.7632.116. In addition to resolved
+locale, timezone, local getters, and formatted strings, the executable probe
+now covers Intl and Date subclass `newTarget`, constructor reflection, options
+accessor count/receiver identity, winter/summer and DST-gap Date construction,
+local versus date-only/offset parsing, local setters with millisecond
+preservation, and explicit locale/timezone precedence. The invalid-zone probe
+is deliberately performed before installing a valid override: Chromium 145
+returns `InvalidParams` on initial admission, while its active override
+`change()` path silently retains the old zone for an invalid replacement.
+Moli additionally locks down the latter state-preservation case in a focused
+Rust protocol test.
+
 For example, Chromium resolves Playwright
 `page.goto(..., wait_until="load")` after `Page.loadEventFired` but before the
 later `Page.frameStoppedLoading` delivery. A smoke scenario that starts a new
@@ -367,7 +380,7 @@ Runner layout:
   transformed single and nested iframe hover, click, wheel, child-local event
   coordinates, exact used frame viewport propagation, and Moli's nested-frame
   UA scrollbar routing boundary.
-- `groups/emulation_storage.py`: viewport and Playwright screenshot-clip boundary, storage/cookie isolation, IndexedDB baseline, and browser-context profile overrides.
+- `groups/emulation_storage.py`: viewport and Playwright screenshot-clip boundary, detailed geolocation plus locale/timezone runtime overrides, storage/cookie isolation, IndexedDB baseline, and browser-context profile overrides.
 - `groups/target_semantics.py`: raw Target-domain identity, attachment,
   activation, visibility, and lifecycle contracts calibrated against Chromium.
 - `groups/browser_semantics.py`: page/runtime cross-engine contracts calibrated

@@ -796,6 +796,36 @@ impl PendingImageLoadEvent {
 pub(crate) type JsContextHostPageTaskCapabilities =
     crate::page_task_queue::RendererPageJsContextTaskSenders;
 
+#[derive(Debug, Default)]
+pub(crate) struct DateLocaleRuntimeState {
+    overrides: RefCell<DateLocaleOverrides>,
+}
+
+#[derive(Debug, Default)]
+struct DateLocaleOverrides {
+    locale: Option<String>,
+    timezone: Option<String>,
+}
+
+impl DateLocaleRuntimeState {
+    pub(crate) fn set_locale(&self, locale: Option<&str>) {
+        self.overrides.borrow_mut().locale = locale.map(str::to_owned);
+    }
+
+    pub(crate) fn set_timezone(&self, timezone: Option<&str>) {
+        self.overrides.borrow_mut().timezone = timezone.map(str::to_owned);
+    }
+
+    pub(crate) fn snapshot(&self) -> (Option<String>, Option<String>) {
+        let overrides = self.overrides.borrow();
+        (overrides.locale.clone(), overrides.timezone.clone())
+    }
+
+    pub(crate) fn timezone(&self) -> Option<String> {
+        self.overrides.borrow().timezone.clone()
+    }
+}
+
 pub(crate) struct JsContextHost {
     runtime: *mut DocumentRuntime,
     layout_policy: moli_page_types::LayoutPolicy,
@@ -866,8 +896,7 @@ pub(crate) struct JsContextHost {
     app_manifest_link_change_epoch: u64,
     extra_http_headers: Vec<(String, String)>,
     permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
-    locale_override: Option<String>,
-    timezone_override: Option<String>,
+    date_locale_runtime_state: Rc<DateLocaleRuntimeState>,
     idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
     protocol_user_gesture_activation_depth: usize,
     current_input_event: Option<crate::native_bridge::CurrentInputEvent>,

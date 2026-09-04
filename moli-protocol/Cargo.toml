@@ -25,6 +25,7 @@ moli-css-parse = { path = "../moli-css-parse" }
 moli-shared-worker = { path = "../moli-shared-worker" }
 moli-site = { path = "../moli-site" }
 moli-storage-key = { path = "../moli-storage-key" }
+moli-time = { path = "../moli-time" }
 moli-trace = { path = "../moli-trace" }
 moli-url = { path = "../moli-url" }
 moli-url-policy = { path = "../moli-url-policy" }
