@@ -304,7 +304,20 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         } else {
             super::navigation_window::window_navigation_for_holder(scope, owner)
         };
+        let child_handle = if runtime_window_is_global(scope, owner) {
+            None
+        } else {
+            child_browsing_context_handle_for_runtime_owner(scope, owner)
+        };
+        let replaces_initial_about_blank = child_handle.is_some_and(|handle| {
+            context_host_ptr_for_navigation_owner(scope, owner).is_some_and(|host_ptr| {
+                unsafe { &*host_ptr }.child_browsing_context_is_on_initial_about_blank_entry(handle)
+            })
+        });
         let effective_kind = match kind {
+            LocationNavigationKind::Assign if replaces_initial_about_blank => {
+                LocationNavigationKind::Replace
+            }
             LocationNavigationKind::Assign if source_element.is_some() && exact_same_href => {
                 LocationNavigationKind::Replace
             }
@@ -402,11 +415,6 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 effective_kind,
             );
         }
-        let child_handle = if runtime_window_is_global(scope, owner) {
-            None
-        } else {
-            child_browsing_context_handle_for_runtime_owner(scope, owner)
-        };
         if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
             let state = window_history_for_holder(scope, owner)
                 .map(|history| history_state_value(scope, history))
@@ -582,6 +590,17 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
 
     if let Some(handle) = child_handle {
         let is_javascript_url = resolved.scheme() == "javascript";
+        let host_ptr = context_host_ptr_for_navigation_owner(scope, owner);
+        let replaces_initial_empty_document = !is_javascript_url
+            && matches!(kind, LocationNavigationKind::Assign)
+            && host_ptr.is_some_and(|host_ptr| {
+                unsafe { &*host_ptr }.child_browsing_context_is_on_initial_about_blank_entry(handle)
+            });
+        let kind = if replaces_initial_empty_document {
+            LocationNavigationKind::Replace
+        } else {
+            kind
+        };
         if (matches!(kind, LocationNavigationKind::Assign)
             || dispatch_child_navigate_event_for_all_kinds)
             && !is_javascript_url
@@ -607,7 +626,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
             sync_location_object(scope, location, resolved.as_str());
             apply_local_window_location_navigation(scope, owner, &resolved, kind);
         }
-        if let Some(host_ptr) = context_host_ptr_for_navigation_owner(scope, owner) {
+        if let Some(host_ptr) = host_ptr {
             let host = unsafe { &mut *host_ptr };
             if matches!(kind, LocationNavigationKind::Assign) && !is_javascript_url {
                 host.mark_child_browsing_context_top_level_history_increment(handle);

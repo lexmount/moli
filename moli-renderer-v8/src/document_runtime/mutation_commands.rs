@@ -884,7 +884,7 @@ impl DocumentRuntime {
         if is_srcdoc {
             runtime.clear_child_browsing_context_cached_snapshot_for_navigation(handle);
         }
-        runtime.refresh_child_browsing_context_and_initial_history_floor(scope, handle);
+        runtime.refresh_child_browsing_context_and_queue_ready_work(scope, handle);
         if is_srcdoc {
             runtime.sync_existing_child_browsing_context_window_state(scope, handle);
         } else if is_navigation_attribute

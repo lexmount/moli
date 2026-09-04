@@ -5,7 +5,6 @@ use super::{
     child_documents::CompletedFrameOwnerResourceTiming, window_security_tokens::WindowAccessOrigin,
 };
 use crate::{
-    context_bootstrap::set_top_level_history_length_at_least_for_runtime_owner,
     document_runtime::{DocumentPolicyContainer, DocumentSandboxPolicy, DomHandle},
     frame_owner_model::{
         ChildFrameOwnerSnapshot, FrameDocumentTaskOwner, FrameId, FrameRealmId, FrameScriptJob,
@@ -785,7 +784,8 @@ impl ChildBrowsingContextEntry {
     pub(super) fn navigation_seed_is_initial_about_blank_commit(&self) -> bool {
         self.navigation_entry_seed.current_index == 0
             && self.navigation_entry_seed.entries.len() == 1
-            && self.navigation_entry_seed.entries[0].url == "about:blank"
+            && Url::parse(&self.navigation_entry_seed.entries[0].url)
+                .is_ok_and(|url| moli_url::is_about_blank(&url))
     }
 
     pub(super) fn navigation_seed_is_initial_attribute_target(&self, url: &Url) -> bool {

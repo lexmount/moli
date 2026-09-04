@@ -38,10 +38,12 @@ pub(in crate::native_bridge) fn update_iframe_snapshot_navigation(
             handle,
             previous_seed_snapshot,
         );
+        let replace_current =
+            runtime.child_browsing_context_is_on_initial_about_blank_entry(handle);
         if runtime.queue_child_browsing_context_navigation_from_existing_seed(
             handle,
             &navigation_target,
-            false,
+            replace_current,
         ) {
             return;
         }

@@ -20,7 +20,7 @@ impl DocumentRuntime {
         for &root in insertion_plan.insertion_roots {
             runtime.clear_disconnected_shadow_roots_in_subtree(root);
             runtime.drop_child_browsing_contexts_moved_into_own_document_subtree(scope, root);
-            runtime.sync_child_browsing_context_subtree_and_initial_history_floor(scope, root);
+            runtime.sync_child_browsing_context_subtree(scope, root);
         }
     }
 

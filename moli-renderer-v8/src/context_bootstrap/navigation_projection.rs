@@ -260,18 +260,15 @@ fn history_length_floor_from_visible_entries<'s>(
         return visible_length;
     }
 
-    // A child sees the joint session-history length. The primary top-level
-    // runtime keeps one hidden initial about:blank predecessor, while a
-    // lightweight popup's first navigation replaces its initial empty entry.
-    // Project the offset of the owning root instead of assuming every child
-    // belongs to the primary top-level runtime.
+    // A child sees the joint session-history length. Creating its initial
+    // entry does not add a new joint-history step, so start from the current
+    // top-level length and only grow it when the child gains a visible entry.
     let top_owner = runtime_top_window_owner(scope, owner);
-    let root_predecessor_offset = if runtime_window_is_global(scope, top_owner) {
-        1.0
-    } else {
-        0.0
-    };
-    visible_length + root_predecessor_offset
+    let top_length = window_history_for_holder(scope, top_owner)
+        .and_then(|history| history_length_number(scope, history))
+        .unwrap_or(visible_length)
+        .max(0.0);
+    visible_length.max(top_length)
 }
 
 fn set_top_history_length_at_least<'s>(

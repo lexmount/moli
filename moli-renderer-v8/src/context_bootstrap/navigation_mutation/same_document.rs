@@ -34,61 +34,37 @@ pub(in crate::context_bootstrap) fn update_navigation_current_entry_for_same_doc
     let navigation_state_json =
         navigation_state.and_then(|state| stringify_history_state(scope, state));
     let entries = history_entries(scope, history).unwrap_or_else(|| v8::Array::new(scope, 0));
-    let should_replace_initial_child_entry = matches!(kind, LocationNavigationKind::Assign)
-        && !runtime_window_is_global(scope, owner)
-        && current_navigation_index == 0
-        && current_index > 0;
     let mut pruned_entries = Vec::new();
     match kind {
         LocationNavigationKind::Assign => {
-            if should_replace_initial_child_entry {
-                let key = navigation_entry_key_value(scope, current_entry)
-                    .unwrap_or_else(|| new_navigation_entry_key().as_str().to_owned());
-                let entry = create_navigation_entry(
-                    scope,
-                    href,
-                    history_state_json.as_deref(),
-                    navigation_state_json.as_deref(),
-                    None,
-                    current_navigation_index,
-                    &new_navigation_entry_id(),
-                    &key,
-                );
-                copy_navigation_entry_document_id(scope, current_entry, entry);
-                let _ = entries.set_index(scope, current_index, entry.into());
-                set_history_entries(scope, history, entries);
-                set_history_state(scope, history, history_state);
-                set_navigation_current_entry(scope, navigation, entry);
-            } else {
-                let next_index = current_index + 1;
-                let next_navigation_index = current_navigation_index + 1;
-                pruned_entries = pruned_history_entries(scope, entries, next_index);
-                set_child_joint_top_index_for_entry(scope, owner, Some(current_entry));
-                let next_entry = create_navigation_entry(
-                    scope,
-                    href,
-                    history_state_json.as_deref(),
-                    navigation_state_json.as_deref(),
-                    None,
-                    next_navigation_index,
-                    &new_navigation_entry_id(),
-                    &new_navigation_entry_key(),
-                );
-                copy_navigation_entry_document_id(scope, current_entry, next_entry);
-                set_child_joint_top_index_for_entry(scope, owner, Some(next_entry));
-                let next_entries = v8::Array::new(scope, (next_index + 1) as i32);
-                for index in 0..next_index {
-                    if let Some(entry) = entries.get_index(scope, index) {
-                        let _ = next_entries.set_index(scope, index, entry);
-                    }
+            let next_index = current_index + 1;
+            let next_navigation_index = current_navigation_index + 1;
+            pruned_entries = pruned_history_entries(scope, entries, next_index);
+            set_child_joint_top_index_for_entry(scope, owner, Some(current_entry));
+            let next_entry = create_navigation_entry(
+                scope,
+                href,
+                history_state_json.as_deref(),
+                navigation_state_json.as_deref(),
+                None,
+                next_navigation_index,
+                &new_navigation_entry_id(),
+                &new_navigation_entry_key(),
+            );
+            copy_navigation_entry_document_id(scope, current_entry, next_entry);
+            set_child_joint_top_index_for_entry(scope, owner, Some(next_entry));
+            let next_entries = v8::Array::new(scope, (next_index + 1) as i32);
+            for index in 0..next_index {
+                if let Some(entry) = entries.get_index(scope, index) {
+                    let _ = next_entries.set_index(scope, index, entry);
                 }
-                let _ = next_entries.set_index(scope, next_index, next_entry.into());
-                set_history_entries(scope, history, next_entries);
-                set_history_index(scope, history, next_index);
-                set_history_length_at_least_visible_entries(scope, history, next_entries);
-                set_history_state(scope, history, history_state);
-                set_navigation_current_entry(scope, navigation, next_entry);
             }
+            let _ = next_entries.set_index(scope, next_index, next_entry.into());
+            set_history_entries(scope, history, next_entries);
+            set_history_index(scope, history, next_index);
+            set_history_length_at_least_visible_entries(scope, history, next_entries);
+            set_history_state(scope, history, history_state);
+            set_navigation_current_entry(scope, navigation, next_entry);
         }
         LocationNavigationKind::Replace => {
             let key = navigation_entry_key_value(scope, current_entry)

@@ -22,8 +22,14 @@ impl JsContextHost {
             handle,
             "The navigation was canceled.".to_owned(),
         );
+        let replace_initial_empty_document =
+            self.child_browsing_context_is_on_initial_about_blank_entry(handle);
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            entry.apply_navigation_to_entry_seed(&url);
+            if replace_initial_empty_document {
+                entry.replace_navigation_in_entry_seed(&url);
+            } else {
+                entry.apply_navigation_to_entry_seed(&url);
+            }
         }
         self.sync_existing_child_browsing_context_runtime_surface_from_seed(scope, handle);
         self.queue_child_browsing_context_navigation_to_url(handle, &url)
@@ -38,8 +44,14 @@ impl JsContextHost {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
         }
+        let replace_initial_empty_document =
+            self.child_browsing_context_is_on_initial_about_blank_entry(handle);
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            entry.apply_navigation_to_entry_seed(&request.url);
+            if replace_initial_empty_document {
+                entry.replace_navigation_in_entry_seed(&request.url);
+            } else {
+                entry.apply_navigation_to_entry_seed(&request.url);
+            }
         }
         self.sync_existing_child_browsing_context_runtime_surface_from_seed(scope, handle);
         self.queue_child_browsing_context_navigation_request(handle, request)
