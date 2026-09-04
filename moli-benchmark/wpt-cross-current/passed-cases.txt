@@ -1557,9 +1557,7 @@ css/css-grid/abspos/positioned-grid-descendants-006.html
 css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-descendants-009.html
 css/css-grid/abspos/positioned-grid-descendants-010.html
-css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
-css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
 css/css-grid/abspos/positioned-grid-descendants-015.html
 css/css-grid/abspos/positioned-grid-descendants-016.html
@@ -5369,6 +5367,9 @@ html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/
 html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/replacestate.html
 html/browsers/history/the-history-interface/traverse-during-beforeunload.html
 html/browsers/history/the-history-interface/traverse-during-unload.html
+html/browsers/history/the-location-interface/assign-replace-from-iframe.html
+html/browsers/history/the-location-interface/assign-replace-from-top-to-nested-iframe.html
+html/browsers/history/the-location-interface/assign-with-nested-iframe.html
 html/browsers/history/the-location-interface/assign_after_load.html
 html/browsers/history/the-location-interface/document_location.html
 html/browsers/history/the-location-interface/location-ancestor-origins-new-object.html
@@ -5402,6 +5403,7 @@ html/browsers/history/the-location-interface/location_reload_javascript_url.html
 html/browsers/history/the-location-interface/location_replace.html
 html/browsers/history/the-location-interface/location_search.html
 html/browsers/history/the-location-interface/reload_document_write.html
+html/browsers/history/the-location-interface/replace-with-nested-iframe.html
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-caching.html
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-length.html
 html/browsers/origin/cross-origin-objects/cross-origin-objects-function-name.html

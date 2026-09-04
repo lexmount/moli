@@ -415,7 +415,6 @@ css/css-flexbox/table-as-item-large-intrinsic-size.html
 css/css-flexbox/table-as-item-stretch-cross-size-2.html
 css/css-flexbox/table-as-item-stretch-cross-size-5.html
 css/css-flexbox/table-as-item-stretch-cross-size.html
-css/css-flexbox/whitespace-in-flexitem-001.html
 css/css-font-loading/fontface-descriptor-updates-2.html
 css/css-font-loading/fontface-load-in-modal-dialog.html
 css/css-font-loading/fontfaceset-load-css-wide-keywords.html
@@ -504,6 +503,8 @@ css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-005.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
+css/css-grid/abspos/positioned-grid-descendants-011.html
+css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
 css/css-grid/abspos/positioned-grid-items-024.html
@@ -2455,6 +2456,7 @@ css/cssom-view/table-with-border-client-width-height.html
 css/cssom-view/window-scroll-arguments.html
 css/cssom-view/window-scroll-promise-interruption.html
 css/cssom-view/window-scroll-promises.html
+css/cssom/computed-style-004.html
 css/cssom/cssimportrule.html
 css/cssom/cssom-getPropertyValue-common-checks.html
 css/cssom/cssom-pagerule.html
@@ -2750,13 +2752,9 @@ html/browsers/history/the-history-interface/traverse_the_history_2.html
 html/browsers/history/the-history-interface/traverse_the_history_3.html
 html/browsers/history/the-history-interface/traverse_the_history_4.html
 html/browsers/history/the-history-interface/traverse_the_history_5.html
-html/browsers/history/the-location-interface/assign-replace-from-iframe.html
-html/browsers/history/the-location-interface/assign-replace-from-top-to-nested-iframe.html
-html/browsers/history/the-location-interface/assign-with-nested-iframe.html
 html/browsers/history/the-location-interface/assign_before_load.html
 html/browsers/history/the-location-interface/location_hash.html
 html/browsers/history/the-location-interface/reload_document_write_onload.html
-html/browsers/history/the-location-interface/replace-with-nested-iframe.html
 html/browsers/history/the-location-interface/same-hash.html
 html/browsers/origin/cross-origin-objects/cross-origin-due-to-document-domain-only.html
 html/browsers/origin/cross-origin-objects/window-location-and-location-href-cross-realm-set.html
@@ -2885,7 +2883,6 @@ html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navi
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation-3.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_ancestor-1.html
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed.html
-html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-img-element/already-loaded-image-sync-width.html
 html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
 html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
@@ -2909,7 +2906,7 @@ html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/svg-img-density-vs-zoom.html
 html/semantics/embedded-content/the-img-element/update-src-complete.html
 html/semantics/embedded-content/the-img-element/update-the-image-data/current-request-microtask-002.html
@@ -3009,7 +3006,6 @@ html/webappapis/scripting/processing-model-2/runtime-error-cross-origin.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-event-during-parse.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-rejection-events.html
 html/webappapis/scripting/processing-model-2/unhandled-promise-rejections/promise-resolution-order.html
-import-maps/multiple-import-maps/resolution-consistency-in-module-tree.html
 inert/inert-and-find-flat-tree.html
 inert/inert-and-find.html
 inert/inert-on-non-html.html
@@ -3188,12 +3184,14 @@ service-workers/service-worker/navigation-timing-sizes.https.html
 service-workers/service-worker/nested-blob-url-workers.https.html
 service-workers/service-worker/next-hop-protocol.https.html
 service-workers/service-worker/opaque-response-preloaded.https.html
+service-workers/service-worker/opaque-script.https.html
 service-workers/service-worker/referrer-policy-header.https.html
 service-workers/service-worker/register-default-scope.https.html
 service-workers/service-worker/registration-end-to-end.https.html
 service-workers/service-worker/registration-scope-module-static-import.https.html
 service-workers/service-worker/registration-scope.https.html
 service-workers/service-worker/request-end-to-end.https.html
+service-workers/service-worker/respond-with-body-accessed-response.https.html
 service-workers/service-worker/sandboxed-iframe-navigator-serviceworker.https.html
 service-workers/service-worker/skip-waiting-installed.https.html
 service-workers/service-worker/skip-waiting-using-registration.https.html
@@ -3326,4 +3324,5 @@ worklets/animation-worklet-service-worker-interception.https.html
 worklets/audio-worklet-service-worker-interception.https.html
 worklets/layout-worklet-service-worker-interception.https.html
 worklets/paint-worklet-service-worker-interception.https.html
+xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to expiring value after load fires
 xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to non-expiring value after timeout fires
