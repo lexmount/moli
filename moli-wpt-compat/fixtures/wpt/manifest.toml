@@ -1358,7 +1358,7 @@ wait_until = "load"
 timeout_ms = 5000
 suite = "smoke"
 tags = ["location"]
-notes = "Manual compat port for the stable HTTP subset of location.protocol assignment: assigning the current protocol with or without a trailing colon, assigning the same protocol with different casing, and assigning an invalid scheme leave URL and session history unchanged. Cross-scheme http/https navigation remains follow-up until the WPT fixture server exposes an HTTPS origin."
+notes = "Manual compat coverage for location.protocol failure boundaries: syntactically invalid schemes throw SyntaxError, while valid scheme-state overrides that do not produce an HTTP(S) URL leave the current URL and session history unchanged. Same-scheme and HTTP-to-HTTPS navigation are covered by renderer tests and upstream WPT."
 
 [[test]]
 id = "location-assign-fragment-history-basic"
