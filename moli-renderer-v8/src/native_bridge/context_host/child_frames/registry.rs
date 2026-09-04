@@ -375,6 +375,13 @@ impl JsContextHost {
                         pending_live_navigation: existing.as_ref().and_then(|entry| {
                             entry.pending_live_navigation_for_refresh(attribute_bootstrap_changed)
                         }),
+                        pending_live_navigation_initiator_url: existing.as_ref().and_then(
+                            |entry| {
+                                entry.pending_live_navigation_initiator_url_for_refresh(
+                                    attribute_bootstrap_changed,
+                                )
+                            },
+                        ),
                         pending_live_navigation_reflects_window_state: existing
                             .as_ref()
                             .is_some_and(|entry| {

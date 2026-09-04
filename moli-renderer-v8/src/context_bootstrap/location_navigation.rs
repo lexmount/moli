@@ -628,6 +628,7 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         }
         if let Some(host_ptr) = host_ptr {
             let host = unsafe { &mut *host_ptr };
+            let initiator_url = location_navigation_initiator_url(scope, host);
             if matches!(kind, LocationNavigationKind::Assign) && !is_javascript_url {
                 host.mark_child_browsing_context_top_level_history_increment(handle);
             }
@@ -635,11 +636,13 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
                 host.queue_child_browsing_context_reload_from_existing_seed(
                     handle,
                     resolved.as_str(),
+                    initiator_url,
                 );
             } else {
                 host.queue_child_browsing_context_navigation_without_seed_update(
                     handle,
                     resolved.as_str(),
+                    initiator_url,
                 );
             }
         }
@@ -1239,6 +1242,40 @@ fn context_host_ptr_for_navigation_owner(
                 .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
                 .and_then(|parent| context_host_ptr_from_window_object(scope, parent))
         })
+}
+
+fn location_navigation_initiator_url(
+    scope: &mut v8::PinScope<'_, '_>,
+    host: &JsContextHost,
+) -> Option<url::Url> {
+    if let Some(popup_id) = crate::native_bridge::active_lightweight_popup_id(scope) {
+        return host.lightweight_popup_document_url(popup_id);
+    }
+    let dispatch_scope = v8::StackTrace::current_script_context(scope)
+        .and_then(|context| host.window_execution_context_identity_for_access_check(context))
+        .map(|identity| identity.dispatch_scope())
+        .or_else(|| {
+            scope
+                .get_incumbent_context()
+                .and_then(|context| {
+                    host.window_execution_context_identity_for_access_check(context)
+                })
+                .map(|identity| identity.dispatch_scope())
+        })
+        .or_else(|| {
+            crate::context_bootstrap::current_child_browsing_context_handle_for_runtime_scope(scope)
+                .map(crate::native_bridge::OwnerDispatchScope::Child)
+        })
+        .unwrap_or(crate::native_bridge::OwnerDispatchScope::Top);
+    match dispatch_scope {
+        crate::native_bridge::OwnerDispatchScope::Top => Some(host.document_url().clone()),
+        crate::native_bridge::OwnerDispatchScope::Child(handle) => {
+            host.child_browsing_context_current_url(handle)
+        }
+        crate::native_bridge::OwnerDispatchScope::LightweightPopup(popup_id) => {
+            host.lightweight_popup_document_url(popup_id)
+        }
+    }
 }
 
 #[cfg(test)]

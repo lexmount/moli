@@ -11186,6 +11186,128 @@ async fn iframe_javascript_url_replacement_preserves_later_fragment_for_reload()
     );
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn child_location_function_uses_executing_document_as_navigation_referrer() {
+    const HOST: &str = "child-location-referrer.test";
+
+    let server = StaticHttpServer::spawn(2).await;
+    let top_url = server.url_for_host(HOST, "/source/navigate-child-function.html");
+    let child_url = server.url_for_host(HOST, "/source/support/location-set.html");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(&format!(
+        r#"
+(() => {{
+  globalThis.__childLocationReferrerLoadCount = 0;
+  const frame = document.createElement('iframe');
+  frame.src = {};
+  frame.onload = () => {{
+    globalThis.__childLocationReferrerLoadCount++;
+  }};
+  (document.body || document.documentElement || document).appendChild(frame);
+}})()
+"#,
+        serde_json::to_string(child_url.as_str()).expect("serialize child URL")
+    ))
+    .expect("child Location referrer setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__childLocationReferrerLoadCount)",
+        "1",
+        "initial child document should load",
+    )
+    .await;
+
+    let child_context_id = vm
+        .live_child_default_runtime_realm_inventory()
+        .into_iter()
+        .map(|realm| realm.context_id)
+        .next()
+        .expect("loaded child realm should exist");
+    vm.eval_in_child_default_context(
+        child_context_id,
+        "globalThis.go = function() { location.href = 'support/dummy.html'; }",
+    )
+    .expect("child navigation function should install");
+    vm.eval("document.querySelector('iframe').contentWindow.go()")
+        .expect("parent should call the child navigation function");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__childLocationReferrerLoadCount)",
+        "2",
+        "child Location navigation should load",
+    )
+    .await;
+
+    let document_referrer = vm
+        .eval("document.querySelector('iframe').contentDocument.referrer")
+        .expect("child navigation referrer should evaluate");
+    let requests = server.finish().await;
+    assert_eq!(requests[0].target, "/source/support/location-set.html");
+    assert_eq!(
+        requests[1].header_value("referer"),
+        Some(child_url.as_str())
+    );
+    assert_eq!(document_referrer, child_url.as_str());
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn parent_location_assignment_uses_parent_document_as_navigation_referrer() {
+    const HOST: &str = "parent-location-referrer.test";
+
+    let server = StaticHttpServer::spawn(2).await;
+    let top_url = server.url_for_host(HOST, "/source/navigate-child-function-parent.html");
+    let child_url = server.url_for_host(HOST, "/source/initial.html");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(&format!(
+        r#"
+(() => {{
+  globalThis.__parentLocationReferrerLoadCount = 0;
+  const frame = document.createElement('iframe');
+  frame.src = {};
+  frame.onload = () => {{
+    globalThis.__parentLocationReferrerLoadCount++;
+  }};
+  (document.body || document.documentElement || document).appendChild(frame);
+}})()
+"#,
+        serde_json::to_string(child_url.as_str()).expect("serialize child URL")
+    ))
+    .expect("parent Location referrer setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__parentLocationReferrerLoadCount)",
+        "1",
+        "initial child document should load",
+    )
+    .await;
+
+    vm.eval("document.querySelector('iframe').contentWindow.location = 'support/dummy.html'")
+        .expect("parent should navigate the child Location");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__parentLocationReferrerLoadCount)",
+        "2",
+        "parent-initiated child Location navigation should load",
+    )
+    .await;
+
+    let document_referrer = vm
+        .eval("document.querySelector('iframe').contentDocument.referrer")
+        .expect("parent-initiated child navigation referrer should evaluate");
+    let requests = server.finish().await;
+    assert_eq!(requests[0].target, "/source/initial.html");
+    assert_eq!(requests[1].header_value("referer"), Some(top_url.as_str()));
+    assert_eq!(document_referrer, top_url.as_str());
+}
+
 #[tokio::test]
 async fn iframe_javascript_url_non_string_completion_does_not_replace_child_document() {
     let mut vm = new_storage_test_vm("https://iframe-javascript-url-non-string.test/");

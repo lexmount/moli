@@ -273,6 +273,7 @@ pub(in crate::context_bootstrap) fn dispatch_history_entry_post_commit_events<'s
             unsafe { &mut *host_ptr }.queue_child_browsing_context_navigation_without_seed_update(
                 child_handle,
                 &applied.url,
+                None,
             );
         }
     } else {

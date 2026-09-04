@@ -43,6 +43,9 @@ unsafe extern "C" {
   fn v8__StackTrace__CurrentScriptNameOrSourceURL(
     isolate: *mut RealIsolate,
   ) -> *const String;
+  fn v8__StackTrace__CurrentScriptContext(
+    isolate: *mut RealIsolate,
+  ) -> *const Context;
   fn v8__StackTrace__GetFrameCount(this: *const StackTrace) -> int;
   fn v8__StackTrace__GetFrame(
     this: *const StackTrace,
@@ -116,6 +119,19 @@ impl StackTrace {
     unsafe {
       scope.cast_local(|sd| {
         v8__StackTrace__CurrentScriptNameOrSourceURL(sd.get_isolate_ptr())
+      })
+    }
+  }
+
+  /// Returns the function context for the first valid script at the top of
+  /// the current JavaScript execution stack.
+  #[inline(always)]
+  pub fn current_script_context<'s>(
+    scope: &PinScope<'s, '_>,
+  ) -> Option<Local<'s, Context>> {
+    unsafe {
+      scope.cast_local(|sd| {
+        v8__StackTrace__CurrentScriptContext(sd.get_isolate_ptr())
       })
     }
   }
