@@ -5320,6 +5320,10 @@ html/browsers/history/the-location-interface/location-ancestor-origins-referrerp
 html/browsers/history/the-location-interface/location-non-configurable-toString-valueOf.html
 html/browsers/history/the-location-interface/location-pathname-setter-question-mark.html
 html/browsers/history/the-location-interface/location-prevent-extensions.html
+html/browsers/history/the-location-interface/location-protocol-setter-non-broken-weird.html
+html/browsers/history/the-location-interface/location-protocol-setter-non-broken.html
+html/browsers/history/the-location-interface/location-protocol-setter-sameish.html
+html/browsers/history/the-location-interface/location-protocol-setter.html
 html/browsers/history/the-location-interface/location-prototype-no-toString-valueOf.html
 html/browsers/history/the-location-interface/location-prototype-setting-same-origin.html
 html/browsers/history/the-location-interface/location-stringifier.html

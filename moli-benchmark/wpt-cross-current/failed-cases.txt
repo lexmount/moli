@@ -2773,8 +2773,6 @@ html/browsers/history/the-location-interface/assign-replace-from-iframe.html
 html/browsers/history/the-location-interface/assign-replace-from-top-to-nested-iframe.html
 html/browsers/history/the-location-interface/assign-with-nested-iframe.html
 html/browsers/history/the-location-interface/assign_before_load.html
-html/browsers/history/the-location-interface/location-protocol-setter-non-broken-weird.html
-html/browsers/history/the-location-interface/location-protocol-setter.html
 html/browsers/history/the-location-interface/location_hash.html
 html/browsers/history/the-location-interface/location_reload_javascript_url.html
 html/browsers/history/the-location-interface/reload_document_write_onload.html
