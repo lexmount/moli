@@ -1058,6 +1058,11 @@ impl DocumentStartScript {
 
 #[derive(Debug, Clone)]
 pub struct SubresourceNetworkRecord {
+    inner: Arc<SubresourceNetworkRecordInner>,
+}
+
+#[derive(Debug, Clone)]
+struct SubresourceNetworkRecordInner {
     frame_id: Option<String>,
     document_url: Url,
     url: Url,
@@ -1154,22 +1159,25 @@ pub enum SubresourceBodyFinishedResult {
 
 impl PartialEq for SubresourceNetworkRecord {
     fn eq(&self, other: &Self) -> bool {
-        self.frame_id == other.frame_id
-            && self.document_url == other.document_url
-            && self.url == other.url
-            && self.websocket_socket_id == other.websocket_socket_id
-            && self.method == other.method
-            && self.request_headers == other.request_headers
-            && self.request_body == other.request_body
-            && self.request_body_bytes == other.request_body_bytes
-            && self.resource_type == other.resource_type
-            && self.request_initiator_type == other.request_initiator_type
-            && self.request_cookie_report == other.request_cookie_report
-            && self.outcome == other.outcome
-            && self.cookie_set_reports == other.cookie_set_reports
-            && self.from_cache == other.from_cache
-            && self.network_request_headers == other.network_request_headers
-            && self.negotiated_http_version == other.negotiated_http_version
+        let left = self.inner.as_ref();
+        let right = other.inner.as_ref();
+        Arc::ptr_eq(&self.inner, &other.inner)
+            || (left.frame_id == right.frame_id
+                && left.document_url == right.document_url
+                && left.url == right.url
+                && left.websocket_socket_id == right.websocket_socket_id
+                && left.method == right.method
+                && left.request_headers == right.request_headers
+                && left.request_body == right.request_body
+                && left.request_body_bytes == right.request_body_bytes
+                && left.resource_type == right.resource_type
+                && left.request_initiator_type == right.request_initiator_type
+                && left.request_cookie_report == right.request_cookie_report
+                && left.outcome == right.outcome
+                && left.cookie_set_reports == right.cookie_set_reports
+                && left.from_cache == right.from_cache
+                && left.network_request_headers == right.network_request_headers
+                && left.negotiated_http_version == right.negotiated_http_version)
     }
 }
 
@@ -2086,29 +2094,31 @@ impl SubresourceNetworkRecord {
             SubresourceBodyFinishedResult::Failed(error_text)
             | SubresourceBodyFinishedResult::FailedWithPartialBody { error_text, .. } => {
                 Some(Self {
-                    frame_id: request.frame_id.clone(),
-                    document_url: request.document_url.clone(),
-                    url: request.url.clone(),
-                    request_handle: Some(request.handle()),
-                    websocket_socket_id: None,
-                    method: request.method.clone(),
-                    request_headers: request.request_headers.clone(),
-                    request_body: request.request_body.clone(),
-                    request_body_bytes: request.request_body_bytes.clone(),
-                    resource_type: request.resource_type,
-                    request_initiator_type: request.request_initiator_type,
-                    request_cookie_report: request.request_cookie_report.clone(),
-                    outcome: SubresourceNetworkOutcome::Failure {
-                        error_text: error_text.clone(),
-                    },
-                    cookie_set_reports: response
-                        .map(|response| response.cookie_set_reports.clone())
-                        .unwrap_or_default(),
-                    from_cache: response.is_some_and(|response| response.from_cache),
-                    network_request_headers: response
-                        .and_then(|response| response.network_request_headers.clone()),
-                    negotiated_http_version: response
-                        .and_then(|response| response.negotiated_http_version),
+                    inner: Arc::new(SubresourceNetworkRecordInner {
+                        frame_id: request.frame_id.clone(),
+                        document_url: request.document_url.clone(),
+                        url: request.url.clone(),
+                        request_handle: Some(request.handle()),
+                        websocket_socket_id: None,
+                        method: request.method.clone(),
+                        request_headers: request.request_headers.clone(),
+                        request_body: request.request_body.clone(),
+                        request_body_bytes: request.request_body_bytes.clone(),
+                        resource_type: request.resource_type,
+                        request_initiator_type: request.request_initiator_type,
+                        request_cookie_report: request.request_cookie_report.clone(),
+                        outcome: SubresourceNetworkOutcome::Failure {
+                            error_text: error_text.clone(),
+                        },
+                        cookie_set_reports: response
+                            .map(|response| response.cookie_set_reports.clone())
+                            .unwrap_or_default(),
+                        from_cache: response.is_some_and(|response| response.from_cache),
+                        network_request_headers: response
+                            .and_then(|response| response.network_request_headers.clone()),
+                        negotiated_http_version: response
+                            .and_then(|response| response.negotiated_http_version),
+                    }),
                 })
             }
         }
@@ -2166,30 +2176,32 @@ impl SubresourceNetworkRecord {
     ) -> Self {
         let request_body_bytes = request_body_text_bytes(&request_body);
         Self {
-            frame_id,
-            document_url,
-            url,
-            request_handle: None,
-            websocket_socket_id: None,
-            method,
-            request_headers,
-            request_body,
-            request_body_bytes,
-            resource_type,
-            request_initiator_type: SubresourceRequestInitiatorType::Script,
-            request_cookie_report,
-            outcome: SubresourceNetworkOutcome::Success {
-                redirect_chain,
-                final_url,
-                status,
-                status_text: None,
-                response_headers,
-                response_body,
-            },
-            cookie_set_reports,
-            from_cache: false,
-            network_request_headers: None,
-            negotiated_http_version: None,
+            inner: Arc::new(SubresourceNetworkRecordInner {
+                frame_id,
+                document_url,
+                url,
+                request_handle: None,
+                websocket_socket_id: None,
+                method,
+                request_headers,
+                request_body,
+                request_body_bytes,
+                resource_type,
+                request_initiator_type: SubresourceRequestInitiatorType::Script,
+                request_cookie_report,
+                outcome: SubresourceNetworkOutcome::Success {
+                    redirect_chain,
+                    final_url,
+                    status,
+                    status_text: None,
+                    response_headers,
+                    response_body,
+                },
+                cookie_set_reports,
+                from_cache: false,
+                network_request_headers: None,
+                negotiated_http_version: None,
+            }),
         }
     }
 
@@ -2205,39 +2217,42 @@ impl SubresourceNetworkRecord {
     ) -> Self {
         let request_body_bytes = request_body_text_bytes(&request_body);
         Self {
-            frame_id,
-            document_url,
-            url,
-            request_handle: None,
-            websocket_socket_id: None,
-            method,
-            request_headers,
-            request_body,
-            request_body_bytes,
-            resource_type,
-            request_initiator_type: SubresourceRequestInitiatorType::Script,
-            request_cookie_report: None,
-            outcome: SubresourceNetworkOutcome::Failure { error_text },
-            cookie_set_reports: Vec::new(),
-            from_cache: false,
-            network_request_headers: None,
-            negotiated_http_version: None,
+            inner: Arc::new(SubresourceNetworkRecordInner {
+                frame_id,
+                document_url,
+                url,
+                request_handle: None,
+                websocket_socket_id: None,
+                method,
+                request_headers,
+                request_body,
+                request_body_bytes,
+                resource_type,
+                request_initiator_type: SubresourceRequestInitiatorType::Script,
+                request_cookie_report: None,
+                outcome: SubresourceNetworkOutcome::Failure { error_text },
+                cookie_set_reports: Vec::new(),
+                from_cache: false,
+                network_request_headers: None,
+                negotiated_http_version: None,
+            }),
         }
     }
 
     pub fn with_websocket_socket_id(mut self, socket_id: u64) -> Self {
-        self.websocket_socket_id = Some(socket_id);
+        Arc::make_mut(&mut self.inner).websocket_socket_id = Some(socket_id);
         self
     }
 
     pub fn with_request_handle(mut self, handle: SubresourceNetworkRequestHandle) -> Self {
-        self.request_handle = Some(handle);
+        Arc::make_mut(&mut self.inner).request_handle = Some(handle);
         self
     }
 
     pub fn with_request_body_bytes(mut self, request_body_bytes: Option<Vec<u8>>) -> Self {
-        self.request_body_bytes =
-            request_body_bytes.or_else(|| request_body_text_bytes(&self.request_body));
+        let inner = Arc::make_mut(&mut self.inner);
+        inner.request_body_bytes =
+            request_body_bytes.or_else(|| request_body_text_bytes(&inner.request_body));
         self
     }
 
@@ -2245,7 +2260,7 @@ impl SubresourceNetworkRecord {
         mut self,
         request_initiator_type: SubresourceRequestInitiatorType,
     ) -> Self {
-        self.request_initiator_type = request_initiator_type;
+        Arc::make_mut(&mut self.inner).request_initiator_type = request_initiator_type;
         self
     }
 
@@ -2253,7 +2268,7 @@ impl SubresourceNetworkRecord {
         if let SubresourceNetworkOutcome::Success {
             status_text: current,
             ..
-        } = &mut self.outcome
+        } = &mut Arc::make_mut(&mut self.inner).outcome
         {
             *current = Some(status_text.into());
         }
@@ -2261,7 +2276,7 @@ impl SubresourceNetworkRecord {
     }
 
     pub fn with_from_cache(mut self, from_cache: bool) -> Self {
-        self.from_cache = from_cache;
+        Arc::make_mut(&mut self.inner).from_cache = from_cache;
         self
     }
 
@@ -2269,7 +2284,7 @@ impl SubresourceNetworkRecord {
         mut self,
         network_request_headers: Option<Vec<(String, String)>>,
     ) -> Self {
-        self.network_request_headers = network_request_headers;
+        Arc::make_mut(&mut self.inner).network_request_headers = network_request_headers;
         self
     }
 
@@ -2277,64 +2292,64 @@ impl SubresourceNetworkRecord {
         mut self,
         negotiated_http_version: Option<NegotiatedHttpVersion>,
     ) -> Self {
-        self.negotiated_http_version = negotiated_http_version;
+        Arc::make_mut(&mut self.inner).negotiated_http_version = negotiated_http_version;
         self
     }
 
     pub fn request_handle(&self) -> Option<SubresourceNetworkRequestHandle> {
-        self.request_handle
+        self.inner.request_handle
     }
 
     pub fn websocket_socket_id(&self) -> Option<u64> {
-        self.websocket_socket_id
+        self.inner.websocket_socket_id
     }
 
     pub fn url(&self) -> &Url {
-        &self.url
+        &self.inner.url
     }
 
     pub fn frame_id(&self) -> Option<&str> {
-        self.frame_id.as_deref()
+        self.inner.frame_id.as_deref()
     }
 
     pub fn document_url(&self) -> &Url {
-        &self.document_url
+        &self.inner.document_url
     }
 
     pub fn method(&self) -> &str {
-        &self.method
+        &self.inner.method
     }
 
     pub fn request_headers(&self) -> &[(String, String)] {
-        &self.request_headers
+        &self.inner.request_headers
     }
 
     pub fn request_body(&self) -> Option<&str> {
-        self.request_body.as_deref()
+        self.inner.request_body.as_deref()
     }
 
     pub fn request_body_bytes(&self) -> Option<&[u8]> {
-        self.request_body_bytes.as_deref()
+        self.inner.request_body_bytes.as_deref()
     }
 
     pub fn resource_type(&self) -> SubresourceResourceType {
-        self.resource_type
+        self.inner.resource_type
     }
 
     pub fn request_initiator_type(&self) -> SubresourceRequestInitiatorType {
-        self.request_initiator_type
+        self.inner.request_initiator_type
     }
 
     pub fn request_cookie_report(&self) -> Option<&StoredCookieQueryReport> {
-        self.request_cookie_report.as_ref()
+        self.inner.request_cookie_report.as_ref()
     }
 
     pub fn outcome(&self) -> &SubresourceNetworkOutcome {
-        &self.outcome
+        &self.inner.outcome
     }
 
     pub fn try_response_body_byte_eq(&self, other: &Self) -> io::Result<bool> {
-        match (&self.outcome, &other.outcome) {
+        match (&self.inner.outcome, &other.inner.outcome) {
             (
                 SubresourceNetworkOutcome::Success {
                     response_body: left,
@@ -2354,19 +2369,19 @@ impl SubresourceNetworkRecord {
     }
 
     pub fn cookie_set_reports(&self) -> &[StoredCookieSetReport] {
-        &self.cookie_set_reports
+        &self.inner.cookie_set_reports
     }
 
     pub fn from_cache(&self) -> bool {
-        self.from_cache
+        self.inner.from_cache
     }
 
     pub fn network_request_headers(&self) -> Option<&[(String, String)]> {
-        self.network_request_headers.as_deref()
+        self.inner.network_request_headers.as_deref()
     }
 
     pub fn negotiated_http_version(&self) -> Option<NegotiatedHttpVersion> {
-        self.negotiated_http_version
+        self.inner.negotiated_http_version
     }
 }
 
@@ -3461,6 +3476,28 @@ mod tests {
         assert!(report.replace_globals_snapshot(BTreeMap::new()));
         assert!(report.globals_are_fresh());
         assert!(report.globals().is_empty());
+    }
+
+    #[test]
+    fn subresource_network_record_clones_share_until_modified() {
+        let record = SubresourceNetworkRecord::failure(
+            Some("FRAME".to_owned()),
+            test_url("/"),
+            test_url("/asset.js"),
+            "GET".to_owned(),
+            vec![("accept".to_owned(), "*/*".to_owned())],
+            None,
+            SubresourceResourceType::Script,
+            "network failed".to_owned(),
+        );
+        let cloned = record.clone();
+
+        assert!(Arc::ptr_eq(&record.inner, &cloned.inner));
+
+        let modified = cloned.with_from_cache(true);
+        assert!(!Arc::ptr_eq(&record.inner, &modified.inner));
+        assert!(!record.from_cache());
+        assert!(modified.from_cache());
     }
 
     #[test]

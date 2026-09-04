@@ -298,6 +298,7 @@ fn response_started_charge(response: &SubresourceResponseStarted) -> usize {
 }
 
 fn network_record_charge(record: &SubresourceNetworkRecord) -> usize {
+    let record = record.inner.as_ref();
     let mut total = record
         .frame_id
         .as_deref()
