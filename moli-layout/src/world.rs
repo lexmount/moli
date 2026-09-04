@@ -77,6 +77,28 @@ impl LayoutBoxKind {
         matches!(self, Self::Text)
     }
 
+    /// Whether this box is one of CSS Display's internal table boxes.
+    ///
+    /// A table wrapper and its caption are deliberately excluded. Properties
+    /// such as `aspect-ratio` apply to those boxes, but not to row groups,
+    /// rows, columns, or cells. Anonymous repair boxes obey the same used-value
+    /// boundary as their source-backed counterparts.
+    pub(crate) const fn is_internal_table_box(self) -> bool {
+        matches!(
+            self,
+            Self::TableRowGroup
+                | Self::TableHeaderGroup
+                | Self::TableFooterGroup
+                | Self::TableColumnGroup
+                | Self::TableColumn
+                | Self::TableRow
+                | Self::TableCell
+                | Self::AnonymousTableRowGroup
+                | Self::AnonymousTableRow
+                | Self::AnonymousTableCell
+        )
+    }
+
     pub(crate) const fn debug_name(self) -> &'static str {
         match self {
             Self::PrincipalBlock => "principal-block",
@@ -560,6 +582,9 @@ impl<N> LayoutBox<N> {
     /// Resolve the used ratio at the layout-node boundary, after both authored
     /// style and natural replaced-element sizing are available.
     pub(crate) fn resolved_aspect_ratio(&self) -> Option<taffy::ResolvedAspectRatio> {
+        if self.kind.is_internal_table_box() {
+            return None;
+        }
         // Blink drops a replaced element's natural ratio when either used
         // size-containment axis applies. An authored `<ratio>` remains
         // authoritative, and `auto <ratio>` may still select its fallback.
@@ -1143,9 +1168,18 @@ where
         element_semantics: Option<LayoutElementSemantics>,
         anonymous_reason: Option<LayoutAnonymousReason>,
         kind: LayoutBoxKind,
-        style: ResolvedLayoutStyle,
+        mut style: ResolvedLayoutStyle,
         text: Option<Arc<str>>,
     ) -> LayoutBox<N> {
+        if kind.is_internal_table_box() {
+            // Keep the authored/computed value in `preferred_aspect_ratio`.
+            // Only the numeric backend projection is suppressed: CSS Sizing
+            // excludes internal table boxes from `aspect-ratio`, and the table
+            // formatter supplies their used track and cell sizes. Chromium
+            // represents the same boundary with its table-cell constraint
+            // space before generic block-size resolution.
+            style.taffy.aspect_ratio = None;
+        }
         let capability_diagnostics =
             default_capability_diagnostics(kind, element_semantics.as_ref(), &style);
         LayoutBox {
