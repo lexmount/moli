@@ -2118,6 +2118,46 @@ fn font_face_binary_source_union_rejects_invalid_font_data() {
 }
 
 #[test]
+fn font_face_rejects_malformed_string_and_magic_prefixed_payloads() {
+    let mut vm = new_storage_test_vm("https://font-face-payload-validation.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const invalidSource = new FontFace('InvalidSource', 'garbage');
+  const invalidUrl = new FontFace(
+    'InvalidUrl',
+    'url("data:font/woff2;base64,d09GMmdhcmJhZ2U=")'
+  );
+  const invalidBytes = new FontFace(
+    'InvalidBytes',
+    new TextEncoder().encode('wOF2garbage')
+  );
+  globalThis.__fontFaceMalformedProbe = {
+    initial: [invalidSource.status, invalidUrl.status, invalidBytes.status],
+    settled: ['pending', 'pending', 'pending']
+  };
+  [invalidSource, invalidUrl, invalidBytes].forEach((face, index) => {
+    face.load().then(
+      () => { __fontFaceMalformedProbe.settled[index] = 'resolved'; },
+      error => { __fontFaceMalformedProbe.settled[index] = error.name; }
+    );
+  });
+})()
+"#,
+    )
+    .expect("malformed FontFace payload probe should initialize");
+
+    let result = vm
+        .eval("JSON.stringify(globalThis.__fontFaceMalformedProbe)")
+        .expect("malformed FontFace payload promises should settle");
+    assert_eq!(
+        result,
+        r#"{"initial":["error","error","error"],"settled":["SyntaxError","NetworkError","SyntaxError"]}"#
+    );
+}
+
+#[test]
 fn maplike_and_setlike_iterators_use_v8_intrinsics_after_public_tampering() {
     let mut vm = new_storage_test_vm("https://maplike-iterator-intrinsics.test/");
 
