@@ -5285,6 +5285,8 @@ html/browsers/history/the-history-interface/pushstate-replacestate-empty-string/
 html/browsers/history/the-history-interface/traverse-during-beforeunload.html
 html/browsers/history/the-history-interface/traverse-during-unload.html
 html/browsers/history/the-location-interface/document_location.html
+html/browsers/history/the-location-interface/location-ancestor-origins-new-object.html
+html/browsers/history/the-location-interface/location-ancestor-origins-referrerpolicy-snapshot.html
 html/browsers/history/the-location-interface/location-non-configurable-toString-valueOf.html
 html/browsers/history/the-location-interface/location-pathname-setter-question-mark.html
 html/browsers/history/the-location-interface/location-prevent-extensions.html

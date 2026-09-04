@@ -2786,8 +2786,6 @@ html/browsers/history/the-location-interface/assign-replace-from-top-to-nested-i
 html/browsers/history/the-location-interface/assign-with-nested-iframe.html
 html/browsers/history/the-location-interface/assign_after_load.html
 html/browsers/history/the-location-interface/assign_before_load.html
-html/browsers/history/the-location-interface/location-ancestor-origins-new-object.html
-html/browsers/history/the-location-interface/location-ancestor-origins-referrerpolicy-snapshot.html
 html/browsers/history/the-location-interface/location-protocol-setter-non-broken-weird.html
 html/browsers/history/the-location-interface/location-protocol-setter.html
 html/browsers/history/the-location-interface/location_assign_about_blank.html
