@@ -7,6 +7,7 @@ use moli_cookie_jar::{
     BrowserCookieStore, CookieSource, NetworkCookieRequestContext, SharedBrowserCookieStore,
     StoredCookie, StoredCookieQueryReport, new_shared_browser_cookie_store,
 };
+use moli_core::browser::BrowserContextId;
 use moli_core::network::{SharedWebStorageStore, new_shared_web_storage_store};
 use moli_core::runtime::{
     NavigationEngine, NavigationPageStorageHandles, NavigationResourceStorageHandles,
@@ -38,6 +39,7 @@ use super::{
 };
 
 pub struct BrowserContext {
+    browser_context_id: BrowserContextId,
     pub id: String,
     storage_partition: BrowserContextStoragePartition,
     pub(crate) page_targets: PageTargetRegistry,
@@ -347,6 +349,7 @@ pub(crate) struct SiteDataClearOptions {
 impl std::fmt::Debug for BrowserContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BrowserContext")
+            .field("browser_context_id", &self.browser_context_id)
             .field("id", &self.id)
             .field("storage_partition", &self.storage_partition)
             .field("active_target_id", &self.active_target_id())
@@ -361,6 +364,10 @@ fn usize_to_u64_saturating(value: usize) -> u64 {
 }
 
 impl BrowserContext {
+    pub fn browser_context_id(&self) -> BrowserContextId {
+        self.browser_context_id
+    }
+
     pub(crate) fn active_page_target(&self) -> &PageTargetHost {
         self.page_targets
             .active()
@@ -499,6 +506,7 @@ impl BrowserContext {
         let storage_partition = BrowserContextStoragePartition::new(identity, partition);
 
         Self {
+            browser_context_id: BrowserContextId::allocate(),
             id,
             storage_partition,
             page_targets: PageTargetRegistry::default(),

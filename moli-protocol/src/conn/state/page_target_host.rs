@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use indexmap::IndexMap;
+use moli_core::browser::{DocumentId, MainFrameSlotId, WebContentsId};
 use moli_core::network::SharedWebStorageStore;
 use moli_core::runtime::NavigationEngine;
 use serde_json::Value;
@@ -21,6 +22,8 @@ use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 #[derive(Debug)]
 pub struct PageTargetHost {
     target_id: String,
+    web_contents_id: WebContentsId,
+    main_frame_slot_id: MainFrameSlotId,
     navigation_engine: Option<NavigationEngine>,
     pub(crate) target_identity: TargetIdentityState,
     pub(crate) devtools_sessions: DevToolsSessionRegistry,
@@ -46,6 +49,8 @@ impl PageTargetHost {
     pub(crate) fn empty(target_id: String) -> Self {
         Self {
             target_id,
+            web_contents_id: WebContentsId::allocate(),
+            main_frame_slot_id: MainFrameSlotId::allocate(),
             navigation_engine: None,
             target_identity: TargetIdentityState::about_blank(),
             devtools_sessions: DevToolsSessionRegistry::default(),
@@ -112,6 +117,18 @@ impl PageTargetHost {
 
     pub(crate) fn target_id(&self) -> &str {
         &self.target_id
+    }
+
+    pub fn web_contents_id(&self) -> WebContentsId {
+        self.web_contents_id
+    }
+
+    pub fn main_frame_slot_id(&self) -> MainFrameSlotId {
+        self.main_frame_slot_id
+    }
+
+    pub fn current_document_id(&self) -> Option<DocumentId> {
+        self.runtime_slot.page_attachment_id()
     }
 
     fn replace_target_id(&mut self, target_id: String) {

@@ -1458,7 +1458,7 @@ fn browser_context_clears_origin_site_data_through_partition_owner() {
 }
 
 #[test]
-fn navigation_request_identity_rejects_stale_tokens_without_ordering() {
+fn browser_navigation_identity_rejects_stale_tokens_without_ordering() {
     let mut context = BrowserContext::new("CTX-nav".to_owned());
     context.set_active_target_id("TID-nav");
     context.attach_active_session("SID-nav");
@@ -1476,9 +1476,35 @@ fn navigation_request_identity_rejects_stale_tokens_without_ordering() {
         !context.accepts_pending_document_navigation_event(&first),
         "a new navigation request identity must make previous events stale"
     );
-    assert_ne!(second.request_id, first.request_id);
+    assert_ne!(second.navigation_id, first.navigation_id);
     assert_eq!(second.target_id, "TID-nav");
     assert_eq!(second.loader_id, "LOADER-2");
+}
+
+#[test]
+fn reused_devtools_ids_do_not_reuse_browser_object_identities() {
+    let first_context = BrowserContext::new("BID-reused".to_owned());
+    let second_context = BrowserContext::new("BID-reused".to_owned());
+    assert_ne!(
+        first_context.browser_context_id(),
+        second_context.browser_context_id()
+    );
+
+    let mut context = first_context;
+    context.set_active_target_id("TID-reused");
+    let first_web_contents = context.active_page_target().web_contents_id();
+    let first_main_frame_slot = context.active_page_target().main_frame_slot_id();
+    drop(context.take_page_target_for_close("TID-reused"));
+
+    context.set_active_target_id("TID-reused");
+    assert_ne!(
+        context.active_page_target().web_contents_id(),
+        first_web_contents
+    );
+    assert_ne!(
+        context.active_page_target().main_frame_slot_id(),
+        first_main_frame_slot
+    );
 }
 
 #[test]

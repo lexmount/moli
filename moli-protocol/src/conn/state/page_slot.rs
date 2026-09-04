@@ -1,12 +1,13 @@
-use std::hash::{Hash, Hasher};
-
-use moli_core::page::{
-    Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
-    RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
-    RendererDocumentLifecycleSnapshot, RendererDocumentLifecycleWaitOutcome,
-    RendererDocumentLifecycleWaiter, RendererDocumentToken, RendererFrameToken,
-    RendererLifecycleEpoch, RendererLifecycleEventStamp, RendererLifecycleStartReason,
-    RendererLifecycleTerminationStamp, RendererPageCreationArtifacts,
+use moli_core::{
+    browser::NavigationId,
+    page::{
+        Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
+        RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
+        RendererDocumentLifecycleSnapshot, RendererDocumentLifecycleWaitOutcome,
+        RendererDocumentLifecycleWaiter, RendererDocumentToken, RendererFrameToken,
+        RendererLifecycleEpoch, RendererLifecycleEventStamp, RendererLifecycleStartReason,
+        RendererLifecycleTerminationStamp, RendererPageCreationArtifacts,
+    },
 };
 use tokio::sync::watch;
 
@@ -15,7 +16,7 @@ use super::document_lifecycle_observer::{
     RendererDocumentLifecycleObserver,
 };
 use super::page_residence_token::{TargetPageResidencePublisher, TargetPageResidenceToken};
-use super::{NavigationRequestId, RendererPageResidenceIdentity, TargetPageAttachmentId};
+use super::{RendererPageResidenceIdentity, TargetPageAttachmentId};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) enum TargetPageAbsenceReason {
@@ -45,29 +46,11 @@ impl TargetPageAbsenceReason {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct DocumentNavigationToken {
     pub(crate) target_id: String,
     pub(crate) loader_id: String,
-    pub(crate) request_id: NavigationRequestId,
-}
-
-impl PartialEq for DocumentNavigationToken {
-    fn eq(&self, other: &Self) -> bool {
-        self.request_id == other.request_id
-            && self.target_id == other.target_id
-            && self.loader_id == other.loader_id
-    }
-}
-
-impl Eq for DocumentNavigationToken {}
-
-impl Hash for DocumentNavigationToken {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.request_id.hash(state);
-        self.target_id.hash(state);
-        self.loader_id.hash(state);
-    }
+    pub(crate) navigation_id: NavigationId,
 }
 
 /// The target-owned lifetime of one cross-Document navigation request.
@@ -664,7 +647,7 @@ impl TargetPageSlot {
         let token = DocumentNavigationToken {
             target_id,
             loader_id,
-            request_id: NavigationRequestId::allocate(),
+            navigation_id: NavigationId::allocate(),
         };
         self.pending_renderer_page = None;
         self.pending_navigation_request = Some(PendingNavigationRequest::new(token.clone()));

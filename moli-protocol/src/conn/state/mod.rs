@@ -1,4 +1,3 @@
-mod attachment_identity;
 mod bounds;
 mod browser_context;
 mod browser_identity;
@@ -32,7 +31,6 @@ mod tests;
 
 // Re-export everything so `use super::state::*` paths continue to work.
 
-pub(crate) use attachment_identity::{NavigationRequestId, TargetPageAttachmentId};
 pub(crate) use browser_identity::BaseBrowserIdentityOverrideState;
 pub use identity::TargetPageResidenceIdentity as DevToolsPageResidenceIdentity;
 pub use identity::URL_BASE;
@@ -40,6 +38,7 @@ pub(crate) use identity::{
     RendererPageResidenceIdentity, TargetIdentityState, TargetPageProtocolAttachmentIdentity,
     TargetPageResidenceIdentity, TargetRootDocumentProtocolAttachmentIdentity,
 };
+pub(crate) use moli_core::browser::DocumentId as TargetPageAttachmentId;
 
 pub(crate) use devtools_renderer_channel::{
     CommittedRendererAgentAttachment, DevToolsRendererChannelError,
