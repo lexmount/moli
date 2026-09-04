@@ -2431,7 +2431,7 @@ async fn detach_fail_closes_page_before_retiring_unremovable_session_scripts() {
         .as_ref()
         .unwrap()
         .active_page_target();
-    assert!(target.owner_state.target_crash_state.is_crashed());
+    assert!(target.is_crashed());
     assert!(target.loaded_page().is_none());
     assert!(
         target
@@ -2537,7 +2537,7 @@ async fn detach_fail_closes_page_when_fetch_disable_cannot_reach_renderer() {
         .unwrap()
         .active_page_target();
     assert!(
-        target.owner_state.target_crash_state.is_crashed(),
+        target.is_crashed(),
         "a failed renderer Fetch cleanup must fail the Page closed"
     );
     assert!(target.loaded_page().is_none());

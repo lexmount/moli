@@ -8,8 +8,11 @@ use super::navigation_controller::NavigationController;
 
 mod document_host;
 mod session_storage;
+mod window;
 pub(in crate::conn) use document_host::DocumentHost;
 pub(crate) use session_storage::SessionStorageNamespace;
+pub(in crate::conn) use window::{Window, WindowOpener};
+pub(crate) use window::{WindowSurface, WindowSurfaceState};
 
 /// Stable Browser page ownership, independent of DevTools bindings.
 ///
@@ -23,6 +26,8 @@ pub(in crate::conn) struct WebContents {
     pub(in crate::conn) main_frame: MainFrameSlot,
     pub(in crate::conn) navigation_engine: Option<NavigationEngine>,
     pub(in crate::conn) session_storage: SessionStorageNamespace,
+    pub(in crate::conn) window: Window,
+    pub(in crate::conn) crashed: bool,
 }
 
 impl Default for WebContents {
@@ -33,6 +38,8 @@ impl Default for WebContents {
             main_frame: MainFrameSlot::default(),
             navigation_engine: None,
             session_storage: SessionStorageNamespace::default(),
+            window: Window::default(),
+            crashed: false,
         }
     }
 }

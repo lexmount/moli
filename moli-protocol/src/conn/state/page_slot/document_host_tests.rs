@@ -21,6 +21,9 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
         config,
     ));
     let stable_ids = (target.web_contents_id(), target.main_frame_slot_id());
+    target.set_window_surface_state(crate::conn::WindowSurfaceState::Fullscreen);
+    target.set_window_surface_geometry(Some(800), Some(600), Some(10), Some(20));
+    let window = target.window_surface();
     let first_document = target.current_document_id().unwrap();
     let storage = target.session_storage_store().clone();
     assert!(
@@ -75,6 +78,7 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
         stable_ids
     );
     assert_eq!(target.current_document_id(), Some(reserved));
+    assert_eq!(target.window_surface(), window);
     assert_ne!(first_document, reserved);
     assert_eq!(
         target

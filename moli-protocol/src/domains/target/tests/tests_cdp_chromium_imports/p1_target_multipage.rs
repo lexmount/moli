@@ -1265,22 +1265,16 @@ async fn rust_cdp_chromium_target_resetting_opener_clears_popup_opener_reference
         .remove_active_page_target_async()
         .await;
 
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .target_opener_ids
-            .contains_key(&target_id)
-    );
+    let popup = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .devtools_target_info(&target_id)
+        .unwrap();
+    assert!(popup.opener_id.is_none());
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .target_opener_frame_ids
-            .get(&target_id)
-            .map(String::as_str),
+        popup.opener_frame_id.as_ref().map(|id| id.as_str()),
         Some("TID-reset-opener")
     );
 }

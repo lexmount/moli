@@ -5927,8 +5927,6 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
         .as_mut()
         .unwrap()
         .active_page_target_mut()
-        .owner_state
-        .target_crash_state
         .mark_crashed();
 
     ctx.process_async(json!({
@@ -5974,13 +5972,7 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
             .browser_context
             .as_ref()
             .expect("active browser context");
-        assert!(
-            active
-                .active_page_target()
-                .owner_state
-                .target_crash_state
-                .is_crashed()
-        );
+        assert!(active.active_page_target().is_crashed());
         assert!(
             !active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
@@ -6051,8 +6043,6 @@ async fn same_context_background_session_can_stage_its_own_inspector_enable_befo
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 }
@@ -6153,8 +6143,6 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_ac
         .as_mut()
         .unwrap()
         .active_page_target_mut()
-        .owner_state
-        .target_crash_state
         .mark_crashed();
 
     ctx.process_async(json!({
@@ -6182,8 +6170,6 @@ async fn same_context_background_session_can_disable_its_own_inspector_before_ac
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed(),
         "navigation should still clear crash state even when inspector is disabled"
     );

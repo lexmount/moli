@@ -35,8 +35,9 @@ impl SurfaceOverrideInputs {
             active_target_surface: true,
             window_document_hidden: browser_context
                 .active_page_target()
-                .owner_state
-                .window_document_hidden(),
+                .window_surface()
+                .state
+                .document_hidden(),
         }
     }
 
@@ -64,7 +65,7 @@ impl SurfaceOverrideInputs {
             touch_emulation_enabled: state.effective_emulation_state.touch_emulation_enabled,
             focus_emulation_enabled: state.effective_emulation_state.focus_emulation_enabled,
             active_target_surface: false,
-            window_document_hidden: false,
+            window_document_hidden: state.window_surface().state.document_hidden(),
         }
     }
 
@@ -702,4 +703,31 @@ fn merge_extra_header_layers(layers: &[&[(String, String)]]) -> Vec<(String, Str
         }
     }
     headers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::conn::WindowSurfaceState;
+
+    #[test]
+    fn background_surface_uses_the_owning_window_state() {
+        let mut target = PageTargetHost::empty("TID-background-window".into());
+        target.effective_emulation_state.focus_emulation_enabled = true;
+        target.set_window_surface_state(WindowSurfaceState::Minimized);
+        let minimized = SurfaceOverrideInputs::from_background(&target, None, None, None);
+        assert!(minimized.document_has_focus());
+        assert!(
+            minimized.document_hidden(),
+            "focus emulation must not unminimize a window"
+        );
+
+        target.set_window_surface_state(WindowSurfaceState::Fullscreen);
+        let fullscreen = SurfaceOverrideInputs::from_background(&target, None, None, None);
+        assert!(!fullscreen.document_hidden());
+        assert_eq!(
+            target.window_surface().state,
+            WindowSurfaceState::Fullscreen
+        );
+    }
 }

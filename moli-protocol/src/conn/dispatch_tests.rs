@@ -4435,8 +4435,9 @@ async fn devtools_command_applies_window_state_to_document_surface() {
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .window_document_hidden(),
+            .window_surface()
+            .state
+            .document_hidden(),
         "SetWindowState must update the target owner state before applying document surfaces"
     );
     assert_eq!(
@@ -4468,9 +4469,9 @@ async fn devtools_command_applies_window_state_to_document_surface() {
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .window_surface_state,
-        TargetWindowSurfaceState::Fullscreen,
+            .window_surface()
+            .state,
+        WindowSurfaceState::Fullscreen,
         "SetWindowState fullscreen must update the target owner before applying document surfaces",
     );
     assert_eq!(
