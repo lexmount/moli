@@ -1482,12 +1482,14 @@ async fn emulate_network_conditions_offline_runtime_fetch_emits_loading_failed()
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_blocks_parser_external_script_but_preserves_following_parse_work() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
             r#"<!doctype html>
 <html><body>
-<script src="http://example.test/blocked/parser-script.js"></script>
+<script src="/blocked/parser-script.js"></script>
 <script>
 globalThis.__lm_after_blocked_parser_script = true;
 </script>
@@ -1497,10 +1499,23 @@ globalThis.__lm_after_blocked_parser_script = true;
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let script_requests = Arc::new(AtomicUsize::new(0));
+    let script_requests_for_server = Arc::clone(&script_requests);
     let server = tokio::spawn(async move {
-        axum::serve(listener, Router::new().route("/page", get(page)))
-            .await
-            .unwrap();
+        let router = Router::new().route("/page", get(page)).route(
+            "/blocked/parser-script.js",
+            get(move || {
+                let requests = Arc::clone(&script_requests_for_server);
+                async move {
+                    requests.fetch_add(1, Ordering::Relaxed);
+                    (
+                        [(CONTENT_TYPE.as_str(), "text/javascript")],
+                        "globalThis.__lm_blocked_parser_script_loaded = true;",
+                    )
+                }
+            }),
+        );
+        axum::serve(listener, router).await.unwrap();
     });
 
     let page_url = format!("http://{addr}/page");
@@ -1510,11 +1525,12 @@ globalThis.__lm_after_blocked_parser_script = true;
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
+    enable_network_domain(&mut ctx, 70_009, Some("SID-1")).await;
     ctx.process_async(json!({
         "id": 70_010,
         "method": "Network.setBlockedURLs",
         "sessionId": "SID-1",
-        "params": { "urls": ["http://example.test/blocked/*"] }
+        "params": { "urls": [format!("http://{addr}/blocked/*")] }
     }))
     .await;
     ctx.expect_result(70_010, json!({}), Some("SID-1"));
@@ -1526,19 +1542,19 @@ globalThis.__lm_after_blocked_parser_script = true;
         "params": { "url": page_url }
     }))
     .await;
-    let _ = ctx.take_response_by_id(70_011);
-
-    wait_until_messages(
+    let navigation = ctx.take_response_by_id(70_011);
+    wait_until_renderer_document_load(
         &mut ctx,
         Some("SID-1"),
-        "parser blocked external script load completion",
-        |messages| {
-            messages
-                .iter()
-                .any(|message| message["method"] == json!("Page.loadEventFired"))
-        },
+        "TID-1",
+        navigation["result"]["loaderId"].as_str().unwrap(),
     )
     .await;
+    assert_eq!(
+        script_requests.load(Ordering::Relaxed),
+        0,
+        "a blocked script must never reach the server"
+    );
 
     ctx.process_async(json!({
         "id": 70_012,
