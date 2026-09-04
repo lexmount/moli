@@ -240,6 +240,7 @@ impl JsContextHost {
         &mut self,
         handle: DomHandle,
         url: &Url,
+        initiator_url: Option<Url>,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -252,6 +253,7 @@ impl JsContextHost {
             .set_child_browsing_context_pending_navigation(
                 handle,
                 ChildBrowsingContextBootstrap::Url(url.clone()),
+                initiator_url,
                 true,
             )
             .is_none()
@@ -279,6 +281,7 @@ impl JsContextHost {
             .set_child_browsing_context_pending_navigation(
                 handle,
                 ChildBrowsingContextBootstrap::Request(request),
+                None,
                 true,
             )
             .is_none()
@@ -355,7 +358,11 @@ impl JsContextHost {
             let dispatch_load_on_no_string_completion =
                 entry_snapshot.navigation_seed_is_initial_about_blank_commit();
             let entry = self.child_browsing_contexts.get_mut(&handle)?;
-            entry.set_pending_navigation(ChildBrowsingContextBootstrap::Url(url.clone()), true);
+            entry.set_pending_navigation(
+                ChildBrowsingContextBootstrap::Url(url.clone()),
+                None,
+                true,
+            );
             self.queue_child_browsing_context_javascript_url_execution(
                 handle,
                 url.clone(),
@@ -382,6 +389,7 @@ impl JsContextHost {
             attribute_bootstrap,
             navigation_load,
             ChildDocumentNavigationInitiator::FrameOwnerElement,
+            None,
         );
         self.sync_existing_child_browsing_context_window_state(scope, handle);
         commit_result
@@ -395,6 +403,7 @@ impl JsContextHost {
     ) -> Option<ChildDocumentCommitResult> {
         let entry_snapshot = self.child_browsing_contexts.get(&handle).cloned()?;
         let pending_bootstrap = entry_snapshot.pending_live_navigation()?;
+        let initiator_url = entry_snapshot.pending_live_navigation_initiator_url();
         if self.current_child_navigation_load(handle) != Some(navigation_load) {
             tracing::debug!(
                 ?handle,
@@ -424,6 +433,7 @@ impl JsContextHost {
             pending_bootstrap,
             navigation_load,
             ChildDocumentNavigationInitiator::BrowsingContext,
+            initiator_url,
         );
         if commit_result
             .as_ref()
