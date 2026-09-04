@@ -29,6 +29,7 @@ impl JsContextHost {
                 entry.replace_navigation_in_entry_seed(&url);
             } else {
                 entry.apply_navigation_to_entry_seed(&url);
+                entry.mark_pending_top_level_history_length_increment();
             }
         }
         self.sync_existing_child_browsing_context_runtime_surface_from_seed(scope, handle);
@@ -51,6 +52,7 @@ impl JsContextHost {
                 entry.replace_navigation_in_entry_seed(&request.url);
             } else {
                 entry.apply_navigation_to_entry_seed(&request.url);
+                entry.mark_pending_top_level_history_length_increment();
             }
         }
         self.sync_existing_child_browsing_context_runtime_surface_from_seed(scope, handle);
@@ -75,6 +77,9 @@ impl JsContextHost {
         );
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.apply_queued_navigation_to_entry_seed(&url, replace_current);
+            if !replace_current {
+                entry.mark_pending_top_level_history_length_increment();
+            }
         }
         self.queue_child_browsing_context_navigation_to_url(handle, &url)
     }
@@ -98,6 +103,7 @@ impl JsContextHost {
         handle: DomHandle,
         resolved_url: &str,
         entry_seed: NavigationHistoryEntrySeed,
+        increments_joint_history: bool,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -107,6 +113,9 @@ impl JsContextHost {
         };
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.replace_navigation_entry_seed_and_clear_pending_history_increment(entry_seed);
+            if increments_joint_history {
+                entry.mark_pending_top_level_history_length_increment();
+            }
         }
         if self
             .set_child_browsing_context_pending_navigation(
@@ -134,6 +143,7 @@ impl JsContextHost {
         };
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.apply_deferred_navigation_to_entry_seed(&url);
+            entry.mark_pending_top_level_history_length_increment();
         }
         if self
             .set_child_browsing_context_pending_navigation(
@@ -162,6 +172,7 @@ impl JsContextHost {
         );
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.apply_deferred_navigation_to_entry_seed(&request.url);
+            entry.mark_pending_top_level_history_length_increment();
         }
         if self
             .set_child_browsing_context_pending_navigation(
