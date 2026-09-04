@@ -48,6 +48,64 @@ document.body.innerHTML = `
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn screenshot_resolves_flex_intrinsic_block_constraints_after_inline_geometry() {
+    run_page_vm_async_test(async move {
+        let loader =
+            crate::network::ResourceRequestClient::new(&FetchConfig::default()).expect("loader");
+        let mut page_vm = test_page_vm_with_loader_and_document_url(
+            &loader,
+            Vec::new(),
+            Url::parse("https://example.com/flex-intrinsic-block-constraints.html")?,
+        );
+        page_vm.vm_mut().eval(
+            r#"
+document.head.innerHTML = `<style>
+html,body{margin:0}
+.case{width:100px;height:200px}
+.column{display:flex;flex-direction:column}
+.row{display:flex}
+.content{width:100px;height:100px}
+#main-max>.item{flex:0 0 200px;max-height:min-content}
+#main-min>.item{flex:0 0 50px;min-height:max-content;overflow:hidden}
+#cross-max>.item{max-height:min-content}
+#vertical{display:flex;width:200px;height:100px}
+#vertical>.item{writing-mode:vertical-rl;flex:0 0 200px;max-width:min-content}
+</style>`;
+document.body.innerHTML = `
+<div id=main-max class="case column"><div class=item><div class=content></div></div></div>
+<div id=main-min class="case column"><div class=item><div class=content></div></div></div>
+<div id=cross-max class="case row"><div class=item><div class=content></div></div></div>
+<div id=vertical><div class=item><div class=content></div></div></div>`;
+'installed'
+"#,
+        )?;
+        page_vm.vm_mut().sync_live_document_style_sources();
+        page_vm
+            .vm_mut()
+            .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 800, 1.0))?
+            .expect("flex intrinsic block constraints screenshot layout");
+
+        let geometry = page_vm.vm_mut().eval(
+            r#"JSON.stringify(Object.fromEntries(['main-max','main-min','cross-max','vertical'].map(id=>{const rect=document.querySelector(`#${id}>.item`).getBoundingClientRect();return [id,[rect.width,rect.height]]})))"#,
+        )?;
+        let geometry: serde_json::Value = serde_json::from_str(&geometry)?;
+        assert_eq!(
+            geometry,
+            serde_json::json!({
+                "main-max": [100, 100],
+                "main-min": [100, 100],
+                "cross-max": [100, 100],
+                "vertical": [100, 100],
+            }),
+            "intrinsic block constraints must resolve after the flex item has an inline constraint",
+        );
+        Ok::<_, anyhow::Error>(())
+    })
+    .await
+    .expect("flex intrinsic block constraints fixture should run");
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn screenshot_resolves_orthogonal_percentages_against_ratio_derived_block_size() {
     run_page_vm_async_test(async move {
         let loader =
