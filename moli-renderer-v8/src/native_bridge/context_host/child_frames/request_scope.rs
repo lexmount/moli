@@ -812,9 +812,20 @@ impl JsContextHost {
         &self,
         handle: DomHandle,
     ) -> crate::document_runtime::DocumentSandboxPolicy {
-        document_sandbox_policy_from_attribute(
+        let owner_policy = document_sandbox_policy_from_attribute(
             self.dom_host().get_attribute(handle, "sandbox").as_deref(),
-        )
+        );
+        // A nested browsing context inherits the active sandboxing flags of
+        // its container Document. Preserve those restrictions when a network
+        // navigation replaces the initial empty Document.
+        self.child_browsing_context_parent_handle(handle)
+            .and_then(|parent| {
+                self.child_browsing_contexts
+                    .get(&parent)
+                    .map(|entry| entry.document_sandbox_policy())
+            })
+            .unwrap_or(self.document_policy_container().sandbox)
+            .with_response_content_security_policy(owner_policy)
     }
 
     pub(crate) fn child_browsing_context_document_credentialless(&self, handle: DomHandle) -> bool {

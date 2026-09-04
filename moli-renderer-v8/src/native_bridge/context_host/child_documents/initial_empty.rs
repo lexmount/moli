@@ -125,6 +125,12 @@ impl JsContextHost {
         let current_owner = owner_transition
             .current_owner()
             .expect("initial-empty frame initialization must install an owner");
+        let ancestor_origins_initialized =
+            self.refresh_current_child_document_ancestor_origins(handle);
+        debug_assert!(
+            ancestor_origins_initialized,
+            "initial-empty child Document must capture its ancestor origins"
+        );
         self.register_committed_document_resource_loader(
             crate::network::context::DocumentFetchContext::new(
                 crate::native_bridge::WindowDocumentOwner::Frame(current_owner),
