@@ -33,6 +33,9 @@ impl PageVm {
             RendererPageDomManipulationTask::PopupLoadEvent(task) => self
                 .apply_selected_page_popup_load_event_turn(task)
                 .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::PopupLoadEvent)),
+            RendererPageDomManipulationTask::PopupClose(task) => self
+                .apply_selected_page_popup_close_turn(task)
+                .map(|outcome| outcome.map_action(PageDomManipulationTurnAction::PopupClose)),
             RendererPageDomManipulationTask::ConnectedStyleEvent(task) => self
                 .apply_selected_page_connected_style_event_turn(task)
                 .map(|outcome| {

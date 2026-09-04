@@ -131,6 +131,7 @@ mod page_owned_document_script_completion;
 mod page_owned_document_script_hooks;
 mod page_parser_async_module_admission;
 mod page_parser_owned_module_continuation;
+mod page_popup_close;
 mod page_popup_load_event;
 mod page_rendering_update;
 #[cfg(test)]
@@ -221,6 +222,7 @@ pub(crate) use page_module_reaction::AuthorizedCurrentPageModuleReaction;
 pub(crate) use page_modulepreload_start::AuthorizedCurrentChildModulepreloadStartTask;
 pub(crate) use page_navigation_api_task::AuthorizedCurrentPageNavigationApiTask;
 pub(crate) use page_opfs_task::AuthorizedCurrentPageOpfsTask;
+pub(crate) use page_popup_close::AuthorizedCurrentPagePopupClose;
 pub(crate) use page_popup_load_event::AuthorizedCurrentPagePopupLoadEvent;
 pub(crate) use page_rendering_update::AuthorizedCurrentPageRenderingUpdate;
 pub(crate) use page_resource_completion::{

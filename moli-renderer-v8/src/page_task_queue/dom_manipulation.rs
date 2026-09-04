@@ -27,6 +27,9 @@ use super::{
         RendererPageImageLoadEventOwner, RendererPageImageLoadEventSender,
         RendererPageImageLoadEventTask,
     },
+    popup_close::{
+        RendererPagePopupCloseOwner, RendererPagePopupCloseSender, RendererPagePopupCloseTask,
+    },
     popup_load_event::{
         RendererPagePopupLoadEventOwner, RendererPagePopupLoadEventSender,
         RendererPagePopupLoadEventTask,
@@ -66,6 +69,7 @@ pub(crate) enum RendererPageDomManipulationOwner {
     FileEntryFileCallback(RendererPageFileEntryFileCallbackOwner),
     ImageLoadEvent(RendererPageImageLoadEventOwner),
     PopupLoadEvent(RendererPagePopupLoadEventOwner),
+    PopupClose(RendererPagePopupCloseOwner),
     ConnectedStyleEvent(RendererPageStylesheetTaskOwner),
     TextTrackDefaultMode(RendererPageTextTrackDefaultModeOwner),
     TextTrackLoad(RendererPageTextTrackLoadOwner),
@@ -82,6 +86,7 @@ pub(crate) enum RendererPageDomManipulationTask {
     FileEntryFileCallback(RendererPageFileEntryFileCallbackTask),
     ImageLoadEvent(RendererPageImageLoadEventTask),
     PopupLoadEvent(RendererPagePopupLoadEventTask),
+    PopupClose(RendererPagePopupCloseTask),
     ConnectedStyleEvent(RendererPageConnectedStyleEventTask),
     TextTrackDefaultMode(RendererPageTextTrackDefaultModeTask),
     TextTrackLoad(RendererPageTextTrackLoadTask),
@@ -110,6 +115,7 @@ impl RendererPageDomManipulationTask {
             Self::PopupLoadEvent(task) => {
                 RendererPageDomManipulationOwner::PopupLoadEvent(task.owner())
             }
+            Self::PopupClose(task) => RendererPageDomManipulationOwner::PopupClose(task.owner()),
             Self::ConnectedStyleEvent(task) => {
                 RendererPageDomManipulationOwner::ConnectedStyleEvent(task.owner())
             }
@@ -144,6 +150,7 @@ pub(crate) enum PageDomManipulationTurnAction {
     FileEntryFileCallback(super::PageFileEntryFileCallbackTurnAction),
     ImageLoadEvent(super::PageImageLoadEventTurnAction),
     PopupLoadEvent(super::PagePopupLoadEventTurnAction),
+    PopupClose(super::PagePopupCloseTurnAction),
     ConnectedStyleEvent(PageConnectedStyleEventTurnAction),
     TextTrackDefaultMode(super::PageTextTrackDefaultModeTurnAction),
     TextTrackLoad(super::PageTextTrackLoadTurnAction),
@@ -201,6 +208,10 @@ impl RendererPageDomManipulationSender {
 
     pub(crate) fn popup_load_event(&self) -> RendererPagePopupLoadEventSender {
         RendererPagePopupLoadEventSender::new(self.route.clone(), self.root_document)
+    }
+
+    pub(crate) fn popup_close(&self) -> RendererPagePopupCloseSender {
+        RendererPagePopupCloseSender::new(self.route.clone(), self.root_document)
     }
 
     pub(crate) fn text_track_default_mode(&self) -> RendererPageTextTrackDefaultModeSender {
