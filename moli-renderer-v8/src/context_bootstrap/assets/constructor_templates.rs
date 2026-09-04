@@ -201,6 +201,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::MediaQueryListEvent => {
             super::super::media_queries::build_media_query_list_event_template(scope)
         }
+        ConstructorKind::HashChangeEvent => {
+            build_event_subclass_template(scope, EventSubclassKind::HashChangeEvent)
+        }
         ConstructorKind::PageTransitionEvent => {
             build_event_subclass_template(scope, EventSubclassKind::PageTransitionEvent)
         }

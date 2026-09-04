@@ -588,19 +588,20 @@ pub(super) fn dispatch_popstate_event<'s>(
     child_handle: Option<crate::document_runtime::DomHandle>,
     state: v8::Local<'s, v8::Value>,
 ) {
-    let event_state = new_event_state(scope);
-    initialize_event_object(scope, event_state, "popstate", false, false);
-    let _ = PopStateEventStateDeclaration::new(state).initialize(scope, event_state);
-    super::events::define_event_property(
-        scope,
-        event_state,
-        "hasUAVisualTransition",
-        v8::Boolean::new(scope, false).into(),
-    );
-    let _ = web_api_interfaces::initialize(scope, event_state, "PopStateEvent");
-    let Some(event) = new_event_wrapper(scope, event_state) else {
+    let Ok(event_ctor) =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "PopStateEvent")
+    else {
         return;
     };
+    let init = PopStateEventStateDeclaration::new(state)
+        .bind(scope)
+        .expect("PopStateEvent init declaration should bind");
+    let Some(event) =
+        event_ctor.new_instance(scope, &[v8str(scope, "popstate").into(), init.into()])
+    else {
+        return;
+    };
+    mark_event_trusted(scope, event);
     let runtime = unsafe { &mut *host_ptr };
     if let Some(child_handle) = child_handle {
         runtime.dispatch_child_window_event(scope, child_handle, "popstate", event);
@@ -620,13 +621,16 @@ pub(crate) fn construct_original_hash_change_event<'s>(
     old_url: &str,
     new_url: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let state = new_event_state(scope);
-    initialize_event_object(scope, state, "hashchange", false, false);
-    HashChangeEventStateDeclaration::new(old_url.to_owned(), new_url.to_owned())
-        .initialize(scope, state)
-        .ok()?;
-    web_api_interfaces::initialize(scope, state, "HashChangeEvent").ok()?;
-    new_event_wrapper(scope, state)
+    let event_ctor =
+        super::exposed_interfaces::ensure_intrinsic_interface_constructor(scope, "HashChangeEvent")
+            .ok()?;
+    let init = HashChangeEventStateDeclaration::new(old_url.to_owned(), new_url.to_owned())
+        .bind(scope)
+        .expect("HashChangeEvent init declaration should bind");
+    let event =
+        event_ctor.new_instance(scope, &[v8str(scope, "hashchange").into(), init.into()])?;
+    mark_event_trusted(scope, event);
+    Some(event)
 }
 
 pub(crate) fn dispatch_beforeunload_for_runtime_owner<'s>(
