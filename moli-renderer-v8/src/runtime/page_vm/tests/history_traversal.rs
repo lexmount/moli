@@ -313,10 +313,17 @@ async fn history_traversal_discards_a_retired_child_local_window() {
             r##"
 const frame = document.createElement("iframe");
 frame.id = "history-stale-child";
+frame.srcdoc = "<!doctype html><p>child</p>";
 document.body.appendChild(frame);
 "created"
 "##,
         )?;
+        run_expected_child_frame_task_source_after_realm_prerequisite_for_wait(
+            &mut page_vm,
+            ChildFrameSemanticTurnKind::NavigationCommit,
+            "history stale-child srcdoc commit",
+        )
+        .await;
         materialize_child_realm_through_page_turn_for_test(&mut page_vm, "history-stale-child")?;
         page_vm.vm_mut().eval(
             r##"
@@ -325,7 +332,7 @@ const child = document.getElementById("history-stale-child").contentWindow;
 child.addEventListener("popstate", () => {
   parent.__retiredChildHistoryEvents += 1;
 });
-child.history.pushState(null, "", "#queued");
+child.history.pushState(null, "", "about:srcdoc#queued");
 child.history.back();
 document.getElementById("history-stale-child").remove();
 "retired"

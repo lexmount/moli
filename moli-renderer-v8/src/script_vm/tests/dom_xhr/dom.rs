@@ -9614,7 +9614,7 @@ fn dom_parser_uses_its_constructor_realm_associated_document() {
   const frame = document.createElement('iframe');
   (document.body || document.documentElement || document).appendChild(frame);
   const child = frame.contentWindow;
-  child.history.replaceState(null, '', '/child-v1.html');
+  child.history.replaceState(null, '', 'about:blank#child-v1');
 
   const topParser = new DOMParser();
   const childParser = new child.DOMParser();
@@ -9635,7 +9635,7 @@ fn dom_parser_uses_its_constructor_realm_associated_document() {
       'text/html'
     ).URL;
   const beforeSameDocumentUpdate = parseUrl(childParser);
-  child.history.replaceState(null, '', '/child-v2.html');
+  child.history.replaceState(null, '', 'about:blank#child-v2');
 
   let invalidReceiver;
   try {
@@ -9664,7 +9664,7 @@ fn dom_parser_uses_its_constructor_realm_associated_document() {
 
     assert_eq!(
         result,
-        r#"{"top":"https://dom-parser-realm.test/top.html","child":"https://dom-parser-realm.test/child-v2.html","childWithTopNewTarget":"https://dom-parser-realm.test/child-v2.html","topWithChildNewTarget":"https://dom-parser-realm.test/top.html","beforeSameDocumentUpdate":"https://dom-parser-realm.test/child-v1.html","invalidReceiver":"TypeError"}"#
+        r#"{"top":"https://dom-parser-realm.test/top.html","child":"about:blank#child-v2","childWithTopNewTarget":"about:blank#child-v2","topWithChildNewTarget":"https://dom-parser-realm.test/top.html","beforeSameDocumentUpdate":"about:blank#child-v1","invalidReceiver":"TypeError"}"#
     );
 }
 
@@ -9679,7 +9679,7 @@ fn dom_parser_non_object_new_target_prototype_uses_new_target_realm_default() {
   const frame = document.createElement('iframe');
   (document.body || document.documentElement || document).appendChild(frame);
   const child = frame.contentWindow;
-  child.history.replaceState(null, '', '/child.html');
+  child.history.replaceState(null, '', 'about:blank#child');
 
   const TopBad = new Function();
   TopBad.prototype = 7;
