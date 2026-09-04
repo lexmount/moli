@@ -5174,7 +5174,9 @@ html/browsers/browsing-the-web/history-traversal/event-order/same-document-trave
 html/browsers/browsing-the-web/history-traversal/events.html
 html/browsers/browsing-the-web/history-traversal/hash-empty-string.html
 html/browsers/browsing-the-web/history-traversal/hashchange-same-fragment-does-not-fire.html
+html/browsers/browsing-the-web/history-traversal/hashchange_event.html
 html/browsers/browsing-the-web/history-traversal/persisted-user-state-restoration/scroll-restoration-basic.html
+html/browsers/browsing-the-web/history-traversal/popstate_event.html
 html/browsers/browsing-the-web/history-traversal/same-url.html
 html/browsers/browsing-the-web/history-traversal/window-name-after-same-origin-main-frame-navigation.html
 html/browsers/browsing-the-web/navigating-across-documents/003.html
