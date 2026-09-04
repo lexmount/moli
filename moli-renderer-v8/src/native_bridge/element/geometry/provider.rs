@@ -2,9 +2,9 @@ use std::collections::HashSet;
 
 use moli_layout::{
     LayoutAnswers, LayoutBoxModel, LayoutCaretPosition, LayoutDocumentMetrics,
-    LayoutElementMetrics, LayoutError, LayoutFlushReason, LayoutHit, LayoutPoint, LayoutQuery,
-    LayoutQueryAnswer, LayoutQueryBatch, LayoutResolvedGridTracks, LayoutScrollIntoViewGeometry,
-    LayoutSize,
+    LayoutElementMetrics, LayoutError, LayoutFlushReason, LayoutHit, LayoutPhysicalBoxStrut,
+    LayoutPoint, LayoutQuery, LayoutQueryAnswer, LayoutQueryBatch, LayoutResolvedGridTracks,
+    LayoutScrollIntoViewGeometry, LayoutSize,
 };
 
 use super::client_rect::{ClientRect, client_rect_from_quad, union_client_rect, zero_client_rect};
@@ -295,6 +295,29 @@ pub(crate) fn observable_used_box_size(
     match answers.answers.into_iter().next() {
         Some(LayoutQueryAnswer::UsedBoxSize(size)) => Ok(size),
         _ => Err(provider_contract_error("used box size")),
+    }
+}
+
+pub(crate) fn observable_used_margin(
+    runtime: &JsContextHost,
+    source: DomHandle,
+    reason: LayoutFlushReason,
+) -> Result<Option<LayoutPhysicalBoxStrut>, LayoutError> {
+    if !runtime.dom_host().is_connected(source) {
+        return Ok(None);
+    }
+    let Some(document) = runtime.layout_document_for_source(source) else {
+        return Ok(None);
+    };
+    let answers = observable_geometry_batch(
+        runtime,
+        document,
+        reason,
+        &LayoutQueryBatch::new(vec![LayoutQuery::UsedMargin { source }]),
+    )?;
+    match answers.answers.into_iter().next() {
+        Some(LayoutQueryAnswer::UsedMargin(margin)) => Ok(margin),
+        _ => Err(provider_contract_error("used margin")),
     }
 }
 

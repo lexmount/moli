@@ -11,9 +11,9 @@ use crate::{
     LayoutBoxGeometry, LayoutBoxId, LayoutClipChainId, LayoutClipNode, LayoutCoordinateSpaceId,
     LayoutError, LayoutFlushReason, LayoutFragment, LayoutFragmentBoxModel, LayoutFragmentId,
     LayoutFragmentKind, LayoutInlineAxis, LayoutOutputBoxId, LayoutPassMetrics, LayoutPassResult,
-    LayoutPoint, LayoutRect, LayoutScrollExtent, LayoutScrollbarAxis, LayoutScrollbarGeometry,
-    LayoutSize, LayoutTransform2D, LayoutViewport, LayoutWorld, PaintCaptureRequest,
-    PaintDiagnostic, PaintDiagnosticSeverity,
+    LayoutPhysicalBoxStrut, LayoutPoint, LayoutRect, LayoutScrollExtent, LayoutScrollbarAxis,
+    LayoutScrollbarGeometry, LayoutSize, LayoutTransform2D, LayoutUsedBoxValues, LayoutViewport,
+    LayoutWorld, PaintCaptureRequest, PaintDiagnostic, PaintDiagnosticSeverity,
 };
 
 pub(crate) struct LayoutPassPhaseMetrics {
@@ -438,12 +438,50 @@ where
                 ) => is_document_element,
                 None => false,
             };
-            let used_box_size = layout_box.is_css_box().then(|| {
+            let used_values = layout_box.is_css_box().then(|| {
+                let layout = layout_box.final_layout();
+                let mut used_margin = layout.margin;
+                let is_in_flow_grid_item = !layout_box.style.is_out_of_flow()
+                    && layout_box.layout_parent.is_some_and(|parent| {
+                        self.world.boxes[parent.index()]
+                            .style
+                            .display()
+                            .is_grid_container()
+                    });
+                if is_in_flow_grid_item {
+                    // Blink stores Grid auto-margin alignment in the fragment
+                    // offset, while its fragment margin strut keeps those auto
+                    // edges at zero. Taffy exposes the absorbed alignment
+                    // space through `Layout.margin`, so normalize only those
+                    // authored-auto edges at the browser fragment boundary.
+                    let authored_margin = layout_box.style.taffy.margin;
+                    if authored_margin.top.is_auto() {
+                        used_margin.top = 0.0;
+                    }
+                    if authored_margin.right.is_auto() {
+                        used_margin.right = 0.0;
+                    }
+                    if authored_margin.bottom.is_auto() {
+                        used_margin.bottom = 0.0;
+                    }
+                    if authored_margin.left.is_auto() {
+                        used_margin.left = 0.0;
+                    }
+                }
+                let margin = LayoutPhysicalBoxStrut::new(
+                    used_margin.top,
+                    used_margin.right,
+                    used_margin.bottom,
+                    used_margin.left,
+                );
                 let box_rect = match layout_box.style.taffy.box_sizing {
                     taffy::BoxSizing::ContentBox => geometry.content_box,
                     taffy::BoxSizing::BorderBox => geometry.border_box,
                 };
-                LayoutSize::new(box_rect.width, box_rect.height)
+                LayoutUsedBoxValues {
+                    size: LayoutSize::new(box_rect.width, box_rect.height),
+                    margin,
+                }
             });
             self.boxes.push(LayoutBoxGeometry {
                 id,
@@ -469,7 +507,7 @@ where
                 padding_box: geometry.padding_box,
                 border_box: geometry.border_box,
                 margin_box: geometry.margin_box,
-                used_box_size,
+                used_values,
                 fragments: Vec::new(),
                 layout_origin_in_document: layout_origins[index],
                 is_body_element: semantics.is_some_and(|element| element.is_html_element("body")),

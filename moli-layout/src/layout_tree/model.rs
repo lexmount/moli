@@ -49,6 +49,43 @@ pub struct LayoutSize {
     pub height: f32,
 }
 
+/// Four physical used-value edges of a CSS box.
+///
+/// Unlike a bounding rectangle, a strut preserves negative and independently
+/// resolved opposite edges. That distinction matters for layout-dependent
+/// CSSOM values such as percentage and automatic margins.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LayoutPhysicalBoxStrut {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+impl LayoutPhysicalBoxStrut {
+    pub const ZERO: Self = Self::new(0.0, 0.0, 0.0, 0.0);
+
+    pub const fn new(top: f32, right: f32, bottom: f32, left: f32) -> Self {
+        Self {
+            top,
+            right,
+            bottom,
+            left,
+        }
+    }
+}
+
+/// CSSOM-observable used values retained for a principal CSS box.
+///
+/// Size and margin come from one numeric layout epoch. Keeping them behind a
+/// single applicability boundary prevents consumers from observing a partial
+/// box state for non-box layout objects.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayoutUsedBoxValues {
+    pub size: LayoutSize,
+    pub margin: LayoutPhysicalBoxStrut,
+}
+
 /// Physical axis corresponding to CSS inline progression for a frozen box.
 ///
 /// Geometry in the frozen tree is physical, but caret and Range algorithms
@@ -460,13 +497,13 @@ pub struct LayoutBoxGeometry {
     pub padding_box: LayoutRect,
     pub border_box: LayoutRect,
     pub margin_box: LayoutRect,
-    /// CSSOM used `width`/`height` selected during this layout epoch.
+    /// CSSOM used size and physical margins selected during this layout epoch.
     ///
-    /// This remains in the box's effective-zoomed layout space, like the
-    /// retained box rectangles. Query projection removes that same retained
-    /// zoom. `None` means this principal layout object is not a CSS box, so
-    /// these properties expose their computed rather than used values.
-    pub used_box_size: Option<LayoutSize>,
+    /// Margins stay separate from `margin_box`: opposite negative margins can
+    /// make that rectangle degenerate, while CSSOM still exposes each edge.
+    /// Values remain in effective-zoomed layout space; query projection removes
+    /// the retained zoom. `None` means this is not a principal CSS box.
+    pub used_values: Option<LayoutUsedBoxValues>,
     pub fragments: Vec<LayoutFragmentId>,
     /// Untransformed border-box origin in document layout coordinates.
     pub layout_origin_in_document: LayoutPoint,

@@ -7,8 +7,8 @@ use crate::LayoutPosition;
 use super::{
     model::{
         LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragmentBoxModel, LayoutFragmentKind,
-        LayoutInlineAxis, LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect,
-        LayoutResolvedGridTracks, LayoutSize, LayoutTransform2D,
+        LayoutInlineAxis, LayoutOutputBoxId, LayoutPhysicalBoxStrut, LayoutPoint, LayoutQuad,
+        LayoutRect, LayoutResolvedGridTracks, LayoutSize, LayoutTransform2D,
     },
     query::{LayoutElementMetrics, LayoutNodeOutput},
     tree::FrozenLayoutTree,
@@ -81,8 +81,17 @@ where
     pub fn used_box_size_for_source(&self, source: N) -> Option<LayoutSize> {
         let output = self.source_output(source)?;
         let geometry = self.box_geometry(output.principal_box?)?;
-        let size = geometry.used_box_size?;
+        let size = geometry.used_values?.size;
         Some(CssomAbsoluteZoom::new(geometry.effective_zoom).size(size))
+    }
+
+    /// Returns layout-dependent physical margins for one principal CSS box,
+    /// normalized out of the box's effective CSS zoom.
+    pub fn used_margin_for_source(&self, source: N) -> Option<LayoutPhysicalBoxStrut> {
+        let output = self.source_output(source)?;
+        let geometry = self.box_geometry(output.principal_box?)?;
+        let margin = geometry.used_values?.margin;
+        Some(CssomAbsoluteZoom::new(geometry.effective_zoom).strut(margin))
     }
 
     /// Resolves CSSOM View element metrics while allowing the renderer to hide
@@ -516,7 +525,16 @@ impl CssomAbsoluteZoom {
     }
 
     fn size(self, size: LayoutSize) -> LayoutSize {
-        LayoutSize::new(size.width / self.0, size.height / self.0)
+        LayoutSize::new(self.scalar(size.width), self.scalar(size.height))
+    }
+
+    fn strut(self, strut: LayoutPhysicalBoxStrut) -> LayoutPhysicalBoxStrut {
+        LayoutPhysicalBoxStrut::new(
+            self.scalar(strut.top),
+            self.scalar(strut.right),
+            self.scalar(strut.bottom),
+            self.scalar(strut.left),
+        )
     }
 }
 
@@ -791,7 +809,7 @@ mod tests {
                     padding_box: LayoutRect::ZERO,
                     border_box: LayoutRect::ZERO,
                     margin_box: LayoutRect::ZERO,
-                    used_box_size: None,
+                    used_values: None,
                     fragments: vec![skipped_fragment, valid_fragment],
                     layout_origin_in_document: LayoutPoint::new(100.0, 200.0),
                     is_body_element: false,

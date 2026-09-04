@@ -7520,7 +7520,7 @@ fn computed_line_height_resolves_numbers_and_percentages() {
     assert_eq!(result, "normal|16px|10px|1.6px");
 }
 #[test]
-fn computed_horizontal_auto_margins_resolve_to_pixels() {
+fn computed_auto_margins_remain_computed_without_a_layout_box() {
     let mut vm = new_storage_test_vm("https://computed-auto-margin.test/");
 
     let result = vm
@@ -7548,9 +7548,9 @@ fn computed_horizontal_auto_margins_resolve_to_pixels() {
 })()
 "#,
         )
-        .expect("computed auto margins should resolve against containing block width");
+        .expect("computed auto margins should remain computed without a layout box");
 
-    assert_eq!(result, "10px|10px|0px|0px");
+    assert_eq!(result, "auto|auto|0px|0px");
 }
 #[test]
 fn computed_insets_absolutize_font_relative_lengths() {

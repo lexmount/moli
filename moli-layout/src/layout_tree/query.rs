@@ -7,8 +7,8 @@ use crate::LayoutError;
 use super::{
     hit_test::{LayoutCaretPosition, LayoutHit},
     model::{
-        LayoutBoxModel, LayoutFragmentId, LayoutOutputBoxId, LayoutPoint, LayoutQuad,
-        LayoutResolvedGridTracks, LayoutSize, LayoutViewport,
+        LayoutBoxModel, LayoutFragmentId, LayoutOutputBoxId, LayoutPhysicalBoxStrut, LayoutPoint,
+        LayoutQuad, LayoutResolvedGridTracks, LayoutSize, LayoutViewport,
     },
     pass_result::{LayoutFlushReason, LayoutPassMetrics},
     tree::FrozenLayoutTree,
@@ -122,6 +122,10 @@ pub enum LayoutQuery<N> {
     UsedBoxSize {
         source: N,
     },
+    /// CSSOM resolved physical margins for a principal CSS box.
+    UsedMargin {
+        source: N,
+    },
     ScrollIntoViewGeometry {
         source: N,
     },
@@ -174,6 +178,7 @@ pub enum LayoutQueryAnswer<N> {
     ElementMetrics(Option<LayoutElementMetrics<N>>),
     UsedGridTracks(Option<LayoutResolvedGridTracks>),
     UsedBoxSize(Option<LayoutSize>),
+    UsedMargin(Option<LayoutPhysicalBoxStrut>),
     ScrollIntoViewGeometry(Option<LayoutScrollIntoViewGeometry<N>>),
     IntersectionGeometry(Option<LayoutIntersectionGeometry>),
     HitTest(Option<LayoutHit<N>>),
@@ -252,6 +257,9 @@ where
                 }
                 LayoutQuery::UsedBoxSize { source } => {
                     LayoutQueryAnswer::UsedBoxSize(self.used_box_size_for_source(*source))
+                }
+                LayoutQuery::UsedMargin { source } => {
+                    LayoutQueryAnswer::UsedMargin(self.used_margin_for_source(*source))
                 }
                 LayoutQuery::ScrollIntoViewGeometry { source } => {
                     LayoutQueryAnswer::ScrollIntoViewGeometry(
