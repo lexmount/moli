@@ -285,14 +285,8 @@ impl TargetNavigationLoadInputs {
                 .browser_identity_override()
                 .cloned()
                 .or_else(|| browser_context.default_browser_identity_override_owned()),
-            http_proxy_override: page_state
-                .http_proxy_override
-                .clone()
-                .or_else(|| browser_context.default_http_proxy_override.clone()),
-            http_no_proxy_override: page_state
-                .http_no_proxy_override
-                .clone()
-                .or_else(|| browser_context.default_http_no_proxy_override.clone()),
+            http_proxy_override: browser_context.default_http_proxy_override.clone(),
+            http_no_proxy_override: browser_context.default_http_no_proxy_override.clone(),
             tls_verify_host_override: page_state
                 .tls_verify_host_override()
                 .or(browser_context.default_tls_verify_host_override),
@@ -346,9 +340,8 @@ impl TargetNavigationLoadInputs {
         inputs.browser_context_id = Some(browser_context.id.clone());
         inputs.browser_identity_override =
             browser_context.effective_active_browser_identity_override_owned();
-        inputs.http_proxy_override = browser_context.effective_active_http_proxy_override_owned();
-        inputs.http_no_proxy_override =
-            browser_context.effective_active_http_no_proxy_override_owned();
+        inputs.http_proxy_override = browser_context.default_http_proxy_override.clone();
+        inputs.http_no_proxy_override = browser_context.default_http_no_proxy_override.clone();
         inputs.tls_verify_host_override =
             browser_context.effective_active_tls_verify_host_override();
         inputs.document_start_scripts = browser_context.default_document_start_script_descriptors();
@@ -3180,6 +3173,8 @@ mod tests {
     #[test]
     fn target_session_owner_ref_snapshots_background_navigation_load_inputs() {
         let mut background = BrowserContext::new_with_page_for_test("BID-background", "TID-active");
+        background.default_http_proxy_override = Some("http://proxy.example:8080".to_owned());
+        background.default_http_no_proxy_override = Some("localhost,127.0.0.1".to_owned());
         background
             .active_page_target_mut()
             .set_base_locale_override(Some("zh-CN".to_owned()));
@@ -3194,8 +3189,6 @@ mod tests {
                 .expect("background target must exist");
             state.set_base_locale_override(Some("fr-FR".to_owned()));
             state.set_base_timezone_override(Some("Europe/Paris".to_owned()));
-            state.http_proxy_override = Some("http://proxy.example:8080".to_owned());
-            state.http_no_proxy_override = Some("localhost,127.0.0.1".to_owned());
             state.set_tls_verify_host_override(Some(false));
             state.apply_emulation_policy_change(
                 crate::conn::EmulationPolicyChange::ScriptExecutionDisabled(true),

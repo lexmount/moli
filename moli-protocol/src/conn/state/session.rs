@@ -336,8 +336,6 @@ impl PageTargetHost {
             || self.network_offline()
             || self.base_browser_identity != super::BaseBrowserIdentityOverrideState::default()
             || self.browser_identity_override().is_some()
-            || self.http_proxy_override.is_some()
-            || self.http_no_proxy_override.is_some()
             || self.tls_verify_host_override().is_some()
             || self.base_locale_override.is_some()
             || self.base_timezone_override.is_some()
@@ -363,8 +361,6 @@ impl PageTargetHost {
     /// the final session-registry removal a pure commit operation.
     pub(crate) fn reset_primary_session_target_state_fields(&mut self) {
         self.set_network_offline(false);
-        self.http_proxy_override = None;
-        self.http_no_proxy_override = None;
         self.set_tls_verify_host_override(None);
         self.input_intercept_drags_enabled = false;
         self.input_drag_intercepted = false;
