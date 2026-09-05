@@ -52,6 +52,65 @@ impl fmt::Debug for RendererAgentBinding {
 }
 
 impl RendererAgentBinding {
+    pub(crate) fn detach_session(
+        &self,
+        inspector_session_id: Option<String>,
+    ) -> anyhow::Result<()> {
+        self.endpoint.detach_session(inspector_session_id)
+    }
+
+    pub(crate) async fn restore_runtime_state(
+        &self,
+        inspector_session_id: Option<String>,
+        session_restore_snapshots: &[moli_core::page::RendererInspectorSessionRestoreSnapshot],
+        stored_runtime_bindings: &[moli_core::page::RuntimeBindingRegistration],
+        session_runtime_bindings: &[moli_core::page::RuntimeBindingRegistration],
+        runtime_enabled: bool,
+    ) -> anyhow::Result<(
+        std::sync::Arc<moli_renderer_v8::RendererPageState>,
+        Option<moli_core::RendererOutputFence>,
+    )> {
+        let pending = self
+            .runtime_inspection(inspector_session_id.clone())
+            .start_apply_runtime_protocol_state(
+                session_restore_snapshots,
+                &[],
+                stored_runtime_bindings,
+                session_runtime_bindings,
+            )?;
+        let output = PendingPageCommand::from_inspector_main_route(pending)
+            .wait()
+            .await?
+            .into_unit_page_command_turn()?;
+        // Release the first Main handoff before admitting Runtime.enable. Its
+        // frozen snapshot/fence remain valid without borrowing the candidate Page.
+        let (completion, mut predecessor) = output.into_completion_and_predecessor();
+        let (_, mut snapshot, _) = completion.into_parts();
+        if runtime_enabled {
+            let enabled = async {
+                self.start_runtime_enable_events(inspector_session_id)?
+                    .wait()
+                    .await?
+                    .into_runtime_protocol_message_command_turn()
+            }
+            .await;
+            // Runtime enable replay retains the existing best-effort contract;
+            // applying the stored configuration above is the required phase.
+            if let Ok(output) = enabled {
+                let (completion, tail) = output.into_completion_and_predecessor();
+                let (_, enabled_snapshot, _) = completion.into_parts();
+                snapshot = enabled_snapshot;
+                if let Some(tail) = tail {
+                    predecessor = Some(match predecessor {
+                        Some(head) => head.latest_in_same_stream(tail),
+                        None => tail,
+                    });
+                }
+            }
+        }
+        Ok((snapshot, predecessor))
+    }
+
     pub(crate) fn runtime_inspection(
         &self,
         inspector_session_id: Option<String>,
@@ -252,7 +311,7 @@ impl RendererChannelAttachment {
 #[derive(Debug)]
 pub(crate) struct PreparedRendererAgentAttachment {
     navigation: NavigationId,
-    attachment: RendererAgentAttachment,
+    renderer: RendererChannelAttachment,
 }
 
 impl PreparedRendererAgentAttachment {
@@ -262,15 +321,37 @@ impl PreparedRendererAgentAttachment {
 
     #[cfg(test)]
     pub(crate) fn attachment(&self) -> RendererAgentAttachment {
-        self.attachment
+        self.renderer.attachment()
     }
 
     pub(crate) fn id(&self) -> RendererAgentAttachmentId {
-        self.attachment.id()
+        self.renderer.attachment().id()
     }
 
     pub(crate) fn agent_token(&self) -> RendererDevToolsAgentToken {
-        self.attachment.agent_token()
+        self.renderer.attachment().agent_token()
+    }
+
+    pub(crate) fn bind(
+        &mut self,
+        endpoint: RendererInspectionEndpoint,
+    ) -> Result<(), DevToolsRendererChannelError> {
+        let attachment = self.renderer.attachment();
+        if attachment.agent_token() != endpoint.agent_token() {
+            return Err(DevToolsRendererChannelError::CandidatePageAttachmentMismatch);
+        }
+        self.renderer = RendererChannelAttachment::Bound(RendererAgentBinding {
+            attachment,
+            endpoint,
+        });
+        Ok(())
+    }
+
+    pub(crate) fn binding(&self) -> Option<&RendererAgentBinding> {
+        match &self.renderer {
+            RendererChannelAttachment::AwaitingPage(_) => None,
+            RendererChannelAttachment::Bound(binding) => Some(binding),
+        }
     }
 }
 
@@ -420,7 +501,9 @@ impl DevToolsRendererChannel {
         }
         Ok(PreparedRendererAgentAttachment {
             navigation: *navigation,
-            attachment: RendererAgentAttachment::new(agent_token),
+            renderer: RendererChannelAttachment::AwaitingPage(RendererAgentAttachment::new(
+                agent_token,
+            )),
         })
     }
 
@@ -452,10 +535,8 @@ impl DevToolsRendererChannel {
         self.inflight_cross_document_navigations
             .retain(|navigation| navigation == candidate.navigation());
         self.committed_latest_navigation = Some(candidate.navigation);
-        let current = candidate.attachment;
-        let previous = self
-            .current
-            .replace(RendererChannelAttachment::AwaitingPage(current));
+        let current = candidate.renderer.attachment();
+        let previous = self.current.replace(candidate.renderer);
         Ok(CommittedRendererAgentAttachment {
             navigation: candidate.navigation,
             current,
@@ -767,6 +848,108 @@ mod tests {
                 "result": {},
             }))],
         )
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn candidate_restore_uses_its_own_binding_and_moves_it_through_commit_and_rollback() {
+        let (browser, mut outgoing) = inspection_page().await;
+        let mut candidate_page = browser
+            .fetch("data:text/html,<title>candidate</title>")
+            .await
+            .unwrap();
+        let mut channel = DevToolsRendererChannel::default();
+        channel
+            .attach_current(outgoing.renderer_inspection_endpoint())
+            .unwrap();
+        let original = channel.current().unwrap();
+        let navigation = NavigationId::allocate();
+        channel.navigation_started(navigation).unwrap();
+        let mut candidate = channel
+            .attach_candidate(&navigation, candidate_page.renderer_devtools_agent_token())
+            .unwrap();
+        assert!(
+            candidate.binding().is_none(),
+            "a reservation cannot inspect the outgoing renderer"
+        );
+        assert!(
+            candidate
+                .bind(outgoing.renderer_inspection_endpoint())
+                .is_err()
+        );
+        candidate
+            .bind(candidate_page.renderer_inspection_endpoint())
+            .unwrap();
+        let candidate_attachment = candidate.attachment();
+        let registration = moli_core::page::RuntimeBindingRegistration {
+            devtools_session: None,
+            name: "candidateBinding".to_owned(),
+            execution_context_name: None,
+        };
+        let (snapshot, predecessor) = candidate
+            .binding()
+            .unwrap()
+            .restore_runtime_state(
+                None,
+                &[],
+                std::slice::from_ref(&registration),
+                std::slice::from_ref(&registration),
+                true,
+            )
+            .await
+            .unwrap();
+        let predecessor = predecessor.expect("restore retains the concrete context output fence");
+        assert_eq!(
+            predecessor.cursor().stream().renderer_agent(),
+            candidate_attachment.agent_token()
+        );
+        assert!(candidate_page.observe_renderer_page_state(&snapshot));
+        assert!(!outgoing.observe_renderer_page_state(&snapshot));
+        assert_eq!(channel.current(), Some(original));
+        for (page, expected) in [
+            (&mut outgoing, "undefined"),
+            (&mut candidate_page, "function"),
+        ] {
+            let result = page
+                .evaluate_runtime_expression_async("typeof candidateBinding")
+                .await
+                .unwrap();
+            assert_eq!(
+                result["value"],
+                json!(expected),
+                "restore must not configure the outgoing VM"
+            );
+        }
+        let transaction = channel.commit_candidate_transaction(candidate).unwrap();
+        assert_eq!(
+            channel.current_binding().unwrap().attachment(),
+            candidate_attachment
+        );
+        channel.rollback_committed_candidate(transaction).unwrap();
+        let restored = channel.current_binding().unwrap();
+        assert_eq!(restored.attachment(), original);
+        restored
+            .start_runtime_enable_events(None)
+            .unwrap()
+            .wait()
+            .await
+            .unwrap()
+            .into_runtime_protocol_message_command_turn()
+            .unwrap();
+        let result = PendingPageCommand::from_inspector_main_route(
+            restored
+                .runtime_inspection(None)
+                .start_default_execution_context_id()
+                .unwrap(),
+        )
+        .wait()
+        .await
+        .unwrap()
+        .finish_runtime_optional_execution_context_id()
+        .unwrap();
+        assert!(
+            result.is_some(),
+            "rollback restores the actual outgoing endpoint, not only metadata"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]

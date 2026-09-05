@@ -210,9 +210,7 @@ impl CdpConnection {
         {
             tracing::warn!(%error, "failed to dispose root Fetch handler");
         }
-        let _ = self
-            .detach_runtime_inspector_session_for_session_owner_async(None)
-            .await;
+        let _ = self.detach_runtime_inspector_session_for_session_owner(None);
         auto_attach::release_attached_sessions_for_root_frontend_async(
             self,
             &mut side_effects,

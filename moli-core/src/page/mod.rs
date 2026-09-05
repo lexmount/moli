@@ -193,7 +193,6 @@ pub struct Page {
     idle_override: Option<EmulatedIdleOverride>,
     handle: RendererPageHandle,
     renderer_agent_attachment_id: Option<RendererAgentAttachmentId>,
-    renderer_devtools_command_session_id: Option<String>,
     page_creation_artifacts: Option<Box<RendererPageCreationArtifacts>>,
 }
 
@@ -220,7 +219,6 @@ impl Page {
             idle_override,
             handle,
             renderer_agent_attachment_id: None,
-            renderer_devtools_command_session_id: None,
             page_creation_artifacts: None,
         }
     }
@@ -236,7 +234,6 @@ impl Page {
             idle_override,
             handle,
             renderer_agent_attachment_id: None,
-            renderer_devtools_command_session_id: None,
             page_creation_artifacts: Some(Box::new(page_creation_artifacts)),
         }
     }
@@ -268,11 +265,6 @@ impl Page {
     #[doc(hidden)]
     pub fn crash_devtools_target_from_io(&self) {
         self.handle.crash_devtools_target_from_io();
-    }
-
-    #[doc(hidden)]
-    pub fn set_renderer_devtools_command_session_id(&mut self, session_id: Option<String>) {
-        self.renderer_devtools_command_session_id = session_id;
     }
 
     #[doc(hidden)]

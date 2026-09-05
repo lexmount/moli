@@ -4298,6 +4298,7 @@ impl CdpConnection {
         Ok(replay)
     }
 
+    #[cfg(test)]
     fn runtime_session_owner_page_mut(
         &mut self,
         session_id: Option<&str>,
@@ -6548,16 +6549,19 @@ impl CdpConnection {
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) async fn detach_runtime_inspector_session_for_session_owner_async(
-        &mut self,
+    pub(crate) fn detach_runtime_inspector_session_for_session_owner(
+        &self,
         session_id: Option<&str>,
     ) -> Result<bool, String> {
+        let owner = CommandOwnerScope::capture(self, session_id);
         let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(session_id);
-        let page = self.runtime_session_owner_page_mut(session_id)?;
-        page.detach_runtime_inspector_session_async(inspector_session_id.as_deref())
-            .await
-            .map_err(|error| format!("runtime inspector session detach failed: {error}"))
+            self.target_renderer_runtime_inspector_session_id_for_owner(&owner);
+        self.runtime_session_owner_slot_for_owner(&owner)?
+            .current_renderer_inspection_binding()
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .detach_session(inspector_session_id)
+            .map_err(|error| format!("runtime inspector session detach failed: {error}"))?;
+        Ok(true)
     }
 }
 

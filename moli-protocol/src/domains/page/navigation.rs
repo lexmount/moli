@@ -3274,7 +3274,7 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                                 commit_loaded_navigation_async(
                                     conn,
                                     out,
-                                    Some(&token),
+                                    &token,
                                     state,
                                     navigation,
                                     Some(transaction),
@@ -3315,7 +3315,7 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             commit_loaded_navigation_async(
                 conn,
                 out,
-                Some(&token),
+                &token,
                 state,
                 *navigation,
                 None,
