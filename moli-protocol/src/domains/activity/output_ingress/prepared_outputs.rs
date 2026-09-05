@@ -98,7 +98,7 @@ impl PreparedProtocolOutputs {
             ),
             RendererProtocolObservation::RuntimeBinding(call) => {
                 crate::domains::runtime::RuntimePreparedOutputs::
-                    from_renderer_runtime_binding_call(conn, owner, call.clone())
+                    from_renderer_runtime_binding_call(conn, owner, source_renderer_agent, call.clone())
                 .append_to_output_sink(&mut prepared);
             }
             RendererProtocolObservation::DomMutations(batch) => {

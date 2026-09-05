@@ -4,8 +4,7 @@ use serde_json::{Value, json};
 use super::Page;
 use super::RuntimeConsoleMessageSnapshot;
 use super::protocol_support::{
-    DocumentStartScript, RuntimeBindingRegistration, RuntimeContextRestoreEvent,
-    RuntimeIsolatedWorldDefinition,
+    RuntimeBindingRegistration, RuntimeContextRestoreEvent, RuntimeIsolatedWorldDefinition,
 };
 use super::{
     CompletedPageCommand, PendingPageCommand, RendererCommandTurnOutput,
@@ -14,8 +13,7 @@ use super::{
 };
 use crate::RendererOutputFence;
 use crate::renderer::{
-    RendererDomDebuggerDomBreakpointResolution, RendererDomDebuggerEventListenerBreakpoint,
-    RendererDomDebuggerEventListenersResolution, RendererDomDebuggerXhrBreakpoint,
+    RendererDomDebuggerDomBreakpointResolution, RendererDomDebuggerEventListenersResolution,
     RendererPageCommand, RendererPageReply, RendererPerformanceMetricSnapshot,
     RendererRuntimeHeapUsage,
 };
@@ -118,26 +116,6 @@ impl Page {
         )
     }
 
-    pub async fn evaluate_runtime_expression_in_execution_context_without_navigation_follow_with_await_async(
-        &mut self,
-        execution_context_id: i64,
-        expression: &str,
-        await_promise: bool,
-    ) -> Result<serde_json::Value> {
-        let command = RendererPageCommand::EvaluateExpressionInExecutionContext {
-            execution_context_id,
-            expression: expression.to_owned(),
-            await_promise,
-        };
-        let reply = self.dispatch_page_command_async(command).await?;
-        expect_page_reply!(
-            reply,
-            "evaluate-in-context page command",
-            "a runtime evaluation result reply",
-            RendererPageReply::RuntimeEvaluationResult(result) => Ok(result.into_protocol_payload()),
-        )
-    }
-
     pub async fn default_execution_context_id_async(&mut self) -> Result<Option<i64>> {
         let reply = self
             .dispatch_page_command_async(RendererPageCommand::DefaultExecutionContextId)
@@ -147,76 +125,6 @@ impl Page {
             "default execution context page command",
             "an optional execution context reply",
             RendererPageReply::OptionalExecutionContextId(id) => Ok(id),
-        )
-    }
-
-    pub async fn default_or_initial_execution_context_id_async(&mut self) -> Result<Option<i64>> {
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::DefaultOrInitialExecutionContextId)
-            .await?;
-        expect_page_reply!(
-            reply,
-            "default or initial execution context page command",
-            "an optional execution context reply",
-            RendererPageReply::OptionalExecutionContextId(id) => Ok(id),
-        )
-    }
-
-    pub async fn has_isolated_world_named_async(&mut self, name: &str) -> Result<bool> {
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::HasIsolatedWorldNamed {
-                name: name.to_owned(),
-                frame_id: None,
-            })
-            .await?;
-        expect_page_reply!(
-            reply,
-            "has isolated world name page command",
-            "a bool reply",
-            RendererPageReply::Bool(value) => Ok(value),
-        )
-    }
-
-    pub async fn has_isolated_world_named_for_frame_async(
-        &mut self,
-        frame_id: &str,
-        name: &str,
-    ) -> Result<bool> {
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::HasIsolatedWorldNamed {
-                name: name.to_owned(),
-                frame_id: Some(frame_id.to_owned()),
-            })
-            .await?;
-        expect_page_reply!(
-            reply,
-            "has isolated world name page command",
-            "a bool reply",
-            RendererPageReply::Bool(value) => Ok(value),
-        )
-    }
-
-    pub fn start_has_isolated_world_named(
-        &self,
-        name: &str,
-        frame_id: Option<&str>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::HasIsolatedWorldNamed {
-            name: name.to_owned(),
-            frame_id: frame_id.map(str::to_owned),
-        })
-    }
-
-    pub fn finish_has_isolated_world_named(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<bool> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "has isolated world name page command",
-            "a bool reply",
-            RendererPageReply::Bool(value) => Ok(value),
         )
     }
 
@@ -234,64 +142,6 @@ impl Page {
             "has isolated context page command",
             "a bool reply",
             RendererPageReply::Bool(value) => Ok(value),
-        )
-    }
-
-    pub async fn ensure_isolated_worlds_attached_to_inspector_async(&mut self) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::EnsureIsolatedWorldsAttachedToInspector,
-            "ensure isolated worlds attached to inspector",
-        )
-        .await
-    }
-
-    pub async fn inspector_execution_context_id_for_isolated_context_async(
-        &mut self,
-        execution_context_id: i64,
-    ) -> Result<Option<i64>> {
-        let reply = self
-            .dispatch_page_command_async(
-                RendererPageCommand::InspectorExecutionContextIdForIsolatedContext(
-                    execution_context_id,
-                ),
-            )
-            .await?;
-        expect_page_reply!(
-            reply,
-            "inspector isolated context id page command",
-            "an optional execution context reply",
-            RendererPageReply::OptionalExecutionContextId(id) => Ok(id),
-        )
-    }
-
-    pub async fn isolated_execution_context_id_for_inspector_context_async(
-        &mut self,
-        execution_context_id: i64,
-    ) -> Result<Option<i64>> {
-        let reply = self
-            .dispatch_page_command_async(
-                RendererPageCommand::IsolatedExecutionContextIdForInspectorContext(
-                    execution_context_id,
-                ),
-            )
-            .await?;
-        expect_page_reply!(
-            reply,
-            "synthetic isolated context id page command",
-            "an optional execution context reply",
-            RendererPageReply::OptionalExecutionContextId(id) => Ok(id),
-        )
-    }
-
-    pub async fn runtime_realm_inventory_async(&mut self) -> Result<Vec<RendererRuntimeRealmInfo>> {
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::RuntimeRealmInventory)
-            .await?;
-        expect_page_reply!(
-            reply,
-            "runtime realm inventory page command",
-            "runtime realm inventory",
-            RendererPageReply::RuntimeRealmInventory(realms) => Ok(realms),
         )
     }
 
@@ -326,25 +176,6 @@ impl Page {
         )
     }
 
-    pub async fn child_default_execution_context_id_for_frame_id_async(
-        &mut self,
-        frame_id: &str,
-    ) -> Result<Option<i64>> {
-        let reply = self
-            .dispatch_page_command_async(
-                RendererPageCommand::ChildDefaultExecutionContextIdForFrameId(frame_id.to_owned()),
-            )
-            .await?;
-        expect_page_reply!(
-            reply,
-            "child default execution context id page command",
-            "an optional execution context id reply",
-            RendererPageReply::OptionalExecutionContextId(execution_context_id) => {
-                Ok(execution_context_id)
-            },
-        )
-    }
-
     pub async fn create_isolated_world_async(
         &mut self,
         name: &str,
@@ -362,78 +193,6 @@ impl Page {
             "an execution context reply",
             RendererPageReply::ExecutionContextId(id) => Ok(id),
         )
-    }
-
-    pub async fn create_isolated_world_for_frame_async(
-        &mut self,
-        frame_id: &str,
-        name: &str,
-        grant_universal_access: bool,
-    ) -> Result<i64> {
-        let command = RendererPageCommand::CreateIsolatedWorld {
-            name: name.to_owned(),
-            grant_universal_access,
-            frame_id: Some(frame_id.to_owned()),
-        };
-        let reply = self.dispatch_page_command_async(command).await?;
-        expect_page_reply!(
-            reply,
-            "create isolated world page command",
-            "an execution context reply",
-            RendererPageReply::ExecutionContextId(id) => Ok(id),
-        )
-    }
-
-    pub fn start_create_isolated_world(
-        &self,
-        name: &str,
-        grant_universal_access: bool,
-        frame_id: Option<&str>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::CreateIsolatedWorld {
-            name: name.to_owned(),
-            grant_universal_access,
-            frame_id: frame_id.map(str::to_owned),
-        })
-    }
-
-    pub fn start_create_isolated_world_runtime_activity_capturing_runtime_inspector_messages(
-        &self,
-        inspector_session_id: Option<&str>,
-        frame_id: Option<&str>,
-        name: &str,
-        grant_universal_access: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::CreateIsolatedWorldRuntimeActivity {
-            inspector_session_id: inspector_session_id.map(str::to_owned),
-            frame_id: frame_id.map(str::to_owned),
-            name: name.to_owned(),
-            grant_universal_access,
-        })
-    }
-
-    pub fn finish_create_isolated_world(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<i64> {
-        let (execution_context_id, _) =
-            self.finish_create_isolated_world_command_turn(completion)?;
-        Ok(execution_context_id)
-    }
-
-    pub fn finish_create_isolated_world_command_turn(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<(i64, RendererCommandTurnOutput)> {
-        let output = self.finish_page_command_turn(completion);
-        let RendererPageReply::ExecutionContextId(execution_context_id) =
-            output.completion().reply()
-        else {
-            return Err(anyhow!(
-                "create isolated world page command returned an unexpected renderer reply"
-            ));
-        };
-        Ok((*execution_context_id, output))
     }
 
     pub async fn dispatch_runtime_protocol_message_async(
@@ -632,107 +391,6 @@ impl Page {
         self.page_state.performance_metric_snapshot().clone()
     }
 
-    pub fn start_dom_debugger_get_event_listeners(
-        &self,
-        inspector_session_id: Option<String>,
-        object_id: String,
-        depth: i32,
-        pierce: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::dom_debugger_get_event_listeners(
-            inspector_session_id,
-            object_id,
-            depth,
-            pierce,
-        ))
-    }
-
-    pub fn finish_dom_debugger_get_event_listeners(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDomDebuggerEventListenersResolution> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "DOMDebugger.getEventListeners page command",
-            "a DOMDebugger event listeners resolution",
-            RendererPageReply::DomDebuggerEventListeners(resolution) => Ok(resolution),
-        )
-    }
-
-    pub fn start_dom_debugger_configure_event_listener_breakpoint(
-        &self,
-        inspector_session_id: Option<String>,
-        breakpoint: RendererDomDebuggerEventListenerBreakpoint,
-        enabled: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::DomDebuggerConfigureEventListenerBreakpoint {
-                inspector_session_id,
-                breakpoint,
-                enabled,
-            },
-        )
-    }
-
-    pub fn start_dom_debugger_configure_xhr_breakpoint(
-        &self,
-        inspector_session_id: Option<String>,
-        breakpoint: RendererDomDebuggerXhrBreakpoint,
-        enabled: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DomDebuggerConfigureXhrBreakpoint {
-            inspector_session_id,
-            breakpoint,
-            enabled,
-        })
-    }
-
-    pub fn start_dom_debugger_configure_dom_breakpoint(
-        &self,
-        inspector_session_id: Option<String>,
-        frontend_node_id: u32,
-        breakpoint_type: String,
-        enabled: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DomDebuggerConfigureDomBreakpoint {
-            inspector_session_id,
-            frontend_node_id,
-            breakpoint_type,
-            enabled,
-        })
-    }
-
-    pub fn finish_dom_debugger_configure_dom_breakpoint(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDomDebuggerDomBreakpointResolution> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "DOMDebugger DOM breakpoint page command",
-            "a DOMDebugger DOM breakpoint resolution",
-            RendererPageReply::DomDebuggerDomBreakpoint(resolution) => Ok(resolution),
-        )
-    }
-
-    pub fn start_runtime_collect_garbage(&self) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::RuntimeCollectGarbage)
-    }
-
-    pub fn finish_runtime_collect_garbage(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<()> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "runtime collect garbage page command",
-            "a unit reply",
-            RendererPageReply::Unit => Ok(()),
-        )
-    }
-
     pub async fn add_runtime_binding_async(
         &mut self,
         name: &str,
@@ -765,47 +423,9 @@ impl Page {
             .await
     }
 
-    pub async fn install_runtime_binding_async(
-        &mut self,
-        name: &str,
-        execution_context_name: Option<&str>,
-        execution_context_id: Option<i64>,
-    ) -> Result<()> {
-        let command = RendererPageCommand::InstallRuntimeBinding {
-            name: name.to_owned(),
-            execution_context_name: execution_context_name.map(str::to_owned),
-            execution_context_id,
-        };
-        self.dispatch_unit_page_command_async(command, "install runtime binding")
-            .await
-    }
-
-    pub fn start_install_runtime_binding(
-        &self,
-        name: &str,
-        execution_context_name: Option<&str>,
-        execution_context_id: Option<i64>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::InstallRuntimeBinding {
-            name: name.to_owned(),
-            execution_context_name: execution_context_name.map(str::to_owned),
-            execution_context_id,
-        })
-    }
-
     pub async fn remove_runtime_binding_async(&mut self, name: &str) -> Result<()> {
         let command = RendererPageCommand::RemoveRuntimeBinding(name.to_owned());
         self.dispatch_unit_page_command_async(command, "remove runtime binding")
-            .await
-    }
-
-    pub fn start_remove_runtime_binding(&self, name: &str) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::RemoveRuntimeBinding(name.to_owned()))
-    }
-
-    pub async fn remove_default_runtime_binding_async(&mut self, name: &str) -> Result<()> {
-        let command = RendererPageCommand::RemoveDefaultRuntimeBinding(name.to_owned());
-        self.dispatch_unit_page_command_async(command, "remove default runtime binding")
             .await
     }
 
@@ -914,20 +534,52 @@ impl Page {
         )
         .await
     }
+}
 
-    pub fn finish_document_start_script_result(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<(i64, bool)>> {
-        let (result, _) = self.finish_document_start_script_result_command_turn(completion)?;
-        Ok(result)
+// Decoding a frozen inspection reply requires no Browser Page residence.
+impl CompletedPageCommand {
+    pub fn finish_create_isolated_world_command_turn(
+        self,
+    ) -> Result<(i64, RendererCommandTurnOutput)> {
+        let output = self.into_output();
+        let RendererPageReply::ExecutionContextId(execution_context_id) =
+            output.completion().reply()
+        else {
+            return Err(anyhow!(
+                "create isolated world page command returned an unexpected renderer reply"
+            ));
+        };
+        Ok((*execution_context_id, output))
+    }
+
+    pub fn finish_dom_debugger_get_event_listeners(
+        self,
+    ) -> Result<RendererDomDebuggerEventListenersResolution> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "DOMDebugger.getEventListeners page command",
+            "a DOMDebugger event listeners resolution",
+            RendererPageReply::DomDebuggerEventListeners(resolution) => Ok(resolution),
+        )
+    }
+
+    pub fn finish_dom_debugger_configure_dom_breakpoint(
+        self,
+    ) -> Result<RendererDomDebuggerDomBreakpointResolution> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "DOMDebugger DOM breakpoint page command",
+            "a DOMDebugger DOM breakpoint resolution",
+            RendererPageReply::DomDebuggerDomBreakpoint(resolution) => Ok(resolution),
+        )
     }
 
     pub fn finish_document_start_script_result_command_turn(
-        &mut self,
-        completion: CompletedPageCommand,
+        self,
     ) -> Result<(Option<(i64, bool)>, RendererCommandTurnOutput)> {
-        let output = self.finish_page_command_turn(completion);
+        let output = self.into_output();
         let RendererPageReply::DocumentStartScriptResult(result) = output.completion().reply()
         else {
             return Err(anyhow!(
@@ -937,90 +589,8 @@ impl Page {
         Ok((*result, output))
     }
 
-    pub async fn add_document_start_script_runtime_activity_async(
-        &mut self,
-        inspector_session_id: Option<&str>,
-        script: &DocumentStartScript,
-        run_immediately: bool,
-    ) -> Result<Option<(i64, bool)>> {
-        let pending =
-            self.start_page_command(RendererPageCommand::AddDocumentStartScriptRuntimeActivity {
-                inspector_session_id: inspector_session_id.map(str::to_owned),
-                script: script.clone(),
-                run_immediately,
-            })?;
-        self.finish_document_start_script_result(pending.wait().await?)
-    }
-
-    pub fn start_add_document_start_script_runtime_activity(
-        &self,
-        inspector_session_id: Option<&str>,
-        script: &DocumentStartScript,
-        run_immediately: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::AddDocumentStartScriptRuntimeActivity {
-            inspector_session_id: inspector_session_id.map(str::to_owned),
-            script: script.clone(),
-            run_immediately,
-        })
-    }
-
-    pub async fn remove_document_start_script_by_registry_key_async(
-        &mut self,
-        registry_key: &str,
-    ) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::RemoveDocumentStartScriptByRegistryKey(registry_key.to_owned()),
-            "remove document-start script by registry key",
-        )
-        .await
-    }
-
-    pub fn start_remove_document_start_script_by_registry_key(
-        &self,
-        registry_key: &str,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::RemoveDocumentStartScriptByRegistryKey(
-            registry_key.to_owned(),
-        ))
-    }
-
-    pub async fn set_runtime_binding_state_async(
-        &mut self,
-        inspector_session_id: Option<String>,
-        stored_runtime_bindings: &[RuntimeBindingRegistration],
-        session_runtime_bindings: &[RuntimeBindingRegistration],
-    ) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::SetRuntimeBindingState {
-                inspector_session_id,
-                stored_runtime_bindings: stored_runtime_bindings.to_vec(),
-                session_runtime_bindings: session_runtime_bindings.to_vec(),
-            },
-            "set runtime binding state",
-        )
-        .await
-    }
-
-    pub fn start_set_runtime_binding_state(
-        &self,
-        inspector_session_id: Option<String>,
-        stored_runtime_bindings: &[RuntimeBindingRegistration],
-        session_runtime_bindings: &[RuntimeBindingRegistration],
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetRuntimeBindingState {
-            inspector_session_id,
-            stored_runtime_bindings: stored_runtime_bindings.to_vec(),
-            session_runtime_bindings: session_runtime_bindings.to_vec(),
-        })
-    }
-
-    pub fn finish_unit_runtime_page_command(
-        &mut self,
-        completion: CompletedPageCommand,
-        operation: &str,
-    ) -> Result<()> {
-        let reply = self.finish_page_command(completion);
+    pub fn finish_unit_runtime_page_command(self, operation: &str) -> Result<()> {
+        let reply = self.into_reply();
         expect_page_reply!(
             reply,
             operation,
@@ -1028,10 +598,28 @@ impl Page {
             RendererPageReply::Unit => Ok(()),
         )
     }
-}
 
-// Decoding a frozen DOM reply requires no Browser Page residence.
-impl CompletedPageCommand {
+    pub fn finish_runtime_optional_execution_context_id(self) -> Result<Option<i64>> {
+        let reply = self.into_reply();
+        expect_page_reply!(reply, "runtime execution context lookup", "an optional execution context reply",
+            RendererPageReply::OptionalExecutionContextId(id) => Ok(id),
+        )
+    }
+
+    pub fn finish_has_isolated_execution_context_id(self) -> Result<bool> {
+        let reply = self.into_reply();
+        expect_page_reply!(reply, "runtime isolated context lookup", "a bool reply",
+            RendererPageReply::Bool(value) => Ok(value),
+        )
+    }
+
+    pub fn finish_runtime_realm_inventory(self) -> Result<Vec<RendererRuntimeRealmInfo>> {
+        let reply = self.into_reply();
+        expect_page_reply!(reply, "runtime realm inventory", "runtime realm inventory",
+            RendererPageReply::RuntimeRealmInventory(realms) => Ok(realms),
+        )
+    }
+
     pub fn finish_child_frame_id_for_default_execution_context_id(self) -> Result<Option<String>> {
         let reply = self.into_reply();
         expect_page_reply!(

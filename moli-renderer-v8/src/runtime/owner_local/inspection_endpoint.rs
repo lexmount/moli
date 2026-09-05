@@ -3,9 +3,13 @@ use super::*;
 mod accessibility;
 mod css;
 mod dom;
+mod dom_debugger;
+mod runtime;
 pub use accessibility::RendererAccessibilityInspection;
 pub use css::RendererCssInspection;
 pub use dom::RendererDomInspection;
+pub use dom_debugger::RendererDomDebuggerInspection;
+pub use runtime::RendererRuntimeInspection;
 
 impl RendererInspectionEndpoint {
     // Only the finite typed agent facades may enter this path. Keep the native
@@ -208,12 +212,15 @@ mod tests {
     fn document_agent_bindings_preserve_main_fifo_and_native_vs_v8_nested_boundaries() {
         use crate::devtools::command::RendererDevToolsMainNestedDispatch;
 
-        for agent in ["DOM", "CSS", "AX", "DOMSnapshot"] {
+        for agent in ["DOM", "CSS", "AX", "DOMSnapshot", "Runtime", "DOMDebugger"] {
             let endpoint = endpoint();
             let attachment = RendererAgentAttachmentId::allocate();
             let dom = endpoint.dom_inspection(attachment, Some("dom-session".to_owned()));
             let css = endpoint.css_inspection(attachment, Some("dom-session".to_owned()));
             let ax = endpoint.accessibility_inspection(attachment, Some("dom-session".to_owned()));
+            let runtime = endpoint.runtime_inspection(attachment, Some("dom-session".to_owned()));
+            let debugger =
+                endpoint.dom_debugger_inspection(attachment, Some("dom-session".to_owned()));
             let (native, v8) = match agent {
                 "DOM" => (
                     dom.start_document_node_snapshot_for_document(true, 1, false),
@@ -234,6 +241,17 @@ mod tests {
                     dom.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
                         1, None, None,
                     ),
+                ),
+                "Runtime" => (
+                    runtime.start_install_runtime_binding("binding", None, None),
+                    debugger.start_dom_debugger_get_event_listeners("object".into(), 1, false),
+                ),
+                "DOMDebugger" => (
+                    debugger.start_dom_debugger_configure_xhr_breakpoint(
+                        RendererDomDebuggerXhrBreakpoint::new("/break".into()),
+                        true,
+                    ),
+                    debugger.start_dom_debugger_get_event_listeners("object".into(), 1, false),
                 ),
                 _ => unreachable!(),
             };
@@ -276,11 +294,13 @@ mod tests {
 
     fn document_agent_commands(
         endpoint: &RendererInspectionEndpoint,
-    ) -> [Result<RendererRuntimeInspectorMainCommandRoute>; 7] {
+    ) -> [Result<RendererRuntimeInspectorMainCommandRoute>; 15] {
         let attachment = RendererAgentAttachmentId::allocate();
         let dom = endpoint.dom_inspection(attachment, None);
         let css = endpoint.css_inspection(attachment, None);
         let ax = endpoint.accessibility_inspection(attachment, None);
+        let runtime = endpoint.runtime_inspection(attachment, None);
+        let debugger = endpoint.dom_debugger_inspection(attachment, None);
         [
             dom.start_document_node_snapshot_for_document(true, 1, false),
             dom.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
@@ -291,6 +311,17 @@ mod tests {
             ax.start_accessibility_tree_payloads_for_document(None),
             ax.start_accessibility_tree_payloads_for_object_id("object"),
             dom.start_dom_snapshot_capture("frame".into(), Default::default()),
+            runtime.start_install_runtime_binding("binding", None, None),
+            runtime.start_remove_runtime_binding("binding"),
+            runtime.start_set_runtime_binding_state(&[], &[]),
+            runtime.start_create_isolated_world_runtime_activity(None, "world", false),
+            runtime.start_runtime_realm_inventory(),
+            runtime.start_remove_document_start_script_by_registry_key("preload"),
+            debugger.start_dom_debugger_get_event_listeners("object".into(), 1, false),
+            debugger.start_dom_debugger_configure_xhr_breakpoint(
+                RendererDomDebuggerXhrBreakpoint::new("/break".into()),
+                true,
+            ),
         ]
     }
 

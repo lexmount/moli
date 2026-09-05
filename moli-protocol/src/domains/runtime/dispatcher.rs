@@ -1143,7 +1143,7 @@ pub(crate) fn start_heap_profiler_inspector_command_dispatch(
 
     if !conn
         .runtime_session_owner_slot(cmd.session_id)
-        .is_ok_and(|slot| slot.has_loaded_page())
+        .is_ok_and(|slot| slot.current_renderer_inspection_binding().is_some())
     {
         return RuntimeCommandTaskStep::Complete(match action {
             HeapProfilerAction::Enable | HeapProfilerAction::Disable => {
@@ -1655,8 +1655,8 @@ fn start_runtime_enable_command_for_owner(
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
 ) -> RuntimeCommandTaskStep {
-    let has_loaded_page = match conn.runtime_session_owner_slot_for_owner(&owner_scope) {
-        Ok(slot) => slot.has_loaded_page(),
+    let has_renderer = match conn.runtime_session_owner_slot_for_owner(&owner_scope) {
+        Ok(slot) => slot.current_renderer_inspection_binding().is_some(),
         Err(_) if owner_scope.session_id().is_some() => {
             return RuntimeCommandTaskStep::Complete(CommandOutputPlan::error(
                 -32001,
@@ -1676,7 +1676,7 @@ fn start_runtime_enable_command_for_owner(
             return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
         }
     };
-    if !has_loaded_page {
+    if !has_renderer {
         if conn.can_defer_initial_document_page_build() {
             match conn.set_runtime_frontend_enabled_for_owner(&owner_scope, true) {
                 SessionOwnerRuntimeFrontendEnableResult::Handled => {}
@@ -1801,7 +1801,7 @@ fn try_start_pending_runtime_binding_command(
     };
     let live_page_update_unavailable = conn
         .runtime_session_owner_slot_for_owner(&owner_scope)
-        .is_ok_and(|slot| !slot.has_loaded_page())
+        .is_ok_and(|slot| slot.current_renderer_inspection_binding().is_none())
         || should_persist
             && conn
                 .runtime_session_owner_slot_for_owner(&owner_scope)
@@ -10387,7 +10387,7 @@ fn start_runtime_disable_command_for_owner(
 ) -> RuntimeCommandTaskStep {
     if !conn
         .runtime_session_owner_slot_for_owner(&owner_scope)
-        .is_ok_and(|slot| slot.has_loaded_page())
+        .is_ok_and(|slot| slot.current_renderer_inspection_binding().is_some())
     {
         return RuntimeCommandTaskStep::Complete(disable_command_output_plan_sync_for_owner(
             conn,
@@ -10457,7 +10457,7 @@ fn start_runtime_run_if_waiting_for_debugger_command(
 ) -> RuntimeCommandTaskStep {
     if !conn
         .runtime_session_owner_slot(cmd.session_id)
-        .is_ok_and(|slot| slot.has_loaded_page())
+        .is_ok_and(|slot| slot.current_renderer_inspection_binding().is_some())
     {
         return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
     }
@@ -10519,7 +10519,7 @@ fn start_runtime_discard_console_entries_command(
 ) -> RuntimeCommandTaskStep {
     if !conn
         .runtime_session_owner_slot(cmd.session_id)
-        .is_ok_and(|slot| slot.has_loaded_page())
+        .is_ok_and(|slot| slot.current_renderer_inspection_binding().is_some())
     {
         advance_runtime_observable_cursors_to_current_for_session_owner(conn, cmd.session_id);
         return RuntimeCommandTaskStep::Complete(CommandOutputPlan::success());
