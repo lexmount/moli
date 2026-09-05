@@ -147,7 +147,10 @@ impl DevToolsSessionRegistry {
             .or_default()
     }
 
-    pub(crate) fn remove_attached(&mut self, session_id: &str) -> Option<DevToolsSessionState> {
+    pub(in crate::conn::state) fn remove_attached(
+        &mut self,
+        session_id: &str,
+    ) -> Option<DevToolsSessionState> {
         let key = DevToolsSessionKey::Attached(session_id.to_owned());
         let removed = self.states.remove(&key);
         if removed.is_some() {
@@ -162,7 +165,7 @@ impl DevToolsSessionRegistry {
     /// The primary handler slot remains allocated for the renderer's implicit
     /// root Inspector session, but its state is replaced atomically. Attached
     /// sessions are removed from both the state map and attachment order.
-    pub(crate) fn dispose(
+    pub(in crate::conn::state) fn dispose(
         &mut self,
         session_id: &str,
         session_key: &DevToolsSessionKey,
@@ -536,7 +539,7 @@ impl DevToolsSessionRegistry {
             .collect()
     }
 
-    pub(crate) fn page_bypass_csp_enabled(&self) -> bool {
+    pub(in crate::conn::state) fn page_bypass_csp_enabled(&self) -> bool {
         self.states()
             .any(|state| state.page_session_state.page_bypass_csp_enabled)
     }

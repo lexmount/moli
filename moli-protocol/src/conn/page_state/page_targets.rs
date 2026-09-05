@@ -307,9 +307,8 @@ impl BrowserContext {
 
     /// Commits removal of a Page session after all domain handlers have run.
     ///
-    /// This deliberately has no renderer or domain side effects. Disposal
-    /// keeps the registry entry live while handlers resolve their exact Page,
-    /// then reaches this single irreversible step.
+    /// Disposal keeps the registry entry live while handlers resolve their
+    /// exact Page, then removes the final contributions without renderer work.
     pub(crate) fn remove_page_session_binding(
         &mut self,
         target_id: &str,
@@ -317,8 +316,7 @@ impl BrowserContext {
         session_key: &moli_page_types::DevToolsSessionKey,
     ) -> bool {
         self.page_target_mut(target_id)
-            .and_then(|target| target.devtools_sessions.dispose(session_id, session_key))
-            .is_some()
+            .is_some_and(|target| target.dispose_devtools_session(session_id, session_key))
     }
 
     pub(crate) async fn clear_devtools_network_session_policy_async(
@@ -583,10 +581,7 @@ impl BrowserContext {
         else {
             return false;
         };
-        target
-            .devtools_sessions
-            .dispose(session_id, &moli_page_types::DevToolsSessionKey::Primary)
-            .is_some()
+        target.dispose_devtools_session(session_id, &moli_page_types::DevToolsSessionKey::Primary)
     }
 
     #[cfg(test)]
@@ -1234,8 +1229,8 @@ fn background_target_identity_for_initial_url(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::state::{PerformanceTimeDomain, TargetPerformanceSessionState};
-    use crate::conn::{DocumentStartScript, TargetPageSessionState, TargetRuntimeSessionState};
+    use crate::conn::state::PerformanceTimeDomain;
+    use crate::conn::{DocumentStartScript, TargetRuntimeSessionState};
     use crate::testing::TestContext;
     use serde_json::json;
     use std::sync::Arc;
@@ -2117,18 +2112,16 @@ mod tests {
             inspector_enabled: true,
             inspector_target_crashed_delivered: false,
         };
-        devtools_session_state.page_session_state = TargetPageSessionState {
-            page_lifecycle_events: true,
-            log_enabled: true,
-            performance: {
-                let mut performance = TargetPerformanceSessionState::default();
-                assert!(performance.enable(PerformanceTimeDomain::ThreadTicks));
-                performance
-            },
-            page_file_chooser_opened_event_enabled: true,
-            page_intercept_file_chooser_dialog_enabled: true,
-            ..Default::default()
-        };
+        let page_session = &mut devtools_session_state.page_session_state;
+        page_session.page_lifecycle_events = true;
+        page_session.log_enabled = true;
+        assert!(
+            page_session
+                .performance
+                .enable(PerformanceTimeDomain::ThreadTicks)
+        );
+        page_session.page_file_chooser_opened_event_enabled = true;
+        page_session.page_intercept_file_chooser_dialog_enabled = true;
         devtools_session_state
             .console_output_session_state
             .console_enabled = true;

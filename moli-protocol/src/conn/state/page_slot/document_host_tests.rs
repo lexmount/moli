@@ -61,6 +61,7 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
     let policy = target.effective_policy();
     target.set_network_offline(true);
     target.set_tls_verify_host_override(Some(false));
+    target.set_devtools_bypass_csp_enabled(&moli_page_types::DevToolsSessionKey::Primary, true);
     let first_document = target.current_document_id().unwrap();
     let storage = target.session_storage_store().clone();
     assert!(
@@ -120,6 +121,7 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
     assert_eq!(target.effective_policy(), policy);
     assert!(target.network_offline());
     assert_eq!(target.tls_verify_host_override(), Some(false));
+    assert!(target.bypass_content_security_policy());
     assert_ne!(first_document, reserved);
     assert_eq!(
         target

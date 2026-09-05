@@ -3717,7 +3717,7 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
         assert!(
             staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
-                .page_bypass_csp_enabled
+                .page_bypass_csp_enabled()
         );
         assert_eq!(
             staged.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -3757,7 +3757,7 @@ async fn same_context_background_session_can_stage_its_own_page_settings_before_
     assert!(
         active.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
-            .page_bypass_csp_enabled
+            .page_bypass_csp_enabled()
     );
     assert_eq!(
         active.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]

@@ -312,7 +312,7 @@ impl TargetNavigationLoadInputs {
                 .map(str::to_owned)
                 .or_else(|| browser_context.default_timezone_override.clone()),
             script_execution_disabled: page_state.emulation_policy().script_execution_disabled,
-            bypass_content_security_policy: page_state.devtools_sessions.page_bypass_csp_enabled(),
+            bypass_content_security_policy: page_state.bypass_content_security_policy(),
             cpu_throttling_rate: page_state.emulation_policy().cpu_throttling_rate,
             emulated_media: (&page_state.emulation_policy().emulated_media).into(),
             viewport_surface: emulated_device_metrics
@@ -477,7 +477,7 @@ impl<'a> TargetSessionOwnerRef<'a> {
     }
 
     pub(super) fn effective_page_bypass_csp_enabled(&self) -> bool {
-        self.target().devtools_sessions.page_bypass_csp_enabled()
+        self.target().bypass_content_security_policy()
     }
 
     pub(super) fn runtime_session_state(&self) -> Option<&'a TargetRuntimeSessionState> {

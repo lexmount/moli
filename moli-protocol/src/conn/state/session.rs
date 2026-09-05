@@ -59,6 +59,68 @@ impl TargetPerformanceSessionState {
 }
 
 impl PageTargetHost {
+    pub(crate) fn bypass_content_security_policy(&self) -> bool {
+        self.runtime_slot
+            .page_slot()
+            .contents
+            .bypass_content_security_policy
+    }
+
+    // Value-only bridge until AgentHost/BrowserHandle install (Commits 14/22).
+    fn install_effective_content_security_policy(&mut self) {
+        let bypass = self.devtools_sessions.page_bypass_csp_enabled();
+        self.runtime_slot
+            .page_slot_mut()
+            .contents
+            .set_bypass_content_security_policy(bypass);
+    }
+
+    pub(crate) fn set_devtools_bypass_csp_enabled(
+        &mut self,
+        session_key: &moli_page_types::DevToolsSessionKey,
+        enabled: bool,
+    ) {
+        self.devtools_sessions
+            .ensure_session(session_key)
+            .page_session_state
+            .page_bypass_csp_enabled = enabled;
+        self.install_effective_content_security_policy();
+    }
+
+    pub(crate) fn disable_devtools_page_domain(
+        &mut self,
+        session_key: &moli_page_types::DevToolsSessionKey,
+    ) {
+        let state = &mut self
+            .devtools_sessions
+            .ensure_session(session_key)
+            .page_session_state;
+        state.disable_page_domain();
+        state.page_lifecycle_events = false;
+        state.page_bypass_csp_enabled = false;
+        state.page_font_families.clear();
+        state.page_file_chooser_opened_event_enabled = false;
+        state.page_intercept_file_chooser_dialog_enabled = false;
+        state.page_screencast.stop();
+        state.javascript_dialog_state.clear();
+        self.install_effective_content_security_policy();
+    }
+
+    pub(crate) fn dispose_devtools_session(
+        &mut self,
+        session_id: &str,
+        session_key: &moli_page_types::DevToolsSessionKey,
+    ) -> bool {
+        let removed = self
+            .devtools_sessions
+            .dispose(session_id, session_key)
+            .is_some();
+        if removed {
+            self.install_effective_content_security_policy();
+        }
+        removed
+    }
+
     // Browser.getVersion reports explicit frontend UA contributions, which
     // differ from a language-only runtime profile. This is projection state.
     pub(crate) fn reported_user_agent_override(&self) -> Option<&str> {
@@ -337,6 +399,7 @@ impl PageTargetHost {
             || self.base_browser_identity != super::BaseBrowserIdentityOverrideState::default()
             || self.browser_identity_override().is_some()
             || self.tls_verify_host_override().is_some()
+            || self.bypass_content_security_policy()
             || self.base_locale_override.is_some()
             || self.base_timezone_override.is_some()
             || self.locale_override().is_some()
@@ -590,7 +653,7 @@ pub(crate) struct TargetPageSessionState {
     pub(crate) audits: TargetAuditsSessionState,
     pub(crate) log_enabled: bool,
     pub(crate) performance: TargetPerformanceSessionState,
-    pub(crate) page_bypass_csp_enabled: bool,
+    pub(in crate::conn::state) page_bypass_csp_enabled: bool,
     pub(crate) page_font_families: serde_json::Map<String, serde_json::Value>,
     pub(crate) page_file_chooser_opened_event_enabled: bool,
     pub(crate) page_intercept_file_chooser_dialog_enabled: bool,
@@ -619,6 +682,11 @@ impl Default for TargetPageSessionState {
 }
 
 impl TargetPageSessionState {
+    #[cfg(test)]
+    pub(crate) fn page_bypass_csp_enabled(&self) -> bool {
+        self.page_bypass_csp_enabled
+    }
+
     pub(crate) fn enable_page_domain(&mut self, subscription_generation: u64) {
         if !self.page_domain_enabled {
             self.page_domain_enabled = true;
@@ -707,6 +775,19 @@ mod tests {
     use super::{PageScreencastConfig, PageScreencastFormat, PageScreencastSessionState};
     use crate::conn::PageTargetHost;
     use moli_page_types::DevToolsSessionKey;
+
+    #[test]
+    fn csp_policy_survives_projection_drop_and_updates_without_session_state() {
+        let mut target = PageTargetHost::empty("TID-owned-csp".into());
+        target.set_devtools_bypass_csp_enabled(&DevToolsSessionKey::Primary, true);
+        target.set_network_offline(true);
+        let mut contents = std::mem::take(&mut target.runtime_slot.page_slot_mut().contents);
+        drop(target);
+        assert!(contents.bypass_content_security_policy);
+        contents.set_bypass_content_security_policy(false);
+        assert!(!contents.bypass_content_security_policy);
+        assert!(contents.network_offline);
+    }
 
     #[test]
     fn tls_policy_survives_projection_drop_and_updates_without_session_state() {
