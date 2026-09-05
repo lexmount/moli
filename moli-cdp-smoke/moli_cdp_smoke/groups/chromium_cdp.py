@@ -70,6 +70,7 @@ async def run_chromium_cdp_group(state: SmokeState) -> None:
 async def run_computed_style_group(state: SmokeState) -> None:
     """Run the focused cross-engine computed-style breadth contract."""
     await _verify_chromium_css_computed_style_breadth_sample(state)
+    await _verify_sampled_computed_sizes(state)
 
 
 def _header_value(headers: dict[str, Any], name: str) -> Any:
@@ -4782,9 +4783,26 @@ async def _verify_chromium_css_computed_style_breadth_sample(state: SmokeState) 
     for shorthand in ["margin", "mask", "padding-block"]:
         assert_equal(values.get(shorthand), None, f"CDP must not enumerate {shorthand}")
 
+    # The first complete read may itself request Grid geometry in Moli. Sizes
+    # sampled before that request can still be computed values, whereas a new
+    # observation can use the newly published layout. Establish a geometry
+    # boundary before asserting whole-declaration stability, retaining the
+    # initial read above to cover cold enumeration and layout-independent data.
+    # Calibrated with Chromium 145.0.7632.116 and Moli 4567db9e (three runs each):
+    # only Moli's four size values change; both are stable after getBoxModel.
+    size_names = ("width", "height", "inline-size", "block-size")
+    initial_sizes = {name: values[name] for name in size_names}
+    await state.cdp.send("DOM.getBoxModel", {"nodeId": target["nodeId"]})
+    sampled_names, sampled_values = await read_computed_style()
+    assert_equal(sampled_names, names, "sampled CDP computed style names")
+    assert_equal(
+        {name: value for name, value in sampled_values.items() if name not in size_names},
+        {name: value for name, value in values.items() if name not in size_names},
+        "geometry sampling preserves this fixture's non-size properties",
+    )
     repeated_names, repeated_values = await read_computed_style()
     assert_equal(repeated_names, names, "repeated CDP computed style names")
-    assert_equal(repeated_values, values, "repeated CDP computed style values")
+    assert_equal(repeated_values, sampled_values, "sampled CDP computed style values stay stable")
 
     await state.cdp.send(
         "Runtime.evaluate",
@@ -4807,8 +4825,112 @@ async def _verify_chromium_css_computed_style_breadth_sample(state: SmokeState) 
         {
             "javascriptPropertyCount": js_summary["count"],
             "cdpPropertyCount": len(names),
+            "initialSizes": initial_sizes,
+            "sampledSizes": {name: sampled_values[name] for name in size_names},
         },
     )
+
+
+async def _verify_sampled_computed_sizes(state: SmokeState) -> None:
+    """Compare used sizes only after an explicit fresh visual observation.
+
+    Cold CSSOM values need not match between engines. Moli's no-layout cold
+    reads and reuse across mutation are tested with layout counters in Rust;
+    this shared client contract checks the geometry both engines sampled.
+    """
+    size_names = ("width", "height", "inline-size", "block-size")
+    for name, tag, style, expected in [
+        (
+            "content-box",
+            "div",
+            "width:500px;height:400px;max-width:120.5px;max-height:80.25px;"
+            "padding:5px;border:2px solid;zoom:2;transform:scale(1.5)",
+            ("120.5px", "80.25px", "120.5px", "80.25px"),
+        ),
+        (
+            "vertical-border-box",
+            "div",
+            "width:500px;height:400px;max-width:160px;max-height:90px;"
+            "padding:5px;border:2px solid;box-sizing:border-box;writing-mode:vertical-rl",
+            ("160px", "90px", "90px", "160px"),
+        ),
+        (
+            "grid",
+            "div",
+            "display:grid;width:180px;height:90px;grid-template-columns:1fr 2fr",
+            ("180px", "90px", "180px", "90px"),
+        ),
+        (
+            "vertical-canvas",
+            "canvas",
+            "writing-mode:vertical-rl",
+            ("300px", "150px", "150px", "300px"),
+        ),
+    ]:
+        await state.page.set_content(
+            f'<!doctype html><style>html,body{{margin:0}}</style>'
+            f'<{tag} id="sampled-size-target" style="{style}"></{tag}>'
+        )
+        await state.page.evaluate(
+            "globalThis.heldSizeStyle = getComputedStyle(document.getElementById('sampled-size-target'))"
+        )
+
+        async def read_held_sizes() -> dict[str, str]:
+            return await state.page.evaluate(
+                "names => Object.fromEntries(names.map(name => [name, heldSizeStyle.getPropertyValue(name)]))",
+                list(size_names),
+            )
+
+        initial = await read_held_sizes()
+        document = await state.cdp.send("DOM.getDocument", {"depth": -1})
+        target = _find_dom_node(
+            document["root"],
+            lambda node: _attribute_list_to_dict(node.get("attributes") or []).get("id")
+            == "sampled-size-target",
+        )
+        if target is None:
+            raise SmokeError(f"missing sampled size target: {name}")
+        observations = []
+        for mutated in (False, True):
+            if mutated:
+                await state.page.evaluate("""() => {
+                    const target = document.getElementById('sampled-size-target');
+                    target.style.width = '40px';
+                    target.style.height = '30px';
+                }""")
+                expected = (
+                    ("40px", "30px", "30px", "40px")
+                    if name.startswith("vertical-")
+                    else ("40px", "30px", "40px", "30px")
+                )
+            screenshot = await state.cdp.send("Page.captureScreenshot", {"format": "png"})
+            if not base64.b64decode(screenshot.get("data", "")).startswith(b"\x89PNG\r\n\x1a\n"):
+                raise SmokeError(f"sampled size screenshot is missing: {name}, mutated={mutated}")
+            expected_values = dict(zip(size_names, expected, strict=True))
+            previous_values = None
+            for _ in range(2):
+                result = await state.cdp.send(
+                    "CSS.getComputedStyleForNode", {"nodeId": target["nodeId"]}
+                )
+                values = {entry["name"]: entry["value"] for entry in result["computedStyle"]}
+                assert_equal(
+                    {key: values.get(key) for key in size_names},
+                    expected_values,
+                    f"sampled CDP sizes: {name}, mutated={mutated}",
+                )
+                assert_equal(
+                    await read_held_sizes(),
+                    expected_values,
+                    f"held CSSOM sizes: {name}, mutated={mutated}",
+                )
+                if previous_values is not None:
+                    assert_equal(values, previous_values, f"sampled declaration stability: {name}")
+                previous_values = values
+            observations.append(expected_values)
+        state.record(
+            f"computed_size_sampling_{name}",
+            {"initial": initial, "sampled": observations[0], "refreshed": observations[1]},
+        )
 
 
 async def _verify_chromium_dom_query_selector_sample(state: SmokeState) -> None:

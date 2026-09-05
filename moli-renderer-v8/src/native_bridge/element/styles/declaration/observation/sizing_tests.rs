@@ -6,6 +6,8 @@ use crate::{
     script_vm::{ScriptVmDefaultWorldBootstrap, StandaloneScriptVmHarness},
 };
 
+mod sampling;
+
 fn fixture(body: &str) -> StandaloneScriptVmHarness {
     let _runtime = crate::JsRuntime::initialize();
     let document = HtmlParser::SCRIPTING_ENABLED.parse(
