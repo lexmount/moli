@@ -1,14 +1,6 @@
 /target*
 /dist/
-/docs/wild-web-report/.wild-web-*
-/docs/wild-web-report/.compare-engines-run
-/docs/wild-web-report/.compare-engines-indexed.txt
-/docs/wild-web-report/.curl-reachability-*.tsv
-/docs/wild-web-report/.engine-comparison-last-run.txt
-/docs/wild-web-report/wild-web-report-*.md
-/docs/wild-web-report/wild-web-report-*.tsv
-/docs/wild-web-report/engine-comparison-*.md
-/docs/wild-web-report/engine-comparison-*.tsv
+/docs/inner
 /.vscode
 /.codex
 /.claude
