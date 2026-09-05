@@ -2482,6 +2482,12 @@ impl ScriptVm {
             Ok(None) => (Ok(None), Vec::new()),
             Err(error) => (Err(error), Vec::new()),
         };
+        if self.devtools_target().pause_ref().is_pause_active() {
+            self._context_host
+                .borrow_mut()
+                .queue_layout_resource_admission(css_images);
+            return result;
+        }
         self.start_css_images_discovered_by_layout(css_images);
         if matches!(&result, Ok(Some(_)))
             && let Err(error) = self.with_default_context_scope(|scope, runtime_ptr| {
@@ -2563,6 +2569,12 @@ impl ScriptVm {
     }
 
     fn reconcile_document_web_fonts_for_layout(&mut self) {
+        if self.devtools_target().pause_ref().is_pause_active() {
+            self._context_host
+                .borrow_mut()
+                .queue_layout_resource_admission(Vec::new());
+            return;
+        }
         let font_fetch_enabled = self
             .document_runtime
             .current_document_resource_loader()

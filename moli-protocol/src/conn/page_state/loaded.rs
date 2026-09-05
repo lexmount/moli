@@ -152,19 +152,18 @@ impl PageTargetHost {
         let previous_attachment = match renderer_attachment_commit {
             LoadedNavigationRendererAttachmentCommit::Prepare(renderer_agent_candidate) => self
                 .runtime_slot
-                .commit_loaded_navigation_renderer_attachment(
-                    &mut page,
-                    renderer_agent_candidate,
-                )?,
+                .commit_loaded_navigation_renderer_attachment(&page, renderer_agent_candidate)?,
             LoadedNavigationRendererAttachmentCommit::AlreadyCommitted(transaction) => {
                 self.runtime_slot
-                    .bind_page_to_committed_renderer_agent_candidate(&mut page, &transaction)?;
+                    .bind_page_to_committed_renderer_agent_candidate(&page, &transaction)?;
                 transaction.previous()
             }
         };
-        let new_attachment_id = page
-            .renderer_agent_attachment_id()
-            .expect("committed navigation Page must have a renderer attachment");
+        let new_attachment_id = self
+            .runtime_slot
+            .current_renderer_attachment()
+            .expect("committed navigation must have a renderer attachment")
+            .id();
         if let Some(previous_attachment) = previous_attachment
             && previous_attachment.id() != new_attachment_id
         {

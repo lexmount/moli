@@ -236,8 +236,6 @@ impl RendererPageHandle {
         self.enqueue_async_command_with_capture_policy(
             command,
             RendererPageStateCapturePolicy::FullReport,
-            false,
-            None,
         )
     }
 
@@ -255,22 +253,6 @@ impl RendererPageHandle {
         self.enqueue_async_command_with_capture_policy(
             command,
             RendererPageStateCapturePolicy::ProtocolTurn,
-            false,
-            None,
-        )
-    }
-
-    #[doc(hidden)]
-    pub fn enqueue_protocol_command_in_inspector_session(
-        &self,
-        command: RendererPageCommand,
-        inspector_session_id: Option<String>,
-    ) -> anyhow::Result<RendererPageCommandPending> {
-        self.enqueue_async_command_with_capture_policy(
-            command,
-            RendererPageStateCapturePolicy::ProtocolTurn,
-            true,
-            inspector_session_id,
         )
     }
 
@@ -278,8 +260,6 @@ impl RendererPageHandle {
         &self,
         command: RendererPageCommand,
         capture_policy: RendererPageStateCapturePolicy,
-        route_protocol_main_receiver: bool,
-        inspector_session_id: Option<String>,
     ) -> anyhow::Result<RendererPageCommandPending> {
         let javascript_dialog_watch = command
             .interruptible_by_javascript_dialog()
@@ -293,23 +273,6 @@ impl RendererPageHandle {
                 page_id = self.page_id(),
                 stage = "page_handle_command_dispatch",
             );
-        }
-        if route_protocol_main_receiver {
-            let route = self
-                .inspection()
-                .devtools_target
-                .main_ref()
-                .enqueue_protocol_page_command(
-                    self.token(),
-                    self.inspection().devtools_agent_token,
-                    command,
-                    inspector_session_id,
-                    capture_policy,
-                );
-            return Ok(RendererPageCommandPending {
-                dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::new(route)),
-                javascript_dialog_watch,
-            });
         }
         let command = match command {
             RendererPageCommand::Inspector(envelope) => {
@@ -330,19 +293,30 @@ impl RendererPageHandle {
             }
             command => command,
         };
-        let owner_command = match capture_policy {
-            RendererPageStateCapturePolicy::FullReport => {
-                RendererOwnerCommand::RunAsyncPageCommand {
-                    token: self.token(),
+        if capture_policy == RendererPageStateCapturePolicy::ProtocolTurn {
+            // The existing renderer Main pump also serves native Page work
+            // while JavaScript is paused. It carries no frontend ticket and
+            // session teardown must not cancel it. Page retirement drains this
+            // agent's queue; do not use the inspection context's cancel signal,
+            // since the Page may survive replacement of that Document.
+            let route = self
+                .inspection()
+                .devtools_target
+                .main_ref()
+                .enqueue_page_command(
+                    self.token(),
+                    self.inspection().devtools_agent_token,
                     command,
-                }
-            }
-            RendererPageStateCapturePolicy::ProtocolTurn => {
-                RendererOwnerCommand::RunProtocolPageCommand {
-                    token: self.token(),
-                    command,
-                }
-            }
+                    capture_policy,
+                );
+            return Ok(RendererPageCommandPending {
+                dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::new(route)),
+                javascript_dialog_watch,
+            });
+        }
+        let owner_command = RendererOwnerCommand::RunAsyncPageCommand {
+            token: self.token(),
+            command,
         };
         let reply_rx = self.inspection().render_runtime.enqueue(owner_command)?;
         Ok(RendererPageCommandPending {

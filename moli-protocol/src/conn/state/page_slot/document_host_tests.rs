@@ -26,8 +26,8 @@ async fn document_replacement_updates_inspection_binding_with_physical_page() {
     assert_eq!(attachment.agent_token(), agent);
     assert_ne!(attachment.id(), old_attachment.id());
     assert_eq!(
-        slot.loaded_page().unwrap().renderer_agent_attachment_id(),
-        Some(attachment.id())
+        slot.loaded_page().unwrap().renderer_devtools_agent_token(),
+        attachment.agent_token()
     );
     assert!(slot.current_renderer_inspection_binding().is_some());
     drop(previous);

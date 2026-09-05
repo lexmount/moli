@@ -324,10 +324,6 @@ impl PreparedRendererAgentAttachment {
         self.renderer.attachment()
     }
 
-    pub(crate) fn id(&self) -> RendererAgentAttachmentId {
-        self.renderer.attachment().id()
-    }
-
     pub(crate) fn agent_token(&self) -> RendererDevToolsAgentToken {
         self.renderer.attachment().agent_token()
     }

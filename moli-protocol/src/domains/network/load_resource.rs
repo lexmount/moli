@@ -72,9 +72,9 @@ pub(super) fn start_load_network_resource_command(
     match pending {
         Ok(pending) => NetworkCommandTaskStep::Pending(PendingNetworkCommandDispatch {
             command_id: cmd.id,
-            owner_scope,
             kind: PendingNetworkCommandKind::PrepareNetworkResourceLoad,
-            pending: PendingNetworkCommandWork::page(pending),
+            pending: PendingNetworkCommandWork::page(conn, &owner_scope, pending),
+            owner_scope,
         }),
         Err(error) => {
             NetworkCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
@@ -105,7 +105,7 @@ pub(super) fn complete_network_resource_preparation(
     let preparation = match conn
         .loaded_page_mut_for_protocol_access_for_owner(&owner_scope)
         .and_then(|page| {
-            if page.renderer_agent_attachment_id() != completion.renderer_agent_attachment_id() {
+            if !completion.is_from_page(page) {
                 return Err("Document changed while preparing the network resource load".to_owned());
             }
             page.finish_prepare_network_resource_load(completion)

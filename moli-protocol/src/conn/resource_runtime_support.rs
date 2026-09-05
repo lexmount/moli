@@ -352,9 +352,8 @@ fn finish_resource_runtime_update_on_current_attachment(
     page: Option<&mut moli_core::page::Page>,
     completion: CompletedPageCommand,
 ) -> Result<(), String> {
-    let completion_attachment = completion.renderer_agent_attachment_id();
     if let Some(page) = page
-        && page.renderer_agent_attachment_id() == completion_attachment
+        && completion.is_from_page(page)
     {
         return page
             .finish_replace_browser_resource_runtime(completion)

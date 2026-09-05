@@ -361,7 +361,7 @@ mod tests {
 
     fn document_agent_commands(
         endpoint: &RendererInspectionEndpoint,
-    ) -> [Result<RendererRuntimeInspectorMainCommandRoute>; 16] {
+    ) -> [Result<RendererRuntimeInspectorMainCommandRoute>; 17] {
         let attachment = RendererAgentAttachmentId::allocate();
         let dom = endpoint.dom_inspection(attachment, None);
         let css = endpoint.css_inspection(attachment, None);
@@ -382,6 +382,7 @@ mod tests {
             runtime.start_remove_runtime_binding("binding"),
             runtime.start_set_runtime_binding_state(&[], &[]),
             runtime.start_apply_runtime_protocol_state(&[], &[], &[], &[]),
+            runtime.start_resolve_blob_object("blob-object"),
             runtime.start_create_isolated_world_runtime_activity(None, "world", false),
             runtime.start_runtime_realm_inventory(),
             runtime.start_remove_document_start_script_by_registry_key("preload"),

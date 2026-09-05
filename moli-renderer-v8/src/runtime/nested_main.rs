@@ -61,7 +61,8 @@ pub(crate) fn dispatch_nested_main_page_command(
         .ok_or_else(|| anyhow!("nested Main receiver has no active Page owner stack"))?;
 
     // SAFETY: `bind_active_nested_main_page` installs this pointer immediately
-    // around the owner-local Page dispatch that can enter V8. A normal debugger
+    // around an owner-local command or scheduled turn that retains its live
+    // PageVm and can enter V8. A normal debugger
     // pause synchronously suspends that outer dispatch, and this callback runs
     // on the same owner thread before the guard is dropped. Instrumentation
     // pauses never claim Main work. The nested borrow ends before V8 resumes

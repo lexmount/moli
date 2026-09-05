@@ -2,6 +2,71 @@ use super::{ChildFrameSemanticTurnKind, new_storage_page_task_executor_test_vm};
 use crate::network::ResourceRequestClient;
 
 #[tokio::test(flavor = "current_thread")]
+async fn deferred_layout_resources_coalesce_on_the_existing_rendering_source() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm("https://layout-resource-turn.test/");
+    for _ in 0..3 {
+        assert!(
+            vm._context_host
+                .borrow_mut()
+                .queue_layout_resource_admission(Vec::new())
+        );
+    }
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap(),
+        "repeated paused capture must not manufacture extra rendering turns"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn deferred_layout_resources_do_not_retarget_after_document_open() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm = new_storage_page_task_executor_test_vm("https://layout-resource-retirement.test/");
+    let before = vm.current_main_document_task_owner().unwrap();
+    let root = vm
+        ._context_host
+        .borrow()
+        .dom_host()
+        .document_element_handle()
+        .unwrap();
+    assert!(
+        vm._context_host
+            .borrow_mut()
+            .queue_layout_resource_admission(vec![moli_layout::LayoutCssImageReference {
+            source: root,
+            resolved_url:
+                "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='1' height='1'/>"
+                    .to_owned(),
+        },])
+    );
+    vm.eval("document.open(); document.write('<!doctype html><title>replacement</title>'); document.close(); 'replaced'").unwrap();
+    assert_ne!(before, vm.current_main_document_task_owner().unwrap());
+    let resources = vm.css_image_resource_observability_for_test();
+    assert!(
+        vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        vm.css_image_resource_observability_for_test(),
+        resources,
+        "retired capture references must not admit resources into the replacement"
+    );
+    assert!(
+        !vm.run_one_rendering_update_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn window_scroll_coalesces_into_one_rendering_update_without_a_timer() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_page_task_executor_test_vm("https://scroll-rendering-update.test/");

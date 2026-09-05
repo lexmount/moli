@@ -250,35 +250,31 @@ async fn restore_and_commit_loaded_navigation_page_async(
     let prepared_configuration_committed = committed_renderer_attachment.is_some();
     let mut page = page;
     let page_agent_token = page.renderer_devtools_agent_token();
-    if let Some(transaction) = committed_renderer_attachment.as_ref() {
-        if token != transaction.navigation()
+    if let Some(transaction) = committed_renderer_attachment.as_ref()
+        && (token != transaction.navigation()
             || transaction.current().agent_token() != page_agent_token
             || conn.current_renderer_agent_attachment_id_for_owner(&state.owner)
-                != Some(transaction.current().id())
-        {
-            tracing::warn!(
-                session_id = state.owner.session_id(),
-                "prepared navigation Page does not match its committed renderer attachment"
-            );
-            return None;
-        }
-        page.bind_renderer_agent_attachment(transaction.current().id());
+                != Some(transaction.current().id()))
+    {
+        tracing::warn!(
+            session_id = state.owner.session_id(),
+            "prepared navigation Page does not match its committed renderer attachment"
+        );
+        return None;
     }
     let renderer_agent_candidate = match committed_renderer_attachment.as_ref() {
-        None => {
-            match conn.prepare_renderer_agent_candidate_for_owner(&state.owner, token, &mut page) {
-                Ok(candidate) => Some(candidate),
-                Err(error) => {
-                    tracing::debug!(
-                        %error,
-                        session_id = state.owner.session_id(),
-                        navigation_id = token.get(),
-                        "dropping superseded renderer navigation candidate before commit"
-                    );
-                    return None;
-                }
+        None => match conn.prepare_renderer_agent_candidate_for_owner(&state.owner, token, &page) {
+            Ok(candidate) => Some(candidate),
+            Err(error) => {
+                tracing::debug!(
+                    %error,
+                    session_id = state.owner.session_id(),
+                    navigation_id = token.get(),
+                    "dropping superseded renderer navigation candidate before commit"
+                );
+                return None;
             }
-        }
+        },
         Some(_) => None,
     };
     let Some(commit_state) = conn.prepare_loaded_navigation_commit_for_owner(&state.owner) else {

@@ -290,7 +290,7 @@ impl Page {
         completion: CompletedPageCommand,
     ) -> Result<RendererCaptureScreenshotReply> {
         anyhow::ensure!(
-            completion.renderer_agent_attachment_id() == self.renderer_agent_attachment_id(),
+            completion.is_from_page(self),
             "capture screenshot completed for a stale renderer attachment"
         );
         let reply = self.finish_page_command(completion);
@@ -314,7 +314,7 @@ impl Page {
         completion: CompletedPageCommand,
     ) -> Result<RendererCaptureScreencastFrameReply> {
         anyhow::ensure!(
-            completion.renderer_agent_attachment_id() == self.renderer_agent_attachment_id(),
+            completion.is_from_page(self),
             "capture screencast frame completed for a stale renderer attachment"
         );
         let reply = self.finish_page_command(completion);
@@ -373,30 +373,6 @@ impl Page {
             "serialize HTML page command",
             "a string reply",
             RendererPageReply::OptionalString(Some(html)) => Ok(html),
-        )
-    }
-
-    pub fn start_resolve_blob_object_in_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        object_id: String,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::resolve_blob_object(
-            inspector_session_id,
-            object_id,
-        ))
-    }
-
-    pub fn finish_resolve_blob_object(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<String> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "resolve Blob object page command",
-            "a Blob UUID reply",
-            RendererPageReply::BlobUuid(uuid) => Ok(uuid),
         )
     }
 
@@ -497,6 +473,15 @@ impl Page {
 
 // Decoding a frozen DOM reply requires no Browser Page residence.
 impl CompletedPageCommand {
+    pub fn finish_resolve_blob_object(self) -> Result<String> {
+        expect_page_reply!(
+            self.into_reply(),
+            "resolve Blob object page command",
+            "a Blob UUID reply",
+            RendererPageReply::BlobUuid(uuid) => Ok(uuid),
+        )
+    }
+
     pub fn finish_set_inline_style_sheet_text(self) -> Result<bool> {
         expect_page_reply!(
             self.into_reply(),
