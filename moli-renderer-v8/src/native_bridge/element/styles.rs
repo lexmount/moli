@@ -577,21 +577,28 @@ pub(in crate::native_bridge::element) fn style_viewport_for_document(
 
 pub(crate) fn computed_style_property_values_for_document_snapshot(
     host: &JsContextHost,
-    handle: DomHandle,
+    handles: impl IntoIterator<Item = DomHandle>,
     properties: &[String],
-) -> Option<Vec<String>> {
-    let DocumentSnapshotStyleComputation::Available(context) =
-        style_computation_context_for_document_snapshot(host, handle)?
-    else {
-        return Some(vec![String::new(); properties.len()]);
-    };
-    let style = ComputedStyleRead::new_with_context(host, handle, context);
-    Some(
-        properties
-            .iter()
-            .map(|property| style.property(property))
-            .collect(),
-    )
+) -> Vec<Vec<String>> {
+    let mut observation = StyleObservation::new(host);
+    handles
+        .into_iter()
+        .map(
+            |handle| match style_computation_context_for_document_snapshot(host, handle) {
+                None => Vec::new(),
+                Some(DocumentSnapshotStyleComputation::HiddenChildFrame) => {
+                    vec![String::new(); properties.len()]
+                }
+                Some(DocumentSnapshotStyleComputation::Available(_)) => {
+                    let style = observation.read(handle);
+                    properties
+                        .iter()
+                        .map(|property| style.property(property))
+                        .collect()
+                }
+            },
+        )
+        .collect()
 }
 
 pub(crate) fn computed_style_properties_for_inspector_handle(

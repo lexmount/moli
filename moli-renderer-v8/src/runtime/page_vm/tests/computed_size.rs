@@ -1,5 +1,6 @@
 use super::*;
 
+mod capture;
 mod chromium;
 mod lifecycle;
 mod logical;

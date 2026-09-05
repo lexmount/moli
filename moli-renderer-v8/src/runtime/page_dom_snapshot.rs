@@ -190,14 +190,20 @@ impl CapturedDocumentState {
         empty_string: usize,
     ) {
         let bounds = lightweight_snapshot_bounds();
-        for (_, node_id) in &self.nodes.layout_nodes {
-            let values = match self.style_source {
-                CapturedDocumentStyleSource::Live => vm
-                    .computed_style_property_values_for_document_snapshot(*node_id, computed_styles)
-                    .unwrap_or_default(),
-                // These compatibility snapshots retain markup but no live style owner.
-                CapturedDocumentStyleSource::DetachedMarkup => Vec::new(),
-            };
+        let styles = match self.style_source {
+            // One observation shares style preparation and the lazy sizing
+            // projection across every node in this Document's capture.
+            CapturedDocumentStyleSource::Live => vm
+                .computed_style_property_values_for_document_snapshot(
+                    self.nodes.layout_nodes.iter().map(|(_, node_id)| *node_id),
+                    computed_styles,
+                ),
+            // These compatibility snapshots retain markup but no live style owner.
+            CapturedDocumentStyleSource::DetachedMarkup => {
+                vec![Vec::new(); self.nodes.layout_nodes.len()]
+            }
+        };
+        for values in styles {
             self.styles.push(
                 values
                     .into_iter()

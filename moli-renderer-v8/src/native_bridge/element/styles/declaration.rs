@@ -2,6 +2,7 @@ mod identity;
 mod observation;
 mod parse;
 mod properties;
+mod sizing;
 mod style_world;
 mod values;
 

@@ -31,6 +31,7 @@ use super::super::super::super::JsContextHost;
 use super::observation::{
     ComputedStyleRead, RetainedStyleObservation, StyleComputationContext, StyleObservation,
 };
+use super::sizing::used_size_from_layout_snapshot;
 use super::style_world::{
     effective_raw_stylesheet_sources, style_base_url, stylesheet_source_document_for_handle,
 };
@@ -185,7 +186,7 @@ impl<'a> StyleResolutionContext<'a> {
 
 impl<'a> ComputedStyleRead<'a> {
     pub(crate) fn new(runtime: &'a JsContextHost, handle: DomHandle) -> Self {
-        StyleObservation::new(runtime).read(handle)
+        StyleObservation::new_for_element(runtime, handle, None).read(handle)
     }
 
     pub(in crate::native_bridge::element::styles) fn new_with_context(
@@ -193,7 +194,7 @@ impl<'a> ComputedStyleRead<'a> {
         handle: DomHandle,
         context: StyleComputationContext,
     ) -> Self {
-        StyleObservation::new_with_context(runtime, context).read(handle)
+        StyleObservation::new_for_element(runtime, handle, Some(context)).read(handle)
     }
 
     pub(in crate::native_bridge::element) fn property(&self, property: &str) -> String {
@@ -5126,7 +5127,10 @@ fn resolve_moli_computed_style_value(
         return tracks;
     }
     if matches!(property, "width" | "height" | "inline-size" | "block-size")
-        && let Some(size) = used_size_from_layout_snapshot(runtime, handle)
+        && let Some(size) = match resolution.observation {
+            Some(observation) => observation.used_size(handle),
+            None => used_size_from_layout_snapshot(runtime, handle),
+        }
     {
         let value = match property {
             "width" => size.width,
@@ -5181,21 +5185,6 @@ fn resolve_moli_computed_style_value(
         return resolve_computed_auto_min_size(runtime, handle, resolution);
     }
     value.to_owned()
-}
-
-fn used_size_from_layout_snapshot(
-    runtime: &JsContextHost,
-    handle: DomHandle,
-) -> Option<moli_layout::LayoutUsedSize> {
-    if !runtime.layout_policy().uses_real_layout() || !runtime.dom_host().is_connected(handle) {
-        return None;
-    }
-    let document = runtime.layout_document_for_source(handle)?;
-    // Reading a CSSOM size never creates or refreshes layout. Use the sizing
-    // basis frozen with the existing geometry, or keep the style-only path.
-    runtime
-        .with_latest_layout_tree_for_document(document, |tree| tree.used_size_for_source(handle))
-        .flatten()
 }
 
 fn resolved_grid_template_tracks(

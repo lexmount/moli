@@ -11,7 +11,7 @@ use super::{
         LayoutSize, LayoutTransform2D, LayoutUsedSize,
     },
     query::{LayoutElementMetrics, LayoutNodeOutput},
-    tree::{CssSizingBox, FrozenLayoutTree},
+    tree::{CssSizingBox, FrozenLayoutBox, FrozenLayoutTree},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -61,32 +61,24 @@ where
         self.element_metrics_for_source_with_offset_parent_filter(source, |_| true)
     }
 
-    /// Physical and logical CSSOM sizes from this snapshot's sizing box, without transforms,
-    /// integer rounding, or absolute CSS zoom. A source without an applicable
-    /// principal box has no used size; consumers keep its computed value.
+    /// Physical and logical CSSOM sizes from this snapshot's sizing box,
+    /// without transforms, integer rounding, or absolute CSS zoom. A source
+    /// without an applicable principal box keeps its computed value.
     pub fn used_size_for_source(&self, source: N) -> Option<LayoutUsedSize> {
         let layout_box = self
             .boxes
             .iter()
             .find(|layout_box| layout_box.principal_source == Some(source))?;
-        let sizing = layout_box.css_sizing?;
-        let rect = match sizing.box_kind {
-            CssSizingBox::Content => layout_box.content_box,
-            CssSizingBox::Border => layout_box.border_box,
-        };
-        let size = CssomAbsoluteZoom::new(layout_box.effective_zoom)
-            .size(LayoutSize::new(rect.width, rect.height));
-        let (inline_size, block_size) = if sizing.horizontal {
-            (size.width, size.height)
-        } else {
-            (size.height, size.width)
-        };
-        Some(LayoutUsedSize {
-            width: size.width,
-            height: size.height,
-            inline_size,
-            block_size,
-        })
+        layout_box.used_size()
+    }
+
+    /// Derives all applicable sizing boxes in one pass. A batch consumer may
+    /// collect this into an operation-local lookup; no index is retained by
+    /// the frozen tree, and no DOM or style input is consulted.
+    pub fn used_sizes(&self) -> impl Iterator<Item = (N, LayoutUsedSize)> + '_ {
+        self.boxes
+            .iter()
+            .filter_map(|layout_box| Some((layout_box.principal_source?, layout_box.used_size()?)))
     }
 
     /// Returns the exact unprojected content box produced for a source's
@@ -496,6 +488,29 @@ where
                 .then_with(|| left.x.total_cmp(&right.x))
         });
         quads
+    }
+}
+
+impl<N> FrozenLayoutBox<N> {
+    fn used_size(&self) -> Option<LayoutUsedSize> {
+        let sizing = self.css_sizing?;
+        let rect = match sizing.box_kind {
+            CssSizingBox::Content => self.content_box,
+            CssSizingBox::Border => self.border_box,
+        };
+        let size = CssomAbsoluteZoom::new(self.effective_zoom)
+            .size(LayoutSize::new(rect.width, rect.height));
+        let (inline_size, block_size) = if sizing.horizontal {
+            (size.width, size.height)
+        } else {
+            (size.height, size.width)
+        };
+        Some(LayoutUsedSize {
+            width: size.width,
+            height: size.height,
+            inline_size,
+            block_size,
+        })
     }
 }
 

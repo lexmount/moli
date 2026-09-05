@@ -1963,6 +1963,15 @@ fn frozen_used_size_keeps_its_sizing_basis_after_style_inputs_are_discarded() {
                 block_size: 50.5
             })
         );
+        let retention = output.retention_metrics();
+        let used_sizes = output.used_sizes().collect::<HashMap<_, _>>();
+        assert_eq!(used_sizes.len(), 2);
+        assert_eq!(used_sizes.get(&1).copied(), output.used_size_for_source(1));
+        assert_eq!(
+            output.retention_metrics(),
+            retention,
+            "the batch lookup must stay outside the frozen tree"
+        );
         let model = output.box_model_for_source(1).expect("sized box");
         let expected_border_width = if box_sizing == BoxSizing::ContentBox {
             130.25
@@ -1997,7 +2006,14 @@ fn frozen_used_size_excludes_non_replaced_inlines_and_suppressed_boxes() {
         styles.0.insert(index, fixed_size(display, 60.0, 25.0));
     }
     let output = build(&source, &mut styles);
+    let used_sizes = output.used_sizes().collect::<HashMap<_, _>>();
+    assert_eq!(
+        used_sizes.len(),
+        2,
+        "only the root and the displayed child have sizing boxes"
+    );
     for source in [1, 2, 3, usize::MAX] {
+        assert!(!used_sizes.contains_key(&source));
         assert_eq!(
             output.used_size_for_source(source),
             None,
@@ -2013,6 +2029,7 @@ fn frozen_used_size_excludes_non_replaced_inlines_and_suppressed_boxes() {
             block_size: 25.0
         })
     );
+    assert_eq!(used_sizes.get(&4).copied(), output.used_size_for_source(4));
 }
 
 #[test]

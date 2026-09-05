@@ -2434,12 +2434,12 @@ impl ScriptVm {
 
     pub(super) fn computed_style_property_values_for_document_snapshot(
         &self,
-        handle: DomHandle,
+        handles: impl IntoIterator<Item = DomHandle>,
         properties: &[String],
-    ) -> Option<Vec<String>> {
+    ) -> Vec<Vec<String>> {
         crate::native_bridge::element::computed_style_property_values_for_document_snapshot(
             &self._context_host.borrow(),
-            handle,
+            handles,
             properties,
         )
     }

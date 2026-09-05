@@ -10,6 +10,7 @@ use crate::{
 
 use super::super::super::super::JsContextHost;
 use super::super::style_viewport_for_document;
+use super::sizing::LayoutSizeReads;
 use super::style_world::{
     StyleObservationKey, prepare_style_world_update, stylesheet_query_fallback,
     stylesheet_source_document_for_handle, stylo_style_environment,
@@ -75,6 +76,9 @@ pub(crate) struct StyleObservation<'a> {
     /// viewport input epoch, but do not become the baseline for ordinary DOM
     /// API observations.
     tracks_persistent_world: bool,
+    /// A single-element read memoizes just its result; an explicit multi-node
+    /// observation can instead derive a temporary per-Document size lookup.
+    sizing_target: Option<DomHandle>,
     drained_document: Option<DomHandle>,
     additional_drained_documents: Vec<DomHandle>,
     primary_document: Option<Rc<StyleObservationInputs<'a>>>,
@@ -93,6 +97,7 @@ pub(super) struct StyleObservationInputs<'a> {
     tracks_persistent_world: bool,
     prepared_update: RefCell<Option<Rc<PreparedStyleWorldUpdate>>>,
     stylesheet_query_snapshot: RefCell<Option<Rc<FullStyleWorldSnapshot>>>,
+    layout_sizes: LayoutSizeReads,
 }
 
 impl<'a> StyleObservationInputs<'a> {
@@ -101,6 +106,7 @@ impl<'a> StyleObservationInputs<'a> {
         source_document: Option<DomHandle>,
         context: StyleComputationContext,
         _tracks_persistent_world: bool,
+        sizing_target: Option<DomHandle>,
     ) -> Self {
         let environment = stylo_style_environment(runtime, source_document);
         Self {
@@ -112,6 +118,7 @@ impl<'a> StyleObservationInputs<'a> {
             tracks_persistent_world: _tracks_persistent_world,
             prepared_update: RefCell::new(None),
             stylesheet_query_snapshot: RefCell::new(None),
+            layout_sizes: LayoutSizeReads::new(sizing_target),
         }
     }
 
@@ -166,9 +173,15 @@ impl<'a> StyleObservationInputs<'a> {
 
 pub(super) trait RetainedStyleObservation {
     fn style_snapshot(&self, handle: DomHandle) -> Option<StyloComputedStyleSnapshot>;
+    fn used_size(&self, handle: DomHandle) -> Option<moli_layout::LayoutUsedSize>;
 }
 
 impl RetainedStyleObservation for StyleObservationInputs<'_> {
+    fn used_size(&self, handle: DomHandle) -> Option<moli_layout::LayoutUsedSize> {
+        self.layout_sizes
+            .get(self.runtime, self.source_document(), handle)
+    }
+
     fn style_snapshot(&self, handle: DomHandle) -> Option<StyloComputedStyleSnapshot> {
         #[cfg(debug_assertions)]
         let invariant_input = self
@@ -215,7 +228,7 @@ impl RetainedStyleObservation for StyleObservationInputs<'_> {
 
 impl<'a> StyleObservation<'a> {
     pub(crate) fn new(runtime: &'a JsContextHost) -> Self {
-        Self::new_with_fixed_context(runtime, None, true)
+        Self::new_with_fixed_context(runtime, None, true, None)
     }
 
     /// Creates one synchronous style-observation scope for an exact document
@@ -236,25 +249,29 @@ impl<'a> StyleObservation<'a> {
             runtime,
             Some(StyleComputationContext::new(viewport).with_read_document(Some(document))),
             false,
+            None,
         )
     }
 
-    pub(super) fn new_with_context(
+    pub(super) fn new_for_element(
         runtime: &'a JsContextHost,
-        context: StyleComputationContext,
+        handle: DomHandle,
+        context: Option<StyleComputationContext>,
     ) -> Self {
-        Self::new_with_fixed_context(runtime, Some(context), true)
+        Self::new_with_fixed_context(runtime, context, true, Some(handle))
     }
 
     fn new_with_fixed_context(
         runtime: &'a JsContextHost,
         fixed_context: Option<StyleComputationContext>,
         tracks_persistent_world: bool,
+        sizing_target: Option<DomHandle>,
     ) -> Self {
         Self {
             runtime,
             fixed_context,
             tracks_persistent_world,
+            sizing_target,
             drained_document: None,
             additional_drained_documents: Vec::new(),
             primary_document: None,
@@ -377,6 +394,7 @@ impl<'a> StyleObservation<'a> {
             source_document,
             context,
             self.tracks_persistent_world,
+            self.sizing_target,
         ));
         if self.primary_document.is_none() {
             self.primary_document = Some(Rc::clone(&observation));
@@ -398,3 +416,6 @@ pub(crate) struct ComputedStyleRead<'a> {
     pub(super) observation_inputs: Rc<StyleObservationInputs<'a>>,
     pub(super) stylo_style: Option<StyloComputedStyleSnapshot>,
 }
+
+#[cfg(test)]
+mod sizing_tests;
