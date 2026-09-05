@@ -48,6 +48,44 @@ pub(super) enum FollowedLocationNavigationBootstrapBoundary {
 
 #[cfg(test)]
 impl LoadedFollowedLocationNavigation {
+    /// The standalone PageVm test adapter has no owner slot in which to park
+    /// an open main response. Await both its body and terminal result before
+    /// rebuilding that fixture, preserving the HTTP head and chunk contents.
+    /// Production navigation keeps the original stream and its owner-driven
+    /// phase-one residence; it must never use this test-only completion gate.
+    async fn with_complete_main_body_for_test(self) -> Result<Self> {
+        let Self::StreamingDocument {
+            requested_url,
+            mut response,
+        } = self
+        else {
+            return Ok(self);
+        };
+        let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
+        while let Some(chunk) = response.next_chunk().await {
+            body_tx
+                .send(chunk)
+                .expect("buffered fixture receiver remains in this scope");
+        }
+        drop(body_tx);
+        response.finish().await?;
+        let (completion_tx, completion_rx) = oneshot::channel();
+        completion_tx
+            .send(Ok(()))
+            .expect("buffered fixture completion receiver remains in this scope");
+        let buffered = StreamingRawResponse::new_with_head(
+            response.head(),
+            body_rx,
+            FetchCancelHandle::new(),
+            completion_rx,
+        )
+        .with_network_request_extra_info(response.network_request_extra_info().cloned());
+        Ok(Self::StreamingDocument {
+            requested_url,
+            response: Box::new(buffered),
+        })
+    }
+
     fn has_header_for_test(&self, expected_name: &str) -> bool {
         let headers = match self {
             Self::NoDocument | Self::Download(_) => return false,
@@ -1468,6 +1506,7 @@ impl PageVm {
             LoadedFollowedLocationNavigation::StreamingDocument { .. }
                 | LoadedFollowedLocationNavigation::ExternalDocument { .. }
         ));
+        let loaded = loaded.with_complete_main_body_for_test().await?;
         let env = self.followed_location_navigation_env();
         let mut runtime_hooks = self.runtime_hooks.clone().for_cross_document_commit();
         runtime_hooks.web_mcp_navigation = web_mcp_invocation;
@@ -1510,6 +1549,96 @@ mod tests {
     use crate::network::ResourceRequestClient;
     use moli_fetch::{BrowserNavigationRequestKind, outgoing_request_headers};
     use url::Url;
+
+    #[tokio::test]
+    async fn standalone_navigation_fixture_waits_for_body_and_successful_terminal() {
+        let requested_url = Url::parse("https://example.test/requested").unwrap();
+        let final_url = Url::parse("https://example.test/replacement").unwrap();
+        let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        let headers = vec![(
+            "Content-Type".to_owned(),
+            b"text/html; charset=utf-8".to_vec(),
+        )];
+        let mut response = moli_fetch::StreamingRawResponse::new(
+            final_url.clone(),
+            200,
+            headers.clone(),
+            None,
+            Vec::new(),
+            true,
+            Vec::new(),
+            body_rx,
+            moli_fetch::FetchCancelHandle::new(),
+            completion_rx,
+        );
+        response.from_cache = true;
+        let loaded = LoadedFollowedLocationNavigation::StreamingDocument {
+            requested_url: requested_url.clone(),
+            response: Box::new(response),
+        };
+        let mut completed = Box::pin(loaded.with_complete_main_body_for_test());
+        assert!(futures_util::poll!(&mut completed).is_pending());
+        body_tx.send(b"<body>first".to_vec()).unwrap();
+        assert!(futures_util::poll!(&mut completed).is_pending());
+        body_tx.send(b"second</body>".to_vec()).unwrap();
+        drop(body_tx);
+        assert!(
+            futures_util::poll!(&mut completed).is_pending(),
+            "body EOF alone must not be treated as successful transfer completion"
+        );
+        completion_tx.send(Ok(())).unwrap();
+        let LoadedFollowedLocationNavigation::StreamingDocument {
+            requested_url: actual_requested_url,
+            mut response,
+        } = completed.await.unwrap()
+        else {
+            panic!("the completed HTTP fixture must retain its response metadata");
+        };
+        assert_eq!(actual_requested_url, requested_url);
+        assert_eq!(response.final_url, final_url);
+        assert_eq!(response.status, 200);
+        assert_eq!(response.headers, headers);
+        assert!(response.redirected);
+        assert!(response.from_cache);
+        assert_eq!(response.next_chunk().await, Some(b"<body>first".to_vec()));
+        assert_eq!(response.next_chunk().await, Some(b"second</body>".to_vec()));
+        assert!(response.body_chunk_stream_is_exhausted());
+        response.finish().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn standalone_navigation_fixture_preserves_transfer_failure() {
+        let url = Url::parse("https://example.test/failed").unwrap();
+        let (body_tx, body_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (completion_tx, completion_rx) = tokio::sync::oneshot::channel();
+        let loaded = LoadedFollowedLocationNavigation::StreamingDocument {
+            requested_url: url.clone(),
+            response: Box::new(moli_fetch::StreamingRawResponse::new(
+                url,
+                200,
+                Vec::new(),
+                None,
+                Vec::new(),
+                false,
+                Vec::new(),
+                body_rx,
+                moli_fetch::FetchCancelHandle::new(),
+                completion_rx,
+            )),
+        };
+        body_tx.send(b"partial document".to_vec()).unwrap();
+        drop(body_tx);
+        completion_tx
+            .send(Err(anyhow::anyhow!("fixture transfer failed")))
+            .unwrap();
+        let error = loaded
+            .with_complete_main_body_for_test()
+            .await
+            .err()
+            .expect("partial bytes must not turn a failed transfer into a completed fixture");
+        assert_eq!(error.to_string(), "fixture transfer failed");
+    }
 
     #[test]
     fn followed_location_navigation_request_uses_document_url_as_initiator() {
