@@ -166,9 +166,7 @@ pub use protocol_support::{
     subresource_auth_credentials_for_challenge,
 };
 pub use renderer_command_support::DocumentNodeClientRectResolution;
-pub use renderer_command_support::{
-    DocumentNodeRuntimeObjectResolution, PageObservableOutputUpdate, TestingOutcome,
-};
+pub use renderer_command_support::{DocumentNodeRuntimeObjectResolution, TestingOutcome};
 
 #[cfg(test)]
 use crate::renderer::RendererPageTestingHandle;
@@ -546,26 +544,5 @@ impl Page {
             "an input dispatch outcome reply",
             RendererPageReply::InputDispatchOutcome(value) => Ok(value),
         )
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn page_observable_output_update_exposes_valid_producer_items() {
-        let items = vec![
-            ScriptObservableOutputItem::ConsoleMessage("console-a".to_owned()),
-            ScriptObservableOutputItem::LifecycleError("error-a".to_owned()),
-            ScriptObservableOutputItem::ConsoleMessage("console-b".to_owned()),
-        ];
-        let update = PageObservableOutputUpdate::append(&items);
-
-        assert_eq!(
-            update.observable_output_items(),
-            items.as_slice(),
-            "observable update should carry the report-level producer item sequence as its only output view"
-        );
     }
 }

@@ -1,14 +1,12 @@
 use std::collections::{BTreeMap, HashMap};
 
-use moli_core::page::{
-    PageObservableOutputUpdate, RuntimeConsoleMessageSnapshot, ScriptObservableOutputItem,
-};
 #[cfg(test)]
 use moli_core::page::{
     RendererPageDiagnosticsSnapshot,
     RendererRuntimeObservableSourceItem as CoreRendererRuntimeObservableSourceItem,
     RendererRuntimeObservableSourceSummary,
 };
+use moli_core::page::{RuntimeConsoleMessageSnapshot, ScriptObservableOutputItem};
 
 use crate::conn::DocumentId;
 
@@ -518,20 +516,11 @@ impl TargetRuntimeObservableQueueState {
         self.reset();
     }
 
-    pub(crate) fn ingest_page_output_update(&mut self, output: PageObservableOutputUpdate<'_>) {
-        self.apply_page_output_update(output);
-    }
-
-    fn apply_page_output_update(&mut self, output: PageObservableOutputUpdate<'_>) {
-        self.append_from_page_output_items(output.observable_output_items());
-    }
-
-    fn recover_from_page_output_items(&mut self, items: &[ScriptObservableOutputItem]) {
-        self.clear_observable_output_items();
-        self.append_from_page_output_items(items);
-    }
-
-    fn append_from_page_output_items(&mut self, items: &[ScriptObservableOutputItem]) {
+    /// Reconciles a cumulative report snapshot, including producer rewinds.
+    pub(crate) fn ingest_observable_output_snapshot(
+        &mut self,
+        items: &[ScriptObservableOutputItem],
+    ) {
         if self.observable_output_items.len() > items.len()
             || self
                 .observable_output_items
@@ -539,22 +528,12 @@ impl TargetRuntimeObservableQueueState {
                 .zip(items.iter())
                 .any(|(previous, next)| previous != next)
         {
-            self.recover_from_page_output_items(items);
-            return;
+            self.observable_output_items.clear();
         }
 
         let start_item_index = self.observable_output_items.len();
-        for item in items.iter().skip(start_item_index) {
-            self.append_observable_output_item(item);
-        }
-    }
-
-    fn clear_observable_output_items(&mut self) {
-        self.observable_output_items.clear();
-    }
-
-    fn append_observable_output_item(&mut self, item: &ScriptObservableOutputItem) {
-        self.observable_output_items.push(item.clone());
+        self.observable_output_items
+            .extend(items[start_item_index..].iter().cloned());
     }
 
     fn console_event_count(&self) -> usize {
@@ -921,7 +900,7 @@ impl TargetRuntimeObservableQueueState {
 #[cfg(test)]
 mod tests {
     use moli_core::page::{
-        PageObservableOutputUpdate, RendererActivityDiagnostics, RendererPageDiagnosticsSnapshot,
+        RendererActivityDiagnostics, RendererPageDiagnosticsSnapshot,
         RendererRuntimeObservableSourceItem, RendererRuntimeObservableSourceSummary,
         RuntimeConsoleMessageSnapshot, ScriptObservableOutputItem,
     };
@@ -962,7 +941,7 @@ mod tests {
         queue: &mut TargetRuntimeObservableQueueState,
         items: &[ScriptObservableOutputItem],
     ) {
-        queue.apply_page_output_update(PageObservableOutputUpdate::append(items));
+        queue.ingest_observable_output_snapshot(items);
     }
 
     #[test]
