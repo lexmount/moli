@@ -644,6 +644,7 @@ impl ScriptVm {
         );
     }
 
+    #[cfg(test)]
     pub(crate) fn eval(&mut self, source: &str) -> Result<String> {
         let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context as *const _;
         self.eval_string_in_context_ptr_runtime_turn(context_ptr, source, false)
@@ -718,6 +719,7 @@ impl ScriptVm {
         self.eval_string_in_context_ptr_runtime_turn(context_ptr, source, true)
     }
 
+    #[cfg(test)]
     pub(super) fn eval_string_in_context_ptr_runtime_turn(
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
@@ -740,7 +742,7 @@ impl ScriptVm {
 
     // Evaluates a trusted internal expression while taking a VM snapshot or
     // reconciling VM-owned state. This is not an owner-visible script turn; new
-    // page/automation entrypoints must use `eval_string_in_context_ptr_runtime_turn`.
+    // page/automation entrypoints must use the typed runtime evaluation path.
     pub(super) fn eval_string_in_context_ptr_internal_snapshot(
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,
@@ -776,6 +778,7 @@ impl ScriptVm {
 
     // Raw string evaluation in a specific context. Keep this private so callers
     // must choose either the runtime-turn facade or the internal snapshot facade.
+    #[cfg(test)]
     fn eval_string_in_context_ptr_without_turn_drain(
         &mut self,
         context_ptr: *const v8::Global<v8::Context>,

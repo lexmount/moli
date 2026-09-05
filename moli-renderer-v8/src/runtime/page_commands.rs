@@ -356,11 +356,6 @@ impl PageVm {
                         .renderer_document_isolate_heap_usage()?,
                 )))
             }
-            RendererPageCommand::PerformanceMetricSnapshot => Ok(
-                RendererPageReply::PerformanceMetricSnapshot(Box::new(
-                    self.vm_mut().performance_metric_snapshot()?,
-                )),
-            ),
             RendererPageCommand::DomDebuggerConfigureEventListenerBreakpoint {
                 inspector_session_id,
                 breakpoint,
@@ -1459,7 +1454,6 @@ fn renderer_page_command_uses_cpu_throttling(command: &RendererPageCommand) -> b
             | RendererPageCommand::DomDebuggerConfigureEventListenerBreakpoint { .. }
             | RendererPageCommand::DomDebuggerConfigureXhrBreakpoint { .. }
             | RendererPageCommand::DomDebuggerConfigureDomBreakpoint { .. }
-            | RendererPageCommand::PerformanceMetricSnapshot
             | RendererPageCommand::CreateIsolatedWorldRuntimeActivity { .. }
             | RendererPageCommand::AddDocumentStartScriptRuntimeActivity { .. }
             | RendererPageCommand::RunPageSurfaceOverrideScript { .. }

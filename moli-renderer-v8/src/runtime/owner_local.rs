@@ -72,9 +72,9 @@ impl RendererAttachedPage {
                     devtools_agent_token: self.devtools_agent_token,
                     page_context_cancel_tx: self.page_context_cancel_tx,
                     devtools_target: self.devtools_target,
+                    script_execution_control: self.script_execution_control,
                 }),
                 javascript_dialog_broker: self.javascript_dialog_broker,
-                script_execution_control: self.script_execution_control,
                 committed_document_post_response_continuation: self
                     .committed_document_post_response_continuation,
                 _not_send: PhantomData,
@@ -92,7 +92,6 @@ pub struct RendererPageHandle {
     render_runtime: RenderRuntimeHandle,
     inspection: Option<RendererInspectionEndpoint>,
     javascript_dialog_broker: RendererJavaScriptDialogBroker,
-    script_execution_control: crate::script_execution_control::RendererScriptExecutionControl,
     committed_document_post_response_continuation:
         Option<RendererPageCommandPostResponseContinuation>,
     _not_send: PhantomData<Rc<()>>,
@@ -108,6 +107,7 @@ pub struct RendererInspectionEndpoint {
     devtools_agent_token: RendererDevToolsAgentToken,
     page_context_cancel_tx: RendererPageContextCancelSender,
     devtools_target: crate::devtools::target::RendererDevToolsTargetHandle,
+    script_execution_control: crate::script_execution_control::RendererScriptExecutionControl,
 }
 
 pub struct RendererPageCommandPending {
@@ -221,102 +221,6 @@ impl RendererPageHandle {
 
     pub fn take_pending_modal_javascript_dialogs(&self) -> Vec<RendererPendingJavaScriptDialog> {
         self.javascript_dialog_broker.take_pending()
-    }
-
-    #[doc(hidden)]
-    pub fn enqueue_performance_get_metrics_io_command(
-        &self,
-        attachment: Option<RendererAgentAttachmentId>,
-        inspector_session_id: Option<String>,
-    ) -> RendererRuntimeInspectorIoCommandRoute {
-        self.inspection().devtools_target.io_ref().enqueue_command(
-            self.inspection().devtools_agent_token,
-            RendererDevToolsIoCommandEnvelope::performance_get_metrics(
-                RendererInspectorIngressTicket::new(
-                    attachment,
-                    inspector_session_id,
-                    RendererInspectorCommandRoute::Io,
-                ),
-            ),
-        )
-    }
-
-    #[doc(hidden)]
-    pub fn enqueue_performance_get_metrics_io_command_with_response(
-        &self,
-        attachment: RendererAgentAttachmentId,
-        inspector_session_id: Option<String>,
-        result: serde_json::Value,
-        response: RendererRuntimeInspectorResponseSender,
-    ) -> RendererRuntimeInspectorIoCommandRoute {
-        debug_assert_eq!(
-            response.renderer_agent_attachment_id(),
-            Some(attachment),
-            "Performance response must belong to the command attachment"
-        );
-        self.inspection().devtools_target.io_ref().enqueue_command(
-            self.inspection().devtools_agent_token,
-            RendererDevToolsIoCommandEnvelope::performance_get_metrics_with_response(
-                RendererInspectorIngressTicket::new(
-                    Some(attachment),
-                    inspector_session_id,
-                    RendererInspectorCommandRoute::Io,
-                ),
-                result,
-                response,
-            ),
-        )
-    }
-
-    /// Enqueues the DevTools IO-agent script policy without borrowing the
-    /// owner-resident `PageVm` that may currently be executing JavaScript.
-    #[doc(hidden)]
-    pub fn enqueue_set_script_execution_disabled_io_command(
-        &self,
-        attachment: Option<RendererAgentAttachmentId>,
-        inspector_session_id: Option<String>,
-        disabled: bool,
-    ) -> RendererRuntimeInspectorIoCommandRoute {
-        self.inspection().devtools_target.io_ref().enqueue_command(
-            self.inspection().devtools_agent_token,
-            RendererDevToolsIoCommandEnvelope::set_script_execution_disabled(
-                RendererInspectorIngressTicket::new(
-                    attachment,
-                    inspector_session_id,
-                    RendererInspectorCommandRoute::Io,
-                ),
-                self.script_execution_control.clone(),
-                disabled,
-            ),
-        )
-    }
-
-    #[doc(hidden)]
-    pub fn enqueue_set_script_execution_disabled_io_command_with_response(
-        &self,
-        attachment: RendererAgentAttachmentId,
-        inspector_session_id: Option<String>,
-        disabled: bool,
-        response: RendererRuntimeInspectorResponseSender,
-    ) -> RendererRuntimeInspectorIoCommandRoute {
-        debug_assert_eq!(
-            response.renderer_agent_attachment_id(),
-            Some(attachment),
-            "Emulation response must belong to the command attachment"
-        );
-        self.inspection().devtools_target.io_ref().enqueue_command(
-            self.inspection().devtools_agent_token,
-            RendererDevToolsIoCommandEnvelope::set_script_execution_disabled_with_response(
-                RendererInspectorIngressTicket::new(
-                    Some(attachment),
-                    inspector_session_id,
-                    RendererInspectorCommandRoute::Io,
-                ),
-                self.script_execution_control.clone(),
-                disabled,
-                response,
-            ),
-        )
     }
 
     /// Disconnects one frontend Inspector route without waiting for the Page

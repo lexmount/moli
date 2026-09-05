@@ -47,6 +47,9 @@ pub(crate) enum RendererPublicationRoute {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPublicationProjection {
     CurrentOwner,
+    // Inspector replies need a live AgentHost binding, not a Protocol-owned
+    // Browser Document. This grants no Browser lifecycle/action projection.
+    SessionResponsesOnly,
     RetiringNetworkOnly,
 }
 
@@ -115,7 +118,11 @@ impl RendererPublicationOwner {
     /// Returning `None` means the target/browser context was retired after
     /// this stream opened. Its already-admitted cursor remains settled, but no
     /// historical output may be projected into a replacement owner.
-    pub(crate) fn resolve(&self, conn: &CdpConnection) -> Option<RendererPublicationRoute> {
+    pub(crate) fn resolve(
+        &self,
+        conn: &CdpConnection,
+        stream: moli_core::RendererOutputStreamIdentity,
+    ) -> Option<RendererPublicationRoute> {
         match self {
             Self::BrowserContext { browser_context_id } => {
                 if !conn
@@ -151,6 +158,11 @@ impl RendererPublicationOwner {
                             page_owner.document_id(),
                         ) {
                             Some(RendererPublicationProjection::CurrentOwner)
+                        } else if runtime_slot
+                            .current_renderer_inspection_binding()
+                            .is_some_and(|binding| binding.routes_output_stream(stream))
+                        {
+                            Some(RendererPublicationProjection::SessionResponsesOnly)
                         } else if runtime_slot.routes_retiring_renderer_page_owner(
                             *renderer_page,
                             page_owner.document_id(),

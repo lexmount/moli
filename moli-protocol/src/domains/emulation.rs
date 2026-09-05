@@ -415,20 +415,34 @@ fn start_script_execution_disabled_command(
             "BrowserContextNotLoaded",
         ));
     }
-    let Some(attachment_id) = loaded_page_mut_for_target_configuration(conn, cmd.session_id)
-        .and_then(|page| page.renderer_agent_attachment_id())
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let Some(binding) = conn
+        .runtime_session_owner_slot_for_owner(&owner)
+        .ok()
+        .and_then(|slot| slot.current_renderer_inspection_binding())
     else {
         return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     };
+    let attachment_id = binding.attachment().id();
     let renderer_inspector_session_id =
         conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
     let response_delivery = cmd.terminal_response_delivery();
     if cmd.id.is_none()
         || response_delivery == moli_page_types::RendererInspectorResponseDelivery::AdapterReply
     {
-        let page = loaded_page_mut_for_target_configuration(conn, cmd.session_id)
-            .expect("the captured Emulation Page must remain loaded synchronously");
-        let pending = page.start_set_script_execution_disabled_from_io(params.value);
+        let pending = match binding.start_set_script_execution_disabled(
+            renderer_inspector_session_id,
+            params.value,
+            None,
+        ) {
+            Ok(pending) => pending,
+            Err(error) => {
+                return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+                    -32000,
+                    error.to_string(),
+                ));
+            }
+        };
         return EmulationCommandTaskStep::Pending(PendingEmulationCommandDispatch {
             command_id: cmd.id,
             session_id: cmd.session_id.map(str::to_owned),
@@ -460,16 +474,20 @@ fn start_script_execution_disabled_command(
         response_rx.is_none(),
         "Emulation session output must not allocate an adapter-reply receiver",
     );
-    let pending = loaded_page_mut_for_target_configuration(conn, cmd.session_id)
-        .filter(|page| page.renderer_agent_attachment_id() == Some(attachment_id))
+    let pending = conn
+        .runtime_session_owner_slot_for_owner(&owner)
+        .ok()
+        .and_then(|slot| slot.current_renderer_inspection_binding())
+        .filter(|binding| binding.attachment().id() == attachment_id)
         .ok_or_else(|| "Emulation renderer attachment changed before IO dispatch".to_owned())
-        .and_then(|page| {
-            page.start_set_script_execution_disabled_from_io_with_response(
-                renderer_inspector_session_id,
-                params.value,
-                response,
-            )
-            .map_err(|error| error.to_string())
+        .and_then(|binding| {
+            binding
+                .start_set_script_execution_disabled(
+                    renderer_inspector_session_id,
+                    params.value,
+                    Some(response),
+                )
+                .map_err(|error| error.to_string())
         });
     let pending = match pending {
         Ok(pending) => pending,

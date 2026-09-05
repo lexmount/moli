@@ -79,6 +79,18 @@ impl Default for WebContents {
 }
 
 impl WebContents {
+    pub(in crate::conn) fn performance_metric_snapshot(
+        &self,
+    ) -> Option<moli_core::page::RendererPerformanceMetricSnapshot> {
+        Some(
+            self.main_frame
+                .current_document
+                .as_ref()?
+                .page
+                .cached_performance_metric_snapshot(),
+        )
+    }
+
     /// Browser observation is independent of the DevTools command that
     /// produced this snapshot. The Page cache validates physical residence
     /// and revision; a rejected observation never invalidates a frozen reply.

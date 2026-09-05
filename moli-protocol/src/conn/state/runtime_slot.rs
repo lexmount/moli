@@ -464,6 +464,12 @@ impl TargetRuntimeSlot {
         self.devtools_renderer_channel.current_binding()
     }
 
+    pub(crate) fn performance_metric_snapshot(
+        &self,
+    ) -> Option<moli_core::page::RendererPerformanceMetricSnapshot> {
+        self.page_slot.contents.performance_metric_snapshot()
+    }
+
     pub(crate) fn routes_current_renderer_page_owner(
         &self,
         renderer_page: RendererPageResidenceIdentity,

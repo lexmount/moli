@@ -107,7 +107,7 @@ async fn ingest_renderer_output_publication(
 ) {
     let cursor = publication.cursor();
     let stream = publication.cursor().stream();
-    let route = owner.resolve(conn);
+    let route = owner.resolve(conn, stream);
     if conn.scheduler_activity_trace_enabled() {
         conn.record_scheduler_activity_trace(json!({
             "kind": "concrete_renderer_output_ingress",
@@ -171,7 +171,21 @@ async fn project_renderer_output_records_for_owner(
     command_context: &mut CommandDispatchContext,
 ) {
     for record in records {
-        let (renderer_cause, item) = record.into_parts();
+        let (renderer_cause, mut item) = record.into_parts();
+        if projection == RendererPublicationProjection::SessionResponsesOnly {
+            let RendererOutputItem::Observation(
+                moli_core::RendererProtocolObservation::RuntimeInspector(batch),
+            ) = &mut item
+            else {
+                continue;
+            };
+            batch.messages.retain(|message| {
+                matches!(message,
+                    moli_core::page::RendererRuntimeInspectorMessage::Protocol(message)
+                        if message.renderer_call_id().is_some()
+                )
+            });
+        }
         if projection == RendererPublicationProjection::RetiringNetworkOnly
             && !matches!(
                 &item,

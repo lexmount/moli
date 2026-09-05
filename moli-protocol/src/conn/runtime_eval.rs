@@ -5365,16 +5365,22 @@ impl CdpConnection {
                         RendererInspectorResponseDelivery::SessionSink
                     );
                     let pending = self
-                        .runtime_session_owner_page_mut(frontend_session_id.as_deref())
-                        .map_err(|error| error.to_string())
-                        .and_then(|page| {
-                            let result = crate::domains::performance::performance_metrics_result(
-                                &page.cached_performance_metric_snapshot(),
-                            );
-                            page.start_performance_get_metrics_from_io_with_response(
+                        .runtime_session_owner_slot_for_owner(&owner)
+                        .and_then(|slot| {
+                            slot.performance_metric_snapshot()
+                                .ok_or_else(|| "NoDocumentLoaded".to_owned())
+                        })
+                        .and_then(|snapshot| {
+                            let result =
+                                crate::domains::performance::performance_metrics_result(&snapshot);
+                            self.renderer_inspection_binding_for_owner(
+                                &owner,
+                                RendererInspectorCommandRoute::Io,
+                            )?
+                            .start_performance_get_metrics(
                                 renderer_inspector_session_id.clone(),
                                 result,
-                                response_sender.clone(),
+                                Some(response_sender.clone()),
                             )
                             .map_err(|error| error.to_string())
                         });
@@ -5408,15 +5414,18 @@ impl CdpConnection {
                         RendererInspectorResponseDelivery::SessionSink
                     );
                     let pending = self
-                        .runtime_session_owner_page_mut(frontend_session_id.as_deref())
-                        .map_err(|error| error.to_string())
-                        .and_then(|page| {
-                            page.start_set_script_execution_disabled_from_io_with_response(
-                                renderer_inspector_session_id.clone(),
-                                disabled,
-                                response_sender.clone(),
-                            )
-                            .map_err(|error| error.to_string())
+                        .renderer_inspection_binding_for_owner(
+                            &owner,
+                            RendererInspectorCommandRoute::Io,
+                        )
+                        .and_then(|binding| {
+                            binding
+                                .start_set_script_execution_disabled(
+                                    renderer_inspector_session_id.clone(),
+                                    disabled,
+                                    Some(response_sender.clone()),
+                                )
+                                .map_err(|error| error.to_string())
                         });
                     let completion = match pending {
                         Ok(pending) => pending.wait().await.map_err(|error| error.to_string()),
@@ -7119,6 +7128,175 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
+    async fn inspector_binding_applies_io_script_policy_without_protocol_page_ownership() {
+        let mut ctx = TestContext::new();
+        let mut context = BrowserContext::new("BID-inspection-io-policy".into());
+        context.set_active_target_id("TID-inspection-io-policy");
+        ctx.conn.install_browser_context_fixture_for_test(context);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<body>inspection IO</body>",
+            None,
+        )
+        .await;
+        let owner = CommandOwnerScope::capture(&ctx.conn, None);
+        let mut document = ctx
+            .conn
+            .runtime_session_owner_slot_mut_for_owner(&owner)
+            .unwrap()
+            .page_slot_mut()
+            .contents
+            .main_frame
+            .current_document
+            .take()
+            .unwrap();
+        for (id, disabled) in [(41, true), (42, false)] {
+            let raw = json!({ "id": id, "method": "Emulation.setScriptExecutionDisabled",
+                "params": { "value": disabled } })
+            .to_string();
+            let response_start = ctx.sent.len();
+            let crate::conn::CdpCommandTaskStep::Pending(pending) =
+                ctx.conn.start_command_dispatch(&raw)
+            else {
+                panic!("a live IO binding must apply script policy without a Protocol Page");
+            };
+            let (mut messages, _) = ctx
+                .complete_command_task_step_for_test(crate::conn::CdpCommandTaskStep::Pending(
+                    pending,
+                ))
+                .await;
+            if !messages.iter().any(|message| message["id"] == json!(id)) {
+                ctx.wait_for_test_command_response(id, response_start).await;
+                messages.push(ctx.take_response_by_id(id));
+            }
+            assert!(
+                messages
+                    .iter()
+                    .any(|message| message["id"] == json!(id) && message["result"] == json!({})),
+                "IO policy response: {messages:?}",
+            );
+            document.page.evaluate_runtime_expression_without_navigation_follow_with_await_async(
+                "(() => { const script = document.createElement('script'); script.textContent = \"document.documentElement.setAttribute('data-inspection-io', 'ran')\"; document.body.appendChild(script); })()",
+                false,
+            ).await.unwrap();
+            let actual = document
+                .page
+                .evaluate_runtime_expression_without_navigation_follow_with_await_async(
+                    "document.documentElement.getAttribute('data-inspection-io')",
+                    false,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                actual["value"],
+                if disabled { Value::Null } else { json!("ran") }
+            );
+        }
+        assert!(
+            !ctx.conn
+                .runtime_session_owner_slot_for_owner(&owner)
+                .unwrap()
+                .has_loaded_page()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inspector_binding_finishes_io_metrics_without_protocol_page_and_rejects_rebind() {
+        use crate::domains::performance::{
+            PerformanceCommandTaskStep, complete_pending_performance_command,
+            try_start_performance_command_dispatch,
+        };
+        let mut ctx = TestContext::new();
+        let mut context = BrowserContext::new("BID-inspection-io-metrics".into());
+        context.set_active_target_id("TID-inspection-io-metrics");
+        ctx.conn.install_browser_context_fixture_for_test(context);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<body><article>metrics</article></body>",
+            None,
+        )
+        .await;
+        let owner = CommandOwnerScope::capture(&ctx.conn, None);
+        assert_eq!(
+            ctx.conn
+                .enable_performance_for_session_owner(None, PerformanceTimeDomain::TimeTicks),
+            Some(true)
+        );
+        let frontend =
+            ParsedCdpCommand::parse_str(r#"{"id":61,"method":"Performance.getMetrics"}"#).unwrap();
+        let cmd = Cmd::from_parsed(&frontend)
+            .unwrap()
+            .with_terminal_response_delivery_override(Some(
+                RendererInspectorResponseDelivery::AdapterReply,
+            ));
+        let mut completions = Vec::new();
+        for _ in 0..2 {
+            let PerformanceCommandTaskStep::Pending(pending) =
+                try_start_performance_command_dispatch(&mut ctx.conn, &cmd)
+            else {
+                panic!("adapter metrics must still use IO dispatch");
+            };
+            completions.push(pending.wait().await);
+        }
+        let document = ctx
+            .conn
+            .runtime_session_owner_slot_mut_for_owner(&owner)
+            .unwrap()
+            .page_slot_mut()
+            .contents
+            .main_frame
+            .current_document
+            .take()
+            .unwrap();
+        for (index, completion) in completions.into_iter().enumerate() {
+            if index == 1 {
+                ctx.install_navigation_fixture_for_session_owner(
+                    "data:text/html,<title>replacement metrics</title>",
+                    None,
+                )
+                .await;
+            }
+            let plan = complete_pending_performance_command(&mut ctx.conn, completion).await;
+            let messages = plan.into_background_events(Some(61), None);
+            assert_eq!(messages.len(), 1);
+            let response = messages.into_iter().next().unwrap().into_protocol_message();
+            let documents = response["result"]["metrics"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|metric| metric["name"] == json!("Documents"))
+                .unwrap()["value"]
+                .as_f64()
+                .unwrap();
+            if index == 0 {
+                assert!(
+                    documents >= 1.0,
+                    "the exact live binding retains its frozen Browser snapshot"
+                );
+                assert!(
+                    !ctx.conn
+                        .runtime_session_owner_slot_for_owner(&owner)
+                        .unwrap()
+                        .has_loaded_page()
+                );
+            } else {
+                assert_eq!(
+                    documents, 0.0,
+                    "a late adapter reply must not reuse a replaced binding's metrics"
+                );
+                assert_eq!(
+                    ctx.conn
+                        .runtime_session_owner_slot_for_owner(&owner)
+                        .unwrap()
+                        .loaded_page()
+                        .unwrap()
+                        .document_title(),
+                    "replacement metrics"
+                );
+            }
+        }
+        drop(document);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
     async fn inspector_binding_applies_emulation_surface_without_protocol_page_ownership() {
         let mut ctx = TestContext::new();
         let mut context = BrowserContext::new("BID-inspection-emulation".into());
@@ -7534,6 +7712,153 @@ mod tests {
             json!({"name": "inspectionBinding"}),
         )
         .await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inspector_binding_replays_io_script_policy_without_protocol_page_ownership() {
+        inspector_binding_replays_io_agent("Emulation.setScriptExecutionDisabled").await;
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inspector_binding_replays_io_metrics_with_current_browser_snapshot() {
+        inspector_binding_replays_io_agent("Performance.getMetrics").await;
+    }
+
+    async fn inspector_binding_replays_io_agent(method: &str) {
+        let mut ctx = TestContext::new();
+        let mut context = BrowserContext::new("BID-inspection-io-replay".into());
+        context.set_active_target_id("TID-inspection-io-replay");
+        ctx.conn.install_browser_context_fixture_for_test(context);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<body><article>IO replay</article></body>",
+            None,
+        )
+        .await;
+        let owner = CommandOwnerScope::capture(&ctx.conn, None);
+        let current = ctx
+            .conn
+            .current_renderer_agent_attachment_id_for_owner(&owner)
+            .unwrap();
+        let outgoing = RendererAgentAttachmentId::allocate();
+        let payload = json!({"id": 51, "method": method, "params": {"value": true}}).to_string();
+        let frontend = ParsedCdpCommand::parse_str(&payload).unwrap();
+        let descriptor = match method {
+            "Emulation.setScriptExecutionDisabled" => {
+                RendererCommandDescriptor::set_script_execution_disabled(
+                    payload.clone(),
+                    frontend.renderer_policy(),
+                    true,
+                    RendererInspectorResponseDelivery::SessionSink,
+                )
+            }
+            "Performance.getMetrics" => RendererCommandDescriptor::performance_get_metrics(
+                payload.clone(),
+                frontend.renderer_policy(),
+                RendererInspectorResponseDelivery::SessionSink,
+            ),
+            _ => unreachable!(),
+        };
+        let prepared = ctx
+            .conn
+            .try_register_renderer_call_for_owner(&owner, 51, Some(outgoing), descriptor)
+            .unwrap();
+        let (old_correlation, old_sender, receiver) = prepared.into_parts();
+        assert!(
+            receiver.is_none(),
+            "IO replay must preserve SessionSink delivery"
+        );
+        let replacements = ctx
+            .conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .active_page_target_mut()
+            .devtools_sessions
+            .prepare_renderer_call_replacements(None, outgoing, current)
+            .unwrap();
+        let (_, terminations, replays) = replacements.into_parts();
+        assert!(terminations.is_empty());
+        assert_eq!(replays.len(), 1);
+        assert!(
+            old_sender
+                .send(json!({"id": old_correlation.renderer_call_id().get(), "result": {}}))
+                .is_err(),
+            "outgoing attachment must not settle a replayed call"
+        );
+        // Metrics is layered: Browser snapshot read plus renderer IO dispatch.
+        // Script inspection itself must work with only the binding in Protocol.
+        let mut document = (method == "Emulation.setScriptExecutionDisabled").then(|| {
+            ctx.conn
+                .runtime_session_owner_slot_mut_for_owner(&owner)
+                .unwrap()
+                .page_slot_mut()
+                .contents
+                .main_frame
+                .current_document
+                .take()
+                .unwrap()
+        });
+        let response_start = ctx.sent.len();
+        let events = ctx
+            .conn
+            .replay_prepared_renderer_calls_after_navigation_async(replays, current)
+            .await
+            .unwrap();
+        assert!(
+            events.is_empty(),
+            "IO response must come from its renderer session"
+        );
+        ctx.wait_for_test_command_response(51, response_start).await;
+        let response = ctx.take_response_by_id(51);
+        assert_eq!(response["id"], json!(51));
+        assert!(
+            response.get("error").is_none(),
+            "IO replay failed: {response}"
+        );
+        if let Some(document) = document.as_mut() {
+            assert_eq!(response["result"], json!({}));
+            document.page.evaluate_runtime_expression_without_navigation_follow_with_await_async(
+                "(() => { const s = document.createElement('script'); s.textContent = \"document.body.setAttribute('data-io-replay', 'ran')\"; document.body.appendChild(s); })()", false,
+            ).await.unwrap();
+            let actual = document
+                .page
+                .evaluate_runtime_expression_without_navigation_follow_with_await_async(
+                    "document.body.getAttribute('data-io-replay')",
+                    false,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                actual["value"],
+                Value::Null,
+                "replayed IO policy must actually disable scripts"
+            );
+            assert!(
+                !ctx.conn
+                    .runtime_session_owner_slot_for_owner(&owner)
+                    .unwrap()
+                    .has_loaded_page()
+            );
+        } else {
+            assert!(
+                response["result"]["metrics"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|metric| metric["name"] == json!("Documents")
+                        && metric["value"].as_f64().unwrap() >= 1.0)
+            );
+        }
+        assert!(
+            ctx.conn
+                .renderer_call_for_frontend_for_session_owner(None, 51)
+                .is_none(),
+            "only the current session response consumes its exact correlation"
+        );
+        assert!(
+            !ctx.sent.iter().any(|message| message["id"] == json!(51)),
+            "replay must settle exactly once"
+        );
     }
 
     async fn inspector_binding_replays_without_protocol_page_ownership(

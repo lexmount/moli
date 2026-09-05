@@ -4970,7 +4970,6 @@ pub enum RendererPageCommand {
     ChildDefaultExecutionContextIdForFrameId(String),
     RuntimeConsoleMessagesWithContext,
     RuntimeHeapUsage,
-    PerformanceMetricSnapshot,
     RuntimeCollectGarbage,
     #[cfg(test)]
     TakeDocumentLifecycleEvents,
@@ -6104,7 +6103,6 @@ pub enum RendererPageReply {
     RuntimeInspectorProtocolMessages(RendererRuntimeCommandOutput),
     RuntimeConsoleMessageSnapshots(Vec<RuntimeConsoleMessageSnapshot>),
     RuntimeHeapUsage(Box<RendererRuntimeHeapUsage>),
-    PerformanceMetricSnapshot(Box<RendererPerformanceMetricSnapshot>),
     RuntimeRealmInventory(Vec<RendererRuntimeRealmInfo>),
     ExecutionContextId(i64),
     ExecutionContextIds(Vec<i64>),
