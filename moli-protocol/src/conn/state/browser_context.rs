@@ -43,7 +43,7 @@ mod storage_partition;
 #[cfg(test)]
 mod tests;
 use physical::BrowserContext as PhysicalBrowserContext;
-pub(crate) use physical::ContextNetworkPolicy;
+pub(crate) use physical::{ContextEmulationDefaults, ContextNetworkPolicy};
 use storage_partition::StoragePartitionKind;
 pub(crate) use storage_partition::{OriginStorageUsage, SiteDataClearOptions};
 
@@ -65,14 +65,9 @@ pub struct BrowserContext {
     pub(crate) default_extra_headers: Vec<(String, String)>,
     pub(crate) global_extra_headers: Vec<(String, String)>,
     default_browser_identity: super::BaseBrowserIdentityOverrideState,
-    pub(crate) default_locale_override: Option<String>,
-    pub(crate) default_timezone_override: Option<String>,
-    pub(crate) default_network_conditions: Option<EmulatedNetworkConditions>,
-    pub(crate) default_geolocation_override: Option<EmulatedGeolocationOverrideState>,
     pub(crate) global_network_conditions: Option<EmulatedNetworkConditions>,
     pub(crate) global_geolocation_override: Option<EmulatedGeolocationOverrideState>,
     pub(crate) global_cache_disabled: bool,
-    pub(crate) default_emulated_device_metrics: Option<EmulatedDeviceMetrics>,
     pub(crate) next_default_document_start_script_id: u32,
     pub(crate) default_document_start_scripts: Vec<(String, DocumentStartScript)>,
     renderer_output_transport_sender: Option<moli_core::RendererOutputTransportSender>,
@@ -387,14 +382,9 @@ impl BrowserContext {
             default_extra_headers: Vec::new(),
             global_extra_headers: Vec::new(),
             default_browser_identity: super::BaseBrowserIdentityOverrideState::default(),
-            default_locale_override: None,
-            default_timezone_override: None,
-            default_network_conditions: None,
-            default_geolocation_override: None,
             global_network_conditions: None,
             global_geolocation_override: None,
             global_cache_disabled: false,
-            default_emulated_device_metrics: None,
             next_default_document_start_script_id: 0,
             default_document_start_scripts: Vec::new(),
             renderer_output_transport_sender: None,
@@ -1308,7 +1298,7 @@ impl BrowserContext {
         locale: Option<String>,
         fallback: &moli_browser_profile::BrowserIdentityProfile,
     ) {
-        self.default_locale_override = locale.clone();
+        self.physical.emulation_defaults.locale = locale.clone();
         self.default_browser_identity
             .set_accept_language(locale, fallback);
     }
@@ -1325,21 +1315,21 @@ impl BrowserContext {
         self.page_targets
             .active()
             .and_then(|host| host.locale_override().map(str::to_owned))
-            .or_else(|| self.default_locale_override.clone())
+            .or_else(|| self.emulation_defaults().locale.clone())
     }
 
     pub(crate) fn effective_active_timezone_override_owned(&self) -> Option<String> {
         self.page_targets
             .active()
             .and_then(|host| host.timezone_override().map(str::to_owned))
-            .or_else(|| self.default_timezone_override.clone())
+            .or_else(|| self.emulation_defaults().timezone.clone())
     }
 
     pub(crate) fn effective_active_network_conditions(&self) -> Option<EmulatedNetworkConditions> {
         self.page_targets
             .active()
             .and_then(|host| host.emulation_policy().network_conditions)
-            .or(self.default_network_conditions)
+            .or(self.emulation_defaults().network_conditions)
             .or(self.global_network_conditions)
     }
 
@@ -1352,6 +1342,36 @@ impl BrowserContext {
 
     // Value-only migration boundary, replaced by typed Browser operations at
     // Commit 22. Never expose the physical Context for mutation through it.
+    pub(crate) fn emulation_defaults(&self) -> &ContextEmulationDefaults {
+        &self.physical.emulation_defaults
+    }
+
+    pub(crate) fn set_default_timezone_override(&mut self, timezone: Option<String>) {
+        self.physical.emulation_defaults.timezone = timezone;
+    }
+
+    pub(crate) fn set_default_network_conditions(
+        &mut self,
+        conditions: Option<EmulatedNetworkConditions>,
+    ) {
+        self.physical.emulation_defaults.network_conditions = conditions;
+    }
+
+    pub(crate) fn set_default_geolocation_override(
+        &mut self,
+        geolocation: Option<EmulatedGeolocationOverrideState>,
+    ) {
+        self.physical.emulation_defaults.geolocation = geolocation;
+    }
+
+    pub(crate) fn set_default_device_metrics(&mut self, metrics: EmulatedDeviceMetrics) -> bool {
+        self.physical
+            .emulation_defaults
+            .device_metrics
+            .replace(metrics)
+            .is_some()
+    }
+
     pub(crate) fn network_policy(&self) -> &ContextNetworkPolicy {
         &self.physical.network_policy
     }
@@ -1380,7 +1400,7 @@ impl BrowserContext {
     ) -> Option<EmulatedNetworkConditions> {
         self.page_target(target_id)
             .and_then(|state| state.emulation_policy().network_conditions)
-            .or(self.default_network_conditions)
+            .or(self.emulation_defaults().network_conditions)
             .or(self.global_network_conditions)
     }
 
@@ -1395,7 +1415,7 @@ impl BrowserContext {
     ) -> Option<String> {
         self.page_target(target_id)
             .and_then(|state| state.locale_override().map(str::to_owned))
-            .or_else(|| self.default_locale_override.clone())
+            .or_else(|| self.emulation_defaults().locale.clone())
     }
 
     pub(crate) fn has_active_target(&self) -> bool {

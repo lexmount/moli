@@ -899,14 +899,15 @@ mod tests {
         );
         target.reset_primary_session_target_state_fields();
         assert!(!target.network_offline());
-        context.default_network_conditions =
-            Some(crate::conn::EmulatedNetworkConditions::offline());
+        context.set_default_network_conditions(Some(
+            crate::conn::EmulatedNetworkConditions::offline(),
+        ));
         assert!(
             conn.navigation_load_inputs_for_owner(&primary)
                 .network_offline
         );
         let context = conn.browser_context.as_mut().unwrap();
-        context.default_network_conditions = None;
+        context.set_default_network_conditions(None);
         context
             .page_target_mut("TID-background")
             .unwrap()
