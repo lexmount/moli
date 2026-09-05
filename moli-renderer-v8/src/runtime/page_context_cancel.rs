@@ -42,6 +42,20 @@ pub(crate) fn renderer_page_context_cancel_channel() -> (
 }
 
 impl RendererPageContextCancelSender {
+    /// Serializes synchronous Inspector enqueue with Page retirement. Keeping
+    /// the existing cancellation lock through enqueue prevents a command from
+    /// entering after retirement has already drained that Page's receivers.
+    pub(in crate::runtime) fn with_inspector_admission<T>(
+        &self,
+        enqueue: impl FnOnce() -> T,
+    ) -> anyhow::Result<T> {
+        let reason = self.state.reason.lock();
+        if let Some(reason) = *reason {
+            return Err(anyhow::anyhow!("Inspector Page is retired: {reason:?}"));
+        }
+        Ok(enqueue())
+    }
+
     pub(crate) fn cancel(&self, reason: RendererPageContextCancelReason) {
         {
             let mut stored = self.state.reason.lock();

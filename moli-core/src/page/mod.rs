@@ -258,6 +258,10 @@ impl Page {
         self.handle.devtools_agent_token()
     }
 
+    pub fn renderer_inspection_endpoint(&self) -> moli_renderer_v8::RendererInspectionEndpoint {
+        self.handle.inspection_endpoint()
+    }
+
     /// Seals this target's Main/IO DevTools ingress and interrupts active V8.
     ///
     /// `Page.crash` is a terminal renderer IO control in Chromium, not an

@@ -17603,7 +17603,7 @@ async fn child_default_context_ids_for_test(page: &RendererPageHandle) -> anyhow
     }
 }
 
-async fn create_test_html_page(
+pub(super) async fn create_test_html_page(
     runtime: &JsRuntime,
     loader: &ResourceRequestClient,
     url: url::Url,
