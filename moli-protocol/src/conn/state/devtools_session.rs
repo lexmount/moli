@@ -252,7 +252,7 @@ impl DevToolsSessionRegistry {
         aggregate
     }
 
-    pub(crate) fn effective_network_browser_identity_override(
+    pub(in crate::conn::state) fn effective_browser_identity_override(
         &self,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
         Self::aggregate_browser_identity_overrides(self.states_in_attachment_order().filter_map(
@@ -265,7 +265,7 @@ impl DevToolsSessionRegistry {
         ))
     }
 
-    pub(crate) fn effective_user_agent_override(&self) -> Option<&str> {
+    pub(in crate::conn::state) fn reported_user_agent_override(&self) -> Option<&str> {
         self.states_in_attachment_order()
             .filter_map(|state| {
                 state
@@ -275,17 +275,6 @@ impl DevToolsSessionRegistry {
                     .and_then(|identity| identity.user_agent.as_deref())
             })
             .last()
-    }
-
-    /// Resolves the identity exposed by the live renderer Document.
-    ///
-    /// Chromium applies the same session attachment precedence to renderer
-    /// agents and browser-side navigation handlers. Setter order does not
-    /// change the winner on either surface.
-    pub(crate) fn effective_renderer_browser_identity_override(
-        &self,
-    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
-        self.effective_network_browser_identity_override()
     }
 
     fn aggregate_browser_identity_overrides<'a>(
@@ -320,7 +309,7 @@ impl DevToolsSessionRegistry {
         })
     }
 
-    pub(crate) fn set_browser_identity_override(
+    pub(in crate::conn::state) fn set_browser_identity_override(
         &mut self,
         session_key: &DevToolsSessionKey,
         browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
@@ -665,7 +654,7 @@ pub(crate) struct DevToolsNetworkSessionState {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct DevToolsEmulationSessionState {
     // UA, Accept-Language, and platform are independent handler contributions.
-    pub(crate) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
+    pub(in crate::conn::state) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
     // Locale and timezone are exclusive controller claims, unlike UA fields.
     pub(crate) locale_override: Option<String>,
     pub(crate) timezone_override: Option<String>,
@@ -1240,16 +1229,8 @@ mod tests {
         sessions: &DevToolsSessionRegistry,
     ) -> moli_browser_profile::BrowserIdentityProfile {
         sessions
-            .effective_network_browser_identity_override()
+            .effective_browser_identity_override()
             .expect("browser identity contribution should be effective")
-    }
-
-    fn effective_renderer_identity(
-        sessions: &DevToolsSessionRegistry,
-    ) -> moli_browser_profile::BrowserIdentityProfile {
-        sessions
-            .effective_renderer_browser_identity_override()
-            .expect("renderer browser identity contribution should be effective")
     }
 
     #[test]
@@ -1323,7 +1304,7 @@ mod tests {
     }
 
     #[test]
-    fn browser_identity_uses_attachment_order_on_network_and_renderer_surfaces() {
+    fn browser_identity_uses_attachment_order_for_the_shared_runtime_profile() {
         let mut sessions = DevToolsSessionRegistry::default();
         let primary = DevToolsSessionKey::Primary;
         let later = DevToolsSessionKey::Attached("SID-later".to_owned());
@@ -1334,9 +1315,8 @@ mod tests {
             &primary,
             identity_override("Moli/Primary-1", None, None),
         );
-        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-1");
         assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
+            effective_identity(&sessions).user_agent(),
             "Moli/Later-1",
             "the later-attached session wins even when it set its override first"
         );
@@ -1348,45 +1328,27 @@ mod tests {
             "Moli/Later-2",
             "the browser-side winner remains the later-attached session"
         );
-        assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Later-2",
-            "updating the later-attached renderer agent preserves its precedence"
-        );
 
         sessions.set_browser_identity_override(
             &primary,
             identity_override("Moli/Primary-2", None, None),
         );
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
-        assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Later-2"
-        );
 
         sessions.set_browser_identity_override(&primary, None);
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
-        assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Later-2"
-        );
 
         sessions.set_browser_identity_override(
             &primary,
             identity_override("Moli/Primary-3", Some("fr-FR"), Some("PrimaryPlatform")),
         );
-        assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Later-2");
-        let renderer_identity = effective_renderer_identity(&sessions);
-        assert_eq!(renderer_identity.user_agent(), "Moli/Later-2");
-        assert_eq!(renderer_identity.accept_language(), "fr-FR");
-        assert_eq!(renderer_identity.navigator_platform(), "PrimaryPlatform");
+        let identity = effective_identity(&sessions);
+        assert_eq!(identity.user_agent(), "Moli/Later-2");
+        assert_eq!(identity.accept_language(), "fr-FR");
+        assert_eq!(identity.navigator_platform(), "PrimaryPlatform");
 
         sessions.remove_attached("SID-later");
         assert_eq!(effective_identity(&sessions).user_agent(), "Moli/Primary-3");
-        assert_eq!(
-            effective_renderer_identity(&sessions).user_agent(),
-            "Moli/Primary-3"
-        );
     }
 
     #[test]

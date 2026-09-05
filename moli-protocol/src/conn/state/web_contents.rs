@@ -34,6 +34,8 @@ pub(in crate::conn) struct WebContents {
     pub(in crate::conn) crashed: bool,
     pub(in crate::conn) emulation_policy: EmulationPolicy,
     pub(in crate::conn) network_request_policy: NetworkRequestPolicy,
+    pub(in crate::conn) browser_identity_override:
+        Option<moli_browser_profile::BrowserIdentityProfile>,
 }
 
 impl Default for WebContents {
@@ -48,6 +50,7 @@ impl Default for WebContents {
             crashed: false,
             emulation_policy: EmulationPolicy::default(),
             network_request_policy: NetworkRequestPolicy::default(),
+            browser_identity_override: None,
         }
     }
 }
@@ -59,6 +62,13 @@ impl WebContents {
 
     pub(in crate::conn) fn set_network_request_policy(&mut self, policy: NetworkRequestPolicy) {
         self.network_request_policy = policy;
+    }
+
+    pub(in crate::conn) fn set_browser_identity_override(
+        &mut self,
+        identity: Option<moli_browser_profile::BrowserIdentityProfile>,
+    ) {
+        self.browser_identity_override = identity;
     }
 
     pub(in crate::conn) fn install_navigation_engine(&mut self, mut engine: NavigationEngine) {

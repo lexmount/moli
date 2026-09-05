@@ -1119,15 +1119,13 @@ async fn loader_uses_active_browser_context_user_agent_override() {
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     first
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-A".into());
+        .set_user_agent_override_for_test("Moli/Context-A".into());
     conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
     second
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-B".into());
+        .set_user_agent_override_for_test("Moli/Context-B".into());
     conn.push_inactive_browser_context_fixture_for_test(second);
 
     assert_eq!(
@@ -1233,22 +1231,19 @@ async fn removing_an_inactive_browser_context_keeps_the_previously_active_contex
     let mut first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
     first
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-A".into());
+        .set_user_agent_override_for_test("Moli/Context-A".into());
     conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-B".into());
+        .set_user_agent_override_for_test("Moli/Context-B".into());
     conn.push_inactive_browser_context_fixture_for_test(second);
 
     let mut third = BrowserContext::new_with_page_for_test("BID-C", "TID-C");
     third
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-C".into());
+        .set_user_agent_override_for_test("Moli/Context-C".into());
     conn.push_inactive_browser_context_fixture_for_test(third);
 
     assert!(conn.activate_browser_context_by_id_async("BID-B").await);
@@ -1286,15 +1281,13 @@ async fn manual_browser_context_restore_reselects_original_context_after_switch(
     let mut first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
     first
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-A".into());
+        .set_user_agent_override_for_test("Moli/Context-A".into());
     conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-B".into());
+        .set_user_agent_override_for_test("Moli/Context-B".into());
     conn.push_inactive_browser_context_fixture_for_test(second);
 
     let previously_active_browser_context_id =

@@ -276,9 +276,7 @@ impl TargetSessionOwnerMut<'_> {
         fallback_identity: &moli_browser_profile::BrowserIdentityProfile,
     ) -> bool {
         self.mutate_page_state(|state, _session_key| {
-            state
-                .network_policy
-                .set_base_user_agent_override(user_agent, fallback_identity);
+            state.set_base_user_agent_override(user_agent, fallback_identity);
         });
         true
     }
@@ -745,17 +743,9 @@ impl CdpConnection {
         }
 
         if is_browser_session && let Some(browser_context) = self.browser_context.as_mut() {
-            if let Some(browser_identity) = browser_identity {
-                browser_context
-                    .active_page_target_mut()
-                    .network_policy
-                    .set_browser_identity_override(browser_identity);
-            } else {
-                browser_context
-                    .active_page_target_mut()
-                    .network_policy
-                    .clear_browser_identity_override();
-            }
+            browser_context
+                .active_page_target_mut()
+                .set_base_browser_identity_override(browser_identity);
         } else {
             self.global_browser_identity_override = browser_identity;
         }

@@ -1531,28 +1531,19 @@ impl BrowserContext {
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
         self.page_targets
             .active()
-            .and_then(|host| host.effective_policy().browser_identity_override().cloned())
+            .and_then(|host| host.browser_identity_override().cloned())
             .or_else(|| self.default_browser_identity.profile_owned())
     }
 
-    pub(crate) fn effective_active_user_agent_override(&self) -> Option<&str> {
+    pub(crate) fn reported_active_user_agent_override(&self) -> Option<&str> {
         self.page_targets
             .active()
-            .and_then(PageTargetHost::effective_user_agent_override)
+            .and_then(PageTargetHost::reported_user_agent_override)
             .or_else(|| {
                 self.default_browser_identity
                     .profile()
                     .map(moli_browser_profile::BrowserIdentityProfile::user_agent)
             })
-    }
-
-    pub(crate) fn effective_active_renderer_browser_identity_override_owned(
-        &self,
-    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
-        self.page_targets
-            .active()
-            .and_then(|host| host.effective_renderer_browser_identity_override_owned())
-            .or_else(|| self.default_browser_identity.profile_owned())
     }
 
     pub(crate) fn default_browser_identity_override(

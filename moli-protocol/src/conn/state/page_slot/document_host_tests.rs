@@ -36,6 +36,16 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
             raw.extra_headers = vec![("X-Stable".into(), "contents".into())];
         },
     );
+    target.set_devtools_browser_identity_override(
+        &moli_page_types::DevToolsSessionKey::Primary,
+        crate::conn::DevToolsBrowserIdentityOverride::from_command(
+            &moli_browser_profile::BrowserIdentityProfile::default(),
+            "Moli/Stable-Identity".into(),
+            Some("fr-FR".into()),
+            None,
+            None,
+        ),
+    );
     let policy = target.effective_policy();
     let first_document = target.current_document_id().unwrap();
     let storage = target.session_storage_store().clone();
