@@ -9,7 +9,8 @@ use super::*;
 use crate::{
     RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
     RendererDocumentLifecycleMilestone, RendererDocumentLifecycleWaitOutcome,
-    RendererDocumentTerminationReason, RendererLifecycleStartReason, RendererPageReply,
+    RendererDocumentTerminationReason, RendererLifecycleStartReason,
+    RendererOutputResidenceIdentity, RendererOwnerLocalHostId, RendererPageReply,
     RendererPageState,
     page_task_queue::PostParseLifecycleWork,
     runtime::document_lifecycle_turn::DocumentLifecycleNavigationTiming,
@@ -3829,6 +3830,11 @@ fn page_state_capture_publishes_lightweight_document_metadata() {
         200,
         Vec::new(),
         state_capture,
+        RendererOutputResidenceIdentity::Page {
+            owner_local_host_id: RendererOwnerLocalHostId::new_for_testing(0),
+            page_id: page_vm.page_id,
+        },
+        0,
     );
     assert_eq!(
         state.final_url().as_str(),

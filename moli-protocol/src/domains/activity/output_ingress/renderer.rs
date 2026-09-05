@@ -273,7 +273,7 @@ mod tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         let owner = CommandOwnerScope::capture(&conn, None);
 

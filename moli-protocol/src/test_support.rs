@@ -11,13 +11,14 @@ use moli_core::{RendererDocumentLifecycleIdentity, RendererOutputResidenceIdenti
 use crate::{
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
     ProtocolSchedulerWork,
-    conn::{CdpConnection, DocumentNavigationToken, RendererPageResidenceIdentity},
+    conn::{CdpConnection, NavigationId, RendererPageResidenceIdentity},
 };
 
 /// Opaque exact-token fixture for scheduler tests that need a real
 /// target-owned background navigation request.
 pub struct BackgroundNavigationRequestFixture {
-    token: DocumentNavigationToken,
+    target_id: String,
+    token: NavigationId,
     cancellation: moli_fetch::FetchCancelHandle,
 }
 
@@ -27,7 +28,7 @@ impl BackgroundNavigationRequestFixture {
     }
 
     pub fn target_id(&self) -> &str {
-        &self.token.target_id
+        &self.target_id
     }
 }
 
@@ -62,6 +63,7 @@ pub fn arm_background_navigation_request_for_target(
         .expect("the target-owned request must expose its cancellation handle");
     assert!(conn.arm_background_navigation_completion(&token, None));
     BackgroundNavigationRequestFixture {
+        target_id: target_id.to_owned(),
         token,
         cancellation,
     }

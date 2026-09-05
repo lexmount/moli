@@ -1621,6 +1621,11 @@ impl RendererOwnerLocalStore {
             response_status,
             response_headers,
             state_capture,
+            RendererOutputResidenceIdentity::Page {
+                owner_local_host_id: owner.local_host_id,
+                page_id: vm.page_id,
+            },
+            0,
         );
         let slot = Self::create_initial_slot_for_vm(owner, &vm, page_state);
         let page_context_cancel_tx = slot.page_context_cancel_sender();
@@ -1668,6 +1673,11 @@ impl RendererOwnerLocalStore {
             response_status,
             response_headers,
             state_capture,
+            RendererOutputResidenceIdentity::Page {
+                owner_local_host_id: owner.local_host_id,
+                page_id: page_vm.page_id,
+            },
+            0,
         );
         let slot = Self::create_initial_slot_for_vm(owner, page_vm, page_state);
         let page_context_cancel_tx = slot.page_context_cancel_sender();
@@ -2465,27 +2475,12 @@ impl RendererOwnerLocalStore {
         entry.slot.refresh_owned_view(view)
     }
 
-    fn commit_next_page_state_on_entry(
-        entry: &LivePageEntry,
-        vm_creation_id: u64,
-        page_state: Arc<RendererPageState>,
-    ) -> Result<()> {
-        Self::refresh_view_on_entry(
-            entry,
-            RendererPageView {
-                page_id: entry.slot.page_id(),
-                vm_creation_id,
-                view_generation: Self::prepare_next_view_generation(entry),
-                page_state,
-            },
-        )
-    }
-
     fn commit_vm_state_capture_as_page_state_on_entry(
         entry: &LivePageEntry,
         state_capture: PageVmStateCapture,
     ) -> Result<()> {
         let current_page_state = entry.slot.active_page_state()?;
+        let view_generation = Self::prepare_next_view_generation(entry);
         let page_state = RendererPageState::from_vm_state_capture(
             current_page_state.requested_url.clone(),
             current_page_state.navigation_initiator_url.clone(),
@@ -2494,8 +2489,18 @@ impl RendererOwnerLocalStore {
             current_page_state.status,
             current_page_state.headers.clone(),
             state_capture,
+            current_page_state.renderer_residence(),
+            view_generation,
         );
-        Self::commit_next_page_state_on_entry(entry, entry.page_vm().creation_id, page_state)
+        Self::refresh_view_on_entry(
+            entry,
+            RendererPageView {
+                page_id: entry.slot.page_id(),
+                vm_creation_id: entry.page_vm().creation_id,
+                view_generation,
+                page_state,
+            },
+        )
     }
 
     fn commit_active_vm_page_state_on_entry(

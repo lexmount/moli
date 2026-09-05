@@ -1,6 +1,6 @@
 use super::*;
 #[tokio::test]
-async fn browser_context_page_attachment_id_tracks_attach_and_detach() {
+async fn browser_context_document_id_tracks_attach_and_detach() {
     let mut conn = CdpConnection::new();
     conn.browser_context = Some(BrowserContext::new_with_page_for_test(
         "BID-cookie-facade",
@@ -13,7 +13,7 @@ async fn browser_context_page_attachment_id_tracks_attach_and_detach() {
         .unwrap()
         .document_cookie_facade_snapshot();
     assert!(!before.has_loaded_page);
-    assert_eq!(before.page_attachment_id, None);
+    assert_eq!(before.document_id, None);
     assert_eq!(before.cookie_store_generation, Some(0));
     assert_eq!(before.structured_write.default_cookie_write_url, None);
     assert_eq!(
@@ -98,7 +98,7 @@ async fn browser_context_page_attachment_id_tracks_attach_and_detach() {
         .await;
     assert!(after_attach.has_loaded_page);
     let attached_page_id = after_attach
-        .page_attachment_id
+        .document_id
         .expect("attached Page must expose an attachment id");
     assert_eq!(after_attach.cookie_store_generation, Some(0));
     assert_eq!(
@@ -170,7 +170,7 @@ async fn browser_context_page_attachment_id_tracks_attach_and_detach() {
         .unwrap()
         .document_cookie_facade_snapshot();
     assert!(!after_detach.has_loaded_page);
-    assert_eq!(after_detach.page_attachment_id, None);
+    assert_eq!(after_detach.document_id, None);
     assert_ne!(attached_page_id, 0);
     assert_eq!(after_detach.cookie_store_generation, Some(0));
     assert_eq!(after_detach.structured_write.default_cookie_write_url, None);

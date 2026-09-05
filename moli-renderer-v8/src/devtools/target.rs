@@ -167,11 +167,15 @@ impl RendererDevToolsTargetHandle {
         let _ = self.close("Inspector target crashed through Page.crash");
     }
 
-    pub(crate) fn detach_page(&self, page_id: PageId, message: &str) {
-        if self.pause.detach_page(page_id) {
-            self.main.cancel_all_queued(message);
-            self.io.cancel_all_queued(message);
-        }
+    pub(crate) fn detach_page(
+        &self,
+        page_id: PageId,
+        agent: RendererDevToolsAgentToken,
+        message: &str,
+    ) {
+        self.pause.detach_page(page_id);
+        self.main.cancel_agent_queued(agent, message);
+        self.io.cancel_agent_queued(agent, message);
     }
 }
 
@@ -275,6 +279,105 @@ mod tests {
             ),
             "terminal Page.crash must reject late ordinary IO work"
         );
+    }
+
+    #[tokio::test]
+    async fn page_retirement_preserves_replacement_agent_ingress() {
+        page_retirement_preserves_other_agent_ingress(false).await;
+    }
+
+    #[tokio::test]
+    async fn rebound_page_retirement_cancels_old_agent_ingress() {
+        page_retirement_preserves_other_agent_ingress(true).await;
+    }
+
+    async fn page_retirement_preserves_other_agent_ingress(rebound: bool) {
+        use crate::runtime::{
+            RendererOutputStreamIdentity, RendererOwnerLocalHostId, RendererTurnOutputJournal,
+        };
+
+        let old_page = PageId::new_for_testing(1);
+        let new_page = PageId::new_for_testing(2);
+        let old_agent = RendererDevToolsAgentToken::allocate();
+        let new_agent = RendererDevToolsAgentToken::allocate();
+        let pause = RendererInspectorPauseBridge::default();
+        let (current_page, current_agent) = if rebound {
+            (new_page, new_agent)
+        } else {
+            (old_page, old_agent)
+        };
+        pause.configure_page_route(RendererTurnOutputJournal::new(
+            RendererOutputStreamIdentity::new_page(
+                RendererOwnerLocalHostId::new_for_testing(1),
+                current_page,
+                current_agent,
+            ),
+        ));
+        let main = RendererInspectorMainIngress::new(
+            RendererInspectorSessionExecutorRouteId::new(1),
+            pause.pause_loop_wake(),
+        );
+        let io = RendererInspectorIoIngress::new(pause.pause_loop_wake(), None);
+        let target = RendererDevToolsTargetHandle::new(pause, main.clone(), io.clone());
+        let enqueue = |page, agent| {
+            let (response_tx, _) =
+                tokio::sync::oneshot::channel::<RendererRuntimeInspectorAsyncCompletion>();
+            let main_route = main.enqueue_command(
+                RendererPageToken::new_for_testing(page),
+                agent,
+                RendererInspectorCommandEnvelope::new_main_protocol(
+                    RendererInspectorIngressTicket::new(
+                        None,
+                        Some("same-session".into()),
+                        RendererInspectorCommandRoute::MainThread,
+                    ),
+                    None,
+                    r#"{"id":1,"method":"Runtime.evaluate"}"#.into(),
+                    RendererRuntimeInspectorResponseSender::new(1, response_tx),
+                ),
+            );
+            let io_route = io.enqueue_command(
+                agent,
+                RendererDevToolsIoCommandEnvelope::performance_get_metrics(
+                    RendererInspectorIngressTicket::new(
+                        None,
+                        Some("same-session".into()),
+                        RendererInspectorCommandRoute::Io,
+                    ),
+                ),
+            );
+            (main_route, io_route)
+        };
+        let (old_main, old_io) = enqueue(old_page, old_agent);
+        let (new_main, new_io) = enqueue(new_page, new_agent);
+
+        target.detach_page(old_page, old_agent, "old page retired");
+
+        let mut main_command = main
+            .claim_for_owner()
+            .expect("replacement Main command survives");
+        assert_eq!(main_command.agent_token, new_agent);
+        let mut io_command = io
+            .claim_for_owner()
+            .expect("replacement IO command survives");
+        assert_eq!(io_command.agent_token, new_agent);
+        assert!(matches!(
+            old_main.wait_for_completion().await,
+            Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled(_))
+        ));
+        assert!(matches!(
+            old_io.wait_for_first_dispatch().await,
+            Ok(RendererRuntimeInspectorIoCommandClaim::Canceled(_))
+        ));
+        drop(main.first_dispatch_guard(&mut main_command));
+        io.first_dispatch_guard(&mut io_command).release();
+        assert!(matches!(
+            new_io.wait_for_first_dispatch().await,
+            Ok(RendererRuntimeInspectorIoCommandClaim::Dispatched)
+        ));
+        drop(new_main);
+        assert!(main.claim_for_owner().is_none());
+        assert!(io.claim_for_owner().is_none());
     }
 
     #[tokio::test]

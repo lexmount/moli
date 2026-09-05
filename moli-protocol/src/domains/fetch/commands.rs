@@ -1848,7 +1848,7 @@ fn continue_streaming_document_response_in_background(
         tokio::task::spawn_local(async move {
             let body_completion_sink = BackgroundNavigationBodyCompletionSink::new(
                 sender.clone(),
-                document_navigation_token.clone(),
+                document_navigation_token,
                 navigation.clone(),
             );
             let navigation_result =
@@ -1873,7 +1873,7 @@ fn continue_streaming_document_response_in_background(
     tokio::task::spawn_local(async move {
         let body_completion_sink = BackgroundNavigationBodyCompletionSink::new(
             sender.clone(),
-            document_navigation_token.clone(),
+            document_navigation_token,
             navigation.clone(),
         );
         let navigation_result = job.run(Some(body_completion_sink)).await;
@@ -2040,7 +2040,7 @@ mod protocol_neutral_tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
 
         let page_owner = conn
@@ -2184,7 +2184,7 @@ mod protocol_neutral_tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
 
         let page_owner = conn
@@ -2320,7 +2320,7 @@ mod protocol_neutral_tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
 
         let page_owner = conn

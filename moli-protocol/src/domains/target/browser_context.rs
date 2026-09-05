@@ -4,7 +4,7 @@ use serde_json::json;
 use moli_browser_profile::{DEFAULT_PROFILE_PARTITION_ID, ProfilePartitionId};
 
 use crate::conn::{
-    BackgroundProtocolEvent, TargetOwnerState, TargetWindowSurfaceState,
+    BackgroundProtocolEvent, ContextNetworkPolicy, WindowSurface, WindowSurfaceState,
     monotonic_timestamp_seconds,
 };
 use crate::devtools_runtime::{
@@ -222,47 +222,39 @@ pub(in crate::domains) fn devtools_client_window_info_for_target(
         .map(|context| context.id.as_str());
     for browser_context in conn.browser_contexts() {
         if let Some(target) = browser_context.page_target(target_id.as_str()) {
-            return Some(devtools_client_window_info_from_owner_state(
+            return Some(devtools_client_window_info_from_surface(
                 target_id.clone(),
                 active_browser_context_id == Some(browser_context.id.as_str())
                     && browser_context.is_active_target(target_id.as_str()),
-                Some(&target.owner_state),
+                target.window_surface(),
             ));
         }
     }
     None
 }
 
-fn devtools_client_window_info_from_owner_state(
+fn devtools_client_window_info_from_surface(
     target_id: DevToolsTargetId,
     active: bool,
-    owner_state: Option<&TargetOwnerState>,
+    surface: WindowSurface,
 ) -> DevToolsClientWindowInfo {
-    let state = owner_state
-        .map(|owner_state| {
-            devtools_window_state_from_target_surface(owner_state.window_surface_state)
-        })
-        .unwrap_or(DevToolsWindowState::Normal);
-    let geometry = owner_state.map(|owner_state| owner_state.window_surface_geometry);
     DevToolsClientWindowInfo {
         client_window: target_id,
         active,
-        state,
-        width: geometry.map(|geometry| geometry.width).unwrap_or(0),
-        height: geometry.map(|geometry| geometry.height).unwrap_or(0),
-        x: geometry.map(|geometry| geometry.x).unwrap_or(0),
-        y: geometry.map(|geometry| geometry.y).unwrap_or(0),
+        state: devtools_window_state_from_target_surface(surface.state),
+        width: surface.width,
+        height: surface.height,
+        x: surface.x,
+        y: surface.y,
     }
 }
 
-fn devtools_window_state_from_target_surface(
-    state: TargetWindowSurfaceState,
-) -> DevToolsWindowState {
+fn devtools_window_state_from_target_surface(state: WindowSurfaceState) -> DevToolsWindowState {
     match state {
-        TargetWindowSurfaceState::Normal => DevToolsWindowState::Normal,
-        TargetWindowSurfaceState::Maximized => DevToolsWindowState::Maximized,
-        TargetWindowSurfaceState::Minimized => DevToolsWindowState::Minimized,
-        TargetWindowSurfaceState::Fullscreen => DevToolsWindowState::Fullscreen,
+        WindowSurfaceState::Normal => DevToolsWindowState::Normal,
+        WindowSurfaceState::Maximized => DevToolsWindowState::Maximized,
+        WindowSurfaceState::Minimized => DevToolsWindowState::Minimized,
+        WindowSurfaceState::Fullscreen => DevToolsWindowState::Fullscreen,
     }
 }
 
@@ -295,13 +287,12 @@ pub(super) fn execute_devtools_create_browser_context_command(
     }
 
     let mut browser_context = conn.new_ephemeral_browser_context(id.clone());
-    browser_context.default_tls_verify_host_override =
-        command.accept_insecure_certs.map(|accept| !accept);
-    browser_context.default_http_proxy_override = command.proxy_server;
-    browser_context.default_http_no_proxy_override =
-        normalize_proxy_bypass_list_for_loader(command.proxy_bypass_list.as_deref());
-    browser_context.proxy_autoconfig_url = command.proxy_autoconfig_url;
-    browser_context.proxy_socks_version = command.proxy_socks_version;
+    browser_context.set_network_policy(ContextNetworkPolicy {
+        http_proxy: command.proxy_server,
+        http_no_proxy: normalize_proxy_bypass_list_for_loader(command.proxy_bypass_list.as_deref()),
+        tls_verify_host: command.accept_insecure_certs.map(|accept| !accept),
+        ..Default::default()
+    });
     conn.insert_browser_context(browser_context);
     Ok(DevToolsCreateBrowserContextResult {
         browser_context_id: crate::devtools_runtime::DevToolsBrowserContextId::from(id),
@@ -514,9 +505,11 @@ pub(super) fn create_browser_context(conn: &mut CdpConnection, cmd: &Cmd<'_>) ->
     }
     let id = conn.gen_bc_id();
     let mut browser_context = conn.new_ephemeral_browser_context(id.clone());
-    browser_context.default_http_proxy_override = params.proxy_server;
-    browser_context.default_http_no_proxy_override =
-        normalize_proxy_bypass_list_for_loader(params.proxy_bypass_list.as_deref());
+    browser_context.set_network_policy(ContextNetworkPolicy {
+        http_proxy: params.proxy_server,
+        http_no_proxy: normalize_proxy_bypass_list_for_loader(params.proxy_bypass_list.as_deref()),
+        ..Default::default()
+    });
     conn.insert_browser_context(browser_context);
     CommandOutputPlan::result(json!({ "browserContextId": id }))
 }

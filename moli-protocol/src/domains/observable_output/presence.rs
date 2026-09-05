@@ -144,7 +144,7 @@ pub(in crate::domains) fn inspector_issue_prepared_outputs(
     if document_binding.renderer_document_identity() != source_document {
         return prepared;
     }
-    let page_attachment_id = document_binding.page_attachment_id;
+    let document_id = document_binding.document_id;
     let frame_id = document_binding.frame_id.clone();
     let loader_id = document_binding.loader_id.clone();
     let Some(storage) = conn.with_target_owner_state_for_owner_mut(owner, |owner_state| {
@@ -179,7 +179,7 @@ pub(in crate::domains) fn inspector_issue_prepared_outputs(
             source_document,
             frame_id.clone(),
             loader_id.clone(),
-            page_attachment_id,
+            document_id,
             issues,
             cursor,
         ));
@@ -291,7 +291,7 @@ fn push_console_log_source_prepared_outputs(
         prepared.extend(
             queue.console_log_backlog_ranges(
                 source.url(),
-                source.page_attachment_id(),
+                source.document_id(),
                 devtools_session_state
                     .console_output_session_state
                     .console_enabled,
@@ -316,7 +316,7 @@ fn push_console_log_source_prepared_outputs(
         conn,
         &queue,
         source.url(),
-        source.page_attachment_id(),
+        source.document_id(),
         owner_state,
         owner,
     );
@@ -441,7 +441,7 @@ pub(in crate::domains) fn live_log_prepared_outputs_for_renderer_network_fact(
     let Some(queue) = TargetObservableOutputQueue::from_log_storage(runtime_slot) else {
         return ObservablePreparedOutputs::default();
     };
-    let Some(page_attachment_id) = runtime_slot.page_attachment_id() else {
+    let Some(document_id) = runtime_slot.document_id() else {
         return ObservablePreparedOutputs::default();
     };
     let mut prepared = ObservablePreparedOutputs::default();
@@ -450,7 +450,7 @@ pub(in crate::domains) fn live_log_prepared_outputs_for_renderer_network_fact(
         conn,
         &queue,
         &url,
-        page_attachment_id,
+        document_id,
         &owner_state,
         owner,
     );
@@ -471,7 +471,7 @@ fn observable_console_log_prepared_outputs_for_session_owner(
     let runtime_slot = conn.runtime_session_owner_slot(session_id).ok()?;
     let url = conn.runtime_session_owner_target_url(session_id)?;
     let queue = super::output_queue::TargetObservableOutputQueue::from_runtime_slot(runtime_slot)?;
-    let page_attachment_id = runtime_slot.page_attachment_id()?;
+    let document_id = runtime_slot.document_id()?;
     let include_console_api_messages = !renderer_agent_owns_page_console_api_events(
         conn,
         &CommandOwnerScope::capture(conn, session_id),
@@ -485,7 +485,7 @@ fn observable_console_log_prepared_outputs_for_session_owner(
         prepared.extend(
             queue.console_log_backlog_ranges(
                 &url,
-                page_attachment_id,
+                document_id,
                 devtools_session_state
                     .console_output_session_state
                     .console_enabled,
@@ -505,7 +505,7 @@ fn observable_console_log_prepared_outputs_for_session_owner(
             conn,
             &queue,
             &url,
-            page_attachment_id,
+            document_id,
             &owner_state,
             &owner,
         );
@@ -519,7 +519,7 @@ fn push_log_prepared_outputs_for_enabled_sessions(
     conn: &CdpConnection,
     queue: &TargetObservableOutputQueue,
     url: &str,
-    page_attachment_id: crate::conn::TargetPageAttachmentId,
+    document_id: crate::conn::DocumentId,
     owner_state: &crate::conn::TargetOwnerState,
     owner: &CommandOwnerScope,
 ) {
@@ -542,7 +542,7 @@ fn push_log_prepared_outputs_for_enabled_sessions(
         }
         prepared.extend(queue.console_log_backlog_ranges(
             url,
-            page_attachment_id,
+            document_id,
             false,
             true,
             true,
@@ -586,7 +586,7 @@ mod tests {
         ));
         bc.active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(17);
+            .set_document_id_for_test(17);
         conn.install_browser_context_fixture_for_test(bc);
         for session_id in enabled_session_ids {
             conn.with_target_devtools_session_state_for_session_mut(Some(session_id), |state| {
@@ -613,7 +613,7 @@ mod tests {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
@@ -662,7 +662,7 @@ mod tests {
         bc.set_target_url("data:text/html,console-only-source".to_owned());
         bc.active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
@@ -716,7 +716,7 @@ mod tests {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state

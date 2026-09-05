@@ -5,8 +5,8 @@ use url::Url;
 
 use super::body_spool::ensure_materialize_limit;
 use super::{
-    CapturedBody, CapturedBodyWriter, CdpConnection, CommandOwnerScope, DocumentNavigationToken,
-    NavigationDispatchState, NavigationLoadOutcome, PausedResponsePreparedDocument,
+    CapturedBody, CapturedBodyWriter, CdpConnection, CommandOwnerScope, NavigationDispatchState,
+    NavigationId, NavigationLoadOutcome, PausedResponsePreparedDocument,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::domains::network::MainDocumentBodyProgressSource;
@@ -447,7 +447,7 @@ impl PendingSubresourceFetchOwnerKind {
 pub struct PendingFetchNavigation {
     pub fetch_request_id: String,
     pub interception_session_id: Option<String>,
-    pub(crate) document_navigation_token: Option<DocumentNavigationToken>,
+    pub(crate) document_navigation_token: Option<NavigationId>,
     pub navigation: NavigationDispatchState,
     pub(crate) request_cookie_report: Option<StoredCookieQueryReport>,
     pub intercept_response: bool,
@@ -467,7 +467,7 @@ pub struct PendingFetchAuthNavigation {
     // response stage must retain the id announced by the original request.
     pub fetch_request_id: String,
     pub response_stage_request_id: String,
-    pub(crate) document_navigation_token: Option<DocumentNavigationToken>,
+    pub(crate) document_navigation_token: Option<NavigationId>,
     pub navigation: NavigationDispatchState,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
     pub auth_response: Arc<NetworkFetchResult<RawResponse>>,
@@ -522,7 +522,7 @@ pub struct PausedDocumentTransfer {
 #[derive(Debug)]
 enum PausedDocumentTransferState {
     Pending {
-        document_navigation_token: Option<DocumentNavigationToken>,
+        document_navigation_token: Option<NavigationId>,
         navigation: NavigationDispatchState,
         body: DocumentBodySource,
     },
@@ -534,7 +534,7 @@ enum PausedDocumentTransferState {
 
 #[derive(Debug)]
 struct ActiveDocumentBodyStreamState {
-    document_navigation_token: Option<DocumentNavigationToken>,
+    document_navigation_token: Option<NavigationId>,
     navigation: NavigationDispatchState,
     requested_url: Url,
     request_method: String,
@@ -639,7 +639,7 @@ impl PausedDocumentTransfers {
     pub(crate) fn register_pending_navigation(
         &mut self,
         request_id: String,
-        document_navigation_token: Option<DocumentNavigationToken>,
+        document_navigation_token: Option<NavigationId>,
         navigation: NavigationDispatchState,
         body: DocumentBodySource,
     ) {
@@ -782,7 +782,7 @@ pub(crate) enum OpenBodyStreamError {
 }
 
 pub(crate) struct PendingStreamingDocumentResponseNavigation {
-    pub(crate) document_navigation_token: DocumentNavigationToken,
+    pub(crate) document_navigation_token: NavigationId,
     pub(crate) navigation: NavigationDispatchState,
     pub(crate) response: StreamingRawResponse,
     pub(crate) network_observation_journal: NetworkObservationJournal,
@@ -793,7 +793,7 @@ pub(crate) struct PendingStreamingDocumentResponseNavigation {
 impl PausedDocumentTransfer {
     pub(crate) fn pending(
         fetch_request_id: String,
-        document_navigation_token: Option<DocumentNavigationToken>,
+        document_navigation_token: Option<NavigationId>,
         navigation: NavigationDispatchState,
         body: DocumentBodySource,
     ) -> Self {
@@ -1159,7 +1159,7 @@ impl PausedDocumentTransfer {
         response_headers: Vec<(String, String)>,
     ) -> Result<
         (
-            Option<DocumentNavigationToken>,
+            Option<NavigationId>,
             NavigationDispatchState,
             Result<NavigationLoadOutcome, String>,
         ),
@@ -1191,7 +1191,7 @@ impl PausedDocumentTransfer {
         response_headers: Vec<(String, String)>,
         synthetic_body: CapturedBody,
     ) -> (
-        Option<DocumentNavigationToken>,
+        Option<NavigationId>,
         NavigationDispatchState,
         Result<NavigationLoadOutcome, String>,
     ) {
@@ -1230,7 +1230,7 @@ impl PausedDocumentTransfer {
         self,
         error_text: String,
     ) -> (
-        Option<DocumentNavigationToken>,
+        Option<NavigationId>,
         NavigationDispatchState,
         Result<NavigationLoadOutcome, String>,
     ) {
@@ -1250,7 +1250,7 @@ impl PausedDocumentTransfer {
 
 impl ActiveDocumentBodyStreamState {
     fn new(
-        document_navigation_token: Option<DocumentNavigationToken>,
+        document_navigation_token: Option<NavigationId>,
         navigation: NavigationDispatchState,
         requested_url: Url,
         request_method: String,
@@ -1325,7 +1325,7 @@ impl ActiveDocumentBodyStreamState {
         response_headers: Vec<(String, String)>,
         synthetic_body: CapturedBody,
     ) -> (
-        Option<DocumentNavigationToken>,
+        Option<NavigationId>,
         NavigationDispatchState,
         Result<NavigationLoadOutcome, String>,
     ) {
@@ -1350,7 +1350,7 @@ impl ActiveDocumentBodyStreamState {
         self,
         error_text: String,
     ) -> (
-        Option<DocumentNavigationToken>,
+        Option<NavigationId>,
         NavigationDispatchState,
         Result<NavigationLoadOutcome, String>,
     ) {

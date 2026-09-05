@@ -610,8 +610,8 @@ fn start_emulate_network_conditions_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> NetworkCommandTaskStep {
-    let conditions = match settings::emulated_network_conditions_for_command(cmd) {
-        Ok(conditions) => conditions,
+    let offline = match settings::network_offline_for_command(cmd) {
+        Ok(offline) => offline,
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
     pending_network_page_command_step(
@@ -619,16 +619,7 @@ fn start_emulate_network_conditions_command(
         cmd.id,
         cmd.session_id,
         PendingNetworkCommandKind::EmulateNetworkConditions,
-        |conn| {
-            conn.start_set_emulated_network_conditions_for_session_owner(
-                cmd.session_id,
-                conditions.offline,
-                conditions.latency,
-                conditions.download_throughput,
-                conditions.upload_throughput,
-                conditions.connection_type,
-            )
-        },
+        |conn| conn.start_set_network_offline_for_session_owner(cmd.session_id, offline),
     )
 }
 

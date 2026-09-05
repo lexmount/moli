@@ -2431,7 +2431,7 @@ async fn detach_fail_closes_page_before_retiring_unremovable_session_scripts() {
         .as_ref()
         .unwrap()
         .active_page_target();
-    assert!(target.owner_state.target_crash_state.is_crashed());
+    assert!(target.is_crashed());
     assert!(target.loaded_page().is_none());
     assert!(
         target
@@ -2537,7 +2537,7 @@ async fn detach_fail_closes_page_when_fetch_disable_cannot_reach_renderer() {
         .unwrap()
         .active_page_target();
     assert!(
-        target.owner_state.target_crash_state.is_crashed(),
+        target.is_crashed(),
         "a failed renderer Fetch cleanup must fail the Page closed"
     );
     assert!(target.loaded_page().is_none());
@@ -3656,7 +3656,7 @@ async fn non_browser_auto_attach_owners_do_not_replay_existing_shared_worker_tar
     ctx.conn
         .runtime_session_owner_slot_mut(Some("SID-page"))
         .expect("page owner runtime slot")
-        .set_page_attachment_id_for_test(1);
+        .set_document_id_for_test(1);
     let owner_page = ctx
         .conn
         .target_page_residence_identity_for_session(Some("SID-page"))

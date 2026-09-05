@@ -88,7 +88,7 @@ impl CdpConnection {
                     .runtime_slot()
                     .routes_current_renderer_page_owner(
                         renderer_page,
-                        target.owner_page.page_attachment_id(),
+                        target.owner_page.document_id(),
                     )
                 {
                     return None;

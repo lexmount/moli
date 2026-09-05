@@ -21,8 +21,8 @@ use url::Url;
 
 use crate::conn::{
     BackgroundNavigationLoadJob, BackgroundProtocolEvent, CapturedBody, CdpConnection,
-    CdpSessionRoute, Cmd, CommandDispatchContext, CommandOwnerScope, DocumentNavigationToken,
-    FetchRequestStage, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
+    CdpSessionRoute, Cmd, CommandDispatchContext, CommandOwnerScope, FetchRequestStage,
+    NavigationDispatchState, NavigationId, NavigationLoadOutcome, NavigationRequestLoadPolicy,
     NavigationResultProjection, NavigationSourceDocumentSecurityContext, PendingFetchNavigation,
     ResponseStageUrlMatchPolicy, monotonic_timestamp_seconds,
 };
@@ -51,14 +51,14 @@ use super::{
 
 pub(super) struct PendingNavigateLoadCommand {
     prefix_events: Vec<BackgroundProtocolEvent>,
-    token: DocumentNavigationToken,
+    token: NavigationId,
     state: NavigationDispatchState,
     job: BackgroundNavigationLoadJob,
 }
 
 pub(super) struct CompletedNavigateLoadCommand {
     prefix_events: Vec<BackgroundProtocolEvent>,
-    token: DocumentNavigationToken,
+    token: NavigationId,
     state: NavigationDispatchState,
     navigation: Result<NavigationLoadOutcome, String>,
 }
@@ -343,7 +343,7 @@ impl DirectNavigationResult {
 
 fn send_background_navigation_started(
     conn: &mut CdpConnection,
-    token: DocumentNavigationToken,
+    token: NavigationId,
     owner: &CommandOwnerScope,
     frame_id: &str,
     loader_id: &str,
@@ -361,7 +361,7 @@ fn send_background_navigation_started(
             initiator,
         );
         for event in events {
-            conn.send_navigation_background_protocol_event(token.clone(), event);
+            conn.send_navigation_background_protocol_event(token, event);
         }
     }
 }
@@ -388,14 +388,14 @@ fn emit_navigation_started_for_session_owner(
 }
 
 pub(crate) struct MaterializedNavigationCompletion {
-    token: DocumentNavigationToken,
+    token: NavigationId,
     state: NavigationDispatchState,
     navigation: network::MaterializedNavigationLoadOutcome,
 }
 
 impl MaterializedNavigationCompletion {
     pub(crate) fn new(
-        token: DocumentNavigationToken,
+        token: NavigationId,
         state: NavigationDispatchState,
         navigation: network::MaterializedNavigationLoadOutcome,
     ) -> Self {
@@ -425,7 +425,7 @@ impl MaterializedNavigationCompletion {
     pub(crate) fn into_parts(
         self,
     ) -> (
-        DocumentNavigationToken,
+        NavigationId,
         NavigationDispatchState,
         network::MaterializedNavigationLoadOutcome,
     ) {
@@ -434,7 +434,7 @@ impl MaterializedNavigationCompletion {
 }
 
 pub struct BackgroundMainDocumentBodyCompletion {
-    token: DocumentNavigationToken,
+    token: NavigationId,
     state: NavigationDispatchState,
     body: Result<CapturedBody, String>,
     synthetic: bool,
@@ -446,7 +446,7 @@ pub struct BackgroundMainDocumentBodyCompletion {
 
 impl BackgroundMainDocumentBodyCompletion {
     pub(crate) fn new(
-        token: DocumentNavigationToken,
+        token: NavigationId,
         state: NavigationDispatchState,
         body: Result<CapturedBody, String>,
         synthetic: bool,
@@ -529,7 +529,7 @@ impl BackgroundNavigationCompletion {
 }
 
 pub struct BackgroundNavigationLifecycleCompletion {
-    token: DocumentNavigationToken,
+    token: NavigationId,
     state: NavigationDispatchState,
     navigation: Result<NavigationLoadOutcome, String>,
     ready_at: std::time::Instant,
@@ -537,7 +537,7 @@ pub struct BackgroundNavigationLifecycleCompletion {
 
 impl BackgroundNavigationLifecycleCompletion {
     pub(crate) fn new(
-        token: DocumentNavigationToken,
+        token: NavigationId,
         state: NavigationDispatchState,
         navigation: Result<NavigationLoadOutcome, String>,
     ) -> Self {
@@ -549,7 +549,7 @@ impl BackgroundNavigationLifecycleCompletion {
         }
     }
 
-    pub(crate) fn navigation_token(&self) -> &DocumentNavigationToken {
+    pub(crate) fn navigation_token(&self) -> &NavigationId {
         &self.token
     }
 
@@ -575,7 +575,7 @@ impl BackgroundNavigationLifecycleCompletion {
 
 impl BackgroundNavigationCompletion {
     pub(crate) fn new(
-        token: DocumentNavigationToken,
+        token: NavigationId,
         state: NavigationDispatchState,
         navigation: Result<NavigationLoadOutcome, String>,
     ) -> Self {
@@ -585,7 +585,7 @@ impl BackgroundNavigationCompletion {
     }
 
     pub(crate) fn main_document_body(
-        token: DocumentNavigationToken,
+        token: NavigationId,
         state: NavigationDispatchState,
         body: Result<CapturedBody, String>,
         synthetic: bool,
@@ -2533,10 +2533,7 @@ fn reloaded_after_crash_session_ids(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Vec<Option<String>> {
-    if !conn
-        .target_owner_state_for_owner(owner)
-        .is_some_and(|owner_state| owner_state.target_crash_state.is_crashed())
-    {
+    if !conn.target_is_crashed_for_owner(owner) {
         return Vec::new();
     }
     conn.page_event_session_ids_for_owner(owner)
@@ -2554,9 +2551,7 @@ fn clear_crash_state_after_navigation(
     owner: &CommandOwnerScope,
     reloaded_after_crash_session_ids: &[Option<String>],
 ) {
-    let _ = conn.with_target_owner_state_for_owner_mut(owner, |owner_state| {
-        owner_state.target_crash_state.clear();
-    });
+    conn.clear_target_crash_state_for_owner(owner);
     for session_id in reloaded_after_crash_session_ids {
         out.push(inspector_target_reloaded_after_crash_event(
             session_id.as_deref(),
@@ -2570,9 +2565,7 @@ fn clear_crash_state_after_navigation_into_plan(
     owner: &CommandOwnerScope,
     reloaded_after_crash_session_ids: &[Option<String>],
 ) {
-    let _ = conn.with_target_owner_state_for_owner_mut(owner, |owner_state| {
-        owner_state.target_crash_state.clear();
-    });
+    conn.clear_target_crash_state_for_owner(owner);
     for session_id in reloaded_after_crash_session_ids {
         plan.push_background_event(inspector_target_reloaded_after_crash_event(
             session_id.as_deref(),
@@ -2807,7 +2800,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         ));
     };
     if let Some(pending) = pending_fetch_navigation.as_mut() {
-        pending.document_navigation_token = Some(document_navigation_token.clone());
+        pending.document_navigation_token = Some(document_navigation_token);
     }
     if pending_fetch_navigation.is_some() {
         emit_navigation_started_for_session_owner(
@@ -2822,7 +2815,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     } else if allow_background_navigation && conn.background_event_sender().is_some() {
         send_background_navigation_started(
             conn,
-            document_navigation_token.clone(),
+            document_navigation_token,
             owner,
             &frame_id,
             navigation_loader_id,
@@ -2947,7 +2940,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         tokio::task::spawn_local(async move {
             let body_completion_sink = crate::conn::BackgroundNavigationBodyCompletionSink::new(
                 sender.clone(),
-                document_navigation_token.clone(),
+                document_navigation_token,
                 completion_state.clone(),
             );
             let (navigation, early_result_sent) = job.run(Some(body_completion_sink)).await;
@@ -3219,7 +3212,7 @@ pub(super) async fn complete_pending_continue_navigation_without_request_pause_c
 pub(crate) async fn complete_materialized_navigation_into_buffer_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
-    token: DocumentNavigationToken,
+    token: NavigationId,
     state: NavigationDispatchState,
     navigation: network::MaterializedNavigationLoadOutcome,
     command_context: &mut crate::conn::CommandDispatchContext,
@@ -3238,14 +3231,13 @@ pub(crate) async fn complete_materialized_navigation_into_buffer_async(
 async fn complete_materialized_navigation_into_buffer_inner_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
-    token: DocumentNavigationToken,
+    token: NavigationId,
     state: NavigationDispatchState,
     navigation: network::MaterializedNavigationLoadOutcome,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) {
     let navigation_owner = state.owner.clone();
     let navigation_session_id = navigation_owner.session_id().map(str::to_owned);
-    let navigation_loader_id = state.loader_id.clone();
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
@@ -3311,7 +3303,7 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                         tracing::debug!(
                             %error,
                             session_id = state.owner.session_id(),
-                            loader_id = token.loader_id,
+                            navigation_id = token.get(),
                             "dropping superseded response commit-ready navigation"
                         );
                         push_navigation_commit_error(out, &state, error);
@@ -3395,10 +3387,7 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             ),
         }
     }
-    conn.clear_pending_document_navigation_for_owner_if_loader_matches(
-        &navigation_owner,
-        &navigation_loader_id,
-    );
+    conn.clear_pending_document_navigation_for_owner_if_matches(&navigation_owner, &token);
 }
 
 fn push_navigation_commit_error(
@@ -3460,7 +3449,7 @@ pub(crate) async fn emit_same_document_navigation_background_events_async(
                 ?source_document,
                 browser_context_id = navigation.owner().browser_context_id(),
                 target_id = navigation.owner().target_id(),
-                page_attachment_id = navigation.owner().page_attachment_id().get(),
+                document_id = navigation.owner().document_id().get(),
                 "dropping same-document navigation produced by a stale Page residence"
             );
             continue;

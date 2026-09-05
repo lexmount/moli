@@ -511,8 +511,12 @@ async fn clear_browser_cache_uses_browser_context_http_cache_owner() {
     let mut ctx = TestContext::from_conn(crate::conn::CdpConnection::new_with_fetch_config(
         fetch_config,
     ));
-    let mut browser_context = BrowserContext::new("BID-1".into());
-    browser_context.http_cache_root = Some(cache_dir.clone());
+    let browser_context = BrowserContext::new_with_storage_partition_and_http_cache(
+        "BID-1".into(),
+        crate::conn::BrowserContextStoragePartitionHandles::memory(),
+        Some(cache_dir.clone()),
+        None,
+    );
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
 
@@ -548,15 +552,24 @@ async fn clear_browser_cache_targets_command_session_browser_context() {
     fs::write(inactive_entry_dir.join("body.test.bin"), b"inactive")
         .expect("inactive cache body fixture should be written");
 
-    let mut active = BrowserContext::new_with_page_for_test("BID-cache-active", "TID-cache-active");
+    let mut active = BrowserContext::new_with_storage_partition_and_http_cache(
+        "BID-cache-active".into(),
+        crate::conn::BrowserContextStoragePartitionHandles::memory(),
+        Some(active_cache_dir.clone()),
+        None,
+    );
+    active.set_active_target_id("TID-cache-active");
     active.attach_active_session("SID-cache-active");
-    active.http_cache_root = Some(active_cache_dir.clone());
     active.record_captured_response_body("REQ-active".to_owned(), "active".to_owned(), [None]);
 
-    let mut inactive =
-        BrowserContext::new_with_page_for_test("BID-cache-inactive", "TID-cache-inactive");
+    let mut inactive = BrowserContext::new_with_storage_partition_and_http_cache(
+        "BID-cache-inactive".into(),
+        crate::conn::BrowserContextStoragePartitionHandles::memory(),
+        Some(inactive_cache_dir.clone()),
+        None,
+    );
+    inactive.set_active_target_id("TID-cache-inactive");
     inactive.attach_active_session("SID-cache-inactive");
-    inactive.http_cache_root = Some(inactive_cache_dir.clone());
     inactive.record_captured_response_body(
         "REQ-inactive".to_owned(),
         "inactive".to_owned(),
@@ -609,10 +622,9 @@ fn new_ephemeral_browser_context_inherits_effective_http_cache_owner() {
     let browser_context = conn.new_ephemeral_browser_context("BID-ephemeral".to_owned());
 
     assert_eq!(
-        browser_context.http_cache_root.as_deref(),
-        Some(cache_dir.as_path())
+        browser_context.http_cache_configuration_for_test(),
+        (Some(cache_dir.as_path()), Some(77))
     );
-    assert_eq!(browser_context.http_cache_max_bytes, Some(77));
 }
 
 #[test]
@@ -633,10 +645,9 @@ fn new_browser_context_inherits_effective_http_cache_owner() {
     let browser_context = conn.new_browser_context("BID-default".to_owned());
 
     assert_eq!(
-        browser_context.http_cache_root.as_deref(),
-        Some(cache_dir.as_path())
+        browser_context.http_cache_configuration_for_test(),
+        (Some(cache_dir.as_path()), Some(77))
     );
-    assert_eq!(browser_context.http_cache_max_bytes, Some(77));
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -633,7 +633,7 @@ async fn devtools_script_navigation_exact_cursor_rejects_replaced_page_owner_act
             route.clone(),
         ))
         .expect("created target runtime slot")
-        .replace_page_attachment_id_for_test();
+        .replace_document_id_for_test();
 
     let sent_start = ctx.sent.len();
     ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
@@ -862,19 +862,21 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
         .browser_context_by_id("user-context-1")
         .expect("created browser context");
     assert_eq!(
-        created_context.default_tls_verify_host_override,
+        created_context.network_policy().tls_verify_host,
         Some(false)
     );
     assert_eq!(
-        created_context.default_http_proxy_override.as_deref(),
+        created_context.network_policy().http_proxy.as_deref(),
         Some("127.0.0.1:80")
     );
     assert_eq!(
-        created_context.default_http_no_proxy_override.as_deref(),
+        created_context.network_policy().http_no_proxy.as_deref(),
         Some("localhost,127.0.0.1")
     );
-    assert_eq!(created_context.proxy_autoconfig_url, None);
-    assert_eq!(created_context.proxy_socks_version, None);
+    let client = conn.ensure_resource_request_client().unwrap();
+    assert_eq!(client.http_proxy(), Some("127.0.0.1:80"));
+    assert_eq!(client.http_no_proxy(), Some("localhost,127.0.0.1"));
+    assert!(!client.tls_verify_host());
 
     let (get_contexts_result, _) = conn
         .execute_devtools_command(DevToolsCommand::GetBrowserContexts(
@@ -955,7 +957,7 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
 }
 
 #[tokio::test]
-async fn devtools_browser_context_create_preserves_proxy_autoconfig_and_socks_metadata() {
+async fn devtools_browser_context_create_installs_socks_proxy_for_requests() {
     let mut conn = CdpConnection::new();
     let context = DevToolsCommandContext {
         protocol: DevToolsProtocol::WebDriverBidi,
@@ -989,14 +991,14 @@ async fn devtools_browser_context_create_preserves_proxy_autoconfig_and_socks_me
         .browser_context_by_id(create_result.browser_context_id.as_str())
         .expect("created browser context");
     assert_eq!(
-        created_context.default_http_proxy_override.as_deref(),
+        created_context.network_policy().http_proxy.as_deref(),
         Some("socks5://[::1]:1080")
     );
-    assert_eq!(
-        created_context.proxy_autoconfig_url.as_deref(),
-        Some("http://proxy.test/proxy.pac")
-    );
-    assert_eq!(created_context.proxy_socks_version, Some(5));
+    // The actual request policy comes from proxy_server, not an inert copy of
+    // PAC/SOCKS metadata. Frontend parsing keeps validating those input fields.
+    let client = conn.ensure_resource_request_client().unwrap();
+    assert_eq!(client.http_proxy(), Some("socks5://[::1]:1080"));
+    assert!(client.tls_verify_host());
 }
 
 #[tokio::test]
@@ -2416,7 +2418,7 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         .browser_context
         .as_ref()
         .expect("browser context")
-        .page_attachment_id();
+        .document_id();
 
     let completed = pending
         .wait()
@@ -2544,7 +2546,7 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
 
     let browser_context = conn.browser_context.as_ref().expect("browser context");
     assert_eq!(
-        browser_context.page_attachment_id(),
+        browser_context.document_id(),
         attachment_after_real_page,
         "discarding stale initial document build must not replace the current page"
     );
@@ -2559,7 +2561,6 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
     );
     let initial = browser_context
         .active_page_target()
-        .owner_state
         .initial_empty_document_state()
         .expect("initial empty document state should remain recorded");
     assert!(
@@ -4436,8 +4437,9 @@ async fn devtools_command_applies_window_state_to_document_surface() {
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .window_document_hidden(),
+            .window_surface()
+            .state
+            .document_hidden(),
         "SetWindowState must update the target owner state before applying document surfaces"
     );
     assert_eq!(
@@ -4471,8 +4473,9 @@ async fn devtools_command_applies_window_state_to_document_surface() {
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .window_fullscreen(),
+            .window_surface()
+            .state
+            .is_fullscreen(),
         "SetWindowState fullscreen must update the target owner before applying document surfaces"
     );
     assert_eq!(
@@ -4622,7 +4625,8 @@ async fn devtools_command_applies_known_user_context_viewport_default() {
         "userContext viewport should not create a page target"
     );
     let default_metrics = browser_context
-        .default_emulated_device_metrics
+        .emulation_defaults()
+        .device_metrics
         .as_ref()
         .expect("userContext should hold default emulated device metrics");
     assert_eq!(default_metrics.width, 800);
@@ -8516,7 +8520,7 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
             .and_then(|browser_context| {
                 browser_context.background_target("TID-security-background")
             })
-            .and_then(|target| target.tls_verify_host_override),
+            .and_then(|target| target.tls_verify_host_override()),
         Some(false),
         "the attached background session should update only its target"
     );

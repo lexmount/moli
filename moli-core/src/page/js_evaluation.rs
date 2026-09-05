@@ -535,7 +535,7 @@ impl Page {
     ) -> Result<PendingRuntimeInspectorCommandDispatch> {
         match inspector_route {
             RendererInspectorCommandRoute::MainThread => {
-                let route = self.handle.enqueue_runtime_inspector_main_command(
+                let route = self.renderer_inspection_endpoint().enqueue_main_command(
                     RendererInspectorCommandEnvelope::new_main_protocol(
                         RendererInspectorIngressTicket::new(
                             self.renderer_agent_attachment_id,
@@ -546,7 +546,7 @@ impl Page {
                         raw_json,
                         deferred_response,
                     ),
-                );
+                )?;
                 Ok(Self::pending_main_ingress_runtime_inspector_command_dispatch(route))
             }
             RendererInspectorCommandRoute::Io => {
@@ -555,7 +555,7 @@ impl Page {
                         "an IO Inspector command cannot require Page owner context resolution"
                     ));
                 }
-                let route = self.handle.enqueue_runtime_inspector_io_command(
+                let route = self.renderer_inspection_endpoint().enqueue_io_command(
                     RendererInspectorCommandEnvelope::new_io(
                         RendererInspectorIngressTicket::new(
                             self.renderer_agent_attachment_id,
@@ -565,7 +565,7 @@ impl Page {
                         raw_json,
                         Some(deferred_response),
                     ),
-                );
+                )?;
                 Ok(Self::pending_io_runtime_inspector_command_dispatch(route))
             }
         }
@@ -576,7 +576,7 @@ impl Page {
         inspector_session_id: Option<String>,
         raw_json: String,
     ) -> Result<PendingRuntimeInspectorCommandDispatch> {
-        let route = self.handle.enqueue_runtime_inspector_io_command(
+        let route = self.renderer_inspection_endpoint().enqueue_io_command(
             RendererInspectorCommandEnvelope::new_io(
                 RendererInspectorIngressTicket::new(
                     self.renderer_agent_attachment_id,
@@ -586,12 +586,12 @@ impl Page {
                 raw_json,
                 None,
             ),
-        );
+        )?;
         Ok(Self::pending_io_runtime_inspector_command_dispatch(route))
     }
 
     pub fn runtime_inspector_pause_active(&self) -> bool {
-        self.handle.runtime_inspector_pause_active()
+        self.renderer_inspection_endpoint().pause_active()
     }
 
     pub fn start_runtime_protocol_message_with_context_resolution(
@@ -654,21 +654,14 @@ impl Page {
         &mut self,
         completion: CompletedPageCommand,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        let output = self.finish_runtime_protocol_message_command_turn(completion)?;
+        self.observe_renderer_page_state(completion.page_state());
+        let output = completion.into_runtime_protocol_message_command_turn()?;
         let (completion, _renderer_output_predecessor) = output.into_completion_and_predecessor();
         let (reply, _, _) = completion.into_parts();
         Self::decode_runtime_inspector_protocol_messages_page_reply(
             reply,
             "runtime protocol page command",
         )
-    }
-
-    pub fn finish_runtime_protocol_message_command_turn(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererCommandTurnOutput> {
-        self.replace_page_state(completion.output().completion().page_state().clone());
-        completion.into_runtime_protocol_message_command_turn()
     }
 
     pub async fn prepare_runtime_protocol_message_async(

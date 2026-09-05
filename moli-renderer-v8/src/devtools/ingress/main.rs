@@ -712,8 +712,8 @@ impl RendererInspectorMainIngress {
         }
     }
 
-    pub(crate) fn cancel_all_queued(&self, message: &str) {
-        let commands = self.shared.state.lock().lanes.drain_queued();
+    pub(crate) fn cancel_agent_queued(&self, agent: RendererDevToolsAgentToken, message: &str) {
+        let commands = self.shared.state.lock().lanes.drain_agent_queued(agent);
         for command in commands {
             fail_main_command(command, message);
         }
@@ -780,32 +780,19 @@ mod tests {
         runtime::{
             RendererDevToolsSessionOutputHost, RendererInspectorIngressTicket,
             RendererOutputStreamIdentity, RendererPageReply, RendererPageState,
-            RendererPerformanceMetricSnapshot, RendererRuntimeCommandOutput,
-            RendererRuntimeInspectorAsyncCompletion, RendererRuntimeInspectorMessage,
-            RendererRuntimeInspectorResponseChannel, RendererTurnOutputJournal,
-            renderer_output_transport_channel,
+            RendererRuntimeCommandOutput, RendererRuntimeInspectorAsyncCompletion,
+            RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseChannel,
+            RendererTurnOutputJournal, renderer_output_transport_channel,
         },
-        types::ScriptExecutionReport,
     };
 
     fn page_state() -> Arc<RendererPageState> {
         let url = url::Url::parse("about:blank").expect("test URL");
-        Arc::new(RendererPageState {
-            requested_url: url.clone(),
-            navigation_initiator_url: None,
-            navigation_redirected: false,
-            navigation_redirect_count: 0,
-            navigation_redirect_chain: Vec::new(),
-            final_url: url,
-            document_title: String::new(),
-            status: 200,
-            headers: Vec::new(),
-            script_execution: Arc::new(ScriptExecutionReport::default()),
-            idle_override: None,
-            service_worker_client_id: 0,
-            dedicated_worker_running_worker_isolate_count: 0,
-            performance_metric_snapshot: RendererPerformanceMetricSnapshot::default(),
-        })
+        Arc::new(RendererPageState::new_for_test(
+            crate::PageId::new_for_testing(1),
+            url.clone(),
+            url,
+        ))
     }
 
     fn ingress() -> RendererInspectorMainIngress {
@@ -907,6 +894,37 @@ mod tests {
         ingress.first_dispatch_guard(&mut first).release();
         let third = ingress.claim_for_pause().expect("a2 after a1 dispatch");
         assert!(third.raw_json().contains(r#""a2""#));
+    }
+
+    #[tokio::test]
+    async fn agent_retirement_preserves_active_and_detach_guards() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let _active_route = enqueue(&ingress, agent, None, "active");
+        let mut active = ingress.claim_for_owner().unwrap();
+        let mut first_dispatch = ingress.first_dispatch_guard(&mut active);
+        ingress.begin_session_detach(agent, &DevToolsSessionKey::Primary);
+        ingress.begin_session_detach(agent, &DevToolsSessionKey::Primary);
+        let blocked = enqueue(&ingress, agent, None, "blocked");
+        let replacement_agent = RendererDevToolsAgentToken::allocate();
+        let _replacement = enqueue(&ingress, replacement_agent, None, "replacement");
+
+        ingress.cancel_agent_queued(agent, "retired page");
+        assert!(matches!(
+            blocked.wait_for_completion().await,
+            Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled(_))
+        ));
+        let mut replacement = ingress.claim_for_owner().unwrap();
+        assert_eq!(replacement.agent_token, replacement_agent);
+        ingress.first_dispatch_guard(&mut replacement).release();
+        assert_eq!(ingress.shared.state.lock().lanes.session_count(), 1);
+
+        first_dispatch.release();
+        ingress.finish_session_detach(agent, &DevToolsSessionKey::Primary);
+        assert_eq!(ingress.shared.state.lock().lanes.session_count(), 1);
+        ingress.finish_session_detach(agent, &DevToolsSessionKey::Primary);
+        assert_eq!(ingress.shared.state.lock().lanes.session_count(), 0);
+        assert!(ingress.claim_for_owner().is_none());
     }
 
     #[tokio::test]

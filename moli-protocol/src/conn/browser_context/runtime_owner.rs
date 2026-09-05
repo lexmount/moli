@@ -1,6 +1,7 @@
 use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionStateMut};
 use super::*;
 use crate::CdpRendererOwnerTurnOutcome;
+use crate::conn::CommandOwnerScope;
 use moli_core::page::V8InspectorSessionState;
 use serde_json::json;
 
@@ -58,9 +59,8 @@ impl CdpConnection {
     ) -> SessionOwnerInspectorEnableResult {
         let accepts_without_target =
             self.accepts_unmaterialized_page_command_for_session(session_id);
-        let target_crashed = self
-            .target_owner_state_for_session(session_id)
-            .is_some_and(|owner_state| owner_state.target_crash_state.is_crashed());
+        let target_crashed =
+            self.target_is_crashed_for_owner(&CommandOwnerScope::capture(self, session_id));
         let primary_session_id = self.runtime_session_owner_primary_session_id(session_id);
         if self
             .with_target_session_owner_mut(session_id, |owner| owner.set_inspector_enabled(enabled))

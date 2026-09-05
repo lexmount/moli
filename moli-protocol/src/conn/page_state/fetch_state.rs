@@ -1,8 +1,7 @@
 use super::super::{BrowserContext, ConnectionNetworkRequestIdAllocator, PageTargetHost};
 #[cfg(test)]
 use super::super::{
-    DocumentBodySource, DocumentNavigationToken, NavigationDispatchState,
-    PendingSubresourceFetchRequest,
+    DocumentBodySource, NavigationDispatchState, NavigationId, PendingSubresourceFetchRequest,
 };
 
 fn document_navigation_loader_id(sequence: u64) -> String {
@@ -58,12 +57,13 @@ impl BrowserContext {
     }
 
     pub(crate) fn insert_page_target_host(&mut self, mut host: PageTargetHost) -> bool {
+        #[cfg(test)]
         if self.page_targets.is_empty() {
             host.document_cookie_manager_surface =
                 self.default_document_cookie_manager_surface.clone();
         }
         host.set_base_cache_disabled(self.global_cache_disabled);
-        if let Some(config) = self.page_navigation_runtime_config.clone() {
+        if let Some(config) = self.page_navigation_runtime_config() {
             let engine = self.new_page_navigation_engine(config);
             host.install_navigation_engine(engine);
         }
@@ -106,7 +106,7 @@ impl BrowserContext {
     pub(crate) fn register_pending_fetch_response_navigation(
         &mut self,
         request_id: String,
-        document_navigation_token: Option<DocumentNavigationToken>,
+        document_navigation_token: Option<NavigationId>,
         navigation: NavigationDispatchState,
         body: DocumentBodySource,
     ) {

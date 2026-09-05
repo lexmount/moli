@@ -353,9 +353,7 @@ pub(super) fn execute_devtools_create_target_command(
             bc.begin_active_target_initial_empty_document(initial_empty_document_url.clone());
             bc.page_target_mut(&target_id)
                 .expect("newly selected target must exist")
-                .owner_state
-                .target_crash_state
-                .clear();
+                .clear_crash_state();
         }
         if command.url != initial_empty_document_url {
             // Chromium gives Target.createTarget(url) one initial

@@ -775,10 +775,7 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
     ));
     let context = conn.browser_context.as_mut().unwrap();
     assert_eq!(
-        context
-            .active_page_target()
-            .runtime_slot
-            .page_attachment_id(),
+        context.active_page_target().runtime_slot.document_id(),
         None
     );
 
@@ -786,7 +783,7 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
     let first_attachment = context
         .active_page_target()
         .runtime_slot
-        .page_attachment_id()
+        .document_id()
         .expect("first Page attachment");
 
     let first = context
@@ -795,7 +792,7 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
     let second_attachment = context
         .active_page_target()
         .runtime_slot
-        .page_attachment_id()
+        .document_id()
         .expect("second Page attachment");
     assert_ne!(second_attachment, first_attachment);
     let _ = first.close_async().await;
@@ -804,10 +801,7 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
         .clear_loaded_page_with_reason(TargetPageAbsenceReason::TargetClosed)
         .expect("second Page should be retired");
     assert_eq!(
-        context
-            .active_page_target()
-            .runtime_slot
-            .page_attachment_id(),
+        context.active_page_target().runtime_slot.document_id(),
         None
     );
     let _ = second.close_async().await;
@@ -1425,7 +1419,7 @@ fn navigation_background_event_queue_preserves_order_for_current_token() {
         stale_message,
     ));
     conn.enqueue_navigation_background_event(NavigationBackgroundEvent::protocol_message(
-        current.clone(),
+        current,
         current_first_message.clone(),
     ));
     conn.enqueue_navigation_background_event(NavigationBackgroundEvent::protocol_message(

@@ -68,23 +68,17 @@ fn renderer_dialog_for_test(
     )
 }
 
-fn target_dialog_for_test(
+fn dialog_projection_for_test(
     page_owner: crate::conn::TargetPageResidenceIdentity,
     frame_id: &str,
-    dialog_type: &str,
-    message: &str,
-    default_prompt: &str,
-    completion: Option<RendererJavaScriptDialogCompletion>,
 ) -> crate::conn::TargetJavaScriptDialog {
+    // Subscription-only fixture. Actual modal work is installed through the
+    // Browser bridge in dialog tests, never stored in this session projection.
     crate::conn::TargetJavaScriptDialog::new(
-        page_owner,
         frame_id.to_owned(),
-        renderer_dialog_for_test(
-            Some(frame_id),
-            dialog_type,
-            message,
-            default_prompt,
-            completion,
+        crate::conn::JavaScriptDialogKey::new(
+            page_owner.document_id(),
+            &renderer_dialog_for_test(Some(frame_id), "alert", "pending", "", None),
         ),
     )
 }

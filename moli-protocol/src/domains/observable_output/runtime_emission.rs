@@ -53,7 +53,7 @@ fn runtime_observable_cursor_end_from_owner_queue_for_owner(
     let runtime_slot = conn.runtime_session_owner_slot_for_owner(owner).ok()?;
     let source = runtime_slot.observable_output_latest_source_tail()?;
     let url = conn.runtime_session_owner_target_url_for_owner(owner)?;
-    (source.url() == url && runtime_slot.page_attachment_id() == Some(source.page_attachment_id()))
+    (source.url() == url && runtime_slot.document_id() == Some(source.document_id()))
         .then_some(source)?
         .cursor_end()
 }
@@ -170,7 +170,7 @@ mod tests {
         RuntimeConsoleMessageSnapshot,
     };
 
-    use crate::conn::{BrowserContext, TargetPageAttachmentId};
+    use crate::conn::{BrowserContext, DocumentId};
 
     use super::{
         advance_runtime_observable_cursors_to_current_for_session_owner,
@@ -182,8 +182,8 @@ mod tests {
         TargetRuntimeObservableQueueState, TargetRuntimeObservableSourceOutput,
     };
 
-    fn page_attachment_id(raw: u64) -> TargetPageAttachmentId {
-        TargetPageAttachmentId::from_raw_for_test(raw)
+    fn document_id(raw: u64) -> DocumentId {
+        DocumentId::from_raw_for_test(raw)
     }
 
     fn prepared_source() -> TargetRuntimeObservableSourceOutput {
@@ -202,7 +202,7 @@ mod tests {
         let mut queue = TargetRuntimeObservableQueueState::default();
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/runtime-source".to_owned(),
-            page_attachment_id(3),
+            document_id(3),
             &source_snapshot,
         );
         queue
@@ -284,7 +284,7 @@ mod tests {
             bc.set_target_url("http://example.test/runtime-source".to_owned());
             bc.active_page_target_mut()
                 .runtime_slot
-                .set_page_attachment_id_for_test(3);
+                .set_document_id_for_test(3);
             bc.active_page_target_mut()
                 .runtime_slot
                 .sync_observable_output_source_from_renderer_snapshot(

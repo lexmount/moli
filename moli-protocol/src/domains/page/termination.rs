@@ -1,6 +1,6 @@
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, DEFAULT_LOADER_ID,
-    DocumentNavigationToken, NavigationDispatchState, PendingFetchNavigation,
+    NavigationDispatchState, NavigationId, PendingFetchNavigation,
     PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
     PendingSubresourceFetchResponseRequest, monotonic_timestamp_seconds,
 };
@@ -50,7 +50,7 @@ fn complete_success_with_background_events(
 async fn complete_tokened_materialized_navigation_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    token: Option<DocumentNavigationToken>,
+    token: Option<NavigationId>,
     navigation_state: NavigationDispatchState,
     navigation: network::MaterializedNavigationLoadOutcome,
 ) -> Option<RendererOutputFence> {

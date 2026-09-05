@@ -1,100 +1,31 @@
-use moli_core::{PageId, RendererOutputResidenceIdentity, RendererOwnerLocalHostId, page::Page};
-
-use super::TargetPageAttachmentId;
+use moli_core::browser::DocumentId;
 
 pub const URL_BASE: &str = "chrome://newtab/";
 
-/// Exact renderer Page residence captured with one deferred-load owner action.
+/// DevTools binding to one current or reserved Browser Document.
 ///
-/// A protocol session can survive a Page replacement, so session identity is
-/// not precise enough to decide whether a later renderer publication is a
-/// prerequisite of this action. The renderer owner and Page ids are allocated
-/// monotonically by the renderer runtime and let the scheduler reject output
-/// from a replacement Page without consulting mutable protocol routing state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RendererPageResidenceIdentity {
-    owner_local_host_id: RendererOwnerLocalHostId,
-    page_id: PageId,
-}
-
-impl RendererPageResidenceIdentity {
-    pub(crate) const fn from_parts(
-        owner_local_host_id: RendererOwnerLocalHostId,
-        page_id: PageId,
-    ) -> Self {
-        Self {
-            owner_local_host_id,
-            page_id,
-        }
-    }
-
-    pub(crate) fn from_page(page: &Page) -> Self {
-        Self::from_parts(page.renderer_owner_local_host_id(), page.renderer_page_id())
-    }
-
-    pub(crate) const fn owner_local_host_id(self) -> RendererOwnerLocalHostId {
-        self.owner_local_host_id
-    }
-
-    pub(crate) const fn page_id(self) -> PageId {
-        self.page_id
-    }
-
-    pub(crate) const fn from_residence(residence: RendererOutputResidenceIdentity) -> Option<Self> {
-        match residence {
-            RendererOutputResidenceIdentity::Page {
-                owner_local_host_id,
-                page_id,
-            } => Some(Self::from_parts(owner_local_host_id, page_id)),
-            RendererOutputResidenceIdentity::SharedWorker { .. }
-            | RendererOutputResidenceIdentity::ServiceWorker { .. } => None,
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn new(owner_local_host_id: RendererOwnerLocalHostId, page_id: PageId) -> Self {
-        Self::from_parts(owner_local_host_id, page_id)
-    }
-
-    pub(crate) fn matches_residence(self, residence: RendererOutputResidenceIdentity) -> bool {
-        matches!(
-            residence,
-            RendererOutputResidenceIdentity::Page {
-                owner_local_host_id,
-                page_id,
-            } if owner_local_host_id == self.owner_local_host_id && page_id == self.page_id
-        )
-    }
-}
-
-/// Identifies one current or reserved Page attachment within a protocol target.
-///
-/// This identity deliberately does not include the renderer Document. A
-/// `document.open()` replacement keeps the same Page residence, while taking,
-/// replacing, or retiring the Page changes `page_attachment_id`. Deferred
-/// protocol work that belongs to a Page should therefore use this identity for
-/// authorization and may carry a renderer Document identity separately as
-/// causal metadata. The attachment id is allocated when the Page is reserved,
-/// so work emitted before installation and work emitted after commit retain the
-/// same identity without predicting a numeric generation. A target without a
-/// current or reserved Page has no Page residence identity.
+/// `document.open()` restarts the renderer lifecycle inside the same Browser
+/// Document; cross-document replacement changes `document_id`. Reservation
+/// and installation use that same id, without a second attachment generation.
+/// Deferred output may carry renderer Document/epoch metadata separately. A
+/// target without a current or reserved Document has no such binding.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
 pub struct TargetPageResidenceIdentity {
     browser_context_id: String,
     target_id: Option<String>,
-    page_attachment_id: TargetPageAttachmentId,
+    document_id: DocumentId,
 }
 
 impl TargetPageResidenceIdentity {
     pub(crate) fn new(
         browser_context_id: String,
         target_id: Option<String>,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
     ) -> Self {
         Self {
             browser_context_id,
             target_id,
-            page_attachment_id,
+            document_id,
         }
     }
 
@@ -102,12 +33,12 @@ impl TargetPageResidenceIdentity {
     pub(crate) fn new_for_test(
         browser_context_id: String,
         target_id: Option<String>,
-        page_attachment_id: u64,
+        document_id: u64,
     ) -> Self {
         Self::new(
             browser_context_id,
             target_id,
-            TargetPageAttachmentId::from_raw_for_test(page_attachment_id),
+            DocumentId::from_raw_for_test(document_id),
         )
     }
 
@@ -119,8 +50,8 @@ impl TargetPageResidenceIdentity {
         self.target_id.as_deref()
     }
 
-    pub(crate) fn page_attachment_id(&self) -> TargetPageAttachmentId {
-        self.page_attachment_id
+    pub fn document_id(&self) -> DocumentId {
+        self.document_id
     }
 }
 

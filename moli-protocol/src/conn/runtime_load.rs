@@ -719,7 +719,7 @@ pub(crate) struct BackgroundNavigationEarlyResult {
 pub(crate) struct BackgroundNavigationBodyCompletionSink {
     sender:
         tokio::sync::mpsc::UnboundedSender<crate::domains::page::BackgroundNavigationCompletion>,
-    token: DocumentNavigationToken,
+    token: NavigationId,
     state: NavigationDispatchState,
 }
 
@@ -728,7 +728,7 @@ impl BackgroundNavigationBodyCompletionSink {
         sender: tokio::sync::mpsc::UnboundedSender<
             crate::domains::page::BackgroundNavigationCompletion,
         >,
-        token: DocumentNavigationToken,
+        token: NavigationId,
         state: NavigationDispatchState,
     ) -> Self {
         Self {
@@ -1544,7 +1544,7 @@ impl CdpConnection {
             .ensure_resource_request_client_for_navigation_load_inputs(&load_inputs)?
             .browser_resource_runtime();
         let navigator_identity = load_inputs
-            .navigator_identity_override
+            .browser_identity_override
             .clone()
             .or_else(|| self.global_browser_identity_override.clone())
             .unwrap_or_else(|| self.base_browser_identity.clone());
@@ -2396,7 +2396,7 @@ impl CdpConnection {
 
     pub(crate) fn navigation_load_job_for_navigation(
         &mut self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         navigation: &NavigationDispatchState,
         body_progress_source: MainDocumentBodyProgressSource,
         early_result: Option<BackgroundNavigationEarlyResult>,
@@ -2428,7 +2428,7 @@ impl CdpConnection {
 
     pub(crate) fn background_navigation_load_job_for_navigation(
         &mut self,
-        token: &DocumentNavigationToken,
+        token: &NavigationId,
         navigation: &NavigationDispatchState,
         body_progress_source: MainDocumentBodyProgressSource,
         early_result: Option<BackgroundNavigationEarlyResult>,

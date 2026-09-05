@@ -105,7 +105,7 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
             .as_ref()
             .expect("active browser context")
             .active_page_target()
-            .effective_emulation_state
+            .emulation_policy()
             .script_execution_disabled
     );
 
@@ -155,7 +155,7 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
             .as_ref()
             .expect("active browser context")
             .active_page_target()
-            .effective_emulation_state
+            .emulation_policy()
             .script_execution_disabled
     );
 
@@ -408,8 +408,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_switching() {
         .as_mut()
         .unwrap()
         .active_page_target_mut()
-        .owner_state
-        .target_crash_state
         .mark_crashed();
     ctx.conn
         .browser_context
@@ -500,8 +498,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_switching() {
             .as_ref()
             .expect("active browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 
@@ -527,8 +523,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_switching() {
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 }
@@ -853,8 +847,7 @@ async fn same_context_targets_restore_their_own_network_artifacts_after_switchin
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_targets_restore_their_own_page_attachment_id_and_request_counters_after_switching()
- {
+async fn same_context_targets_restore_their_own_document_id_and_request_counters_after_switching() {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
@@ -872,7 +865,7 @@ async fn same_context_targets_restore_their_own_page_attachment_id_and_request_c
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
         bc.active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(11);
+            .set_document_id_for_test(11);
         bc.set_next_network_request_sequence_for_test(41);
         bc.set_subresource_network_emitted_record_count_for_test(12);
         bc.active_page_target_mut()
@@ -916,7 +909,7 @@ async fn same_context_targets_restore_their_own_page_attachment_id_and_request_c
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
         bc.active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(23);
+            .set_document_id_for_test(23);
         bc.set_next_network_request_sequence_for_test(71);
         bc.set_subresource_network_emitted_record_count_for_test(8);
         bc.active_page_target_mut()
@@ -933,8 +926,8 @@ async fn same_context_targets_restore_their_own_page_attachment_id_and_request_c
         assert_eq!(
             bc.active_page_target()
                 .runtime_slot
-                .page_attachment_id()
-                .map(crate::conn::TargetPageAttachmentId::get),
+                .document_id()
+                .map(crate::conn::DocumentId::get),
             Some(11)
         );
         assert_eq!(bc.next_network_request_sequence_for_test(), 41);
@@ -962,8 +955,8 @@ async fn same_context_targets_restore_their_own_page_attachment_id_and_request_c
         assert_eq!(
             bc.active_page_target()
                 .runtime_slot
-                .page_attachment_id()
-                .map(crate::conn::TargetPageAttachmentId::get),
+                .document_id()
+                .map(crate::conn::DocumentId::get),
             Some(23)
         );
         assert_eq!(bc.next_network_request_sequence_for_test(), 71);
@@ -1304,8 +1297,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
         .as_mut()
         .unwrap()
         .active_page_target_mut()
-        .owner_state
-        .target_crash_state
         .mark_crashed();
     ctx.conn
         .browser_context
@@ -1371,8 +1362,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
             .as_ref()
             .expect("active browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 
@@ -1422,8 +1411,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 
@@ -1446,8 +1433,6 @@ async fn same_context_targets_restore_their_own_crash_state_after_session_scoped
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 }

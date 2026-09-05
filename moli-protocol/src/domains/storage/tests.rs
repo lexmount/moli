@@ -3410,9 +3410,12 @@ async fn storage_clear_data_for_origin_uses_browser_context_http_cache_owner() {
     let mut ctx = TestContext::from_conn(crate::conn::CdpConnection::new_with_fetch_config(
         clear_config,
     ));
-    let mut browser_context = BrowserContext::new("BID-cache-owner".into());
-    browser_context.http_cache_root = Some(cache_root.path.clone());
-    browser_context.http_cache_max_bytes = seed_config.http_cache_max_bytes();
+    let browser_context = BrowserContext::new_with_storage_partition_and_http_cache(
+        "BID-cache-owner".into(),
+        crate::conn::BrowserContextStoragePartitionHandles::memory(),
+        Some(cache_root.path.clone()),
+        seed_config.http_cache_max_bytes(),
+    );
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
 

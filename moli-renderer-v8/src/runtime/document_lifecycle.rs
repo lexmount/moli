@@ -146,6 +146,46 @@ pub struct RendererDocumentLifecycleSnapshot {
     pub terminated: Option<RendererLifecycleTerminationStamp>,
 }
 
+impl RendererDocumentLifecycleSnapshot {
+    /// Applies an event already validated by its lifecycle owner.
+    ///
+    /// This also supports projections that omit a cancelled event tail. Exact
+    /// identity, epoch and sequence admission belong to the authoritative owner,
+    /// not to this snapshot update.
+    pub fn apply_event(&mut self, event: RendererDocumentLifecycleEvent) {
+        let stamp = RendererLifecycleEventStamp {
+            sequence: event.sequence,
+            timestamp_micros: event.timestamp_micros,
+        };
+        match event.kind {
+            RendererDocumentLifecycleEventKind::Started { .. } => {
+                self.frame = event.frame;
+                self.document = event.document;
+                self.epoch = event.epoch;
+                self.started = stamp;
+                self.dom_content_loaded = None;
+                self.load = None;
+                self.terminated = None;
+            }
+            RendererDocumentLifecycleEventKind::Milestone(
+                RendererDocumentLifecycleMilestone::DomContentLoaded,
+            ) => self.dom_content_loaded = Some(stamp),
+            RendererDocumentLifecycleEventKind::Milestone(
+                RendererDocumentLifecycleMilestone::Load,
+            ) => {
+                self.load = Some(stamp);
+            }
+            RendererDocumentLifecycleEventKind::Terminated { reason, .. } => {
+                self.terminated = Some(RendererLifecycleTerminationStamp {
+                    sequence: event.sequence,
+                    timestamp_micros: event.timestamp_micros,
+                    reason,
+                });
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RendererPageCreationArtifacts {
     pub active_document: RendererDocumentToken,

@@ -73,7 +73,7 @@ pub(crate) struct BrowserContextDocumentCookieFreshnessSnapshot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BrowserContextDocumentCookieFacadeSnapshot {
     pub(crate) has_loaded_page: bool,
-    pub(crate) page_attachment_id: Option<u64>,
+    pub(crate) document_id: Option<u64>,
     pub(crate) cookie_store_generation: Option<u64>,
     pub(crate) structured_write: BrowserContextStructuredCookieWriteSnapshot,
     pub(crate) capability_surface: BrowserContextDocumentCookieCapabilitySurfaceSnapshot,
@@ -194,7 +194,10 @@ fn browser_context_cookie_manager_surface_snapshot(
     browser_context: &BrowserContext,
     owner: Option<&DocumentCookieOwnerSnapshot>,
 ) -> BrowserContextCookieManagerSurfaceSnapshot {
+    #[cfg(test)]
     let snapshot = browser_context.raw_cookie_manager_surface_snapshot();
+    #[cfg(not(test))]
+    let snapshot = BrowserContextCookieManagerSurfaceSnapshot::default();
     let current_document_url = browser_context
         .loaded_page()
         .map(|page| page.final_url().clone());
@@ -297,9 +300,7 @@ fn browser_context_document_cookie_facade_snapshot(
     let structured_write = capability_surface.manager_surface.structured_write.clone();
     BrowserContextDocumentCookieFacadeSnapshot {
         has_loaded_page,
-        page_attachment_id: browser_context
-            .page_attachment_id()
-            .map(super::TargetPageAttachmentId::get),
+        document_id: browser_context.document_id().map(super::DocumentId::get),
         cookie_store_generation: Some(browser_context.document_cookie_generation()),
         structured_write,
         capability_surface,

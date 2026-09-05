@@ -92,8 +92,8 @@ impl CompletedPageCommand {
         self.output
     }
 
-    pub(crate) fn output(&self) -> &RendererCommandTurnOutput {
-        &self.output
+    pub fn page_state(&self) -> &std::sync::Arc<crate::renderer::RendererPageState> {
+        self.output.completion().page_state()
     }
 
     /// Consumes a command that was already settled by the renderer owner.
@@ -174,7 +174,7 @@ impl Page {
         &mut self,
         completion: CompletedPageCommand,
     ) -> RendererCommandTurnOutput {
-        self.replace_page_state(completion.output.completion().page_state().clone());
+        self.observe_renderer_page_state(completion.page_state());
         completion.output
     }
 

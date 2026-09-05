@@ -37,6 +37,101 @@ async fn create_browser_context_adds_inactive_context() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cross_document_navigation_keeps_target_session_and_replaces_page_residence() {
+    let mut ctx = TestContext::new();
+    let target_id = "TID-stable-across-navigation";
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-stable-across-navigation",
+        target_id,
+        "<title>before navigation</title>",
+    )
+    .await;
+    let session_id = "SID-stable-across-navigation";
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .expect("browser context")
+        .attach_active_session(session_id);
+    register_page_session_route(
+        &mut ctx,
+        "BID-stable-across-navigation",
+        target_id,
+        session_id,
+        moli_page_types::DevToolsSessionKey::Primary,
+    );
+    let (browser_context_id, web_contents_id, main_frame_slot_id) = {
+        let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
+        let target = browser_context.active_page_target();
+        (
+            browser_context.browser_context_id(),
+            target.web_contents_id(),
+            target.main_frame_slot_id(),
+        )
+    };
+    let before = ctx
+        .conn
+        .target_page_residence_identity_for_session(Some(session_id))
+        .expect("initial Page residence");
+    ctx.sent.clear();
+
+    ctx.process_async(json!({
+        "id": 1041001,
+        "method": "Page.navigate",
+        "sessionId": session_id,
+        "params": {
+            "url": "data:text/html,<title>after navigation</title>"
+        }
+    }))
+    .await;
+    consume_main_document_navigation_start(&mut ctx);
+    let navigation = take_response_by_id(&mut ctx, 1041001);
+    assert_eq!(navigation["result"]["frameId"], json!(target_id));
+    assert!(
+        navigation["result"]["loaderId"].is_string(),
+        "cross-document navigation must create a new loader"
+    );
+    let navigation_output = ctx.take_all();
+    assert!(
+        navigation_output.iter().all(|message| {
+            !matches!(
+                message["method"].as_str(),
+                Some("Target.targetCreated" | "Target.targetDestroyed")
+            )
+        }),
+        "replacing a Document must not replace its stable DevTools target: {navigation_output:?}"
+    );
+
+    let after = ctx
+        .conn
+        .target_page_residence_identity_for_session(Some(session_id))
+        .expect("replacement Page residence");
+    let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
+    let target = browser_context.active_page_target();
+    assert_eq!(browser_context.browser_context_id(), browser_context_id);
+    assert_eq!(target.web_contents_id(), web_contents_id);
+    assert_eq!(target.main_frame_slot_id(), main_frame_slot_id);
+    assert_eq!(target.current_document_id(), Some(after.document_id()));
+    assert_eq!(after.browser_context_id(), before.browser_context_id());
+    assert_eq!(after.target_id(), before.target_id());
+    assert_ne!(
+        after.document_id(),
+        before.document_id(),
+        "cross-document navigation must replace the concrete Document"
+    );
+    assert!(browser_context.target_page_residence_is_current(&after));
+    assert!(
+        !browser_context.target_page_residence_is_current(&before),
+        "the previous Document identity must be stale after replacement"
+    );
+    assert_eq!(
+        ctx.conn.non_browser_target_id_for_session(Some(session_id)),
+        Some(target_id.to_owned()),
+        "the attached DevTools session must remain on the stable target"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn close_active_target_fails_only_active_owner_pending_awaits() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-await-owner".into());
@@ -112,8 +207,8 @@ async fn create_browser_context_records_proxy_server_override() {
             .expect("active browser context");
         (
             active.id.clone(),
-            active.default_http_proxy_override.clone(),
-            active.default_http_no_proxy_override.clone(),
+            active.network_policy().http_proxy.clone(),
+            active.network_policy().http_no_proxy.clone(),
         )
     };
     ctx.expect_result(41, json!({ "browserContextId": active_id }), None);
@@ -145,7 +240,7 @@ async fn create_browser_context_preserves_non_loopback_proxy_bypass_entries() {
             .expect("active browser context");
         (
             active.id.clone(),
-            active.default_http_no_proxy_override.clone(),
+            active.network_policy().http_no_proxy.clone(),
         )
     };
     ctx.expect_result(42, json!({ "browserContextId": active_id }), None);

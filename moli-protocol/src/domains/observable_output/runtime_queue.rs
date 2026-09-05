@@ -1,16 +1,14 @@
 use std::collections::{BTreeMap, HashMap};
 
-use moli_core::page::{
-    PageObservableOutputUpdate, RuntimeConsoleMessageSnapshot, ScriptObservableOutputItem,
-};
 #[cfg(test)]
 use moli_core::page::{
     RendererPageDiagnosticsSnapshot,
     RendererRuntimeObservableSourceItem as CoreRendererRuntimeObservableSourceItem,
     RendererRuntimeObservableSourceSummary,
 };
+use moli_core::page::{RuntimeConsoleMessageSnapshot, ScriptObservableOutputItem};
 
-use crate::conn::TargetPageAttachmentId;
+use crate::conn::DocumentId;
 
 use super::items::{
     ObservableRuntimePreparedItem, ObservableRuntimePreparedItems, runtime_console_api_called_item,
@@ -33,8 +31,7 @@ impl TargetRuntimeObservableQueueSnapshot {
     ) -> Option<TargetRuntimeObservableSourceOutput> {
         let latest = self.source_outputs.last()?;
         let sources = self.source_outputs.iter().filter(|source| {
-            source.url() == latest.url()
-                && source.page_attachment_id() == latest.page_attachment_id()
+            source.url() == latest.url() && source.document_id() == latest.document_id()
         });
         TargetRuntimeObservableSourceOutput::combine_same_identity(sources)
     }
@@ -43,7 +40,7 @@ impl TargetRuntimeObservableQueueSnapshot {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TargetRuntimeObservableSourceOutput {
     url: String,
-    page_attachment_id: TargetPageAttachmentId,
+    document_id: DocumentId,
     source_item_start_index: usize,
     source_item_end_index: usize,
     start_summary: TargetRuntimeObservableSourceSummary,
@@ -54,7 +51,7 @@ pub(crate) struct TargetRuntimeObservableSourceOutput {
 impl TargetRuntimeObservableSourceOutput {
     fn from_delta(
         url: String,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
         source_item_start_index: usize,
         source_item_end_index: usize,
         start_summary: TargetRuntimeObservableSourceSummary,
@@ -69,7 +66,7 @@ impl TargetRuntimeObservableSourceOutput {
             .advance_with_items(summary.default_execution_context_id(), &source_items)?;
         (derived_summary == summary).then_some(Self {
             url,
-            page_attachment_id,
+            document_id,
             source_item_start_index,
             source_item_end_index,
             start_summary,
@@ -84,7 +81,7 @@ impl TargetRuntimeObservableSourceOutput {
         let mut combined = first.clone();
         for source in sources {
             if combined.url != source.url
-                || combined.page_attachment_id != source.page_attachment_id
+                || combined.document_id != source.document_id
                 || combined.source_item_end_index != source.source_item_start_index
             {
                 return None;
@@ -102,8 +99,8 @@ impl TargetRuntimeObservableSourceOutput {
         &self.url
     }
 
-    pub(crate) fn page_attachment_id(&self) -> TargetPageAttachmentId {
-        self.page_attachment_id
+    pub(crate) fn document_id(&self) -> DocumentId {
+        self.document_id
     }
 
     #[cfg(test)]
@@ -187,7 +184,7 @@ impl TargetRuntimeObservableSourceOutput {
         }
         Some(ObservableRuntimePreparedItems::from_runtime_source_items(
             self.url.clone(),
-            self.page_attachment_id,
+            self.document_id,
             items,
             owner_state
                 .source_context_console_counts(summary.default_execution_context_id(), &summary),
@@ -502,8 +499,7 @@ pub(crate) struct TargetRuntimeObservableQueueState {
     observable_output_items: Vec<ScriptObservableOutputItem>,
     source_inspector_issues: Vec<moli_core::page::InspectorIssueSnapshot>,
     latest_source_tail: Option<TargetRuntimeObservableSourceOutput>,
-    source_tails_by_identity:
-        HashMap<(String, TargetPageAttachmentId), TargetRuntimeObservableSourceOutput>,
+    source_tails_by_identity: HashMap<(String, DocumentId), TargetRuntimeObservableSourceOutput>,
     source_outputs: Vec<TargetRuntimeObservableSourceOutput>,
 }
 
@@ -520,20 +516,11 @@ impl TargetRuntimeObservableQueueState {
         self.reset();
     }
 
-    pub(crate) fn ingest_page_output_update(&mut self, output: PageObservableOutputUpdate<'_>) {
-        self.apply_page_output_update(output);
-    }
-
-    fn apply_page_output_update(&mut self, output: PageObservableOutputUpdate<'_>) {
-        self.append_from_page_output_items(output.observable_output_items());
-    }
-
-    fn recover_from_page_output_items(&mut self, items: &[ScriptObservableOutputItem]) {
-        self.clear_observable_output_items();
-        self.append_from_page_output_items(items);
-    }
-
-    fn append_from_page_output_items(&mut self, items: &[ScriptObservableOutputItem]) {
+    /// Reconciles a cumulative report snapshot, including producer rewinds.
+    pub(crate) fn ingest_observable_output_snapshot(
+        &mut self,
+        items: &[ScriptObservableOutputItem],
+    ) {
         if self.observable_output_items.len() > items.len()
             || self
                 .observable_output_items
@@ -541,22 +528,12 @@ impl TargetRuntimeObservableQueueState {
                 .zip(items.iter())
                 .any(|(previous, next)| previous != next)
         {
-            self.recover_from_page_output_items(items);
-            return;
+            self.observable_output_items.clear();
         }
 
         let start_item_index = self.observable_output_items.len();
-        for item in items.iter().skip(start_item_index) {
-            self.append_observable_output_item(item);
-        }
-    }
-
-    fn clear_observable_output_items(&mut self) {
-        self.observable_output_items.clear();
-    }
-
-    fn append_observable_output_item(&mut self, item: &ScriptObservableOutputItem) {
-        self.observable_output_items.push(item.clone());
+        self.observable_output_items
+            .extend(items[start_item_index..].iter().cloned());
     }
 
     fn console_event_count(&self) -> usize {
@@ -599,18 +576,18 @@ impl TargetRuntimeObservableQueueState {
     pub(crate) fn sync_source_from_renderer_snapshot(
         &mut self,
         url: String,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
         source: &RendererPageDiagnosticsSnapshot,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
         let renderer_source = source.runtime_observable_source()?;
-        self.sync_source_from_renderer_runtime_source(url, page_attachment_id, renderer_source)
+        self.sync_source_from_renderer_runtime_source(url, document_id, renderer_source)
     }
 
     #[cfg(test)]
     pub(crate) fn sync_source_from_renderer_runtime_source(
         &mut self,
         url: String,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
         renderer_source: &RendererRuntimeObservableSourceSummary,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
         self.source_inspector_issues = renderer_source.inspector_issues().to_vec();
@@ -624,10 +601,10 @@ impl TargetRuntimeObservableQueueState {
         }
         let source_url = url.clone();
         let source_item_count = source_items.len();
-        let Some(cursor) = self.source_tail_for_identity(&url, page_attachment_id) else {
+        let Some(cursor) = self.source_tail_for_identity(&url, document_id) else {
             self.append_source_output(
                 url,
-                page_attachment_id,
+                document_id,
                 0,
                 source_item_count,
                 TargetRuntimeObservableSourceSummary::zero_with_default_execution_context(
@@ -636,62 +613,62 @@ impl TargetRuntimeObservableQueueState {
                 summary,
                 source_items,
             );
-            return self.source_tail_for_identity(&source_url, page_attachment_id);
+            return self.source_tail_for_identity(&source_url, document_id);
         };
         let Some(cursor_summary) = cursor.source_summary() else {
             self.rebuild_source_outputs_from_renderer_source(
                 url,
-                page_attachment_id,
+                document_id,
                 summary,
                 source_items,
             );
-            return self.source_tail_for_identity(&source_url, page_attachment_id);
+            return self.source_tail_for_identity(&source_url, document_id);
         };
         if cursor_summary == summary {
-            return self.source_tail_for_identity(&source_url, page_attachment_id);
+            return self.source_tail_for_identity(&source_url, document_id);
         }
         if source_item_count < cursor.source_item_end_index {
             self.rebuild_source_outputs_from_renderer_source(
                 url,
-                page_attachment_id,
+                document_id,
                 summary,
                 source_items,
             );
-            return self.source_tail_for_identity(&source_url, page_attachment_id);
+            return self.source_tail_for_identity(&source_url, document_id);
         }
         let delta_items = source_items[cursor.source_item_end_index..].to_vec();
         if delta_items.is_empty() {
             self.rebuild_source_outputs_from_renderer_source(
                 url,
-                page_attachment_id,
+                document_id,
                 summary,
                 source_items,
             );
-            return self.source_tail_for_identity(&source_url, page_attachment_id);
+            return self.source_tail_for_identity(&source_url, document_id);
         }
         let Some(delta_summary) =
             cursor_summary.advance_with_items(summary.default_execution_context_id(), &delta_items)
         else {
             self.rebuild_source_outputs_from_renderer_source(
                 url,
-                page_attachment_id,
+                document_id,
                 summary,
                 source_items,
             );
-            return self.source_tail_for_identity(&source_url, page_attachment_id);
+            return self.source_tail_for_identity(&source_url, document_id);
         };
         if delta_summary != summary {
             self.rebuild_source_outputs_from_renderer_source(
                 url,
-                page_attachment_id,
+                document_id,
                 summary,
                 source_items,
             );
-            return self.source_tail_for_identity(&source_url, page_attachment_id);
+            return self.source_tail_for_identity(&source_url, document_id);
         }
         if !self.append_source_output(
             url.clone(),
-            page_attachment_id,
+            document_id,
             cursor.source_item_end_index,
             source_item_count,
             cursor_summary,
@@ -700,12 +677,12 @@ impl TargetRuntimeObservableQueueState {
         ) {
             self.rebuild_source_outputs_from_renderer_source(
                 url,
-                page_attachment_id,
+                document_id,
                 summary,
                 source_items,
             );
         }
-        self.source_tail_for_identity(&source_url, page_attachment_id)
+        self.source_tail_for_identity(&source_url, document_id)
     }
 
     /// Appends one concrete console fact already ordered by the renderer
@@ -717,10 +694,10 @@ impl TargetRuntimeObservableQueueState {
     pub(crate) fn append_renderer_console_message(
         &mut self,
         url: String,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
         message: RuntimeConsoleMessageSnapshot,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
-        let key = (url.clone(), page_attachment_id);
+        let key = (url.clone(), document_id);
         let (source_item_start_index, start_summary) = self
             .source_tails_by_identity
             .get(&key)
@@ -751,7 +728,7 @@ impl TargetRuntimeObservableQueueState {
         assert!(
             self.append_source_output(
                 url.clone(),
-                page_attachment_id,
+                document_id,
                 source_item_start_index,
                 source_item_end_index,
                 start_summary,
@@ -760,7 +737,7 @@ impl TargetRuntimeObservableQueueState {
             ),
             "one concrete Runtime console record must form a valid source delta"
         );
-        self.source_tail_for_identity(&url, page_attachment_id)
+        self.source_tail_for_identity(&url, document_id)
     }
 
     /// Appends one concrete renderer lifecycle error in stream order.
@@ -771,11 +748,11 @@ impl TargetRuntimeObservableQueueState {
     pub(crate) fn append_renderer_lifecycle_error(
         &mut self,
         url: String,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
         text: String,
         execution_context_id: Option<i64>,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
-        let key = (url.clone(), page_attachment_id);
+        let key = (url.clone(), document_id);
         let (source_item_start_index, start_summary) = self
             .source_tails_by_identity
             .get(&key)
@@ -800,7 +777,7 @@ impl TargetRuntimeObservableQueueState {
         assert!(
             self.append_source_output(
                 url.clone(),
-                page_attachment_id,
+                document_id,
                 source_item_start_index,
                 source_item_end_index,
                 start_summary,
@@ -809,16 +786,16 @@ impl TargetRuntimeObservableQueueState {
             ),
             "one concrete Runtime lifecycle error must form a valid source delta"
         );
-        self.source_tail_for_identity(&url, page_attachment_id)
+        self.source_tail_for_identity(&url, document_id)
     }
 
     fn source_tail_for_identity(
         &self,
         url: &str,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
     ) -> Option<TargetRuntimeObservableSourceOutput> {
         self.source_tails_by_identity
-            .get(&(url.to_owned(), page_attachment_id))
+            .get(&(url.to_owned(), document_id))
             .cloned()
     }
 
@@ -859,7 +836,7 @@ impl TargetRuntimeObservableQueueState {
     fn append_source_output(
         &mut self,
         url: String,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
         source_item_start_index: usize,
         source_item_end_index: usize,
         start_summary: TargetRuntimeObservableSourceSummary,
@@ -868,7 +845,7 @@ impl TargetRuntimeObservableQueueState {
     ) -> bool {
         let Some(output) = TargetRuntimeObservableSourceOutput::from_delta(
             url.clone(),
-            page_attachment_id,
+            document_id,
             source_item_start_index,
             source_item_end_index,
             start_summary,
@@ -883,7 +860,7 @@ impl TargetRuntimeObservableQueueState {
     }
 
     fn remember_latest_source_tail(&mut self, output: &TargetRuntimeObservableSourceOutput) {
-        let key = (output.url.clone(), output.page_attachment_id);
+        let key = (output.url.clone(), output.document_id);
         let next = if let Some(current) = self.source_tails_by_identity.remove(&key) {
             TargetRuntimeObservableSourceOutput::combine_same_identity([&current, output])
                 .unwrap_or_else(|| output.clone())
@@ -898,7 +875,7 @@ impl TargetRuntimeObservableQueueState {
     fn rebuild_source_outputs_from_renderer_source(
         &mut self,
         url: String,
-        page_attachment_id: TargetPageAttachmentId,
+        document_id: DocumentId,
         summary: TargetRuntimeObservableSourceSummary,
         source_items: Vec<TargetRuntimeObservableSourceItem>,
     ) {
@@ -908,7 +885,7 @@ impl TargetRuntimeObservableQueueState {
         self.source_tails_by_identity.clear();
         self.append_source_output(
             url,
-            page_attachment_id,
+            document_id,
             0,
             source_item_count,
             TargetRuntimeObservableSourceSummary::zero_with_default_execution_context(
@@ -923,7 +900,7 @@ impl TargetRuntimeObservableQueueState {
 #[cfg(test)]
 mod tests {
     use moli_core::page::{
-        PageObservableOutputUpdate, RendererActivityDiagnostics, RendererPageDiagnosticsSnapshot,
+        RendererActivityDiagnostics, RendererPageDiagnosticsSnapshot,
         RendererRuntimeObservableSourceItem, RendererRuntimeObservableSourceSummary,
         RuntimeConsoleMessageSnapshot, ScriptObservableOutputItem,
     };
@@ -932,10 +909,10 @@ mod tests {
         TargetRuntimeObservableQueueSnapshot, TargetRuntimeObservableQueueState,
         TargetRuntimeObservableSourceItem, TargetRuntimeObservableSourceSummary,
     };
-    use crate::conn::TargetPageAttachmentId;
+    use crate::conn::DocumentId;
 
-    fn page_attachment_id(raw: u64) -> TargetPageAttachmentId {
-        TargetPageAttachmentId::from_raw_for_test(raw)
+    fn document_id(raw: u64) -> DocumentId {
+        DocumentId::from_raw_for_test(raw)
     }
 
     fn renderer_source_snapshot(
@@ -964,7 +941,7 @@ mod tests {
         queue: &mut TargetRuntimeObservableQueueState,
         items: &[ScriptObservableOutputItem],
     ) {
-        queue.apply_page_output_update(PageObservableOutputUpdate::append(items));
+        queue.ingest_observable_output_snapshot(items);
     }
 
     #[test]
@@ -1119,7 +1096,7 @@ mod tests {
 
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/runtime-source".to_owned(),
-            page_attachment_id(17),
+            document_id(17),
             &source_snapshot,
         );
 
@@ -1138,7 +1115,7 @@ mod tests {
             .last()
             .expect("source output should be available");
         assert_eq!(output.url(), "http://example.test/runtime-source");
-        assert_eq!(output.page_attachment_id().get(), 17);
+        assert_eq!(output.document_id().get(), 17);
         assert_eq!(output.source_item_start_index(), 0);
         assert_eq!(output.source_item_end_index(), 2);
         assert_eq!(
@@ -1183,17 +1160,17 @@ mod tests {
 
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/runtime-source".to_owned(),
-            page_attachment_id(17),
+            document_id(17),
             &first_snapshot,
         );
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/runtime-source".to_owned(),
-            page_attachment_id(17),
+            document_id(17),
             &first_snapshot,
         );
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/runtime-source".to_owned(),
-            page_attachment_id(17),
+            document_id(17),
             &second_snapshot,
         );
 
@@ -1259,12 +1236,12 @@ mod tests {
 
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/first-source".to_owned(),
-            page_attachment_id(17),
+            document_id(17),
             &first_snapshot,
         );
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/second-source".to_owned(),
-            page_attachment_id(18),
+            document_id(18),
             &second_snapshot,
         );
 
@@ -1274,7 +1251,7 @@ mod tests {
             .expect("latest source identity should expose a prepared tail");
 
         assert_eq!(source.url(), "http://example.test/second-source");
-        assert_eq!(source.page_attachment_id().get(), 18);
+        assert_eq!(source.document_id().get(), 18);
         assert_eq!(
             source.source_console_messages(),
             vec![
@@ -1315,17 +1292,17 @@ mod tests {
 
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/first-source".to_owned(),
-            page_attachment_id(17),
+            document_id(17),
             &first_initial_snapshot,
         );
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/second-source".to_owned(),
-            page_attachment_id(18),
+            document_id(18),
             &second_snapshot,
         );
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/first-source".to_owned(),
-            page_attachment_id(17),
+            document_id(17),
             &first_advanced_snapshot,
         );
 
@@ -1339,7 +1316,7 @@ mod tests {
             "source tail cache should resume the prior identity cursor instead of rebuilding from zero"
         );
         let first_tail = queue
-            .source_tail_for_identity("http://example.test/first-source", page_attachment_id(17))
+            .source_tail_for_identity("http://example.test/first-source", document_id(17))
             .expect(
                 "first identity source tail should stay cached after a different latest source",
             );
@@ -1374,7 +1351,7 @@ mod tests {
             queue
                 .sync_source_from_renderer_snapshot(
                     "http://example.test/source".to_owned(),
-                    page_attachment_id(17),
+                    document_id(17),
                     &source_snapshot,
                 )
                 .is_some(),
@@ -1384,7 +1361,7 @@ mod tests {
             queue
                 .sync_source_from_renderer_snapshot(
                     "http://example.test/source".to_owned(),
-                    page_attachment_id(17),
+                    document_id(17),
                     &RendererPageDiagnosticsSnapshot::default(),
                 )
                 .is_none(),
@@ -1426,17 +1403,17 @@ mod tests {
 
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/source-a".to_owned(),
-            page_attachment_id(17),
+            document_id(17),
             &first_a_snapshot,
         );
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/source-b".to_owned(),
-            page_attachment_id(18),
+            document_id(18),
             &b_snapshot,
         );
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/source-a".to_owned(),
-            page_attachment_id(17),
+            document_id(17),
             &second_a_snapshot,
         );
 
@@ -1479,12 +1456,12 @@ mod tests {
 
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/runtime-source".to_owned(),
-            page_attachment_id(17),
+            document_id(17),
             &first_snapshot,
         );
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/runtime-source".to_owned(),
-            page_attachment_id(17),
+            document_id(17),
             &rewind_snapshot,
         );
 
@@ -1524,12 +1501,12 @@ mod tests {
 
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/runtime-source".to_owned(),
-            page_attachment_id(17),
+            document_id(17),
             &first_snapshot,
         );
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/runtime-source".to_owned(),
-            page_attachment_id(17),
+            document_id(17),
             &default_context_change_snapshot,
         );
 
@@ -1561,7 +1538,7 @@ mod tests {
 
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/diagnostics-only-runtime-source".to_owned(),
-            page_attachment_id(41),
+            document_id(41),
             &diagnostics_only_snapshot,
         );
 
@@ -1586,7 +1563,7 @@ mod tests {
 
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/invalid-runtime-source".to_owned(),
-            page_attachment_id(41),
+            document_id(41),
             &invalid_source_snapshot,
         );
 
@@ -1603,7 +1580,7 @@ mod tests {
 
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/empty-runtime-source".to_owned(),
-            page_attachment_id(29),
+            document_id(29),
             &RendererPageDiagnosticsSnapshot::default(),
         );
 
@@ -1627,7 +1604,7 @@ mod tests {
 
         queue.sync_source_from_renderer_snapshot(
             "http://example.test/runtime-source-items".to_owned(),
-            page_attachment_id(31),
+            document_id(31),
             &source_snapshot,
         );
 

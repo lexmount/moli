@@ -12,12 +12,12 @@ impl CdpConnection {
         let http_proxy = self
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.effective_active_http_proxy_override_owned())
+            .and_then(|bc| bc.network_policy().http_proxy.clone())
             .or_else(|| self.base_http_proxy.clone());
         let http_no_proxy = self
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.effective_active_http_no_proxy_override_owned())
+            .and_then(|bc| bc.network_policy().http_no_proxy.clone())
             .or_else(|| self.base_http_no_proxy.clone());
         let tls_verify_host = self
             .browser_context
@@ -39,7 +39,7 @@ impl CdpConnection {
 
     pub async fn set_tls_verify_host_async(&mut self, enabled: bool) {
         if let Some(browser_context) = self.browser_context.as_mut() {
-            browser_context.default_tls_verify_host_override = Some(enabled);
+            browser_context.set_tls_verify_host_override(enabled);
         } else {
             self.base_tls_verify_host = enabled;
         }
@@ -57,7 +57,7 @@ impl CdpConnection {
     pub fn user_agent(&self) -> &str {
         self.browser_context
             .as_ref()
-            .and_then(|browser_context| browser_context.effective_active_user_agent_override())
+            .and_then(|browser_context| browser_context.reported_active_user_agent_override())
             .or_else(|| {
                 self.global_browser_identity_override
                     .as_ref()
@@ -75,8 +75,7 @@ impl CdpConnection {
         if let Some(browser_context) = self.browser_context.as_mut() {
             browser_context
                 .active_page_target_mut()
-                .network_policy
-                .set_browser_identity_override(browser_identity);
+                .set_base_browser_identity_override(Some(browser_identity));
         } else {
             self.base_browser_identity = browser_identity;
         }
@@ -126,7 +125,7 @@ impl CdpConnection {
     #[cfg(test)]
     pub(crate) async fn set_http_proxy_override_async(&mut self, proxy: Option<String>) {
         if let Some(browser_context) = self.browser_context.as_mut() {
-            browser_context.default_http_proxy_override = proxy;
+            browser_context.set_http_proxy_override_for_test(proxy);
         } else {
             self.base_http_proxy = proxy;
         }
@@ -137,12 +136,7 @@ impl CdpConnection {
     pub fn http_proxy(&self) -> Option<&str> {
         self.browser_context
             .as_ref()
-            .and_then(|bc| {
-                bc.page_targets
-                    .active()
-                    .and_then(|host| host.http_proxy_override.as_deref())
-                    .or(bc.default_http_proxy_override.as_deref())
-            })
+            .and_then(|bc| bc.network_policy().http_proxy.as_deref())
             .or(self.base_http_proxy.as_deref())
     }
 
@@ -158,12 +152,7 @@ impl CdpConnection {
     pub fn http_no_proxy(&self) -> Option<&str> {
         self.browser_context
             .as_ref()
-            .and_then(|bc| {
-                bc.page_targets
-                    .active()
-                    .and_then(|host| host.http_no_proxy_override.as_deref())
-                    .or(bc.default_http_no_proxy_override.as_deref())
-            })
+            .and_then(|bc| bc.network_policy().http_no_proxy.as_deref())
             .or(self.base_http_no_proxy.as_deref())
     }
 

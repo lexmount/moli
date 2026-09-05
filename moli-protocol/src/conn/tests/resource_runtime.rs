@@ -516,15 +516,15 @@ fn page_request_client_for_navigation_inputs_inherits_service_worker_bypass() {
     let mut browser_context = BrowserContext::new("BID-1".to_owned());
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
-    {
-        let network = &mut browser_context
-            .active_page_target_mut()
-            .devtools_sessions
-            .primary_mut()
-            .network_session_state;
-        network.network_enabled = true;
-        network.bypass_service_worker = true;
-    }
+    browser_context
+        .active_page_target_mut()
+        .mutate_devtools_network_session_state(
+            &moli_page_types::DevToolsSessionKey::Primary,
+            |network| {
+                network.network_enabled = true;
+                network.bypass_service_worker = true;
+            },
+        );
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let inputs = conn.navigation_load_inputs_for_session_owner(Some("SID-1"));
@@ -1119,15 +1119,13 @@ async fn loader_uses_active_browser_context_user_agent_override() {
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
     first
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-A".into());
+        .set_user_agent_override_for_test("Moli/Context-A".into());
     conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
     second
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-B".into());
+        .set_user_agent_override_for_test("Moli/Context-B".into());
     conn.push_inactive_browser_context_fixture_for_test(second);
 
     assert_eq!(
@@ -1150,11 +1148,17 @@ async fn loader_uses_active_browser_context_user_agent_override() {
 async fn loader_uses_active_browser_context_http_proxy_override() {
     let mut conn = CdpConnection::new();
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-    first.active_page_target_mut().http_proxy_override = Some("http://proxy-a.test:8080".into());
+    first.set_network_policy(crate::conn::ContextNetworkPolicy {
+        http_proxy: Some("http://proxy-a.test:8080".into()),
+        ..Default::default()
+    });
     conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
-    second.active_page_target_mut().http_proxy_override = Some("http://proxy-b.test:8080".into());
+    second.set_network_policy(crate::conn::ContextNetworkPolicy {
+        http_proxy: Some("http://proxy-b.test:8080".into()),
+        ..Default::default()
+    });
     conn.push_inactive_browser_context_fixture_for_test(second);
 
     assert_eq!(
@@ -1177,11 +1181,17 @@ async fn loader_uses_active_browser_context_http_proxy_override() {
 async fn loader_uses_active_browser_context_http_no_proxy_override() {
     let mut conn = CdpConnection::new();
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-    first.active_page_target_mut().http_no_proxy_override = Some("localhost,127.0.0.1".into());
+    first.set_network_policy(crate::conn::ContextNetworkPolicy {
+        http_no_proxy: Some("localhost,127.0.0.1".into()),
+        ..Default::default()
+    });
     conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
-    second.active_page_target_mut().http_no_proxy_override = Some("::1,.example.com".into());
+    second.set_network_policy(crate::conn::ContextNetworkPolicy {
+        http_no_proxy: Some("::1,.example.com".into()),
+        ..Default::default()
+    });
     conn.push_inactive_browser_context_fixture_for_test(second);
 
     assert_eq!(
@@ -1204,11 +1214,15 @@ async fn loader_uses_active_browser_context_http_no_proxy_override() {
 async fn loader_uses_active_browser_context_tls_verify_host_override() {
     let mut conn = CdpConnection::new();
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-    first.active_page_target_mut().tls_verify_host_override = Some(false);
+    first
+        .active_page_target_mut()
+        .set_tls_verify_host_override(Some(false));
     conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
-    second.active_page_target_mut().tls_verify_host_override = Some(true);
+    second
+        .active_page_target_mut()
+        .set_tls_verify_host_override(Some(true));
     conn.push_inactive_browser_context_fixture_for_test(second);
 
     assert!(
@@ -1233,22 +1247,19 @@ async fn removing_an_inactive_browser_context_keeps_the_previously_active_contex
     let mut first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
     first
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-A".into());
+        .set_user_agent_override_for_test("Moli/Context-A".into());
     conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-B".into());
+        .set_user_agent_override_for_test("Moli/Context-B".into());
     conn.push_inactive_browser_context_fixture_for_test(second);
 
     let mut third = BrowserContext::new_with_page_for_test("BID-C", "TID-C");
     third
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-C".into());
+        .set_user_agent_override_for_test("Moli/Context-C".into());
     conn.push_inactive_browser_context_fixture_for_test(third);
 
     assert!(conn.activate_browser_context_by_id_async("BID-B").await);
@@ -1286,15 +1297,13 @@ async fn manual_browser_context_restore_reselects_original_context_after_switch(
     let mut first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
     first
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-A".into());
+        .set_user_agent_override_for_test("Moli/Context-A".into());
     conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
     second
         .active_page_target_mut()
-        .network_policy
-        .set_user_agent_override("Moli/Context-B".into());
+        .set_user_agent_override_for_test("Moli/Context-B".into());
     conn.push_inactive_browser_context_fixture_for_test(second);
 
     let previously_active_browser_context_id =
@@ -1574,7 +1583,7 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
     browser_context
         .active_page_target_mut()
         .runtime_slot
-        .set_page_attachment_id_for_test(901);
+        .set_document_id_for_test(901);
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let page_id = moli_core::PageId::new_for_testing(901);
@@ -1706,7 +1715,7 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
     replacement_context
         .active_page_target_mut()
         .runtime_slot
-        .set_page_attachment_id_for_test(902);
+        .set_document_id_for_test(902);
     conn.install_browser_context_fixture_for_test(replacement_context);
     let (_, accepted) = conn.bind_renderer_document_lifecycle_for_owner(
         &crate::conn::CommandOwnerScope::for_session("SID-lifecycle-wait"),
@@ -1750,7 +1759,7 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
     browser_context
         .active_page_target_mut()
         .runtime_slot
-        .set_page_attachment_id_for_test(1001);
+        .set_document_id_for_test(1001);
     assert!(
         browser_context.insert_page_target_host(PageTargetHost::with_url(
             "TID-background".to_owned(),
@@ -1761,12 +1770,10 @@ fn devtools_target_context_resolves_background_page_without_ambient_route() {
     let background = browser_context
         .background_target_mut("TID-background")
         .expect("background PageTargetHost");
+    background.runtime_slot.set_document_id_for_test(1002);
     background
         .runtime_slot
-        .set_page_attachment_id_for_test(1002);
-    background
-        .runtime_slot
-        .start_document_navigation("TID-background".to_owned(), "LID-background".to_owned());
+        .start_document_navigation("LID-background".to_owned());
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let context = crate::devtools_runtime::DevToolsCommandContext {
@@ -3355,40 +3362,7 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_activatin
             .map(|identity| identity.user_agent()),
         Some("Moli/Direct-UA")
     );
-    assert!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .network_offline()
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .emulated_network_latency(),
-        25.0
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .emulated_download_throughput(),
-        1024.0
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .emulated_upload_throughput(),
-        256.0
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .emulated_connection_type(),
-        Some("cellular3g")
-    );
+    assert!(inactive.active_page_target().network_offline());
 }
 
 #[tokio::test]
@@ -3509,14 +3483,7 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_activ
             .map(|identity| identity.user_agent()),
         Some("Moli/Background-UA")
     );
-    assert!(staged.network_policy.network_offline());
-    assert_eq!(staged.network_policy.emulated_network_latency(), 50.0);
-    assert_eq!(staged.network_policy.emulated_download_throughput(), 2048.0);
-    assert_eq!(staged.network_policy.emulated_upload_throughput(), 512.0);
-    assert_eq!(
-        staged.network_policy.emulated_connection_type(),
-        Some("wifi")
-    );
+    assert!(staged.network_offline());
 }
 
 #[tokio::test]

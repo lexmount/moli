@@ -4393,26 +4393,33 @@ impl CdpConnection {
         route: &RuntimeProtocolMessagePageRoute,
         completion: moli_core::page::CompletedPageCommand,
     ) -> Result<RendererCommandTurnOutput, String> {
-        let output = if let Ok(page) = self.runtime_protocol_message_started_page_mut(route) {
-            page.finish_runtime_protocol_message_command_turn(completion)
-        } else {
-            // Completion means the renderer owner has already committed the
-            // command's Page state and concrete protocol publication. The
-            // target can install a successor attachment before this protocol
-            // task resumes (for example, form.submit() followed by a normal
-            // command response). Preserve that immutable result; there is
-            // simply no current Page cache belonging to this route to update.
-            completion.into_runtime_protocol_message_command_turn()
-        };
-        output.map_err(|error| format!("runtime inspector dispatch failed: {error}"))
+        if let Ok(page) = self.runtime_protocol_message_started_page_mut(route) {
+            page.observe_renderer_page_state(completion.page_state());
+        }
+        // Snapshot observation and DevTools decoding have separate authority:
+        // an absent/replaced Page or rejected observation cannot invalidate an
+        // already-frozen reply, its output predecessor or its handoff guard.
+        completion
+            .into_runtime_protocol_message_command_turn()
+            .map_err(|error| format!("runtime inspector dispatch failed: {error}"))
     }
 
     fn ingest_runtime_protocol_message_started_route_output_updates(
         &mut self,
         route: &RuntimeProtocolMessagePageRoute,
+        output: &RendererCommandTurnOutput,
     ) {
         if let Ok(slot) = self.runtime_protocol_message_started_slot_mut(route) {
-            let _ = slot.ingest_owner_page_observable_output_updates();
+            // DevTools observes the frozen command result, independently of
+            // Browser Page-cache refresh. Retired routes never feed the
+            // replacement document's queue.
+            slot.ingest_observable_output_snapshot(
+                output
+                    .completion()
+                    .page_state()
+                    .script_execution
+                    .observable_output_items(),
+            );
         }
     }
 
@@ -5334,7 +5341,10 @@ impl CdpConnection {
                 elapsed_ms = started.elapsed().as_millis(),
             );
         }
-        self.ingest_runtime_protocol_message_started_route_output_updates(&completed.route);
+        self.ingest_runtime_protocol_message_started_route_output_updates(
+            &completed.route,
+            &output,
+        );
         if let Some(started) = timing_started {
             tracing::info!(
                 target: "moli_cdp_nav_timing",
@@ -5638,7 +5648,10 @@ impl CdpConnection {
                 }
             };
             command_turn_output.bind_renderer_agent_attachment(new_attachment_id);
-            self.ingest_runtime_protocol_message_started_route_output_updates(&completed.route);
+            self.ingest_runtime_protocol_message_started_route_output_updates(
+                &completed.route,
+                &command_turn_output,
+            );
             let mut command = CommandDispatchContext::default();
             let completion = command.consume_renderer_command_turn_output(command_turn_output);
             events.extend(command.take_protocol_events());
@@ -6831,7 +6844,7 @@ mod tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         conn
     }
@@ -6927,6 +6940,303 @@ mod tests {
             .to_string(),
         )
         .unwrap()
+    }
+
+    async fn frozen_inspector_completion_fixture()
+    -> (TestContext, CompletedRuntimeProtocolMessageDispatch) {
+        let mut ctx = TestContext::new();
+        let mut context = BrowserContext::new("BID-inspection-output".into());
+        context.set_active_target_id("TID-inspection-output");
+        ctx.conn.install_browser_context_fixture_for_test(context);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<title>before</title>",
+            None,
+        )
+        .await;
+        let owner = CommandOwnerScope::capture(&ctx.conn, None);
+        let pending = ctx
+            .conn
+            .start_runtime_protocol_message_for_owner(
+                &owner,
+                json!({
+                    "id": 41,
+                    "method": "Runtime.evaluate",
+                    "params": {
+                        "expression": "document.title = 'after-inspection'; console.log('inspection-output'); 42",
+                    },
+                })
+                .to_string(),
+            )
+            .unwrap();
+        let completed = pending.wait().await.unwrap();
+        assert_ne!(
+            ctx.conn
+                .runtime_protocol_message_started_page_mut(&completed.route)
+                .unwrap()
+                .document_title(),
+            "after-inspection",
+            "renderer completion must not implicitly mutate the Browser cache"
+        );
+        (ctx, completed)
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inspector_completion_updates_current_document_cache_and_output() {
+        let (mut ctx, completed) = frozen_inspector_completion_fixture().await;
+        let route = completed.route.clone();
+        let moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(ref completion) =
+            completed.completion
+        else {
+            panic!("fixture must settle on the renderer owner");
+        };
+        let predecessor = completion.renderer_output_predecessor();
+        assert!(predecessor.is_some());
+        let output = ctx
+            .conn
+            .complete_runtime_protocol_message_async(completed)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(output.renderer_output_predecessor(), predecessor);
+        assert_eq!(
+            output
+                .runtime_inspector_output()
+                .unwrap()
+                .protocol_response(41)
+                .unwrap()["result"]["result"]["value"],
+            json!(42)
+        );
+        let items = output
+            .completion()
+            .page_state()
+            .script_execution
+            .observable_output_items();
+        assert!(items.iter().any(|item| matches!(
+            item,
+            moli_core::page::ScriptObservableOutputItem::ConsoleMessage(text)
+                if text.contains("inspection-output")
+        )));
+        let slot = ctx
+            .conn
+            .runtime_protocol_message_started_slot_mut(&route)
+            .unwrap();
+        assert_eq!(
+            slot.loaded_page().unwrap().document_title(),
+            "after-inspection"
+        );
+        assert_eq!(
+            slot.loaded_page()
+                .unwrap()
+                .script_execution()
+                .observable_output_items(),
+            items
+        );
+        assert_eq!(
+            slot.observable_output_queue_snapshot()
+                .unwrap()
+                .observable_output_items,
+            items
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inspector_completion_preserves_frozen_reply_without_updating_replacement() {
+        let (mut ctx, completed) = frozen_inspector_completion_fixture().await;
+        let old_route = completed.route.clone();
+        let moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(ref completion) =
+            completed.completion
+        else {
+            panic!("fixture must settle on the renderer owner");
+        };
+        let predecessor = completion.renderer_output_predecessor();
+        assert!(predecessor.is_some());
+        let old_document = ctx
+            .conn
+            .runtime_protocol_message_started_slot_mut(&old_route)
+            .unwrap()
+            .document_id();
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<title>replacement</title>",
+            None,
+        )
+        .await;
+        let owner = CommandOwnerScope::capture(&ctx.conn, None);
+        let route = ctx
+            .conn
+            .runtime_protocol_message_page_route_for_owner(&owner)
+            .unwrap();
+        assert_ne!(
+            route.renderer_agent_attachment_id,
+            old_route.renderer_agent_attachment_id
+        );
+        let slot = ctx
+            .conn
+            .runtime_protocol_message_started_slot_mut(&route)
+            .unwrap();
+        assert_ne!(slot.document_id(), old_document);
+        let title = slot.loaded_page().unwrap().document_title();
+        let items = slot
+            .loaded_page()
+            .unwrap()
+            .script_execution()
+            .observable_output_items()
+            .to_vec();
+        let queue = slot.observable_output_queue_snapshot().unwrap();
+
+        let output = ctx
+            .conn
+            .complete_runtime_protocol_message_async(completed)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(output.renderer_output_predecessor(), predecessor);
+        assert_eq!(
+            output.completion().page_state().document_title(),
+            "after-inspection"
+        );
+        assert_eq!(
+            output
+                .runtime_inspector_output()
+                .unwrap()
+                .protocol_response(41)
+                .unwrap()["result"]["result"]["value"],
+            json!(42)
+        );
+        let slot = ctx
+            .conn
+            .runtime_protocol_message_started_slot_mut(&route)
+            .unwrap();
+        assert_eq!(slot.loaded_page().unwrap().document_title(), title);
+        assert_eq!(
+            slot.loaded_page()
+                .unwrap()
+                .script_execution()
+                .observable_output_items(),
+            items
+        );
+        assert_eq!(slot.observable_output_queue_snapshot().unwrap(), queue);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inspector_completion_output_does_not_require_a_page_cache_refresh() {
+        let (mut ctx, completed) = frozen_inspector_completion_fixture().await;
+        let moli_core::page::CompletedRuntimeInspectorCommandDispatch::Owner(completion) =
+            completed.completion
+        else {
+            panic!("fixture must settle on the renderer owner");
+        };
+        let output = completion
+            .into_runtime_protocol_message_command_turn()
+            .unwrap();
+        let items = output
+            .completion()
+            .page_state()
+            .script_execution
+            .observable_output_items();
+        assert!(!items.is_empty());
+        ctx.conn
+            .ingest_runtime_protocol_message_started_route_output_updates(
+                &completed.route,
+                &output,
+            );
+        let slot = ctx
+            .conn
+            .runtime_protocol_message_started_slot_mut(&completed.route)
+            .unwrap();
+        assert_ne!(
+            slot.loaded_page().unwrap().document_title(),
+            "after-inspection"
+        );
+        assert_eq!(
+            slot.observable_output_queue_snapshot()
+                .unwrap()
+                .observable_output_items,
+            items
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inspector_completion_observes_snapshot_before_rejecting_wrong_reply_kind() {
+        let (mut ctx, completed) = frozen_inspector_completion_fixture().await;
+        let route = completed.route;
+        drop(completed.completion);
+        let pending = ctx
+            .conn
+            .runtime_protocol_message_started_page_mut(&route)
+            .unwrap()
+            .start_page_diagnostics_snapshot()
+            .unwrap();
+        let completion = pending.wait().await.unwrap();
+        assert_eq!(completion.page_state().document_title(), "after-inspection");
+        let error = ctx
+            .conn
+            .consume_runtime_protocol_message_completion(&route, completion)
+            .err()
+            .expect("non-Runtime reply must not be decoded as inspector output");
+        assert!(
+            error.contains("runtime protocol page command returned an unexpected renderer reply")
+        );
+        assert_eq!(
+            ctx.conn
+                .runtime_protocol_message_started_page_mut(&route)
+                .unwrap()
+                .document_title(),
+            "after-inspection"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn retired_inspection_endpoint_discards_prepared_renderer_calls() {
+        let mut ctx = TestContext::new();
+        let mut context = BrowserContext::new("BID-inspection-retired".into());
+        context.set_active_target_id("TID-inspection-retired");
+        ctx.conn.install_browser_context_fixture_for_test(context);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<title>live</title>",
+            None,
+        )
+        .await;
+        let owner = CommandOwnerScope::capture(&ctx.conn, None);
+        let mut root = ctx
+            .conn
+            .browser_context_by_id_mut("BID-inspection-retired")
+            .unwrap()
+            .take_renderer_runtime_owner_for_teardown()
+            .unwrap();
+        root.shutdown_and_join();
+
+        for (lane, action) in [
+            (RendererInspectorCommandRoute::MainThread, None),
+            (RendererInspectorCommandRoute::Io, None),
+            (RendererInspectorCommandRoute::MainThread, Some("evaluate")),
+        ] {
+            let (method, params) = match lane {
+                RendererInspectorCommandRoute::MainThread => {
+                    ("Runtime.evaluate", json!({"expression": "41"}))
+                }
+                RendererInspectorCommandRoute::Io => ("Debugger.pause", json!({})),
+            };
+            let descriptor = RendererCommandDescriptor::from_synthesized_payload(
+                json!({"id": 41, "method": method, "params": params}).to_string(),
+            )
+            .unwrap();
+            let result = if let Some(action) = action {
+                ctx.conn.start_runtime_protocol_message_with_context_resolution_for_owner_with_deferred_response(
+                    &owner, action, descriptor, 41,
+                )
+            } else {
+                ctx.conn
+                    .start_runtime_protocol_message_for_owner_with_deferred_response_and_access(
+                        &owner, descriptor, 41, lane,
+                    )
+            };
+            assert!(matches!(result, Err(error) if error.contains("Inspector Page is retired")));
+            assert_eq!(
+                ctx.conn
+                    .take_renderer_call_for_frontend_for_owner(&owner, 41),
+                None
+            );
+        }
     }
 
     fn devtools_session_renderer_command_descriptor_for_test(
@@ -8163,7 +8473,7 @@ mod tests {
         browser_context
             .active_page_target_mut()
             .runtime_slot
-            .set_page_attachment_id_for_test(1);
+            .set_document_id_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
 
         conn.try_register_renderer_call_for_session_owner(
@@ -8394,7 +8704,7 @@ mod tests {
 
         conn.runtime_session_owner_slot_mut(Some("SID-active"))
             .expect("test runtime slot")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
 
         let mut direct_events = Vec::new();
         let mut claimed_events = Vec::new();
@@ -8524,7 +8834,7 @@ mod tests {
 
         conn.runtime_session_owner_slot_mut(Some("SID-active"))
             .expect("test runtime slot")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         conn.register_runtime_remote_object_ids_for_session_owner_with_group(
             Some("SID-active"),
             vec!["replacement-object".to_owned()],
@@ -8551,7 +8861,7 @@ mod tests {
 
         conn.runtime_session_owner_slot_mut(Some("SID-active"))
             .expect("test runtime slot")
-            .replace_page_attachment_id_for_test();
+            .replace_document_id_for_test();
         conn.register_runtime_remote_object_ids_for_session_owner_with_group(
             Some("SID-active"),
             vec!["replacement-object".to_owned()],

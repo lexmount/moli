@@ -105,7 +105,7 @@ fn page_owner_state_commands_complete_through_command_dispatch() {
         browser_context.active_page_target().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
-            .page_bypass_csp_enabled
+            .page_bypass_csp_enabled()
     );
     assert_eq!(
         browser_context.active_page_target().devtools_sessions
@@ -169,7 +169,6 @@ fn page_owner_state_commands_complete_through_command_dispatch() {
 fn mark_page_domain_enabled(state: &mut crate::conn::TargetPageSessionState) {
     state.page_domain_enabled = true;
     state.page_lifecycle_events = true;
-    state.page_bypass_csp_enabled = true;
     state
         .page_font_families
         .insert("standard".to_owned(), json!("Inter"));
@@ -178,24 +177,22 @@ fn mark_page_domain_enabled(state: &mut crate::conn::TargetPageSessionState) {
     state
         .page_screencast
         .start(crate::conn::PageScreencastConfig::default());
-    state.javascript_dialog_state.push(target_dialog_for_test(
-        crate::conn::TargetPageResidenceIdentity::new_for_test(
-            "BID-dialog".to_owned(),
-            Some("TID-dialog".to_owned()),
-            1,
-        ),
-        "TID-dialog",
-        "alert",
-        "pending",
-        "",
-        None,
-    ));
+    state
+        .javascript_dialog_state
+        .push(dialog_projection_for_test(
+            crate::conn::TargetPageResidenceIdentity::new_for_test(
+                "BID-dialog".to_owned(),
+                Some("TID-dialog".to_owned()),
+                1,
+            ),
+            "TID-dialog",
+        ));
 }
 
 fn assert_page_domain_enabled(state: &crate::conn::TargetPageSessionState) {
     assert!(state.page_domain_enabled);
     assert!(state.page_lifecycle_events);
-    assert!(state.page_bypass_csp_enabled);
+    assert!(state.page_bypass_csp_enabled());
     assert_eq!(
         state.page_font_families.get("standard"),
         Some(&json!("Inter"))
@@ -210,7 +207,7 @@ fn assert_page_domain_enabled(state: &crate::conn::TargetPageSessionState) {
 fn assert_page_domain_disabled(state: &crate::conn::TargetPageSessionState) {
     assert!(!state.page_domain_enabled);
     assert!(!state.page_lifecycle_events);
-    assert!(!state.page_bypass_csp_enabled);
+    assert!(!state.page_bypass_csp_enabled());
     assert!(state.page_font_families.is_empty());
     assert!(!state.page_file_chooser_opened_event_enabled);
     assert!(!state.page_intercept_file_chooser_dialog_enabled);
@@ -248,17 +245,13 @@ fn enable_page_domain_for_session(conn: &mut crate::conn::CdpConnection, session
         state
             .page_session_state
             .javascript_dialog_state
-            .push(target_dialog_for_test(
+            .push(dialog_projection_for_test(
                 crate::conn::TargetPageResidenceIdentity::new_for_test(
                     "BID-dialog".to_owned(),
                     Some("TID-dialog".to_owned()),
                     1,
                 ),
                 "TID-dialog",
-                "alert",
-                "pending",
-                "",
-                None,
             ));
     });
 }
@@ -568,6 +561,10 @@ async fn document_open_exits_initial_empty_document_record() {
         create_response["result"]["targetId"].as_str().is_some(),
         "Target.createTarget should return target id: {create_response}"
     );
+    let target_id = create_response["result"]["targetId"]
+        .as_str()
+        .unwrap()
+        .to_owned();
 
     ctx.process_async(json!({
         "id": 131,
@@ -577,8 +574,10 @@ async fn document_open_exits_initial_empty_document_record() {
     ctx.expect_result(131, json!({}), None);
     let before = ctx
         .conn
-        .target_owner_state_for_session(None)
-        .and_then(|owner_state| owner_state.initial_empty_document_state())
+        .browser_context
+        .as_ref()
+        .and_then(|context| context.page_target(&target_id))
+        .and_then(|target| target.initial_empty_document_state())
         .expect("initial empty document record should survive materialization");
     assert!(before.materialized());
     assert!(before.is_on_initial_empty_document());
@@ -595,8 +594,10 @@ async fn document_open_exits_initial_empty_document_record() {
 
     let after = ctx
         .conn
-        .target_owner_state_for_session(None)
-        .and_then(|owner_state| owner_state.initial_empty_document_state())
+        .browser_context
+        .as_ref()
+        .and_then(|context| context.page_target(&target_id))
+        .and_then(|target| target.initial_empty_document_state())
         .expect("initial empty document record should remain for diagnostics");
     assert!(after.exited());
     assert!(!after.is_on_initial_empty_document());
@@ -1148,6 +1149,9 @@ async fn page_disable_clears_page_handler_state_for_active_attached_session() {
         "about:blank",
     );
     let browser_context = ctx.conn.browser_context.as_mut().unwrap();
+    browser_context
+        .active_page_target_mut()
+        .set_devtools_bypass_csp_enabled(&moli_page_types::DevToolsSessionKey::Primary, true);
     mark_page_domain_enabled(
         &mut browser_context.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -1208,6 +1212,7 @@ async fn page_disable_clears_page_handler_state_for_background_attached_session(
         let state = browser_context
             .background_target_mut("TID-background")
             .expect("background target must exist");
+        state.set_devtools_bypass_csp_enabled(&moli_page_types::DevToolsSessionKey::Primary, true);
         mark_page_domain_enabled(
             &mut state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state,
@@ -2586,12 +2591,7 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
     assert_eq!(attached_inspector["sessionId"], "SID-attached");
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(
-        bc.active_page_target()
-            .owner_state
-            .target_crash_state
-            .is_crashed()
-    );
+    assert!(bc.active_page_target().is_crashed());
     assert!(
         bc.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
@@ -2639,8 +2639,6 @@ async fn crash_notifies_all_attached_sessions_and_marks_browser_context_crashed(
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 }
@@ -2666,14 +2664,10 @@ async fn crash_targets_background_owner_without_activation() {
     bc.insert_page_target_host(background);
     bc.background_target_mut("TID-background")
         .expect("background target must exist")
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-        crate::conn::DevToolsSessionState {
-            runtime_session_state: crate::conn::TargetRuntimeSessionState {
-                inspector_enabled: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        .devtools_sessions
+        .primary_mut()
+        .runtime_session_state
+        .inspector_enabled = true;
     let background_document_token = bc
         .start_document_navigation_for_target(
             "TID-background",
@@ -2713,8 +2707,6 @@ async fn crash_targets_background_owner_without_activation() {
     assert!(
         bc.background_target("TID-background")
             .expect("background target must exist")
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 }
@@ -2987,10 +2979,7 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
             request_stage: FetchRequestStage::Response,
         }],
     );
-    bc.active_page_target_mut()
-        .owner_state
-        .target_crash_state
-        .mark_crashed();
+    bc.active_page_target_mut().mark_crashed();
     let _ = bc
         .active_page_target_mut()
         .runtime_slot
@@ -3010,10 +2999,13 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
         .set_next_subresource_fetch_request_id_for_test(5);
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
     bc.remember_target_window_name("close-me", "TID-1");
-    bc.target_opener_ids
-        .insert("TID-popup-after-close".into(), "TID-1".into());
-    bc.target_opener_frame_ids
-        .insert("TID-popup-after-close".into(), "FRAME-1".into());
+    // An unknown popup cannot retain an orphaned opener side record.
+    bc.remember_target_opener(
+        "TID-popup-after-close",
+        "TID-1".into(),
+        "FRAME-1".into(),
+        false,
+    );
     bc.record_captured_response_body("REQ-old".into(), "body".into(), [Some("SID-1".into())]);
     bc.insert_io_stream("STREAM-old".into(), b"body".to_vec(), 0);
 
@@ -3043,11 +3035,9 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
     assert!(!bc.has_active_session());
     assert!(bc.attached_target_id_for_session("SID-attached").is_none());
     assert!(bc.target_id_for_window_name("close-me").is_none());
-    assert!(!bc.target_opener_ids.contains_key("TID-popup-after-close"));
-    assert!(
-        !bc.target_opener_frame_ids
-            .contains_key("TID-popup-after-close")
-    );
+    assert!(bc.target_info("TID-popup-after-close").is_none());
+    assert_eq!(bc.moli_memory_diagnostics()["targetOpenerCount"], 0);
+    assert_eq!(bc.moli_memory_diagnostics()["targetOpenerFrameCount"], 0);
     assert!(!bc.has_loaded_page());
     assert!(
         !bc.accepts_document_body_completion_event(&close_document_token),
@@ -3154,14 +3144,10 @@ async fn close_aborts_background_paused_navigation_without_activation() {
     assert!(bc.assign_attached_session_to_target("TID-background", "SID-attached".to_owned()));
     bc.background_target_mut("TID-background")
         .expect("background target must exist")
-        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary] =
-        crate::conn::DevToolsSessionState {
-            runtime_session_state: crate::conn::TargetRuntimeSessionState {
-                inspector_enabled: true,
-                ..Default::default()
-            },
-            ..Default::default()
-        };
+        .devtools_sessions
+        .primary_mut()
+        .runtime_session_state
+        .inspector_enabled = true;
 
     ctx.process_async(json!({
         "id": 246,
@@ -3523,7 +3509,7 @@ async fn set_bypass_csp_accepts_valid_params_and_returns_empty_result() {
     assert!(ctx.conn.browser_context.as_ref().is_some_and(|bc| {
         bc.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
-            .page_bypass_csp_enabled
+            .page_bypass_csp_enabled()
     }));
 }
 #[tokio::test(flavor = "multi_thread")]

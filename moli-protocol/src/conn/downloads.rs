@@ -1533,8 +1533,10 @@ mod tests {
         let mut connection = CdpConnection::new();
         let mut browser_context = BrowserContext::new("BID-download".to_owned());
         browser_context.set_active_target_id("TID-active");
-        browser_context.default_extra_headers =
-            vec![("X-Context-Default".to_owned(), "default".to_owned())];
+        browser_context.set_default_extra_headers(vec![(
+            "X-Context-Default".to_owned(),
+            "default".to_owned(),
+        )]);
         browser_context.global_extra_headers =
             vec![("X-Context-Global".to_owned(), "global".to_owned())];
 
@@ -1543,9 +1545,7 @@ mod tests {
             Some("SID-background".to_owned()),
             "https://background.test/".to_owned(),
         );
-        background
-            .network_policy
-            .push_extra_header(("X-Target".to_owned(), "target".to_owned()));
+        background.set_base_extra_headers(vec![("X-Target".to_owned(), "target".to_owned())]);
         assert!(browser_context.insert_page_target_host(background));
         connection.install_browser_context_fixture_for_test(browser_context);
 

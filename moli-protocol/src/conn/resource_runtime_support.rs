@@ -167,14 +167,24 @@ impl CdpConnection {
 
     #[cfg(test)]
     pub(crate) async fn reset_resource_runtime_async(&mut self) {
-        if let Some((engine, slot)) = self
+        if let Some(contents) = self
             .browser_context
             .as_mut()
             .and_then(|context| context.page_targets.active_mut())
-            .and_then(|host| host.navigation_engine_and_runtime_slot_mut())
+            .filter(|host| host.navigation_engine().is_some())
+            .map(|host| &mut host.runtime_slot.page_slot_mut().contents)
         {
-            engine
-                .reset_resource_runtime_async(slot.loaded_page_mut())
+            contents
+                .navigation_engine
+                .as_mut()
+                .expect("filtered navigation engine")
+                .reset_resource_runtime_async(
+                    contents
+                        .main_frame
+                        .current_document
+                        .as_mut()
+                        .map(|document| &mut document.page),
+                )
                 .await;
             return;
         }
@@ -186,16 +196,24 @@ impl CdpConnection {
 
     pub(crate) async fn rebuild_resource_runtime_for_loaded_page_async(&mut self) {
         let storage = self.resource_storage_handles();
-        let rebuild_result = if let Some((engine, slot)) = self
+        let rebuild_result = if let Some(contents) = self
             .browser_context
             .as_mut()
             .and_then(|context| context.page_targets.active_mut())
-            .and_then(|host| host.navigation_engine_and_runtime_slot_mut())
+            .filter(|host| host.navigation_engine().is_some())
+            .map(|host| &mut host.runtime_slot.page_slot_mut().contents)
         {
-            engine
+            contents
+                .navigation_engine
+                .as_mut()
+                .expect("filtered navigation engine")
                 .rebuild_resource_runtime_for_page_with_storage_async(
                     storage.into_navigation_storage(),
-                    slot.loaded_page_mut(),
+                    contents
+                        .main_frame
+                        .current_document
+                        .as_mut()
+                        .map(|document| &mut document.page),
                 )
                 .await
         } else {
@@ -208,14 +226,24 @@ impl CdpConnection {
                 .await
         };
         if rebuild_result.is_err() {
-            if let Some((engine, slot)) = self
+            if let Some(contents) = self
                 .browser_context
                 .as_mut()
                 .and_then(|context| context.page_targets.active_mut())
-                .and_then(|host| host.navigation_engine_and_runtime_slot_mut())
+                .filter(|host| host.navigation_engine().is_some())
+                .map(|host| &mut host.runtime_slot.page_slot_mut().contents)
             {
-                engine
-                    .reset_resource_runtime_async(slot.loaded_page_mut())
+                contents
+                    .navigation_engine
+                    .as_mut()
+                    .expect("filtered navigation engine")
+                    .reset_resource_runtime_async(
+                        contents
+                            .main_frame
+                            .current_document
+                            .as_mut()
+                            .map(|document| &mut document.page),
+                    )
                     .await;
             } else {
                 self.standalone_navigation_engine
@@ -240,7 +268,7 @@ impl CdpConnection {
     ) -> Result<Option<PendingPageCommand>, String> {
         let load_inputs = self.navigation_load_inputs_for_owner(owner);
         let navigator_identity = load_inputs
-            .navigator_identity_override
+            .browser_identity_override
             .clone()
             .or_else(|| self.global_browser_identity_override.clone())
             .unwrap_or_else(|| self.base_browser_identity.clone());

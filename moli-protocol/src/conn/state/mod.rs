@@ -1,4 +1,3 @@
-mod attachment_identity;
 mod bounds;
 mod browser_context;
 mod browser_identity;
@@ -11,9 +10,8 @@ mod fetch;
 mod identity;
 mod inspector;
 mod javascript_dialog;
-mod navigation;
+mod navigation_controller;
 mod navigation_outcome;
-mod page_residence_token;
 mod page_resource;
 mod page_slot;
 mod page_target_host;
@@ -23,23 +21,23 @@ mod runtime_slot;
 mod service_worker_lifetime;
 mod service_worker_target;
 mod session;
-mod session_storage;
 mod shared_worker_attachment;
 mod shared_worker_target;
 mod target_state;
 #[cfg(test)]
 mod tests;
+mod web_contents;
 
 // Re-export everything so `use super::state::*` paths continue to work.
 
-pub(crate) use attachment_identity::{NavigationRequestId, TargetPageAttachmentId};
 pub(crate) use browser_identity::BaseBrowserIdentityOverrideState;
 pub use identity::TargetPageResidenceIdentity as DevToolsPageResidenceIdentity;
 pub use identity::URL_BASE;
 pub(crate) use identity::{
-    RendererPageResidenceIdentity, TargetIdentityState, TargetPageProtocolAttachmentIdentity,
-    TargetPageResidenceIdentity, TargetRootDocumentProtocolAttachmentIdentity,
+    TargetIdentityState, TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity,
+    TargetRootDocumentProtocolAttachmentIdentity,
 };
+pub(crate) use moli_core::browser::{DocumentId, NavigationId, RendererPageResidenceIdentity};
 
 pub(crate) use devtools_renderer_channel::{
     CommittedRendererAgentAttachment, DevToolsRendererChannelError,
@@ -49,16 +47,16 @@ pub(crate) use devtools_renderer_channel::{
 pub(crate) use dedicated_worker_target::{
     DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot, DedicatedWorkerTargetState,
 };
+#[cfg(test)]
+pub(crate) use devtools_session::DevToolsEmulationSessionState;
 pub(crate) use devtools_session::{
     DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
-    DevToolsEmulationSessionState, DevToolsLogViolationThreshold, DevToolsNetworkSessionState,
-    DevToolsSessionState, PreparedRendererCallReplacements, SessionRendererCallReplay,
-    SessionRendererCallTermination,
+    DevToolsLogViolationThreshold, DevToolsNetworkSessionState, DevToolsSessionState,
+    PreparedRendererCallReplacements, SessionRendererCallReplay, SessionRendererCallTermination,
 };
 pub(crate) use document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
 };
-pub(crate) use page_residence_token::{TargetPageResidenceObservation, TargetPageResidenceToken};
 
 pub use bounds::BrowserWindowBounds;
 
@@ -66,7 +64,7 @@ pub(crate) use page_resource::MainDocumentResourceSnapshot;
 #[cfg(test)]
 pub(crate) use page_slot::TargetPageSlot;
 pub(crate) use page_slot::{
-    CommittedRendererDocumentBinding, DocumentNavigationToken, InitialDocumentPageBuildWaiter,
+    CommittedRendererDocumentBinding, InitialDocumentPageBuildWaiter,
     RendererDocumentLifecycleWaiterId, TargetPageAbsenceReason,
 };
 pub use page_slot::{DocumentStartScript, IsolatedWorldDefinition, RuntimeBindingDefinition};
@@ -98,38 +96,44 @@ pub(crate) use service_worker_lifetime::{
 pub(crate) use service_worker_target::{
     ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState,
 };
-#[cfg(test)]
-pub(crate) use session::TargetPerformanceSessionState;
 pub(crate) use session::{
     EffectiveTargetPolicy, PageScreencastConfig, PageScreencastFormat, PerformanceTimeDomain,
-    TargetNetworkPolicyState, TargetPageSessionState, TargetRuntimeSessionState,
+    TargetPageSessionState, TargetRuntimeSessionState,
 };
-pub(crate) use session_storage::TargetSessionStorageNamespace;
 pub(crate) use shared_worker_attachment::{
     TargetSharedWorkerProtocolAttachmentIdentity, TargetSharedWorkerProtocolAttachmentRetirement,
 };
 pub(crate) use shared_worker_target::SharedWorkerTargetState;
+#[cfg(test)]
+pub(crate) use web_contents::JavaScriptDialogKey;
+pub(crate) use web_contents::{
+    EmulationPolicy, EmulationPolicyChange, EmulationPolicyDelta, SessionStorageNamespace,
+    WindowSurface, WindowSurfaceState,
+};
+pub(crate) use web_contents::{
+    JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogSnapshot,
+};
+pub(in crate::conn) use web_contents::{PageSurface, WindowOpener};
 
 pub use browser_context::BrowserContext;
 pub(crate) use browser_context::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles,
-    BrowserContextStoragePartitionHandles, SiteDataClearOptions,
+    BrowserContextStoragePartitionHandles, ContextNetworkPolicy, SiteDataClearOptions,
 };
 
-pub use navigation::{PageNavigationHistoryEntry, PendingNavigationHistoryUpdate};
+pub(crate) use navigation_controller::{InitialDocument, InitialDocumentCreator};
+pub use navigation_controller::{PageNavigationHistoryEntry, PendingNavigationHistoryUpdate};
 
-pub(crate) use emulation::{
-    EffectiveTargetEmulationState, EffectiveTargetEmulationStateDelta, EmulatedNetworkConditions,
-    EmulatedViewportSurface, viewport_surface_install_script,
-};
 pub use emulation::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
     EmulatedMediaOverrides,
 };
+pub(crate) use emulation::{
+    EmulatedNetworkConditions, EmulatedViewportSurface, viewport_surface_install_script,
+};
 pub use page_target_host::PageTargetHost;
 pub(crate) use target_state::{
-    PendingBidiChannelListener, PendingInspectorAwait, TargetInitialEmptyDocumentCreator,
-    TargetOwnerState, TargetWindowSurfaceState,
+    PendingBidiChannelListener, PendingInspectorAwait, TargetOwnerState,
 };
 
 pub(crate) use navigation_outcome::{CompletedDownloadBody, CompletedDownloadBodyArtifact};

@@ -29,8 +29,6 @@ async fn create_target_clears_stale_crash_state() {
         .as_mut()
         .unwrap()
         .active_page_target_mut()
-        .owner_state
-        .target_crash_state
         .mark_crashed();
 
     ctx.process_async(json!({"id": 9, "method": "Target.createTarget",
@@ -51,8 +49,6 @@ async fn create_target_clears_stale_crash_state() {
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .owner_state
-            .target_crash_state
             .is_crashed()
     );
 }
@@ -1493,24 +1489,19 @@ async fn resetting_opener_target_clears_live_opener_but_keeps_frame_attribution(
         .await;
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
+    let popup = browser_context
+        .devtools_target_info(&popup_target_id)
+        .unwrap();
     assert_eq!(
-        browser_context.target_opener_ids.get(&popup_target_id),
-        None,
+        popup.opener_id, None,
         "popup target must not retain a stale openerId after the opener target slot is reset"
     );
     assert_eq!(
-        browser_context
-            .target_opener_frame_ids
-            .get(&popup_target_id)
-            .map(String::as_str),
+        popup.opener_frame_id.as_ref().map(|id| id.as_str()),
         Some("TID-opener-reset"),
         "popup target must retain immutable DevTools opener-frame attribution"
     );
-    assert!(
-        !browser_context
-            .target_can_access_opener
-            .contains(&popup_target_id)
-    );
+    assert!(!popup.can_access_opener);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1551,13 +1542,18 @@ async fn popup_initial_empty_document_record_captures_creator_identity() {
     let initial = browser_context
         .background_target(popup_target_id)
         .expect("background target must exist")
-        .owner_state
         .initial_empty_document_state()
         .expect("popup target should record initial empty document");
     let creator = initial
         .creator()
         .expect("window.open initial empty document should record creator identity");
-    assert_eq!(creator.target_id(), "TID-opener-creator");
+    assert_eq!(
+        creator.web_contents_id(),
+        browser_context
+            .page_target("TID-opener-creator")
+            .unwrap()
+            .web_contents_id()
+    );
     assert_eq!(creator.security_origin(), "https://opener.example");
     assert_eq!(creator.secure_context_type(), "Secure");
 }
@@ -1637,7 +1633,6 @@ async fn popup_initial_empty_document_frame_tree_inherits_opener_origin() {
     let initial = browser_context
         .background_target(&popup_target_id)
         .expect("background target must exist")
-        .owner_state
         .initial_empty_document_state()
         .expect("popup target should still record initial empty document");
     assert!(initial.is_on_initial_empty_document());

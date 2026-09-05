@@ -5,8 +5,8 @@ use url::Url;
 
 use super::dom_protocol_support::DocumentNodeObjectSnapshot;
 use super::protocol_support::{
-    ChildFrameTreeSnapshot, ScriptExecutionReport, ScriptObservableOutputItem,
-    SubresourceNetworkRecord, WebSocketLifecycleEvent, WebSocketNetworkEvent,
+    ChildFrameTreeSnapshot, ScriptExecutionReport, SubresourceNetworkRecord,
+    WebSocketLifecycleEvent, WebSocketNetworkEvent,
 };
 use super::{CompletedPageCommand, Page, PendingPageCommand};
 use crate::renderer::{
@@ -33,11 +33,6 @@ use crate::renderer::{
 // Types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug)]
-pub struct PageObservableOutputUpdate<'a> {
-    observable_output_items: &'a [ScriptObservableOutputItem],
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TestingOutcome {
     pub(super) observations: usize,
@@ -60,20 +55,8 @@ pub enum DocumentNodeClientRectResolution {
 }
 
 // ---------------------------------------------------------------------------
-// PageObservableOutputUpdate / TestingOutcome impls
+// TestingOutcome impls
 // ---------------------------------------------------------------------------
-
-impl<'a> PageObservableOutputUpdate<'a> {
-    pub fn append(observable_output_items: &'a [ScriptObservableOutputItem]) -> Self {
-        Self {
-            observable_output_items,
-        }
-    }
-
-    pub fn observable_output_items(&self) -> &'a [ScriptObservableOutputItem] {
-        self.observable_output_items
-    }
-}
 
 impl TestingOutcome {
     pub fn observations(&self) -> usize {
@@ -212,13 +195,10 @@ impl Page {
         )
     }
 
-    pub fn take_observable_output_update(&mut self) -> PageObservableOutputUpdate<'_> {
-        let observable_output_items = self.page_state.script_execution().observable_output_items();
-        PageObservableOutputUpdate::append(observable_output_items)
-    }
-
-    pub(super) fn replace_page_state(&mut self, page_state: Arc<RendererPageState>) {
-        self.page_state.replace(page_state);
+    /// Observes a renderer snapshot without consuming its command reply or output fence.
+    /// Foreign Page/owner captures and older Page-view revisions leave the cache unchanged.
+    pub fn observe_renderer_page_state(&mut self, page_state: &Arc<RendererPageState>) -> bool {
+        self.page_state.observe(page_state)
     }
 
     pub fn start_set_inline_style_sheet_text_for_style_sheet_id(

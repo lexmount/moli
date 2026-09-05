@@ -365,20 +365,7 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
             .expect("second target should keep background network state");
-        assert!(background.network_policy.network_offline());
-        assert_eq!(background.network_policy.emulated_network_latency(), 25.0);
-        assert_eq!(
-            background.network_policy.emulated_download_throughput(),
-            2048.0
-        );
-        assert_eq!(
-            background.network_policy.emulated_upload_throughput(),
-            256.0
-        );
-        assert_eq!(
-            background.network_policy.emulated_connection_type(),
-            Some("wifi")
-        );
+        assert!(background.network_offline());
     }
 
     ctx.process_async(json!({
@@ -398,35 +385,7 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
             .as_ref()
             .expect("active browser context after restoring first target");
         assert_eq!(active.active_target_id(), Some("TID-000000000NA"));
-        assert!(!active.active_page_target().network_policy.network_offline());
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_network_latency(),
-            150.0
-        );
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_download_throughput(),
-            1024.0
-        );
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_upload_throughput(),
-            512.0
-        );
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_connection_type(),
-            Some("cellular3g")
-        );
+        assert!(!active.active_page_target().network_offline());
     }
 }
 
@@ -934,7 +893,7 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
                 .map(|identity| identity.user_agent()),
             Some("Moli/Target-B")
         );
-        assert_eq!(background.tls_verify_host_override, Some(true));
+        assert_eq!(background.tls_verify_host_override(), Some(true));
         assert!(
             background
                 .navigation_engine()
@@ -969,7 +928,7 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
             Some("Moli/Target-B")
         );
         assert_eq!(
-            active.active_page_target().tls_verify_host_override,
+            active.active_page_target().tls_verify_host_override(),
             Some(true)
         );
     }
@@ -1003,7 +962,7 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
             Some("Moli/Target-A")
         );
         assert_eq!(
-            active.active_page_target().tls_verify_host_override,
+            active.active_page_target().tls_verify_host_override(),
             Some(false)
         );
     }
@@ -1014,140 +973,131 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
     assert!(!ctx.conn.tls_verify_host());
 }
 
-#[tokio::test(flavor = "multi_thread")]
-async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_switching() {
-    let mut ctx = TestContext::new();
-    load_bc_with_titled_page_async(
-        &mut ctx,
-        "BID-9-PROXY",
-        "TID-000000000PX",
-        "<title>first</title><div id='ok'>first target</div>",
-    )
-    .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-
-    {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("active browser context");
-        active.active_page_target_mut().http_proxy_override =
-            Some("http://proxy-a.test:8080".into());
-        active.active_page_target_mut().http_no_proxy_override = Some("localhost,127.0.0.1".into());
-    }
-    ctx.conn.invalidate_resource_runtime_async().await;
-    ctx.conn
-        .ensure_resource_request_client()
-        .expect("loader for target A");
-    assert_eq!(ctx.conn.http_proxy(), Some("http://proxy-a.test:8080"));
-    assert_eq!(ctx.conn.http_no_proxy(), Some("localhost,127.0.0.1"));
-
+async fn assert_context_proxy_survives_target_selection(close_second: bool) {
+    let mut ctx = TestContext::new_with_target_discovery(false);
+    let proxy = "http://proxy.example:8080";
     ctx.process_async(json!({
         "id": 1041770,
-        "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PROXY", "url": "about:blank#second"}
+        "method": "Target.createBrowserContext",
+        "params": { "proxyServer": proxy, "proxyBypassList": "<-loopback>" }
     }))
     .await;
-    let created = ctx.take_one();
-    assert_eq!(created["method"], "Target.targetCreated");
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
+    let context_id = take_response_by_id(&mut ctx, 1041770)["result"]["browserContextId"]
         .as_str()
-        .expect("second target id")
+        .expect("created browser context")
         .to_owned();
-    ctx.expect_result(1041770, json!({ "targetId": second_target_id }), None);
 
+    let mut targets = Vec::new();
+    for id in [1041771, 1041772] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Target.createTarget",
+            "params": { "browserContextId": context_id, "url": "about:blank" }
+        }))
+        .await;
+        let target_id = take_response_by_id(&mut ctx, id)["result"]["targetId"]
+            .as_str()
+            .expect("created page")
+            .to_owned();
+        ctx.process_async(json!({
+            "id": id + 10,
+            "method": "Target.attachToTarget",
+            "params": { "targetId": target_id, "flatten": true }
+        }))
+        .await;
+        let session_id = take_response_by_id(&mut ctx, id + 10)["result"]["sessionId"]
+            .as_str()
+            .expect("page session")
+            .to_owned();
+        ctx.process_async(json!({
+            "id": id + 20,
+            "method": "Page.navigate",
+            "sessionId": session_id,
+            "params": { "url": "data:text/html,<title>context proxy</title>" }
+        }))
+        .await;
+        let navigation = take_response_by_id(&mut ctx, id + 20);
+        assert_eq!(navigation["result"]["frameId"], target_id);
+        crate::testing::wait_until_renderer_document_load(
+            &mut ctx,
+            Some(&session_id),
+            &target_id,
+            navigation["result"]["loaderId"]
+                .as_str()
+                .expect("document loader"),
+        )
+        .await;
+        let inputs = ctx
+            .conn
+            .navigation_load_inputs_for_session_owner(Some(&session_id));
+        let client = ctx
+            .conn
+            .ensure_resource_request_client_for_navigation_load_inputs(&inputs)
+            .expect("exact page loader");
+        assert_eq!(client.http_proxy(), Some(proxy));
+        assert_eq!(client.http_no_proxy(), Some(""));
+        targets.push(target_id);
+        ctx.take_all();
+    }
+
+    for (id, target_id) in [(1041801, &targets[0]), (1041802, &targets[1])] {
+        ctx.process_async(json!({
+            "id": id,
+            "method": "Target.activateTarget",
+            "params": { "targetId": target_id }
+        }))
+        .await;
+        ctx.expect_result(id, json!({}), None);
+        let client = ctx
+            .conn
+            .ensure_resource_request_client()
+            .expect("active page loader");
+        assert_eq!(client.http_proxy(), Some(proxy));
+        assert_eq!(client.http_no_proxy(), Some(""));
+    }
+
+    let method = if close_second {
+        "Target.closeTarget"
+    } else {
+        "Target.activateTarget"
+    };
+    let target_id = if close_second {
+        &targets[1]
+    } else {
+        &targets[0]
+    };
     ctx.process_async(json!({
-        "id": 1041771,
-        "method": "Target.attachToTarget",
-        "params": { "targetId": second_target_id }
+        "id": 1041803,
+        "method": method,
+        "params": { "targetId": target_id }
     }))
     .await;
-    let second_session_id = take_response_by_id(&mut ctx, 1041771)["result"]["sessionId"]
-        .as_str()
-        .expect("second target session id")
-        .to_owned();
-    ctx.expect_event("Target.attachedToTarget", None);
-
-    ctx.process_async(json!({
-        "id": 1041772,
-        "method": "Page.navigate",
-        "sessionId": second_session_id,
-        "params": {
-            "url": "data:text/html,<title>second</title><div id='ok'>second target</div>"
-        }
-    }))
-    .await;
-    consume_main_document_navigation_start(&mut ctx);
-    let second_navigation = take_response_by_id(&mut ctx, 1041772);
+    let response = take_response_by_id(&mut ctx, 1041803);
     assert_eq!(
-        second_navigation["result"]["frameId"],
-        json!(second_target_id)
+        response["result"],
+        if close_second {
+            json!({ "success": true })
+        } else {
+            json!({})
+        }
     );
-    ctx.take_all();
-
-    ctx.process_async(json!({
-        "id": 10417721,
-        "method": "Target.activateTarget",
-        "params": { "targetId": second_target_id }
-    }))
-    .await;
-    ctx.expect_result(10417721, json!({}), None);
-
-    {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("active browser context");
-        assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
-        active.active_page_target_mut().http_proxy_override =
-            Some("http://proxy-b.test:8080".into());
-        active.active_page_target_mut().http_no_proxy_override = Some("::1,.example.com".into());
-    }
-    ctx.conn.invalidate_resource_runtime_async().await;
-    ctx.conn
+    let context = ctx.conn.browser_context.as_ref().expect("active context");
+    assert_eq!(context.id, context_id);
+    assert_eq!(context.active_target_id(), Some(targets[0].as_str()));
+    assert_eq!(context.page_target(&targets[1]).is_some(), !close_second);
+    assert_eq!(ctx.conn.http_proxy(), Some(proxy));
+    assert_eq!(ctx.conn.http_no_proxy(), Some(""));
+    let client = ctx
+        .conn
         .ensure_resource_request_client()
-        .expect("loader for target B");
-    assert_eq!(ctx.conn.http_proxy(), Some("http://proxy-b.test:8080"));
-    assert_eq!(ctx.conn.http_no_proxy(), Some("::1,.example.com"));
+        .expect("restored page loader");
+    assert_eq!(client.http_proxy(), Some(proxy));
+    assert_eq!(client.http_no_proxy(), Some(""));
+}
 
-    ctx.process_async(json!({
-        "id": 1041773,
-        "method": "Target.activateTarget",
-        "params": { "targetId": "TID-000000000PX" }
-    }))
-    .await;
-    ctx.expect_result(1041773, json!({}), None);
-
-    {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert_eq!(active.active_target_id(), Some("TID-000000000PX"));
-        assert_eq!(
-            active.active_page_target().http_proxy_override.as_deref(),
-            Some("http://proxy-a.test:8080")
-        );
-        assert_eq!(
-            active
-                .active_page_target()
-                .http_no_proxy_override
-                .as_deref(),
-            Some("localhost,127.0.0.1")
-        );
-    }
-    ctx.conn
-        .ensure_resource_request_client()
-        .expect("restored loader for target A");
-    assert_eq!(ctx.conn.http_proxy(), Some("http://proxy-a.test:8080"));
-    assert_eq!(ctx.conn.http_no_proxy(), Some("localhost,127.0.0.1"));
+#[tokio::test(flavor = "multi_thread")]
+async fn same_context_targets_share_proxy_after_switching() {
+    assert_context_proxy_survives_target_selection(false).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1270,7 +1220,7 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_close_tar
             Some("Moli/Close-A")
         );
         assert_eq!(
-            active.active_page_target().tls_verify_host_override,
+            active.active_page_target().tls_verify_host_override(),
             Some(false)
         );
     }
@@ -1282,147 +1232,6 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_close_tar
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn same_context_targets_restore_their_own_proxy_loader_overrides_after_close_target_activation()
- {
-    let mut ctx = TestContext::new();
-    load_bc_with_titled_page_async(
-        &mut ctx,
-        "BID-9-PROXY-CLOSE",
-        "TID-000000000PC",
-        "<title>first</title><div id='ok'>first target</div>",
-    )
-    .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .attach_active_session("SID-active");
-
-    {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("active browser context");
-        active.active_page_target_mut().http_proxy_override =
-            Some("http://proxy-close-a.test:8080".into());
-        active.active_page_target_mut().http_no_proxy_override = Some("localhost,127.0.0.1".into());
-    }
-    ctx.conn.invalidate_resource_runtime_async().await;
-    ctx.conn
-        .ensure_resource_request_client()
-        .expect("loader for target A");
-    assert_eq!(
-        ctx.conn.http_proxy(),
-        Some("http://proxy-close-a.test:8080")
-    );
-    assert_eq!(ctx.conn.http_no_proxy(), Some("localhost,127.0.0.1"));
-
-    ctx.process_async(json!({
-        "id": 1041860,
-        "method": "Target.createTarget",
-        "params": {"browserContextId": "BID-9-PROXY-CLOSE", "url": "about:blank#second"}
-    }))
-    .await;
-    let created = ctx.take_one();
-    assert_eq!(created["method"], "Target.targetCreated");
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    ctx.expect_result(1041860, json!({ "targetId": second_target_id }), None);
-
-    ctx.process_async(json!({
-        "id": 1041861,
-        "method": "Target.attachToTarget",
-        "params": { "targetId": second_target_id }
-    }))
-    .await;
-    let second_session_id = take_response_by_id(&mut ctx, 1041861)["result"]["sessionId"]
-        .as_str()
-        .expect("second target session id")
-        .to_owned();
-    ctx.expect_event("Target.attachedToTarget", None);
-
-    ctx.process_async(json!({
-        "id": 1041862,
-        "method": "Page.navigate",
-        "sessionId": second_session_id,
-        "params": {
-            "url": "data:text/html,<title>second</title><div id='ok'>second target</div>"
-        }
-    }))
-    .await;
-    consume_main_document_navigation_start(&mut ctx);
-    let second_navigation = take_response_by_id(&mut ctx, 1041862);
-    assert_eq!(
-        second_navigation["result"]["frameId"],
-        json!(second_target_id)
-    );
-    ctx.take_all();
-
-    ctx.process_async(json!({
-        "id": 10418620,
-        "method": "Target.activateTarget",
-        "params": { "targetId": second_target_id }
-    }))
-    .await;
-    ctx.expect_result(10418620, json!({}), None);
-
-    {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("active browser context");
-        active.active_page_target_mut().http_proxy_override =
-            Some("http://proxy-close-b.test:8080".into());
-        active.active_page_target_mut().http_no_proxy_override = Some("::1,.example.com".into());
-    }
-    ctx.conn.invalidate_resource_runtime_async().await;
-    ctx.conn
-        .ensure_resource_request_client()
-        .expect("loader for target B");
-    assert_eq!(
-        ctx.conn.http_proxy(),
-        Some("http://proxy-close-b.test:8080")
-    );
-    assert_eq!(ctx.conn.http_no_proxy(), Some("::1,.example.com"));
-
-    ctx.process_async(json!({
-        "id": 1041863,
-        "method": "Target.closeTarget",
-        "params": { "targetId": second_target_id }
-    }))
-    .await;
-    let close_response = take_response_by_id(&mut ctx, 1041863);
-    assert_eq!(close_response["result"]["success"], json!(true));
-
-    {
-        let active = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .expect("active browser context");
-        assert_eq!(active.active_target_id(), Some("TID-000000000PC"));
-        assert_eq!(
-            active.active_page_target().http_proxy_override.as_deref(),
-            Some("http://proxy-close-a.test:8080")
-        );
-        assert_eq!(
-            active
-                .active_page_target()
-                .http_no_proxy_override
-                .as_deref(),
-            Some("localhost,127.0.0.1")
-        );
-    }
-    ctx.conn
-        .ensure_resource_request_client()
-        .expect("restored loader after close activation");
-    assert_eq!(
-        ctx.conn.http_proxy(),
-        Some("http://proxy-close-a.test:8080")
-    );
-    assert_eq!(ctx.conn.http_no_proxy(), Some("localhost,127.0.0.1"));
+async fn same_context_targets_share_proxy_after_close_target_activation() {
+    assert_context_proxy_survives_target_selection(true).await;
 }
