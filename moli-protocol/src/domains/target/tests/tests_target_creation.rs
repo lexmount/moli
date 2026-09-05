@@ -627,8 +627,7 @@ async fn detached_browser_target_session_stops_receiving_discovery_events() {
         crate::conn::CdpTargetFilter::default_auto_attach(),
     );
     ctx.conn
-        .download_behavior
-        .set_browser_events_enabled_for_session(Some(&browser_session_id), true);
+        .set_browser_download_events_enabled_for_session(Some(&browser_session_id), true);
     ctx.conn
         .set_service_worker_pause_on_start_owner(Some(&browser_session_id), true);
     ctx.conn
@@ -650,8 +649,7 @@ async fn detached_browser_target_session_stops_receiving_discovery_events() {
     );
     assert!(
         !ctx.conn
-            .download_behavior
-            .browser_event_session_ids()
+            .browser_download_event_session_ids()
             .contains(&Some(browser_session_id.clone()))
     );
     assert!(!ctx.conn.service_worker_pause_on_start_for_devtools());

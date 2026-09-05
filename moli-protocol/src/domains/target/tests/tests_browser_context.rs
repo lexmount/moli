@@ -89,21 +89,30 @@ async fn dispose_browser_context_wrong_id() {
 async fn dispose_browser_context_success() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-20");
-    ctx.conn.download_behavior.set_browser_context(
-        "BID-20".into(),
-        "allow".into(),
-        Some("/tmp/downloads".into()),
-        true,
-    );
+    ctx.conn
+        .configure_download_policy(
+            Some("BID-20"),
+            moli_core::browser::DownloadPolicy {
+                behavior: moli_core::browser::DownloadBehavior::Allow,
+                download_path: Some("/tmp/downloads".into()),
+            },
+            Some(true),
+        )
+        .unwrap();
     ctx.process_async(json!({"id": 9, "method": "Target.disposeBrowserContext",
                        "params": {"browserContextId": "BID-20"}}))
         .await;
     ctx.expect_result(9, json!({}), None);
     assert!(ctx.conn.browser_context.is_none());
     assert_eq!(
-        ctx.conn.download_behavior,
-        crate::conn::BrowserDownloadBehavior::default()
+        ctx.conn.download_policy_for_browser_context(Some("BID-20")),
+        &moli_core::browser::DownloadPolicy::default()
     );
+    assert!(
+        !ctx.conn
+            .automation_download_events_enabled_for_context(Some("BID-20"))
+    );
+    assert!(ctx.conn.browser_download_event_session_ids().is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]

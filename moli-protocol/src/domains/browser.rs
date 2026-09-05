@@ -16,19 +16,14 @@ use crate::devtools_runtime::{
 use crate::domains::actions::BrowserAction;
 use crate::domains::command_output::CommandOutputPlan;
 use crate::version;
+use moli_core::browser::DownloadPolicy;
 use moli_core::page::PermissionOverrideRegistration;
 
 const DEV_TOOLS_WINDOW_ID: u32 = 1_923_710_101;
-const DOWNLOAD_BEHAVIORS: &[&str] = &["default", "deny", "allow", "allowAndName"];
-
-pub(crate) fn is_valid_download_behavior(behavior: &str) -> bool {
-    DOWNLOAD_BEHAVIORS.contains(&behavior)
-}
 
 /// Disables Browser-domain observation owned by one DevTools session.
 pub(in crate::domains) fn dispose_session_handler(conn: &mut CdpConnection, session_id: &str) {
-    conn.download_behavior
-        .set_browser_events_enabled_for_session(Some(session_id), false);
+    conn.set_browser_download_events_enabled_for_session(Some(session_id), false);
 }
 
 pub(crate) struct PendingBrowserCommandDispatch {
@@ -308,22 +303,20 @@ pub(crate) fn set_download_behavior_command_output_plan(
     {
         return CommandOutputPlan::error(-31998, "UnknownBrowserContextId");
     }
-    if !is_valid_download_behavior(params.behavior.as_str()) {
+    let Some(behavior) = crate::conn::parse_download_behavior(&params.behavior) else {
         return CommandOutputPlan::error(-32602, "InvalidParams");
-    }
+    };
 
-    match params.browser_context_id {
-        Some(browser_context_id) => conn.download_behavior.set_browser_context_policy(
-            browser_context_id,
-            params.behavior,
-            params.download_path,
-        ),
-        None => conn
-            .download_behavior
-            .set_global_policy(params.behavior, params.download_path),
-    }
-    conn.download_behavior
-        .set_browser_events_enabled_for_session(cmd.session_id, params.events_enabled);
+    conn.configure_download_policy(
+        params.browser_context_id.as_deref(),
+        DownloadPolicy {
+            behavior,
+            download_path: params.download_path,
+        },
+        None,
+    )
+    .expect("validated BrowserContext remains available");
+    conn.set_browser_download_events_enabled_for_session(cmd.session_id, params.events_enabled);
 
     CommandOutputPlan::success()
 }
@@ -387,38 +380,48 @@ fn execute_devtools_set_download_behavior(
         match target_contexts {
             Some(user_contexts) => {
                 for browser_context_id in user_contexts {
-                    conn.download_behavior
-                        .reset_browser_context(browser_context_id.as_str());
+                    conn.reset_download_policy(Some(browser_context_id.as_str()))
+                        .expect("validated BrowserContext remains available");
                 }
             }
-            None => conn.download_behavior.reset_global(),
+            None => conn
+                .reset_download_policy(None)
+                .expect("global policy always exists"),
         }
         return Ok(DevToolsCommandResult::Empty);
     };
 
-    if !is_valid_download_behavior(behavior.behavior.as_str()) {
+    let Some(download_behavior) = crate::conn::parse_download_behavior(&behavior.behavior) else {
         return Err(DevToolsError::new(
             DevToolsErrorKind::InvalidArgument,
             "download behavior is invalid",
         ));
-    }
+    };
 
     match target_contexts {
         Some(user_contexts) => {
             for browser_context_id in user_contexts {
-                conn.download_behavior.set_browser_context(
-                    browser_context_id.into_string(),
-                    behavior.behavior.clone(),
-                    behavior.download_path.clone(),
-                    behavior.events_enabled,
-                );
+                conn.configure_download_policy(
+                    Some(browser_context_id.as_str()),
+                    DownloadPolicy {
+                        behavior: download_behavior,
+                        download_path: behavior.download_path.clone(),
+                    },
+                    Some(behavior.events_enabled),
+                )
+                .expect("validated BrowserContext remains available");
             }
         }
-        None => conn.download_behavior.set_global(
-            behavior.behavior,
-            behavior.download_path,
-            behavior.events_enabled,
-        ),
+        None => conn
+            .configure_download_policy(
+                None,
+                DownloadPolicy {
+                    behavior: download_behavior,
+                    download_path: behavior.download_path,
+                },
+                Some(behavior.events_enabled),
+            )
+            .expect("global policy always exists"),
     }
     Ok(DevToolsCommandResult::Empty)
 }

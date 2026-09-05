@@ -282,12 +282,16 @@ async fn rust_cdp_chromium_target_dispose_active_context_activates_remaining_con
 async fn rust_cdp_chromium_target_dispose_context_clears_context_scoped_download_behavior() {
     let mut ctx = TestContext::new_with_target_discovery(false);
     let browser_context_id = create_browser_context(&mut ctx, 261_016).await;
-    ctx.conn.download_behavior.set_browser_context(
-        browser_context_id.clone(),
-        "allow".into(),
-        Some("/tmp/moli-target-contexts".into()),
-        true,
-    );
+    ctx.conn
+        .configure_download_policy(
+            Some(&browser_context_id),
+            moli_core::browser::DownloadPolicy {
+                behavior: moli_core::browser::DownloadBehavior::Allow,
+                download_path: Some("/tmp/moli-target-contexts".into()),
+            },
+            Some(true),
+        )
+        .unwrap();
 
     ctx.process_async(json!({
         "id": 261_017,
@@ -298,9 +302,15 @@ async fn rust_cdp_chromium_target_dispose_context_clears_context_scoped_download
 
     ctx.expect_result(261_017, json!({}), None);
     assert_eq!(
-        ctx.conn.download_behavior,
-        crate::conn::BrowserDownloadBehavior::default()
+        ctx.conn
+            .download_policy_for_browser_context(Some(&browser_context_id)),
+        &moli_core::browser::DownloadPolicy::default()
     );
+    assert!(
+        !ctx.conn
+            .automation_download_events_enabled_for_context(Some(&browser_context_id))
+    );
+    assert!(ctx.conn.browser_download_event_session_ids().is_empty());
 }
 
 // Chromium source:

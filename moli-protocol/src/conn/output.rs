@@ -4475,9 +4475,8 @@ mod tests {
     #[test]
     fn browser_download_route_guard_rejects_detached_and_reenabled_subscription() {
         let mut conn = CdpConnection::new();
-        conn.download_behavior
-            .set_browser_events_enabled_for_session(Some("SID-browser"), true);
-        let first_generation = conn.download_behavior.browser_event_observers()[0].1;
+        conn.set_browser_download_events_enabled_for_session(Some("SID-browser"), true);
+        let first_generation = conn.download_subscriptions.browser_event_observers()[0].1;
         let event = BackgroundProtocolEvent::browser_download_progress(
             Some("SID-browser"),
             Some(first_generation),
@@ -4489,13 +4488,11 @@ mod tests {
         );
         assert!(event.route_is_current(&conn));
 
-        conn.download_behavior
-            .set_browser_events_enabled_for_session(Some("SID-browser"), false);
+        conn.set_browser_download_events_enabled_for_session(Some("SID-browser"), false);
         assert!(!event.route_is_current(&conn));
 
-        conn.download_behavior
-            .set_browser_events_enabled_for_session(Some("SID-browser"), true);
-        let second_generation = conn.download_behavior.browser_event_observers()[0].1;
+        conn.set_browser_download_events_enabled_for_session(Some("SID-browser"), true);
+        let second_generation = conn.download_subscriptions.browser_event_observers()[0].1;
         assert_ne!(second_generation, first_generation);
         assert!(
             !event.route_is_current(&conn),

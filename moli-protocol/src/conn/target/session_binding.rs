@@ -243,8 +243,7 @@ impl CdpConnection {
     }
 
     pub(crate) fn release_root_target_frontend_owner_without_event(&mut self) {
-        self.download_behavior
-            .set_browser_events_enabled_for_session(None, false);
+        self.set_browser_download_events_enabled_for_session(None, false);
         self.cancel_tracing_for_session_owner(None);
         self.clear_auto_attach_owner(None);
         self.clear_target_discovery_for_owner(None);

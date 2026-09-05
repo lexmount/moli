@@ -698,23 +698,32 @@ async fn page_set_download_behavior_reuses_browser_download_state() {
 
     let settings = ctx
         .conn
-        .download_behavior
-        .effective_for_browser_context(Some("BID-PAGE-DOWNLOAD"));
-    assert_eq!(settings.behavior, "allow");
+        .download_policy_for_browser_context(Some("BID-PAGE-DOWNLOAD"));
+    assert_eq!(
+        settings.behavior,
+        moli_core::browser::DownloadBehavior::Allow
+    );
     assert_eq!(
         settings.download_path.as_deref(),
         Some("/tmp/page-downloads")
     );
     assert!(
-        !settings.automation_events_enabled,
+        !ctx.conn
+            .automation_download_events_enabled_for_context(Some("BID-PAGE-DOWNLOAD")),
         "Page.setDownloadBehavior delegates to BrowserHandler::DoSetDownloadBehavior and must not enable Browser download events"
     );
     assert_eq!(
-        ctx.conn.download_behavior.browser_context_id.as_deref(),
-        Some("BID-PAGE-DOWNLOAD")
+        ctx.conn.browser_context.as_ref().unwrap().download_policy(),
+        Some(settings)
     );
-    assert_eq!(ctx.conn.download_behavior.behavior, "default");
-    assert!(!ctx.conn.download_behavior.automation_events_enabled);
+    assert_eq!(
+        ctx.conn.download_policy_for_browser_context(None),
+        &moli_core::browser::DownloadPolicy::default()
+    );
+    assert!(
+        !ctx.conn
+            .automation_download_events_enabled_for_context(None)
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -743,19 +752,23 @@ async fn page_set_download_behavior_uses_current_page_context_not_param_context(
 
     let active_settings = ctx
         .conn
-        .download_behavior
-        .effective_for_browser_context(Some("BID-PAGE-DOWNLOAD-ACTIVE"));
-    assert_eq!(active_settings.behavior, "allow");
+        .download_policy_for_browser_context(Some("BID-PAGE-DOWNLOAD-ACTIVE"));
+    assert_eq!(
+        active_settings.behavior,
+        moli_core::browser::DownloadBehavior::Allow
+    );
     assert_eq!(
         active_settings.download_path.as_deref(),
         Some("/tmp/page-downloads-active")
     );
-    assert!(!active_settings.automation_events_enabled);
+    assert!(
+        !ctx.conn
+            .automation_download_events_enabled_for_context(Some("BID-PAGE-DOWNLOAD-ACTIVE"))
+    );
     assert_eq!(
         ctx.conn
-            .download_behavior
-            .effective_for_browser_context(Some("BID-PAGE-DOWNLOAD-OTHER")),
-        crate::conn::BrowserDownloadBehaviorSettings::default()
+            .download_policy_for_browser_context(Some("BID-PAGE-DOWNLOAD-OTHER")),
+        &moli_core::browser::DownloadPolicy::default()
     );
 }
 

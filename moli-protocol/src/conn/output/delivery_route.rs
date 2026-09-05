@@ -157,7 +157,7 @@ impl ProtocolDeliveryRoute {
         }
         if let Some(subscription) = capabilities.browser_download_subscription.as_ref()
             && !conn
-                .download_behavior
+                .download_subscriptions
                 .browser_event_subscription_is_current(
                     subscription.session_id.as_deref(),
                     subscription.generation,

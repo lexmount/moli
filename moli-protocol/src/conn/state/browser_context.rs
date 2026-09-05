@@ -71,6 +71,7 @@ pub struct BrowserContext {
     #[cfg(test)]
     pub(crate) default_document_cookie_manager_surface: BrowserContextCookieManagerSurface,
     pub target_popup_ids: HashMap<String, u64>,
+    pub(in crate::conn) automation_download_events_enabled: Option<bool>,
     pending_popup_javascript_dialogs: HashMap<u64, Vec<TargetPreparedJavaScriptDialog>>,
     pub(crate) shared_worker_targets: BTreeMap<SharedWorkerInstanceId, SharedWorkerTargetState>,
     pub(crate) dedicated_worker_targets: BTreeMap<u64, DedicatedWorkerTargetState>,
@@ -240,6 +241,17 @@ impl std::fmt::Debug for BrowserContext {
 }
 
 impl BrowserContext {
+    pub(crate) fn download_policy(&self) -> Option<&moli_core::browser::DownloadPolicy> {
+        self.physical.download_policy.as_ref()
+    }
+
+    pub(in crate::conn) fn set_download_policy(
+        &mut self,
+        policy: Option<moli_core::browser::DownloadPolicy>,
+    ) {
+        self.physical.download_policy = policy;
+    }
+
     // Internal owner lookup only. These references never leave this private
     // Context module; protocol callers use concrete operations and values.
     fn web_contents_for_target(&self, target_id: &str) -> Option<&WebContents> {
@@ -415,6 +427,7 @@ impl BrowserContext {
             #[cfg(test)]
             default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
             target_popup_ids: HashMap::new(),
+            automation_download_events_enabled: None,
             pending_popup_javascript_dialogs: HashMap::new(),
             shared_worker_targets: BTreeMap::new(),
             dedicated_worker_targets: BTreeMap::new(),

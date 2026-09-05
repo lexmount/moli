@@ -2,11 +2,11 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    str::FromStr,
     sync::Arc,
 };
 
 use http::HeaderName;
+use moli_core::browser::{DownloadBehavior, DownloadPolicy};
 use moli_core::network::ResourceRequestClient;
 use moli_core::page::RendererPendingDownloadActivation;
 use moli_fetch::{FetchCancelHandle, Request};
@@ -18,9 +18,9 @@ use tokio::io::AsyncWriteExt;
 use url::Url;
 
 use super::{
-    BackgroundProtocolEvent, BrowserDownloadBehaviorSettings, CdpConnection,
-    CommandDispatchContext, CommandOwnerScope, CompletedDownloadBody,
-    CompletedDownloadBodyArtifact, NavigationDispatchState, output::BackgroundEventSender,
+    BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
+    CompletedDownloadBody, CompletedDownloadBodyArtifact, NavigationDispatchState,
+    output::BackgroundEventSender,
 };
 
 #[derive(Clone, Default)]
@@ -137,40 +137,13 @@ enum OpenDownloadArtifactOutcome {
     NotFound,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::EnumString)]
-#[strum(serialize_all = "camelCase")]
-enum DownloadBehavior {
-    Default,
-    Deny,
-    Allow,
-    AllowAndName,
-}
-
-impl DownloadBehavior {
-    fn parse(value: &str) -> Option<Self> {
-        Self::from_str(value).ok()
-    }
-
-    fn allows_download(self) -> bool {
-        matches!(self, Self::Allow | Self::AllowAndName)
-    }
-
-    fn names_artifact_by_guid(self) -> bool {
-        self == Self::AllowAndName
-    }
-
-    fn is_canceled_without_download(self) -> bool {
-        matches!(self, Self::Default | Self::Deny)
-    }
-}
-
 struct PreparedDownloadActivation {
     frame_id: String,
     request: Request,
     loader: ResourceRequestClient,
     download_root: String,
     guid: String,
-    behavior: String,
+    behavior: DownloadBehavior,
     event_route: DownloadEventRoute,
     suggested_filename_hint: Option<String>,
     cancel_handle: FetchCancelHandle,
@@ -184,7 +157,7 @@ struct PreparedNavigationDownload {
     response_body: CompletedDownloadBody,
     download_root: String,
     guid: String,
-    behavior: String,
+    behavior: DownloadBehavior,
     event_route: DownloadEventRoute,
     registry: SharedDownloadRegistry,
 }
@@ -430,8 +403,12 @@ impl CdpConnection {
             download_root,
             guid,
             behavior: settings.behavior,
-            event_route: self
-                .download_event_route(command_owner, settings.automation_events_enabled),
+            event_route: self.download_event_route(
+                command_owner,
+                self.automation_download_events_enabled_for_context(Some(
+                    &owner.browser_context_id,
+                )),
+            ),
             suggested_filename_hint: activation.suggested_filename,
             cancel_handle,
             registry: self.download_registry.clone(),
@@ -446,16 +423,14 @@ impl CdpConnection {
         let Some(owner) = self.pending_download_owner_context(command_owner) else {
             return Ok(None);
         };
-        let settings = self
-            .download_behavior
-            .effective_for_browser_context(Some(&owner.browser_context_id));
-        if !DownloadBehavior::parse(settings.behavior.as_str())
-            .is_some_and(DownloadBehavior::is_canceled_without_download)
-        {
+        let settings = self.download_policy_for_browser_context(Some(&owner.browser_context_id));
+        if !settings.behavior.is_canceled_without_download() {
             return Ok(None);
         }
-        let event_route =
-            self.download_event_route(command_owner, settings.automation_events_enabled);
+        let event_route = self.download_event_route(
+            command_owner,
+            self.automation_download_events_enabled_for_context(Some(&owner.browser_context_id)),
+        );
         if !event_route.has_observers() {
             return Ok(Some(Vec::new()));
         }
@@ -527,8 +502,12 @@ impl CdpConnection {
             download_root,
             guid: generate_download_guid()?,
             behavior: settings.behavior,
-            event_route: self
-                .download_event_route(command_owner, settings.automation_events_enabled),
+            event_route: self.download_event_route(
+                command_owner,
+                self.automation_download_events_enabled_for_context(Some(
+                    &owner.browser_context_id,
+                )),
+            ),
             registry: self.download_registry.clone(),
         }))
     }
@@ -565,8 +544,10 @@ impl CdpConnection {
             download_root,
             guid: generate_download_guid()?,
             behavior: settings.behavior,
-            event_route: self
-                .download_event_route(&state.owner, settings.automation_events_enabled),
+            event_route: self.download_event_route(
+                &state.owner,
+                self.automation_download_events_enabled_for_context(owner_context_id.as_deref()),
+            ),
             registry: self.download_registry.clone(),
         }))
     }
@@ -640,16 +621,12 @@ impl CdpConnection {
     fn effective_download_behavior_for_browser_context(
         &self,
         browser_context_id: Option<&str>,
-    ) -> Option<BrowserDownloadBehaviorSettings> {
-        let settings = self
-            .download_behavior
-            .effective_for_browser_context(browser_context_id);
-        if !DownloadBehavior::parse(settings.behavior.as_str())
-            .is_some_and(DownloadBehavior::allows_download)
-        {
-            return None;
-        }
-        Some(settings)
+    ) -> Option<DownloadPolicy> {
+        let settings = self.download_policy_for_browser_context(browser_context_id);
+        settings
+            .behavior
+            .allows_download()
+            .then(|| settings.clone())
     }
 
     fn download_event_route(
@@ -672,7 +649,7 @@ impl CdpConnection {
             .collect();
         DownloadEventRoute {
             browser_observers: self
-                .download_behavior
+                .download_subscriptions
                 .browser_event_observers()
                 .into_iter()
                 .map(
@@ -683,7 +660,7 @@ impl CdpConnection {
                 )
                 .collect(),
             automation_events_enabled: automation_events_enabled
-                || self.download_behavior.webdriver_bidi_events_enabled,
+                || self.download_subscriptions.webdriver_bidi_events_enabled,
             page_observers,
         }
     }
@@ -727,11 +704,7 @@ async fn complete_download_activation_async(
         .or_else(|| prepared.suggested_filename_hint.clone())
         .or_else(|| filename_from_url(&response.final_url))
         .unwrap_or_else(|| pending_download_filename(&prepared));
-    let artifact_name = artifact_file_name(
-        prepared.behavior.as_str(),
-        &prepared.guid,
-        &suggested_filename,
-    );
+    let artifact_name = artifact_file_name(prepared.behavior, &prepared.guid, &suggested_filename);
     let artifact_path = Path::new(&prepared.download_root).join(&artifact_name);
     let partial_path = partial_artifact_path(&artifact_path);
     let expected_total_bytes = content_length_from_headers(&response.headers);
@@ -896,11 +869,7 @@ async fn complete_navigation_download_async(
     let suggested_filename = filename_from_headers(&prepared.response_headers)
         .or_else(|| filename_from_url(&prepared.response_url))
         .unwrap_or_else(|| "download".to_owned());
-    let artifact_name = artifact_file_name(
-        prepared.behavior.as_str(),
-        &prepared.guid,
-        &suggested_filename,
-    );
+    let artifact_name = artifact_file_name(prepared.behavior, &prepared.guid, &suggested_filename);
     let artifact_path = Path::new(&prepared.download_root).join(&artifact_name);
 
     let mut events = build_navigation_download_will_begin_event(&prepared, &suggested_filename);
@@ -1323,8 +1292,8 @@ fn format_download_guid(mut bytes: [u8; 16]) -> String {
     )
 }
 
-fn artifact_file_name(behavior: &str, guid: &str, suggested_filename: &str) -> String {
-    if DownloadBehavior::parse(behavior).is_some_and(DownloadBehavior::names_artifact_by_guid) {
+fn artifact_file_name(behavior: DownloadBehavior, guid: &str, suggested_filename: &str) -> String {
+    if behavior.names_artifact_by_guid() {
         return guid.to_owned();
     }
     sanitize_filename(suggested_filename)
@@ -1505,23 +1474,90 @@ mod tests {
     #[test]
     fn download_behavior_parses_cdp_tokens_with_existing_case_sensitivity() {
         assert_eq!(
-            DownloadBehavior::parse("default"),
+            crate::conn::parse_download_behavior("default"),
             Some(DownloadBehavior::Default)
         );
         assert_eq!(
-            DownloadBehavior::parse("deny"),
+            crate::conn::parse_download_behavior("deny"),
             Some(DownloadBehavior::Deny)
         );
         assert_eq!(
-            DownloadBehavior::parse("allow"),
+            crate::conn::parse_download_behavior("allow"),
             Some(DownloadBehavior::Allow)
         );
         assert_eq!(
-            DownloadBehavior::parse("allowAndName"),
+            crate::conn::parse_download_behavior("allowAndName"),
             Some(DownloadBehavior::AllowAndName)
         );
-        assert_eq!(DownloadBehavior::parse("allowandname"), None);
-        assert_eq!(DownloadBehavior::parse("unknown"), None);
+        assert_eq!(crate::conn::parse_download_behavior("allowandname"), None);
+        assert_eq!(crate::conn::parse_download_behavior("unknown"), None);
+    }
+
+    #[test]
+    fn prepared_download_freezes_its_context_policy_and_observation_separately() {
+        use moli_core::browser::DownloadPolicy;
+        use moli_renderer_v8::{
+            RendererPendingDownloadActivation, RendererPendingDownloadResponse,
+        };
+
+        let mut conn = CdpConnection::default();
+        let mut source = BrowserContext::new("CTX-source".into());
+        source.set_active_target_id("TID-source");
+        source.attach_active_session("SID-source");
+        conn.install_browser_context_fixture_for_test(source);
+        conn.configure_download_policy(
+            Some("CTX-source"),
+            DownloadPolicy {
+                behavior: DownloadBehavior::AllowAndName,
+                download_path: Some("/source".into()),
+            },
+            Some(true),
+        )
+        .unwrap();
+        let activation = RendererPendingDownloadActivation {
+            url: "https://source.test/report".into(),
+            suggested_filename: Some("report.txt".into()),
+            response: Some(RendererPendingDownloadResponse {
+                final_url: "https://source.test/report".into(),
+                status: 200,
+                headers: Vec::new(),
+                body: b"download".to_vec(),
+            }),
+        };
+        let mut foreground = BrowserContext::new("CTX-foreground".into());
+        foreground.set_active_target_id("TID-foreground");
+        let source = conn.browser_context.replace(foreground).unwrap();
+        conn.push_inactive_browser_context_fixture_for_test(source);
+        assert_eq!(
+            conn.target_owner_identity_for_owner(&CommandOwnerScope::for_session("SID-source")),
+            Some(("CTX-source".into(), Some("TID-source".into())))
+        );
+        let prepared = conn
+            .prepare_prefetched_download_activation(
+                &CommandOwnerScope::for_session("SID-source"),
+                activation,
+            )
+            .unwrap()
+            .unwrap();
+        conn.configure_download_policy(
+            Some("CTX-source"),
+            DownloadPolicy {
+                behavior: DownloadBehavior::Deny,
+                download_path: None,
+            },
+            Some(false),
+        )
+        .unwrap();
+        assert_eq!(prepared.frame_id, "TID-source");
+        assert_eq!(prepared.download_root, "/source");
+        assert_eq!(prepared.behavior, DownloadBehavior::AllowAndName);
+        assert!(prepared.event_route.automation_events_enabled);
+        assert_eq!(
+            conn.download_policy_for_browser_context(Some("CTX-source"))
+                .behavior,
+            DownloadBehavior::Deny
+        );
+        assert!(!conn.automation_download_events_enabled_for_context(Some("CTX-source")));
     }
 
     #[test]
@@ -1742,9 +1778,8 @@ mod tests {
     #[test]
     fn stale_browser_observer_does_not_suppress_automation_download_event() {
         let mut conn = CdpConnection::new();
-        conn.download_behavior
-            .set_browser_events_enabled_for_session(Some("SID-browser"), true);
-        let generation = conn.download_behavior.browser_event_observers()[0].1;
+        conn.set_browser_download_events_enabled_for_session(Some("SID-browser"), true);
+        let generation = conn.download_subscriptions.browser_event_observers()[0].1;
         let route = DownloadEventRoute {
             browser_observers: vec![BrowserDownloadObserver {
                 session_id: Some("SID-browser".to_owned()),
@@ -1764,8 +1799,7 @@ mod tests {
         assert!(events[0].route_is_current(&conn));
         assert!(events[1].route_is_current(&conn));
 
-        conn.download_behavior
-            .set_browser_events_enabled_for_session(Some("SID-browser"), false);
+        conn.set_browser_download_events_enabled_for_session(Some("SID-browser"), false);
 
         assert!(!events[0].route_is_current(&conn));
         assert!(
@@ -1848,15 +1882,15 @@ mod tests {
     #[test]
     fn artifact_file_name_uses_guid_only_for_allow_and_name_behavior() {
         assert_eq!(
-            artifact_file_name("allowAndName", "GUID-1", "../report.txt"),
+            artifact_file_name(DownloadBehavior::AllowAndName, "GUID-1", "../report.txt"),
             "GUID-1"
         );
         assert_eq!(
-            artifact_file_name("allow", "GUID-1", "../report.txt"),
+            artifact_file_name(DownloadBehavior::Allow, "GUID-1", "../report.txt"),
             "report.txt"
         );
         assert_eq!(
-            artifact_file_name("unknown", "GUID-1", "../report.txt"),
+            artifact_file_name(DownloadBehavior::Default, "GUID-1", "../report.txt"),
             "report.txt"
         );
     }
