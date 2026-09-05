@@ -53,16 +53,15 @@ async fn runtime_discard_console_entries_suppresses_buffered_runtime_events() {
 #[tokio::test(flavor = "multi_thread")]
 async fn runtime_discard_console_entries_is_page_target_local() {
     let mut ctx = TestContext::new();
-    let background_target = crate::conn::PageTargetHost::with_url(
-        "TID-background".to_owned(),
-        Some("SID-background".to_owned()),
-        "about:blank".to_owned(),
-    );
 
     let mut browser_context = BrowserContext::new("BID-1".to_owned());
     browser_context.set_active_target_id("TID-active");
     browser_context.attach_active_session("SID-active");
-    browser_context.insert_page_target_host(background_target);
+    browser_context.register_page_target_url_fixture(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "about:blank".to_owned(),
+    );
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
     ctx.install_navigation_fixture_for_session_owner(
@@ -1584,11 +1583,19 @@ async fn runtime_discard_console_entries_advances_background_owner_without_activ
     .await;
 
     let queue_console_entries = {
+        let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-background"));
+        let (context_id, target_id) = ctx
+            .conn
+            .resolved_page_owner_identity_for_owner(&owner)
+            .unwrap();
+        ctx.conn
+            .browser_context_by_id_mut(&context_id)
+            .unwrap()
+            .ingest_owner_page_observable_output_updates_for_target(&target_id);
         let runtime_slot = ctx
             .conn
             .runtime_session_owner_slot_mut(Some("SID-background"))
             .expect("background runtime slot should exist");
-        runtime_slot.ingest_owner_page_observable_output_updates();
         runtime_slot
             .observable_output_queue_snapshot()
             .expect("background observable queue should exist")

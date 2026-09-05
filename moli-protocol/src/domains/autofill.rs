@@ -109,10 +109,12 @@ pub(crate) fn try_start_autofill_command_dispatch(
     };
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = conn
-        .loaded_page_mut_for_protocol_access(cmd.session_id)
-        .and_then(|page| {
-            page.start_autofill_trigger(request)
-                .map_err(|error| error.to_string())
+        .resolved_page_owner_identity_for_owner(&owner_scope)
+        .ok_or_else(|| "NoDocumentLoaded".to_owned())
+        .and_then(|(context_id, target_id)| {
+            conn.browser_context_by_id(&context_id)
+                .ok_or("NoDocumentLoaded")?
+                .start_target_autofill_trigger(&target_id, request)
         });
     match pending {
         Ok(pending) => AutofillCommandTaskStep::Pending(PendingAutofillCommandDispatch {
@@ -131,11 +133,13 @@ pub(crate) fn complete_pending_autofill_command(
     completed: CompletedAutofillCommandDispatch,
 ) -> CommandOutputPlan {
     let outcome = completed.completed.and_then(|completion| {
-        conn.loaded_page_mut_for_protocol_access_for_owner(&completed.owner_scope)
-            .and_then(|page| {
-                page.finish_autofill_trigger(completion)
-                    .map_err(|error| error.to_string())
-            })
+        conn.ensure_document_accessible_for_owner(&completed.owner_scope)?;
+        let (context_id, target_id) = conn
+            .resolved_page_owner_identity_for_owner(&completed.owner_scope)
+            .ok_or("NoDocumentLoaded")?;
+        conn.browser_context_by_id_mut(&context_id)
+            .ok_or("NoDocumentLoaded")?
+            .finish_target_autofill_trigger(&target_id, completion)
     });
     match outcome {
         Ok(RendererAutofillTriggerOutcome::Applied { .. }) => CommandOutputPlan::success(),

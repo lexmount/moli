@@ -15,13 +15,17 @@ impl CdpConnection {
         source_frame_id: String,
         dialog: RendererPendingJavaScriptDialog,
     ) -> bool {
-        let Some(mut owner) = self.target_session_owner_mut(session_id) else {
+        let Some(owner) = self.target_session_owner_mut(session_id) else {
             let _ = dialog.finish(false, String::new());
             return false;
         };
-        owner.mutate_page_state(|target, session| {
-            target.install_javascript_dialog(session, page_owner, source_frame_id, dialog)
-        })
+        owner.browser_context.install_javascript_dialog_for_target(
+            &owner.target_id,
+            &owner.session_key,
+            page_owner,
+            source_frame_id,
+            dialog,
+        )
     }
 
     pub(crate) fn javascript_dialog_snapshot_for_owner(
@@ -31,8 +35,7 @@ impl CdpConnection {
         let owner = self.target_session_owner_ref_for_owner(owner)?;
         owner
             .browser_context
-            .page_target(&owner.target_id)?
-            .javascript_dialog_snapshot(&owner.session_key)
+            .javascript_dialog_snapshot_for_target(&owner.target_id, &owner.session_key)
     }
 
     pub(crate) fn set_javascript_dialog_prompt_text_for_owner(
@@ -40,11 +43,16 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         prompt_text: String,
     ) -> Result<(), JavaScriptDialogError> {
-        self.target_session_owner_mut_for_owner(owner)
-            .ok_or(JavaScriptDialogError::NotFound)?
-            .mutate_page_state(|target, session| {
-                target.set_javascript_dialog_prompt_text(session, prompt_text)
-            })
+        let owner = self
+            .target_session_owner_mut_for_owner(owner)
+            .ok_or(JavaScriptDialogError::NotFound)?;
+        owner
+            .browser_context
+            .set_javascript_dialog_prompt_text_for_target(
+                &owner.target_id,
+                &owner.session_key,
+                prompt_text,
+            )
     }
 
     pub(crate) fn handle_javascript_dialog_for_owner(
@@ -53,9 +61,12 @@ impl CdpConnection {
         accepted: bool,
         prompt_text: Option<String>,
     ) -> Option<(String, JavaScriptDialogClosed)> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .mutate_page_state(|target, session| {
-                target.handle_javascript_dialog(session, accepted, prompt_text)
-            })
+        let owner = self.target_session_owner_mut_for_owner(owner)?;
+        owner.browser_context.handle_javascript_dialog_for_target(
+            &owner.target_id,
+            &owner.session_key,
+            accepted,
+            prompt_text,
+        )
     }
 }

@@ -1,4 +1,4 @@
-use crate::conn::{BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent, PageTargetHost};
+use crate::conn::{BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent};
 use crate::domains::page::LOADER_ID;
 use crate::testing::{
     TestContext, wait_until_renderer_document_load, wait_until_scheduler_message,
@@ -399,16 +399,15 @@ fn renderer_backed_ax_node_id(node: &Value) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn accessibility_loaded_page_methods_target_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
-        "TID-background".to_owned(),
-        Some("SID-background".to_owned()),
-        "about:blank".to_owned(),
-    );
 
     let mut bc = BrowserContext::new("BID-A".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.insert_page_target_host(background);
+    bc.register_page_target_url_fixture(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "about:blank".to_owned(),
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<html><body><p>Intro</p><button>Owner</button></body></html>",
@@ -611,13 +610,10 @@ async fn get_full_ax_tree_uses_fresh_initial_document_without_adapter() {
     assert!(!nodes.is_empty());
     assert_eq!(nodes[0]["role"]["value"], "RootWebArea");
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context.target_has_loaded_page(context.active_target_id().unwrap())
+        },
         "Target.createTarget should install the initial about:blank page before Accessibility"
     );
 }

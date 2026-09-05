@@ -904,16 +904,12 @@ fn finish_fetch_interception_update(
     // Interception is configuration, not an Inspector document query. The
     // outgoing Page must accept cleanup while a navigation is suspended, but
     // a completion for that Page must never update its replacement.
-    let page = match conn.loaded_page_mut_for_target_configuration_for_owner(owner) {
-        Ok(page) => page,
-        Err(message) if message == "NoDocumentLoaded" => return Ok(()),
-        Err(message) => return Err(message),
+    let Some((context_id, target_id)) = conn.resolved_page_owner_identity_for_owner(owner) else {
+        return Ok(());
     };
-    if !completion.is_from_page(page) {
-        return Err("Renderer Page changed".to_owned());
-    }
-    page.finish_set_fetch_subresource_interception(completion)
-        .map_err(|error| error.to_string())
+    conn.browser_context_by_id_mut(&context_id)
+        .ok_or("NoDocumentLoaded")?
+        .finish_target_fetch_interception_update(&target_id, completion)
 }
 
 fn start_disable_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> FetchCommandTaskStep {

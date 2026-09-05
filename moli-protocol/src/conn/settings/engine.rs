@@ -24,11 +24,10 @@ impl CdpConnection {
             .as_ref()
             .and_then(|bc| bc.effective_active_tls_verify_host_override())
             .unwrap_or(self.base_tls_verify_host);
-        let bypass_service_worker = self
-            .browser_context
-            .as_ref()
-            .and_then(|bc| bc.page_targets.active())
-            .is_some_and(|host| host.effective_policy().bypass_service_worker());
+        let bypass_service_worker = self.browser_context.as_ref().is_some_and(|bc| {
+            bc.active_target_id()
+                .is_some_and(|id| bc.effective_policy_for_target(id).bypass_service_worker())
+        });
         let engine = self.active_navigation_engine_mut();
         engine.set_browser_identity_override(browser_identity);
         engine.set_http_proxy_override(http_proxy);
@@ -73,9 +72,11 @@ impl CdpConnection {
             self.base_browser_identity.accept_language(),
         );
         if let Some(browser_context) = self.browser_context.as_mut() {
+            let target_id = browser_context
+                .active_target_id_owned()
+                .expect("active target");
             browser_context
-                .active_page_target_mut()
-                .set_base_browser_identity_override(Some(browser_identity));
+                .set_base_browser_identity_override_for_target(&target_id, Some(browser_identity));
         } else {
             self.base_browser_identity = browser_identity;
         }
@@ -159,8 +160,7 @@ impl CdpConnection {
     pub(crate) fn fetch_config(&self) -> &moli_fetch::FetchConfig {
         self.browser_context
             .as_ref()
-            .and_then(|context| context.page_targets.active())
-            .and_then(crate::conn::state::PageTargetHost::navigation_engine)
+            .and_then(|context| context.page_navigation_engine(context.active_target_id()?))
             .map(moli_core::runtime::NavigationEngine::fetch_config)
             .unwrap_or_else(|| self.standalone_navigation_engine.fetch_config())
     }

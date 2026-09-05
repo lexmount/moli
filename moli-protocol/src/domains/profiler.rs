@@ -48,10 +48,7 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context should exist");
-        let _ = browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        let _ = browser_context.replace_active_page_for_test(Some(page));
     }
 
     async fn spawn_profiler_navigation_server() -> (String, tokio::task::JoinHandle<()>) {
@@ -93,10 +90,7 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context should exist");
-        let _ = browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        let _ = browser_context.replace_active_page_for_test(Some(page));
     }
 
     async fn complete_pending_command_task_for_test(
@@ -133,13 +127,10 @@ mod tests {
     }
 
     async fn active_page_renderer_inspector_session_count(ctx: &mut TestContext) -> u64 {
-        let response = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
-            .expect("active target should still have a loaded page")
-            .runtime_heap_usage_async()
+        let context = ctx.conn.browser_context.as_mut().unwrap();
+        let target_id = context.active_target_id_owned().unwrap();
+        let response = context
+            .target_runtime_heap_usage_for_test(&target_id)
             .await
             .expect("runtime heap usage diagnostics should be available");
         u64::try_from(response.moli.runtime.inspector_session_count)
@@ -1998,10 +1989,7 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context should exist");
-        let _ = browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        let _ = browser_context.replace_active_page_for_test(Some(page));
 
         assert_eq!(
             process_and_take_response(&mut ctx, json!({"id": 200, "method": "Page.enable"}), 200)
@@ -2198,10 +2186,7 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context should exist after reload");
-        let _ = browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        let _ = browser_context.replace_active_page_for_test(Some(page));
 
         let stop_after_target_reuse =
             process_and_take_response(&mut ctx, json!({"id": 125, "method": "Profiler.stop"}), 125)

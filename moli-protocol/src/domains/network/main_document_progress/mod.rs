@@ -209,10 +209,10 @@ impl CompletedDownloadProgressTransfer {
         let queue = completed_download_body_progress_queue(progress, conn, state, final_url);
         let body = match self.body {
             CompletedDownloadProgressBody::Buffered(body) => {
-                crate::conn::CompletedDownloadBody::Buffered(body)
+                moli_core::browser::DownloadBody::Buffered(body)
             }
             CompletedDownloadProgressBody::Streaming(response) => {
-                crate::conn::CompletedDownloadBody::Streaming(response)
+                moli_core::browser::DownloadBody::Streaming(response)
             }
         };
         (

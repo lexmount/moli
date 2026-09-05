@@ -1,7 +1,7 @@
 use moli_core::page::{CompletedPageCommand, PendingPageCommand, RendererPageDiagnosticsSnapshot};
 use std::time::Instant;
 
-use super::{CdpConnection, CdpSessionRoute, CommandOwnerScope, TargetRuntimeSlot};
+use super::{CdpConnection, CdpSessionRoute, CommandOwnerScope};
 
 pub(crate) struct PendingChildFrameLifecycleWork {
     owner: CommandOwnerScope,
@@ -28,18 +28,15 @@ impl PendingChildFrameLifecycleWork {
 }
 
 impl CdpConnection {
-    fn activity_source_runtime_slot_mut(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Option<&mut TargetRuntimeSlot> {
+    fn activity_source_page_route(&mut self, session_id: Option<&str>) -> Option<(String, String)> {
         let owner = CommandOwnerScope::capture(self, session_id);
-        self.activity_source_runtime_slot_mut_for_owner(&owner)
+        self.activity_source_page_route_for_owner(&owner)
     }
 
-    fn activity_source_runtime_slot_mut_for_owner(
+    fn activity_source_page_route_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-    ) -> Option<&mut TargetRuntimeSlot> {
+    ) -> Option<(String, String)> {
         let route = owner.resolve_route(self)?;
         let (browser_context_id, target_id) = match &route {
             CdpSessionRoute::PageTarget {
@@ -63,11 +60,7 @@ impl CdpConnection {
             | CdpSessionRoute::ServiceWorkerTarget { .. } => return None,
         };
         self.ensure_page_navigation_engine_for_target(&browser_context_id, &target_id)?;
-        let target = self
-            .browser_context_by_id_mut(&browser_context_id)?
-            .page_target_mut(&target_id)?;
-        target.navigation_engine()?;
-        Some(&mut target.runtime_slot)
+        Some((browser_context_id, target_id))
     }
 
     pub(crate) fn start_child_frame_lifecycle_work_for_owner(
@@ -78,24 +71,17 @@ impl CdpConnection {
         let storage = self
             .navigation_load_inputs_for_owner(&owner)
             .resource_storage_handles();
-        let Some(slot) = self.activity_source_runtime_slot_mut_for_owner(&owner) else {
-            return Err("NoDocumentLoaded".to_owned());
-        };
-        let contents = &mut slot.page_slot_mut().contents;
-        let Some(document) = contents.main_frame.current_document.as_ref() else {
-            return Err("NoDocumentLoaded".to_owned());
-        };
-        let engine = contents
-            .navigation_engine
-            .as_mut()
-            .expect("resolved navigation engine");
-        let pending = engine
-            .start_page_child_frame_lifecycle_work_with_storage_best_effort(
+        let (context_id, target_id) = self
+            .activity_source_page_route_for_owner(&owner)
+            .ok_or("NoDocumentLoaded")?;
+        let pending = self
+            .browser_context_by_id_mut(&context_id)
+            .ok_or("NoDocumentLoaded")?
+            .start_target_child_frame_lifecycle_work(
+                &target_id,
                 storage.into_navigation_storage(),
-                &document.page,
                 timeout,
-            )
-            .map_err(|error| error.to_string())?;
+            )?;
         Ok(PendingChildFrameLifecycleWork { owner, pending })
     }
 
@@ -103,25 +89,12 @@ impl CdpConnection {
         &mut self,
         pending: CompletedChildFrameLifecycleWork,
     ) -> Result<(bool, moli_core::page::RendererCommandTurnOutput), String> {
-        let Some(slot) = self.activity_source_runtime_slot_mut_for_owner(&pending.owner) else {
-            return Err("NoDocumentLoaded".to_owned());
-        };
-        let contents = &mut slot.page_slot_mut().contents;
-        let Some(document) = contents.main_frame.current_document.as_mut() else {
-            return Err("NoDocumentLoaded".to_owned());
-        };
-        let engine = contents
-            .navigation_engine
-            .as_mut()
-            .expect("resolved navigation engine");
-        let completed = engine
-            .complete_page_child_frame_lifecycle_work_best_effort(
-                &mut document.page,
-                pending.completion,
-            )
-            .map_err(|error| error.to_string())?;
-        let _ = slot.ingest_owner_page_observable_output_updates();
-        Ok(completed)
+        let (context_id, target_id) = self
+            .activity_source_page_route_for_owner(&pending.owner)
+            .ok_or("NoDocumentLoaded")?;
+        self.browser_context_by_id_mut(&context_id)
+            .ok_or("NoDocumentLoaded")?
+            .complete_target_child_frame_lifecycle_work(&target_id, pending.completion)
     }
 
     #[cfg(test)]
@@ -143,7 +116,7 @@ impl CdpConnection {
             session_id,
             trace_started,
         );
-        let Some(slot) = self.activity_source_runtime_slot_mut(session_id) else {
+        let Some((context_id, target_id)) = self.activity_source_page_route(session_id) else {
             trace_activity_source_stage(
                 "conn_page_diagnostics_snapshot_missing_owner",
                 session_id,
@@ -151,7 +124,10 @@ impl CdpConnection {
             );
             return Ok(RendererPageDiagnosticsSnapshot::default());
         };
-        let Some(page) = slot.loaded_page_mut() else {
+        let context = self
+            .browser_context_by_id_mut(&context_id)
+            .expect("resolved BrowserContext");
+        if !context.target_has_loaded_page(&target_id) {
             trace_activity_source_stage(
                 "conn_page_diagnostics_snapshot_missing_page",
                 session_id,
@@ -160,8 +136,8 @@ impl CdpConnection {
             return Ok(RendererPageDiagnosticsSnapshot::default());
         };
         let renderer_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-        let snapshot = page
-            .page_diagnostics_snapshot_async()
+        let snapshot = context
+            .target_page_diagnostics_snapshot_async(&target_id)
             .await
             .map_err(|error| error.to_string())?;
         trace_activity_source_stage(
@@ -170,7 +146,7 @@ impl CdpConnection {
             renderer_started,
         );
         let ingest_started = moli_trace::cdp_runtime_trace_enabled().then(Instant::now);
-        let ingested = slot.ingest_owner_page_observable_output_updates();
+        let ingested = context.ingest_owner_page_observable_output_updates_for_target(&target_id);
         trace_activity_source_stage_with_bool(
             "conn_page_diagnostics_snapshot_ingest_done",
             session_id,

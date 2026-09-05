@@ -1926,11 +1926,6 @@ async fn dom_get_document_rejects_while_main_document_navigation_is_pending() {
 #[tokio::test]
 async fn document_navigation_gate_is_scoped_to_background_target_owner() {
     let mut ctx = TestContext::new();
-    let background_target = crate::conn::PageTargetHost::with_url(
-        "TID-background".to_owned(),
-        Some("SID-background".to_owned()),
-        "about:blank".to_owned(),
-    );
 
     let mut browser_context = BrowserContext::new("BID-1".to_owned());
     browser_context.set_active_target_id("TID-active");
@@ -1939,7 +1934,11 @@ async fn document_navigation_gate_is_scoped_to_background_target_owner() {
         [moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .runtime_frontend_enabled = true;
-    browser_context.insert_page_target_host(background_target);
+    browser_context.register_page_target_url_fixture(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "about:blank".to_owned(),
+    );
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
     ctx.install_navigation_fixture_for_session_owner(

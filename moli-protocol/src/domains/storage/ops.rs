@@ -493,8 +493,11 @@ fn start_get_storage_key_for_frame_command(
     };
 
     if params.frame_id == target_id {
-        if let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) {
-            return match page.start_document_storage_key_snapshot() {
+        if let Ok((context_id, target_id)) = conn.resolve_document_command_owner(&owner_scope) {
+            let context = conn
+                .browser_context_by_id(&context_id)
+                .expect("admitted document context remains registered");
+            return match context.start_document_storage_key_snapshot_for_target(&target_id) {
                 Ok(pending) => StorageCommandTaskStep::Pending(PendingStorageCommandDispatch {
                     command_id: cmd.id,
                     session_id: cmd.session_id.map(str::to_owned),
@@ -519,13 +522,16 @@ fn start_get_storage_key_for_frame_command(
     if let Err(message) = conn.ensure_document_accessible_for_owner(&owner_scope) {
         return StorageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
     }
-    let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
+    let Ok((context_id, target_id)) = conn.resolve_document_command_owner(&owner_scope) else {
         return StorageCommandTaskStep::Complete(CommandOutputPlan::error(
             -32000,
             "NoFrameForGivenId",
         ));
     };
-    match page.start_child_frame_tree_snapshot() {
+    let context = conn
+        .browser_context_by_id(&context_id)
+        .expect("admitted document context remains registered");
+    match context.start_child_frame_tree_snapshot_for_target(&target_id) {
         Ok(pending) => StorageCommandTaskStep::Pending(PendingStorageCommandDispatch {
             command_id: cmd.id,
             session_id: cmd.session_id.map(str::to_owned),
@@ -657,16 +663,16 @@ fn start_devtools_set_cookies_result(
             "UnknownBrowserContextId",
         )));
     };
-    let Some(page) = browser_context
-        .page_targets
-        .active_mut()
-        .and_then(|target| target.runtime_slot.loaded_page_mut())
+    let Some(target_id) = browser_context
+        .active_target_id()
+        .filter(|target_id| browser_context.target_has_loaded_page(target_id))
+        .map(str::to_owned)
     else {
         let manager_surface = browser_context.cookie_manager_surface_snapshot_without_live_page();
         let reports = set_cookies_with_manager_surface(browser_context, &manager_surface, cookies);
         return DevToolsSetCookiesTaskStep::Complete(Ok(set_cookie_reports_result(&reports)));
     };
-    match page.start_document_cookie_owner_snapshot() {
+    match browser_context.start_document_cookie_owner_snapshot_for_target(&target_id) {
         Ok(pending) => DevToolsSetCookiesTaskStep::Pending(PendingStorageCommandDispatch {
             command_id,
             session_id: session_id.map(str::to_owned),
@@ -767,10 +773,13 @@ fn complete_get_storage_key_for_top_frame_command(
         Ok(completion) => completion,
         Err(error) => return CommandOutputPlan::error(-32000, error),
     };
-    let Some(page) = loaded_page_mut_for_owner(conn, owner_scope) else {
+    let Ok((context_id, target_id)) = conn.resolve_document_command_owner(owner_scope) else {
         return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
     };
-    match page.finish_document_storage_key_snapshot(completion) {
+    let context = conn
+        .browser_context_by_id_mut(&context_id)
+        .expect("admitted document context remains registered");
+    match context.finish_document_storage_key_snapshot_for_target(&target_id, completion) {
         Ok(storage_key) => storage_key_result_plan(&storage_key),
         Err(error) => CommandOutputPlan::error(-32000, error.to_string()),
     }
@@ -786,18 +795,22 @@ fn complete_get_storage_key_for_frame_command(
         Ok(completion) => completion,
         Err(error) => return CommandOutputPlan::error(-32000, error),
     };
-    let Some(page) = loaded_page_mut_for_owner(conn, owner_scope) else {
+    let Ok((context_id, target_id)) = conn.resolve_document_command_owner(owner_scope) else {
         return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
     };
-    let child_frames = match page.finish_child_frame_tree_snapshot(completion) {
-        Ok(child_frames) => child_frames,
-        Err(error) => {
-            return CommandOutputPlan::error(
-                -32000,
-                format!("Failed to snapshot child frame tree: {error}"),
-            );
-        }
-    };
+    let context = conn
+        .browser_context_by_id_mut(&context_id)
+        .expect("admitted document context remains registered");
+    let child_frames =
+        match context.finish_child_frame_tree_snapshot_for_target(&target_id, completion) {
+            Ok(child_frames) => child_frames,
+            Err(error) => {
+                return CommandOutputPlan::error(
+                    -32000,
+                    format!("Failed to snapshot child frame tree: {error}"),
+                );
+            }
+        };
 
     let Some(frame) = find_child_frame(&child_frames, frame_id) else {
         return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
@@ -872,17 +885,19 @@ fn complete_set_cookies_result(
         ));
     };
     let owner = {
-        let Some(page) = browser_context
-            .page_targets
-            .active_mut()
-            .and_then(|target| target.runtime_slot.loaded_page_mut())
+        let Some(target_id) = browser_context
+            .active_target_id()
+            .filter(|target_id| browser_context.target_has_loaded_page(target_id))
+            .map(str::to_owned)
         else {
             return Err(DevToolsError::new(
                 DevToolsErrorKind::Internal,
                 "NoDocumentLoaded",
             ));
         };
-        match page.finish_document_cookie_owner_snapshot(completion) {
+        match browser_context
+            .finish_document_cookie_owner_snapshot_for_target(&target_id, completion)
+        {
             Ok(owner) => owner,
             Err(error) => {
                 return Err(DevToolsError::new(
@@ -895,14 +910,6 @@ fn complete_set_cookies_result(
     let manager_surface = browser_context.cookie_manager_surface_snapshot_with_owner(&owner);
     let reports = set_cookies_with_manager_surface(browser_context, &manager_surface, cookies);
     Ok(set_cookie_reports_result(&reports))
-}
-
-fn loaded_page_mut_for_owner<'a>(
-    conn: &'a mut CdpConnection,
-    owner: &CommandOwnerScope,
-) -> Option<&'a mut moli_core::page::Page> {
-    conn.loaded_page_mut_for_protocol_access_for_owner(owner)
-        .ok()
 }
 
 fn find_child_frame<'a>(

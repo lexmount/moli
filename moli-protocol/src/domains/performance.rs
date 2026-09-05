@@ -210,7 +210,7 @@ pub(crate) fn try_start_performance_command_dispatch(
         .and_then(|slot| {
             Some((
                 slot.current_renderer_inspection_binding()?,
-                slot.performance_metric_snapshot()?,
+                conn.performance_metric_snapshot_for_owner(&owner_scope)?,
             ))
         })
     else {
@@ -1004,9 +1004,7 @@ mod tests {
         let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
         assert_eq!(browser_context.active_target_id(), Some("TID-active"));
         assert!(
-            browser_context
-                .background_target("TID-background")
-                .is_some_and(|target| target.has_loaded_page()),
+            browser_context.target_has_loaded_page("TID-background"),
             "Performance.getMetrics should not activate the loaded background owner"
         );
     }
@@ -1057,7 +1055,7 @@ mod tests {
         assert!(
             browser_context
                 .background_target("TID-background")
-                .is_some_and(|target| !target.has_loaded_page()),
+                .is_some_and(|target| !browser_context.target_has_loaded_page(target.target_id())),
             "unloaded Performance owner fallback should not activate the background target"
         );
     }
@@ -1096,7 +1094,7 @@ mod tests {
         assert!(
             active
                 .background_target("TID-background")
-                .filter(|target| target.has_non_default_session_state())
+                .filter(|target| active.has_non_default_session_state_for_target(target.target_id()))
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .page_session_state

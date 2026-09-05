@@ -3760,10 +3760,7 @@ mod tests {
         let mut conn = CdpConnection::default();
         let mut context = BrowserContext::new("BID-1".to_owned());
         context.set_active_target_id("TID-page");
-        let document_id = context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_document_id_for_test(1);
+        let document_id = context.set_active_document_fixture_for_test(1);
         let owner_page = TargetPageResidenceIdentity::new(
             "BID-1".to_owned(),
             Some("TID-page".to_owned()),
@@ -4035,11 +4032,11 @@ mod tests {
         conn.browser_context
             .as_mut()
             .unwrap()
-            .insert_page_target_host(crate::conn::PageTargetHost::with_url(
+            .register_page_target_url_fixture(
                 "TID-other-page".to_owned(),
                 Some("SID-other-page".to_owned()),
                 "about:blank".to_owned(),
-            ));
+            );
         conn.register_session_route_for_test("SID-page-base", page_route);
         conn.register_session_route_for_test(
             "SID-other-page",
@@ -4746,12 +4743,13 @@ mod tests {
                 String::new(),
                 Vec::new(),
             ));
-        conn.browser_context
-            .as_mut()
-            .unwrap()
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_document_id_for_test();
+        {
+            let context = &mut conn.browser_context.as_mut().unwrap();
+            let target_id = context
+                .active_target_id_owned()
+                .expect("active fixture target");
+            context.replace_document_id_for_test_for_target(&target_id)
+        };
         let messages = protocol_messages(
             &retire_dedicated_worker_targets_for_replaced_page_async(&mut conn, &owner_page).await,
         );

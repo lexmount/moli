@@ -696,7 +696,7 @@ fn parse_inline_style_declarations(style_text: &str) -> Vec<CssDeclaration> {
 #[cfg(test)]
 mod tests {
     use super::parse_inline_style_declarations;
-    use crate::conn::{BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent, PageTargetHost};
+    use crate::conn::{BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent};
     use crate::domains::page::LOADER_ID;
     use crate::testing::{TestContext, wait_until_renderer_document_load};
     use moli_core::page::{RENDERER_BACKEND_NODE_ID_START, is_renderer_backend_node_id};
@@ -943,16 +943,15 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn css_loaded_page_methods_target_background_owner_without_activation() {
         let mut ctx = TestContext::new();
-        let background = PageTargetHost::with_url(
-            "TID-background".to_owned(),
-            Some("SID-background".to_owned()),
-            "about:blank".to_owned(),
-        );
 
         let mut bc = BrowserContext::new("BID-A".to_owned());
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
-        bc.insert_page_target_host(background);
+        bc.register_page_target_url_fixture(
+            "TID-background".to_owned(),
+            Some("SID-background".to_owned()),
+            "about:blank".to_owned(),
+        );
         ctx.conn.install_browser_context_fixture_for_test(bc);
         ctx.install_navigation_fixture_for_session_owner(
             "data:text/html,<html><head><style title='owner'>body { color: red; }</style></head><body><div id='target' style='display:flex;width:123px;color:blue'></div></body></html>",
@@ -1618,10 +1617,7 @@ mod tests {
 
         let mut browser_context = BrowserContext::new("BID-css-owner-route".to_owned());
         browser_context.set_active_target_id("TID-css-active".to_owned());
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(active_page);
+        browser_context.replace_active_page_for_test(Some(active_page));
         browser_context.stage_background_target(
             "TID-css-background".to_owned(),
             None,
@@ -1629,10 +1625,7 @@ mod tests {
             None,
             None,
         );
-        browser_context
-            .background_target_mut("TID-css-background")
-            .expect("background target")
-            .replace_loaded_page(Some(background_page));
+        browser_context.replace_target_page_for_test("TID-css-background", Some(background_page));
         ctx.conn
             .install_browser_context_fixture_for_test(browser_context);
 

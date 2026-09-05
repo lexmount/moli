@@ -14,16 +14,17 @@ impl CdpConnection {
     /// into the replacement Page.
     pub(crate) fn settle_page_command_turn_for_owner(
         &mut self,
-        session_id: Option<&str>,
         owner: &TargetPageResidenceIdentity,
         completion: CompletedPageCommand,
     ) -> RendererCommandTurnOutput {
-        if !self.target_page_residence_identity_is_current(owner) {
-            return completion.into_output();
-        }
-
-        if let Ok(page) = self.loaded_page_mut_for_interruptible_protocol_access(session_id) {
-            return page.finish_page_command_turn(completion);
+        if let Some(target_id) = owner.target_id()
+            && let Some(context) = self.browser_context_by_id_mut(owner.browser_context_id())
+        {
+            return context.settle_target_page_command_turn(
+                target_id,
+                owner.document_id(),
+                completion,
+            );
         }
 
         // The renderer has already settled this immutable result. Losing the

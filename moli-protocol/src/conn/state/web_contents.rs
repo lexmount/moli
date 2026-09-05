@@ -30,7 +30,8 @@ pub(crate) use window::{WindowSurface, WindowSurfaceState};
 
 /// Stable Browser page ownership, independent of DevTools bindings.
 ///
-/// Embedded in the legacy residence until the typed API cutover (Commit 24b).
+/// Owned by the physical BrowserContext, privately embedded in the Protocol
+/// migration residence until the typed API cutover (Commit 24b).
 /// Declaration order cancels pending work and retires the Document before
 /// releasing the engine and storage. This owner is deliberately not Clone.
 #[derive(Debug)]
@@ -77,6 +78,17 @@ impl Default for WebContents {
 }
 
 impl WebContents {
+    /// Retire Browser authority synchronously, then close the renderer without
+    /// retaining any Context/registry borrow across await.
+    pub(in crate::conn) fn begin_close(mut self) -> ClosingWebContents {
+        self.navigation.clear_document_navigation_state();
+        let page = self.replace_document(None);
+        ClosingWebContents {
+            page,
+            _contents: self,
+        }
+    }
+
     pub(in crate::conn) fn performance_metric_snapshot(
         &self,
     ) -> Option<moli_core::page::RendererPerformanceMetricSnapshot> {
@@ -187,6 +199,21 @@ impl WebContents {
         engine.set_cache_disabled(self.network_request_policy.cache_disabled);
         engine.set_bypass_service_worker(self.network_request_policy.bypass_service_worker);
         self.navigation_engine = Some(engine);
+    }
+}
+
+/// A move-owned Browser teardown participant, not a mutable WebContents handle.
+/// Its Page retires before the engine and storage even if cleanup is cancelled.
+pub(in crate::conn) struct ClosingWebContents {
+    page: Option<Page>,
+    _contents: WebContents,
+}
+
+impl ClosingWebContents {
+    pub(in crate::conn) async fn close_async(mut self) {
+        if let Some(page) = self.page.take() {
+            let _ = page.close_async().await;
+        }
     }
 }
 

@@ -190,15 +190,13 @@ fn remove_network_intercept_from_browser_context(
     if target.fetch_owner.remove_network_intercept(intercept_id) {
         let (subresource_enabled, subresource_resource_type) =
             target.fetch_owner.subresource_interception_config();
-        let Some(page) = target.runtime_slot.loaded_page_mut() else {
-            return Ok(Some(None));
-        };
-        return page
-            .start_set_fetch_subresource_interception(
+        let target_id = target.target_id().to_owned();
+        return browser_context
+            .start_target_fetch_interception_update(
+                &target_id,
                 subresource_enabled,
                 subresource_resource_type,
             )
-            .map(Some)
             .map(Some)
             .map_err(|error| format!("failed to update page fetch interception: {error}"));
     }
@@ -1037,15 +1035,14 @@ impl CdpConnection {
             handle_auth_requests,
             patterns,
         );
-        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
-            return Ok(None);
-        };
-        page.start_set_fetch_subresource_interception(
-            subresource_enabled,
-            subresource_resource_type,
-        )
-        .map(Some)
-        .map_err(|error| format!("failed to update page fetch interception: {error}"))
+        owner
+            .browser_context
+            .start_target_fetch_interception_update(
+                &owner.target_id,
+                subresource_enabled,
+                subresource_resource_type,
+            )
+            .map_err(|error| format!("failed to update page fetch interception: {error}"))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1068,15 +1065,14 @@ impl CdpConnection {
             auth_url_patterns,
             patterns,
         );
-        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
-            return Ok(None);
-        };
-        page.start_set_fetch_subresource_interception(
-            subresource_enabled,
-            subresource_resource_type,
-        )
-        .map(Some)
-        .map_err(|error| format!("failed to update page fetch interception: {error}"))
+        owner
+            .browser_context
+            .start_target_fetch_interception_update(
+                &owner.target_id,
+                subresource_enabled,
+                subresource_resource_type,
+            )
+            .map_err(|error| format!("failed to update page fetch interception: {error}"))
     }
 
     pub(crate) fn start_remove_network_intercept_for_owner(
@@ -1096,15 +1092,14 @@ impl CdpConnection {
             }
             return Err("NetworkInterceptNotFound".to_owned());
         };
-        let Some(page) = owner.runtime_slot_mut().loaded_page_mut() else {
-            return Ok(None);
-        };
-        page.start_set_fetch_subresource_interception(
-            subresource_enabled,
-            subresource_resource_type,
-        )
-        .map(Some)
-        .map_err(|error| format!("failed to update page fetch interception: {error}"))
+        owner
+            .browser_context
+            .start_target_fetch_interception_update(
+                &owner.target_id,
+                subresource_enabled,
+                subresource_resource_type,
+            )
+            .map_err(|error| format!("failed to update page fetch interception: {error}"))
     }
 
     fn start_remove_network_intercept_from_any_target(
@@ -1152,16 +1147,12 @@ impl CdpConnection {
         // must carry them to the caller for settlement. Reinstall current
         // effective interception on retries, after the raw session is gone.
         let page_command = owner
-            .runtime_slot_mut()
-            .loaded_page_mut()
-            .map(|page| {
-                page.start_set_fetch_subresource_interception(
-                    subresource_enabled,
-                    subresource_resource_type,
-                )
-            })
-            .transpose()
-            .map_err(|error| error.to_string());
+            .browser_context
+            .start_target_fetch_interception_update(
+                &owner.target_id,
+                subresource_enabled,
+                subresource_resource_type,
+            );
         Some((pending, page_command))
     }
 

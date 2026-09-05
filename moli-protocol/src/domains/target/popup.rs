@@ -502,12 +502,7 @@ fn popup_target_has_loaded_page(
     let Some(browser_context) = conn.browser_context_by_id(browser_context_id) else {
         return false;
     };
-    if browser_context.is_active_target(target_id) {
-        return browser_context.has_loaded_page();
-    }
-    browser_context
-        .background_target(target_id)
-        .is_some_and(|target| target.has_loaded_page())
+    browser_context.target_has_loaded_page(target_id)
 }
 
 pub(crate) async fn complete_popup_target_navigation_owner_action_async(

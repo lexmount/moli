@@ -237,9 +237,7 @@ async fn get_frame_tree_uses_owner_element_id_when_frame_name_is_empty() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+        .replace_active_page_for_test(Some(page));
     complete_child_frame_lifecycle(&mut ctx).await;
 
     ctx.process_async(json!({"id": 15, "method": "Page.getFrameTree"}))
@@ -264,10 +262,7 @@ async fn get_frame_tree_projects_sandboxed_about_blank_from_document_url() {
         .expect("page should load");
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        let _ = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        let _ = bc.replace_active_page_for_test(Some(page));
         bc.set_target_security_origin("https://top.example".into());
         bc.set_target_secure_context_type("Secure".into());
     }
@@ -295,10 +290,7 @@ async fn get_frame_tree_recurses_into_nested_child_frames() {
         .expect("page should load");
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        let _ = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        let _ = bc.replace_active_page_for_test(Some(page));
         bc.set_target_security_origin("https://top.example".into());
         bc.set_target_secure_context_type("Secure".into());
     }
@@ -356,10 +348,7 @@ async fn get_frame_tree_projects_nested_sandboxed_srcdoc_from_document_urls() {
         .expect("page should load");
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        let _ = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        let _ = bc.replace_active_page_for_test(Some(page));
         bc.set_target_security_origin("https://top.example".into());
         bc.set_target_secure_context_type("Secure".into());
     }
@@ -451,9 +440,7 @@ async fn get_frame_tree_can_complete_through_pending_command_dispatch() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+        .replace_active_page_for_test(Some(page));
 
     let raw = json!({
         "id": 1203,
@@ -505,9 +492,7 @@ async fn pending_get_frame_tree_after_page_unload_returns_empty_target_tree() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+        .replace_active_page_for_test(Some(page));
 
     let raw = json!({
         "id": 1206,
@@ -519,13 +504,14 @@ async fn pending_get_frame_tree_after_page_unload_returns_empty_target_tree() {
         .conn
         .try_start_pending_command_dispatch(&raw)
         .expect("Page.getFrameTree should start as a pending command for loaded pages");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .clear_loaded_page_for_test_fixture();
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_mut()
+            .expect("browser context")
+            .clear_target_page_for_test("TID-PENDING-FRAME-TREE-UNLOAD")
+            .is_some()
+    );
 
     let (messages, scheduler_events) =
         complete_pending_command_task_for_test(&mut ctx, pending).await;
@@ -554,17 +540,16 @@ async fn pending_get_frame_tree_after_page_unload_returns_empty_target_tree() {
 async fn get_frame_tree_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let page_url = "data:text/html,<iframe name='background-child'></iframe>";
-    let background = PageTargetHost::with_url(
-        "TID-background".to_owned(),
-        Some("SID-background".to_owned()),
-        "about:blank".to_owned(),
-    );
 
     let mut bc = BrowserContext::new("BID-1".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<body>active</body>".to_owned());
-    bc.insert_page_target_host(background);
+    bc.register_page_target_url_fixture(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "about:blank".to_owned(),
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-background"))
         .await;

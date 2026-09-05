@@ -31,16 +31,10 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
                 Some(renderer_agent_candidate),
             )
             .expect("document-content test renderer candidate should commit");
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(navigation.page);
-        // Match the browser commit paired with the position supplied to the
-        // renderer; this fixture bypasses the production Page.navigate path.
-        browser_context
-            .active_page_target_mut()
-            .owner_state
-            .record_loaded_page_navigation_history((url.to_owned(), String::new()));
+        browser_context.replace_active_page_for_test(Some(navigation.page));
+        browser_context.record_target_navigation_history_for_test(
+            "TID-1", (url.to_owned(), String::new()),
+        );
         assert!(
             browser_context
                 .active_page_target_mut()

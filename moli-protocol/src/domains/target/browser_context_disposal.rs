@@ -163,12 +163,6 @@ pub(super) async fn execute_browser_context_disposal_async(
         close_page_target(conn, out, page_target).await;
     }
 
-    conn.download_behavior
-        .clear_browser_context(disposal.browser_context_id.as_str());
-    conn.permission_overrides.retain(|entry| {
-        entry.browser_context_id.as_deref() != Some(disposal.browser_context_id.as_str())
-    });
-
     let removed = conn
         .remove_browser_context_by_id_restoring_active_async(
             &disposal.browser_context_id,

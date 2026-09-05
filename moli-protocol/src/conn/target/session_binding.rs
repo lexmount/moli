@@ -163,8 +163,8 @@ impl CdpConnection {
             None => Ok(()),
         };
         if !self
-            .runtime_session_owner_slot(Some(session_id))
-            .is_ok_and(|slot| slot.has_loaded_page())
+            .browser_context_by_id(&browser_context_id)
+            .is_some_and(|context| context.target_has_loaded_page(&target_id))
         {
             return policy_result;
         }
@@ -243,8 +243,7 @@ impl CdpConnection {
     }
 
     pub(crate) fn release_root_target_frontend_owner_without_event(&mut self) {
-        self.download_behavior
-            .set_browser_events_enabled_for_session(None, false);
+        self.set_browser_download_events_enabled_for_session(None, false);
         self.cancel_tracing_for_session_owner(None);
         self.clear_auto_attach_owner(None);
         self.clear_target_discovery_for_owner(None);

@@ -147,10 +147,7 @@ async fn push_loaded_runtime_frontend_enabled_background_context_async(
         .expect("test background page should load");
     let mut background_context = crate::conn::BrowserContext::new(browser_context_id.to_owned());
     background_context.set_active_target_id(target_id.to_owned());
-    let _ = background_context
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    let _ = background_context.replace_active_page_for_test(Some(page));
     background_context.attach_active_session(session_id.to_owned());
     background_context
         .active_page_target_mut()
@@ -168,16 +165,14 @@ async fn with_loaded_runtime_frontend_enabled_background_target_async(
     background_session_id: &str,
     html: &str,
 ) {
-    let background_target = crate::conn::PageTargetHost::with_url(
+    let mut browser_context = crate::conn::BrowserContext::new("BID-1".to_owned());
+    browser_context.set_active_target_id(active_target_id.to_owned());
+    browser_context.attach_active_session(active_session_id.to_owned());
+    browser_context.register_page_target_url_fixture(
         background_target_id.to_owned(),
         Some(background_session_id.to_owned()),
         format!("data:text/html,{html}"),
     );
-
-    let mut browser_context = crate::conn::BrowserContext::new("BID-1".to_owned());
-    browser_context.set_active_target_id(active_target_id.to_owned());
-    browser_context.attach_active_session(active_session_id.to_owned());
-    browser_context.insert_page_target_host(background_target);
     {
         let state = browser_context
             .background_target_mut(background_target_id)

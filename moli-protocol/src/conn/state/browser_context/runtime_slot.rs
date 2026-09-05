@@ -1,3 +1,4 @@
+use super::BrowserContext;
 use moli_core::page::{
     Page, RendererAgentAttachmentId, RendererDevToolsAgentToken, RendererDocumentLifecycleIdentity,
     RendererRuntimeInspectorMessageBatch, ScriptNetworkOutputItem, ScriptObservableOutputItem,
@@ -22,11 +23,13 @@ use crate::{
     },
 };
 
-use super::devtools_renderer_channel::{
+use crate::conn::state::devtools_renderer_channel::{
     DevToolsRendererChannel, RendererAgentBinding, RendererAgentDetachReason,
 };
-use super::page_slot::{InitialDocumentPageBuildWaiter, TargetPageAbsenceReason, TargetPageSlot};
-use super::{
+use crate::conn::state::page_slot::{
+    InitialDocumentPageBuildWaiter, TargetPageAbsenceReason, TargetPageSlot,
+};
+use crate::conn::state::{
     CommittedRendererAgentAttachment, CommittedRendererDocumentBinding,
     DevToolsRendererChannelError, DocumentId, NavigationId, PreparedRendererAgentAttachment,
     PreparedRendererCallReplacements, RendererAgentAttachment, RendererPageResidenceIdentity,
@@ -105,13 +108,10 @@ impl TargetNetworkRequestIdAllocator<'_> {
 
 impl TargetRuntimeSlot {
     pub(crate) fn from_page_slot(page_slot: TargetPageSlot) -> Self {
-        let mut slot = Self {
+        Self {
             page_slot,
             ..Default::default()
-        };
-        slot.ensure_loaded_page_renderer_attachment();
-        slot.ingest_owner_page_observable_output_updates();
-        slot
+        }
     }
 
     pub(in crate::conn) fn page_slot(&self) -> &TargetPageSlot {
@@ -122,55 +122,10 @@ impl TargetRuntimeSlot {
         &mut self.page_slot
     }
 
-    pub(crate) fn loaded_page(&self) -> Option<&Page> {
-        self.page_slot.loaded_page()
-    }
-
-    pub(crate) fn committed_renderer_document_binding(
-        &self,
-    ) -> Option<&CommittedRendererDocumentBinding> {
-        self.page_slot.renderer_document_lifecycle_binding()
-    }
-
-    pub(crate) fn loaded_page_mut(&mut self) -> Option<&mut Page> {
-        self.page_slot.loaded_page_mut()
-    }
-
-    pub(crate) fn has_loaded_page(&self) -> bool {
-        self.page_slot.has_loaded_page()
-    }
-
-    pub(crate) fn has_pending_initial_document_page_build(&self) -> bool {
-        matches!(
-            self.page_slot.loaded_page_absence_reason(),
-            Some(
-                TargetPageAbsenceReason::InitialDocumentPageBuildPending
-                    | TargetPageAbsenceReason::InitialDocumentPageBuildInProgress
-            )
-        )
-    }
-
-    pub(crate) fn has_initial_document_page_build_in_progress(&self) -> bool {
-        self.page_slot.loaded_page_absence_reason()
-            == Some(TargetPageAbsenceReason::InitialDocumentPageBuildInProgress)
-    }
-
     pub(crate) fn initial_document_page_build_waiter(
         &self,
     ) -> Option<InitialDocumentPageBuildWaiter> {
         self.page_slot.initial_document_page_build_waiter()
-    }
-
-    pub(crate) fn start_initial_document_page_build(&mut self) {
-        self.page_slot.start_initial_document_page_build();
-    }
-
-    pub(crate) fn bind_initial_document_page_build_renderer_page(
-        &mut self,
-        renderer_page: RendererPageResidenceIdentity,
-    ) -> bool {
-        self.page_slot
-            .bind_initial_document_page_build_renderer_page(renderer_page)
     }
 
     pub(crate) fn complete_initial_document_page_build(&mut self) {
@@ -181,65 +136,15 @@ impl TargetRuntimeSlot {
         self.page_slot.fail_initial_document_page_build(message);
     }
 
-    pub(crate) fn transient_no_page_reason_for_protocol_output(&self) -> Option<&'static str> {
-        let reason = self.page_slot.loaded_page_absence_reason()?;
-        match reason {
-            TargetPageAbsenceReason::InitialDocumentPageBuildPending
-            | TargetPageAbsenceReason::InitialDocumentPageBuildInProgress => None,
-            TargetPageAbsenceReason::NoTarget
-            | TargetPageAbsenceReason::NavigationFailed
-            | TargetPageAbsenceReason::TargetClosed
-            | TargetPageAbsenceReason::TargetCrashed => None,
-            #[cfg(test)]
-            TargetPageAbsenceReason::TestFixture => None,
-        }
-    }
-
-    pub(crate) fn replace_loaded_page(&mut self, page: Option<Page>) -> Option<Page> {
+    /// Browser retirement has already invalidated the Document. Stop this
+    /// projection's producers and waiters before awaiting renderer teardown.
+    pub(super) fn retire_for_target_close(&mut self) {
         self.javascript_dialog_scope.retire();
-        let mut page = page;
-        let retiring_document = self
-            .page_slot
-            .loaded_page()
-            .zip(self.page_slot.renderer_document_lifecycle_binding())
-            .map(|(loaded_page, binding)| {
-                (
-                    RendererPageResidenceIdentity::from_page(loaded_page),
-                    binding.document_id,
-                    binding.clone(),
-                )
-            });
-        let retiring_document = retiring_document.map(|(renderer_page, document_id, binding)| {
-            RetiringRendererDocumentOutput {
-                renderer_page,
-                document_id,
-                binding,
-                network_agent: self.network_agent.rotate_document_for_replacement(),
-            }
-        });
-        self.ensure_renderer_attachment_for_replacement(page.as_mut());
-        let previous = self.page_slot.replace_loaded_page(page);
-        if let Some(retiring_document) = retiring_document {
-            self.retiring_renderer_document_outputs
-                .push(retiring_document);
-            self.reset_replacement_document_output_state();
-        } else {
-            self.reset_document_output_state();
-        }
-        self.ingest_owner_page_observable_output_updates();
-        previous
-    }
-
-    pub(crate) fn clear_loaded_page_with_reason(
-        &mut self,
-        reason: TargetPageAbsenceReason,
-    ) -> Option<Page> {
-        self.javascript_dialog_scope.retire();
-        let previous = self.page_slot.replace_loaded_page_with_reason(None, reason);
-        self.transition_renderer_channel_for_page_absence(reason);
+        self.page_slot.retire_for_target_close();
+        self.transition_renderer_channel_for_page_absence(TargetPageAbsenceReason::TargetClosed);
+        self.pending_renderer_call_replacements = PreparedRendererCallReplacements::default();
+        self.retiring_renderer_document_outputs.clear();
         self.reset_document_output_state();
-        self.ingest_owner_page_observable_output_updates();
-        previous
     }
 
     /// Retires protocol storage owned by the replaced main Document.
@@ -259,60 +164,6 @@ impl TargetRuntimeSlot {
         self.observable_queue.reset_output_queue();
     }
 
-    #[cfg(test)]
-    pub(crate) fn clear_loaded_page_for_test_fixture(&mut self) -> Option<Page> {
-        self.clear_loaded_page_with_reason(TargetPageAbsenceReason::TestFixture)
-    }
-
-    pub(crate) fn mark_loaded_page_absent(&mut self, reason: TargetPageAbsenceReason) {
-        self.javascript_dialog_scope.retire();
-        self.page_slot.mark_loaded_page_absent(reason);
-        self.transition_renderer_channel_for_page_absence(reason);
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_loaded_page_for_test(&mut self, page: Page) {
-        let _ = self.replace_loaded_page(Some(page));
-    }
-
-    pub(crate) fn document_id(&self) -> Option<DocumentId> {
-        self.page_slot.document_id()
-    }
-
-    pub(crate) fn pending_document_id(&self) -> Option<DocumentId> {
-        self.page_slot.pending_document_id()
-    }
-
-    pub(crate) fn reserve_renderer_document(
-        &mut self,
-        renderer_page: RendererPageResidenceIdentity,
-    ) -> DocumentId {
-        self.page_slot.reserve_renderer_document(renderer_page)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_document_id_for_test(&mut self, raw: u64) -> DocumentId {
-        let attachment_changed = self.page_slot.document_id().map(DocumentId::get) != Some(raw);
-        if attachment_changed {
-            self.javascript_dialog_scope.retire();
-        }
-        self.page_slot.set_document_id_for_test(raw)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn replace_document_id_for_test(&mut self) -> DocumentId {
-        self.javascript_dialog_scope.retire();
-        self.page_slot.replace_document_id_for_test()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn install_document_id_for_test(&mut self, attachment_id: DocumentId) {
-        if self.page_slot.document_id() != Some(attachment_id) {
-            self.javascript_dialog_scope.retire();
-        }
-        self.page_slot.install_document_id_for_test(attachment_id);
-    }
-
     pub(crate) fn javascript_dialog_scope_observer(&self) -> TargetJavaScriptDialogScopeObserver {
         self.javascript_dialog_scope.observe()
     }
@@ -328,13 +179,11 @@ impl TargetRuntimeSlot {
         self.javascript_dialog_scope.retire();
     }
 
-    pub(crate) fn start_document_navigation(&mut self, loader_id: String) -> NavigationId {
+    pub(super) fn start_renderer_document_navigation(&mut self, navigation: NavigationId) {
         self.devtools_renderer_channel.reopen_after_target_crash();
-        let token = self.page_slot.start_document_navigation(loader_id);
         self.devtools_renderer_channel
-            .navigation_started(token)
+            .navigation_started(navigation)
             .expect("an open target runtime slot must accept a new document navigation");
-        token
     }
 
     #[cfg(test)]
@@ -356,25 +205,6 @@ impl TargetRuntimeSlot {
     ) -> Result<PreparedRendererAgentAttachment, DevToolsRendererChannelError> {
         self.devtools_renderer_channel
             .attach_candidate(token, agent_token)
-    }
-
-    pub(crate) fn commit_renderer_agent_candidate_transaction(
-        &mut self,
-        candidate: PreparedRendererAgentAttachment,
-        renderer_page: RendererPageResidenceIdentity,
-    ) -> Result<CommittedRendererAgentAttachment, DevToolsRendererChannelError> {
-        let transaction = self
-            .devtools_renderer_channel
-            .commit_candidate_transaction(candidate)?;
-        if self
-            .page_slot
-            .bind_pending_document_navigation_renderer_page(transaction.navigation(), renderer_page)
-        {
-            return Ok(transaction);
-        }
-        self.devtools_renderer_channel
-            .rollback_committed_candidate(transaction)?;
-        Err(DevToolsRendererChannelError::CommittedCandidateMismatch)
     }
 
     pub(crate) fn rollback_committed_renderer_agent_candidate(
@@ -461,21 +291,6 @@ impl TargetRuntimeSlot {
         self.devtools_renderer_channel.current_binding()
     }
 
-    pub(crate) fn performance_metric_snapshot(
-        &self,
-    ) -> Option<moli_core::page::RendererPerformanceMetricSnapshot> {
-        self.page_slot.contents.performance_metric_snapshot()
-    }
-
-    pub(crate) fn routes_current_renderer_page_owner(
-        &self,
-        renderer_page: RendererPageResidenceIdentity,
-        document_id: DocumentId,
-    ) -> bool {
-        self.page_slot.document_id() == Some(document_id)
-            && self.page_slot.routes_renderer_page(renderer_page)
-    }
-
     pub(crate) fn routes_retiring_renderer_page_owner(
         &self,
         renderer_page: RendererPageResidenceIdentity,
@@ -517,67 +332,8 @@ impl TargetRuntimeSlot {
             .attach_current(page.renderer_inspection_endpoint())
     }
 
-    pub(crate) fn accepts_pending_document_navigation_event(&self, token: &NavigationId) -> bool {
-        self.page_slot
-            .accepts_pending_document_navigation_event(token)
-    }
-
-    pub(crate) fn document_navigation_cancellation_handle(
-        &self,
-        token: &NavigationId,
-    ) -> Option<moli_fetch::FetchCancelHandle> {
-        self.page_slot
-            .document_navigation_cancellation_handle(token)
-    }
-
-    pub(crate) fn arm_background_navigation_completion(
-        &mut self,
-        token: &NavigationId,
-        additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
-    ) -> bool {
-        self.page_slot
-            .arm_background_navigation_completion(token, additional_cancellation)
-    }
-
-    pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
-        self.page_slot
-            .settle_background_navigation_completion(token)
-    }
-
-    pub(crate) fn has_inflight_background_navigation(&self) -> bool {
-        self.page_slot.has_inflight_background_navigation()
-    }
-
     pub(crate) fn has_renderer_navigation(&self, navigation: &NavigationId) -> bool {
         self.devtools_renderer_channel.has_navigation(navigation)
-    }
-
-    pub(crate) fn accepts_document_body_completion_event(&self, token: &NavigationId) -> bool {
-        self.page_slot.accepts_document_body_completion_event(token)
-    }
-
-    pub(crate) fn has_pending_document_navigation(&self) -> bool {
-        self.page_slot.has_pending_document_navigation()
-    }
-
-    pub(crate) fn moli_memory_diagnostics(&self) -> Value {
-        json!({
-            "hasLoadedPage": self.has_loaded_page(),
-            "loadedPageAbsenceReason": self
-                .page_slot
-                .loaded_page_absence_reason()
-                .map(TargetPageAbsenceReason::label),
-            "pageAttachmentId": self.document_id().map(DocumentId::get),
-            "hasPendingDocumentNavigation": self.has_pending_document_navigation(),
-            "rendererChannelClosed": self.devtools_renderer_channel.is_closed(),
-            "rendererChannelHasCurrentAttachment":
-                self.devtools_renderer_channel.current().is_some(),
-            "rendererChannelInflightNavigationCount":
-                self.devtools_renderer_channel.inflight_navigation_count(),
-            "hasNetworkEventListeners": self.has_network_event_listeners(),
-            "nextFetchRequestId": self.request_counters.next_fetch_request_id,
-            "nextSubresourceFetchRequestId": self.request_counters.next_subresource_fetch_request_id,
-        })
     }
 
     pub(crate) fn record_subresource_request_id_for_handle_if_absent(
@@ -616,46 +372,6 @@ impl TargetRuntimeSlot {
     pub(crate) fn claim_completed_subresource_request_id(&mut self, request_id: &str) -> bool {
         self.network_agent
             .claim_completed_subresource_request_id(request_id)
-    }
-
-    pub(crate) fn current_document_loader_id(&self) -> Option<&str> {
-        self.page_slot.current_document_loader_id()
-    }
-
-    pub(crate) fn committed_document_loader_id(&self) -> Option<&str> {
-        self.page_slot.committed_document_loader_id()
-    }
-
-    pub(crate) fn commit_pending_document_navigation_if_matches(
-        &mut self,
-        token: &NavigationId,
-    ) -> bool {
-        self.page_slot
-            .commit_pending_document_navigation_if_matches(token)
-    }
-
-    pub(crate) fn clear_pending_document_navigation_if_matches(
-        &mut self,
-        navigation: &NavigationId,
-    ) -> bool {
-        self.page_slot
-            .clear_pending_document_navigation_if_matches(navigation)
-    }
-
-    pub(crate) fn clear_document_navigation_state(&mut self) {
-        self.javascript_dialog_scope.retire();
-        self.page_slot.clear_document_navigation_state();
-    }
-
-    fn ensure_loaded_page_renderer_attachment(&mut self) {
-        let Some(page) = self.page_slot.loaded_page() else {
-            return;
-        };
-        let attachment = self
-            .devtools_renderer_channel
-            .attach_current(page.renderer_inspection_endpoint())
-            .expect("a loaded page cannot be attached to a closed renderer channel");
-        debug_assert!(attachment.is_none());
     }
 
     fn transition_renderer_channel_for_page_absence(&mut self, reason: TargetPageAbsenceReason) {
@@ -710,70 +426,6 @@ impl TargetRuntimeSlot {
         }
     }
 
-    /// Appends one concrete renderer-produced network fact to the protocol
-    /// queue for the exact committed Document that produced it.
-    ///
-    /// The accumulated `Page` report remains useful to CLI/diagnostic
-    /// consumers, but it is no longer the discovery mechanism for live
-    /// protocol output. A replacement Document must not inherit a late item
-    /// merely because it occupies the same Page residence.
-    pub(crate) fn ingest_renderer_network_output_item_and_prepare_live_delivery(
-        &mut self,
-        source_renderer_page: Option<RendererPageResidenceIdentity>,
-        source_document: RendererDocumentLifecycleIdentity,
-        item: &ScriptNetworkOutputItem,
-        trigger_session_id: Option<&str>,
-        primary_session_id: Option<&str>,
-        preferred_request_id: Option<NetworkBacklogPreferredRequestId<'_>>,
-        network_request_id_allocator: &mut ConnectionNetworkRequestIdAllocator,
-    ) -> Option<TargetNetworkBacklogPreparedDelivery> {
-        let current_renderer_page = self
-            .page_slot
-            .loaded_page()
-            .map(RendererPageResidenceIdentity::from_page);
-        if let Some(binding) = self.page_slot.renderer_document_lifecycle_binding()
-            && binding.renderer_document_identity() == source_document
-            && source_renderer_page.is_none_or(|page| Some(page) == current_renderer_page)
-        {
-            let loader_id = binding.loader_id.clone();
-            self.log_output_queue
-                .ingest_renderer_network_output_item(item);
-            return Some(
-                self.network_agent
-                    .ingest_renderer_output_item_and_prepare_live_delivery(
-                        item,
-                        &loader_id,
-                        trigger_session_id,
-                        primary_session_id,
-                        preferred_request_id,
-                        network_request_id_allocator,
-                    ),
-            );
-        }
-
-        let event_session_ids = self
-            .network_agent
-            .event_session_ids(trigger_session_id, primary_session_id);
-        let retiring = self
-            .retiring_renderer_document_outputs
-            .iter_mut()
-            .find(|entry| {
-                entry.binding.renderer_document_identity() == source_document
-                    && source_renderer_page.is_none_or(|page| entry.renderer_page == page)
-            })?;
-        Some(
-            retiring
-                .network_agent
-                .ingest_renderer_output_item_and_prepare_live_delivery(
-                    item,
-                    &retiring.binding.loader_id,
-                    event_session_ids,
-                    preferred_request_id,
-                    network_request_id_allocator,
-                ),
-        )
-    }
-
     pub(crate) fn renderer_subresources_are_idle(&self) -> bool {
         // The armed network-idle lifecycle binding belongs to the current
         // loader. A predecessor queue is retained only to deliver its final
@@ -782,11 +434,6 @@ impl TargetRuntimeSlot {
         self.network_agent.renderer_subresources_are_idle()
     }
 
-    pub(crate) fn network_log_entries(&self) -> Option<&[TargetNetworkLogEntry]> {
-        self.page_slot
-            .has_loaded_page()
-            .then(|| self.log_output_queue.network_entries())
-    }
     #[cfg(test)]
     pub(crate) fn observable_output_queue_snapshot(
         &self,
@@ -815,78 +462,12 @@ impl TargetRuntimeSlot {
             .then(|| self.observable_queue.inspector_issues())
     }
 
-    #[cfg(test)]
-    pub(crate) fn sync_observable_output_source_from_renderer_snapshot(
-        &mut self,
-        url: String,
-        source: &RendererPageDiagnosticsSnapshot,
-    ) -> Option<TargetRuntimeObservableSourceOutput> {
-        let document_id = self.document_id()?;
-        self.observable_queue
-            .sync_source_from_renderer_snapshot(url, document_id, source)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn sync_observable_output_source_from_renderer_runtime_source(
-        &mut self,
-        url: String,
-        source: &RendererRuntimeObservableSourceSummary,
-    ) -> Option<TargetRuntimeObservableSourceOutput> {
-        let document_id = self.document_id()?;
-        self.observable_queue
-            .sync_source_from_renderer_runtime_source(url, document_id, source)
-    }
-
-    pub(crate) fn append_renderer_runtime_console_message(
-        &mut self,
-        url: String,
-        message: moli_core::page::RuntimeConsoleMessageSnapshot,
-    ) -> Option<TargetRuntimeObservableSourceOutput> {
-        let document_id = self.document_id()?;
-        self.observable_queue
-            .append_renderer_console_message(url, document_id, message)
-    }
-
-    pub(crate) fn append_renderer_runtime_lifecycle_error(
-        &mut self,
-        url: String,
-        text: String,
-        execution_context_id: Option<i64>,
-    ) -> Option<TargetRuntimeObservableSourceOutput> {
-        let document_id = self.document_id()?;
-        self.observable_queue.append_renderer_lifecycle_error(
-            url,
-            document_id,
-            text,
-            execution_context_id,
-        )
-    }
-
-    pub(crate) fn ingest_owner_page_observable_output_updates(&mut self) -> bool {
-        let Some(page) = self.page_slot.loaded_page() else {
-            self.observable_queue.reset_output_queue();
-            return false;
-        };
-        self.observable_queue
-            .ingest_observable_output_snapshot(page.script_execution().observable_output_items());
-        true
-    }
-
     pub(crate) fn ingest_observable_output_snapshot(
         &mut self,
         items: &[ScriptObservableOutputItem],
     ) {
         self.observable_queue
             .ingest_observable_output_snapshot(items);
-    }
-
-    pub(crate) fn observe_renderer_page_state(
-        &mut self,
-        snapshot: &std::sync::Arc<moli_renderer_v8::RendererPageState>,
-    ) -> bool {
-        self.page_slot
-            .contents
-            .observe_renderer_page_state(snapshot)
     }
 
     pub(crate) fn primary_network_events_enabled(&self) -> bool {
@@ -1335,6 +916,392 @@ impl TargetRuntimeSlot {
     #[cfg(test)]
     pub(crate) fn next_subresource_fetch_request_id_for_test(&self) -> u32 {
         self.request_counters.next_subresource_fetch_request_id
+    }
+}
+
+impl BrowserContext {
+    pub(crate) fn target_has_pending_initial_document_page_build(&self, target_id: &str) -> bool {
+        matches!(
+            self.loaded_page_absence_reason_for_target(target_id),
+            Some(
+                TargetPageAbsenceReason::InitialDocumentPageBuildPending
+                    | TargetPageAbsenceReason::InitialDocumentPageBuildInProgress
+            )
+        )
+    }
+    pub(crate) fn target_has_initial_document_page_build_in_progress(
+        &self,
+        target_id: &str,
+    ) -> bool {
+        self.loaded_page_absence_reason_for_target(target_id)
+            == Some(TargetPageAbsenceReason::InitialDocumentPageBuildInProgress)
+    }
+    pub(crate) fn target_transient_no_page_reason_for_protocol_output(
+        &self,
+        target_id: &str,
+    ) -> Option<&'static str> {
+        let reason = self.loaded_page_absence_reason_for_target(target_id)?;
+        match reason {
+            TargetPageAbsenceReason::InitialDocumentPageBuildPending
+            | TargetPageAbsenceReason::InitialDocumentPageBuildInProgress => None,
+            TargetPageAbsenceReason::NoTarget
+            | TargetPageAbsenceReason::NavigationFailed
+            | TargetPageAbsenceReason::TargetClosed
+            | TargetPageAbsenceReason::TargetCrashed => None,
+            #[cfg(test)]
+            TargetPageAbsenceReason::TestFixture => None,
+        }
+    }
+    pub(super) fn replace_loaded_page_for_target(
+        &mut self,
+        target_id: &str,
+        page: Option<Page>,
+    ) -> Option<Page> {
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .javascript_dialog_scope
+            .retire();
+        let mut page = page;
+        let retiring_document = self
+            .loaded_page_for_target(target_id)
+            .zip(self.renderer_document_lifecycle_binding_for_target(target_id))
+            .map(|(loaded_page, binding)| {
+                (
+                    RendererPageResidenceIdentity::from_page(loaded_page),
+                    binding.document_id,
+                    binding.clone(),
+                )
+            });
+        let retiring_document = retiring_document.map(|(renderer_page, document_id, binding)| {
+            RetiringRendererDocumentOutput {
+                renderer_page,
+                document_id,
+                binding,
+                network_agent: self
+                    .page_targets
+                    .get_mut(target_id)
+                    .expect("resolved target projection must remain live")
+                    .runtime_slot
+                    .network_agent
+                    .rotate_document_for_replacement(),
+            }
+        });
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .ensure_renderer_attachment_for_replacement(page.as_mut());
+        let previous = self.replace_target_document(target_id, page);
+        if let Some(retiring_document) = retiring_document {
+            self.page_targets
+                .get_mut(target_id)
+                .expect("resolved target projection must remain live")
+                .runtime_slot
+                .retiring_renderer_document_outputs
+                .push(retiring_document);
+            self.page_targets
+                .get_mut(target_id)
+                .expect("resolved target projection must remain live")
+                .runtime_slot
+                .reset_replacement_document_output_state();
+        } else {
+            self.page_targets
+                .get_mut(target_id)
+                .expect("resolved target projection must remain live")
+                .runtime_slot
+                .reset_document_output_state();
+        }
+        self.ingest_owner_page_observable_output_updates_for_target(target_id);
+        previous
+    }
+    pub(super) fn clear_loaded_page_with_reason_for_target(
+        &mut self,
+        target_id: &str,
+        reason: TargetPageAbsenceReason,
+    ) -> Option<Page> {
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .javascript_dialog_scope
+            .retire();
+        let previous = self.replace_loaded_page_with_reason_for_target(target_id, None, reason);
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .transition_renderer_channel_for_page_absence(reason);
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .reset_document_output_state();
+        self.ingest_owner_page_observable_output_updates_for_target(target_id);
+        previous
+    }
+    pub(crate) fn mark_loaded_page_absent_for_target(
+        &mut self,
+        target_id: &str,
+        reason: TargetPageAbsenceReason,
+    ) {
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .javascript_dialog_scope
+            .retire();
+        self.set_target_page_absence_reason(target_id, reason);
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .transition_renderer_channel_for_page_absence(reason);
+    }
+    pub(crate) fn commit_renderer_agent_candidate_transaction_for_target(
+        &mut self,
+        target_id: &str,
+        candidate: PreparedRendererAgentAttachment,
+        renderer_page: RendererPageResidenceIdentity,
+    ) -> Result<CommittedRendererAgentAttachment, DevToolsRendererChannelError> {
+        let transaction = self
+            .page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .devtools_renderer_channel
+            .commit_candidate_transaction(candidate)?;
+        if self.bind_pending_document_navigation_renderer_page_for_target(
+            target_id,
+            transaction.navigation(),
+            renderer_page,
+        ) {
+            return Ok(transaction);
+        }
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .devtools_renderer_channel
+            .rollback_committed_candidate(transaction)?;
+        Err(DevToolsRendererChannelError::CommittedCandidateMismatch)
+    }
+    pub(crate) fn performance_metric_snapshot_for_target(
+        &self,
+        target_id: &str,
+    ) -> Option<moli_core::page::RendererPerformanceMetricSnapshot> {
+        self.web_contents_for_target(target_id)
+            .expect("resolved WebContents must remain live")
+            .performance_metric_snapshot()
+    }
+    pub(crate) fn routes_current_renderer_page_owner_for_target(
+        &self,
+        target_id: &str,
+        renderer_page: RendererPageResidenceIdentity,
+        document_id: DocumentId,
+    ) -> bool {
+        self.target_document_id(target_id) == Some(document_id)
+            && self.routes_renderer_page_for_target(target_id, renderer_page)
+    }
+    pub(crate) fn runtime_slot_diagnostics_for_target(&self, target_id: &str) -> Value {
+        json!({
+            "hasLoadedPage": self.target_has_loaded_page(target_id),
+            "loadedPageAbsenceReason": self.loaded_page_absence_reason_for_target(target_id)
+                .map(TargetPageAbsenceReason::label),
+            "pageAttachmentId": self.target_document_id(target_id).map(DocumentId::get),
+            "hasPendingDocumentNavigation": self.has_pending_document_navigation_for_target(target_id),
+            "rendererChannelClosed": self.page_targets.get(target_id).expect("resolved target projection must remain live").runtime_slot.devtools_renderer_channel.is_closed(),
+            "rendererChannelHasCurrentAttachment":
+                self.page_targets.get(target_id).expect("resolved target projection must remain live").runtime_slot.devtools_renderer_channel.current().is_some(),
+            "rendererChannelInflightNavigationCount":
+                self.page_targets.get(target_id).expect("resolved target projection must remain live").runtime_slot.devtools_renderer_channel.inflight_navigation_count(),
+            "hasNetworkEventListeners": self.page_targets.get(target_id).expect("resolved target projection must remain live").runtime_slot.has_network_event_listeners(),
+            "nextFetchRequestId": self.page_targets.get(target_id).expect("resolved target projection must remain live").runtime_slot.request_counters.next_fetch_request_id,
+            "nextSubresourceFetchRequestId": self.page_targets.get(target_id).expect("resolved target projection must remain live").runtime_slot.request_counters.next_subresource_fetch_request_id,
+        })
+    }
+    /// Appends one concrete renderer-produced network fact to the protocol
+    /// queue for the exact committed Document that produced it.
+    ///
+    /// The accumulated `Page` report remains useful to CLI/diagnostic
+    /// consumers, but it is no longer the discovery mechanism for live
+    /// protocol output. A replacement Document must not inherit a late item
+    /// merely because it occupies the same Page residence.
+    pub(crate) fn ingest_renderer_network_output_item_and_prepare_live_delivery_for_target(
+        &mut self,
+        target_id: &str,
+        source_renderer_page: Option<RendererPageResidenceIdentity>,
+        source_document: RendererDocumentLifecycleIdentity,
+        item: &ScriptNetworkOutputItem,
+        trigger_session_id: Option<&str>,
+        primary_session_id: Option<&str>,
+        preferred_request_id: Option<NetworkBacklogPreferredRequestId<'_>>,
+        network_request_id_allocator: &mut ConnectionNetworkRequestIdAllocator,
+    ) -> Option<TargetNetworkBacklogPreparedDelivery> {
+        let current_renderer_page = self
+            .loaded_page_for_target(target_id)
+            .map(RendererPageResidenceIdentity::from_page);
+        if let Some(binding) = self.renderer_document_lifecycle_binding_for_target(target_id)
+            && binding.renderer_document_identity() == source_document
+            && source_renderer_page.is_none_or(|page| Some(page) == current_renderer_page)
+        {
+            let loader_id = binding.loader_id.clone();
+            self.page_targets
+                .get_mut(target_id)
+                .expect("resolved target projection must remain live")
+                .runtime_slot
+                .log_output_queue
+                .ingest_renderer_network_output_item(item);
+            return Some(
+                self.page_targets
+                    .get_mut(target_id)
+                    .expect("resolved target projection must remain live")
+                    .runtime_slot
+                    .network_agent
+                    .ingest_renderer_output_item_and_prepare_live_delivery(
+                        item,
+                        &loader_id,
+                        trigger_session_id,
+                        primary_session_id,
+                        preferred_request_id,
+                        network_request_id_allocator,
+                    ),
+            );
+        }
+
+        let event_session_ids = self
+            .page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .network_agent
+            .event_session_ids(trigger_session_id, primary_session_id);
+        let retiring = self
+            .page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .retiring_renderer_document_outputs
+            .iter_mut()
+            .find(|entry| {
+                entry.binding.renderer_document_identity() == source_document
+                    && source_renderer_page.is_none_or(|page| entry.renderer_page == page)
+            })?;
+        Some(
+            retiring
+                .network_agent
+                .ingest_renderer_output_item_and_prepare_live_delivery(
+                    item,
+                    &retiring.binding.loader_id,
+                    event_session_ids,
+                    preferred_request_id,
+                    network_request_id_allocator,
+                ),
+        )
+    }
+    pub(crate) fn network_log_entries_for_target(
+        &self,
+        target_id: &str,
+    ) -> Option<&[TargetNetworkLogEntry]> {
+        self.target_has_loaded_page(target_id).then(|| {
+            self.page_targets
+                .get(target_id)
+                .expect("resolved target projection must remain live")
+                .runtime_slot
+                .log_output_queue
+                .network_entries()
+        })
+    }
+    #[cfg(test)]
+    pub(crate) fn sync_observable_output_source_from_renderer_snapshot_for_target(
+        &mut self,
+        target_id: &str,
+        url: String,
+        source: &RendererPageDiagnosticsSnapshot,
+    ) -> Option<TargetRuntimeObservableSourceOutput> {
+        let document_id = self.target_document_id(target_id)?;
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .observable_queue
+            .sync_source_from_renderer_snapshot(url, document_id, source)
+    }
+    #[cfg(test)]
+    pub(crate) fn sync_observable_output_source_from_renderer_runtime_source_for_target(
+        &mut self,
+        target_id: &str,
+        url: String,
+        source: &RendererRuntimeObservableSourceSummary,
+    ) -> Option<TargetRuntimeObservableSourceOutput> {
+        let document_id = self.target_document_id(target_id)?;
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .observable_queue
+            .sync_source_from_renderer_runtime_source(url, document_id, source)
+    }
+    pub(crate) fn append_renderer_runtime_console_message_for_target(
+        &mut self,
+        target_id: &str,
+        url: String,
+        message: moli_core::page::RuntimeConsoleMessageSnapshot,
+    ) -> Option<TargetRuntimeObservableSourceOutput> {
+        let document_id = self.target_document_id(target_id)?;
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .observable_queue
+            .append_renderer_console_message(url, document_id, message)
+    }
+    pub(crate) fn append_renderer_runtime_lifecycle_error_for_target(
+        &mut self,
+        target_id: &str,
+        url: String,
+        text: String,
+        execution_context_id: Option<i64>,
+    ) -> Option<TargetRuntimeObservableSourceOutput> {
+        let document_id = self.target_document_id(target_id)?;
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .runtime_slot
+            .observable_queue
+            .append_renderer_lifecycle_error(url, document_id, text, execution_context_id)
+    }
+    pub(crate) fn ingest_owner_page_observable_output_updates_for_target(
+        &mut self,
+        target_id: &str,
+    ) -> bool {
+        let Some(projection) = self.page_targets.get_mut(target_id) else {
+            return false;
+        };
+        let page = self
+            .physical
+            .web_contents
+            .get(&projection.web_contents_id())
+            .and_then(|contents| contents.main_frame.current_document.as_ref());
+        let queue = &mut projection.runtime_slot.observable_queue;
+        let Some(document) = page else {
+            queue.reset_output_queue();
+            return false;
+        };
+        queue.ingest_observable_output_snapshot(
+            document.page.script_execution().observable_output_items(),
+        );
+        true
+    }
+    pub(crate) fn observe_renderer_page_state_for_target(
+        &mut self,
+        target_id: &str,
+        snapshot: &std::sync::Arc<moli_renderer_v8::RendererPageState>,
+    ) -> bool {
+        self.web_contents_for_target_mut(target_id)
+            .expect("resolved WebContents must remain live")
+            .observe_renderer_page_state(snapshot)
     }
 }
 

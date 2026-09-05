@@ -179,21 +179,28 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                     } else {
                         None
                     };
-                let pending_page = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
-                    Ok(page) => (match command.action {
-                        DevToolsAuthChallengeAction::Default => page
-                            .start_fail_pending_subresource_auth(
-                                pending.internal_id,
-                                "Fetch auth challenge aborted".to_owned(),
-                            ),
-                        DevToolsAuthChallengeAction::Cancel => {
-                            page.start_cancel_pending_subresource_auth(pending.internal_id)
-                        }
-                        DevToolsAuthChallengeAction::ProvideCredentials => unreachable!(),
-                    })
-                    .map_err(|error| error.to_string()),
-                    Err(message) => Err(message.to_owned()),
-                };
+                let pending_page = conn.resolve_document_command_owner(owner).and_then(
+                    |(context_id, target_id)| {
+                        let context = conn
+                            .browser_context_by_id_mut(&context_id)
+                            .ok_or("NoDocumentLoaded")?;
+                        (match command.action {
+                            DevToolsAuthChallengeAction::Default => context
+                                .start_fail_pending_subresource_auth_for_target(
+                                    &target_id,
+                                    pending.internal_id,
+                                    "Fetch auth challenge aborted".to_owned(),
+                                ),
+                            DevToolsAuthChallengeAction::Cancel => context
+                                .start_cancel_pending_subresource_auth_for_target(
+                                    &target_id,
+                                    pending.internal_id,
+                                ),
+                            DevToolsAuthChallengeAction::ProvideCredentials => unreachable!(),
+                        })
+                        .map_err(|error| error.to_string())
+                    },
+                );
                 let pending_page = match pending_page {
                     Ok(pending_page) => pending_page,
                     Err(error) => {
@@ -269,12 +276,20 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                         )));
                     }
                 };
-                let pending_page = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
-                    Ok(page) => page
-                        .start_continue_pending_subresource_auth(pending.internal_id, auth)
-                        .map_err(|error| format!("subresource auth continue failed: {error}")),
-                    Err(message) => Err(message.to_owned()),
-                };
+                let pending_page = conn.resolve_document_command_owner(owner).and_then(
+                    |(context_id, target_id)| {
+                        let context = conn
+                            .browser_context_by_id_mut(&context_id)
+                            .ok_or("NoDocumentLoaded")?;
+                        context
+                            .start_continue_pending_subresource_auth_for_target(
+                                &target_id,
+                                pending.internal_id,
+                                auth,
+                            )
+                            .map_err(|error| format!("subresource auth continue failed: {error}"))
+                    },
+                );
                 let pending_page = match pending_page {
                     Ok(pending_page) => pending_page,
                     Err(message) => {
@@ -617,13 +632,15 @@ async fn complete_subresource_auth_terminal_async(
             return;
         }
     };
-    let result = match conn.loaded_page_mut_for_protocol_access_for_owner(&activity_owner) {
-        Ok(page) if expose_challenged_response => page
-            .finish_cancel_pending_subresource_auth(completion)
-            .map(|_| ()),
-        Ok(page) => page
-            .finish_fail_pending_subresource_auth(completion)
-            .map(|_| ()),
+    let result = match conn.resolve_document_command_owner(&activity_owner) {
+        Ok((context_id, target_id)) => conn
+            .browser_context_by_id_mut(&context_id)
+            .expect("admitted document context remains registered")
+            .finish_target_subresource_auth_terminal(
+                &target_id,
+                completion,
+                expose_challenged_response,
+            ),
         Err(message) => {
             if let Some(correlation) = correlation {
                 correlation.rollback(conn);
@@ -660,8 +677,12 @@ fn finish_continue_subresource_auth(
     completed: Option<Result<CompletedPageCommand, String>>,
 ) -> Result<(), String> {
     let completion = completed.ok_or_else(|| "Missing renderer completion".to_owned())??;
-    let page = conn.loaded_page_mut_for_protocol_access_for_owner(owner)?;
-    page.finish_continue_pending_subresource_auth(completion)
+    let (context_id, target_id) = conn.resolve_document_command_owner(owner)?;
+    let context = conn
+        .browser_context_by_id_mut(&context_id)
+        .ok_or("NoDocumentLoaded")?;
+    context
+        .finish_continue_pending_subresource_auth_for_target(&target_id, completion)
         .map(|_| ())
         .map_err(|error| format!("subresource auth continue failed: {error}"))
 }

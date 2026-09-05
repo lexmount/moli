@@ -16,7 +16,8 @@ impl TargetSessionOwnerMut<'_> {
             .overrides
             .get_or_insert_default()
             .apply(change.clone());
-        state.apply_emulation_policy_change(change);
+        self.browser_context
+            .apply_target_emulation_policy_change(&self.target_id, change);
         true
     }
 
@@ -24,18 +25,28 @@ impl TargetSessionOwnerMut<'_> {
         &mut self,
         locale_override: Option<String>,
     ) -> Result<(), &'static str> {
-        self.mutate_page_state(|state, session_key| {
-            state.set_devtools_locale_override(session_key, locale_override)
-        })
+        {
+            self.browser_context
+                .set_devtools_locale_override_for_target(
+                    &self.target_id,
+                    &self.session_key,
+                    locale_override,
+                )
+        }
     }
 
     fn set_devtools_timezone_override(
         &mut self,
         timezone_override: Option<String>,
     ) -> Result<(), &'static str> {
-        self.mutate_page_state(|state, session_key| {
-            state.set_devtools_timezone_override(session_key, timezone_override)
-        })
+        {
+            self.browser_context
+                .set_devtools_timezone_override_for_target(
+                    &self.target_id,
+                    &self.session_key,
+                    timezone_override,
+                )
+        }
     }
 
     fn set_base_locale_override(
@@ -43,28 +54,31 @@ impl TargetSessionOwnerMut<'_> {
         locale_override: Option<String>,
         fallback_identity: &moli_browser_profile::BrowserIdentityProfile,
     ) -> Result<(), &'static str> {
-        self.mutate_page_state(|state, _session_key| {
-            state.set_base_locale_override(locale_override.clone())?;
-            state.set_base_accept_language_override(locale_override, fallback_identity);
-            Ok(())
-        })
+        self.browser_context
+            .set_base_locale_override_for_target(&self.target_id, locale_override.clone())?;
+        self.browser_context
+            .set_base_accept_language_override_for_target(
+                &self.target_id,
+                locale_override,
+                fallback_identity,
+            );
+        Ok(())
     }
 
     fn set_base_timezone_override(
         &mut self,
         timezone_override: Option<String>,
     ) -> Result<(), &'static str> {
-        self.mutate_page_state(|state, _session_key| {
-            state.set_base_timezone_override(timezone_override)
-        })
+        self.browser_context
+            .set_base_timezone_override_for_target(&self.target_id, timezone_override)
     }
 }
 
 impl TargetSessionOwnerRef<'_> {
     fn emit_touch_events_for_mouse(&self) -> Option<bool> {
         self.browser_context
-            .page_target(&self.target_id)
-            .map(|state| state.emulation_policy().emit_touch_events_for_mouse)
+            .target_emulation_policy(&self.target_id)
+            .map(|policy| policy.emit_touch_events_for_mouse)
     }
 
     #[cfg(test)]
@@ -86,8 +100,8 @@ impl CdpConnection {
             .and_then(|owner| {
                 owner
                     .browser_context
-                    .page_target(&owner.target_id)
-                    .and_then(|target| target.emulation_policy().default_background_color)
+                    .target_emulation_policy(&owner.target_id)
+                    .and_then(|policy| policy.default_background_color)
             })
             .unwrap_or([255; 4])
     }
@@ -206,64 +220,18 @@ impl CdpConnection {
             .devtools_sessions
             .navigator_emulation
             .remove(&owner.session_key);
-        target.apply_emulation_policy_changes(changes);
+        owner
+            .browser_context
+            .apply_target_emulation_policy_changes(&owner.target_id, changes);
         true
     }
 }
 
 impl BrowserContext {
     pub(crate) fn effective_active_emulated_device_metrics(&self) -> Option<EmulatedDeviceMetrics> {
-        self.active_page_target()
-            .emulation_policy()
-            .emulated_device_metrics
-            .clone()
+        self.active_target_id()
+            .and_then(|id| self.target_emulation_policy(id))
+            .and_then(|policy| policy.emulated_device_metrics.clone())
             .or_else(|| self.emulation_defaults().device_metrics.clone())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn emulation_policy_survives_projection_drop_and_updates_without_sessions() {
-        let mut context = BrowserContext::new_with_page_for_test("CTX-policy", "TID-policy");
-        context.attach_active_session("SID-primary");
-        assert!(context.assign_attached_session_to_target("TID-policy", "SID-attached".into()));
-        let id = context.active_page_target().web_contents_id();
-        let mut conn = CdpConnection::default();
-        conn.install_browser_context_fixture_for_test(context);
-        for (session, change) in [
-            ("SID-primary", EmulationPolicyChange::MaxTouchPoints(4)),
-            ("SID-attached", EmulationPolicyChange::MaxTouchPoints(2)),
-            ("SID-primary", EmulationPolicyChange::FocusEnabled(true)),
-        ] {
-            assert!(conn.apply_emulation_override_for_session_owner(Some(session), change));
-        }
-        let primary = conn
-            .emulation_session_state_for_session_owner(Some("SID-primary"))
-            .unwrap();
-        assert_eq!(primary.overrides.as_ref().unwrap().max_touch_points, 4);
-        drop(primary);
-
-        let mut contents = {
-            let mut projection = conn
-                .browser_context
-                .as_mut()
-                .unwrap()
-                .take_page_target_for_close("TID-policy")
-                .unwrap();
-            std::mem::take(&mut projection.runtime_slot.page_slot_mut().contents)
-        };
-        drop(conn);
-        assert_eq!(contents.id(), id);
-        assert_eq!(contents.emulation_policy.max_touch_points, 2);
-        assert!(contents.emulation_policy.focus_emulation_enabled);
-        let snapshot = contents.emulation_policy.clone();
-        contents
-            .emulation_policy
-            .apply(EmulationPolicyChange::ScriptExecutionDisabled(true));
-        assert!(!snapshot.script_execution_disabled);
-        assert!(contents.emulation_policy.script_execution_disabled);
     }
 }

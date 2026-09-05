@@ -1,8 +1,8 @@
+use moli_core::browser::DownloadBody;
 use moli_core::page::{
     Page, RendererMainDocumentCommit, RendererPageCreationArtifacts,
     RendererPendingDownloadActivation, RendererRuntimeRealmInfo,
 };
-use moli_fetch::StreamingRawResponse;
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -151,20 +151,14 @@ impl RendererMainDocumentCommitSeed {
 }
 
 #[derive(Debug)]
-pub(crate) enum CompletedDownloadBody {
-    Buffered(Vec<u8>),
-    Streaming(Box<StreamingRawResponse>),
-}
-
-#[derive(Debug)]
 pub(crate) struct CompletedDownloadBodyArtifact {
-    body: CompletedDownloadBody,
+    body: DownloadBody,
     response_headers: Vec<(String, Vec<u8>)>,
 }
 
-impl CompletedDownloadBodyArtifact {
+impl DownloadBodyArtifact {
     pub(crate) fn from_body(
-        body: CompletedDownloadBody,
+        body: DownloadBody,
         response_headers: Vec<(String, Vec<u8>)>,
     ) -> Self {
         Self {
@@ -173,7 +167,7 @@ impl CompletedDownloadBodyArtifact {
         }
     }
 
-    pub(crate) fn into_parts(self) -> (CompletedDownloadBody, Vec<(String, Vec<u8>)>) {
+    pub(crate) fn into_parts(self) -> (DownloadBody, Vec<(String, Vec<u8>)>) {
         (self.body, self.response_headers)
     }
 }
@@ -362,12 +356,7 @@ impl<'a> TargetInfo<'a> {
                 .owner_state
                 .committed_document_title()
                 .map(str::to_owned)
-                .or_else(|| {
-                    bc.active_page_target()
-                        .runtime_slot
-                        .loaded_page()
-                        .map(|page| page.document_title())
-                })
+                .or_else(|| bc.target_document_title(bc.active_target_id()?))
                 .unwrap_or_default(),
             url: bc.target_url(),
             attached,

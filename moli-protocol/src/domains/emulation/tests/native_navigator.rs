@@ -210,12 +210,12 @@ async fn focus_override_updates_loaded_background_page_and_preserves_real_focus(
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active");
     bc.attach_active_session("SID-active");
-    bc.insert_page_target_host(PageTargetHost::new(
+    bc.register_page_target_fixture(
         "TID-1".into(),
         Some("SID-1".into()),
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
-    ));
+    );
     install_geolocation_page_for_test(&mut ctx, bc).await;
     let snapshot = "[document.hasFocus(), document.hidden, document.visibilityState]";
     assert_eq!(
@@ -270,12 +270,12 @@ async fn focus_override_dispatches_native_visibility_and_focus_events() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active");
     bc.attach_active_session("SID-active");
-    bc.insert_page_target_host(PageTargetHost::new(
+    bc.register_page_target_fixture(
         "TID-1".into(),
         Some("SID-1".into()),
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
-    ));
+    );
     install_geolocation_page_for_test(&mut ctx, bc).await;
     assert_eq!(
         evaluate(

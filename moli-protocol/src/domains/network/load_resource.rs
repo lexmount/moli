@@ -52,13 +52,17 @@ pub(super) fn start_load_network_resource_command(
         ));
     };
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let pending = match conn.loaded_page_mut_for_protocol_access(cmd.session_id) {
-        Ok(page) => page.start_prepare_network_resource_load(
-            frame_id,
-            url,
-            params.options.disable_cache,
-            params.options.include_credentials,
-        ),
+    let pending = match conn.resolve_document_command_owner(&owner_scope) {
+        Ok((context_id, target_id)) => conn
+            .browser_context_by_id(&context_id)
+            .expect("admitted document context remains registered")
+            .start_target_network_resource_load(
+                &target_id,
+                frame_id,
+                url,
+                params.options.disable_cache,
+                params.options.include_credentials,
+            ),
         Err(message) if message == "NoDocumentLoaded" => {
             return NetworkCommandTaskStep::Complete(CommandOutputPlan::error(
                 -32602,
@@ -102,15 +106,13 @@ pub(super) fn complete_network_resource_preparation(
             return invalid_completion_step();
         }
     };
-    let preparation = match conn
-        .loaded_page_mut_for_protocol_access_for_owner(&owner_scope)
-        .and_then(|page| {
-            if !completion.is_from_page(page) {
-                return Err("Document changed while preparing the network resource load".to_owned());
-            }
-            page.finish_prepare_network_resource_load(completion)
-                .map_err(|error| error.to_string())
-        }) {
+    let preparation = match conn.resolve_document_command_owner(&owner_scope).and_then(
+        |(context_id, target_id)| {
+            conn.browser_context_by_id_mut(&context_id)
+                .ok_or("NoDocumentLoaded")?
+                .finish_target_network_resource_load_preparation(&target_id, completion)
+        },
+    ) {
         Ok(preparation) => preparation,
         Err(message) => {
             return NetworkCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));

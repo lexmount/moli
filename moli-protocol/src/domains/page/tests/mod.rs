@@ -1,8 +1,8 @@
 use super::{LOADER_ID, build_mhtml_snapshot, child_frame_security_identity};
 use crate::conn::{
     BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent, EmulatedDeviceMetrics,
-    FetchInterceptionPattern, FetchRequestStage, NETWORK_ERROR_PAGE_URL, PageTargetHost,
-    PendingCdpCommandDispatch, ServiceWorkerTargetState, URL_BASE,
+    FetchInterceptionPattern, FetchRequestStage, NETWORK_ERROR_PAGE_URL, PendingCdpCommandDispatch,
+    ServiceWorkerTargetState, URL_BASE,
 };
 use crate::devtools_runtime::{
     AutomationEvent, DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
@@ -98,13 +98,12 @@ async fn complete_pending_command_task_for_test(
 }
 
 async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
-    let page = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
-        .expect("loaded page");
-    page.serialize_html_async()
+    let context = ctx.conn.browser_context.as_mut().expect("browser context");
+    let target_id = context
+        .active_target_id_owned()
+        .expect("active document target");
+    context
+        .serialize_target_html_for_test(&target_id)
         .await
         .expect("loaded page should serialize HTML")
 }

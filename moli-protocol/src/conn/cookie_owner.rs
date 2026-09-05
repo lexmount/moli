@@ -545,12 +545,13 @@ impl BrowserContext {
     pub(crate) async fn document_cookie_owner_snapshot_async(
         &mut self,
     ) -> Option<DocumentCookieOwnerSnapshot> {
-        let page = self
-            .page_targets
-            .active_mut()?
-            .runtime_slot
-            .loaded_page_mut()?;
-        page.document_cookie_owner_snapshot_async().await.ok()
+        let target_id = self.active_target_id_owned()?;
+        let pending = self
+            .start_document_cookie_owner_snapshot_for_target(&target_id)
+            .ok()?;
+        let completion = pending.wait().await.ok()?;
+        self.finish_document_cookie_owner_snapshot_for_target(&target_id, completion)
+            .ok()
     }
 
     pub(super) fn default_cookie_write_url_with_source(
@@ -573,7 +574,7 @@ impl BrowserContext {
 
         if let Some(url) = self
             .page_targets
-            .active()
+            .active(self.selected_web_contents_id())
             .and_then(|host| Url::parse(host.target_url()).ok())
             .filter(|url| matches!(url.scheme(), "http" | "https"))
         {

@@ -18,7 +18,7 @@ use chromiumoxide_cdp::cdp::browser_protocol::page::{
 use moli_core::page::{
     ChildFrameDocumentNetworkActivitySnapshot, ChildFrameDocumentOpenedSnapshot,
     ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot, ChildFrameTreeSnapshot,
-    CompletedPageCommand, Page, PendingPageCommand, RendererCaptureScreencastFrameReply,
+    CompletedPageCommand, PendingPageCommand, RendererCaptureScreencastFrameReply,
     RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
     RendererCaptureScreenshotRequest, RendererDocumentLifecycleEvent,
     RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
@@ -1578,24 +1578,22 @@ fn start_set_javascript_dialog_handler_enabled(
     session_id: Option<&str>,
     enabled: bool,
 ) -> Result<(), String> {
-    if let Ok(slot) = conn.runtime_session_owner_slot_mut(session_id)
-        && let Some(page) = slot.loaded_page_mut()
+    let owner = CommandOwnerScope::capture(conn, session_id);
+    let route = conn
+        .loaded_document_owner_identity_for_owner(&owner)
+        .or_else(|| {
+            let context = conn.browser_context.as_ref()?;
+            let target_id = context.active_target_id()?;
+            context
+                .target_has_loaded_page(target_id)
+                .then(|| (context.id.clone(), target_id.to_owned()))
+        });
+    if let Some((context_id, target_id)) = route
+        && let Some(context) = conn.browser_context_by_id(&context_id)
     {
-        return page
-            .start_set_javascript_dialog_handler_enabled(enabled)
-            .map(|_| ())
-            .map_err(|error| error.to_string());
-    }
-    if let Some(page) = conn.browser_context.as_mut().and_then(|browser_context| {
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-    }) {
-        return page
-            .start_set_javascript_dialog_handler_enabled(enabled)
-            .map(|_| ())
-            .map_err(|error| error.to_string());
+        return context
+            .start_set_javascript_dialog_handler_enabled_for_target(&target_id, enabled)
+            .map(|_| ());
     }
     Ok(())
 }
@@ -1693,13 +1691,16 @@ fn try_start_set_bypass_csp_command(
         ));
     };
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let Some(page) = conn
-        .loaded_page_mut_for_protocol_access(cmd.session_id)
-        .ok()
+    let Ok((page_context_id, page_target_id)) = conn.resolve_document_command_owner(&owner_scope)
     else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::success());
     };
-    match page.start_set_bypass_content_security_policy(effective_bypass) {
+    let page_context = conn
+        .browser_context_by_id(&page_context_id)
+        .expect("admitted document context remains registered");
+    match page_context
+        .start_set_bypass_content_security_policy_for_target(&page_target_id, effective_bypass)
+    {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id: cmd.id,
             owner_scope,
@@ -1988,8 +1989,12 @@ impl CdpConnection {
             max_height: config.max_height(),
             known_visual_state,
         };
-        let pending = match self.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
-            Ok(page) => match page.start_capture_screencast_frame(request) {
+        let pending = match self.resolve_document_command_owner(&owner_scope) {
+            Ok((page_context_id, page_target_id)) => match self
+                .browser_context_by_id(&page_context_id)
+                .expect("admitted document context remains registered")
+                .start_capture_screencast_frame_for_target(&page_target_id, request)
+            {
                 Ok(pending) => pending,
                 Err(error) => {
                     tracing::debug!(?error, "failed to start screencast frame capture");
@@ -2033,18 +2038,24 @@ impl CdpConnection {
 
         let frame = match completed {
             Ok(completion) => {
-                let page = match self.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
-                    Ok(page) => page,
-                    Err(_) => {
-                        let _ = self.complete_page_screencast_capture_for_owner(
-                            &owner_scope,
-                            generation,
-                            false,
-                        );
-                        return PageScreencastCaptureCompletion::Retry;
-                    }
-                };
-                match page.finish_capture_screencast_frame(*completion) {
+                let (page_context_id, page_target_id) =
+                    match self.resolve_document_command_owner(&owner_scope) {
+                        Ok(route) => route,
+                        Err(_) => {
+                            let _ = self.complete_page_screencast_capture_for_owner(
+                                &owner_scope,
+                                generation,
+                                false,
+                            );
+                            return PageScreencastCaptureCompletion::Retry;
+                        }
+                    };
+                let page_context = self
+                    .browser_context_by_id_mut(&page_context_id)
+                    .expect("admitted document context remains registered");
+                match page_context
+                    .finish_capture_screencast_frame_for_target(&page_target_id, *completion)
+                {
                     Ok(RendererCaptureScreencastFrameReply::Captured(frame)) => frame,
                     Ok(RendererCaptureScreencastFrameReply::Unchanged) => {
                         if self.complete_page_screencast_capture_for_owner(
@@ -2517,11 +2528,9 @@ mod producer_tests {
         frame_id: &str,
         identity: RendererDocumentLifecycleIdentity,
     ) {
-        let runtime_slot = conn
-            .runtime_session_owner_slot_mut(Some(session_id))
-            .expect("test target should expose a runtime owner slot");
-        if runtime_slot.document_id().is_none() {
-            runtime_slot.set_document_id_for_test(identity.document.page_id.as_u64());
+        let owner = crate::conn::CommandOwnerScope::capture(conn, Some(session_id));
+        if conn.current_document_id_for_owner(&owner).is_none() {
+            conn.set_document_fixture_for_owner_test(&owner, identity.document.page_id.as_u64());
         }
         let lifecycle_snapshot = RendererDocumentLifecycleSnapshot {
             frame: identity.frame,
@@ -2555,11 +2564,9 @@ mod producer_tests {
         conn: &mut CdpConnection,
         session_id: &str,
     ) -> crate::conn::TargetPageResidenceIdentity {
-        let runtime_slot = conn
-            .runtime_session_owner_slot_mut(Some(session_id))
-            .expect("test target should expose a runtime owner slot");
-        if runtime_slot.document_id().is_none() {
-            runtime_slot.replace_document_id_for_test();
+        let owner = crate::conn::CommandOwnerScope::capture(conn, Some(session_id));
+        if conn.current_document_id_for_owner(&owner).is_none() {
+            conn.replace_document_fixture_for_owner_test(&owner);
         }
         conn.target_page_residence_identity_for_session(Some(session_id))
             .expect("test target should expose a Page residence identity")
@@ -3335,9 +3342,10 @@ mod producer_tests {
                     vec![dialog],
                 ),
             ));
-        conn.runtime_session_owner_slot_mut(Some("SID-dialog-stale-page"))
-            .expect("test target runtime slot")
-            .replace_document_id_for_test();
+        conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &conn,
+            Some("SID-dialog-stale-page"),
+        ));
 
         let mut out = Vec::new();
         super::emit_javascript_dialog_activity_background_events_async(
@@ -3469,8 +3477,15 @@ mod producer_tests {
     async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
         let mut conn = CdpConnection::default();
         conn.set_root_target_discovery_enabled(true);
-        conn.download_behavior
-            .set_global("deny".to_owned(), None, true);
+        conn.configure_download_policy(
+            None,
+            moli_core::browser::DownloadPolicy {
+                behavior: moli_core::browser::DownloadBehavior::Deny,
+                download_path: None,
+            },
+            Some(true),
+        )
+        .unwrap();
         let mut bc = BrowserContext::new("BID-activity-order".into());
         bc.set_active_target_id("TID-activity-order");
         bc.set_target_url("https://example.test/page".to_owned());
@@ -3836,10 +3851,10 @@ mod producer_tests {
         let out = protocol_messages_from_background_events(background_events);
 
         assert!(
-            conn.runtime_session_owner_slot(Some("SID-1"))
-                .expect("runtime owner slot should exist")
-                .loaded_page()
-                .is_none(),
+            !conn.has_loaded_page_for_owner(&crate::conn::CommandOwnerScope::capture(
+                &conn,
+                Some("SID-1")
+            )),
             "prepared child-frame completion emission must not require a loaded page"
         );
         assert!(out.iter().any(|message| {
@@ -4480,10 +4495,10 @@ mod producer_tests {
             "attachment-only child-frame token should not synthesize navigation events"
         );
         assert!(
-            conn.runtime_session_owner_slot(Some("SID-1"))
-                .expect("runtime owner slot should exist")
-                .loaded_page()
-                .is_none(),
+            !conn.has_loaded_page_for_owner(&crate::conn::CommandOwnerScope::capture(
+                &conn,
+                Some("SID-1")
+            )),
             "prepared attachment-only emission must not require live page readback"
         );
     }
@@ -4508,9 +4523,10 @@ mod producer_tests {
             "SID-child-page-owner",
             source_document,
         );
-        conn.runtime_session_owner_slot_mut(Some("SID-child-page-owner"))
-            .expect("test runtime owner")
-            .replace_document_id_for_test();
+        conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &conn,
+            Some("SID-child-page-owner"),
+        ));
 
         let mut events = Vec::new();
         super::emit_prepared_child_frame_activity(&mut conn, &mut events, activity, None).await;
@@ -4809,13 +4825,14 @@ mod producer_tests {
             "prepared popup should create the owner popup target without reading a loaded page"
         );
         assert!(
-            conn.browser_context
-                .as_ref()
-                .unwrap()
-                .background_targets()
-                .next()
-                .and_then(|target| target.loaded_page())
-                .is_some_and(|page| moli_url::is_about_blank(page.final_url())),
+            {
+                let context = conn.browser_context.as_ref().unwrap();
+                context
+                    .background_targets()
+                    .next()
+                    .and_then(|target| context.target_document_url(target.target_id()))
+                    .is_some_and(moli_url::is_about_blank)
+            },
             "target creation should install only the initial empty Document"
         );
         let scheduler_events = conn.take_scheduler_events();
@@ -4969,10 +4986,10 @@ mod producer_tests {
         .await;
 
         assert!(
-            conn.runtime_session_owner_slot(Some("SID-1"))
-                .expect("runtime owner slot should exist")
-                .loaded_page()
-                .is_none(),
+            !conn.has_loaded_page_for_owner(&crate::conn::CommandOwnerScope::capture(
+                &conn,
+                Some("SID-1")
+            )),
             "prepared same-document navigation emission must not require a loaded page"
         );
         assert_eq!(out.len(), 1);
@@ -5085,9 +5102,10 @@ mod producer_tests {
             source_document,
         );
         let owner = page_residence_identity_for_test(&mut conn, "SID-stale-page-same-document");
-        conn.runtime_session_owner_slot_mut(Some("SID-stale-page-same-document"))
-            .expect("test runtime slot should exist")
-            .replace_document_id_for_test();
+        conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &conn,
+            Some("SID-stale-page-same-document"),
+        ));
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_same_document_navigations_for_test(
@@ -5275,9 +5293,10 @@ mod producer_tests {
             source_document,
         );
         let owner = page_residence_identity_for_test(&mut conn, "SID-stale-page-location");
-        conn.runtime_session_owner_slot_mut(Some("SID-stale-page-location"))
-            .expect("test runtime slot should exist")
-            .replace_document_id_for_test();
+        conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &conn,
+            Some("SID-stale-page-location"),
+        ));
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_top_level_location_navigation_for_test(
@@ -5640,13 +5659,18 @@ fn try_start_page_capture_snapshot_command(
             "unsupported snapshot format.",
         ));
     }
-    let page = match conn.loaded_page_mut_for_protocol_access(cmd.session_id) {
-        Ok(page) => page,
+    let (page_context_id, page_target_id) = match conn
+        .resolve_document_command_owner(&CommandOwnerScope::capture(conn, cmd.session_id))
+    {
+        Ok(route) => route,
         Err(message) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
         }
     };
-    match page.start_serialize_html() {
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("admitted document context remains registered");
+    match page_context.start_serialize_html_for_target(&page_target_id) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id: cmd.id,
             owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
@@ -5876,27 +5900,32 @@ async fn execute_devtools_get_layout_metrics_for_current_owner(
 ) -> Result<DevToolsLayoutMetricsResult, DevToolsError> {
     let fallback =
         layout_metrics_result_from_surface(current_viewport_surface_for_owner(conn, owner));
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
+    let Some((page_context_id, page_target_id)) =
+        conn.loaded_document_owner_identity_for_owner(owner)
     else {
         return Ok(fallback);
     };
-    let pending = page.start_layout_metrics().map_err(|error| {
-        devtools_layout_metrics_error(format!("Failed to start layout metrics: {error}"))
-    })?;
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("resolved document context remains registered");
+    let pending = page_context
+        .start_layout_metrics_for_target(&page_target_id)
+        .map_err(|error| {
+            devtools_layout_metrics_error(format!("Failed to start layout metrics: {error}"))
+        })?;
     let completed = pending.wait().await.map_err(|error| {
         devtools_layout_metrics_error(format!("Failed to produce layout metrics: {error}"))
     })?;
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
+    let Some((page_context_id, page_target_id)) =
+        conn.loaded_document_owner_identity_for_owner(owner)
     else {
         return Err(devtools_layout_metrics_error("NoDocumentLoaded"));
     };
-    page.finish_layout_metrics(completed)
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("resolved document context remains registered");
+    page_context
+        .finish_layout_metrics_for_target(&page_target_id, completed)
         .map(layout_metrics_result_from_renderer)
         .map_err(|error| {
             devtools_layout_metrics_error(format!("Failed to finish layout metrics: {error}"))
@@ -6032,9 +6061,9 @@ fn page_set_download_behavior_command_output_plan(
         }
     };
 
-    if !crate::domains::browser::is_valid_download_behavior(params.behavior.as_str()) {
+    let Some(behavior) = crate::conn::parse_download_behavior(&params.behavior) else {
         return CommandOutputPlan::error(-32602, "InvalidParams");
-    }
+    };
 
     let session_id = cmd.session_id;
     let Some((browser_context_id, _)) = conn.target_owner_identity_for_session(session_id) else {
@@ -6044,11 +6073,15 @@ fn page_set_download_behavior_command_output_plan(
         return CommandOutputPlan::error(-32000, "Could not fetch browser context");
     }
 
-    conn.download_behavior.set_browser_context_policy(
-        browser_context_id,
-        params.behavior,
-        params.download_path,
-    );
+    conn.configure_download_policy(
+        Some(&browser_context_id),
+        moli_core::browser::DownloadPolicy {
+            behavior,
+            download_path: params.download_path,
+        },
+        None,
+    )
+    .expect("validated BrowserContext remains available");
     CommandOutputPlan::success()
 }
 
@@ -6256,10 +6289,8 @@ async fn devtools_frame_tree_for_current_owner_async(
             Vec::new(),
         ));
     }
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
+    let Some((page_context_id, page_target_id)) =
+        conn.loaded_document_owner_identity_for_owner(owner)
     else {
         return Ok(frame_tree_payload(
             target_id,
@@ -6272,10 +6303,19 @@ async fn devtools_frame_tree_for_current_owner_async(
             Vec::new(),
         ));
     };
-    let target_mime_type = main_document_mime_type(page);
-    let pending = page.start_child_frame_tree_snapshot().map_err(|error| {
-        devtools_frame_tree_error(format!("Failed to snapshot child frame tree: {error}"))
-    })?;
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("resolved document context remains registered");
+    let target_mime_type = main_document_mime_type(
+        page_context
+            .target_response_headers(&page_target_id)
+            .expect("loaded document headers"),
+    );
+    let pending = page_context
+        .start_child_frame_tree_snapshot_for_target(&page_target_id)
+        .map_err(|error| {
+            devtools_frame_tree_error(format!("Failed to snapshot child frame tree: {error}"))
+        })?;
     let completed = pending.wait().await.map_err(|error| {
         devtools_frame_tree_error(format!("Failed to snapshot child frame tree: {error}"))
     })?;
@@ -6291,10 +6331,8 @@ async fn devtools_frame_tree_for_current_owner_async(
             Vec::new(),
         ));
     }
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
+    let Some((page_context_id, page_target_id)) =
+        conn.loaded_document_owner_identity_for_owner(owner)
     else {
         return Ok(frame_tree_payload(
             target_id,
@@ -6307,8 +6345,11 @@ async fn devtools_frame_tree_for_current_owner_async(
             Vec::new(),
         ));
     };
-    let child_frames = page
-        .finish_child_frame_tree_snapshot(completed)
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("resolved document context remains registered");
+    let child_frames = page_context
+        .finish_child_frame_tree_snapshot_for_target(&page_target_id, completed)
         .map_err(|error| {
             devtools_frame_tree_error(format!("Failed to snapshot child frame tree: {error}"))
         })?;
@@ -6338,8 +6379,8 @@ fn network_error_page_unreachable_url(
         .flatten()
 }
 
-fn main_document_mime_type(page: &Page) -> String {
-    moli_web_mime::effective_response_mime_essence(page.headers(), None)
+fn main_document_mime_type(headers: &[(String, String)]) -> String {
+    moli_web_mime::effective_response_mime_essence(headers, None)
         .unwrap_or_else(default_document_mime_type)
 }
 
@@ -6495,8 +6536,9 @@ fn try_start_page_enable_command(
         )));
     }
     match conn.runtime_session_owner_slot(cmd.session_id) {
-        Ok(slot)
-            if slot.has_loaded_page()
+        Ok(_)
+            if conn
+                .has_loaded_page_for_owner(&CommandOwnerScope::capture(conn, cmd.session_id))
                 && conn.runtime_session_owner_can_start_initial_document_navigation(
                     cmd.session_id,
                 ) =>
@@ -6519,7 +6561,10 @@ fn try_start_page_enable_command(
                 &[],
             ))
         }
-        Ok(slot) if slot.has_loaded_page() => {
+        Ok(_)
+            if conn
+                .has_loaded_page_for_owner(&CommandOwnerScope::capture(conn, cmd.session_id)) =>
+        {
             Some(PageCommandTaskStep::Complete(CommandOutputPlan::success()))
         }
         Ok(_) if !conn.runtime_session_owner_target_is_initial_about_blank(cmd.session_id) => {
@@ -6592,17 +6637,22 @@ fn try_start_page_set_document_content_command(
     if let Err(message) = conn.ensure_document_accessible_for_session_owner(session_id) {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
     }
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut(session_id)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
+    let Some((page_context_id, page_target_id)) = conn
+        .loaded_document_owner_identity_for_owner(&CommandOwnerScope::capture(conn, session_id))
     else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error(
             -32000,
             "No Document instance to set HTML for",
         ));
     };
-    match page.start_set_document_content(params.frame_id.into(), params.html) {
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("resolved document context remains registered");
+    match page_context.start_set_document_content_for_target(
+        &page_target_id,
+        params.frame_id.into(),
+        params.html,
+    ) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id: cmd.id,
             owner_scope: CommandOwnerScope::capture(conn, session_id),
@@ -6707,12 +6757,16 @@ fn start_devtools_capture_screenshot_command(
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let owner_scope = CommandOwnerScope::capture(conn, session_id);
     let base_background_color = conn.default_background_color_for_owner(&owner_scope);
-    let page = match conn.loaded_page_mut_for_protocol_access(session_id) {
-        Ok(page) => page,
-        Err(message) => {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-        }
-    };
+    let (page_context_id, page_target_id) =
+        match conn.resolve_document_command_owner(&CommandOwnerScope::capture(conn, session_id)) {
+            Ok(route) => route,
+            Err(message) => {
+                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+            }
+        };
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("admitted document context remains registered");
     let format = match command.format.as_deref() {
         None | Some("png") => RendererScreenshotFormat::Png,
         Some("jpeg") => RendererScreenshotFormat::Jpeg,
@@ -6756,7 +6810,7 @@ fn start_devtools_capture_screenshot_command(
         max_width: None,
         max_height: None,
     };
-    match page.start_capture_screenshot_with_request(request) {
+    match page_context.start_capture_screenshot_with_request_for_target(&page_target_id, request) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
             owner_scope,
@@ -6802,12 +6856,16 @@ fn start_devtools_print_to_pdf_command(
         .unwrap_or(DevToolsPrintToPdfTransferMode::ReturnAsBase64);
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let owner_scope = CommandOwnerScope::capture(conn, session_id);
-    let page = match conn.loaded_page_mut_for_protocol_access(session_id) {
-        Ok(page) => page,
-        Err(message) => {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-        }
-    };
+    let (page_context_id, page_target_id) =
+        match conn.resolve_document_command_owner(&CommandOwnerScope::capture(conn, session_id)) {
+            Ok(route) => route,
+            Err(message) => {
+                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+            }
+        };
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("admitted document context remains registered");
     let request = RendererCaptureScreenshotRequest {
         base_background_color: [255; 4],
         purpose: RendererScreenshotPurpose::Print {
@@ -6820,7 +6878,7 @@ fn start_devtools_print_to_pdf_command(
         max_width: None,
         max_height: None,
     };
-    match page.start_capture_screenshot_with_request(request) {
+    match page_context.start_capture_screenshot_with_request_for_target(&page_target_id, request) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
             owner_scope,
@@ -6890,10 +6948,8 @@ fn start_devtools_get_frame_tree_command(
             &[],
         ));
     }
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(&owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
+    let Some((page_context_id, page_target_id)) =
+        conn.loaded_document_owner_identity_for_owner(&owner)
     else {
         return PageCommandTaskStep::Complete(get_frame_tree_command_output_plan(
             output_kind,
@@ -6908,8 +6964,15 @@ fn start_devtools_get_frame_tree_command(
             &[],
         ));
     };
-    let target_mime_type = main_document_mime_type(page);
-    match page.start_child_frame_tree_snapshot() {
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("resolved document context remains registered");
+    let target_mime_type = main_document_mime_type(
+        page_context
+            .target_response_headers(&page_target_id)
+            .expect("loaded document headers"),
+    );
+    match page_context.start_child_frame_tree_snapshot_for_target(&page_target_id) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
             owner_scope: CommandOwnerScope::capture(conn, command_session_id),
@@ -7423,16 +7486,17 @@ fn start_devtools_get_layout_metrics_command(
     let fallback =
         layout_metrics_result_from_surface(current_viewport_surface(conn, command_session_id));
     let owner_scope = CommandOwnerScope::capture(conn, command_session_id);
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut(command_session_id)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
-    else {
+    let Some((page_context_id, page_target_id)) = conn.loaded_document_owner_identity_for_owner(
+        &CommandOwnerScope::capture(conn, command_session_id),
+    ) else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_result(
             DevToolsCommandResult::LayoutMetrics(fallback),
         ));
     };
-    match page.start_layout_metrics() {
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("resolved document context remains registered");
+    match page_context.start_layout_metrics_for_target(&page_target_id) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
             owner_scope,
@@ -7581,17 +7645,20 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let Some(page) = conn
-                .runtime_session_owner_slot_mut_for_owner(&owner_scope)
-                .ok()
-                .and_then(|slot| slot.loaded_page_mut())
+            let Some((page_context_id, page_target_id)) =
+                conn.loaded_document_owner_identity_for_owner(&owner_scope)
             else {
                 return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                     -32000,
                     "NoDocumentLoaded",
                 ));
             };
-            if let Err(error) = page.finish_set_bypass_content_security_policy(completion) {
+            let page_context = conn
+                .browser_context_by_id_mut(&page_context_id)
+                .expect("resolved document context remains registered");
+            if let Err(error) = page_context
+                .finish_set_bypass_content_security_policy_for_target(&page_target_id, completion)
+            {
                 return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                     -32000,
                     error.to_string(),
@@ -7609,17 +7676,21 @@ pub(crate) async fn complete_pending_page_command(
                 }
             };
             let (result, output) = {
-                let Some(page) = conn
-                    .runtime_session_owner_slot_mut_for_owner(&owner_scope)
-                    .ok()
-                    .and_then(|slot| slot.loaded_page_mut())
+                let Some((page_context_id, page_target_id)) =
+                    conn.loaded_document_owner_identity_for_owner(&owner_scope)
                 else {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
                         "No Document instance to set HTML for",
                     ));
                 };
-                match page.finish_set_document_content_command_turn(completion) {
+                let page_context = conn
+                    .browser_context_by_id_mut(&page_context_id)
+                    .expect("resolved document context remains registered");
+                match page_context.finish_set_document_content_command_turn_for_target(
+                    &page_target_id,
+                    completion,
+                ) {
                     Ok(completed) => completed,
                     Err(error) => {
                         return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -7679,10 +7750,8 @@ pub(crate) async fn complete_pending_page_command(
                     &[],
                 ));
             }
-            let Some(page) = conn
-                .runtime_session_owner_slot_mut_for_owner(&owner_scope)
-                .ok()
-                .and_then(|slot| slot.loaded_page_mut())
+            let Some((page_context_id, page_target_id)) =
+                conn.loaded_document_owner_identity_for_owner(&owner_scope)
             else {
                 return PageCommandTaskStep::Complete(get_frame_tree_command_output_plan(
                     output_kind,
@@ -7697,8 +7766,13 @@ pub(crate) async fn complete_pending_page_command(
                     &[],
                 ));
             };
+            let page_context = conn
+                .browser_context_by_id_mut(&page_context_id)
+                .expect("resolved document context remains registered");
             let child_frames = match *completed {
-                Ok(completion) => match page.finish_child_frame_tree_snapshot(completion) {
+                Ok(completion) => match page_context
+                    .finish_child_frame_tree_snapshot_for_target(&page_target_id, completion)
+                {
                     Ok(frames) => frames,
                     Err(error) => {
                         return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -7724,7 +7798,9 @@ pub(crate) async fn complete_pending_page_command(
                 target_secure_context_type,
                 target_mime_type,
                 child_frames,
-                page.subresource_network_records(),
+                page_context
+                    .target_subresource_network_records(&page_target_id)
+                    .expect("loaded document resource records"),
             )
         }
         CompletedPageCommandKind::CaptureSnapshot { completed } => {
@@ -7737,26 +7813,32 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let Some(page) = conn
-                .runtime_session_owner_slot_mut_for_owner(&owner_scope)
-                .ok()
-                .and_then(|slot| slot.loaded_page_mut())
+            let Some((page_context_id, page_target_id)) =
+                conn.loaded_document_owner_identity_for_owner(&owner_scope)
             else {
                 return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                     -32000,
                     "NoDocumentLoaded",
                 ));
             };
-            let html = match page.finish_serialize_html(completion) {
-                Ok(html) => html,
-                Err(error) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to serialize page snapshot: {error}"),
-                    ));
-                }
-            };
-            let url = page.final_url().as_str().to_owned();
+            let page_context = conn
+                .browser_context_by_id_mut(&page_context_id)
+                .expect("resolved document context remains registered");
+            let html =
+                match page_context.finish_serialize_html_for_target(&page_target_id, completion) {
+                    Ok(html) => html,
+                    Err(error) => {
+                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                            -32000,
+                            format!("Failed to serialize page snapshot: {error}"),
+                        ));
+                    }
+                };
+            let url = page_context
+                .target_document_url(&page_target_id)
+                .expect("loaded document URL")
+                .as_str()
+                .to_owned();
             CommandOutputPlan::result(json!({ "data": build_mhtml_snapshot(&url, &html) }))
         }
         CompletedPageCommandKind::GetLayoutMetrics { completed } => {
@@ -7769,15 +7851,19 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let page = match conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
-                Ok(page) => page,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            match page.finish_layout_metrics(completion) {
+            let (page_context_id, page_target_id) =
+                match conn.resolve_document_command_owner(&owner_scope) {
+                    Ok(route) => route,
+                    Err(message) => {
+                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                            -32000, message,
+                        ));
+                    }
+                };
+            let page_context = conn
+                .browser_context_by_id_mut(&page_context_id)
+                .expect("admitted document context remains registered");
+            match page_context.finish_layout_metrics_for_target(&page_target_id, completion) {
                 Ok(metrics) => {
                     CommandOutputPlan::from_devtools_result(DevToolsCommandResult::LayoutMetrics(
                         layout_metrics_result_from_renderer(metrics),
@@ -7799,15 +7885,19 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let page = match conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
-                Ok(page) => page,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            match page.finish_capture_screenshot(completion) {
+            let (page_context_id, page_target_id) =
+                match conn.resolve_document_command_owner(&owner_scope) {
+                    Ok(route) => route,
+                    Err(message) => {
+                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                            -32000, message,
+                        ));
+                    }
+                };
+            let page_context = conn
+                .browser_context_by_id_mut(&page_context_id)
+                .expect("admitted document context remains registered");
+            match page_context.finish_capture_screenshot_for_target(&page_target_id, completion) {
                 Ok(RendererCaptureScreenshotReply::Captured(image)) => {
                     CommandOutputPlan::from_devtools_result(
                         DevToolsCommandResult::CaptureScreenshot(DevToolsCaptureScreenshotResult {
@@ -7844,15 +7934,21 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let page = match conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
-                Ok(page) => page,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            let image = match page.finish_capture_screenshot(completion) {
+            let (page_context_id, page_target_id) =
+                match conn.resolve_document_command_owner(&owner_scope) {
+                    Ok(route) => route,
+                    Err(message) => {
+                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                            -32000, message,
+                        ));
+                    }
+                };
+            let page_context = conn
+                .browser_context_by_id_mut(&page_context_id)
+                .expect("admitted document context remains registered");
+            let image = match page_context
+                .finish_capture_screenshot_for_target(&page_target_id, completion)
+            {
                 Ok(RendererCaptureScreenshotReply::Captured(image)) => image,
                 Ok(RendererCaptureScreenshotReply::LayoutDisabled) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(

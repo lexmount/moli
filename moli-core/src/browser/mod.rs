@@ -6,10 +6,17 @@
 
 mod document_lifecycle;
 mod document_lifetime;
+mod downloads;
+mod permissions;
 mod renderer_residence;
 
 pub use document_lifecycle::DocumentLifecycle;
 pub use document_lifetime::{DocumentLifetime, DocumentLifetimeObserver, DocumentRetirement};
+pub use downloads::{
+    DownloadAccessError, DownloadBehavior, DownloadBody, DownloadManager, DownloadMetadata,
+    DownloadObservation, DownloadPolicy, DownloadSnapshot, DownloadState,
+};
+pub use permissions::{PermissionDefaults, PermissionOverrides};
 pub use renderer_residence::RendererPageResidenceIdentity;
 
 use std::{

@@ -9,24 +9,27 @@ mod emulation;
 mod fetch;
 mod identity;
 mod inspector;
-mod javascript_dialog;
+pub(in crate::conn) use browser_context::javascript_dialog;
 mod navigation_controller;
 mod navigation_outcome;
 mod page_resource;
-mod page_slot;
+pub(in crate::conn) use browser_context::page_slot;
 mod page_target_host;
 mod pending_renderer_command;
 mod profiler;
-mod runtime_slot;
+pub(in crate::conn) use browser_context::runtime_slot;
 mod service_worker_lifetime;
 mod service_worker_target;
-mod session;
+pub(in crate::conn) use browser_context::session;
 mod shared_worker_attachment;
 mod shared_worker_target;
 mod target_state;
 #[cfg(test)]
 mod tests;
 mod web_contents;
+
+#[cfg(test)]
+pub(in crate::conn) use web_contents::DocumentHost;
 
 // Re-export everything so `use super::state::*` paths continue to work.
 
@@ -97,8 +100,8 @@ pub(crate) use service_worker_target::{
     ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState,
 };
 pub(crate) use session::{
-    EffectiveTargetPolicy, PageScreencastConfig, PageScreencastFormat, PerformanceTimeDomain,
-    TargetPageSessionState, TargetRuntimeSessionState,
+    PageScreencastConfig, PageScreencastFormat, PerformanceTimeDomain, TargetPageSessionState,
+    TargetRuntimeSessionState,
 };
 pub(crate) use shared_worker_attachment::{
     TargetSharedWorkerProtocolAttachmentIdentity, TargetSharedWorkerProtocolAttachmentRetirement,
@@ -120,6 +123,13 @@ pub(crate) use browser_context::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles,
     BrowserContextStoragePartitionHandles, ContextNetworkPolicy, SiteDataClearOptions,
 };
+pub(crate) use browser_context::{
+    CompletedContextPermissionUpdate, PendingContextPermissionUpdate,
+};
+pub(crate) use browser_context::{
+    LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit, NetworkPolicyUpdateKind,
+    PageInputCommand, PagePolicyUpdateKind,
+};
 
 pub(crate) use navigation_controller::{InitialDocument, InitialDocumentCreator};
 pub use navigation_controller::{PageNavigationHistoryEntry, PendingNavigationHistoryUpdate};
@@ -134,7 +144,7 @@ pub(crate) use target_state::{
     PendingBidiChannelListener, PendingInspectorAwait, TargetOwnerState,
 };
 
-pub(crate) use navigation_outcome::{CompletedDownloadBody, CompletedDownloadBodyArtifact};
+pub(crate) use navigation_outcome::CompletedDownloadBodyArtifact;
 pub use navigation_outcome::{
     DownloadNavigation, LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome,
     NavigationRequestLoadPolicy, TargetInfo,

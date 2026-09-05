@@ -2,7 +2,7 @@ use super::{
     backend_node_id_for_snapshot, frontend_node_id_for_snapshot, node_snapshot_base_payload,
     node_snapshot_to_cdp, node_snapshot_to_cdp_with_limit,
 };
-use crate::conn::{BrowserContext, CdpCommandTaskStep, PageTargetHost, PendingCdpCommandDispatch};
+use crate::conn::{BrowserContext, CdpCommandTaskStep, PendingCdpCommandDispatch};
 use crate::testing::TestContext;
 use moli_core::page::{RENDERER_BACKEND_NODE_ID_START, is_renderer_backend_node_id};
 use moli_page_types::{DocumentNodeSnapshot, DocumentSnapshotNodeId};
@@ -28,13 +28,10 @@ async fn create_about_blank_target_with_initial_document(ctx: &mut TestContext, 
         .unwrap_or_else(|| panic!("Target.createTarget should return target id: {create_response}"))
         .to_owned();
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context.target_has_loaded_page(context.active_target_id().unwrap())
+        },
         "Target.createTarget should install the initial about:blank page"
     );
     target_id
@@ -70,13 +67,10 @@ async fn get_document_uses_fresh_initial_document_without_adapter() {
     );
     assert_tree_backend_node_ids_are_renderer_owned(&response["result"]["root"]);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context.target_has_loaded_page(context.active_target_id().unwrap())
+        },
         "Target.createTarget should install the initial about:blank page before DOM.getDocument"
     );
 }
@@ -125,13 +119,10 @@ async fn get_flattened_document_uses_fresh_initial_document_without_adapter() {
     );
     assert_node_array_backend_node_ids_are_renderer_owned(&response["result"]["nodes"]);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context.target_has_loaded_page(context.active_target_id().unwrap())
+        },
         "Target.createTarget should install the initial about:blank page before DOM.getFlattenedDocument"
     );
 }
@@ -178,13 +169,10 @@ async fn describe_node_uses_fresh_initial_document_without_adapter() {
     );
     assert_tree_backend_node_ids_are_renderer_owned(&response["result"]["node"]);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context.target_has_loaded_page(context.active_target_id().unwrap())
+        },
         "Target.createTarget should install the initial about:blank page before DOM.describeNode"
     );
 }

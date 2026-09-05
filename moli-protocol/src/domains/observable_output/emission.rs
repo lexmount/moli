@@ -347,8 +347,7 @@ mod tests {
     use serde_json::json;
 
     use crate::conn::{
-        BackgroundProtocolEvent, BrowserContext, PageTargetHost, TargetIdentityState,
-        TargetPageSlot,
+        BackgroundProtocolEvent, BrowserContext, TargetIdentityState, TargetPageSlot,
     };
     use crate::domains::observable_output::{
         ObservablePreparedOutputSlot, TargetRuntimeObservableSourceSummary,
@@ -371,15 +370,24 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context should be loaded");
-        let page = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-            .expect("loaded page should be installed");
-        let console_messages = page
-            .runtime_console_messages_with_context_async()
+        let target_id = bc.active_target_id_owned().unwrap();
+        let snapshot = bc
+            .target_page_diagnostics_snapshot_async(&target_id)
             .await
             .expect("runtime console messages should load");
+        let console_messages = snapshot
+            .runtime_observable_source()
+            .unwrap()
+            .source_items()
+            .iter()
+            .filter_map(|item| match item {
+                moli_core::page::RendererRuntimeObservableSourceItem::ConsoleMessage {
+                    message,
+                    ..
+                } => Some(message.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
         let default_execution_context_id = console_messages
             .first()
             .map(|message| message.execution_context_id);
@@ -404,10 +412,7 @@ mod tests {
             .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
             .await
             .expect("test page should load");
-        let _ = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        let _ = bc.replace_active_page_for_test(Some(page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
@@ -546,10 +551,7 @@ mod tests {
             )
             .await
             .expect("test page should load");
-        let _ = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        let _ = bc.replace_active_page_for_test(Some(page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
@@ -609,10 +611,7 @@ mod tests {
             )
             .await
             .expect("test page should load");
-        let _ = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        let _ = bc.replace_active_page_for_test(Some(page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
@@ -750,12 +749,13 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        bc.insert_page_target_host(PageTargetHost::new(
+        bc.register_page_target_fixture(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             TargetIdentityState::with_url("data:text/html,background-owner".to_owned()),
-            TargetPageSlot::with_loaded_page_for_test(background_page),
-        ));
+            TargetPageSlot::empty_for_test_fixture(),
+        );
+        bc.replace_target_page_for_test("TID-background", Some(background_page));
         bc.background_target_mut("TID-background")
             .expect("background target must exist")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -839,12 +839,13 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        bc.insert_page_target_host(PageTargetHost::new(
+        bc.register_page_target_fixture(
             "TID-activated".to_owned(),
             Some("SID-activated".to_owned()),
             TargetIdentityState::with_url("data:text/html,activated-owner".to_owned()),
-            TargetPageSlot::with_loaded_page_for_test(activated_page),
-        ));
+            TargetPageSlot::empty_for_test_fixture(),
+        );
+        bc.replace_target_page_for_test("TID-activated", Some(activated_page));
         bc.background_target_mut("TID-activated")
             .expect("background target must exist")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -855,13 +856,9 @@ mod tests {
         let (old_active_attachment, activated_attachment) = {
             let bc = ctx.conn.browser_context.as_ref().expect("browser context");
             (
-                bc.active_page_target()
-                    .runtime_slot
-                    .document_id()
+                bc.target_document_id(bc.active_target_id().unwrap())
                     .expect("active Page attachment"),
-                bc.background_target("TID-activated")
-                    .expect("activated target")
-                    .document_id()
+                bc.target_document_id("TID-activated")
                     .expect("activated Page attachment"),
             )
         };
@@ -885,14 +882,12 @@ mod tests {
             let bc = ctx.conn.browser_context.as_ref().expect("browser context");
             assert_eq!(bc.active_target_id(), Some("TID-activated"));
             assert_eq!(
-                bc.active_page_target().runtime_slot.document_id(),
+                bc.target_document_id(bc.active_target_id().unwrap()),
                 Some(activated_attachment),
                 "activation must preserve the selected target's Page attachment"
             );
             assert_eq!(
-                bc.background_target("TID-active")
-                    .expect("previous active target should be background")
-                    .document_id(),
+                bc.target_document_id("TID-active"),
                 Some(old_active_attachment),
                 "deactivation must leave the Page attachment with its original target host"
             );
@@ -1209,10 +1204,11 @@ mod tests {
             .runtime_session_state
             .runtime_frontend_enabled = true;
         ctx.conn.install_browser_context_fixture_for_test(bc);
-        ctx.conn
-            .runtime_session_owner_slot_mut(None)
-            .expect("runtime slot should exist")
-            .ingest_owner_page_observable_output_updates();
+        {
+            let context = ctx.conn.browser_context.as_mut().unwrap();
+            let target_id = context.active_target_id_owned().unwrap();
+            context.ingest_owner_page_observable_output_updates_for_target(&target_id);
+        }
 
         let runtime_plan = ObservableActivityEmissionPlan::prepare_async(
             ObservableOutputProjectionStep::RuntimeObservable,

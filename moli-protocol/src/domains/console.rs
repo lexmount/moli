@@ -38,8 +38,7 @@ fn console_command_has_renderer_agent(conn: &CdpConnection, cmd: &Cmd<'_>) -> bo
     }) {
         return true;
     }
-    conn.runtime_session_owner_slot(cmd.session_id)
-        .is_ok_and(|slot| slot.has_loaded_page())
+    conn.has_loaded_page_for_owner(&CommandOwnerScope::capture(conn, cmd.session_id))
 }
 
 pub(crate) fn apply_console_output_state_for_session(
@@ -578,7 +577,7 @@ mod tests {
         assert!(
             active
                 .background_target("TID-background")
-                .filter(|target| target.has_non_default_session_state())
+                .filter(|target| active.has_non_default_session_state_for_target(target.target_id()))
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .console_output_session_state

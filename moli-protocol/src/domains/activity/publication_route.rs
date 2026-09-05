@@ -153,31 +153,33 @@ impl RendererPublicationOwner {
                 .chain(conn.inactive_browser_contexts.iter())
                 .filter(|browser_context| browser_context.id == *browser_context_id)
                 .find_map(|browser_context| {
-                    let projection_for = |runtime_slot: &crate::conn::TargetRuntimeSlot| {
-                        if runtime_slot.routes_current_renderer_page_owner(
-                            *renderer_page,
-                            page_owner.document_id(),
-                        ) {
-                            Some(RendererPublicationProjection::CurrentOwner)
-                        } else if runtime_slot
-                            .current_renderer_inspection_binding()
-                            .is_some_and(|binding| binding.routes_output_stream(stream))
-                        {
-                            Some(RendererPublicationProjection::InspectionOnly)
-                        } else if runtime_slot.routes_retiring_renderer_page_owner(
-                            *renderer_page,
-                            page_owner.document_id(),
-                        ) {
-                            Some(RendererPublicationProjection::RetiringNetworkOnly)
-                        } else {
-                            None
-                        }
-                    };
+                    let projection_for =
+                        |route_target_id: &str, runtime_slot: &crate::conn::TargetRuntimeSlot| {
+                            if browser_context.routes_current_renderer_page_owner_for_target(
+                                route_target_id,
+                                *renderer_page,
+                                page_owner.document_id(),
+                            ) {
+                                Some(RendererPublicationProjection::CurrentOwner)
+                            } else if runtime_slot
+                                .current_renderer_inspection_binding()
+                                .is_some_and(|binding| binding.routes_output_stream(stream))
+                            {
+                                Some(RendererPublicationProjection::InspectionOnly)
+                            } else if runtime_slot.routes_retiring_renderer_page_owner(
+                                *renderer_page,
+                                page_owner.document_id(),
+                            ) {
+                                Some(RendererPublicationProjection::RetiringNetworkOnly)
+                            } else {
+                                None
+                            }
+                        };
                     let route_for =
                         |runtime_slot: &crate::conn::TargetRuntimeSlot,
                          route_target_id: String,
                          session_id: Option<String>| {
-                            projection_for(runtime_slot).map(|projection| {
+                            projection_for(&route_target_id, runtime_slot).map(|projection| {
                                 RendererPublicationRoute::for_target(
                                     browser_context.id.clone(),
                                     route_target_id,
@@ -197,7 +199,11 @@ impl RendererPublicationOwner {
                         .or_else(|| {
                             target_id
                                 .is_none()
-                                .then(|| browser_context.page_targets.active())
+                                .then(|| {
+                                    browser_context
+                                        .page_targets
+                                        .active(browser_context.selected_web_contents_id())
+                                })
                                 .flatten()
                         });
                     let frozen_route = frozen_target.and_then(|target| {

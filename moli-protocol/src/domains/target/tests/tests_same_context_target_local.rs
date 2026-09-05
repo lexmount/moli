@@ -1399,7 +1399,7 @@ async fn activate_target_chain_restores_multiple_set_auto_attach_background_load
     );
     {
         let bc = ctx.conn.browser_context.as_mut().unwrap();
-        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        bc.register_page_target_fixture(
             "TID-000000000F".into(),
             None,
             crate::conn::TargetIdentityState::new(
@@ -1408,8 +1408,8 @@ async fn activate_target_chain_restores_multiple_set_auto_attach_background_load
                 "Secure".into(),
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
-        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        );
+        bc.register_page_target_fixture(
             "TID-0000000010".into(),
             None,
             crate::conn::TargetIdentityState::new(
@@ -1418,7 +1418,7 @@ async fn activate_target_chain_restores_multiple_set_auto_attach_background_load
                 "Secure".into(),
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+        );
     }
 
     ctx.process_async(json!({
@@ -1605,7 +1605,7 @@ async fn close_target_restores_loaded_runtime_to_previous_set_auto_attach_target
     );
     {
         let bc = ctx.conn.browser_context.as_mut().unwrap();
-        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        bc.register_page_target_fixture(
             "TID-000000000F".into(),
             None,
             crate::conn::TargetIdentityState::new(
@@ -1614,8 +1614,8 @@ async fn close_target_restores_loaded_runtime_to_previous_set_auto_attach_target
                 "Secure".into(),
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
-        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        );
+        bc.register_page_target_fixture(
             "TID-0000000010".into(),
             None,
             crate::conn::TargetIdentityState::new(
@@ -1624,7 +1624,7 @@ async fn close_target_restores_loaded_runtime_to_previous_set_auto_attach_target
                 "Secure".into(),
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+        );
     }
 
     ctx.process_async(json!({
@@ -1862,7 +1862,7 @@ async fn page_command_on_background_target_session_routes_without_activating_loa
         .browser_context
         .as_mut()
         .unwrap()
-        .insert_page_target_host(crate::conn::PageTargetHost::new(
+        .register_page_target_fixture(
             "TID-000000000F".into(),
             Some("SID-bg".into()),
             crate::conn::TargetIdentityState::new(
@@ -1871,7 +1871,7 @@ async fn page_command_on_background_target_session_routes_without_activating_loa
                 "Secure".into(),
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+        );
     register_page_session_route(
         &mut ctx,
         "BID-9",
@@ -1914,8 +1914,7 @@ async fn page_command_on_background_target_session_routes_without_activating_loa
         Some("SID-bg")
     );
     assert!(
-        bc.background_target("TID-000000000F")
-            .is_some_and(|target| target.has_loaded_page()),
+        bc.target_has_loaded_page("TID-000000000F"),
         "background Page.navigate should load the background target without activating it"
     );
 

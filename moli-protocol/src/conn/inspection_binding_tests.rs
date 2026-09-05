@@ -9,6 +9,17 @@ mod lifecycle;
 mod native_commands;
 mod runtime_agents;
 
+pub(super) fn take_inspection_document(
+    conn: &mut super::CdpConnection,
+    owner: &CommandOwnerScope,
+) -> super::state::DocumentHost {
+    let (context_id, target_id) = conn.resolved_page_owner_identity_for_owner(owner).unwrap();
+    conn.browser_context_by_id_mut(&context_id)
+        .unwrap()
+        .take_document_host_for_inspection_test(&target_id)
+        .unwrap()
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn dom_inspection_starts_without_protocol_document_ownership() {
     dom_inspection_round_trip(false).await;
@@ -57,16 +68,7 @@ async fn dom_inspection_rejects_frozen_replies_and_follow_ups_after_rebind() {
         };
         let completed = pending.wait().await;
         let owner = CommandOwnerScope::capture(&ctx.conn, None);
-        let old_document = ctx
-            .conn
-            .runtime_session_owner_slot_mut_for_owner(&owner)
-            .unwrap()
-            .page_slot_mut()
-            .contents
-            .main_frame
-            .current_document
-            .take()
-            .unwrap();
+        let old_document = take_inspection_document(&mut ctx.conn, &owner);
         ctx.install_navigation_fixture_for_session_owner(
             "data:text/html,<body><main id='inspected' data-phase='replacement'>new</main></body>",
             None,
@@ -129,17 +131,7 @@ async fn dom_context() -> TestContext {
 async fn dom_inspection_round_trip(start_before_move: bool) {
     let mut ctx = dom_context().await;
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let take_document = |ctx: &mut TestContext| {
-        ctx.conn
-            .runtime_session_owner_slot_mut_for_owner(&owner)
-            .unwrap()
-            .page_slot_mut()
-            .contents
-            .main_frame
-            .current_document
-            .take()
-            .unwrap()
-    };
+    let take_document = |ctx: &mut TestContext| take_inspection_document(&mut ctx.conn, &owner);
     let mut document = (!start_before_move).then(|| take_document(&mut ctx));
     let raw = json!({"id": 1, "method": "DOM.getDocument", "params": {"depth": -1}}).to_string();
     let step = ctx.conn.start_command_dispatch(&raw);
@@ -247,12 +239,7 @@ async fn dom_inspection_round_trip(start_before_move: bool) {
         json!("after"),
         "the DOM mutation must reach the actual renderer"
     );
-    assert!(
-        !ctx.conn
-            .runtime_session_owner_slot_for_owner(&owner)
-            .unwrap()
-            .has_loaded_page()
-    );
+    assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
 }
 
 async fn dom_command(ctx: &mut TestContext, id: u64, method: &str, params: Value) -> Value {

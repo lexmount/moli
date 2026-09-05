@@ -34,13 +34,10 @@ async fn browser_context_document_cookie_snapshots_reflect_live_page_state() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .loaded_page_mut()
-        .unwrap()
-        .document_cookie_telemetry_snapshot_async()
+        .document_cookie_owner_snapshot_async()
         .await
-        .unwrap();
+        .unwrap()
+        .telemetry;
     assert_eq!(
         before.last_operation_was_set,
         live_before.last_operation_was_set
@@ -75,13 +72,10 @@ async fn browser_context_document_cookie_snapshots_reflect_live_page_state() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .loaded_page_mut()
-        .unwrap()
-        .document_cookie_telemetry_snapshot_async()
+        .document_cookie_owner_snapshot_async()
         .await
-        .unwrap();
+        .unwrap()
+        .telemetry;
     // BrowserContext should be a thin owner/view seam over the live page's
     // document-cookie facade state instead of keeping a parallel counter
     // set of its own.

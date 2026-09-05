@@ -68,7 +68,7 @@ mod tests {
     use moli_core::page::RendererServiceWorkerVersionStatus;
 
     use crate::{
-        conn::{BrowserContext, PageTargetHost, ServiceWorkerTargetState},
+        conn::{BrowserContext, ServiceWorkerTargetState},
         testing::TestContext,
     };
     use serde_json::json;
@@ -112,7 +112,13 @@ mod tests {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
         bc.attach_active_session("SID-1");
-        bc.active_page_target_mut().mark_crashed();
+        {
+            let context = &mut bc;
+            let target_id = context
+                .active_target_id_owned()
+                .expect("active fixture target");
+            context.set_target_crash_state(&target_id, true)
+        };
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({"id": 3, "method": "Inspector.enable", "sessionId": "SID-1"}))
@@ -136,7 +142,13 @@ mod tests {
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-primary");
         assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
-        bc.active_page_target_mut().mark_crashed();
+        {
+            let context = &mut bc;
+            let target_id = context
+                .active_target_id_owned()
+                .expect("active fixture target");
+            context.set_target_crash_state(&target_id, true)
+        };
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({
@@ -169,14 +181,12 @@ mod tests {
         let mut bc = BrowserContext::new("BID-1".into());
         bc.set_active_target_id("TID-active");
         bc.attach_active_session("SID-active");
-        bc.insert_page_target_host(PageTargetHost::with_url(
+        bc.register_page_target_url_fixture(
             "TID-background".into(),
             Some("SID-background".into()),
             "about:blank#background".into(),
-        ));
-        bc.background_target_mut("TID-background")
-            .expect("background target must exist")
-            .mark_crashed();
+        );
+        bc.set_target_crash_state("TID-background", true);
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({
@@ -193,7 +203,7 @@ mod tests {
         assert_eq!(bc.active_target_id(), Some("TID-active"));
         assert!(
             bc.background_target("TID-background")
-                .filter(|target| target.has_non_default_session_state())
+                .filter(|target| bc.has_non_default_session_state_for_target(target.target_id()))
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .runtime_session_state
@@ -255,7 +265,7 @@ mod tests {
         let mut ctx = TestContext::new();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-A");
         bc.attach_active_session("SID-active");
-        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        bc.register_page_target_fixture(
             "TID-B".into(),
             Some("SID-B".into()),
             crate::conn::TargetIdentityState::new(
@@ -264,8 +274,14 @@ mod tests {
                 "InsecureScheme".into(),
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
-        bc.active_page_target_mut().mark_crashed();
+        );
+        {
+            let context = &mut bc;
+            let target_id = context
+                .active_target_id_owned()
+                .expect("active fixture target");
+            context.set_target_crash_state(&target_id, true)
+        };
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({"id": 4, "method": "Inspector.enable", "sessionId": "SID-B"}))
@@ -287,7 +303,7 @@ mod tests {
             );
             assert!(
                 bc.background_target("TID-B")
-                    .filter(|target| target.has_non_default_session_state())
+                    .filter(|target| bc.has_non_default_session_state_for_target(target.target_id()))
                     .is_some_and(|state| {
                         state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                             .runtime_session_state
@@ -308,7 +324,7 @@ mod tests {
         );
         assert!(
             bc.background_target("TID-B")
-                .filter(|target| target.has_non_default_session_state())
+                .filter(|target| bc.has_non_default_session_state_for_target(target.target_id()))
                 .is_none(),
             "disable should collapse staged background state back to default"
         );

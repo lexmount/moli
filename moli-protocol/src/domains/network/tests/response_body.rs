@@ -1690,11 +1690,7 @@ async fn network_data_collector_membership_uses_recorded_target_scope() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("bidi-session-1".to_owned());
-    bc.insert_page_target_host(PageTargetHost::with_url(
-        "TID-other".to_owned(),
-        None,
-        "about:blank".to_owned(),
-    ));
+    bc.register_page_target_url_fixture("TID-other".to_owned(), None, "about:blank".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
     for (collector, target_id) in [
@@ -1813,11 +1809,7 @@ async fn network_data_collector_gated_body_without_match_is_not_readable() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("bidi-session-1".to_owned());
-    bc.insert_page_target_host(PageTargetHost::with_url(
-        "TID-other".to_owned(),
-        None,
-        "about:blank".to_owned(),
-    ));
+    bc.register_page_target_url_fixture("TID-other".to_owned(), None, "about:blank".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
     let (result, _) = ctx

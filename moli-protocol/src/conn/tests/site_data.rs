@@ -238,9 +238,7 @@ async fn connection_preview_clear_cookie_store_with_persistent_scope_does_not_in
     conn.browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(navigation.page);
+        .replace_active_page_for_test(Some(navigation.page));
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("document.cookie", false)
@@ -330,9 +328,7 @@ async fn connection_clear_cookie_store_with_session_scope_invalidates_live_docum
     conn.browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(navigation.page);
+        .replace_active_page_for_test(Some(navigation.page));
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("document.cookie", false)
@@ -539,9 +535,7 @@ async fn connection_cookie_site_clear_invalidates_live_document_cookie_cache() {
     conn.browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(navigation.page);
+        .replace_active_page_for_test(Some(navigation.page));
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("document.cookie", false)
@@ -619,9 +613,7 @@ async fn connection_preview_clear_cookies_for_sites_does_not_invalidate_live_doc
     conn.browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(navigation.page);
+        .replace_active_page_for_test(Some(navigation.page));
 
     let before = conn
         .evaluate_runtime_expression_with_await_async("document.cookie", false)

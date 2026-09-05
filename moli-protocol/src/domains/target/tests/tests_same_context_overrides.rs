@@ -138,8 +138,7 @@ async fn same_context_targets_keep_local_network_policy_but_share_process_locale
             .expect("active browser context");
         assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
         assert_eq!(
-            bc.active_page_target()
-                .effective_policy()
+            bc.effective_policy_for_target(bc.active_target_id().unwrap())
                 .extra_headers()
                 .to_byte_strings(),
             vec![("X-Target".into(), "A".into())]
@@ -205,8 +204,7 @@ async fn same_context_targets_keep_local_network_policy_but_share_process_locale
             .expect("active browser context");
         assert_eq!(bc.active_target_id(), Some(second_target_id.as_str()));
         assert_eq!(
-            bc.active_page_target()
-                .effective_policy()
+            bc.effective_policy_for_target(bc.active_target_id().unwrap())
                 .extra_headers()
                 .to_byte_strings(),
             vec![("X-Target".into(), "B".into())]
@@ -381,9 +379,9 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
         assert_eq!(active.active_target_id(), Some("TID-000000000NA"));
         let background = active
             .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
+            .filter(|target| active.has_non_default_session_state_for_target(target.target_id()))
             .expect("second target should keep background network state");
-        assert!(background.network_offline());
+        assert!(active.network_offline_for_target(background.target_id()));
     }
 
     ctx.process_async(json!({
@@ -403,7 +401,7 @@ async fn same_context_targets_restore_their_own_network_conditions_after_session
             .as_ref()
             .expect("active browser context after restoring first target");
         assert_eq!(active.active_target_id(), Some("TID-000000000NA"));
-        assert!(!active.active_page_target().network_offline());
+        assert!(!active.network_offline_for_target(active.active_target_id().unwrap()));
     }
 }
 
@@ -905,16 +903,19 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
             .page_target(&second_target_id)
             .expect("background target");
         assert_eq!(
-            background
-                .effective_policy()
+            browser_context
+                .effective_policy_for_target(background.target_id())
                 .browser_identity_override()
                 .map(|identity| identity.user_agent()),
             Some("Moli/Target-B")
         );
-        assert_eq!(background.tls_verify_host_override(), Some(true));
+        assert_eq!(
+            browser_context.tls_verify_host_override_for_target(background.target_id()),
+            Some(true)
+        );
         assert!(
-            background
-                .navigation_engine()
+            browser_context
+                .page_navigation_engine(background.target_id())
                 .expect("background navigation engine")
                 .fetch_config()
                 .tls_verify_host(),
@@ -939,14 +940,13 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
         assert_eq!(active.active_target_id(), Some(second_target_id.as_str()));
         assert_eq!(
             active
-                .active_page_target()
-                .effective_policy()
+                .effective_policy_for_target(active.active_target_id().unwrap())
                 .browser_identity_override()
                 .map(|identity| identity.user_agent()),
             Some("Moli/Target-B")
         );
         assert_eq!(
-            active.active_page_target().tls_verify_host_override(),
+            active.tls_verify_host_override_for_target(active.active_target_id().unwrap()),
             Some(true)
         );
     }
@@ -973,14 +973,13 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
         assert_eq!(active.active_target_id(), Some("TID-000000000UA"));
         assert_eq!(
             active
-                .active_page_target()
-                .effective_policy()
+                .effective_policy_for_target(active.active_target_id().unwrap())
                 .browser_identity_override()
                 .map(|identity| identity.user_agent()),
             Some("Moli/Target-A")
         );
         assert_eq!(
-            active.active_page_target().tls_verify_host_override(),
+            active.tls_verify_host_override_for_target(active.active_target_id().unwrap()),
             Some(false)
         );
     }
@@ -1231,14 +1230,13 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_close_tar
         assert_eq!(active.active_target_id(), Some("TID-000000000UC"));
         assert_eq!(
             active
-                .active_page_target()
-                .effective_policy()
+                .effective_policy_for_target(active.active_target_id().unwrap())
                 .browser_identity_override()
                 .map(|identity| identity.user_agent()),
             Some("Moli/Close-A")
         );
         assert_eq!(
-            active.active_page_target().tls_verify_host_override(),
+            active.tls_verify_host_override_for_target(active.active_target_id().unwrap()),
             Some(false)
         );
     }

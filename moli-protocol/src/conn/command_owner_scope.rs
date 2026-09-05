@@ -102,7 +102,7 @@ impl CommandOwnerScope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{BrowserContext, PageTargetHost};
+    use crate::conn::BrowserContext;
     use crate::devtools_runtime::{
         DevToolsCommandContext, DevToolsProtocol, DevToolsSessionId, DevToolsTargetId,
     };
@@ -184,13 +184,11 @@ mod tests {
         let mut browser_context =
             BrowserContext::new_with_page_for_test("BID-owner", "TID-primary");
         browser_context.attach_active_session("SID-primary");
-        assert!(
-            browser_context.insert_page_target_host(PageTargetHost::with_url(
-                "TID-background".to_owned(),
-                Some("SID-background".to_owned()),
-                "about:blank".to_owned(),
-            ))
-        );
+        assert!(browser_context.register_page_target_url_fixture(
+            "TID-background".to_owned(),
+            Some("SID-background".to_owned()),
+            "about:blank".to_owned(),
+        ));
         conn.install_browser_context_fixture_for_test(browser_context);
 
         let protocol_neutral = conn

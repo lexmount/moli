@@ -378,9 +378,9 @@ mod tests {
         load_document(&mut ctx, "<!doctype html><body></body>").await;
         let source_document = ctx
             .conn
-            .runtime_session_owner_slot(Some("SID-1"))
-            .expect("loaded target runtime slot")
-            .committed_renderer_document_binding()
+            .committed_renderer_document_binding_for_owner(
+                &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1")),
+            )
             .expect("loaded target Document binding")
             .renderer_document_identity();
         let response = SubresourceResponseStarted::new(
@@ -432,9 +432,9 @@ mod tests {
         load_document(&mut ctx, "<!doctype html><body>old Document</body>").await;
         let source_document = ctx
             .conn
-            .runtime_session_owner_slot(Some("SID-1"))
-            .expect("loaded target runtime slot")
-            .committed_renderer_document_binding()
+            .committed_renderer_document_binding_for_owner(
+                &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1")),
+            )
             .expect("loaded target Document binding")
             .renderer_document_identity();
         let response = SubresourceResponseStarted::new(
@@ -492,9 +492,9 @@ mod tests {
 
         let source_document = ctx
             .conn
-            .runtime_session_owner_slot(Some("SID-1"))
-            .expect("loaded target runtime slot")
-            .committed_renderer_document_binding()
+            .committed_renderer_document_binding_for_owner(
+                &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1")),
+            )
             .expect("loaded target Document binding")
             .renderer_document_identity();
         let response = SubresourceResponseStarted::new(
@@ -673,7 +673,7 @@ mod tests {
         assert!(
             active
                 .background_target("TID-background")
-                .filter(|target| target.has_non_default_session_state())
+                .filter(|target| active.has_non_default_session_state_for_target(target.target_id()))
                 .is_some_and(|state| state.devtools_sessions
                     [moli_page_types::DevToolsSessionKey::Primary]
                     .page_session_state

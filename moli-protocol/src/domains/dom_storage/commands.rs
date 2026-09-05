@@ -217,8 +217,11 @@ fn start_storage_operation(
         ));
     }
 
-    if let Ok(page) = conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) {
-        return match page.start_document_storage_key_snapshot() {
+    if let Ok((context_id, target_id)) = conn.resolve_document_command_owner(&owner_scope) {
+        let context = conn
+            .browser_context_by_id(&context_id)
+            .expect("admitted document context remains registered");
+        return match context.start_document_storage_key_snapshot_for_target(&target_id) {
             Ok(pending) => {
                 DomStorageCommandTaskStep::Pending(Box::new(PendingDomStorageCommandDispatch {
                     command_id: cmd.id,
@@ -302,10 +305,13 @@ fn complete_top_frame_resolution(
         }
     };
     let storage_key = {
-        let Ok(page) = conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) else {
+        let Ok((context_id, target_id)) = conn.resolve_document_command_owner(&owner_scope) else {
             return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
         };
-        match page.finish_document_storage_key_snapshot(completion) {
+        let context = conn
+            .browser_context_by_id_mut(&context_id)
+            .expect("admitted document context remains registered");
+        match context.finish_document_storage_key_snapshot_for_target(&target_id, completion) {
             Ok(storage_key) => storage_key,
             Err(error) => {
                 return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -327,10 +333,12 @@ fn complete_top_frame_resolution(
     }
 
     let child_pending = {
-        let Ok(page) = conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) else {
+        let Ok((context_id, target_id)) = conn.resolve_document_command_owner(&owner_scope) else {
             return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
         };
-        page.start_child_frame_tree_snapshot()
+        conn.browser_context_by_id(&context_id)
+            .expect("admitted document context remains registered")
+            .start_child_frame_tree_snapshot_for_target(&target_id)
     };
     match child_pending {
         Ok(pending) => {
@@ -365,10 +373,13 @@ fn complete_child_frame_resolution(
         }
     };
     let child_frames = {
-        let Ok(page) = conn.loaded_page_mut_for_protocol_access_for_owner(&owner_scope) else {
+        let Ok((context_id, target_id)) = conn.resolve_document_command_owner(&owner_scope) else {
             return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
         };
-        match page.finish_child_frame_tree_snapshot(completion) {
+        let context = conn
+            .browser_context_by_id_mut(&context_id)
+            .expect("admitted document context remains registered");
+        match context.finish_child_frame_tree_snapshot_for_target(&target_id, completion) {
             Ok(child_frames) => child_frames,
             Err(error) => {
                 return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(

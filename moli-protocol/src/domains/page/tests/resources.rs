@@ -382,9 +382,7 @@ async fn get_resource_tree_reports_observed_frame_subresources() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     ctx.process_async(json!({
         "id": 1,
@@ -580,9 +578,7 @@ async fn frame_and_resource_trees_report_main_document_response_mime() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     for (id, method) in [(11, "Page.getResourceTree"), (12, "Page.getFrameTree")] {
         ctx.process_async(json!({
