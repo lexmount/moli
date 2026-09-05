@@ -318,7 +318,7 @@ impl DevToolsSessionRegistry {
         state.emulation_session_state.browser_identity_override = browser_identity_override;
     }
 
-    pub(crate) fn set_locale_override(
+    pub(in crate::conn::state) fn set_locale_override(
         &mut self,
         session_key: &DevToolsSessionKey,
         locale_override: Option<String>,
@@ -339,7 +339,7 @@ impl DevToolsSessionRegistry {
         Ok(())
     }
 
-    pub(crate) fn set_timezone_override(
+    pub(in crate::conn::state) fn set_timezone_override(
         &mut self,
         session_key: &DevToolsSessionKey,
         timezone_override: Option<String>,
@@ -363,13 +363,13 @@ impl DevToolsSessionRegistry {
         Ok(())
     }
 
-    pub(crate) fn effective_locale_override(&self) -> Option<&str> {
+    pub(in crate::conn::state) fn effective_locale_override(&self) -> Option<&str> {
         self.states
             .values()
             .find_map(|state| state.emulation_session_state.locale_override.as_deref())
     }
 
-    pub(crate) fn effective_timezone_override(&self) -> Option<&str> {
+    pub(in crate::conn::state) fn effective_timezone_override(&self) -> Option<&str> {
         self.states
             .values()
             .find_map(|state| state.emulation_session_state.timezone_override.as_deref())
@@ -381,7 +381,10 @@ impl DevToolsSessionRegistry {
         }
     }
 
-    pub(crate) fn clear_emulation_policy_state(&mut self, session_key: &DevToolsSessionKey) {
+    pub(in crate::conn::state) fn clear_emulation_policy_state(
+        &mut self,
+        session_key: &DevToolsSessionKey,
+    ) {
         if let Some(state) = self.states.get_mut(session_key) {
             let emulation = &mut state.emulation_session_state;
             emulation.browser_identity_override = None;
@@ -656,8 +659,8 @@ pub(crate) struct DevToolsEmulationSessionState {
     // UA, Accept-Language, and platform are independent handler contributions.
     pub(in crate::conn::state) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
     // Locale and timezone are exclusive controller claims, unlike UA fields.
-    pub(crate) locale_override: Option<String>,
-    pub(crate) timezone_override: Option<String>,
+    pub(in crate::conn::state) locale_override: Option<String>,
+    pub(in crate::conn::state) timezone_override: Option<String>,
     pub(crate) overrides: super::EmulationPolicy,
 }
 

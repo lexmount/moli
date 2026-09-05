@@ -82,25 +82,29 @@ impl PageTargetHost {
     }
 
     pub(crate) fn effective_policy(&self) -> EffectiveTargetPolicy {
+        let contents = &self.runtime_slot.page_slot().contents;
         EffectiveTargetPolicy {
-            network_request: self
-                .runtime_slot
-                .page_slot()
-                .contents
-                .network_request_policy
-                .clone(),
-            browser_identity_override: self.browser_identity_override().cloned(),
-            locale_override: self
-                .devtools_sessions
-                .effective_locale_override()
-                .map(str::to_owned)
-                .or_else(|| self.base_locale_override.clone()),
-            timezone_override: self
-                .devtools_sessions
-                .effective_timezone_override()
-                .map(str::to_owned)
-                .or_else(|| self.base_timezone_override.clone()),
+            network_request: contents.network_request_policy.clone(),
+            browser_identity_override: contents.browser_identity_override.clone(),
+            locale_override: contents.locale_override.clone(),
+            timezone_override: contents.timezone_override.clone(),
         }
+    }
+
+    pub(crate) fn locale_override(&self) -> Option<&str> {
+        self.runtime_slot
+            .page_slot()
+            .contents
+            .locale_override
+            .as_deref()
+    }
+
+    pub(crate) fn timezone_override(&self) -> Option<&str> {
+        self.runtime_slot
+            .page_slot()
+            .contents
+            .timezone_override
+            .as_deref()
     }
 
     // Only contribution writes aggregate DevTools state. Replace this in-place
@@ -218,7 +222,9 @@ impl PageTargetHost {
         locale_override: Option<String>,
     ) -> Result<(), &'static str> {
         self.devtools_sessions
-            .set_locale_override(session_key, locale_override)
+            .set_locale_override(session_key, locale_override)?;
+        self.install_effective_locale();
+        Ok(())
     }
 
     pub(crate) fn set_devtools_timezone_override(
@@ -227,15 +233,45 @@ impl PageTargetHost {
         timezone_override: Option<String>,
     ) -> Result<(), &'static str> {
         self.devtools_sessions
-            .set_timezone_override(session_key, timezone_override)
+            .set_timezone_override(session_key, timezone_override)?;
+        self.install_effective_timezone();
+        Ok(())
     }
 
     pub(crate) fn set_base_locale_override(&mut self, locale_override: Option<String>) {
         self.base_locale_override = locale_override;
+        self.install_effective_locale();
     }
 
     pub(crate) fn set_base_timezone_override(&mut self, timezone_override: Option<String>) {
         self.base_timezone_override = timezone_override;
+        self.install_effective_timezone();
+    }
+
+    // Claim arbitration stays in DevTools. Each bridge installs only its field;
+    // Commits 14/22 replace these in-place writes with typed Browser commands.
+    fn install_effective_locale(&mut self) {
+        let locale = self
+            .devtools_sessions
+            .effective_locale_override()
+            .map(str::to_owned)
+            .or_else(|| self.base_locale_override.clone());
+        self.runtime_slot
+            .page_slot_mut()
+            .contents
+            .set_locale_override(locale);
+    }
+
+    fn install_effective_timezone(&mut self) {
+        let timezone = self
+            .devtools_sessions
+            .effective_timezone_override()
+            .map(str::to_owned)
+            .or_else(|| self.base_timezone_override.clone());
+        self.runtime_slot
+            .page_slot_mut()
+            .contents
+            .set_timezone_override(timezone);
     }
 
     pub(crate) fn clear_devtools_network_state(
@@ -253,6 +289,8 @@ impl PageTargetHost {
         self.devtools_sessions
             .clear_emulation_policy_state(session_key);
         self.install_effective_browser_identity();
+        self.install_effective_locale();
+        self.install_effective_timezone();
     }
 
     pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
@@ -275,6 +313,8 @@ impl PageTargetHost {
             || self.tls_verify_host_override.is_some()
             || self.base_locale_override.is_some()
             || self.base_timezone_override.is_some()
+            || self.locale_override().is_some()
+            || self.timezone_override().is_some()
             || *self.emulation_policy() != super::EmulationPolicy::default()
             || self
                 .runtime_slot
@@ -311,8 +351,8 @@ fn overlay_extra_headers(effective: &mut Vec<(String, String)>, layer: &[(String
     }
 }
 
-/// Migration snapshot: request/identity values come from WebContents; locale
-/// and timezone still come from contributions until their policy cutover.
+/// Read-only migration snapshot of installed Browser values. Session raw input
+/// is resolved on writes, never when reading policy or preparing navigation.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct EffectiveTargetPolicy {
     network_request: NetworkRequestPolicy,
@@ -899,6 +939,134 @@ mod tests {
         assert_eq!(
             combined.extra_headers(),
             [("X-SHARED".into(), "SID-a".into())]
+        );
+    }
+
+    #[test]
+    fn locale_and_timezone_survive_projection_drop_and_independent_field_updates() {
+        let mut target = PageTargetHost::empty("TID-owned-locale".into());
+        let session = DevToolsSessionKey::Primary;
+        target
+            .set_devtools_locale_override(&session, Some("fr-FR".into()))
+            .unwrap();
+        target
+            .set_devtools_timezone_override(&session, Some("Europe/Paris".into()))
+            .unwrap();
+        let snapshot = target.effective_policy();
+        target
+            .runtime_slot
+            .page_slot_mut()
+            .contents
+            .set_locale_override(Some("ja-JP".into()));
+        target
+            .set_devtools_timezone_override(&session, Some("UTC".into()))
+            .unwrap();
+        assert_eq!(target.locale_override(), Some("ja-JP"));
+        assert_eq!(target.effective_policy().locale_override(), Some("ja-JP"));
+        assert_eq!(
+            target
+                .devtools_sessions
+                .primary()
+                .emulation_session_state
+                .locale_override
+                .as_deref(),
+            Some("fr-FR")
+        );
+        target
+            .runtime_slot
+            .page_slot_mut()
+            .contents
+            .set_timezone_override(Some("Asia/Tokyo".into()));
+        target
+            .set_devtools_locale_override(&session, Some("it-IT".into()))
+            .unwrap();
+        assert_eq!(target.timezone_override(), Some("Asia/Tokyo"));
+        assert_eq!(
+            target.effective_policy().timezone_override(),
+            Some("Asia/Tokyo")
+        );
+        assert_eq!(
+            target
+                .devtools_sessions
+                .primary()
+                .emulation_session_state
+                .timezone_override
+                .as_deref(),
+            Some("UTC")
+        );
+        assert_eq!(snapshot.locale_override(), Some("fr-FR"));
+        assert_eq!(snapshot.timezone_override(), Some("Europe/Paris"));
+
+        let id = target.web_contents_id();
+        let mut contents = std::mem::take(&mut target.runtime_slot.page_slot_mut().contents);
+        drop(target);
+        assert_eq!(contents.id(), id);
+        assert_eq!(contents.locale_override.as_deref(), Some("it-IT"));
+        assert_eq!(contents.timezone_override.as_deref(), Some("Asia/Tokyo"));
+        contents.set_locale_override(None);
+        assert!(contents.locale_override.is_none());
+        assert_eq!(contents.timezone_override.as_deref(), Some("Asia/Tokyo"));
+        contents.set_timezone_override(None);
+        assert!(contents.timezone_override.is_none());
+    }
+
+    #[test]
+    fn locale_and_timezone_claims_only_change_their_effective_field() {
+        let mut target = PageTargetHost::empty("TID-locale-policy".into());
+        let locale_owner = DevToolsSessionKey::Primary;
+        let timezone_owner = DevToolsSessionKey::Attached("SID-timezone".into());
+        target.set_base_locale_override(Some("en-GB".into()));
+        target.set_base_timezone_override(Some("Europe/London".into()));
+        target.set_user_agent_override_for_test("Moli/Unchanged".into());
+        target
+            .set_devtools_locale_override(&locale_owner, Some("fr-FR".into()))
+            .unwrap();
+        target
+            .set_devtools_timezone_override(&timezone_owner, Some("Europe/Paris".into()))
+            .unwrap();
+        let installed = target.effective_policy();
+        for locale in [Some("de-DE".into()), None] {
+            assert_eq!(
+                target.set_devtools_locale_override(&timezone_owner, locale),
+                Err("Another locale override is already in effect")
+            );
+            assert_eq!(target.effective_policy(), installed);
+        }
+        assert_eq!(
+            target.set_devtools_timezone_override(&locale_owner, Some("Asia/Tokyo".into())),
+            Err("Timezone override is already in effect")
+        );
+        assert_eq!(target.effective_policy(), installed);
+        target
+            .set_devtools_timezone_override(&locale_owner, None)
+            .unwrap();
+        assert_eq!(target.effective_policy(), installed);
+
+        target.set_base_locale_override(Some("es-ES".into()));
+        target.set_base_timezone_override(Some("Europe/Madrid".into()));
+        assert_eq!(target.effective_policy(), installed);
+        target
+            .set_devtools_locale_override(&locale_owner, None)
+            .unwrap();
+        let locale_cleared = target.effective_policy();
+        assert_eq!(locale_cleared.locale_override(), Some("es-ES"));
+        assert_eq!(locale_cleared.timezone_override(), Some("Europe/Paris"));
+        assert_eq!(
+            installed.delta(&locale_cleared),
+            super::EffectiveTargetPolicyDelta {
+                locale: true,
+                ..Default::default()
+            }
+        );
+        target.clear_devtools_emulation_policy_state(&timezone_owner);
+        let cleared = target.effective_policy();
+        assert_eq!(cleared.timezone_override(), Some("Europe/Madrid"));
+        assert_eq!(
+            locale_cleared.delta(&cleared),
+            super::EffectiveTargetPolicyDelta {
+                timezone: true,
+                ..Default::default()
+            }
         );
     }
 
