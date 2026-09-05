@@ -1658,6 +1658,10 @@ impl RendererOwnerLocalStore {
             is_on_named_owner_execution_lane_for(&owner.owner_state.local_executor),
             "phase-one-blocked page installation must execute on the matching named owner lane"
         );
+        // Bind the committed response before the first snapshot, just as for
+        // replacement Documents. A suspended parser must retain the full
+        // redirect chain, not only the count passed to the Page state.
+        pending_navigation.attach_committed_response();
         let page_vm = pending_navigation.page_vm_mut();
         let state_capture = page_vm.capture_page_state_on_named_owner_lane()?;
         let page_state = RendererPageState::from_vm_state_capture(
