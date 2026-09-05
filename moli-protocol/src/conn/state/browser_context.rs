@@ -1607,20 +1607,6 @@ impl BrowserContext {
             .or(self.global_network_conditions)
     }
 
-    pub(crate) fn effective_active_http_proxy_override_owned(&self) -> Option<String> {
-        self.page_targets
-            .active()
-            .and_then(|host| host.http_proxy_override.clone())
-            .or_else(|| self.default_http_proxy_override.clone())
-    }
-
-    pub(crate) fn effective_active_http_no_proxy_override_owned(&self) -> Option<String> {
-        self.page_targets
-            .active()
-            .and_then(|host| host.http_no_proxy_override.clone())
-            .or_else(|| self.default_http_no_proxy_override.clone())
-    }
-
     pub(crate) fn effective_active_tls_verify_host_override(&self) -> Option<bool> {
         self.page_targets
             .active()

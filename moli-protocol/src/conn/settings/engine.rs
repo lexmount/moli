@@ -12,12 +12,12 @@ impl CdpConnection {
         let http_proxy = self
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.effective_active_http_proxy_override_owned())
+            .and_then(|bc| bc.default_http_proxy_override.clone())
             .or_else(|| self.base_http_proxy.clone());
         let http_no_proxy = self
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.effective_active_http_no_proxy_override_owned())
+            .and_then(|bc| bc.default_http_no_proxy_override.clone())
             .or_else(|| self.base_http_no_proxy.clone());
         let tls_verify_host = self
             .browser_context
@@ -136,12 +136,7 @@ impl CdpConnection {
     pub fn http_proxy(&self) -> Option<&str> {
         self.browser_context
             .as_ref()
-            .and_then(|bc| {
-                bc.page_targets
-                    .active()
-                    .and_then(|host| host.http_proxy_override.as_deref())
-                    .or(bc.default_http_proxy_override.as_deref())
-            })
+            .and_then(|bc| bc.default_http_proxy_override.as_deref())
             .or(self.base_http_proxy.as_deref())
     }
 
@@ -157,12 +152,7 @@ impl CdpConnection {
     pub fn http_no_proxy(&self) -> Option<&str> {
         self.browser_context
             .as_ref()
-            .and_then(|bc| {
-                bc.page_targets
-                    .active()
-                    .and_then(|host| host.http_no_proxy_override.as_deref())
-                    .or(bc.default_http_no_proxy_override.as_deref())
-            })
+            .and_then(|bc| bc.default_http_no_proxy_override.as_deref())
             .or(self.base_http_no_proxy.as_deref())
     }
 
