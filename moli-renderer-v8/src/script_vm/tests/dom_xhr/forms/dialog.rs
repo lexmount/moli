@@ -221,3 +221,146 @@ fn dialog_form_submission_distinguishes_absent_and_empty_submitter_values() {
         r#"{"absentValue":{"open":false,"returnValue":"previous","valueAttribute":null},"emptyValue":{"open":false,"returnValue":"","valueAttribute":""}}"#
     );
 }
+
+#[test]
+fn dialog_escape_keydown_light_dismisses_modal_dialog() {
+    let mut vm = new_storage_test_vm("https://dialog-escape-modal.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const d = document.createElement('dialog');
+  d.id = 'modal';
+  d.innerHTML = '<p>content</p>';
+  (document.body || document.documentElement || document).appendChild(d);
+  window.__events = [];
+  d.addEventListener('cancel', () => { window.__events.push('cancel'); });
+  d.addEventListener('close', () => { window.__events.push('close'); });
+  document.addEventListener('keydown', e => { window.__key = e.key; });
+  d.showModal();
+  return d.open;
+})()
+"#,
+    )
+    .expect("modal dialog setup should evaluate");
+
+    vm.dispatch_key_event("keydown", "Escape", "Escape", "", 0, false, false)
+        .expect("Escape keydown should dispatch");
+
+    let result = vm
+        .eval(
+            r#"
+(() => JSON.stringify({
+  open: document.getElementById('modal').open,
+  key: window.__key,
+  events: window.__events
+}))()
+"#,
+        )
+        .expect("modal Escape result should evaluate");
+    let value: serde_json::Value = serde_json::from_str(&result).expect("json");
+    assert_eq!(value["open"], serde_json::json!(false));
+    assert_eq!(value["key"], serde_json::json!("Escape"));
+    assert!(
+        value["events"]
+            .as_array()
+            .expect("events array")
+            .contains(&serde_json::json!("cancel")),
+        "cancel must fire before Escape closes a modal dialog; got {result}"
+    );
+}
+
+#[test]
+fn dialog_escape_keydown_respects_prevent_default() {
+    let mut vm = new_storage_test_vm("https://dialog-escape-prevent-default.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const host = document.body || document.documentElement || document;
+  window.__cancels = [];
+  document.addEventListener('keydown', e => {
+    window.__key = e.key;
+    if (window.__blockEscape) { e.preventDefault(); }
+  });
+  function make(id, preventCancel) {
+    const d = document.createElement('dialog');
+    d.id = id;
+    host.appendChild(d);
+    if (preventCancel) {
+      d.addEventListener('cancel', e => { window.__cancels.push(id); e.preventDefault(); });
+    } else {
+      d.addEventListener('cancel', () => { window.__cancels.push(id); });
+    }
+    d.showModal();
+    return d;
+  }
+  window.__make = make;
+})()
+"#,
+    )
+    .expect("prevent-default dialog setup should evaluate");
+
+    // A keydown preventDefault suppresses the whole light-dismiss.
+    vm.eval("window.__blockEscape = true; window.__make('kd', false);")
+        .expect("blocked dialog");
+    vm.dispatch_key_event("keydown", "Escape", "Escape", "", 0, false, false)
+        .expect("blocked Escape keydown should dispatch");
+    let blocked = vm
+        .eval(
+            r#"(JSON.stringify({ open: document.getElementById('kd').open, cancels: window.__cancels }))"#,
+        )
+        .expect("blocked result should evaluate");
+    assert_eq!(
+        blocked, r#"{"open":true,"cancels":[]}"#,
+        "preventing the keydown must suppress the dialog light-dismiss"
+    );
+
+    // A cancel preventDefault fires cancel but keeps the dialog open.
+    vm.eval("window.__blockEscape = false; window.__make('cc', true);")
+        .expect("cancel-catch dialog");
+    vm.dispatch_key_event("keydown", "Escape", "Escape", "", 0, false, false)
+        .expect("cancel-caught Escape keydown should dispatch");
+    let cancel_caught = vm
+        .eval(
+            r#"(JSON.stringify({ open: document.getElementById('cc').open, cancels: window.__cancels }))"#,
+        )
+        .expect("cancel-caught result should evaluate");
+    assert_eq!(
+        cancel_caught, r#"{"open":true,"cancels":["cc"]}"#,
+        "a prevented cancel must keep the dialog open"
+    );
+}
+
+#[test]
+fn dialog_escape_keydown_does_not_close_non_modal_dialog() {
+    let mut vm = new_storage_test_vm("https://dialog-escape-non-modal.test/");
+
+    vm.eval(
+        r#"
+(() => {
+  const d = document.createElement('dialog');
+  d.id = 'plain';
+  (document.body || document.documentElement || document).appendChild(d);
+  window.__cancels = 0;
+  d.addEventListener('cancel', () => { window.__cancels += 1; });
+  d.show();
+  return d.open;
+})()
+"#,
+    )
+    .expect("non-modal dialog setup should evaluate");
+
+    vm.dispatch_key_event("keydown", "Escape", "Escape", "", 0, false, false)
+        .expect("Escape keydown should dispatch");
+
+    let result = vm
+        .eval(
+            r#"(JSON.stringify({ open: document.getElementById('plain').open, cancels: window.__cancels }))"#,
+        )
+        .expect("non-modal Escape result should evaluate");
+    assert_eq!(
+        result, r#"{"open":true,"cancels":0}"#,
+        "Escape must not light-dismiss a non-modal dialog"
+    );
+}

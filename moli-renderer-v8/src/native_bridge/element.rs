@@ -179,6 +179,7 @@ use details_dialog::{
     dialog_show_modal_callback, perform_summary_click_default_action,
 };
 pub(crate) use details_dialog::{
+    perform_dialog_escape_default_action_for_dispatched_event,
     queue_details_toggle_event_for_attribute_change, queue_parser_details_toggle_event,
     queue_parser_details_toggle_events_in_subtree,
 };
