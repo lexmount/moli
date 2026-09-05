@@ -77,7 +77,7 @@ impl MoliStyleEngine {
         let Some(document) = owner_document_for_source_owner(host, owner) else {
             return;
         };
-        let css_text = host.text_content(owner).unwrap_or_default();
+        let css_text = host.shared_text_content(owner).unwrap_or_else(|| "".into());
         let parser_base = stylesheet_source_base_url(host, owner);
         let previous_linked_documents = self.linked_stylesheet_owner_documents(owner);
         self.remove_linked_stylesheet_owner_from_documents(host, owner, previous_linked_documents);
