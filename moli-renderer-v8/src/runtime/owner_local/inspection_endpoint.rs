@@ -1,9 +1,34 @@
 use super::*;
 
+mod accessibility;
+mod css;
 mod dom;
+pub use accessibility::RendererAccessibilityInspection;
+pub use css::RendererCssInspection;
 pub use dom::RendererDomInspection;
 
 impl RendererInspectionEndpoint {
+    // Only the finite typed agent facades may enter this path. Keep the native
+    // PageAgent versus V8 OwnerOnly dispatch boundary of the original command.
+    fn enqueue_typed_inspection_command(
+        &self,
+        attachment: RendererAgentAttachmentId,
+        inspector_session_id: Option<String>,
+        command: RendererPageCommand,
+    ) -> Result<RendererRuntimeInspectorMainCommandRoute> {
+        self.page_context_cancel_tx.with_inspector_admission(|| {
+            self.devtools_target
+                .main_ref()
+                .enqueue_bound_protocol_page_command(
+                    self.token,
+                    self.devtools_agent_token,
+                    command,
+                    inspector_session_id,
+                    attachment,
+                )
+        })
+    }
+
     pub fn agent_token(&self) -> RendererDevToolsAgentToken {
         self.devtools_agent_token
     }
@@ -180,83 +205,111 @@ mod tests {
     }
 
     #[test]
-    fn dom_binding_preserves_main_fifo_and_native_vs_v8_nested_boundaries() {
+    fn document_agent_bindings_preserve_main_fifo_and_native_vs_v8_nested_boundaries() {
         use crate::devtools::command::RendererDevToolsMainNestedDispatch;
 
-        let endpoint = endpoint();
-        let attachment = RendererAgentAttachmentId::allocate();
-        let dom = endpoint.dom_inspection(attachment, Some("dom-session".to_owned()));
-        let native = dom
-            .start_document_node_snapshot_for_document(true, 1, false)
-            .unwrap();
-        let v8 = dom
-            .start_resolve_runtime_object_for_backend_node_id_in_inspector_session(1, None, None)
-            .unwrap();
-        for route in [&native, &v8] {
-            assert_eq!(route.ticket().attachment(), Some(attachment));
-            assert_eq!(
-                route.ticket().session().wire_session_id(),
-                Some("dom-session")
-            );
-        }
+        for agent in ["DOM", "CSS", "AX", "DOMSnapshot"] {
+            let endpoint = endpoint();
+            let attachment = RendererAgentAttachmentId::allocate();
+            let dom = endpoint.dom_inspection(attachment, Some("dom-session".to_owned()));
+            let css = endpoint.css_inspection(attachment, Some("dom-session".to_owned()));
+            let ax = endpoint.accessibility_inspection(attachment, Some("dom-session".to_owned()));
+            let (native, v8) = match agent {
+                "DOM" => (
+                    dom.start_document_node_snapshot_for_document(true, 1, false),
+                    dom.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
+                        1, None, None,
+                    ),
+                ),
+                "CSS" => (
+                    css.start_computed_style_for_backend_node(1),
+                    css.start_computed_style_for_object("object"),
+                ),
+                "AX" => (
+                    ax.start_accessibility_tree_payloads_for_document(None),
+                    ax.start_accessibility_tree_payloads_for_object_id("object"),
+                ),
+                "DOMSnapshot" => (
+                    dom.start_dom_snapshot_capture("frame".into(), Default::default()),
+                    dom.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
+                        1, None, None,
+                    ),
+                ),
+                _ => unreachable!(),
+            };
+            let native = native.unwrap();
+            let v8 = v8.unwrap();
+            for route in [&native, &v8] {
+                assert_eq!(route.ticket().attachment(), Some(attachment));
+                assert_eq!(
+                    route.ticket().session().wire_session_id(),
+                    Some("dom-session")
+                );
+            }
 
-        let main = endpoint.devtools_target.main_ref();
-        let mut native = main
-            .claim_for_pause()
-            .expect("native DOM retains its Page-agent boundary");
-        assert_eq!(
-            native.nested_dispatch(),
-            RendererDevToolsMainNestedDispatch::PageAgent
-        );
-        let handoff = main.first_dispatch_guard(&mut native);
-        assert!(
-            main.claim_for_owner().is_none(),
-            "one session keeps its first-dispatch FIFO"
-        );
-        drop(handoff);
-        assert!(
-            main.claim_for_pause().is_none(),
-            "typed V8 resolution remains owner-only"
-        );
-        let v8 = main.claim_for_owner().unwrap();
-        assert_eq!(
-            v8.nested_dispatch(),
-            RendererDevToolsMainNestedDispatch::OwnerOnly
-        );
-        assert_eq!(v8.ticket().attachment(), Some(attachment));
+            let main = endpoint.devtools_target.main_ref();
+            let mut native = main
+                .claim_for_pause()
+                .expect("native inspection retains its Page-agent boundary");
+            assert_eq!(
+                native.nested_dispatch(),
+                RendererDevToolsMainNestedDispatch::PageAgent
+            );
+            let handoff = main.first_dispatch_guard(&mut native);
+            assert!(
+                main.claim_for_owner().is_none(),
+                "one session keeps its first-dispatch FIFO"
+            );
+            drop(handoff);
+            assert!(
+                main.claim_for_pause().is_none(),
+                "typed V8 resolution remains owner-only"
+            );
+            let v8 = main.claim_for_owner().unwrap();
+            assert_eq!(
+                v8.nested_dispatch(),
+                RendererDevToolsMainNestedDispatch::OwnerOnly
+            );
+            assert_eq!(v8.ticket().attachment(), Some(attachment));
+        }
+    }
+
+    fn document_agent_commands(
+        endpoint: &RendererInspectionEndpoint,
+    ) -> [Result<RendererRuntimeInspectorMainCommandRoute>; 7] {
+        let attachment = RendererAgentAttachmentId::allocate();
+        let dom = endpoint.dom_inspection(attachment, None);
+        let css = endpoint.css_inspection(attachment, None);
+        let ax = endpoint.accessibility_inspection(attachment, None);
+        [
+            dom.start_document_node_snapshot_for_document(true, 1, false),
+            dom.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
+                1, None, None,
+            ),
+            css.start_computed_style_for_backend_node(1),
+            css.start_computed_style_for_object("object"),
+            ax.start_accessibility_tree_payloads_for_document(None),
+            ax.start_accessibility_tree_payloads_for_object_id("object"),
+            dom.start_dom_snapshot_capture("frame".into(), Default::default()),
+        ]
     }
 
     #[test]
-    fn dom_binding_retirement_and_context_shutdown_settle_queued_and_late_commands() {
+    fn document_agent_binding_retirement_and_context_shutdown_settle_queued_and_late_commands() {
         for context_shutdown in [false, true] {
             let endpoint = endpoint();
             let registry = RendererDevToolsTargetShutdownRegistry::default();
             let _registration = registry.register(endpoint.devtools_target.clone()).unwrap();
-            let dom = endpoint.dom_inspection(RendererAgentAttachmentId::allocate(), None);
-            let native = dom
-                .start_document_node_snapshot_for_document(true, 1, false)
-                .unwrap();
-            let v8 = dom
-                .start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
-                    1, None, None,
-                )
-                .unwrap();
+            let queued = document_agent_commands(&endpoint).map(Result::unwrap);
             if context_shutdown {
                 registry.terminate_all();
             } else {
                 endpoint.retire_page();
             }
-            assert_main_canceled(native);
-            assert_main_canceled(v8);
-            for route in [
-                dom.start_document_node_snapshot_for_document(true, 1, false),
-                dom.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
-                    1, None, None,
-                ),
-            ]
-            .into_iter()
-            .flatten()
-            {
+            for route in queued {
+                assert_main_canceled(route);
+            }
+            for route in document_agent_commands(&endpoint).into_iter().flatten() {
                 assert_main_canceled(route);
             }
             assert!(
@@ -305,7 +358,7 @@ mod tests {
     fn inspection_admission_racing_page_retirement_settles_without_executor() {
         let endpoint = endpoint();
         let start = std::sync::Barrier::new(2);
-        let (main, io, dedicated) = std::thread::scope(|scope| {
+        let (main, io, dedicated, document_agents) = std::thread::scope(|scope| {
             scope.spawn(|| {
                 start.wait();
                 endpoint.retire_page();
@@ -315,6 +368,7 @@ mod tests {
                 endpoint.enqueue_main_command(main_command()),
                 endpoint.enqueue_io_command(io_command()),
                 dedicated_io_commands(&endpoint),
+                document_agent_commands(&endpoint),
             )
         });
 
@@ -326,6 +380,9 @@ mod tests {
         }
         for route in dedicated.into_iter().flatten() {
             assert_io_canceled(route);
+        }
+        for route in document_agents.into_iter().flatten() {
+            assert_main_canceled(route);
         }
         assert_retired(&endpoint);
     }

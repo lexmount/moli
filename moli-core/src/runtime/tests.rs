@@ -5568,10 +5568,18 @@ async fn renderer_owner_created_page_runs_inline_stylesheet_commands() -> Result
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
-    let style_sheet_inventory_pending = page.start_style_sheet_inventory_for_document()?;
+    let endpoint = page.renderer_inspection_endpoint();
+    let inspection = endpoint.css_inspection(
+        moli_renderer_v8::RendererAgentAttachmentId::allocate(),
+        None,
+    );
+    let style_sheet_inventory_pending = crate::page::PendingPageCommand::from_inspector_main_route(
+        inspection.start_style_sheet_inventory()?,
+    );
     let style_sheet_inventory_completion = style_sheet_inventory_pending.wait().await?;
-    let style_sheet_id = page
-        .finish_style_sheet_inventory_for_document(style_sheet_inventory_completion)?
+    page.observe_renderer_page_state(style_sheet_inventory_completion.page_state());
+    let style_sheet_id = style_sheet_inventory_completion
+        .finish_style_sheet_inventory_for_document()?
         .added
         .into_iter()
         .find(|header| header.is_inline)
@@ -5582,11 +5590,13 @@ async fn renderer_owner_created_page_runs_inline_stylesheet_commands() -> Result
         .expect("target div should exist")
         .backend_node_id;
 
-    let computed_before_pending =
-        page.start_computed_style_properties_for_backend_node_id(target_backend_node_id)?;
+    let computed_before_pending = crate::page::PendingPageCommand::from_inspector_main_route(
+        inspection.start_computed_style_for_backend_node(target_backend_node_id)?,
+    );
     let computed_before_completion = computed_before_pending.wait().await?;
-    let computed_before = page
-        .finish_computed_style_properties(computed_before_completion)?
+    page.observe_renderer_page_state(computed_before_completion.page_state());
+    let computed_before = computed_before_completion
+        .finish_computed_style_properties()?
         .unwrap_or_default();
     let display_before = computed_before
         .iter()
@@ -5607,28 +5617,34 @@ async fn renderer_owner_created_page_runs_inline_stylesheet_commands() -> Result
     assert_eq!(width_before, "120px");
     assert_eq!(height_before, "24px");
 
-    let payload_before_pending =
-        page.start_style_sheet_payload_for_style_sheet_id(&style_sheet_id)?;
+    let payload_before_pending = crate::page::PendingPageCommand::from_inspector_main_route(
+        inspection.start_style_sheet_payload(&style_sheet_id)?,
+    );
     let payload_before_completion = payload_before_pending.wait().await?;
+    page.observe_renderer_page_state(payload_before_completion.page_state());
     assert_eq!(
-        page.finish_style_sheet_payload(payload_before_completion)?
+        payload_before_completion
+            .finish_style_sheet_payload()?
             .expect("inline stylesheet payload should be available")
             .text,
         "#target { display: block; }"
     );
 
-    let edit_pending = page.start_set_inline_style_sheet_text_for_style_sheet_id(
-        &style_sheet_id,
-        "#target { display: none; }",
-    )?;
+    let edit_pending = crate::page::PendingPageCommand::from_inspector_main_route(
+        inspection.start_set_style_sheet_text(&style_sheet_id, "#target { display: none; }")?,
+    );
     let edit_completion = edit_pending.wait().await?;
-    assert!(page.finish_set_inline_style_sheet_text(edit_completion)?);
+    page.observe_renderer_page_state(edit_completion.page_state());
+    assert!(edit_completion.finish_set_inline_style_sheet_text()?);
 
-    let payload_after_pending =
-        page.start_style_sheet_payload_for_style_sheet_id(&style_sheet_id)?;
+    let payload_after_pending = crate::page::PendingPageCommand::from_inspector_main_route(
+        inspection.start_style_sheet_payload(&style_sheet_id)?,
+    );
     let payload_after_completion = payload_after_pending.wait().await?;
+    page.observe_renderer_page_state(payload_after_completion.page_state());
     assert_eq!(
-        page.finish_style_sheet_payload(payload_after_completion)?
+        payload_after_completion
+            .finish_style_sheet_payload()?
             .expect("inline stylesheet payload should still be available")
             .text,
         "#target { display: none; }"

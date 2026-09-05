@@ -3,6 +3,8 @@ use serde_json::{Value, json};
 use super::{BrowserContext, CdpCommandTaskStep, CommandOwnerScope};
 use crate::testing::TestContext;
 
+mod document_agents;
+
 #[tokio::test(flavor = "multi_thread")]
 async fn dom_inspection_starts_without_protocol_document_ownership() {
     dom_inspection_round_trip(false).await;
