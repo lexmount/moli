@@ -996,7 +996,6 @@ mod tests {
         TargetSessionStateMut {
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
-            network_policy: &mut state.network_policy,
             tls_verify_host_override: &mut state.tls_verify_host_override,
         }
     }
@@ -1005,7 +1004,6 @@ mod tests {
         TargetSessionStateMut {
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],
-            network_policy: &mut state.network_policy,
             tls_verify_host_override: &mut state.tls_verify_host_override,
         }
     }

@@ -3346,40 +3346,7 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_activatin
             .map(|identity| identity.user_agent()),
         Some("Moli/Direct-UA")
     );
-    assert!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .network_offline()
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .emulated_network_latency(),
-        25.0
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .emulated_download_throughput(),
-        1024.0
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .emulated_upload_throughput(),
-        256.0
-    );
-    assert_eq!(
-        inactive
-            .active_page_target()
-            .network_policy
-            .emulated_connection_type(),
-        Some("cellular3g")
-    );
+    assert!(inactive.active_page_target().network_offline());
 }
 
 #[tokio::test]
@@ -3500,14 +3467,7 @@ async fn direct_network_policy_routes_to_inactive_background_owner_without_activ
             .map(|identity| identity.user_agent()),
         Some("Moli/Background-UA")
     );
-    assert!(staged.network_policy.network_offline());
-    assert_eq!(staged.network_policy.emulated_network_latency(), 50.0);
-    assert_eq!(staged.network_policy.emulated_download_throughput(), 2048.0);
-    assert_eq!(staged.network_policy.emulated_upload_throughput(), 512.0);
-    assert_eq!(
-        staged.network_policy.emulated_connection_type(),
-        Some("wifi")
-    );
+    assert!(staged.network_offline());
 }
 
 #[tokio::test]

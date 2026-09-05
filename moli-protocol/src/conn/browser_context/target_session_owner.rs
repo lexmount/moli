@@ -2,8 +2,8 @@ use super::*;
 use crate::conn::state::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles, DevToolsSessionState,
     PageNavigationHistoryEntry, PageTargetHost, RendererMainDocumentCommitSeed, TargetFetchConfig,
-    TargetNetworkPolicyState, TargetOwnerState, TargetPageAbsenceReason,
-    TargetPageResidenceIdentity, TargetRuntimeSessionState, TargetRuntimeSlot, WindowSurfaceState,
+    TargetOwnerState, TargetPageAbsenceReason, TargetPageResidenceIdentity,
+    TargetRuntimeSessionState, TargetRuntimeSlot, WindowSurfaceState,
 };
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
@@ -89,7 +89,6 @@ impl ClosedPageTarget {
 
 pub(super) struct TargetSessionStateMut<'a> {
     pub(super) devtools_session_state: &'a mut DevToolsSessionState,
-    pub(super) network_policy: &'a mut TargetNetworkPolicyState,
     pub(super) tls_verify_host_override: &'a mut Option<bool>,
 }
 
@@ -326,7 +325,7 @@ impl TargetNavigationLoadInputs {
             viewport_surface: emulated_device_metrics
                 .as_ref()
                 .map(|metrics| metrics.viewport_surface().to_page_viewport_surface()),
-            network_offline: page_state.network_policy.network_offline()
+            network_offline: page_state.network_offline()
                 || effective_network_conditions
                     .is_some_and(|conditions| !conditions.navigator_online()),
             bypass_service_worker: effective_policy.bypass_service_worker(),
@@ -620,10 +619,6 @@ impl TargetSessionStateMut<'_> {
         &mut self.devtools_session_state.runtime_session_state
     }
 
-    pub(super) fn network_policy_mut(&mut self) -> &mut TargetNetworkPolicyState {
-        self.network_policy
-    }
-
     pub(super) fn tls_verify_host_override_mut(&mut self) -> &mut Option<bool> {
         self.tls_verify_host_override
     }
@@ -685,7 +680,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
         let devtools_session_state = target.devtools_sessions.ensure_session(&self.session_key);
         f(TargetSessionStateMut {
             devtools_session_state,
-            network_policy: &mut target.network_policy,
             tls_verify_host_override: &mut target.tls_verify_host_override,
         })
     }
@@ -3213,7 +3207,7 @@ mod tests {
                 crate::conn::EmulationPolicyChange::ScriptExecutionDisabled(true),
             );
             state.set_user_agent_override_for_test("OwnerUA/1.0".to_owned());
-            state.network_policy.set_network_offline(true);
+            state.set_network_offline(true);
             state.mutate_devtools_network_session_state(&DevToolsSessionKey::Primary, |network| {
                 network.network_enabled = true;
                 network.blocked_url_patterns = vec!["*.blocked.test".to_owned()];

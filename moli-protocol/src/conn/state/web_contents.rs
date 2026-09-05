@@ -34,6 +34,7 @@ pub(in crate::conn) struct WebContents {
     pub(in crate::conn) crashed: bool,
     pub(in crate::conn) emulation_policy: EmulationPolicy,
     pub(in crate::conn) network_request_policy: NetworkRequestPolicy,
+    pub(in crate::conn) network_offline: bool,
     pub(in crate::conn) browser_identity_override:
         Option<moli_browser_profile::BrowserIdentityProfile>,
     pub(in crate::conn) locale_override: Option<String>,
@@ -52,6 +53,7 @@ impl Default for WebContents {
             crashed: false,
             emulation_policy: EmulationPolicy::default(),
             network_request_policy: NetworkRequestPolicy::default(),
+            network_offline: false,
             browser_identity_override: None,
             locale_override: None,
             timezone_override: None,
@@ -66,6 +68,10 @@ impl WebContents {
 
     pub(in crate::conn) fn set_network_request_policy(&mut self, policy: NetworkRequestPolicy) {
         self.network_request_policy = policy;
+    }
+
+    pub(in crate::conn) fn set_network_offline(&mut self, offline: bool) {
+        self.network_offline = offline;
     }
 
     pub(in crate::conn) fn set_browser_identity_override(

@@ -111,8 +111,8 @@ impl PageTargetHost {
     // install with AgentHost -> BrowserHandle in Commits 14/22, before 24b.
     fn install_effective_network_request_policy(&mut self) {
         let mut policy = self.devtools_sessions.effective_network_policy();
-        policy.cache_disabled |= self.network_policy.base_cache_disabled;
-        let mut headers = self.network_policy.base_extra_headers.clone();
+        policy.cache_disabled |= self.base_network_request_policy.cache_disabled;
+        let mut headers = self.base_network_request_policy.extra_headers.clone();
         overlay_extra_headers(&mut headers, &policy.extra_headers);
         policy.extra_headers = headers;
         self.runtime_slot
@@ -122,7 +122,7 @@ impl PageTargetHost {
     }
 
     pub(crate) fn set_base_cache_disabled(&mut self, disabled: bool) {
-        self.network_policy.base_cache_disabled = disabled;
+        self.base_network_request_policy.cache_disabled = disabled;
         self.install_effective_network_request_policy();
         let effective = self
             .runtime_slot
@@ -136,8 +136,20 @@ impl PageTargetHost {
     }
 
     pub(crate) fn set_base_extra_headers(&mut self, headers: Vec<(String, String)>) {
-        self.network_policy.base_extra_headers = headers;
+        self.base_network_request_policy.extra_headers = headers;
         self.install_effective_network_request_policy();
+    }
+
+    pub(crate) fn network_offline(&self) -> bool {
+        self.runtime_slot.page_slot().contents.network_offline
+    }
+
+    // Value-only bridge until AgentHost/BrowserHandle install (Commits 14/22).
+    pub(crate) fn set_network_offline(&mut self, offline: bool) {
+        self.runtime_slot
+            .page_slot_mut()
+            .contents
+            .set_network_offline(offline);
     }
 
     // Like request policy, this value-only bridge is replaced by the typed
@@ -305,7 +317,8 @@ impl PageTargetHost {
     pub(crate) fn has_non_default_session_state(&self) -> bool {
         self.devtools_sessions.has_non_default_state()
             || self.runtime_slot.primary_network_events_enabled()
-            || self.network_policy != TargetNetworkPolicyState::default()
+            || self.base_network_request_policy != BaseNetworkRequestPolicy::default()
+            || self.network_offline()
             || self.base_browser_identity != super::BaseBrowserIdentityOverrideState::default()
             || self.browser_identity_override().is_some()
             || self.http_proxy_override.is_some()
@@ -334,7 +347,7 @@ impl PageTargetHost {
     /// have their own disposal steps. Keeping them out of this helper makes
     /// the final session-registry removal a pure commit operation.
     pub(crate) fn reset_primary_session_target_state_fields(&mut self) {
-        self.network_policy.clear_session_scoped_state();
+        self.set_network_offline(false);
         self.http_proxy_override = None;
         self.http_no_proxy_override = None;
         self.tls_verify_host_override = None;
@@ -671,86 +684,11 @@ pub(crate) struct InspectorSessionState {
     pub(crate) v8_state: Option<V8InspectorSessionState>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct TargetNetworkPolicyState {
-    // Target-wide policy contributed by WebDriver BiDi or connection defaults.
-    base_cache_disabled: bool,
-    network_offline: bool,
-    emulated_network_latency: f64,
-    emulated_download_throughput: f64,
-    emulated_upload_throughput: f64,
-    emulated_connection_type: Option<String>,
-    // Target-scoped headers contributed by WebDriver BiDi.
-    base_extra_headers: Vec<(String, String)>,
-}
-
-impl Default for TargetNetworkPolicyState {
-    fn default() -> Self {
-        Self {
-            base_cache_disabled: false,
-            network_offline: false,
-            emulated_network_latency: 0.0,
-            emulated_download_throughput: -1.0,
-            emulated_upload_throughput: -1.0,
-            emulated_connection_type: None,
-            base_extra_headers: Vec::new(),
-        }
-    }
-}
-
-impl TargetNetworkPolicyState {
-    pub(crate) fn clear_session_scoped_state(&mut self) {
-        let base_cache_disabled = self.base_cache_disabled;
-        let base_extra_headers = std::mem::take(&mut self.base_extra_headers);
-        *self = Self::default();
-        self.base_cache_disabled = base_cache_disabled;
-        self.base_extra_headers = base_extra_headers;
-    }
-
-    pub(crate) fn network_offline(&self) -> bool {
-        self.network_offline
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_network_offline(&mut self, network_offline: bool) {
-        self.network_offline = network_offline;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn emulated_network_latency(&self) -> f64 {
-        self.emulated_network_latency
-    }
-
-    #[cfg(test)]
-    pub(crate) fn emulated_download_throughput(&self) -> f64 {
-        self.emulated_download_throughput
-    }
-
-    #[cfg(test)]
-    pub(crate) fn emulated_upload_throughput(&self) -> f64 {
-        self.emulated_upload_throughput
-    }
-
-    #[cfg(test)]
-    pub(crate) fn emulated_connection_type(&self) -> Option<&str> {
-        self.emulated_connection_type.as_deref()
-    }
-
-    pub(crate) fn set_emulated_network_conditions(
-        &mut self,
-        offline: bool,
-        latency: f64,
-        download_throughput: f64,
-        upload_throughput: f64,
-        connection_type: Option<String>,
-    ) -> bool {
-        self.network_offline = offline;
-        self.emulated_network_latency = latency;
-        self.emulated_download_throughput = download_throughput;
-        self.emulated_upload_throughput = upload_throughput;
-        self.emulated_connection_type = connection_type;
-        self.network_offline
-    }
+/// Frontend base contributions; installed runtime policy belongs to WebContents.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct BaseNetworkRequestPolicy {
+    cache_disabled: bool,
+    extra_headers: Vec<(String, String)>,
 }
 
 #[cfg(test)]
@@ -758,6 +696,23 @@ mod tests {
     use super::{PageScreencastConfig, PageScreencastFormat, PageScreencastSessionState};
     use crate::conn::PageTargetHost;
     use moli_page_types::DevToolsSessionKey;
+
+    #[test]
+    fn network_offline_survives_projection_drop_without_overwriting_request_policy() {
+        let mut target = PageTargetHost::empty("TID-owned-offline".into());
+        target.set_network_offline(true);
+        target.set_base_cache_disabled(true);
+        target.clear_devtools_network_state(&DevToolsSessionKey::Primary);
+        assert!(target.network_offline());
+        let id = target.web_contents_id();
+        let mut contents = std::mem::take(&mut target.runtime_slot.page_slot_mut().contents);
+        drop(target);
+        assert_eq!(contents.id(), id);
+        assert!(contents.network_offline);
+        contents.set_network_offline(false);
+        assert!(!contents.network_offline);
+        assert!(contents.network_request_policy.cache_disabled);
+    }
 
     #[test]
     fn browser_identity_survives_projection_drop_and_updates_without_sessions() {

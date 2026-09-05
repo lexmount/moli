@@ -1369,14 +1369,7 @@ fn start_network_conditions_update_for_current_route(
     };
     let owner = CommandOwnerScope::for_route(route.clone());
     let network_update = conn
-        .start_set_emulated_network_conditions_for_owner(
-            &owner,
-            effective_offline,
-            0.0,
-            -1.0,
-            -1.0,
-            None,
-        )
+        .start_set_network_offline_for_owner(&owner, effective_offline)
         .map_err(devtools_emulation_owner_error)?;
     let mut pending = Vec::new();
     if let Some(network_update) = network_update {
