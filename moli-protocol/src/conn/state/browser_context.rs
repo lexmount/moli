@@ -41,6 +41,7 @@ use super::{
 mod physical;
 #[cfg(test)]
 mod tests;
+pub(crate) use physical::ContextNetworkPolicy;
 use physical::{BrowserContext as PhysicalBrowserContext, StoragePartitionKind};
 
 /// DevTools context projection with a privately embedded Browser context.
@@ -68,11 +69,6 @@ pub struct BrowserContext {
     pub(crate) global_network_conditions: Option<EmulatedNetworkConditions>,
     pub(crate) global_geolocation_override: Option<EmulatedGeolocationOverrideState>,
     pub(crate) global_cache_disabled: bool,
-    pub(crate) default_http_proxy_override: Option<String>,
-    pub(crate) default_http_no_proxy_override: Option<String>,
-    pub(crate) default_tls_verify_host_override: Option<bool>,
-    pub proxy_autoconfig_url: Option<String>,
-    pub proxy_socks_version: Option<u8>,
     pub(crate) default_emulated_device_metrics: Option<EmulatedDeviceMetrics>,
     pub(crate) next_default_document_start_script_id: u32,
     pub(crate) default_document_start_scripts: Vec<(String, DocumentStartScript)>,
@@ -416,11 +412,6 @@ impl BrowserContext {
             global_network_conditions: None,
             global_geolocation_override: None,
             global_cache_disabled: false,
-            default_http_proxy_override: None,
-            default_http_no_proxy_override: None,
-            default_tls_verify_host_override: None,
-            proxy_autoconfig_url: None,
-            proxy_socks_version: None,
             default_emulated_device_metrics: None,
             next_default_document_start_script_id: 0,
             default_document_start_scripts: Vec::new(),
@@ -1515,7 +1506,26 @@ impl BrowserContext {
         self.page_targets
             .active()
             .and_then(|host| host.tls_verify_host_override())
-            .or(self.default_tls_verify_host_override)
+            .or(self.physical.network_policy.tls_verify_host)
+    }
+
+    // Value-only migration boundary, replaced by typed Browser operations at
+    // Commit 22. Never expose the physical Context for mutation through it.
+    pub(crate) fn network_policy(&self) -> &ContextNetworkPolicy {
+        &self.physical.network_policy
+    }
+
+    pub(crate) fn set_network_policy(&mut self, policy: ContextNetworkPolicy) {
+        self.physical.network_policy = policy;
+    }
+
+    pub(crate) fn set_tls_verify_host_override(&mut self, enabled: bool) {
+        self.physical.network_policy.tls_verify_host = Some(enabled);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_http_proxy_override_for_test(&mut self, proxy: Option<String>) {
+        self.physical.network_policy.http_proxy = proxy;
     }
 
     pub(crate) fn effective_active_network_offline(&self) -> bool {

@@ -19,6 +19,7 @@ use super::BrowserContextStoragePartitionHandles;
 pub(super) struct BrowserContext {
     pub(super) id: BrowserContextId,
     pub(super) page_navigation_runtime_config: Option<NavigationRuntimeConfig>,
+    pub(super) network_policy: ContextNetworkPolicy,
     // The wrapper drops its page/engine residents first. Keep the stores alive
     // while the remaining runtime root stops producers and joins its network.
     renderer_runtime_owner: Option<RendererBrowserContextRuntimeOwner>,
@@ -35,6 +36,7 @@ impl BrowserContext {
         Self {
             id: BrowserContextId::allocate(),
             page_navigation_runtime_config: None,
+            network_policy: ContextNetworkPolicy::default(),
             renderer_runtime_owner: Some(RendererBrowserContextRuntime::new()),
             storage_partition: StoragePartition {
                 kind,
@@ -76,6 +78,15 @@ impl BrowserContext {
     ) -> Option<RendererBrowserContextRuntimeOwner> {
         self.renderer_runtime_owner.take()
     }
+}
+
+/// Context-scoped request defaults, with no frontend or session attribution.
+/// A missing value inherits the process policy; an empty bypass list does not.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct ContextNetworkPolicy {
+    pub(crate) http_proxy: Option<String>,
+    pub(crate) http_no_proxy: Option<String>,
+    pub(crate) tls_verify_host: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

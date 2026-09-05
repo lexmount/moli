@@ -284,11 +284,11 @@ impl TargetNavigationLoadInputs {
                 .browser_identity_override()
                 .cloned()
                 .or_else(|| browser_context.default_browser_identity_override_owned()),
-            http_proxy_override: browser_context.default_http_proxy_override.clone(),
-            http_no_proxy_override: browser_context.default_http_no_proxy_override.clone(),
+            http_proxy_override: browser_context.network_policy().http_proxy.clone(),
+            http_no_proxy_override: browser_context.network_policy().http_no_proxy.clone(),
             tls_verify_host_override: page_state
                 .tls_verify_host_override()
-                .or(browser_context.default_tls_verify_host_override),
+                .or(browser_context.network_policy().tls_verify_host),
             navigation_initiator_url: target_navigation_initiator_url(
                 target.target_url(),
                 target.loaded_page(),
@@ -339,8 +339,8 @@ impl TargetNavigationLoadInputs {
         inputs.browser_context_id = Some(browser_context.id.clone());
         inputs.browser_identity_override =
             browser_context.effective_active_browser_identity_override_owned();
-        inputs.http_proxy_override = browser_context.default_http_proxy_override.clone();
-        inputs.http_no_proxy_override = browser_context.default_http_no_proxy_override.clone();
+        inputs.http_proxy_override = browser_context.network_policy().http_proxy.clone();
+        inputs.http_no_proxy_override = browser_context.network_policy().http_no_proxy.clone();
         inputs.tls_verify_host_override =
             browser_context.effective_active_tls_verify_host_override();
         inputs.document_start_scripts = browser_context.default_document_start_script_descriptors();
@@ -3172,8 +3172,11 @@ mod tests {
     #[test]
     fn target_session_owner_ref_snapshots_background_navigation_load_inputs() {
         let mut background = BrowserContext::new_with_page_for_test("BID-background", "TID-active");
-        background.default_http_proxy_override = Some("http://proxy.example:8080".to_owned());
-        background.default_http_no_proxy_override = Some("localhost,127.0.0.1".to_owned());
+        background.set_network_policy(crate::conn::ContextNetworkPolicy {
+            http_proxy: Some("http://proxy.example:8080".to_owned()),
+            http_no_proxy: Some("localhost,127.0.0.1".to_owned()),
+            ..Default::default()
+        });
         background
             .active_page_target_mut()
             .set_base_locale_override(Some("zh-CN".to_owned()));

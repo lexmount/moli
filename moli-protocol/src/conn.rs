@@ -556,7 +556,7 @@ pub(crate) use state::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles,
     BrowserContextStoragePartitionHandles, CommittedRendererAgentAttachment,
     CommittedRendererDocumentBinding, CompletedDownloadBody, CompletedDownloadBodyArtifact,
-    DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot,
+    ContextNetworkPolicy, DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot,
     DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
     DevToolsLogViolationThreshold, DocumentId, DuplicatePendingRendererCommand,
     EmulatedNetworkConditions, EmulatedViewportSurface, EmulationPolicyChange,
