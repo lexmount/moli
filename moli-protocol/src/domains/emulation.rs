@@ -1111,7 +1111,7 @@ async fn execute_devtools_set_extra_headers_for_browser_contexts(
         let browser_context = conn
             .browser_context_by_id_mut(browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_extra_headers = command.headers.clone();
+        browser_context.set_default_extra_headers(command.headers.clone());
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_extra_headers_updates_for_routes(

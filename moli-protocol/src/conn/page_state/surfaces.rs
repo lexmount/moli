@@ -169,7 +169,7 @@ impl BrowserContext {
     ) -> Vec<(String, String)> {
         merge_extra_header_layers(&[
             self.global_extra_headers.as_slice(),
-            self.default_extra_headers.as_slice(),
+            self.network_policy().extra_headers.as_slice(),
             target_headers,
         ])
     }

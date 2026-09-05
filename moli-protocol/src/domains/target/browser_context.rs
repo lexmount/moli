@@ -291,6 +291,7 @@ pub(super) fn execute_devtools_create_browser_context_command(
         http_proxy: command.proxy_server,
         http_no_proxy: normalize_proxy_bypass_list_for_loader(command.proxy_bypass_list.as_deref()),
         tls_verify_host: command.accept_insecure_certs.map(|accept| !accept),
+        ..Default::default()
     });
     conn.insert_browser_context(browser_context);
     Ok(DevToolsCreateBrowserContextResult {

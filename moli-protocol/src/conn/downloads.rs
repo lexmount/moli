@@ -1533,8 +1533,10 @@ mod tests {
         let mut connection = CdpConnection::new();
         let mut browser_context = BrowserContext::new("BID-download".to_owned());
         browser_context.set_active_target_id("TID-active");
-        browser_context.default_extra_headers =
-            vec![("X-Context-Default".to_owned(), "default".to_owned())];
+        browser_context.set_default_extra_headers(vec![(
+            "X-Context-Default".to_owned(),
+            "default".to_owned(),
+        )]);
         browser_context.global_extra_headers =
             vec![("X-Context-Global".to_owned(), "global".to_owned())];
 

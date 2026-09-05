@@ -94,6 +94,7 @@ pub(crate) struct ContextNetworkPolicy {
     pub(crate) http_proxy: Option<String>,
     pub(crate) http_no_proxy: Option<String>,
     pub(crate) tls_verify_host: Option<bool>,
+    pub(crate) extra_headers: Vec<(String, String)>,
 }
 
 /// Installed context defaults; inherited process values are not copied here.
