@@ -1289,16 +1289,30 @@ async fn emulate_network_conditions_requires_browser_context() {
 async fn emulate_network_conditions_rejects_invalid_params() {
     let mut ctx = TestContext::new();
     ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
-    ctx.process_async(json!({
-        "id": 29,
-        "method": "Network.emulateNetworkConditions",
-        "params": { "offline": true }
-    }))
-    .await;
-    ctx.expect_error(29, -32602, "InvalidParams");
+    for params in [
+        json!({ "offline": true }),
+        json!({ "offline": true, "latency": "slow", "downloadThroughput": -1, "uploadThroughput": -1 }),
+        json!({ "offline": true, "latency": 0, "downloadThroughput": -1, "uploadThroughput": -1, "connectionType": "invalid" }),
+    ] {
+        ctx.process_async(json!({
+            "id": 29,
+            "method": "Network.emulateNetworkConditions",
+            "params": params,
+        }))
+        .await;
+        ctx.expect_error(29, -32602, "InvalidParams");
+        assert!(
+            !ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .active_page_target()
+                .network_offline()
+        );
+    }
 }
 #[tokio::test(flavor = "multi_thread")]
-async fn emulate_network_conditions_updates_browser_context_state() {
+async fn emulate_network_conditions_installs_only_the_supported_offline_value() {
     let mut ctx = TestContext::new();
     ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
 
@@ -1317,30 +1331,30 @@ async fn emulate_network_conditions_updates_browser_context_state() {
     ctx.expect_result(30, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(bc.active_page_target().network_policy.network_offline());
-    assert_eq!(
-        bc.active_page_target()
-            .network_policy
-            .emulated_network_latency(),
-        150.0
-    );
-    assert_eq!(
-        bc.active_page_target()
-            .network_policy
-            .emulated_download_throughput(),
-        1024.0
-    );
-    assert_eq!(
-        bc.active_page_target()
-            .network_policy
-            .emulated_upload_throughput(),
-        512.0
-    );
-    assert_eq!(
-        bc.active_page_target()
-            .network_policy
-            .emulated_connection_type(),
-        Some("cellular3g")
+    assert!(bc.active_page_target().network_offline());
+    ctx.process_async(json!({
+        "id": 30_001,
+        "method": "Network.emulateNetworkConditions",
+        "params": {
+            "offline": false,
+            "latency": 150,
+            "downloadThroughput": 1024,
+            "uploadThroughput": 512,
+            "connectionType": "cellular3g"
+        }
+    }))
+    .await;
+    ctx.expect_result(30_001, json!({}), None);
+    let target = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .active_page_target();
+    assert!(!target.network_offline());
+    assert!(
+        !target.has_non_default_session_state(),
+        "unimplemented throttling values must not keep runtime state"
     );
 }
 #[tokio::test(flavor = "multi_thread")]

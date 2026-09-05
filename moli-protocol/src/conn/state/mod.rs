@@ -100,7 +100,7 @@ pub(crate) use service_worker_target::{
 pub(crate) use session::TargetPerformanceSessionState;
 pub(crate) use session::{
     EffectiveTargetPolicy, PageScreencastConfig, PageScreencastFormat, PerformanceTimeDomain,
-    TargetNetworkPolicyState, TargetPageSessionState, TargetRuntimeSessionState,
+    TargetPageSessionState, TargetRuntimeSessionState,
 };
 pub(crate) use shared_worker_attachment::{
     TargetSharedWorkerProtocolAttachmentIdentity, TargetSharedWorkerProtocolAttachmentRetirement,

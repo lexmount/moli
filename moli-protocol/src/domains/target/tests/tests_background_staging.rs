@@ -1606,26 +1606,12 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
             .as_ref()
             .expect("active browser context");
         assert_eq!(active.active_target_id(), Some("TID-000000000PN"));
-        assert!(!active.active_page_target().network_policy.network_offline());
-        assert_eq!(
-            active
-                .active_page_target()
-                .network_policy
-                .emulated_network_latency(),
-            10.0
-        );
+        assert!(!active.active_page_target().network_offline());
         let staged = active
             .background_target(&second_target_id)
             .filter(|target| target.has_non_default_session_state())
             .expect("second target should have staged background page session state");
-        assert!(staged.network_policy.network_offline());
-        assert_eq!(staged.network_policy.emulated_network_latency(), 25.0);
-        assert_eq!(staged.network_policy.emulated_download_throughput(), 1024.0);
-        assert_eq!(staged.network_policy.emulated_upload_throughput(), 256.0);
-        assert_eq!(
-            staged.network_policy.emulated_connection_type(),
-            Some("cellular3g")
-        );
+        assert!(staged.network_offline());
     }
 
     ctx.process_async(json!({
@@ -1667,40 +1653,7 @@ async fn same_context_background_session_can_stage_its_own_network_conditions_be
             activated.active_session_id(),
             Some(second_session_id.as_str())
         );
-        assert!(
-            activated
-                .active_page_target()
-                .network_policy
-                .network_offline()
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_network_latency(),
-            25.0
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_download_throughput(),
-            1024.0
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_upload_throughput(),
-            256.0
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_connection_type(),
-            Some("cellular3g")
-        );
+        assert!(activated.active_page_target().network_offline());
     }
 
     ctx.process_async(json!({
@@ -1953,20 +1906,17 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
             .expect("active browser context");
         assert_eq!(active.active_target_id(), Some("TID-000000000PR"));
         assert!(
-            !active.active_page_target().network_policy.network_offline(),
+            !active.active_page_target().network_offline(),
             "active target should keep its default online state",
         );
         let staged = active
             .background_target(&second_target_id)
-            .filter(|target| target.has_non_default_session_state())
-            .expect("second target should have staged background page session state");
-        assert!(!staged.network_policy.network_offline());
-        assert_eq!(staged.network_policy.emulated_network_latency(), 0.0);
-        assert_eq!(staged.network_policy.emulated_download_throughput(), -1.0);
-        assert_eq!(staged.network_policy.emulated_upload_throughput(), -1.0);
-        assert_eq!(
-            staged.network_policy.emulated_connection_type(),
-            Some("none")
+            .expect("reset must preserve the background page");
+        assert!(!staged.network_offline());
+        assert!(staged.is_session(&second_session_id));
+        assert!(
+            !staged.has_non_default_session_state(),
+            "reset must not retain unimplemented traffic overrides"
         );
     }
 
@@ -1979,17 +1929,45 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
     let _ = take_response_by_id(&mut ctx, 104194505);
     ctx.take_all();
 
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let page_url = format!("http://{}/page", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/page",
+                get(|| async {
+                    axum::response::Html(
+                        "<title>activated-online</title><div id='ok'>activated online</div>",
+                    )
+                }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
     ctx.process_async(json!({
-            "id": 104194506,
-            "method": "Page.navigate",
-            "sessionId": second_session_id,
-            "params": { "url": "data:text/html,<title>activated-online</title><div id='ok'>activated online</div>" }
-        })).await;
+        "id": 104194506,
+        "method": "Page.navigate",
+        "sessionId": second_session_id,
+        "params": { "url": page_url }
+    }))
+    .await;
     let activated_navigation = take_response_by_id(&mut ctx, 104194506);
     assert_eq!(
         activated_navigation["result"]["frameId"],
         json!(second_target_id)
     );
+    let loader_id = activated_navigation["result"]["loaderId"]
+        .as_str()
+        .expect("online navigation loader id");
+    crate::testing::wait_until_renderer_document_load(
+        &mut ctx,
+        Some(&second_session_id),
+        &second_target_id,
+        loader_id,
+    )
+    .await;
     assert!(
         ctx.sent
             .iter()
@@ -2005,41 +1983,28 @@ async fn same_context_background_session_can_reset_its_own_network_conditions_be
             activated.active_target_id(),
             Some(second_target_id.as_str())
         );
-        assert!(
-            !activated
-                .active_page_target()
-                .network_policy
-                .network_offline()
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_network_latency(),
-            0.0
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_download_throughput(),
-            -1.0
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_upload_throughput(),
-            -1.0
-        );
-        assert_eq!(
-            activated
-                .active_page_target()
-                .network_policy
-                .emulated_connection_type(),
-            Some("none")
-        );
+        assert!(!activated.active_page_target().network_offline());
+        assert_eq!(activated.active_page_target().target_url(), page_url);
     }
+    ctx.process_async(json!({
+        "id": 104194507,
+        "method": "Runtime.evaluate",
+        "sessionId": second_session_id,
+        "params": {
+            "expression": "({title: document.title, online: navigator.onLine})",
+            "returnByValue": true
+        }
+    }))
+    .await;
+    let surface = take_response_by_id(&mut ctx, 104194507);
+    assert_eq!(
+        surface["result"]["result"]["value"],
+        json!({
+            "title": "activated-online",
+            "online": true,
+        })
+    );
+    server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
