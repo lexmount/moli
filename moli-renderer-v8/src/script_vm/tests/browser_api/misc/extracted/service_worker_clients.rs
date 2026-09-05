@@ -162,15 +162,31 @@ async fn navigator_service_worker_post_message_routes_to_waiting_and_active_vers
             const sw = navigator.serviceWorker;
             const registration = await sw.register("worker.js", { scope: "./" });
             await sw.ready;
-            const updated = await sw.register("worker.js", { scope: "./" });
-            let lookup = await sw.getRegistration();
-            for (let i = 0; i < 20 && !lookup.waiting; i++) {
-              await new Promise(resolve => setTimeout(resolve, 0));
-              lookup = await sw.getRegistration();
-            }
-            const waiting = lookup.waiting;
+            // Subscribe before register: neither its promise nor a fixed
+            // number of Page timer turns guarantees Worker installation.
+            const installed = new Promise((resolve, reject) => {
+              registration.addEventListener("updatefound", () => {
+                const worker = registration.installing;
+                if (!worker) {
+                  reject(new Error("updatefound did not expose the installing worker"));
+                  return;
+                }
+                function onStateChange() {
+                  if (worker.state === "installed" || worker.state === "redundant") {
+                    worker.removeEventListener("statechange", onStateChange);
+                    if (worker.state === "installed") resolve(worker);
+                    else reject(new Error("updated worker became redundant before installation"));
+                  }
+                }
+                worker.addEventListener("statechange", onStateChange);
+                onStateChange();
+              }, { once: true });
+            });
+            await sw.register("worker.js", { scope: "./" });
+            const waiting = await installed;
+            const lookup = await sw.getRegistration();
             const active = lookup.active;
-            if (!waiting || !active) {
+            if (lookup.waiting !== waiting || !active) {
               throw new Error("expected waiting and active workers");
             }
 
