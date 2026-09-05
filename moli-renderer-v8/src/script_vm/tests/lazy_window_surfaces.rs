@@ -1,5 +1,6 @@
 use super::*;
 
+mod eval;
 mod rebind;
 mod seeds;
 

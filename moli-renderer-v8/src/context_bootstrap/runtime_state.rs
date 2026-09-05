@@ -2006,8 +2006,11 @@ fn install_window_runtime_state<'s>(
     // classic-script declarations like `var parent = ...` work, without letting
     // DOM named items shadow the builtins.
     WindowLegacyAliasAccessorsDeclaration::default().initialize(scope, global)?;
-    let intrinsic_eval = v8::Script::compile(scope, v8str(scope, "eval"), None)
-        .and_then(|script| script.run(scope))
+    // Read the existing V8 intrinsic without compiling a script or invoking
+    // Window's DOM named-property interceptors during bootstrap.
+    let intrinsic_eval = global
+        .get_real_named_property(scope, v8str(scope, "eval").into())
+        .filter(|value| value.is_function())
         .ok_or_else(|| anyhow!("failed to resolve intrinsic eval"))?;
     set_private_value(scope, global, WINDOW_INTRINSIC_EVAL_SLOT, intrinsic_eval);
     WindowEvalGlobalDeclaration::new(intrinsic_eval)
