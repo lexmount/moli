@@ -63,7 +63,7 @@ impl BrowserContext {
                 self.default_document_cookie_manager_surface.clone();
         }
         host.set_base_cache_disabled(self.global_cache_disabled);
-        if let Some(config) = self.page_navigation_runtime_config.clone() {
+        if let Some(config) = self.page_navigation_runtime_config() {
             let engine = self.new_page_navigation_engine(config);
             host.install_navigation_engine(engine);
         }
