@@ -2803,9 +2803,7 @@ fn start_geolocation_surface_override_page_commands(
     let Some(browser_context) = conn.browser_context.as_mut() else {
         return Ok(Vec::new());
     };
-    let Some(script) = browser_context.generated_surface_override_script_for_active_target() else {
-        return Ok(Vec::new());
-    };
+    let script = browser_context.generated_surface_override_script_for_active_target();
     let browser_context_id = browser_context.id.clone();
     let Some(target_id) = browser_context.active_target_id_owned() else {
         return Ok(Vec::new());
@@ -2855,7 +2853,7 @@ fn start_session_surface_override_page_command_for_owner(
         {
             browser_context.generated_surface_override_script_for_background_target(target_id)
         } else {
-            browser_context.generated_surface_override_script_for_active_target()
+            Some(browser_context.generated_surface_override_script_for_active_target())
         }
     };
     let Some(script) = script else {
@@ -2893,7 +2891,7 @@ fn start_surface_override_for_route(
                 return Err("BrowserContextNotLoaded".to_owned());
             };
             if browser_context.is_active_target(target_id) {
-                browser_context.generated_surface_override_script_for_active_target()
+                Some(browser_context.generated_surface_override_script_for_active_target())
             } else {
                 browser_context.generated_surface_override_script_for_background_target(target_id)
             }
@@ -2920,11 +2918,11 @@ fn start_surface_override_for_route(
 fn start_surface_override_page_command(
     target: PendingEmulationPageTarget,
     page: &moli_core::page::Page,
-    script: crate::conn::DocumentStartScript,
+    script: String,
     runtime_call_id: u64,
 ) -> Result<PendingEmulationPageCommand, String> {
     let (pending, runtime_response_rx) =
-        start_runtime_emulation_protocol_message(page, runtime_call_id, script.source)?;
+        start_runtime_emulation_protocol_message(page, runtime_call_id, script)?;
     Ok(PendingEmulationPageCommand {
         target,
         operation: PendingEmulationPageOperation::RuntimeProtocolMessage,

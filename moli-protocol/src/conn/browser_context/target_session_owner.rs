@@ -240,15 +240,14 @@ impl TargetNavigationLoadInputs {
             .page_target(target_id)
             .expect("resolved Page target owner must remain live");
         let page_state = target;
-        let mut document_start_scripts = Vec::new();
         let generated_surface_script = if browser_context.is_active_target(target_id) {
             browser_context.generated_surface_override_script_for_active_target()
         } else {
             browser_context.generated_surface_override_script_for_background_state(page_state)
         };
-        if let Some(script) = generated_surface_script {
-            document_start_scripts.push(script);
-        }
+        let mut document_start_scripts = vec![BrowserContext::surface_preload_descriptor(
+            generated_surface_script,
+        )];
         document_start_scripts.extend(browser_context.default_document_start_script_descriptors());
         document_start_scripts.extend(target.owner_state.document_start_scripts.iter().map(
             |(identifier, script)| {

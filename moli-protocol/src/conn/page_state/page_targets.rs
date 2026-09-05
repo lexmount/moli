@@ -460,7 +460,7 @@ impl BrowserContext {
             .map(str::to_owned)
             .or_else(|| self.default_timezone_override.clone());
         let surface_script = if is_active {
-            self.generated_surface_override_script_for_active_target()
+            Some(self.generated_surface_override_script_for_active_target())
         } else {
             self.generated_surface_override_script_for_background_target(target_id)
         };
@@ -510,7 +510,7 @@ impl BrowserContext {
             }
             if let Some(surface_script) = surface_script
                 && let Err(error) = page
-                    .run_page_surface_override_script_async(&surface_script.source)
+                    .run_page_surface_override_script_async(&surface_script)
                     .await
             {
                 first_error.get_or_insert_with(|| {
@@ -643,10 +643,10 @@ impl BrowserContext {
                 .is_none_or(|host| !host.has_pending_javascript_dialog());
         let previous_active_target_id = self.active_target_id_owned();
         let previous_surface_script = if synchronize_loaded_page {
-            previous_active_target_id.as_deref().and_then(|target_id| {
-                let host = self.page_target(target_id)?;
-                self.generated_surface_override_script_for_background_state(host)
-            })
+            previous_active_target_id
+                .as_deref()
+                .and_then(|target_id| self.page_target(target_id))
+                .map(|host| self.generated_surface_override_script_for_background_state(host))
         } else {
             None
         };
@@ -660,9 +660,7 @@ impl BrowserContext {
             && let Some(page) = self
                 .page_target_mut(&previous_active_target_id)
                 .and_then(|host| host.runtime_slot.loaded_page_mut())
-            && let Err(error) = page
-                .run_page_surface_override_script_async(&script.source)
-                .await
+            && let Err(error) = page.run_page_surface_override_script_async(&script).await
         {
             tracing::warn!(target_id = previous_active_target_id, %error, "failed to update background page visibility");
         }
