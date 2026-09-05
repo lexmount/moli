@@ -10,7 +10,7 @@ use crate::{
     RendererDocumentLifecycleEventKind, RendererDocumentLifecycleIdentity,
     RendererDocumentLifecycleMilestone, RendererDocumentLifecycleWaitOutcome,
     RendererDocumentTerminationReason, RendererLifecycleStartReason, RendererPageReply,
-    RendererPageState,
+    RendererPageState, RendererRuntimeInspectorMessage,
     page_task_queue::PostParseLifecycleWork,
     runtime::document_lifecycle_turn::DocumentLifecycleNavigationTiming,
     script_vm::{
@@ -20,6 +20,7 @@ use crate::{
         MainDocumentLifecycleTargetRejection,
     },
 };
+use serde_json::Value;
 use std::sync::Arc;
 
 #[test]
@@ -3651,6 +3652,69 @@ fn runtime_evaluate_without_enable_uses_inspector_default_context() {
             .iter()
             .any(|message| message["method"] == json!("Runtime.executionContextCreated")),
         "default-context materialization must not open the Runtime event surface"
+    );
+}
+
+#[test]
+fn runtime_stack_capture_follows_session_lifecycle() {
+    let mut page_vm = test_page_vm();
+    crate::inspector_session::tests::assert_session_lifecycle(|request| {
+        page_vm
+            .vm_mut()
+            .dispatch_inspector_protocol_message(request)
+            .expect("Page Inspector dispatch")
+    });
+}
+
+#[test]
+fn runtime_stack_capture_preserves_independent_session_limits() {
+    let mut page_vm = test_page_vm();
+    crate::inspector_session::tests::assert_multiple_sessions(|session, request| {
+        page_vm
+            .vm_mut()
+            .dispatch_inspector_protocol_message_for_session(Some(session), request)
+            .expect("Page Inspector session dispatch")
+            .into_iter()
+            .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+            .collect()
+    });
+}
+
+#[test]
+fn runtime_enable_hides_the_internal_stack_capture_limit_response() {
+    let mut page_vm = test_page_vm();
+
+    let messages = page_vm
+        .vm_mut()
+        .dispatch_inspector_protocol_message(r#"{"id":41,"method":"Runtime.enable"}"#)
+        .expect("Runtime.enable dispatch");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message["id"] == json!(41) && message["result"] == json!({})),
+        "Runtime.enable should retain its frontend response: {messages:#?}"
+    );
+    assert!(
+        messages.iter().all(|message| {
+            message
+                .get("id")
+                .and_then(Value::as_i64)
+                .is_none_or(|call_id| call_id >= 0)
+        }),
+        "the private stack-capture command response must not enter Page CDP output: {messages:#?}"
+    );
+
+    let messages = page_vm
+        .vm_mut()
+        .dispatch_inspector_protocol_message(
+            r#"{"id":42,"method":"Runtime.setMaxCallStackSizeToCapture","params":{"size":8}}"#,
+        )
+        .expect("frontend Page stack-capture command");
+    assert!(
+        messages
+            .iter()
+            .any(|message| message["id"] == json!(42) && message["result"] == json!({})),
+        "the private default must not prevent a frontend override: {messages:#?}"
     );
 }
 

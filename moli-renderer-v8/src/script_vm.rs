@@ -18,6 +18,7 @@ use crate::{
         FrameRealmId, FrameScriptJob, FrameScriptJobKind,
     },
     inspector_microtasks::with_scoped_inspector_microtasks,
+    inspector_session::dispatch_with_runtime_defaults,
     network::{ResourceRequestClient, context::DocumentResourceLoader},
     page_task_queue::{
         PageRuntimeWakeSender, PageTask, PageTaskSender, PostParseLifecycleWork,
@@ -1535,10 +1536,9 @@ impl ScriptVm {
                                 let _dispatch_response_capture =
                                     outbound.capture_dispatch_responses();
                                 with_scoped_inspector_microtasks(scope, || {
-                                    session.dispatch_protocol_message(
-                                        v8::inspector::StringView::from(raw_json.as_bytes()),
-                                    );
-                                });
+                                    dispatch_with_runtime_defaults(session, raw_json, &outbound)
+                                })
+                                .map_err(anyhow::Error::msg)?;
                             }
                             let response = outbound
                                 .take_response_for_call_id_after(
@@ -1762,11 +1762,12 @@ impl ScriptVm {
                         // callback even if they settle in this same owner turn.
                         let dispatch_response_capture = outbound.capture_dispatch_responses();
                         let dispatch_started = timing_started.map(|_| Instant::now());
-                        with_scoped_inspector_microtasks(scope, || {
-                            session.dispatch_protocol_message(v8::inspector::StringView::from(
-                                raw_json.as_bytes(),
-                            ));
-                        });
+                        if let Err(error) = with_scoped_inspector_microtasks(scope, || {
+                            dispatch_with_runtime_defaults(session, raw_json, &outbound)
+                        }) {
+                            outbound.discard_messages_after(snap);
+                            return Err(anyhow::Error::msg(error));
+                        }
                         if let (Some(total_started), Some(started)) =
                             (timing_started, dispatch_started)
                         {

@@ -111,7 +111,7 @@ RAW_GROUPS: tuple[SmokeGroup, ...] = (
     ),
     SmokeGroup(
         "runtime-exception",
-        "Raw asynchronous Runtime.exceptionThrown delivery without a follow-up command.",
+        "Raw Runtime.enable stack-cost privacy and asynchronous Runtime.exceptionThrown delivery.",
         "raw",
         run_runtime_exception_group,
     ),

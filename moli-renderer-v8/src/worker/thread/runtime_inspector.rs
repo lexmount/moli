@@ -7,6 +7,7 @@ use std::{
 use serde_json::{Value, json};
 
 use crate::inspector_microtasks::with_scoped_inspector_microtasks;
+use crate::inspector_session::{InspectorSessionOutput, dispatch_with_runtime_defaults};
 use crate::runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender};
 use crate::worker::{
     handle::{WorkerRuntimeInspectorMessageBatch, WorkerToParentMessage},
@@ -34,9 +35,34 @@ struct WorkerInspectorOutboundState {
 #[derive(Clone, Default)]
 struct WorkerInspectorOutbound(Rc<RefCell<WorkerInspectorOutboundState>>);
 
+struct WorkerInspectorSessionOutput<'a> {
+    outbound: &'a WorkerInspectorOutbound,
+    session_key: &'a str,
+}
+
+impl InspectorSessionOutput for WorkerInspectorSessionOutput<'_> {
+    fn capture_internal_response(&self, call_id: i32, dispatch: impl FnOnce()) -> Option<Value> {
+        let scope = self
+            .outbound
+            .push_dispatch_scope(self.session_key, Some(call_id));
+        dispatch();
+        let mut response = None;
+        for message in scope.finish() {
+            let value = message.into_v8_inspector_message();
+            if value.get("id").and_then(Value::as_i64) == Some(i64::from(call_id)) {
+                response = Some(value);
+            } else {
+                self.outbound.push_value(self.session_key, value);
+            }
+        }
+        response
+    }
+}
+
 #[derive(Default)]
 struct WorkerInspectorDispatchScope {
     session_key: String,
+    internal_call_id: Option<i32>,
     messages: Vec<RendererRuntimeInspectorMessage>,
 }
 
@@ -158,13 +184,22 @@ impl WorkerInspectorOutbound {
     }
 
     fn push_response_value(&self, session_key: &str, call_id: i32, value: Value) {
-        let callback = {
-            self.0
-                .borrow_mut()
-                .pending_response_callbacks
-                .remove(&(session_key.to_owned(), call_id))
-        };
-        if let Some(callback) = callback {
+        let mut guard = self.0.borrow_mut();
+        if let Some(scope) = guard.active_dispatch_scopes.last_mut().filter(|scope| {
+            scope.session_key == session_key && scope.internal_call_id == Some(call_id)
+        }) {
+            scope
+                .messages
+                .push(RendererRuntimeInspectorMessage::from_v8_inspector_message(
+                    value,
+                ));
+            return;
+        }
+        if let Some(callback) = guard
+            .pending_response_callbacks
+            .remove(&(session_key.to_owned(), call_id))
+        {
+            drop(guard);
             if let Err(message) = callback.send(value) {
                 tracing::debug!(
                     call_id,
@@ -174,7 +209,6 @@ impl WorkerInspectorOutbound {
             }
             return;
         }
-        let mut guard = self.0.borrow_mut();
         if let Some(scope) = guard
             .active_dispatch_scopes
             .last_mut()
@@ -245,12 +279,17 @@ impl WorkerInspectorOutbound {
         coalesce_worker_inspector_messages(messages)
     }
 
-    fn push_dispatch_scope(&self, session_key: &str) -> WorkerInspectorDispatchScopeGuard {
+    fn push_dispatch_scope(
+        &self,
+        session_key: &str,
+        internal_call_id: Option<i32>,
+    ) -> WorkerInspectorDispatchScopeGuard {
         self.0
             .borrow_mut()
             .active_dispatch_scopes
             .push(WorkerInspectorDispatchScope {
                 session_key: session_key.to_owned(),
+                internal_call_id,
                 messages: Vec::new(),
             });
         WorkerInspectorDispatchScopeGuard {
@@ -510,9 +549,16 @@ impl WorkerRuntimeInspector {
             self.outbound
                 .register_response_callback(&session_key, callback);
         }
-        let dispatch_scope = self.outbound.push_dispatch_scope(&session_key);
+        let dispatch_scope = self.outbound.push_dispatch_scope(&session_key, None);
         let session = self.ensure_session(&session_key);
-        session.dispatch_protocol_message(v8::inspector::StringView::from(raw_json.as_bytes()));
+        dispatch_with_runtime_defaults(
+            &session,
+            raw_json,
+            &WorkerInspectorSessionOutput {
+                outbound: &self.outbound,
+                session_key: &session_key,
+            },
+        )?;
         let messages = dispatch_scope.finish();
         self.record_execution_context_state(&messages);
         Ok(messages)
@@ -866,7 +912,7 @@ mod tests {
     fn worker_inspector_outbound_captures_dispatch_and_drops_stale_late_response() {
         let outbound = WorkerInspectorOutbound::default();
 
-        let dispatch_scope = outbound.push_dispatch_scope("SID-1");
+        let dispatch_scope = outbound.push_dispatch_scope("SID-1", None);
         outbound.push_response_value("SID-1", 1, json!({"id": 1, "result": "command-tail"}));
         let current = dispatch_scope.finish();
         outbound.push_response_value("SID-1", 2, json!({"id": 2, "result": "late"}));
@@ -882,6 +928,192 @@ mod tests {
             outbound.take_all().is_empty(),
             "stale worker late response must not contaminate pending notifications"
         );
+    }
+
+    #[test]
+    fn worker_runtime_enable_hides_the_internal_stack_capture_limit_response() {
+        crate::ensure_v8_for_test();
+        let mut isolate = v8::Isolate::new(Default::default());
+        let inspector = WorkerRuntimeInspector::new_for_test(&mut isolate);
+        let context = {
+            let scope = pin!(v8::HandleScope::new(&mut isolate));
+            let scope = &mut scope.init();
+            let context = v8::Context::new(scope, Default::default());
+            inspector.attach_context(
+                context,
+                v8::Global::new(scope, context),
+                "https://worker-runtime-limit.test/worker.js",
+            );
+            v8::Global::new(scope, context)
+        };
+        let scope = pin!(v8::HandleScope::new(&mut isolate));
+        let scope = &mut scope.init();
+        let context = v8::Local::new(scope, &context);
+        let scope = &mut v8::ContextScope::new(scope, context);
+
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        inspector
+            .dispatch_protocol_message_with_optional_deferred_response(
+                scope,
+                None,
+                r#"{"id":-1,"method":"Runtime.evaluate","params":{"expression":"new Promise(resolve => globalThis.resolveStackCaptureProbe = resolve)","awaitPromise":true}}"#,
+                Some(RendererRuntimeInspectorResponseSender::new(-1, tx)),
+            )
+            .expect("pending frontend evaluation before Runtime.enable");
+        let messages = inspector
+            .dispatch_protocol_message(scope, None, r#"{"id":41,"method":"Runtime.enable"}"#)
+            .expect("worker Runtime.enable dispatch");
+        assert_eq!(protocol_response(&messages, 41)["result"], json!({}));
+        assert!(
+            messages.iter().all(|message| match message {
+                RendererRuntimeInspectorMessage::Protocol(message) => message
+                    .value()
+                    .get("id")
+                    .and_then(Value::as_i64)
+                    .is_none_or(|call_id| call_id >= 0),
+                RendererRuntimeInspectorMessage::RuntimeContext(_) => true,
+            }),
+            "the private stack-capture command response must not enter worker CDP output: {messages:#?}"
+        );
+        assert!(
+            matches!(
+                rx.try_recv(),
+                Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+            ),
+            "the internal -1 response must not settle the pending frontend -1 command"
+        );
+        inspector.dispatch_protocol_message(
+            scope,
+            None,
+            r#"{"id":40,"method":"Runtime.evaluate","params":{"expression":"resolveStackCaptureProbe(7)"}}"#,
+        ).expect("resolve frontend evaluation");
+        let completion = rx.try_recv().expect("frontend promise response");
+        assert_eq!(
+            completion
+                .output
+                .protocol_response(-1)
+                .expect("response ID -1")["result"]["result"]["value"],
+            json!(7)
+        );
+
+        let messages = inspector
+            .dispatch_protocol_message(
+                scope,
+                None,
+                r#"{"id":42,"method":"Runtime.setMaxCallStackSizeToCapture","params":{"size":8}}"#,
+            )
+            .expect("frontend worker stack-capture command");
+        assert_eq!(
+            protocol_response(&messages, 42)["result"],
+            json!({}),
+            "the private default must not prevent a frontend override"
+        );
+
+        inspector
+            .dispatch_protocol_message(scope, None, r#"{"id":43,"method":"Runtime.disable"}"#)
+            .expect("disable before checking the session lifecycle");
+        crate::inspector_session::tests::assert_session_lifecycle(|request| {
+            inspector
+                .dispatch_protocol_message(scope, None, request)
+                .expect("Worker Inspector dispatch")
+                .into_iter()
+                .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+                .collect()
+        });
+        inspector
+            .dispatch_protocol_message(scope, None, r#"{"id":44,"method":"Runtime.disable"}"#)
+            .expect("disable the default session before testing independent limits");
+        crate::inspector_session::tests::assert_multiple_sessions(|session, request| {
+            inspector
+                .dispatch_protocol_message(scope, Some(session), request)
+                .expect("Worker Inspector session dispatch")
+                .into_iter()
+                .map(RendererRuntimeInspectorMessage::into_v8_inspector_message)
+                .collect()
+        });
+    }
+
+    #[test]
+    fn worker_internal_response_capture_preserves_frontend_output() {
+        let outbound = WorkerInspectorOutbound::default();
+        let scope = outbound.push_dispatch_scope("SID-1", None);
+        let queued = json!({"id": -1, "result": "queued"});
+        let notification = json!({"method": "Runtime.consoleAPICalled", "params": {}});
+        outbound.push_response_value("SID-1", -1, queued.clone());
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        outbound.register_response_callback(
+            "SID-1",
+            RendererRuntimeInspectorResponseSender::new(-1, tx),
+        );
+        let (peer_tx, mut peer_rx) = tokio::sync::oneshot::channel();
+        outbound.register_response_callback(
+            "SID-2",
+            RendererRuntimeInspectorResponseSender::new(-1, peer_tx),
+        );
+        let output = WorkerInspectorSessionOutput {
+            outbound: &outbound,
+            session_key: "SID-1",
+        };
+
+        let response = output.capture_internal_response(-1, || {
+            outbound.push_response_value("SID-1", -1, json!({"id": -1, "result": "outer"}));
+            let nested = output.capture_internal_response(-1, || {
+                outbound.push_response_value("SID-2", -1, json!({"id": -1, "result": "peer"}));
+                outbound.push_value("SID-1", notification.clone());
+                outbound.push_response_value("SID-1", -1, json!({"id": -1, "result": "inner"}));
+            });
+            assert_eq!(nested, Some(json!({"id": -1, "result": "inner"})));
+        });
+        assert_eq!(response, Some(json!({"id": -1, "result": "outer"})));
+        assert_eq!(
+            peer_rx
+                .try_recv()
+                .expect("peer callback must not be intercepted")
+                .output
+                .protocol_response(-1),
+            Some(&json!({"id": -1, "result": "peer"}))
+        );
+        assert!(matches!(
+            rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ));
+        outbound.push_response_value("SID-1", -1, json!({"id": -1, "result": "frontend"}));
+        let completion = rx
+            .try_recv()
+            .expect("frontend callback must remain registered");
+        assert_eq!(
+            completion.output.protocol_response(-1),
+            Some(&json!({"id": -1, "result": "frontend"}))
+        );
+        assert_eq!(
+            scope.finish(),
+            vec![inspector_message(queued), inspector_message(notification)]
+        );
+        assert!(outbound.take_all().is_empty());
+    }
+
+    #[test]
+    fn worker_internal_response_capture_restores_routing_after_unwind() {
+        let outbound = WorkerInspectorOutbound::default();
+        let scope = outbound.push_dispatch_scope("SID-1", None);
+        let (tx, mut rx) = tokio::sync::oneshot::channel();
+        outbound.register_response_callback(
+            "SID-1",
+            RendererRuntimeInspectorResponseSender::new(-1, tx),
+        );
+        let output = WorkerInspectorSessionOutput {
+            outbound: &outbound,
+            session_key: "SID-1",
+        };
+        assert!(
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                output.capture_internal_response(-1, || panic!("test dispatch unwind"));
+            }))
+            .is_err()
+        );
+        outbound.push_response_value("SID-1", -1, json!({"id": -1, "result": {}}));
+        assert!(rx.try_recv().is_ok());
+        assert!(scope.finish().is_empty());
     }
 
     #[test]
@@ -952,7 +1184,7 @@ mod tests {
     fn worker_inspector_outbound_tags_peer_session_pending_messages() {
         let outbound = WorkerInspectorOutbound::default();
 
-        let dispatch_scope = outbound.push_dispatch_scope("SID-1");
+        let dispatch_scope = outbound.push_dispatch_scope("SID-1", None);
         outbound.push_value(
             "SID-2",
             json!({"method": "Runtime.executionContextCreated"}),
@@ -978,7 +1210,7 @@ mod tests {
     #[test]
     fn worker_pause_flushes_active_notifications_but_retains_command_response() {
         let outbound = WorkerInspectorOutbound::default();
-        let dispatch_scope = outbound.push_dispatch_scope("SID-1");
+        let dispatch_scope = outbound.push_dispatch_scope("SID-1", None);
         outbound.push_value("SID-1", json!({"method": "Debugger.paused", "params": {}}));
         outbound.push_response_value("SID-1", 7, json!({"id": 7, "result": {}}));
 
