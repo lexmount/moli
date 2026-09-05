@@ -37,6 +37,7 @@ use moli_dom::NodeId;
 use moli_fetch::{
     NegotiatedHttpVersion, NetworkRequestExtraInfo, NetworkResponseExtraInfo, RedirectInfo,
     RequestAuth, RequestAuthScheme, RequestAuthTarget, Response, ResponseBody, ResponseHead,
+    SharedResponseBodyBytes,
 };
 use moli_web_mime::is_json_module_mime;
 
@@ -357,6 +358,12 @@ impl NavigationResponse {
         self.body_bytes().to_vec()
     }
 
+    fn shared_body_bytes(&self) -> SharedResponseBodyBytes {
+        self.body
+            .shared_materialized_bytes()
+            .expect("NavigationResponse body should remain materialized")
+    }
+
     pub fn materialized_body(&self) -> ResponseBody {
         self.body
             .clone_materialized()
@@ -383,19 +390,10 @@ impl NavigationResponse {
     }
 
     pub fn from_head_and_body(head: ResponseHead, body: String, body_bytes: Vec<u8>) -> Self {
-        Self {
-            final_url: head.final_url,
-            status: head.status,
-            headers: head.headers,
-            body: ResponseBody::materialized_text(body, body_bytes),
-            request_cookie_report: head.request_cookie_report,
-            cookie_set_reports: head.cookie_set_reports,
-            redirected: head.redirected,
-            redirect_chain: head.redirect_chain.into_iter().map(Into::into).collect(),
-            from_cache: head.from_cache,
-            negotiated_http_version: head.negotiated_http_version,
-            network_request_headers: None,
-        }
+        Self::from_head_and_materialized_body(
+            head,
+            ResponseBody::materialized_text(body, body_bytes),
+        )
     }
 
     /// Headers configured on the HTTP transfer that produced this response.
@@ -414,15 +412,26 @@ impl NavigationResponse {
     }
 
     pub fn from_head_and_materialized_body(head: ResponseHead, body: ResponseBody) -> Self {
-        let (body, body_bytes) = body
-            .try_into_lossy_materialized_text()
+        let body = body
+            .try_into_materialized_text_body()
             .expect("NavigationResponse body should remain materialized text");
-        Self::from_head_and_body(head, body, body_bytes)
+        Self {
+            final_url: head.final_url,
+            status: head.status,
+            headers: head.headers,
+            body,
+            request_cookie_report: head.request_cookie_report,
+            cookie_set_reports: head.cookie_set_reports,
+            redirected: head.redirected,
+            redirect_chain: head.redirect_chain.into_iter().map(Into::into).collect(),
+            from_cache: head.from_cache,
+            negotiated_http_version: head.negotiated_http_version,
+            network_request_headers: None,
+        }
     }
 
     pub fn from_head_and_text_body(head: ResponseHead, body: String) -> Self {
-        let body_bytes = body.as_bytes().to_vec();
-        Self::from_head_and_body(head, body, body_bytes)
+        Self::from_head_and_body(head, body, Vec::new())
     }
 
     pub fn from_text_body(
@@ -1459,14 +1468,14 @@ pub struct SubresourceResponseBody {
 
 #[derive(Debug)]
 enum SubresourceResponseBodyInner {
-    Memory(Vec<u8>),
+    Memory(SharedResponseBodyBytes),
     File { path: PathBuf, len: usize },
 }
 
 impl SubresourceResponseBodyInner {
     fn in_memory_bytes(&self) -> Option<&[u8]> {
         match self {
-            Self::Memory(bytes) => Some(bytes),
+            Self::Memory(bytes) => Some(bytes.as_slice()),
             Self::File { .. } => None,
         }
     }
@@ -1635,20 +1644,30 @@ impl Drop for SubresourceResponseBodyWriter {
 impl SubresourceResponseBody {
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         Self {
-            inner: Arc::new(SubresourceResponseBodyInner::Memory(bytes)),
+            inner: Arc::new(SubresourceResponseBodyInner::Memory(
+                SharedResponseBodyBytes::from_bytes(bytes),
+            )),
         }
     }
 
-    /// Copies the exact bytes from a materialized fetch response into the
+    /// Shares the exact bytes from a materialized fetch response with the
     /// renderer-neutral subresource body carrier.
     pub fn from_fetch_response(response: &Response) -> Self {
-        Self::from_bytes(response.body_bytes().to_vec())
+        Self {
+            inner: Arc::new(SubresourceResponseBodyInner::Memory(
+                response.shared_body_bytes(),
+            )),
+        }
     }
 
-    /// Copies the exact bytes from a materialized navigation response into the
+    /// Shares the exact bytes from a materialized navigation response with the
     /// renderer-neutral subresource body carrier.
     pub fn from_navigation_response(response: &NavigationResponse) -> Self {
-        Self::from_bytes(response.body_bytes().to_vec())
+        Self {
+            inner: Arc::new(SubresourceResponseBodyInner::Memory(
+                response.shared_body_bytes(),
+            )),
+        }
     }
 
     pub fn bytes(&self) -> Cow<'_, [u8]> {
@@ -1663,7 +1682,7 @@ impl SubresourceResponseBody {
 
     pub fn try_bytes(&self) -> io::Result<Cow<'_, [u8]>> {
         match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory(bytes) => Ok(Cow::Borrowed(bytes)),
+            SubresourceResponseBodyInner::Memory(bytes) => Ok(Cow::Borrowed(bytes.as_slice())),
             SubresourceResponseBodyInner::File { .. } => self.materialize_bytes().map(Cow::Owned),
         }
     }
@@ -1710,9 +1729,11 @@ impl SubresourceResponseBody {
 
     pub fn materialize_bytes_from(&self, offset: usize) -> io::Result<Vec<u8>> {
         match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory(bytes) => {
-                Ok(bytes.get(offset..).map(<[u8]>::to_vec).unwrap_or_default())
-            }
+            SubresourceResponseBodyInner::Memory(bytes) => Ok(bytes
+                .as_slice()
+                .get(offset..)
+                .map(<[u8]>::to_vec)
+                .unwrap_or_default()),
             SubresourceResponseBodyInner::File { path, len, .. } => {
                 if offset >= *len {
                     return Ok(Vec::new());
@@ -1732,7 +1753,7 @@ impl SubresourceResponseBody {
         }
         match self.inner.as_ref() {
             SubresourceResponseBodyInner::Memory(bytes) => {
-                let Some(remaining) = bytes.get(offset..) else {
+                let Some(remaining) = bytes.as_slice().get(offset..) else {
                     return Ok(Vec::new());
                 };
                 let len = remaining.len().min(max_len);
@@ -1754,7 +1775,7 @@ impl SubresourceResponseBody {
 
     pub fn write_bytes_to<W: Write>(&self, writer: &mut W) -> io::Result<()> {
         match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory(bytes) => writer.write_all(bytes),
+            SubresourceResponseBodyInner::Memory(bytes) => writer.write_all(bytes.as_slice()),
             SubresourceResponseBodyInner::File { path, .. } => {
                 let mut file = File::open(path)?;
                 let mut buffer = [0; 64 * 1024];
@@ -1772,7 +1793,7 @@ impl SubresourceResponseBody {
 
     pub fn len(&self) -> usize {
         match self.inner.as_ref() {
-            SubresourceResponseBodyInner::Memory(bytes) => bytes.len(),
+            SubresourceResponseBodyInner::Memory(bytes) => bytes.as_slice().len(),
             SubresourceResponseBodyInner::File { len, .. } => *len,
         }
     }
@@ -3875,12 +3896,14 @@ mod tests {
             "hello".to_owned(),
             b"hello".to_vec(),
         );
+        let response_body_storage = response.body_bytes().as_ptr();
         let body = SubresourceResponseBody::from_fetch_response(&response);
         let SubresourceResponseBodyInner::Memory(bytes) = body.inner.as_ref() else {
             panic!("fetch response should use in-memory byte storage");
         };
 
-        assert_eq!(bytes, b"hello");
+        assert_eq!(bytes.as_slice(), b"hello");
+        assert_eq!(bytes.as_slice().as_ptr(), response_body_storage);
         assert_eq!(body.try_bytes().unwrap().as_ref(), b"hello");
     }
 

@@ -247,6 +247,56 @@ fn response_body_marks_materialized_and_streaming_shapes() {
     assert!(streaming_body.try_into_materialized_bytes().is_err());
 }
 
+#[test]
+fn response_body_reuses_valid_utf8_bytes_as_text_storage() {
+    let body = ResponseBody::lossy_text_from_bytes(b"hello".to_vec());
+    assert_eq!(body.as_materialized_text(), Some("hello"));
+    assert_eq!(body.as_materialized_bytes(), Some(b"hello".as_slice()));
+    let storage = body.as_materialized_bytes().unwrap().as_ptr();
+    let shared = body.shared_materialized_bytes().unwrap();
+    assert_eq!(shared.as_slice().as_ptr(), storage);
+    let cloned = body.clone_materialized().unwrap();
+    assert_eq!(cloned.as_materialized_bytes().unwrap().as_ptr(), storage);
+    assert!(matches!(
+        body,
+        ResponseBody::MaterializedText {
+            exact_bytes: None,
+            ..
+        }
+    ));
+
+    let (text, bytes) = body
+        .try_into_lossy_materialized_text()
+        .expect("materialized text should expose exact parts");
+    assert_eq!(text, "hello");
+    assert_eq!(bytes, b"hello");
+}
+
+#[test]
+fn response_body_keeps_invalid_utf8_bytes_beside_lossy_text() {
+    let body = ResponseBody::lossy_text_from_bytes(vec![b'a', 0xff, b'b']);
+    assert_eq!(body.as_materialized_text(), Some("a\u{fffd}b"));
+    assert_eq!(
+        body.as_materialized_bytes(),
+        Some([b'a', 0xff, b'b'].as_slice())
+    );
+    let storage = body.as_materialized_bytes().unwrap().as_ptr();
+    assert_eq!(
+        body.shared_materialized_bytes()
+            .unwrap()
+            .as_slice()
+            .as_ptr(),
+        storage
+    );
+    assert!(matches!(
+        body,
+        ResponseBody::MaterializedText {
+            exact_bytes: Some(ref bytes),
+            ..
+        } if bytes.as_slice() == [b'a', 0xff, b'b']
+    ));
+}
+
 #[tokio::test]
 async fn response_body_materializes_streaming_text_source() {
     let (body_tx, body_rx) = mpsc::unbounded_channel();
