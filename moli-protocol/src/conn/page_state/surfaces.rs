@@ -1,8 +1,6 @@
 #[cfg(test)]
 use super::super::cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
-use super::super::{
-    BrowserContext, CdpConnection, DocumentStartScript, EmulatedViewportSurface, PageTargetHost,
-};
+use super::super::{BrowserContext, DocumentStartScript, EmulatedViewportSurface, PageTargetHost};
 use crate::conn::state::PageSurface;
 #[cfg(test)]
 use moli_cookie_jar::{BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides};
@@ -411,110 +409,6 @@ impl BrowserContext {
             surface.clear_policy_browser_context_overrides()
         })
         .await;
-    }
-}
-
-impl CdpConnection {
-    pub(crate) async fn remove_document_start_scripts_for_detached_session_async(
-        &mut self,
-        session_id: &str,
-    ) -> anyhow::Result<()> {
-        let renderer_inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_session(Some(session_id));
-        let devtools_session = moli_page_types::DevToolsSessionKey::from_wire_session_id(
-            renderer_inspector_session_id.as_deref(),
-        );
-        let registry_keys = self
-            .target_owner_state_for_session(Some(session_id))
-            .map(|owner_state| {
-                owner_state.document_start_script_registry_keys_for_session(&devtools_session)
-            })
-            .unwrap_or_default();
-        let owner = crate::conn::CommandOwnerScope::capture(self, Some(session_id));
-        let has_renderer = self
-            .runtime_session_owner_slot_for_owner(&owner)
-            .ok()
-            .is_some_and(|slot| slot.current_renderer_inspection_binding().is_some());
-        if !has_renderer {
-            let _ = self.with_target_owner_state_for_session_mut(Some(session_id), |owner_state| {
-                owner_state.remove_document_start_scripts_for_session(&devtools_session)
-            });
-            return Ok(());
-        }
-
-        let mut first_error = None;
-        for registry_key in registry_keys {
-            let result: anyhow::Result<()> = async {
-                let pending = self
-                    .runtime_session_owner_slot_for_owner(&owner)
-                    .ok()
-                    .and_then(|slot| slot.current_renderer_inspection_binding())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "renderer binding disappeared while removing detached-session document-start scripts"
-                        )
-                    })?
-                    .runtime_inspection(renderer_inspector_session_id.clone())
-                    .start_remove_document_start_script_by_registry_key(&registry_key)
-                    .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
-                    .map_err(|error| {
-                        anyhow::anyhow!(
-                            "failed to start detached-session document-start script cleanup: {error}"
-                        )
-                    })?;
-                let completion = pending.wait().await.map_err(|error| {
-                    anyhow::anyhow!(
-                        "detached-session document-start script cleanup was canceled: {error}"
-                    )
-                })?;
-                self.observe_renderer_inspection_completion(&owner, &completion).map_err(anyhow::Error::msg)?;
-                completion.finish_unit_runtime_page_command(
-                    "remove detached-session document-start script",
-                )
-                .map_err(|error| {
-                    anyhow::anyhow!(
-                        "failed to finish detached-session document-start script cleanup: {error}"
-                    )
-                })?;
-                self.with_target_owner_state_for_owner_mut(
-                    &owner,
-                    |owner_state| {
-                        owner_state.remove_document_start_script_registry_key_for_session(
-                            &devtools_session,
-                            &registry_key,
-                        )
-                    },
-                )
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "session owner disappeared during document-start script cleanup"
-                    )
-                })?;
-                Ok(())
-            }
-            .await;
-            if let Err(error) = result {
-                first_error.get_or_insert(error);
-            }
-        }
-
-        // Keep unresolved registry keys as cleanup authority. The centralized
-        // session disposer will either retry after the renderer disappears or
-        // keep the session binding alive; clearing them here would orphan a
-        // script that may still execute in a later Document.
-        if let Some(error) = first_error {
-            return Err(error);
-        }
-
-        // Scripts without a renderer registry key never require a renderer
-        // round trip. Successful keyed removals have already been committed.
-        self.with_target_owner_state_for_session_mut(Some(session_id), |owner_state| {
-            owner_state.remove_document_start_scripts_for_session(&devtools_session)
-        })
-        .ok_or_else(|| {
-            anyhow::anyhow!("session owner disappeared during document-start script cleanup")
-        })?;
-        Ok(())
     }
 }
 

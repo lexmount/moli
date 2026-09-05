@@ -1130,47 +1130,39 @@ impl CdpConnection {
     pub(crate) fn start_disable_fetch_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<
-        Option<(
-            SessionOwnerPendingFetchState,
-            Option<moli_core::page::PendingPageCommand>,
-        )>,
-        String,
-    > {
+    ) -> Option<(
+        SessionOwnerPendingFetchState,
+        Result<Option<moli_core::page::PendingPageCommand>, String>,
+    )> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.start_disable_fetch_for_owner(&owner)
     }
 
-    pub(crate) fn start_disable_fetch_for_owner(
+    fn start_disable_fetch_for_owner(
         &mut self,
         command_owner: &CommandOwnerScope,
-    ) -> Result<
-        Option<(
-            SessionOwnerPendingFetchState,
-            Option<moli_core::page::PendingPageCommand>,
-        )>,
-        String,
-    > {
-        let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
-            return Ok(None);
-        };
-        let (pending, (subresource_enabled, subresource_resource_type), page_update_required) =
-            owner
-                .reset_fetch_config_for_session_and_drain_pending_state(command_owner.session_id());
-        let page_command = if page_update_required
-            && let Some(page) = owner.runtime_slot_mut().loaded_page_mut()
-        {
-            Some(
+    ) -> Option<(
+        SessionOwnerPendingFetchState,
+        Result<Option<moli_core::page::PendingPageCommand>, String>,
+    )> {
+        let mut owner = self.target_session_owner_mut_for_owner(command_owner)?;
+        let (pending, (subresource_enabled, subresource_resource_type)) = owner
+            .reset_fetch_config_for_session_and_drain_pending_state(command_owner.session_id());
+        // Once requests have been drained, even a synchronous admission error
+        // must carry them to the caller for settlement. Reinstall current
+        // effective interception on retries, after the raw session is gone.
+        let page_command = owner
+            .runtime_slot_mut()
+            .loaded_page_mut()
+            .map(|page| {
                 page.start_set_fetch_subresource_interception(
                     subresource_enabled,
                     subresource_resource_type,
                 )
-                .map_err(|error| error.to_string())?,
-            )
-        } else {
-            None
-        };
-        Ok(Some((pending, page_command)))
+            })
+            .transpose()
+            .map_err(|error| error.to_string());
+        Some((pending, page_command))
     }
 
     pub(crate) fn take_pending_fetch_state_for_owner(

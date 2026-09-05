@@ -225,10 +225,21 @@ async fn session_preload_cleanup_updates_renderer_without_protocol_document() {
         .current_document
         .take()
         .unwrap();
+    ctx.process_async(
+        json!({"id": 10, "method": "Target.detachFromTarget", "params": {
+            "targetId": "TID-dom-inspection", "sessionId": "SID-preload-cleanup",
+        }}),
+    )
+    .await;
+    ctx.expect_result(10, json!({}), None);
+    // Reusing the primary renderer session key must not resurrect its old
+    // preload, even while the Browser Document is held outside Protocol.
     ctx.conn
-        .remove_document_start_scripts_for_detached_session_async("SID-preload-cleanup")
-        .await
-        .unwrap();
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .attach_active_session("SID-preload-cleanup");
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ctx.process_async(json!({"id": 2, "method": "Page.createIsolatedWorld", "sessionId": "SID-preload-cleanup", "params": {
         "frameId": "TID-dom-inspection", "worldName": "detached-preload-world",
     }})).await;

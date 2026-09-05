@@ -453,15 +453,6 @@ pub(crate) struct EffectiveTargetPolicy {
 }
 
 impl EffectiveTargetPolicy {
-    pub(crate) fn delta(&self, next: &Self) -> EffectiveTargetPolicyDelta {
-        EffectiveTargetPolicyDelta {
-            network_request: self.network_request != next.network_request,
-            browser_identity: self.browser_identity_override != next.browser_identity_override,
-            locale: self.locale_override != next.locale_override,
-            timezone: self.timezone_override != next.timezone_override,
-        }
-    }
-
     pub(crate) fn cache_disabled(&self) -> bool {
         self.network_request.cache_disabled
     }
@@ -490,21 +481,6 @@ impl EffectiveTargetPolicy {
 
     pub(crate) fn timezone_override(&self) -> Option<&str> {
         self.timezone_override.as_deref()
-    }
-}
-
-/// Renderer surfaces that must be replayed after an effective policy change.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct EffectiveTargetPolicyDelta {
-    pub(crate) network_request: bool,
-    pub(crate) browser_identity: bool,
-    pub(crate) locale: bool,
-    pub(crate) timezone: bool,
-}
-
-impl EffectiveTargetPolicyDelta {
-    pub(crate) fn is_empty(self) -> bool {
-        !self.network_request && !self.browser_identity && !self.locale && !self.timezone
     }
 }
 
@@ -1120,20 +1096,20 @@ mod tests {
         assert_eq!(locale_cleared.locale_override(), Some("es-ES"));
         assert_eq!(locale_cleared.timezone_override(), Some("Europe/Paris"));
         assert_eq!(
-            installed.delta(&locale_cleared),
-            super::EffectiveTargetPolicyDelta {
-                locale: true,
-                ..Default::default()
+            locale_cleared,
+            super::EffectiveTargetPolicy {
+                locale_override: Some("es-ES".into()),
+                ..installed
             }
         );
         target.clear_devtools_emulation_policy_state(&timezone_owner);
         let cleared = target.effective_policy();
         assert_eq!(cleared.timezone_override(), Some("Europe/Madrid"));
         assert_eq!(
-            locale_cleared.delta(&cleared),
-            super::EffectiveTargetPolicyDelta {
-                timezone: true,
-                ..Default::default()
+            cleared,
+            super::EffectiveTargetPolicy {
+                timezone_override: Some("Europe/Madrid".into()),
+                ..locale_cleared
             }
         );
     }
@@ -1171,6 +1147,8 @@ mod tests {
             .primary_mut()
             .emulation_session_state
             .overrides
+            .as_mut()
+            .unwrap()
             .cpu_throttling_rate = 4.0;
         let effective = state.effective_policy();
         assert_eq!(effective.locale_override(), Some("fr-FR"));
@@ -1193,6 +1171,8 @@ mod tests {
                 .primary()
                 .emulation_session_state
                 .overrides
+                .as_ref()
+                .unwrap()
                 .cpu_throttling_rate,
             4.0,
             "clearing policy contributions must leave the handler's renderer state intact"

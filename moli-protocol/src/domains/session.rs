@@ -9,7 +9,6 @@ enum DevToolsSessionDomainHandler {
     Target,
     Fetch,
     Runtime,
-    Page,
     Emulation,
     Network,
     PrimaryPageTargetState,
@@ -27,7 +26,6 @@ const PAGE_HANDLERS: &[DevToolsSessionDomainHandler] = &[
     DevToolsSessionDomainHandler::Target,
     DevToolsSessionDomainHandler::Fetch,
     DevToolsSessionDomainHandler::Runtime,
-    DevToolsSessionDomainHandler::Page,
     DevToolsSessionDomainHandler::Emulation,
     DevToolsSessionDomainHandler::Network,
     DevToolsSessionDomainHandler::PrimaryPageTargetState,
@@ -43,9 +41,9 @@ const WORKER_HANDLERS: &[DevToolsSessionDomainHandler] = &[
 /// Browser-side handlers installed for one DevTools session.
 ///
 /// Target teardown iterates this collection without knowing any domain's
-/// state or disable operation. That mirrors Chromium's DevToolsSession, where
-/// handlers own Disable() and the session lifecycle only invokes them before
-/// renderer Inspector detachment.
+/// state or disable operation. Page Inspector resources have already retired
+/// through the renderer session lifecycle; these handlers revoke service
+/// contributions and reconcile Browser-owned policy without that Inspector.
 struct DevToolsSessionHandlers {
     handlers: &'static [DevToolsSessionDomainHandler],
 }
@@ -80,8 +78,8 @@ impl DevToolsSessionHandlerDisposal {
     }
 }
 
-/// Invokes every installed browser-side handler while the session route is
-/// still authoritative. One failure never prevents the remaining handlers
+/// Invokes every installed browser-side handler while the service route is
+/// still retained for cleanup. One failure never prevents the remaining handlers
 /// from receiving their disposal callback.
 pub(crate) async fn dispose_live_handlers_async(
     conn: &mut CdpConnection,
@@ -140,7 +138,6 @@ impl DevToolsSessionDomainHandler {
             Self::Target => "Target",
             Self::Fetch => "Fetch",
             Self::Runtime => "Runtime",
-            Self::Page => "Page",
             Self::Emulation => "Emulation",
             Self::Network => "Network",
             Self::PrimaryPageTargetState => "primary Page target",
@@ -184,10 +181,6 @@ impl DevToolsSessionDomainHandler {
                     plan,
                 )
                 .await?;
-                Ok(None)
-            }
-            Self::Page => {
-                super::page::dispose_session_async(conn, session_id).await?;
                 Ok(None)
             }
             Self::Emulation => {

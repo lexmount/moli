@@ -27,24 +27,9 @@ pub(in crate::domains) fn fail_pending_session_calls(
     );
 }
 
-/// Detaches the Page's renderer Inspector endpoint after Page-owned cleanup
-/// commands have completed.
-pub(in crate::domains) async fn detach_page_session_inspector_async(
-    conn: &mut CdpConnection,
-    session_id: &str,
-) {
-    if let Err(error) = conn.detach_runtime_inspector_session_for_session_owner(Some(session_id)) {
-        tracing::debug!(
-            session_id,
-            %error,
-            "renderer Inspector session was already unavailable during disposal"
-        );
-    }
-}
-
-/// Disables Runtime state owned by one DevTools session. Renderer Inspector
-/// detachment is a separate lifecycle phase and runs after every browser-side
-/// domain handler has disabled itself.
+/// Disables Runtime service state owned by one DevTools session. Page
+/// Inspector resources retire separately; worker handlers release remote
+/// objects before their worker Inspector is detached.
 pub(in crate::domains) async fn dispose_session_handler_async(
     conn: &mut CdpConnection,
     background_events: &mut Vec<BackgroundProtocolEvent>,
@@ -70,8 +55,7 @@ pub(in crate::domains) async fn dispose_session_handler_async(
     Ok(())
 }
 
-/// Detaches the renderer-side Inspector endpoint after every browser-side
-/// domain handler has disabled itself.
+/// Retires renderer-owned session state through its lifecycle endpoint.
 pub(in crate::domains) async fn detach_session_inspector_async(
     conn: &mut CdpConnection,
     plan: &SessionDisposalPlan,
@@ -79,7 +63,9 @@ pub(in crate::domains) async fn detach_session_inspector_async(
     let session_id = plan.session_id();
     match plan.target() {
         SessionDisposalTarget::PageTarget { .. } => {
-            detach_page_session_inspector_async(conn, session_id).await;
+            conn.detach_runtime_inspector_session_for_session_owner(Some(session_id))
+                .await
+                .map_err(anyhow::Error::msg)?;
         }
         SessionDisposalTarget::SharedWorkerTarget {
             browser_context_id,

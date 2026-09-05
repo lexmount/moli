@@ -13,10 +13,12 @@ pub use runtime::RendererRuntimeInspection;
 
 impl RendererInspectionEndpoint {
     /// Seals the frontend's Main/IO ingress synchronously, then lets the
-    /// original renderer owner destroy its V8 session. This lifecycle control
-    /// does not wait behind paused JavaScript or introduce another command lane.
-    pub fn detach_session(&self, inspector_session_id: Option<String>) -> Result<()> {
-        self.page_context_cancel_tx.with_inspector_admission(|| {
+    /// original renderer owner destroy its V8 session and registrations. The
+    /// acknowledgement proves cleanup completed before service records retire.
+    /// Arming the existing detach guard wakes paused JavaScript; this is not a
+    /// command queued on the session that is being destroyed.
+    pub async fn detach_session(&self, inspector_session_id: Option<String>) -> Result<()> {
+        let reply = self.page_context_cancel_tx.with_inspector_admission(|| {
             let session = DevToolsSessionKey::from_wire_session_id(
                 inspector_session_id.as_deref().filter(|id| !id.is_empty()),
             );
@@ -26,14 +28,21 @@ impl RendererInspectionEndpoint {
                 self.devtools_agent_token,
                 session,
             );
-            self.render_runtime.dispatch_detached(
+            self.render_runtime.enqueue(
                 RendererOwnerCommand::FinalizeRuntimeInspectorSessionDetach {
                     token: self.token,
                     inspector_session_id,
                     pause_guard,
                 },
             )
-        })?
+        })??;
+        match reply
+            .await
+            .map_err(|_| anyhow!("renderer session detach reply channel closed"))??
+        {
+            RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(_) => Ok(()),
+            _ => Err(anyhow!("unexpected renderer session detach reply")),
+        }
     }
 
     // Only the finite typed agent facades may enter this path. Keep the native
@@ -557,7 +566,7 @@ mod tests {
         old.retire_page();
 
         assert!(
-            old.detach_session(None).is_err(),
+            old.detach_session(None).now_or_never().unwrap().is_err(),
             "retired detach must not close replacement ingress"
         );
         assert_retired(&old);
@@ -612,7 +621,11 @@ mod tests {
         let endpoint = endpoint();
         let main = endpoint.enqueue_main_command(main_command()).unwrap();
         let io = endpoint.enqueue_io_command(io_command()).unwrap();
-        let error = endpoint.detach_session(None).unwrap_err();
+        let error = endpoint
+            .detach_session(None)
+            .now_or_never()
+            .unwrap()
+            .unwrap_err();
         assert!(error.to_string().contains("shut down"));
         assert_main_canceled(main);
         assert_io_canceled(io);

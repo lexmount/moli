@@ -2327,98 +2327,304 @@ async fn detach_from_target_removes_only_selected_session_document_start_scripts
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn detach_fail_closes_page_before_retiring_unremovable_session_scripts() {
+async fn session_cleanup_exception_keeps_the_page_and_peer_session_alive() {
+    session_cleanup_exception_keeps_peer_alive(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn primary_session_cleanup_exception_keeps_the_page_and_peer_session_alive() {
+    session_cleanup_exception_keeps_peer_alive(true).await;
+}
+
+async fn session_cleanup_exception_keeps_peer_alive(primary: bool) {
     let mut ctx = TestContext::new();
     load_bc_with_titled_page_async(
         &mut ctx,
-        "BID-detach-cleanup-failure",
-        "TID-detach-cleanup-failure",
-        "<!doctype html><body>detach cleanup failure</body>",
+        "BID-cleanup-exception",
+        "TID-cleanup-exception",
+        "<!doctype html><body>still alive</body>",
     )
     .await;
     {
-        let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-        browser_context.attach_active_session("SID-cleanup-primary");
-        assert!(browser_context.assign_attached_session_to_target(
-            "TID-detach-cleanup-failure",
-            "SID-cleanup-attached".to_owned(),
-        ));
+        let context = ctx.conn.browser_context.as_mut().unwrap();
+        context.attach_active_session(if primary {
+            "SID-cleanup-exception"
+        } else {
+            "SID-cleanup-peer"
+        });
+        assert!(
+            context.assign_attached_session_to_target(
+                "TID-cleanup-exception",
+                if primary {
+                    "SID-cleanup-peer"
+                } else {
+                    "SID-cleanup-exception"
+                }
+                .to_owned(),
+            )
+        );
     }
-    register_page_session_route(
-        &mut ctx,
-        "BID-detach-cleanup-failure",
-        "TID-detach-cleanup-failure",
-        "SID-cleanup-primary",
-        moli_page_types::DevToolsSessionKey::Primary,
-    );
-    register_page_session_route(
-        &mut ctx,
-        "BID-detach-cleanup-failure",
-        "TID-detach-cleanup-failure",
-        "SID-cleanup-attached",
-        moli_page_types::DevToolsSessionKey::Attached("SID-cleanup-attached".to_owned()),
-    );
-    ctx.sent.clear();
+    ctx.conn.commit_declared_session_fixtures_for_test();
+    for (id, method, params) in [
+        (
+            1,
+            "Page.addScriptToEvaluateOnNewDocument",
+            json!({
+                "source": "globalThis.cleanedSessionScript = true;",
+                "worldName": "cleanup-script",
+            }),
+        ),
+        (2, "Fetch.enable", json!({})),
+        (3, "Network.enable", json!({})),
+        (
+            4,
+            "Network.setExtraHTTPHeaders",
+            json!({"headers": {"X-Cleanup": "gone"}}),
+        ),
+        (
+            5,
+            "Emulation.setDeviceMetricsOverride",
+            json!({
+                "width": 400, "height": 300, "deviceScaleFactor": 2, "mobile": false,
+            }),
+        ),
+        (
+            6,
+            "Runtime.evaluate",
+            json!({"expression": r#"
+            Object.defineProperty(globalThis, '__moliDeviceMetricsOriginalDescriptors', {
+                configurable: true,
+                get() { throw new Error('session-cleanup-only'); }
+            });
+        "#}),
+        ),
+    ] {
+        ctx.process_async(json!({
+            "id": id, "sessionId": "SID-cleanup-exception", "method": method, "params": params,
+        }))
+        .await;
+        let response = take_response_by_id(&mut ctx, id);
+        assert!(response.get("error").is_none(), "{method}: {response}");
+        assert!(
+            response["result"].get("exceptionDetails").is_none(),
+            "{response}"
+        );
+    }
+    ctx.take_all();
 
-    ctx.process_async(json!({
-        "id": 120_110,
-        "sessionId": "SID-cleanup-attached",
-        "method": "Page.addScriptToEvaluateOnNewDocument",
-        "params": { "source": "globalThis.__mustNotOutliveSession = true;" }
-    }))
+    let before = page_renderer_inspector_session_count(&mut ctx, "before failed cleanup").await;
+    ctx.process_async(
+        json!({"id": 7, "method": "Target.detachFromTarget", "params": {
+            "targetId": "TID-cleanup-exception", "sessionId": "SID-cleanup-exception",
+        }}),
+    )
     .await;
-    ctx.expect_result(
-        120_110,
-        json!({ "identifier": "1" }),
-        Some("SID-cleanup-attached"),
-    );
-
-    ctx.conn
+    let response = take_response_by_id(&mut ctx, 7);
+    let target = ctx
+        .conn
         .browser_context
         .as_ref()
-        .and_then(|browser_context| browser_context.active_page_target().loaded_page())
-        .expect("fixture should retain a loaded Page")
-        .crash_devtools_target_from_io();
-    let cleanup_error = ctx
-        .conn
-        .remove_document_start_scripts_for_detached_session_async("SID-cleanup-attached")
-        .await
-        .expect_err("a closed renderer ingress must reject script cleanup");
+        .unwrap()
+        .active_page_target();
     assert!(
-        cleanup_error
-            .to_string()
-            .contains("document-start script cleanup"),
-        "unexpected cleanup failure: {cleanup_error:#}"
+        !target.is_crashed(),
+        "a cleanup exception is not a renderer crash: {response}"
+    );
+    assert!(target.loaded_page().is_some());
+    assert!(
+        response["error"]["message"]
+            .as_str()
+            .is_some_and(|message| { message.contains("session-cleanup-only") }),
+        "the incomplete detach must report its cleanup error: {response}"
     );
     assert!(
         ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .owner_state
-            .document_start_scripts
-            .iter()
-            .any(|(_, script)| {
-                script.devtools_session
-                    == Some(moli_page_types::DevToolsSessionKey::Attached(
-                        "SID-cleanup-attached".to_owned(),
-                    ))
-            }),
-        "failed renderer cleanup must retain protocol-side retry authority"
+            .session_route(Some("SID-cleanup-exception"))
+            .is_some()
+    );
+    assert!(!target.fetch_owner.is_enabled());
+    assert!(target.owner_state.document_start_scripts.is_empty());
+    assert!(
+        target.effective_policy().extra_headers().is_empty(),
+        "Network cleanup must still run after Emulation failed"
+    );
+    assert!(
+        !ctx.sent.iter().any(|event| matches!(
+            event["method"].as_str(),
+            Some("Inspector.targetCrashed" | "Target.targetCrashed" | "Target.detachedFromTarget")
+        )),
+        "failed session cleanup must not publish successful detach or crash: {:?}",
+        ctx.sent
     );
 
+    assert_eq!(
+        page_renderer_inspector_session_count(&mut ctx, "after failed cleanup").await,
+        before - 1
+    );
+    ctx.process_async(json!({"id": 71, "sessionId": "SID-cleanup-peer", "method": "Emulation.setEmulatedMedia", "params": {
+        "features": [{"name": "prefers-color-scheme", "value": "dark"}],
+    }})).await;
+    ctx.expect_result(71, json!({}), Some("SID-cleanup-peer"));
+    ctx.process_async(
+        json!({"id": 70, "method": "Target.detachFromTarget", "params": {
+            "targetId": "TID-cleanup-exception", "sessionId": "SID-cleanup-exception",
+        }}),
+    )
+    .await;
+    assert!(
+        take_response_by_id(&mut ctx, 70)["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("session-cleanup-only")),
+        "cleared raw policy must not turn a failed cleanup into a false success"
+    );
+    ctx.process_async(
+        json!({"id": 72, "sessionId": "SID-cleanup-peer", "method": "Runtime.evaluate", "params": {
+            "expression": "matchMedia('(prefers-color-scheme: dark)').matches",
+        }}),
+    )
+    .await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 72)["result"]["result"]["value"],
+        json!(true),
+        "failed cleanup retry must preserve later peer policy"
+    );
+    ctx.process_async(json!({"id": 8, "sessionId": "SID-cleanup-peer", "method": "Runtime.evaluate", "params": {
+        "expression": "delete globalThis.__moliDeviceMetricsOriginalDescriptors; document.body.textContent",
+    }})).await;
+    assert_eq!(
+        take_response_by_id(&mut ctx, 8)["result"]["result"]["value"],
+        json!("still alive")
+    );
+    if primary {
+        // Exercise the remaining primary policy tail independently. Disabled
+        // scripting suppresses the throwing surface script used above, so it
+        // cannot also serve as that cleanup-error fixture.
+        ctx.process_async(json!({"id": 73, "sessionId": "SID-cleanup-peer", "method": "Emulation.setScriptExecutionDisabled", "params": {
+            "value": true,
+        }})).await;
+        ctx.expect_result(73, json!({}), Some("SID-cleanup-peer"));
+        ctx.conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .reset_primary_page_session_target_state_async(
+                "TID-cleanup-exception",
+                "SID-cleanup-exception",
+            )
+            .await
+            .unwrap();
+        ctx.process_async(json!({"id": 74, "sessionId": "SID-cleanup-peer", "method": "Runtime.evaluate", "params": {
+            "expression": "globalThis.cleanupRetryScriptRan = false; const s = document.createElement('script'); s.textContent = 'globalThis.cleanupRetryScriptRan = true'; document.body.append(s); s.remove(); globalThis.cleanupRetryScriptRan",
+        }})).await;
+        assert_eq!(
+            take_response_by_id(&mut ctx, 74)["result"]["result"]["value"],
+            json!(false),
+            "primary cleanup must install current script policy, including later peer changes"
+        );
+        ctx.process_async(json!({"id": 75, "sessionId": "SID-cleanup-peer", "method": "Emulation.setScriptExecutionDisabled", "params": {
+            "value": false,
+        }})).await;
+        ctx.expect_result(75, json!({}), Some("SID-cleanup-peer"));
+    }
+    ctx.process_async(
+        json!({"id": 9, "method": "Target.detachFromTarget", "params": {
+            "targetId": "TID-cleanup-exception", "sessionId": "SID-cleanup-exception",
+        }}),
+    )
+    .await;
+    ctx.expect_result(9, json!({}), None);
+    assert!(
+        ctx.conn
+            .session_route(Some("SID-cleanup-exception"))
+            .is_none()
+    );
+    assert!(ctx.conn.session_route(Some("SID-cleanup-peer")).is_some());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn script_session_cleanup_does_not_infer_browser_crash_from_closed_ingress() {
+    closed_renderer_session_cleanup(
+        "Page.addScriptToEvaluateOnNewDocument",
+        json!({
+            "source": "globalThis.mustNotOutliveSession = true;",
+        }),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn fetch_session_cleanup_does_not_infer_browser_crash_from_closed_ingress() {
+    closed_renderer_session_cleanup("Fetch.enable", json!({})).await;
+}
+
+async fn closed_renderer_session_cleanup(method: &str, params: Value) {
+    let mut ctx = TestContext::new();
+    load_bc_with_titled_page_async(
+        &mut ctx,
+        "BID-closed-cleanup",
+        "TID-closed-cleanup",
+        "<!doctype html><body>renderer termination</body>",
+    )
+    .await;
+    {
+        let context = ctx.conn.browser_context.as_mut().unwrap();
+        context.attach_active_session("SID-closed-peer");
+        assert!(context.assign_attached_session_to_target(
+            "TID-closed-cleanup",
+            "SID-closed-cleanup".to_owned(),
+        ));
+    }
+    ctx.conn.commit_declared_session_fixtures_for_test();
     ctx.process_async(json!({
-        "id": 120_111,
-        "method": "Target.detachFromTarget",
-        "params": {
-            "targetId": "TID-detach-cleanup-failure",
-            "sessionId": "SID-cleanup-attached"
-        }
+        "id": 1, "sessionId": "SID-closed-cleanup", "method": method, "params": params,
     }))
     .await;
-    ctx.expect_result(120_111, json!({}), None);
+    let response = take_response_by_id(&mut ctx, 1);
+    assert!(response.get("error").is_none(), "{response}");
+    ctx.take_all();
 
+    // Close the actual receiver before disposal, as the old fail-close tests
+    // did. A cleanup error still is not authority to retire the Browser Page.
+    ctx.conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .active_page_target()
+        .loaded_page()
+        .unwrap()
+        .crash_devtools_target_from_io();
+    ctx.process_async(
+        json!({"id": 2, "method": "Target.detachFromTarget", "params": {
+            "targetId": "TID-closed-cleanup", "sessionId": "SID-closed-cleanup",
+        }}),
+    )
+    .await;
+    let response = take_response_by_id(&mut ctx, 2);
+    assert!(response.get("error").is_some(), "{response}");
+    let target = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .active_page_target();
+    assert!(!target.is_crashed());
+    assert!(target.loaded_page().is_some());
+    assert!(!target.fetch_owner.is_enabled());
+    assert!(ctx.conn.session_route(Some("SID-closed-cleanup")).is_some());
+    assert!(
+        !ctx.sent.iter().any(|event| matches!(
+            event["method"].as_str(),
+            Some("Inspector.targetCrashed" | "Target.targetCrashed")
+        )),
+        "{:?}",
+        ctx.sent
+    );
+
+    // Browser termination is an independent explicit operation. Only it
+    // retires the document and publishes the crash to all page sessions.
+    ctx.process_async(json!({"id": 3, "sessionId": "SID-closed-peer", "method": "Page.crash"}))
+        .await;
+    ctx.expect_result(3, json!({}), Some("SID-closed-peer"));
     let target = ctx
         .conn
         .browser_context
@@ -2428,125 +2634,28 @@ async fn detach_fail_closes_page_before_retiring_unremovable_session_scripts() {
     assert!(target.is_crashed());
     assert!(target.loaded_page().is_none());
     assert!(
-        target
-            .owner_state
-            .document_start_scripts
-            .iter()
-            .all(|(_, script)| {
-                script.devtools_session
-                    != Some(moli_page_types::DevToolsSessionKey::Attached(
-                        "SID-cleanup-attached".to_owned(),
-                    ))
-            }),
-        "session records may retire after the failed renderer has been closed"
-    );
-    assert_eq!(
-        ctx.conn.session_route(Some("SID-cleanup-attached")),
-        None,
-        "the binding should commit only after renderer ownership is gone"
-    );
-    assert!(
         ctx.sent
             .iter()
-            .any(|message| message["method"] == json!("Inspector.targetCrashed")),
-        "cleanup fail-close should be observable to attached Inspector clients: {:?}",
-        ctx.sent
+            .any(|event| event["method"] == json!("Inspector.targetCrashed"))
     );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn detach_fail_closes_page_when_fetch_disable_cannot_reach_renderer() {
-    let mut ctx = TestContext::new();
-    load_bc_with_titled_page_async(
-        &mut ctx,
-        "BID-detach-fetch-cleanup-failure",
-        "TID-detach-fetch-cleanup-failure",
-        "<!doctype html><body>detach fetch cleanup failure</body>",
+    ctx.process_async(
+        json!({"id": 4, "method": "Target.detachFromTarget", "params": {
+            "targetId": "TID-closed-cleanup", "sessionId": "SID-closed-cleanup",
+        }}),
     )
     .await;
-    {
-        let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-        browser_context.attach_active_session("SID-fetch-cleanup-primary");
-        assert!(browser_context.assign_attached_session_to_target(
-            "TID-detach-fetch-cleanup-failure",
-            "SID-fetch-cleanup-attached".to_owned(),
-        ));
-    }
-    register_page_session_route(
-        &mut ctx,
-        "BID-detach-fetch-cleanup-failure",
-        "TID-detach-fetch-cleanup-failure",
-        "SID-fetch-cleanup-primary",
-        moli_page_types::DevToolsSessionKey::Primary,
-    );
-    register_page_session_route(
-        &mut ctx,
-        "BID-detach-fetch-cleanup-failure",
-        "TID-detach-fetch-cleanup-failure",
-        "SID-fetch-cleanup-attached",
-        moli_page_types::DevToolsSessionKey::Attached("SID-fetch-cleanup-attached".to_owned()),
-    );
-    ctx.sent.clear();
-
-    ctx.process_async(json!({
-        "id": 120_112,
-        "sessionId": "SID-fetch-cleanup-attached",
-        "method": "Fetch.enable"
-    }))
-    .await;
-    ctx.expect_result(120_112, json!({}), Some("SID-fetch-cleanup-attached"));
+    ctx.expect_result(4, json!({}), None);
+    assert!(ctx.conn.session_route(Some("SID-closed-cleanup")).is_none());
+    assert!(ctx.conn.session_route(Some("SID-closed-peer")).is_some());
     assert!(
         ctx.conn
             .browser_context
             .as_ref()
             .unwrap()
             .active_page_target()
-            .fetch_owner
-            .is_enabled(),
-        "the attached session must own renderer Fetch interception before detach"
-    );
-
-    ctx.conn
-        .browser_context
-        .as_ref()
-        .and_then(|browser_context| browser_context.active_page_target().loaded_page())
-        .expect("fixture should retain a loaded Page")
-        .crash_devtools_target_from_io();
-
-    ctx.process_async(json!({
-        "id": 120_113,
-        "method": "Target.detachFromTarget",
-        "params": {
-            "targetId": "TID-detach-fetch-cleanup-failure",
-            "sessionId": "SID-fetch-cleanup-attached"
-        }
-    }))
-    .await;
-    ctx.expect_result(120_113, json!({}), None);
-
-    let target = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target();
-    assert!(
-        target.is_crashed(),
-        "a failed renderer Fetch cleanup must fail the Page closed"
-    );
-    assert!(target.loaded_page().is_none());
-    assert!(!target.fetch_owner.is_enabled());
-    assert_eq!(
-        ctx.conn.session_route(Some("SID-fetch-cleanup-attached")),
-        None,
-        "the binding should commit only after renderer ownership is gone"
-    );
-    assert!(
-        ctx.sent
-            .iter()
-            .any(|message| message["method"] == json!("Inspector.targetCrashed")),
-        "Fetch cleanup fail-close should be observable to Inspector clients: {:?}",
-        ctx.sent
+            .owner_state
+            .document_start_scripts
+            .is_empty()
     );
 }
 

@@ -2701,69 +2701,57 @@ pub(crate) async fn dispose_page_session_async(
         .clear_devtools_emulation_session_policy_async(session_id)
         .await
         .err();
-
-    let Some(delta) = conn.disable_emulation_session_handler_for_session_owner(session_id) else {
+    if !conn.disable_emulation_session_handler_for_session_owner(session_id) {
         return first_error.map_or(Ok(()), Err);
-    };
+    }
     let owner = CommandOwnerScope::capture(conn, Some(session_id));
     let load_inputs = conn.navigation_load_inputs_for_owner(&owner);
     if let Some(page) = loaded_page_mut_for_target_configuration(conn, Some(session_id)) {
-        if delta.script_execution_disabled {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "script execution",
-                page.set_script_execution_disabled_async(load_inputs.script_execution_disabled)
-                    .await,
-            );
-        }
-        if delta.emulated_media {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "emulated media",
-                page.set_emulated_media_async(&load_inputs.emulated_media)
-                    .await,
-            );
-        }
-        if delta.cpu_throttling_rate {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "CPU throttling",
-                page.set_cpu_throttling_rate_async(load_inputs.cpu_throttling_rate)
-                    .await,
-            );
-        }
-        if delta.network_conditions {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "network conditions",
-                page.set_network_offline_async(load_inputs.network_offline)
-                    .await,
-            );
-        }
-        if delta.emulated_device_metrics {
-            record_emulation_disposal_result(
-                &mut first_error,
-                "device metrics viewport",
-                page.set_viewport_surface_async(load_inputs.viewport_surface)
-                    .await,
-            );
-            record_emulation_disposal_result(
-                &mut first_error,
-                "device metrics script",
-                page.run_page_surface_override_script_async(
-                    device::LIVE_DEVICE_METRICS_CLEAR_SCRIPT,
-                )
-                .await,
-            );
-        }
-    }
-    if delta.surface_changed() {
+        // A failed earlier attempt may already have removed the raw session
+        // contribution. Always install current Browser policy, not that old
+        // contribution or a delta computed from already-cleared service state.
         record_emulation_disposal_result(
             &mut first_error,
-            "page surfaces",
-            apply_session_surface_state_async(conn, session_id).await,
+            "script execution",
+            page.set_script_execution_disabled_async(load_inputs.script_execution_disabled)
+                .await,
+        );
+        record_emulation_disposal_result(
+            &mut first_error,
+            "emulated media",
+            page.set_emulated_media_async(&load_inputs.emulated_media)
+                .await,
+        );
+        record_emulation_disposal_result(
+            &mut first_error,
+            "CPU throttling",
+            page.set_cpu_throttling_rate_async(load_inputs.cpu_throttling_rate)
+                .await,
+        );
+        record_emulation_disposal_result(
+            &mut first_error,
+            "network conditions",
+            page.set_network_offline_async(load_inputs.network_offline)
+                .await,
+        );
+        record_emulation_disposal_result(
+            &mut first_error,
+            "device metrics viewport",
+            page.set_viewport_surface_async(load_inputs.viewport_surface)
+                .await,
+        );
+        record_emulation_disposal_result(
+            &mut first_error,
+            "device metrics script",
+            page.run_page_surface_override_script_async(device::LIVE_DEVICE_METRICS_CLEAR_SCRIPT)
+                .await,
         );
     }
+    record_emulation_disposal_result(
+        &mut first_error,
+        "page surfaces",
+        apply_session_surface_state_async(conn, session_id).await,
+    );
     first_error.map_or(Ok(()), Err)
 }
 

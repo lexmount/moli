@@ -66,16 +66,6 @@ mod termination;
 #[cfg(test)]
 mod tests;
 
-/// Removes renderer-owned Page resources for one DevTools session while its
-/// Inspector binding is still usable for cleanup commands.
-pub(in crate::domains) async fn dispose_session_async(
-    conn: &mut CdpConnection,
-    session_id: &str,
-) -> anyhow::Result<()> {
-    conn.remove_document_start_scripts_for_detached_session_async(session_id)
-        .await
-}
-
 /// Clears target-visible state owned by the primary Page session after every
 /// per-session handler contribution has been removed.
 pub(in crate::domains) async fn dispose_primary_session_target_state_async(

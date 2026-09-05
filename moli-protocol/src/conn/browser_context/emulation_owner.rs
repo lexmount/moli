@@ -2,7 +2,7 @@ use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionOwnerRef};
 use super::*;
 #[cfg(test)]
 use crate::conn::DevToolsEmulationSessionState;
-use crate::conn::{EmulatedDeviceMetrics, EmulationPolicyChange, EmulationPolicyDelta};
+use crate::conn::{EmulatedDeviceMetrics, EmulationPolicyChange};
 
 impl TargetSessionOwnerMut<'_> {
     fn apply_emulation_override(self, change: EmulationPolicyChange) -> bool {
@@ -14,6 +14,7 @@ impl TargetSessionOwnerMut<'_> {
             .ensure_session(&self.session_key)
             .emulation_session_state
             .overrides
+            .get_or_insert_default()
             .apply(change.clone());
         state.apply_emulation_policy_change(change);
         true
@@ -158,16 +159,20 @@ impl CdpConnection {
     pub(crate) fn disable_emulation_session_handler_for_session_owner(
         &mut self,
         session_id: &str,
-    ) -> Option<EmulationPolicyDelta> {
-        let owner = self.target_session_owner_mut(Some(session_id))?;
-        let target = owner.browser_context.page_target_mut(&owner.target_id)?;
-        let raw = std::mem::take(
-            &mut target
-                .devtools_sessions
-                .ensure_session(&owner.session_key)
-                .emulation_session_state,
-        );
-        Some(target.apply_emulation_policy_changes(raw.disable_policy_changes()))
+    ) -> bool {
+        let Some(owner) = self.target_session_owner_mut(Some(session_id)) else {
+            return false;
+        };
+        let Some(target) = owner.browser_context.page_target_mut(&owner.target_id) else {
+            return false;
+        };
+        let changes = target
+            .devtools_sessions
+            .ensure_session(&owner.session_key)
+            .emulation_session_state
+            .disable_policy_changes();
+        target.apply_emulation_policy_changes(changes);
+        true
     }
 }
 
@@ -206,7 +211,7 @@ mod tests {
         let primary = conn
             .emulation_session_state_for_session_owner(Some("SID-primary"))
             .unwrap();
-        assert_eq!(primary.overrides.cpu_throttling_rate, 4.0);
+        assert_eq!(primary.overrides.as_ref().unwrap().cpu_throttling_rate, 4.0);
         drop(primary);
 
         let mut contents = {

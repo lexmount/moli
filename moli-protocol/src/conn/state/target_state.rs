@@ -316,41 +316,12 @@ impl TargetOwnerState {
             .any(|(_, script)| script.has_bidi_channel_argument)
     }
 
-    pub(crate) fn document_start_script_registry_keys_for_session(
-        &self,
-        devtools_session: &DevToolsSessionKey,
-    ) -> Vec<String> {
-        self.document_start_scripts
-            .iter()
-            .filter_map(|(_, script)| {
-                (script.devtools_session.as_ref() == Some(devtools_session))
-                    .then(|| script.registry_key.clone())
-                    .flatten()
-            })
-            .collect()
-    }
-
     pub(crate) fn remove_document_start_scripts_for_session(
         &mut self,
         devtools_session: &DevToolsSessionKey,
     ) {
         self.document_start_scripts
             .retain(|(_, script)| script.devtools_session.as_ref() != Some(devtools_session));
-    }
-
-    pub(crate) fn remove_document_start_script_registry_key_for_session(
-        &mut self,
-        devtools_session: &DevToolsSessionKey,
-        registry_key: &str,
-    ) -> bool {
-        let Some(index) = self.document_start_scripts.iter().position(|(_, script)| {
-            script.devtools_session.as_ref() == Some(devtools_session)
-                && script.registry_key.as_deref() == Some(registry_key)
-        }) else {
-            return false;
-        };
-        self.document_start_scripts.remove(index);
-        true
     }
 
     pub(crate) fn moli_memory_diagnostics(&self) -> Value {

@@ -481,6 +481,15 @@ true
 
     #[tokio::test]
     async fn debugger_paused_attached_session_detach_wakes_owner() {
+        paused_session_policy_cleanup("SID-debugger-attached", "SID-debugger-primary").await;
+    }
+
+    #[tokio::test]
+    async fn debugger_paused_primary_session_detach_restores_policy_before_acknowledgement() {
+        paused_session_policy_cleanup("SID-debugger-primary", "SID-debugger-attached").await;
+    }
+
+    async fn paused_session_policy_cleanup(session: &str, peer: &str) {
         let mut ctx = TestContext::new();
         with_loaded_document(&mut ctx).await;
         {
@@ -511,11 +520,43 @@ true
             );
         }
 
+        for (id, method, params) in [
+            (400, "Fetch.enable", json!({})),
+            (
+                401,
+                "Page.addScriptToEvaluateOnNewDocument",
+                json!({"source": "globalThis.detached = true;"}),
+            ),
+            (
+                402,
+                "Emulation.setDeviceMetricsOverride",
+                json!({
+                    "width": 400, "height": 300, "deviceScaleFactor": 2, "mobile": false,
+                }),
+            ),
+            (403, "Network.enable", json!({})),
+            (
+                404,
+                "Network.setExtraHTTPHeaders",
+                json!({"headers": {"X-Detached": "gone"}}),
+            ),
+        ] {
+            let result = command(
+                &mut ctx,
+                json!({
+                    "id": id, "sessionId": session, "method": method, "params": params,
+                }),
+                id,
+            )
+            .await;
+            assert!(result.get("error").is_none(), "{method}: {result}");
+        }
+
         let enable = command(
             &mut ctx,
             json!({
                 "id": 41,
-                "sessionId": "SID-debugger-attached",
+                "sessionId": session,
                 "method": "Debugger.enable"
             }),
             41,
@@ -526,7 +567,7 @@ true
             &mut ctx,
             json!({
                 "id": 42,
-                "sessionId": "SID-debugger-attached",
+                "sessionId": session,
                 "method": "Runtime.evaluate",
                 "params": {
                     "expression": "setTimeout(() => { debugger; globalThis.__afterDebuggerDetach = 1; }, 50); true"
@@ -538,8 +579,7 @@ true
         assert_eq!(timer["result"]["result"]["value"], json!(true));
 
         ctx.wait_for_scheduler_message("attached Debugger.paused", |message| {
-            message["method"] == json!("Debugger.paused")
-                && message["sessionId"] == json!("SID-debugger-attached")
+            message["method"] == json!("Debugger.paused") && message["sessionId"] == json!(session)
         })
         .await;
 
@@ -552,7 +592,7 @@ true
                     "method": "Target.detachFromTarget",
                     "params": {
                         "targetId": "TID-debugger",
-                        "sessionId": "SID-debugger-attached"
+                        "sessionId": session
                     }
                 }),
                 43,
@@ -561,12 +601,23 @@ true
         .await
         .expect("detaching a paused Debugger session must wake the renderer owner");
         assert_eq!(detach["result"], json!({}), "{detach:?}");
+        let target = ctx
+            .conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target();
+        assert!(!target.is_crashed());
+        assert!(!target.fetch_owner.is_enabled());
+        assert!(target.owner_state.document_start_scripts.is_empty());
+        assert!(target.emulation_policy().emulated_device_metrics.is_none());
+        assert!(target.effective_policy().extra_headers().is_empty());
 
         let continued = command(
             &mut ctx,
             json!({
                 "id": 44,
-                "sessionId": "SID-debugger-primary",
+                "sessionId": peer,
                 "method": "Runtime.evaluate",
                 "params": {"expression": "globalThis.__afterDebuggerDetach"}
             }),
