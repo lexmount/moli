@@ -780,32 +780,19 @@ mod tests {
         runtime::{
             RendererDevToolsSessionOutputHost, RendererInspectorIngressTicket,
             RendererOutputStreamIdentity, RendererPageReply, RendererPageState,
-            RendererPerformanceMetricSnapshot, RendererRuntimeCommandOutput,
-            RendererRuntimeInspectorAsyncCompletion, RendererRuntimeInspectorMessage,
-            RendererRuntimeInspectorResponseChannel, RendererTurnOutputJournal,
-            renderer_output_transport_channel,
+            RendererRuntimeCommandOutput, RendererRuntimeInspectorAsyncCompletion,
+            RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseChannel,
+            RendererTurnOutputJournal, renderer_output_transport_channel,
         },
-        types::ScriptExecutionReport,
     };
 
     fn page_state() -> Arc<RendererPageState> {
         let url = url::Url::parse("about:blank").expect("test URL");
-        Arc::new(RendererPageState {
-            requested_url: url.clone(),
-            navigation_initiator_url: None,
-            navigation_redirected: false,
-            navigation_redirect_count: 0,
-            navigation_redirect_chain: Vec::new(),
-            final_url: url,
-            document_title: String::new(),
-            status: 200,
-            headers: Vec::new(),
-            script_execution: Arc::new(ScriptExecutionReport::default()),
-            idle_override: None,
-            service_worker_client_id: 0,
-            dedicated_worker_running_worker_isolate_count: 0,
-            performance_metric_snapshot: RendererPerformanceMetricSnapshot::default(),
-        })
+        Arc::new(RendererPageState::new_for_test(
+            crate::PageId::new_for_testing(1),
+            url.clone(),
+            url,
+        ))
     }
 
     fn ingress() -> RendererInspectorMainIngress {

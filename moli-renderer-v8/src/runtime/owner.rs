@@ -1888,15 +1888,7 @@ impl RendererOwnerHandle {
     }
 
     pub fn refresh_page_view_for_testing(&self, view: RendererPageView) -> Result<()> {
-        self.state.page_table.refresh(
-            view.page_id,
-            view.vm_creation_id,
-            view.view_generation,
-            view.page_state.requested_url.clone(),
-            view.page_state.final_url.clone(),
-            view.page_state.document_title.clone(),
-            view.page_state.status,
-        )
+        self.state.page_table.refresh_view_for_testing(view)
     }
 
     pub fn remove_page_for_testing(&self, page_id: PageId) {
