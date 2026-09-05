@@ -20,6 +20,7 @@ use super::{
         WindowSurfaceState,
     },
 };
+#[cfg(test)]
 use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 
 /// DevTools page projection with a temporarily embedded Browser residence.
@@ -42,6 +43,7 @@ pub struct PageTargetHost {
     pub(crate) input_intercept_drags_enabled: bool,
     pub(crate) input_drag_intercepted: bool,
     pub(crate) css_enabled: bool,
+    #[cfg(test)]
     pub(crate) document_cookie_manager_surface: BrowserContextCookieManagerSurface,
     pub(crate) dom_remote_object_node_cache: HashMap<String, Value>,
     pub(crate) runtime_slot: TargetRuntimeSlot,
@@ -77,6 +79,7 @@ impl PageTargetHost {
             input_intercept_drags_enabled: false,
             input_drag_intercepted: false,
             css_enabled: false,
+            #[cfg(test)]
             document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
             dom_remote_object_node_cache: HashMap::new(),
             runtime_slot: TargetRuntimeSlot::from_page_slot(target_page_slot),
@@ -350,6 +353,7 @@ pub(crate) struct PageTargetRegistry {
 }
 
 impl PageTargetRegistry {
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.hosts.is_empty()
     }

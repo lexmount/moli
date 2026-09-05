@@ -1,3 +1,4 @@
+#[cfg(test)]
 use super::super::cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
 use super::super::{
     BrowserContext, CdpConnection, DocumentStartScript, EmulatedDeviceMetrics,
@@ -170,6 +171,7 @@ impl BrowserContext {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn raw_cookie_manager_surface_snapshot(
         &self,
     ) -> BrowserContextCookieManagerSurfaceSnapshot {

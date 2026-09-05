@@ -194,7 +194,10 @@ fn browser_context_cookie_manager_surface_snapshot(
     browser_context: &BrowserContext,
     owner: Option<&DocumentCookieOwnerSnapshot>,
 ) -> BrowserContextCookieManagerSurfaceSnapshot {
+    #[cfg(test)]
     let snapshot = browser_context.raw_cookie_manager_surface_snapshot();
+    #[cfg(not(test))]
+    let snapshot = BrowserContextCookieManagerSurfaceSnapshot::default();
     let current_document_url = browser_context
         .loaded_page()
         .map(|page| page.final_url().clone());

@@ -15,9 +15,10 @@ use moli_core::page::{
     DocumentCookieOwnerSnapshot,
 };
 
+#[cfg(test)]
 use super::cookie_policy_surface::BrowserContextDocumentCookiePolicySurface;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub(crate) struct BrowserContextCookieManagerPolicySnapshot {
     pub(crate) overrides: BrowserCookieFacadeOverrides,
     pub(crate) cookies_enabled_override: Option<bool>,
@@ -905,25 +906,8 @@ pub(crate) struct BrowserContextCookieManagerSurfaceSnapshot {
 
 impl Default for BrowserContextCookieManagerSurfaceSnapshot {
     fn default() -> Self {
-        BrowserContextCookieManagerSurface::default().snapshot()
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub(crate) struct BrowserContextCookieManagerSurface {
-    policy_surface: BrowserContextDocumentCookiePolicySurface,
-}
-
-impl BrowserContextCookieManagerSurface {
-    pub(crate) fn snapshot(&self) -> BrowserContextCookieManagerSurfaceSnapshot {
-        let policy_surface = self.policy_surface.snapshot();
-        BrowserContextCookieManagerSurfaceSnapshot {
-            policy: BrowserContextCookieManagerPolicySnapshot {
-                overrides: policy_surface.overrides,
-                cookies_enabled_override: policy_surface.cookies_enabled_override,
-                browser_context_overrides: policy_surface.browser_context_overrides,
-                generation: policy_surface.generation,
-            },
+        Self {
+            policy: BrowserContextCookieManagerPolicySnapshot::default(),
             policy_gating: BrowserContextCookieManagerGatingSnapshot::default(),
             effective_gating: BrowserContextCookieManagerGatingSnapshot::default(),
             structured_write: BrowserContextStructuredCookieWriteSnapshot {
@@ -947,8 +931,29 @@ impl BrowserContextCookieManagerSurface {
             activity: BrowserContextCookieManagerActivitySnapshot::default(),
         }
     }
+}
 
-    #[cfg(test)]
+#[cfg(test)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct BrowserContextCookieManagerSurface {
+    policy_surface: BrowserContextDocumentCookiePolicySurface,
+}
+
+#[cfg(test)]
+impl BrowserContextCookieManagerSurface {
+    pub(crate) fn snapshot(&self) -> BrowserContextCookieManagerSurfaceSnapshot {
+        let policy_surface = self.policy_surface.snapshot();
+        BrowserContextCookieManagerSurfaceSnapshot {
+            policy: BrowserContextCookieManagerPolicySnapshot {
+                overrides: policy_surface.overrides,
+                cookies_enabled_override: policy_surface.cookies_enabled_override,
+                browser_context_overrides: policy_surface.browser_context_overrides,
+                generation: policy_surface.generation,
+            },
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn set_policy_overrides(
         &mut self,
         overrides: &BrowserCookieFacadeOverrides,
@@ -956,22 +961,18 @@ impl BrowserContextCookieManagerSurface {
         self.policy_surface.set_overrides(overrides)
     }
 
-    #[cfg(test)]
     pub(crate) fn clear_policy_overrides(&mut self) -> bool {
         self.policy_surface.clear_overrides()
     }
 
-    #[cfg(test)]
     pub(crate) fn set_policy_cookies_enabled_override(&mut self, enabled: bool) -> bool {
         self.policy_surface.set_cookies_enabled_override(enabled)
     }
 
-    #[cfg(test)]
     pub(crate) fn clear_policy_cookies_enabled_override(&mut self) -> bool {
         self.policy_surface.clear_cookies_enabled_override()
     }
 
-    #[cfg(test)]
     pub(crate) fn set_policy_browser_context_overrides(
         &mut self,
         overrides: &BrowserCookieFacadeContextOverrides,
@@ -979,12 +980,10 @@ impl BrowserContextCookieManagerSurface {
         self.policy_surface.set_browser_context_overrides(overrides)
     }
 
-    #[cfg(test)]
     pub(crate) fn clear_policy_browser_context_overrides(&mut self) -> bool {
         self.policy_surface.clear_browser_context_overrides()
     }
 
-    #[cfg(test)]
     pub(crate) async fn apply_to_page_async(&self, page: &mut Page) {
         self.policy_surface.apply_to_page_async(page).await;
     }

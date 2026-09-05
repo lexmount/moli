@@ -22,6 +22,7 @@ use moli_core::storage::{
 use moli_shared_worker::SharedWorkerInstanceId;
 use serde_json::{Value, json};
 
+#[cfg(test)]
 use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 
 use super::{
@@ -42,8 +43,8 @@ pub struct BrowserContext {
     pub id: String,
     storage_partition: BrowserContextStoragePartition,
     pub(crate) page_targets: PageTargetRegistry,
-    /// Policy retained while the context has no page target yet. The first
-    /// target inherits it; once targets exist, each target owns its surface.
+    /// Test-only cookie overrides, inherited by the first page fixture.
+    #[cfg(test)]
     pub(crate) default_document_cookie_manager_surface: BrowserContextCookieManagerSurface,
     pub target_popup_ids: HashMap<String, u64>,
     pending_popup_javascript_dialogs: HashMap<u64, Vec<TargetPreparedJavaScriptDialog>>,
@@ -498,6 +499,7 @@ impl BrowserContext {
             id,
             storage_partition,
             page_targets: PageTargetRegistry::default(),
+            #[cfg(test)]
             default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
             target_popup_ids: HashMap::new(),
             pending_popup_javascript_dialogs: HashMap::new(),
