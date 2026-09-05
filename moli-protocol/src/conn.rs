@@ -40,6 +40,7 @@ mod command_owner_scope;
 mod command_view;
 mod cookie_manager_surface;
 mod cookie_owner;
+#[cfg(test)]
 mod cookie_policy_surface;
 #[cfg(test)]
 mod cookie_store_boundary;

@@ -57,6 +57,7 @@ impl BrowserContext {
     }
 
     pub(crate) fn insert_page_target_host(&mut self, mut host: PageTargetHost) -> bool {
+        #[cfg(test)]
         if self.page_targets.is_empty() {
             host.document_cookie_manager_surface =
                 self.default_document_cookie_manager_surface.clone();
