@@ -13,7 +13,10 @@ use super::super::{
     source_key::{StyleSourceKey, StyleSourceSetKey},
 };
 use super::imports::stylesheet_top_level_import_urls;
-use super::shared_cache::{SharedStyleSourceContents, shared_style_source_contents};
+use super::shared_cache::{
+    SharedStyleSourceContents, shared_style_source_contents,
+    shared_style_source_contents_from_shared,
+};
 use crate::{
     document_runtime::DomHandle, protocol_types::EmulatedMediaOverrides,
     style_engine::StyleViewport,
@@ -92,6 +95,15 @@ pub(crate) struct OwnerStyleSheetSource {
 impl StyloStylesheetSource {
     pub(crate) fn new(css_text: String, base_url: url::Url) -> Self {
         let shared = shared_style_source_contents(css_text, base_url);
+        Self::from_shared_contents(shared)
+    }
+
+    fn from_shared_text(css_text: StdArc<str>, base_url: url::Url) -> Self {
+        let shared = shared_style_source_contents_from_shared(css_text, base_url);
+        Self::from_shared_contents(shared)
+    }
+
+    fn from_shared_contents(shared: StdArc<SharedStyleSourceContents>) -> Self {
         let cache_key =
             StyleSourceKey::from_css_fingerprint(shared.css_fingerprint(), shared.base_url());
         let base_url = shared.base_url_handle();
@@ -542,8 +554,22 @@ impl StylesheetFontFaceDescriptor {
 }
 
 impl OwnerStyleSheetSource {
+    #[cfg(test)]
     pub(crate) fn new(owner: DomHandle, css_text: String, parser_base: url::Url) -> Self {
         let source = StyloStylesheetSource::new(css_text, parser_base);
+        Self::from_source(owner, source)
+    }
+
+    pub(crate) fn from_shared_text(
+        owner: DomHandle,
+        css_text: StdArc<str>,
+        parser_base: url::Url,
+    ) -> Self {
+        let source = StyloStylesheetSource::from_shared_text(css_text, parser_base);
+        Self::from_source(owner, source)
+    }
+
+    fn from_source(owner: DomHandle, source: StyloStylesheetSource) -> Self {
         let processing_contents = source
             .processing_contents()
             .expect("owner processing source must remain text-backed");
