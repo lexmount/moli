@@ -2868,6 +2868,7 @@ dependencies = [
  "http",
  "httpdate",
  "indexmap",
+ "kurbo",
  "markup5ever",
  "moli-action-window",
  "moli-broadcast-channel",
