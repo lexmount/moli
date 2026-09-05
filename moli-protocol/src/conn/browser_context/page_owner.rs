@@ -76,24 +76,8 @@ impl TargetSessionStateMut<'_> {
             .page_file_chooser_opened_event_enabled = enabled;
     }
 
-    fn disable_page_domain(mut self) {
-        let state = self.page_session_state_mut();
-        state.disable_page_domain();
-        state.page_lifecycle_events = false;
-        state.page_bypass_csp_enabled = false;
-        state.page_font_families.clear();
-        state.page_file_chooser_opened_event_enabled = false;
-        state.page_intercept_file_chooser_dialog_enabled = false;
-        state.page_screencast.stop();
-        state.javascript_dialog_state.clear();
-    }
-
     fn set_page_lifecycle_events_enabled(mut self, enabled: bool) {
         self.page_session_state_mut().page_lifecycle_events = enabled;
-    }
-
-    fn set_page_bypass_csp_enabled(mut self, enabled: bool) {
-        self.page_session_state_mut().page_bypass_csp_enabled = enabled;
     }
 
     fn set_page_font_families(mut self, font_families: serde_json::Map<String, Value>) {
@@ -304,9 +288,9 @@ impl TargetSessionOwnerMut<'_> {
         true
     }
 
-    fn disable_page_domain(self) -> bool {
-        self.mutate_session_state(|state| {
-            state.disable_page_domain();
+    fn disable_page_domain(mut self) -> bool {
+        self.mutate_page_state(|target, session| {
+            target.disable_devtools_page_domain(session);
         });
         true
     }
@@ -341,9 +325,9 @@ impl TargetSessionOwnerMut<'_> {
         PageLifecycleEventsEnableResult::Handled { replay_target }
     }
 
-    fn set_page_bypass_csp_enabled(self, enabled: bool) -> bool {
-        self.mutate_session_state(|state| {
-            state.set_page_bypass_csp_enabled(enabled);
+    fn set_page_bypass_csp_enabled(mut self, enabled: bool) -> bool {
+        self.mutate_page_state(|target, session| {
+            target.set_devtools_bypass_csp_enabled(session, enabled);
         });
         true
     }
@@ -991,6 +975,83 @@ mod tests {
     use super::*;
     use crate::conn::PageTargetHost;
 
+    #[test]
+    fn csp_policy_preserves_peer_contributions_across_update_disable_and_detach() {
+        let mut context = BrowserContext::new_with_page_for_test("BID-csp", "TID-csp");
+        context.attach_active_session("SID-primary");
+        for session in ["SID-attached", "SID-observer"] {
+            assert!(context.assign_attached_session_to_target("TID-csp", session.to_owned()));
+        }
+        let mut conn = CdpConnection::default();
+        conn.install_browser_context_fixture_for_test(context);
+        for (session, enabled, expected) in [
+            ("SID-primary", true, true),
+            ("SID-attached", true, true),
+            ("SID-primary", false, true),
+            ("SID-attached", false, false),
+        ] {
+            assert!(conn.set_page_bypass_csp_enabled_for_session_owner(Some(session), enabled));
+            assert_eq!(
+                conn.navigation_load_inputs_for_session_owner(Some("SID-observer"))
+                    .bypass_content_security_policy,
+                expected
+            );
+        }
+        for session in ["SID-primary", "SID-attached"] {
+            assert!(conn.set_page_bypass_csp_enabled_for_session_owner(Some(session), true));
+        }
+        for (session, expected) in [("SID-primary", true), ("SID-attached", false)] {
+            assert!(conn.disable_page_domain_for_session_owner(Some(session)));
+            assert_eq!(
+                conn.effective_page_bypass_csp_enabled_for_session_owner(Some("SID-observer")),
+                Some(expected)
+            );
+        }
+        assert!(conn.set_page_bypass_csp_enabled_for_session_owner(Some("SID-attached"), true));
+        let key = moli_page_types::DevToolsSessionKey::Attached("SID-attached".into());
+        assert!(
+            !conn
+                .browser_context
+                .as_mut()
+                .unwrap()
+                .remove_page_session_binding("TID-csp", "SID-wrong", &key)
+        );
+        assert!(
+            conn.navigation_load_inputs_for_session_owner(Some("SID-observer"))
+                .bypass_content_security_policy
+        );
+        assert!(
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .remove_page_session_binding("TID-csp", "SID-attached", &key)
+        );
+        assert!(
+            !conn
+                .navigation_load_inputs_for_session_owner(Some("SID-observer"))
+                .bypass_content_security_policy
+        );
+        assert!(conn.set_page_bypass_csp_enabled_for_session_owner(Some("SID-primary"), true));
+        assert!(
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .release_primary_session_binding_preserving_frontend_state("SID-primary")
+        );
+        assert!(
+            !conn
+                .navigation_load_inputs_for_session_owner(Some("SID-observer"))
+                .bypass_content_security_policy
+        );
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .page_target("TID-csp")
+                .is_some()
+        );
+    }
+
     fn active_session_state_mut(browser_context: &mut BrowserContext) -> TargetSessionStateMut<'_> {
         let state = browser_context.active_page_target_mut();
         TargetSessionStateMut {
@@ -1015,7 +1076,9 @@ mod tests {
         active_session_state_mut(&mut active).set_console_enabled(true);
         active_session_state_mut(&mut active).set_log_enabled(true);
         active_session_state_mut(&mut active).set_page_file_chooser_opened_event_enabled(true);
-        active_session_state_mut(&mut active).set_page_bypass_csp_enabled(true);
+        active
+            .active_page_target_mut()
+            .set_devtools_bypass_csp_enabled(&moli_page_types::DevToolsSessionKey::Primary, true);
         active_session_state_mut(&mut active).set_page_font_families(font_families.clone());
         active_session_state_mut(&mut active).set_page_intercept_file_chooser_dialog_enabled(true);
         assert!(
@@ -1045,7 +1108,7 @@ mod tests {
             active.active_page_target().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
-                .page_bypass_csp_enabled
+                .page_bypass_csp_enabled()
         );
         assert_eq!(
             active.active_page_target().devtools_sessions
@@ -1073,7 +1136,8 @@ mod tests {
         background_session_state_mut(&mut background).set_log_enabled(true);
         background_session_state_mut(&mut background)
             .set_page_file_chooser_opened_event_enabled(true);
-        background_session_state_mut(&mut background).set_page_bypass_csp_enabled(true);
+        background
+            .set_devtools_bypass_csp_enabled(&moli_page_types::DevToolsSessionKey::Primary, true);
         background_session_state_mut(&mut background).set_page_font_families(font_families.clone());
         background_session_state_mut(&mut background)
             .set_page_intercept_file_chooser_dialog_enabled(true);
@@ -1100,7 +1164,7 @@ mod tests {
         assert!(
             background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state
-                .page_bypass_csp_enabled
+                .page_bypass_csp_enabled()
         );
         assert_eq!(
             background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]

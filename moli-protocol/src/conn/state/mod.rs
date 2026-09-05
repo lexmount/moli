@@ -96,8 +96,6 @@ pub(crate) use service_worker_lifetime::{
 pub(crate) use service_worker_target::{
     ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState,
 };
-#[cfg(test)]
-pub(crate) use session::TargetPerformanceSessionState;
 pub(crate) use session::{
     EffectiveTargetPolicy, PageScreencastConfig, PageScreencastFormat, PerformanceTimeDomain,
     TargetPageSessionState, TargetRuntimeSessionState,

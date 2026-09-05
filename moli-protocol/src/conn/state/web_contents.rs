@@ -36,6 +36,7 @@ pub(in crate::conn) struct WebContents {
     pub(in crate::conn) network_request_policy: NetworkRequestPolicy,
     pub(in crate::conn) network_offline: bool,
     pub(in crate::conn) tls_verify_host_override: Option<bool>,
+    pub(in crate::conn) bypass_content_security_policy: bool,
     pub(in crate::conn) browser_identity_override:
         Option<moli_browser_profile::BrowserIdentityProfile>,
     pub(in crate::conn) locale_override: Option<String>,
@@ -56,6 +57,7 @@ impl Default for WebContents {
             network_request_policy: NetworkRequestPolicy::default(),
             network_offline: false,
             tls_verify_host_override: None,
+            bypass_content_security_policy: false,
             browser_identity_override: None,
             locale_override: None,
             timezone_override: None,
@@ -78,6 +80,10 @@ impl WebContents {
 
     pub(in crate::conn) fn set_tls_verify_host_override(&mut self, enabled: Option<bool>) {
         self.tls_verify_host_override = enabled;
+    }
+
+    pub(in crate::conn) fn set_bypass_content_security_policy(&mut self, bypass: bool) {
+        self.bypass_content_security_policy = bypass;
     }
 
     pub(in crate::conn) fn set_browser_identity_override(

@@ -105,7 +105,7 @@ fn page_owner_state_commands_complete_through_command_dispatch() {
         browser_context.active_page_target().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
-            .page_bypass_csp_enabled
+            .page_bypass_csp_enabled()
     );
     assert_eq!(
         browser_context.active_page_target().devtools_sessions
@@ -169,7 +169,6 @@ fn page_owner_state_commands_complete_through_command_dispatch() {
 fn mark_page_domain_enabled(state: &mut crate::conn::TargetPageSessionState) {
     state.page_domain_enabled = true;
     state.page_lifecycle_events = true;
-    state.page_bypass_csp_enabled = true;
     state
         .page_font_families
         .insert("standard".to_owned(), json!("Inter"));
@@ -195,7 +194,7 @@ fn mark_page_domain_enabled(state: &mut crate::conn::TargetPageSessionState) {
 fn assert_page_domain_enabled(state: &crate::conn::TargetPageSessionState) {
     assert!(state.page_domain_enabled);
     assert!(state.page_lifecycle_events);
-    assert!(state.page_bypass_csp_enabled);
+    assert!(state.page_bypass_csp_enabled());
     assert_eq!(
         state.page_font_families.get("standard"),
         Some(&json!("Inter"))
@@ -210,7 +209,7 @@ fn assert_page_domain_enabled(state: &crate::conn::TargetPageSessionState) {
 fn assert_page_domain_disabled(state: &crate::conn::TargetPageSessionState) {
     assert!(!state.page_domain_enabled);
     assert!(!state.page_lifecycle_events);
-    assert!(!state.page_bypass_csp_enabled);
+    assert!(!state.page_bypass_csp_enabled());
     assert!(state.page_font_families.is_empty());
     assert!(!state.page_file_chooser_opened_event_enabled);
     assert!(!state.page_intercept_file_chooser_dialog_enabled);
@@ -1156,6 +1155,9 @@ async fn page_disable_clears_page_handler_state_for_active_attached_session() {
         "about:blank",
     );
     let browser_context = ctx.conn.browser_context.as_mut().unwrap();
+    browser_context
+        .active_page_target_mut()
+        .set_devtools_bypass_csp_enabled(&moli_page_types::DevToolsSessionKey::Primary, true);
     mark_page_domain_enabled(
         &mut browser_context.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -1216,6 +1218,7 @@ async fn page_disable_clears_page_handler_state_for_background_attached_session(
         let state = browser_context
             .background_target_mut("TID-background")
             .expect("background target must exist");
+        state.set_devtools_bypass_csp_enabled(&moli_page_types::DevToolsSessionKey::Primary, true);
         mark_page_domain_enabled(
             &mut state.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
                 .page_session_state,
@@ -3512,7 +3515,7 @@ async fn set_bypass_csp_accepts_valid_params_and_returns_empty_result() {
     assert!(ctx.conn.browser_context.as_ref().is_some_and(|bc| {
         bc.active_page_target().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
-            .page_bypass_csp_enabled
+            .page_bypass_csp_enabled()
     }));
 }
 #[tokio::test(flavor = "multi_thread")]
