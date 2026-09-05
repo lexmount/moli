@@ -16,7 +16,7 @@ use moli_core::runtime::{
     storage_partition::StoragePartitionState,
 };
 use moli_core::storage::{
-    SharedIndexedDbManager, SharedStorageBucketStore, StorageBucketIdentity, WeakIndexedDbManager,
+    SharedIndexedDbManager, SharedStorageBucketStore, WeakIndexedDbManager,
     new_shared_storage_bucket_store_with_indexed_db_manager,
 };
 use moli_shared_worker::SharedWorkerInstanceId;
@@ -39,10 +39,13 @@ use super::{
 };
 
 mod physical;
+mod storage_partition;
 #[cfg(test)]
 mod tests;
+use physical::BrowserContext as PhysicalBrowserContext;
 pub(crate) use physical::ContextNetworkPolicy;
-use physical::{BrowserContext as PhysicalBrowserContext, StoragePartitionKind};
+use storage_partition::StoragePartitionKind;
+pub(crate) use storage_partition::{OriginStorageUsage, SiteDataClearOptions};
 
 /// DevTools context projection with a privately embedded Browser context.
 /// Storage/runtime live in the Browser owner; the page collection moves with
@@ -99,14 +102,6 @@ pub(crate) struct BrowserContextPageStorageHandles {
     pub(crate) session_storage_store: SharedWebStorageStore,
     pub(crate) indexed_db_manager: Option<WeakIndexedDbManager>,
     pub(crate) storage_bucket_store: Option<SharedStorageBucketStore>,
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub(crate) struct BrowserContextOriginStorageUsage {
-    pub(crate) local_storage_usage: u64,
-    pub(crate) indexed_db_usage: u64,
-    pub(crate) storage_buckets_usage: u64,
-    pub(crate) total_usage: u64,
 }
 
 impl BrowserContextStoragePartitionHandles {
@@ -223,15 +218,6 @@ impl BrowserContextPageStorageHandles {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct SiteDataClearOptions {
-    pub cookies: bool,
-    pub local_storage: bool,
-    pub indexed_db: bool,
-    pub storage_buckets: bool,
-    pub http_cache: bool,
-}
-
 impl std::fmt::Debug for BrowserContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BrowserContext")
@@ -243,10 +229,6 @@ impl std::fmt::Debug for BrowserContext {
             .field("has_loaded_page", &self.has_loaded_page())
             .finish_non_exhaustive()
     }
-}
-
-fn usize_to_u64_saturating(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 impl BrowserContext {
@@ -585,65 +567,10 @@ impl BrowserContext {
     pub(crate) fn storage_usage_for_origin(
         &self,
         serialized_origin: &str,
-    ) -> Result<BrowserContextOriginStorageUsage, String> {
-        let local_storage_usage = {
-            let store = self.physical.storage_partition.web_storage_store().lock();
-            usize_to_u64_saturating(store.usage_bytes_for_origin_areas(serialized_origin))
-        };
-        let indexed_db_usage = moli_core::storage::indexed_db_origins_with_prefix_usage_bytes(
-            self.physical.storage_partition.indexed_db_manager(),
-            &moli_storage_key::storage_key_prefix_for_origin(serialized_origin),
-        )?;
-        let storage_buckets_usage = self.storage_bucket_usage_for_origin(serialized_origin)?;
-        Ok(BrowserContextOriginStorageUsage {
-            local_storage_usage,
-            indexed_db_usage,
-            storage_buckets_usage,
-            total_usage: local_storage_usage
-                .saturating_add(indexed_db_usage)
-                .saturating_add(storage_buckets_usage),
-        })
-    }
-
-    fn storage_bucket_usage_for_origin(&self, serialized_origin: &str) -> Result<u64, String> {
-        let (bucket_identities, cache_usage, storage_service) = {
-            let store = self
-                .physical
-                .storage_partition
-                .storage_bucket_store()
-                .lock();
-            (
-                store.bucket_identities_for_origin_areas(serialized_origin),
-                store.cache_usage_for_origin_areas(serialized_origin),
-                store.storage_service(),
-            )
-        };
-        let mut usage = cache_usage;
-        for identity in bucket_identities {
-            let indexed_db_usage = moli_core::storage::indexed_db_origin_usage_bytes(
-                self.physical.storage_partition.indexed_db_manager(),
-                &identity.indexed_db_storage_key(),
-            )?;
-            let opfs_usage = storage_service
-                .opfs_usage(&identity.locator())
-                .map_err(|error| format!("FailedToReadStorageBucketOpfsUsage: {error}"))?;
-            usage = usage
-                .saturating_add(indexed_db_usage)
-                .saturating_add(opfs_usage);
-        }
-        Ok(usage)
-    }
-
-    fn complete_storage_bucket_deletions(
-        &self,
-        cleanups: Vec<StorageBucketIdentity>,
-    ) -> Result<(), String> {
-        let bucket_store = self.physical.storage_partition.storage_bucket_store();
-        for cleanup in cleanups {
-            moli_core::storage::complete_storage_bucket_deletion(bucket_store, &cleanup)
-                .map_err(|error| format!("FailedToCompleteStorageBucketDeletion: {error}"))?;
-        }
-        Ok(())
+    ) -> Result<OriginStorageUsage, String> {
+        self.physical
+            .storage_partition
+            .usage_for_origin(serialized_origin)
     }
 
     pub(crate) fn renderer_runtime(&self) -> RendererBrowserContextRuntime {
@@ -1199,56 +1126,14 @@ impl BrowserContext {
             .clear_document_navigation_state();
     }
 
-    pub(crate) fn clear_indexed_db_origin(&self, origin: &str) -> Result<(), String> {
-        moli_core::storage::clear_indexed_db_origin(
-            self.physical.storage_partition.indexed_db_manager(),
-            origin,
-        )
-    }
-
     pub(crate) fn clear_site_data_for_origin(
         &mut self,
         origin: &url::Url,
         options: SiteDataClearOptions,
     ) -> Result<(), String> {
-        if options.cookies
-            && let Some(host) = origin.host_str().map(str::to_ascii_lowercase)
-        {
-            let mut cookie_store = self.physical.storage_partition.cookie_store().lock();
-            cookie_store.delete_cookies(None, None, None, Some(host.as_str()));
-        }
-
-        let serialized_origin = origin.origin().ascii_serialization();
-        if options.local_storage {
-            let mut store = self.physical.storage_partition.web_storage_store().lock();
-            store
-                .try_clear_origin_areas(&serialized_origin)
-                .map_err(|error| format!("FailedToClearLocalStorage: {error}"))?;
-        }
-
-        if options.indexed_db {
-            moli_core::storage::clear_indexed_db_origins_with_prefix(
-                self.physical.storage_partition.indexed_db_manager(),
-                &moli_storage_key::storage_key_prefix_for_origin(&serialized_origin),
-            )?;
-        }
-
-        if options.storage_buckets {
-            let cleanups = self
-                .physical
-                .storage_partition
-                .storage_bucket_store()
-                .lock()
-                .clear_origin_areas(&serialized_origin)
-                .map_err(|error| format!("FailedToClearStorageBuckets: {error}"))?;
-            self.complete_storage_bucket_deletions(cleanups)?;
-        }
-
-        if options.http_cache {
-            self.clear_http_cache_for_origin(origin)?;
-        }
-
-        Ok(())
+        self.physical
+            .storage_partition
+            .clear_site_data_for_origin(origin, options)
     }
 
     pub(crate) fn clear_site_data_for_storage_key(
@@ -1256,57 +1141,13 @@ impl BrowserContext {
         storage_key: &moli_storage_key::MoliStorageKey,
         options: SiteDataClearOptions,
     ) -> Result<(), String> {
-        let origin = url::Url::parse(storage_key.origin())
-            .map_err(|error| format!("UnableToDeserializeStorageKeyOrigin: {error}"))?;
-        if origin.origin().ascii_serialization() != storage_key.origin() {
-            return Err("UnableToDeserializeStorageKeyOrigin".to_owned());
-        }
-
-        if options.cookies
-            && let Some(host) = origin.host_str().map(str::to_ascii_lowercase)
-        {
-            let mut cookie_store = self.physical.storage_partition.cookie_store().lock();
-            cookie_store.delete_cookies(None, None, None, Some(host.as_str()));
-        }
-
-        let serialized_storage_key = storage_key.serialized_storage_key();
-        if options.local_storage {
-            let mut store = self.physical.storage_partition.web_storage_store().lock();
-            store
-                .try_clear_origin(&serialized_storage_key)
-                .map_err(|error| format!("FailedToClearLocalStorage: {error}"))?;
-        }
-
-        if options.indexed_db {
-            self.clear_indexed_db_origin(&serialized_storage_key)?;
-        }
-
-        if options.storage_buckets {
-            let cleanups = self
-                .physical
-                .storage_partition
-                .storage_bucket_store()
-                .lock()
-                .clear_origin(&serialized_storage_key)
-                .map_err(|error| format!("FailedToClearStorageBuckets: {error}"))?;
-            self.complete_storage_bucket_deletions(cleanups)?;
-        }
-
-        if options.http_cache {
-            self.clear_http_cache_for_origin(&origin)?;
-        }
-
-        Ok(())
+        self.physical
+            .storage_partition
+            .clear_site_data_for_storage_key(storage_key, options)
     }
 
     pub(crate) fn clear_http_cache(&self) -> Result<(), String> {
         self.physical.storage_partition.clear_http_cache()
-    }
-
-    pub(crate) fn clear_http_cache_for_origin(&self, origin: &url::Url) -> Result<usize, String> {
-        self.physical
-            .storage_partition
-            .clear_http_cache_for_origin(origin)
     }
 
     #[cfg(test)]

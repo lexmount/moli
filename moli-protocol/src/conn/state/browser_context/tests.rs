@@ -2,6 +2,74 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn physical_storage_operations_outlive_protocol_projection() {
+    let origin = url::Url::parse("https://physical.test").unwrap();
+    let origin_key = origin.origin().ascii_serialization();
+    let key_a = moli_storage_key::partitioned_storage_key(&origin_key, "https://top-a.test");
+    let key_b = moli_storage_key::partitioned_storage_key(&origin_key, "https://top-b.test");
+    let sibling = url::Url::parse("https://sibling.test").unwrap();
+    let sibling_origin = sibling.origin().ascii_serialization();
+    let sibling_key = moli_storage_key::MoliStorageKey::first_party_from_url(&sibling, None)
+        .serialized_storage_key();
+    let mut physical = {
+        let projection = BrowserContext::new_with_page_for_test("CTX-storage", "page-storage");
+        {
+            let mut store = projection.web_storage_store_for_test().lock();
+            assert!(store.set_item(&key_a, "local", "aaa"));
+            assert!(store.set_item(&key_b, "local", "bb"));
+            assert!(store.set_item(&sibling_key, "local", "c"));
+        }
+        projection.physical
+    };
+    let partition = &mut physical.storage_partition;
+    assert_eq!(
+        partition.usage_for_origin(&origin_key).unwrap(),
+        OriginStorageUsage {
+            local_storage_usage: 5,
+            indexed_db_usage: 0,
+            storage_buckets_usage: 0,
+            total_usage: 5,
+        }
+    );
+    let options = SiteDataClearOptions {
+        local_storage: true,
+        ..Default::default()
+    };
+    let key = moli_storage_key::deserialize_serialized_storage_key(&key_a).unwrap();
+    partition
+        .clear_site_data_for_storage_key(&key, options)
+        .unwrap();
+    assert_eq!(
+        partition.usage_for_origin(&origin_key).unwrap().total_usage,
+        2
+    );
+    {
+        let mut store = partition.web_storage_store().lock();
+        assert_eq!(store.get_item(&key_a, "local"), None);
+        assert_eq!(store.get_item(&key_b, "local"), Some("bb".into()));
+        assert!(store.set_item(&key_a, "local", "aaa"));
+    }
+    partition
+        .clear_site_data_for_origin(&origin, options)
+        .unwrap();
+    assert_eq!(
+        partition.usage_for_origin(&origin_key).unwrap().total_usage,
+        0
+    );
+    assert_eq!(
+        partition
+            .usage_for_origin(&sibling_origin)
+            .unwrap()
+            .total_usage,
+        1
+    );
+    let mut store = partition.web_storage_store().lock();
+    assert_eq!(store.get_item(&key_a, "local"), None);
+    assert_eq!(store.get_item(&key_b, "local"), None);
+    assert_eq!(store.get_item(&sibling_key, "local"), Some("c".into()));
+}
+
+#[test]
 fn context_network_policy_outlives_page_and_protocol_projection() {
     let expected = ContextNetworkPolicy {
         http_proxy: Some("http://proxy.example:8080".into()),
