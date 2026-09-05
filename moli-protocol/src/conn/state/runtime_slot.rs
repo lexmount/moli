@@ -341,12 +341,11 @@ impl TargetRuntimeSlot {
     pub(crate) fn prepare_renderer_agent_candidate(
         &self,
         token: &NavigationId,
-        page: &mut Page,
+        page: &Page,
     ) -> Result<PreparedRendererAgentAttachment, DevToolsRendererChannelError> {
         let mut candidate = self
             .prepare_renderer_agent_candidate_token(token, page.renderer_devtools_agent_token())?;
         candidate.bind(page.renderer_inspection_endpoint())?;
-        page.bind_renderer_agent_attachment(candidate.id());
         Ok(candidate)
     }
 
@@ -388,7 +387,7 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn bind_page_to_committed_renderer_agent_candidate(
         &mut self,
-        page: &mut Page,
+        page: &Page,
         transaction: &CommittedRendererAgentAttachment,
     ) -> Result<(), DevToolsRendererChannelError> {
         let current = transaction.current();
@@ -399,20 +398,18 @@ impl TargetRuntimeSlot {
         }
         self.devtools_renderer_channel
             .bind_current(page.renderer_inspection_endpoint())?;
-        page.bind_renderer_agent_attachment(current.id());
         Ok(())
     }
 
     pub(crate) fn commit_loaded_navigation_renderer_attachment(
         &mut self,
-        page: &mut Page,
+        page: &Page,
         candidate: Option<PreparedRendererAgentAttachment>,
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
         let Some(candidate) = candidate else {
             return self.attach_page_renderer_agent_as_current(page);
         };
-        if page.renderer_agent_attachment_id() != Some(candidate.id())
-            || page.renderer_devtools_agent_token() != candidate.agent_token()
+        if page.renderer_devtools_agent_token() != candidate.agent_token()
             || candidate.binding().is_none()
         {
             return Err(DevToolsRendererChannelError::CandidatePageAttachmentMismatch);
@@ -514,17 +511,10 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn attach_page_renderer_agent_as_current(
         &mut self,
-        page: &mut Page,
+        page: &Page,
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
-        let previous = self
-            .devtools_renderer_channel
-            .attach_current(page.renderer_inspection_endpoint())?;
-        let current = self
-            .devtools_renderer_channel
-            .current()
-            .expect("attaching a renderer agent must install a current attachment");
-        page.bind_renderer_agent_attachment(current.id());
-        Ok(previous)
+        self.devtools_renderer_channel
+            .attach_current(page.renderer_inspection_endpoint())
     }
 
     pub(crate) fn accepts_pending_document_navigation_event(&self, token: &NavigationId) -> bool {
@@ -658,7 +648,7 @@ impl TargetRuntimeSlot {
     }
 
     fn ensure_loaded_page_renderer_attachment(&mut self) {
-        let Some(page) = self.page_slot.loaded_page_mut() else {
+        let Some(page) = self.page_slot.loaded_page() else {
             return;
         };
         let attachment = self
@@ -666,11 +656,6 @@ impl TargetRuntimeSlot {
             .attach_current(page.renderer_inspection_endpoint())
             .expect("a loaded page cannot be attached to a closed renderer channel");
         debug_assert!(attachment.is_none());
-        let current = self
-            .devtools_renderer_channel
-            .current()
-            .expect("a loaded page must have a renderer attachment");
-        page.bind_renderer_agent_attachment(current.id());
     }
 
     fn transition_renderer_channel_for_page_absence(&mut self, reason: TargetPageAbsenceReason) {
@@ -723,11 +708,6 @@ impl TargetRuntimeSlot {
                 .attach_current(page.renderer_inspection_endpoint())
                 .expect("a loaded page cannot be installed into a closed renderer channel");
         }
-        let current = self
-            .devtools_renderer_channel
-            .current()
-            .expect("a loaded page must have a renderer attachment");
-        page.bind_renderer_agent_attachment(current.id());
     }
 
     /// Appends one concrete renderer-produced network fact to the protocol

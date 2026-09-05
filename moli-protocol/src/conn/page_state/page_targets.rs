@@ -1744,9 +1744,9 @@ mod tests {
         assert_eq!(
             background_target
                 .loaded_page()
-                .and_then(|page| page.renderer_agent_attachment_id()),
-            Some(active_attachment.id()),
-            "the background Page and its renderer channel must retain the same attachment"
+                .map(|page| page.renderer_devtools_agent_token()),
+            Some(active_attachment.agent_token()),
+            "the background Page and its renderer channel must retain the same physical agent"
         );
         assert!(
             background_target

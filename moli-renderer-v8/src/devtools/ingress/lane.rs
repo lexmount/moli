@@ -9,7 +9,8 @@ pub(crate) trait RendererDevToolsIngressCommand {
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub(crate) struct RendererDevToolsSessionLaneKey {
     agent_token: RendererDevToolsAgentToken,
-    session: DevToolsSessionKey,
+    // None is the physical Page's native work, not a synthetic frontend session.
+    session: Option<DevToolsSessionKey>,
 }
 
 impl RendererDevToolsSessionLaneKey {
@@ -19,7 +20,14 @@ impl RendererDevToolsSessionLaneKey {
     ) -> Self {
         Self {
             agent_token,
-            session,
+            session: Some(session),
+        }
+    }
+
+    pub(crate) fn for_page(agent_token: RendererDevToolsAgentToken) -> Self {
+        Self {
+            agent_token,
+            session: None,
         }
     }
 }

@@ -192,7 +192,6 @@ pub struct Page {
     // most recently.
     idle_override: Option<EmulatedIdleOverride>,
     handle: RendererPageHandle,
-    renderer_agent_attachment_id: Option<RendererAgentAttachmentId>,
     page_creation_artifacts: Option<Box<RendererPageCreationArtifacts>>,
 }
 
@@ -218,7 +217,6 @@ impl Page {
             page_state: PageStateCache::new(page_state),
             idle_override,
             handle,
-            renderer_agent_attachment_id: None,
             page_creation_artifacts: None,
         }
     }
@@ -233,7 +231,6 @@ impl Page {
             page_state: PageStateCache::new(page_state),
             idle_override,
             handle,
-            renderer_agent_attachment_id: None,
             page_creation_artifacts: Some(Box::new(page_creation_artifacts)),
         }
     }
@@ -265,16 +262,6 @@ impl Page {
     #[doc(hidden)]
     pub fn crash_devtools_target_from_io(&self) {
         self.handle.crash_devtools_target_from_io();
-    }
-
-    #[doc(hidden)]
-    pub fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
-        self.renderer_agent_attachment_id
-    }
-
-    #[doc(hidden)]
-    pub fn bind_renderer_agent_attachment(&mut self, id: RendererAgentAttachmentId) {
-        self.renderer_agent_attachment_id = Some(id);
     }
 
     #[doc(hidden)]

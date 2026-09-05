@@ -23,6 +23,16 @@ impl RendererInspectionEndpoint {
 }
 
 impl RendererRuntimeInspection<'_> {
+    pub fn start_resolve_blob_object(
+        &self,
+        object_id: &str,
+    ) -> Result<RendererRuntimeInspectorMainCommandRoute> {
+        self.start_page_command(RendererPageCommand::resolve_blob_object(
+            self.inspector_session_id.clone(),
+            object_id.to_owned(),
+        ))
+    }
+
     pub fn start_apply_runtime_protocol_state(
         &self,
         session_restore_snapshots: &[RendererInspectorSessionRestoreSnapshot],

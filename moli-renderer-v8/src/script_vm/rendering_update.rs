@@ -58,6 +58,22 @@ impl ScriptVm {
     ) -> Result<bool> {
         let task = authorization.into_task();
         let owner = task.owner();
+        if task.kind() == RendererPageRenderingUpdateTaskKind::LayoutResourceAdmission {
+            let css_images = self
+                ._context_host
+                .borrow_mut()
+                .take_authorized_layout_resources(task.task_id(), owner.target())
+                .ok_or_else(|| anyhow!("authorized layout resource task lost its exact payload"))?;
+            self.reconcile_document_web_fonts_for_layout();
+            self.start_css_images_discovered_by_layout(css_images);
+            let document = self._context_host.borrow().document_handle();
+            return self.with_default_context_scope(|scope, host_ptr| {
+                crate::native_bridge::element::queue_revealed_lazy_image_loads(
+                    scope, host_ptr, document,
+                );
+                Ok(true)
+            });
+        }
         self.with_default_context_scope(|scope, host_ptr| {
             unsafe { &mut *host_ptr }
                 .apply_authorized_rendering_update(

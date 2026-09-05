@@ -117,6 +117,12 @@ impl PageVm {
         &mut self,
         barrier: ActionBarrier,
     ) -> Result<bool> {
+        // Capture may read the current frame in the nested debugger loop, but
+        // queued input and its JavaScript listeners still belong to a later
+        // ordinary Page turn. Keep the original batch queued until resume.
+        if self.vm().devtools_target().pause_ref().is_pause_active() {
+            return Ok(false);
+        }
         let Some(batch) = self
             .page_action_window
             .window

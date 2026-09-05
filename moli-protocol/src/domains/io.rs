@@ -5,9 +5,10 @@ use serde_json::json;
 
 use crate::{
     conn::{
-        CapturedBody, CdpConnection, Cmd, CompletedFetchResponseBodyStreamReadDispatch,
-        IoStreamState, PendingFetchResponseBodyStreamRead,
-        PendingFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamReadStart,
+        CapturedBody, CdpConnection, Cmd, CommandOwnerScope,
+        CompletedFetchResponseBodyStreamReadDispatch, IoStreamState,
+        PendingFetchResponseBodyStreamRead, PendingFetchResponseBodyStreamReadDispatch,
+        PendingFetchResponseBodyStreamReadStart,
     },
     domains::actions::IoAction,
     domains::command_output::CommandOutputPlan,
@@ -30,7 +31,10 @@ pub(crate) struct CompletedIoCommandDispatch {
 
 enum PendingIoCommandKind {
     FetchResponseBodyRead(Box<PendingFetchResponseBodyStreamReadDispatch>),
-    ResolveBlob(PendingPageCommand),
+    ResolveBlob {
+        owner: CommandOwnerScope,
+        pending: PendingPageCommand,
+    },
     ReadBlob {
         pending: PendingPageCommand,
         handle: String,
@@ -41,7 +45,10 @@ enum PendingIoCommandKind {
 
 enum CompletedIoCommandKind {
     FetchResponseBodyRead(Box<CompletedFetchResponseBodyStreamReadDispatch>),
-    ResolveBlob(Result<CompletedPageCommand, String>),
+    ResolveBlob {
+        owner: CommandOwnerScope,
+        completed: Result<CompletedPageCommand, String>,
+    },
     ReadBlob {
         completed: Result<CompletedPageCommand, String>,
         handle: String,
@@ -61,9 +68,12 @@ impl PendingIoCommandDispatch {
             PendingIoCommandKind::FetchResponseBodyRead(pending) => {
                 CompletedIoCommandKind::FetchResponseBodyRead(Box::new(pending.wait().await))
             }
-            PendingIoCommandKind::ResolveBlob(pending) => CompletedIoCommandKind::ResolveBlob(
-                pending.wait().await.map_err(|error| error.to_string()),
-            ),
+            PendingIoCommandKind::ResolveBlob { owner, pending } => {
+                CompletedIoCommandKind::ResolveBlob {
+                    owner,
+                    completed: pending.wait().await.map_err(|error| error.to_string()),
+                }
+            }
             PendingIoCommandKind::ReadBlob {
                 pending,
                 handle,
@@ -118,8 +128,8 @@ pub(crate) fn complete_pending_io_command(
             );
             read_fetch_response_body_stream_output_plan(read)
         }
-        CompletedIoCommandKind::ResolveBlob(completed) => {
-            complete_resolve_blob_command(conn, session_id, completed)
+        CompletedIoCommandKind::ResolveBlob { owner, completed } => {
+            complete_resolve_blob_command(conn, &owner, completed)
         }
         CompletedIoCommandKind::ReadBlob {
             completed,
@@ -179,22 +189,20 @@ fn start_resolve_blob_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> IoComm
             return IoCommandTaskStep::Complete(CommandOutputPlan::error(-32602, "InvalidParams"));
         }
     };
-    let inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = conn
-        .loaded_page_mut_for_protocol_access(cmd.session_id)
-        .and_then(|page| {
-            page.start_resolve_blob_object_in_inspector_session(
-                inspector_session_id,
-                params.object_id.as_ref().to_owned(),
-            )
-            .map_err(|error| error.to_string())
+        .runtime_inspection_for_owner(&owner)
+        .and_then(|runtime| {
+            runtime
+                .start_resolve_blob_object(params.object_id.as_ref())
+                .map(PendingPageCommand::from_inspector_main_route)
+                .map_err(|error| error.to_string())
         });
     match pending {
         Ok(pending) => IoCommandTaskStep::Pending(Box::new(PendingIoCommandDispatch {
             command_id: cmd.id,
             session_id: cmd.session_id.map(str::to_owned),
-            kind: PendingIoCommandKind::ResolveBlob(pending),
+            kind: PendingIoCommandKind::ResolveBlob { owner, pending },
         })),
         Err(message) => IoCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message)),
     }
@@ -230,15 +238,14 @@ fn start_read_blob_command(
 
 fn complete_resolve_blob_command(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     completed: Result<CompletedPageCommand, String>,
 ) -> CommandOutputPlan {
     let uuid = completed.and_then(|completed| {
-        conn.loaded_page_mut_for_protocol_access(session_id)
-            .and_then(|page| {
-                page.finish_resolve_blob_object(completed)
-                    .map_err(|error| error.to_string())
-            })
+        conn.observe_renderer_inspection_completion(owner, &completed)?;
+        completed
+            .finish_resolve_blob_object()
+            .map_err(|error| error.to_string())
     });
     match uuid {
         Ok(uuid) => CommandOutputPlan::result(json!({ "uuid": uuid })),

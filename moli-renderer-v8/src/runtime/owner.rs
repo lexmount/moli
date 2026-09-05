@@ -248,10 +248,6 @@ pub enum RendererOwnerCommand {
         token: RendererPageToken,
         command: RendererPageCommand,
     },
-    RunProtocolPageCommand {
-        token: RendererPageToken,
-        command: RendererPageCommand,
-    },
     /// Renderer-side cleanup after the browser/protocol owner has already
     /// disconnected a DevTools session and suspended both of its ingress lanes.
     /// Replacement frontend work remains queued behind this lifecycle task so
@@ -964,8 +960,7 @@ fn runtime_command_output_scope_owned_by_dispatch(
 
 fn owner_command_timing_label(command: &RendererOwnerCommand) -> Option<&'static str> {
     match command {
-        RendererOwnerCommand::RunAsyncPageCommand { command, .. }
-        | RendererOwnerCommand::RunProtocolPageCommand { command, .. } => {
+        RendererOwnerCommand::RunAsyncPageCommand { command, .. } => {
             renderer_page_command_timing_label(command)
         }
         _ => None,
@@ -983,7 +978,6 @@ fn renderer_command_admission_page_token(
 ) -> Option<RendererPageToken> {
     match command {
         RendererOwnerCommand::RunAsyncPageCommand { token, .. }
-        | RendererOwnerCommand::RunProtocolPageCommand { token, .. }
         | RendererOwnerCommand::WaitForNetworkIdle { token, .. }
         | RendererOwnerCommand::WaitForDomStable { token, .. } => Some(*token),
         _ => None,
@@ -2483,21 +2477,7 @@ impl RendererOwnerHandle {
                 owner_local_store.cancel_prepared_document(token);
                 Ok(RendererOwnerReply::PreparedRendererDocumentCanceled).into()
             }
-            command @ (RendererOwnerCommand::RunAsyncPageCommand { .. }
-            | RendererOwnerCommand::RunProtocolPageCommand { .. }) => {
-                let (token, command, capture_policy) = match command {
-                    RendererOwnerCommand::RunAsyncPageCommand { token, command } => (
-                        token,
-                        command,
-                        super::RendererPageStateCapturePolicy::FullReport,
-                    ),
-                    RendererOwnerCommand::RunProtocolPageCommand { token, command } => (
-                        token,
-                        command,
-                        super::RendererPageStateCapturePolicy::ProtocolTurn,
-                    ),
-                    _ => unreachable!("combined renderer page command pattern must match"),
-                };
+            RendererOwnerCommand::RunAsyncPageCommand { token, command } => {
                 if moli_trace::cdp_nav_timing_enabled()
                     && let Some(command_label) = renderer_page_command_timing_label(&command)
                 {
@@ -2512,7 +2492,7 @@ impl RendererOwnerHandle {
                     RenderRuntimeTurn::RunLivePageCommand {
                         token,
                         command,
-                        capture_policy,
+                        capture_policy: super::RendererPageStateCapturePolicy::FullReport,
                     },
                 ))
             }
@@ -3169,7 +3149,6 @@ impl RendererOwnerHandle {
             && matches!(
                 &command,
                 RendererOwnerCommand::RunAsyncPageCommand { command, .. }
-                    | RendererOwnerCommand::RunProtocolPageCommand { command, .. }
                     if command.interruptible_by_javascript_dialog()
             )
         {

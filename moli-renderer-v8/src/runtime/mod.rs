@@ -416,9 +416,8 @@ pub use self::protocol_output::{
 };
 pub use self::service_worker_run::RendererServiceWorkerRunIdentity;
 pub use crate::devtools::command::{
-    RendererDevToolsIoCommandEnvelope, RendererDevToolsMainCommandEnvelope,
-    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
-    RendererInspectorIngressTicket,
+    RendererDevToolsIoCommandEnvelope, RendererInspectorCommandEnvelope,
+    RendererInspectorCommandRoute, RendererInspectorIngressTicket, RendererMainCommandEnvelope,
 };
 pub(crate) use crate::devtools::command::{
     RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,

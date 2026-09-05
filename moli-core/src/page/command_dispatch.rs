@@ -90,6 +90,11 @@ pub struct CompletedPageCommand {
 }
 
 impl CompletedPageCommand {
+    pub fn is_from_page(&self, page: &Page) -> bool {
+        crate::browser::RendererPageResidenceIdentity::from_page(page)
+            .matches_residence(self.page_state().renderer_residence())
+    }
+
     /// Returns the exact renderer output position produced by this command.
     ///
     /// Protocol dispatch must capture this before a command-specific decoder
@@ -163,40 +168,20 @@ impl CompletedPageCommand {
 impl Page {
     pub(crate) fn start_page_command(
         &self,
-        mut command: RendererPageCommand,
+        command: RendererPageCommand,
     ) -> Result<PendingPageCommand> {
-        if let Some(attachment_id) = self.renderer_agent_attachment_id {
-            command.bind_inspector_attachment(attachment_id);
-        }
-        let pending = if self.renderer_agent_attachment_id.is_some() {
-            // Migration-only native Page command ingress. Browser/embedding
-            // operations never inherit the last DevTools caller's session;
-            // session-scoped inspection enters its explicit endpoint binding.
-            self.handle
-                .enqueue_protocol_command_in_inspector_session(command, None)?
-        } else {
-            // CLI, embedding and other renderer-owner callers reuse the thin
-            // protocol-turn capture policy, but they are not a
-            // DevToolsSession receiver and must not acquire a Main ingress
-            // lane that is scoped to a renderer attachment.
-            self.handle.enqueue_protocol_command(command)?
-        };
+        // Browser/embedding commands have a physical Page owner, not a
+        // DevTools attachment. Inspector calls enter their explicit binding.
         Ok(PendingPageCommand {
-            pending,
-            renderer_agent_attachment_id: self.renderer_agent_attachment_id,
+            pending: self.handle.enqueue_protocol_command(command)?,
+            renderer_agent_attachment_id: None,
         })
     }
 
-    fn start_full_page_command(
-        &self,
-        mut command: RendererPageCommand,
-    ) -> Result<PendingPageCommand> {
-        if let Some(attachment_id) = self.renderer_agent_attachment_id {
-            command.bind_inspector_attachment(attachment_id);
-        }
+    fn start_full_page_command(&self, command: RendererPageCommand) -> Result<PendingPageCommand> {
         Ok(PendingPageCommand {
             pending: self.handle.enqueue_async_command(command)?,
-            renderer_agent_attachment_id: self.renderer_agent_attachment_id,
+            renderer_agent_attachment_id: None,
         })
     }
 

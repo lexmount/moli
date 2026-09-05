@@ -2471,10 +2471,10 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
     assert_eq!(large_id_evaluation["result"]["result"]["value"], json!(42));
 
     let current_attachment_id = conn
-        .browser_context
-        .as_ref()
-        .and_then(|context| context.loaded_page())
-        .and_then(moli_core::page::Page::renderer_agent_attachment_id)
+        .runtime_session_owner_slot(None)
+        .ok()
+        .and_then(|slot| slot.current_renderer_attachment())
+        .map(|attachment| attachment.id())
         .expect("loaded page should have a renderer attachment");
     let stale_attachment_id = moli_core::page::RendererAgentAttachmentId::allocate();
     let attachment_test_frontend_id = 8_101;

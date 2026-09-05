@@ -4,7 +4,7 @@ use crate::runtime::{
     RendererInspectorPageCommand, RendererPageCommand, RendererRuntimeInspectorResponseSender,
 };
 use crate::script_execution_control::RendererScriptExecutionControl;
-use moli_page_types::{DevToolsSessionKey, RendererAgentAttachmentId, RendererDevToolsCommandId};
+use moli_page_types::{DevToolsSessionKey, RendererAgentAttachmentId, RendererCommandId};
 use serde_json::Value;
 
 /// Chromium routes Page DevTools work through separate main-thread and IO
@@ -57,7 +57,7 @@ pub struct RendererInspectorIngressTicket {
     attachment: Option<RendererAgentAttachmentId>,
     session: DevToolsSessionKey,
     route: RendererInspectorCommandRoute,
-    command_id: RendererDevToolsCommandId,
+    command_id: RendererCommandId,
 }
 
 impl RendererInspectorIngressTicket {
@@ -74,7 +74,7 @@ impl RendererInspectorIngressTicket {
                     .filter(|session_id| !session_id.is_empty()),
             ),
             route,
-            command_id: RendererDevToolsCommandId::allocate(),
+            command_id: RendererCommandId::allocate(),
         }
     }
 
@@ -90,7 +90,7 @@ impl RendererInspectorIngressTicket {
         self.route
     }
 
-    pub fn command_id(&self) -> RendererDevToolsCommandId {
+    pub fn command_id(&self) -> RendererCommandId {
         self.command_id
     }
 
@@ -283,17 +283,22 @@ impl RendererDevToolsIoCommandEnvelope {
     }
 }
 
-/// One command delivered by the renderer's Main DevTools receiver.
+/// One command delivered by the renderer's Main execution pump.
 ///
 /// Unlike `RendererInspectorCommandEnvelope`, this envelope is deliberately
-/// agent-neutral: protocol commands that ultimately need the renderer Page,
-/// DOM, CSS, Accessibility, or V8 agents all enter the same Main receiver.
-/// The boxed payload keeps that admission boundary structural without adding
-/// a second allowlist of `RendererPageCommand` variants.
+/// agent-neutral: Page-native work and DOM, CSS, Accessibility, or V8 inspection
+/// reuse the same pump, but only inspection carries a frontend session ticket.
+/// Main admission does not imply pause-loop eligibility: only operations that
+/// can run without entering the suspended Page isolate may use nested dispatch.
 #[doc(hidden)]
-pub struct RendererDevToolsMainCommandEnvelope {
-    ticket: RendererInspectorIngressTicket,
+pub struct RendererMainCommandEnvelope {
+    source: RendererMainCommandSource,
     payload: Box<RendererPageCommand>,
+}
+
+enum RendererMainCommandSource {
+    Page(RendererCommandId),
+    Inspector(RendererInspectorIngressTicket),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -303,7 +308,18 @@ pub(crate) enum RendererDevToolsMainNestedDispatch {
     OwnerOnly,
 }
 
-impl RendererDevToolsMainCommandEnvelope {
+impl RendererMainCommandEnvelope {
+    pub(crate) fn from_page_command(command: RendererPageCommand) -> Self {
+        assert!(
+            !matches!(command, RendererPageCommand::Inspector(_)),
+            "Page-owned work cannot carry an Inspector command"
+        );
+        Self {
+            source: RendererMainCommandSource::Page(RendererCommandId::allocate()),
+            payload: Box::new(command),
+        }
+    }
+
     pub(crate) fn from_protocol_command(command: RendererPageCommand) -> Self {
         Self::from_protocol_command_in_session(command, None)
     }
@@ -321,13 +337,23 @@ impl RendererDevToolsMainCommandEnvelope {
             ),
         };
         Self {
-            ticket,
+            source: RendererMainCommandSource::Inspector(ticket),
             payload: Box::new(command),
         }
     }
 
-    pub(crate) fn ticket(&self) -> &RendererInspectorIngressTicket {
-        &self.ticket
+    pub(crate) fn ticket(&self) -> Option<&RendererInspectorIngressTicket> {
+        match &self.source {
+            RendererMainCommandSource::Page(_) => None,
+            RendererMainCommandSource::Inspector(ticket) => Some(ticket),
+        }
+    }
+
+    pub(crate) fn command_id(&self) -> u64 {
+        match &self.source {
+            RendererMainCommandSource::Page(id) => id.get(),
+            RendererMainCommandSource::Inspector(ticket) => ticket.sequence(),
+        }
     }
 
     pub(crate) fn nested_dispatch(&self) -> RendererDevToolsMainNestedDispatch {
@@ -338,12 +364,39 @@ impl RendererDevToolsMainCommandEnvelope {
                 RendererDevToolsMainNestedDispatch::InspectorSession
             }
             RendererPageCommand::Inspector(_) => RendererDevToolsMainNestedDispatch::OwnerOnly,
+            command if matches!(self.source, RendererMainCommandSource::Page(_)) => {
+                match command {
+                    RendererPageCommand::CaptureScreenshot(request)
+                        if matches!(
+                            request.purpose,
+                            crate::runtime::RendererScreenshotPurpose::Screenshot
+                        ) =>
+                    {
+                        RendererDevToolsMainNestedDispatch::PageAgent
+                    }
+                    RendererPageCommand::CaptureScreencastFrame(_)
+                    | RendererPageCommand::LayoutMetrics
+                    | RendererPageCommand::SerializeHtml
+                    | RendererPageCommand::OuterHtmlForDocument { .. }
+                    | RendererPageCommand::OuterHtmlForBackendNodeId { .. }
+                    | RendererPageCommand::BlobBytesForUuid { .. } => {
+                        RendererDevToolsMainNestedDispatch::PageAgent
+                    }
+                    // A native payload is not necessarily V8-free: input can
+                    // invoke listeners, policies update JS realms, and print
+                    // changes matchMedia. These require an ordinary Page turn.
+                    _ => RendererDevToolsMainNestedDispatch::OwnerOnly,
+                }
+            }
             _ => RendererDevToolsMainNestedDispatch::PageAgent,
         }
     }
 
     pub(crate) fn with_attachment(mut self, attachment: RendererAgentAttachmentId) -> Self {
-        self.ticket.bind_attachment(attachment);
+        let RendererMainCommandSource::Inspector(ticket) = &mut self.source else {
+            panic!("Page-owned work cannot acquire a DevTools attachment");
+        };
+        ticket.bind_attachment(attachment);
         self.payload.bind_inspector_attachment(attachment);
         self
     }
