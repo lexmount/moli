@@ -712,8 +712,8 @@ impl RendererInspectorMainIngress {
         }
     }
 
-    pub(crate) fn cancel_all_queued(&self, message: &str) {
-        let commands = self.shared.state.lock().lanes.drain_queued();
+    pub(crate) fn cancel_agent_queued(&self, agent: RendererDevToolsAgentToken, message: &str) {
+        let commands = self.shared.state.lock().lanes.drain_agent_queued(agent);
         for command in commands {
             fail_main_command(command, message);
         }
@@ -907,6 +907,37 @@ mod tests {
         ingress.first_dispatch_guard(&mut first).release();
         let third = ingress.claim_for_pause().expect("a2 after a1 dispatch");
         assert!(third.raw_json().contains(r#""a2""#));
+    }
+
+    #[tokio::test]
+    async fn agent_retirement_preserves_active_and_detach_guards() {
+        let ingress = ingress();
+        let agent = RendererDevToolsAgentToken::allocate();
+        let _active_route = enqueue(&ingress, agent, None, "active");
+        let mut active = ingress.claim_for_owner().unwrap();
+        let mut first_dispatch = ingress.first_dispatch_guard(&mut active);
+        ingress.begin_session_detach(agent, &DevToolsSessionKey::Primary);
+        ingress.begin_session_detach(agent, &DevToolsSessionKey::Primary);
+        let blocked = enqueue(&ingress, agent, None, "blocked");
+        let replacement_agent = RendererDevToolsAgentToken::allocate();
+        let _replacement = enqueue(&ingress, replacement_agent, None, "replacement");
+
+        ingress.cancel_agent_queued(agent, "retired page");
+        assert!(matches!(
+            blocked.wait_for_completion().await,
+            Ok(RendererRuntimeInspectorMainCommandCompletion::Canceled(_))
+        ));
+        let mut replacement = ingress.claim_for_owner().unwrap();
+        assert_eq!(replacement.agent_token, replacement_agent);
+        ingress.first_dispatch_guard(&mut replacement).release();
+        assert_eq!(ingress.shared.state.lock().lanes.session_count(), 1);
+
+        first_dispatch.release();
+        ingress.finish_session_detach(agent, &DevToolsSessionKey::Primary);
+        assert_eq!(ingress.shared.state.lock().lanes.session_count(), 1);
+        ingress.finish_session_detach(agent, &DevToolsSessionKey::Primary);
+        assert_eq!(ingress.shared.state.lock().lanes.session_count(), 0);
+        assert!(ingress.claim_for_owner().is_none());
     }
 
     #[tokio::test]

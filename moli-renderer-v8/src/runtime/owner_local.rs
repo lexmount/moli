@@ -639,8 +639,11 @@ impl Drop for RendererPageHandle {
         let Some(token) = self.token.take() else {
             return;
         };
-        self.devtools_target
-            .detach_page(token.page_id, "Inspector Page handle was dropped");
+        self.devtools_target.detach_page(
+            token.page_id,
+            self.devtools_agent_token,
+            "Inspector Page handle was dropped",
+        );
         self.javascript_dialog_broker.dismiss_pending();
         self.page_context_cancel_tx
             .cancel(RendererPageContextCancelReason::PageClosed);
