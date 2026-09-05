@@ -9,6 +9,8 @@ pub struct RendererPageRecord {
 
 #[derive(Debug, Clone)]
 pub struct RendererPageState {
+    residence: RendererOutputResidenceIdentity,
+    view_generation: u64,
     pub requested_url: Url,
     pub navigation_initiator_url: Option<Url>,
     pub navigation_redirected: bool,
@@ -34,6 +36,8 @@ impl RendererPageState {
         mut status: u16,
         mut headers: Vec<(String, String)>,
         state_capture: PageVmStateCapture,
+        residence: RendererOutputResidenceIdentity,
+        view_generation: u64,
     ) -> Arc<Self> {
         let mut navigation_redirect_chain = Vec::new();
         if let Some(navigation) = state_capture.navigation_response.as_ref() {
@@ -46,6 +50,8 @@ impl RendererPageState {
         }
 
         Arc::new(Self {
+            residence,
+            view_generation,
             requested_url,
             navigation_initiator_url,
             navigation_redirected,
@@ -62,6 +68,41 @@ impl RendererPageState {
                 .dedicated_worker_running_worker_isolate_count,
             performance_metric_snapshot: state_capture.performance_metric_snapshot,
         })
+    }
+
+    /// Physical source of this immutable capture, independent of DevTools attachment.
+    pub fn renderer_residence(&self) -> RendererOutputResidenceIdentity {
+        self.residence
+    }
+
+    /// Existing renderer Page-view revision at publication, not an output fence.
+    pub fn view_generation(&self) -> u64 {
+        self.view_generation
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn new_for_test(page_id: PageId, requested_url: Url, final_url: Url) -> Self {
+        Self {
+            residence: RendererOutputResidenceIdentity::Page {
+                owner_local_host_id: RendererOwnerLocalHostId::new_for_testing(0),
+                page_id,
+            },
+            view_generation: 0,
+            requested_url,
+            navigation_initiator_url: None,
+            navigation_redirected: false,
+            navigation_redirect_count: 0,
+            navigation_redirect_chain: Vec::new(),
+            final_url,
+            document_title: String::new(),
+            status: 200,
+            headers: Vec::new(),
+            script_execution: Arc::new(ScriptExecutionReport::default()),
+            idle_override: None,
+            service_worker_client_id: 0,
+            dedicated_worker_running_worker_isolate_count: 0,
+            performance_metric_snapshot: RendererPerformanceMetricSnapshot::default(),
+        }
     }
 
     pub fn final_url(&self) -> &Url {
@@ -212,10 +253,16 @@ impl RendererPageSlotHandle {
             "renderer owner routed refresh for mismatched page {}",
             view.page_id.as_u64()
         );
+        let RendererPageEntryState::Active(current) = &entry.state else {
+            anyhow::bail!(
+                "renderer owner no longer tracks active page {} for refresh",
+                view.page_id.as_u64()
+            );
+        };
         ensure!(
-            entry.is_active(),
-            "renderer owner no longer tracks active page {} for refresh",
-            view.page_id.as_u64()
+            view.page_state.renderer_residence() == current.renderer_residence()
+                && view.page_state.view_generation() == view.view_generation,
+            "renderer owner received mismatched page snapshot provenance"
         );
         ensure!(
             view.view_generation >= entry.view_generation,

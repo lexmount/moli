@@ -169,7 +169,7 @@ impl Page {
             .handle
             .wait_for_network_idle(timeout_ms, loader)
             .await?;
-        self.replace_page_state(page_state);
+        self.observe_renderer_page_state(&page_state);
         expect_page_reply!(
             reply,
             "wait for network idle page command",
@@ -186,7 +186,7 @@ impl Page {
         let loader = loader.clone();
         let timeout_ms = timeout.as_millis().min(u128::from(u64::MAX)) as u64;
         let (reply, page_state) = self.handle.wait_for_dom_stable(timeout_ms, loader).await?;
-        self.replace_page_state(page_state);
+        self.observe_renderer_page_state(&page_state);
         expect_page_reply!(
             reply,
             "wait for dom stable page command",

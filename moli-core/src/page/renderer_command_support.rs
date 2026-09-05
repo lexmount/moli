@@ -195,8 +195,10 @@ impl Page {
         )
     }
 
-    pub(super) fn replace_page_state(&mut self, page_state: Arc<RendererPageState>) {
-        self.page_state.replace(page_state);
+    /// Observes a renderer snapshot without consuming its command reply or output fence.
+    /// Foreign Page/owner captures and older Page-view revisions leave the cache unchanged.
+    pub fn observe_renderer_page_state(&mut self, page_state: &Arc<RendererPageState>) -> bool {
+        self.page_state.observe(page_state)
     }
 
     pub fn start_set_inline_style_sheet_text_for_style_sheet_id(

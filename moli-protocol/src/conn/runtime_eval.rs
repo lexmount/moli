@@ -4393,18 +4393,15 @@ impl CdpConnection {
         route: &RuntimeProtocolMessagePageRoute,
         completion: moli_core::page::CompletedPageCommand,
     ) -> Result<RendererCommandTurnOutput, String> {
-        let output = if let Ok(page) = self.runtime_protocol_message_started_page_mut(route) {
-            page.finish_runtime_protocol_message_command_turn(completion)
-        } else {
-            // Completion means the renderer owner has already committed the
-            // command's Page state and concrete protocol publication. The
-            // target can install a successor attachment before this protocol
-            // task resumes (for example, form.submit() followed by a normal
-            // command response). Preserve that immutable result; there is
-            // simply no current Page cache belonging to this route to update.
-            completion.into_runtime_protocol_message_command_turn()
-        };
-        output.map_err(|error| format!("runtime inspector dispatch failed: {error}"))
+        if let Ok(page) = self.runtime_protocol_message_started_page_mut(route) {
+            page.observe_renderer_page_state(completion.page_state());
+        }
+        // Snapshot observation and DevTools decoding have separate authority:
+        // an absent/replaced Page or rejected observation cannot invalidate an
+        // already-frozen reply, its output predecessor or its handoff guard.
+        completion
+            .into_runtime_protocol_message_command_turn()
+            .map_err(|error| format!("runtime inspector dispatch failed: {error}"))
     }
 
     fn ingest_runtime_protocol_message_started_route_output_updates(
@@ -7155,6 +7152,36 @@ mod tests {
                 .unwrap()
                 .observable_output_items,
             items
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn inspector_completion_observes_snapshot_before_rejecting_wrong_reply_kind() {
+        let (mut ctx, completed) = frozen_inspector_completion_fixture().await;
+        let route = completed.route;
+        drop(completed.completion);
+        let pending = ctx
+            .conn
+            .runtime_protocol_message_started_page_mut(&route)
+            .unwrap()
+            .start_page_diagnostics_snapshot()
+            .unwrap();
+        let completion = pending.wait().await.unwrap();
+        assert_eq!(completion.page_state().document_title(), "after-inspection");
+        let error = ctx
+            .conn
+            .consume_runtime_protocol_message_completion(&route, completion)
+            .err()
+            .expect("non-Runtime reply must not be decoded as inspector output");
+        assert!(
+            error.contains("runtime protocol page command returned an unexpected renderer reply")
+        );
+        assert_eq!(
+            ctx.conn
+                .runtime_protocol_message_started_page_mut(&route)
+                .unwrap()
+                .document_title(),
+            "after-inspection"
         );
     }
 
