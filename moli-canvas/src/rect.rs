@@ -15,8 +15,7 @@ pub fn canonicalize_fill_style(raw: &str) -> Option<String> {
         if alpha == u8::MAX {
             return Some(format!("rgb({red}, {green}, {blue})"));
         }
-        let alpha = (f64::from(alpha) / 255.0 * 100.0).round() / 100.0;
-        return Some(format!("rgba({red}, {green}, {blue}, {alpha:.2})"));
+        return Some(canonical_rgba(red, green, blue, alpha));
     }
     None
 }
@@ -300,34 +299,22 @@ pub fn paint_rect(
 }
 
 fn canonical_hex_color(value: &str) -> Option<String> {
-    let hex = value.strip_prefix('#')?;
-    if !hex.chars().all(|char| char.is_ascii_hexdigit()) {
-        return None;
+    let [red, green, blue, alpha] = hex_color_rgba(value)?;
+    if alpha == u8::MAX {
+        Some(format!("#{red:02x}{green:02x}{blue:02x}"))
+    } else {
+        Some(canonical_rgba(red, green, blue, alpha))
     }
-    match hex.len() {
-        3 => {
-            let chars = hex.chars().collect::<Vec<_>>();
-            Some(format!(
-                "#{0}{0}{1}{1}{2}{2}",
-                chars[0].to_ascii_lowercase(),
-                chars[1].to_ascii_lowercase(),
-                chars[2].to_ascii_lowercase()
-            ))
-        }
-        6 => Some(format!("#{hex}")),
-        8 => {
-            let rgba = u32::from_str_radix(hex, 16).ok()?;
-            let red = ((rgba >> 24) & 0xff) as u8;
-            let green = ((rgba >> 16) & 0xff) as u8;
-            let blue = ((rgba >> 8) & 0xff) as u8;
-            let alpha = (rgba & 0xff) as u8;
-            if alpha == u8::MAX {
-                Some(format!("#{red:02x}{green:02x}{blue:02x}"))
-            } else {
-                let alpha = (alpha as f64 / 255.0 * 100.0).round() / 100.0;
-                Some(format!("rgba({red}, {green}, {blue}, {alpha:.2})"))
-            }
-        }
-        _ => None,
+}
+
+fn canonical_rgba(red: u8, green: u8, blue: u8, alpha: u8) -> String {
+    let fraction = f64::from(alpha) / 255.0;
+    let rounded = (fraction * 100.0).round() / 100.0;
+    if (rounded * 255.0).round() as u8 == alpha {
+        format!("rgba({red}, {green}, {blue}, {rounded:.2})")
+    } else {
+        // Two decimal places cannot represent every 8-bit alpha. Retain enough
+        // precision that serializing a style does not change its pixels.
+        format!("rgba({red}, {green}, {blue}, {fraction:.3})")
     }
 }

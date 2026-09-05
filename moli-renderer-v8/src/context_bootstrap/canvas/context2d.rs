@@ -272,23 +272,6 @@ struct CanvasContextEllipseArgs {
     counterclockwise: bool,
 }
 
-#[derive(webidl::WebIdlArgs)]
-#[webidl(prefix = "CanvasRenderingContext2D.transform")]
-struct CanvasContextTransformArgs {
-    #[webidl(required)]
-    a: f64,
-    #[webidl(required)]
-    b: f64,
-    #[webidl(required)]
-    c: f64,
-    #[webidl(required)]
-    d: f64,
-    #[webidl(required)]
-    e: f64,
-    #[webidl(required)]
-    f: f64,
-}
-
 fn require_canvas_context_receiver<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
@@ -872,6 +855,18 @@ pub(crate) fn canvas_context_arc_callback<'s>(
     let Some(parsed) = webidl::parse_args::<CanvasContextArcArgs>(scope, &args) else {
         return;
     };
+    if ![
+        parsed.x,
+        parsed.y,
+        parsed.radius,
+        parsed.start_angle,
+        parsed.end_angle,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+    {
+        return;
+    }
     if parsed.radius < 0.0 {
         webidl::throw_index_size_error(scope);
         rv.set_undefined();
@@ -902,6 +897,12 @@ pub(crate) fn canvas_context_arc_to_callback<'s>(
     let Some(parsed) = webidl::parse_args::<CanvasContextArcToArgs>(scope, &args) else {
         return;
     };
+    if ![parsed.x1, parsed.y1, parsed.x2, parsed.y2, parsed.radius]
+        .into_iter()
+        .all(f64::is_finite)
+    {
+        return;
+    }
     if parsed.radius < 0.0 {
         webidl::throw_index_size_error(scope);
         rv.set_undefined();
@@ -925,6 +926,20 @@ pub(crate) fn canvas_context_ellipse_callback<'s>(
     let Some(parsed) = webidl::parse_args::<CanvasContextEllipseArgs>(scope, &args) else {
         return;
     };
+    if ![
+        parsed.x,
+        parsed.y,
+        parsed.radius_x,
+        parsed.radius_y,
+        parsed.rotation,
+        parsed.start_angle,
+        parsed.end_angle,
+    ]
+    .into_iter()
+    .all(f64::is_finite)
+    {
+        return;
+    }
     if parsed.radius_x < 0.0 || parsed.radius_y < 0.0 {
         webidl::throw_index_size_error(scope);
         rv.set_undefined();
@@ -1008,12 +1023,14 @@ pub(crate) fn canvas_context_transform_callback<'s>(
     if !require_canvas_context_receiver(scope, args.this(), "transform") {
         return;
     }
-    let Some(parsed) = webidl::parse_args::<CanvasContextTransformArgs>(scope, &args) else {
+    let Some([a, b, c, d, e, f]) =
+        super::transform::transform_arguments(scope, &args, "CanvasRenderingContext2D.transform")
+    else {
         return;
     };
     let path_state = canvas_path_state(scope, args.this());
     with_path_state(&path_state, |state| {
-        state.concatenate_transform(parsed.a, parsed.b, parsed.c, parsed.d, parsed.e, parsed.f);
+        state.concatenate_transform(a, b, c, d, e, f);
     });
 }
 
@@ -1025,12 +1042,12 @@ pub(crate) fn canvas_context_set_transform_callback<'s>(
     if !require_canvas_context_receiver(scope, args.this(), "setTransform") {
         return;
     }
-    let Some(parsed) = webidl::parse_args::<CanvasContextTransformArgs>(scope, &args) else {
+    let Some([a, b, c, d, e, f]) = super::transform::set_transform_arguments(scope, &args) else {
         return;
     };
     let path_state = canvas_path_state(scope, args.this());
     with_path_state(&path_state, |state| {
-        state.set_transform(parsed.a, parsed.b, parsed.c, parsed.d, parsed.e, parsed.f);
+        state.set_transform(a, b, c, d, e, f);
     });
 }
 
@@ -1168,7 +1185,7 @@ pub(crate) fn canvas_context_line_width_setter_callback<'s>(
     if !require_canvas_context_receiver(scope, args.this(), "lineWidth setter") {
         return;
     }
-    canvas_context_nonnegative_number_assign(
+    canvas_context_positive_number_assign(
         scope,
         args.this(),
         args.get(0),
@@ -1198,7 +1215,7 @@ pub(crate) fn canvas_context_miter_limit_setter_callback<'s>(
     if !require_canvas_context_receiver(scope, args.this(), "miterLimit setter") {
         return;
     }
-    canvas_context_nonnegative_number_assign(
+    canvas_context_positive_number_assign(
         scope,
         args.this(),
         args.get(0),
@@ -1365,7 +1382,7 @@ pub(crate) fn canvas_context_stroke_style_setter_callback<'s>(
     rv.set_undefined();
 }
 
-fn canvas_context_nonnegative_number_assign<'s>(
+fn canvas_context_positive_number_assign<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     holder: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
@@ -1378,7 +1395,7 @@ fn canvas_context_nonnegative_number_assign<'s>(
     );
     if let Ok(value) = value {
         let value = f64::from(value);
-        if value.is_finite() && value >= 0.0 {
+        if value.is_finite() && value > 0.0 {
             set_context_number_slot(scope, holder, slot, value);
         }
     }

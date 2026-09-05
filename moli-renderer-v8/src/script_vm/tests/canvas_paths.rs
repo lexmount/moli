@@ -1,6 +1,6 @@
 use super::*;
 
-fn canvas_pixels(script: &str, points: &[(u32, u32)], expected: &[u8]) {
+pub(super) fn canvas_pixels(script: &str, points: &[(u32, u32)], expected: &[u8]) {
     for kind in ["html", "offscreen"] {
         let mut vm = new_storage_test_vm("https://canvas-paths.test/");
         let result = vm

@@ -292,7 +292,7 @@ struct CanvasRenderingContext2dTemplateDeclaration {
 
     #[webapi(
         method = "setTransform",
-        length = 6,
+        length = 0,
         callback = canvas_context_set_transform_callback
     )]
     set_transform: (),

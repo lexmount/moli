@@ -55,6 +55,32 @@ mod tests {
     }
 
     #[test]
+    fn hex_alpha_canonicalization_round_trips_every_byte() {
+        for alpha in 0..=255_u8 {
+            let raw = format!("#12ab34{alpha:02x}");
+            let canonical = canonicalize_fill_style(&raw).expect("valid eight-digit hex");
+            assert_eq!(
+                fill_style_rgba(&canonical),
+                [0x12, 0xab, 0x34, alpha],
+                "{raw}: {canonical}"
+            );
+        }
+        for alpha in 0..16_u8 {
+            let raw = format!("#0f0{alpha:x}");
+            let canonical = canonicalize_fill_style(&raw).expect("valid four-digit hex");
+            assert_eq!(fill_style_rgba(&canonical), [0, 255, 0, alpha * 17]);
+        }
+    }
+
+    #[test]
+    fn malformed_hex_colors_cannot_panic_or_install_a_style() {
+        for raw in ["#", "#12", "#12345", "#gggg", "#💚", "#éé", "#0000000x"] {
+            assert_eq!(canonicalize_fill_style(raw), None, "{raw}");
+            assert_eq!(fill_style_rgba(raw), [0, 0, 0, 255], "{raw}");
+        }
+    }
+
+    #[test]
     fn data_url_zero_and_png_dimensions_are_stable() {
         assert_eq!(encode_data_url(&[], 0, 0).as_deref(), Some("data:,"));
 
