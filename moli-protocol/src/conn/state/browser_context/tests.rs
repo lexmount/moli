@@ -2,6 +2,89 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn context_header_defaults_preserve_layer_order_and_clear_fallback() {
+    let header = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+    let mut context = BrowserContext::new("CTX-headers".into());
+    context.global_extra_headers = vec![header("X-Order", "global"), header("X-Global", "1")];
+    context.set_default_extra_headers(vec![
+        header("X-Order", "context"),
+        header("x-order", "case-distinct"),
+        header("X-Context", "1"),
+    ]);
+    let page_headers = vec![header("X-Order", "page"), header("X-Page", "1")];
+    assert_eq!(
+        context.merged_extra_headers_for_target_policy(&page_headers),
+        vec![
+            header("X-Global", "1"),
+            header("x-order", "case-distinct"),
+            header("X-Context", "1"),
+            header("X-Order", "page"),
+            header("X-Page", "1"),
+        ]
+    );
+    context.set_default_extra_headers(Vec::new());
+    assert_eq!(
+        context.merged_extra_headers_for_target_policy(&page_headers),
+        vec![
+            header("X-Global", "1"),
+            header("X-Order", "page"),
+            header("X-Page", "1"),
+        ]
+    );
+    assert_eq!(
+        context.effective_extra_headers(),
+        context.global_extra_headers
+    );
+    assert!(!context.has_active_target());
+}
+
+#[test]
+fn context_header_defaults_outlive_projection_without_replacing_network_policy() {
+    let headers = vec![("X-Context".to_owned(), "context".to_owned())];
+    let expected = ContextNetworkPolicy {
+        http_proxy: Some("http://proxy.example:8080".into()),
+        http_no_proxy: Some(String::new()),
+        tls_verify_host: Some(false),
+        extra_headers: headers.clone(),
+    };
+    let physical = {
+        let mut projection = BrowserContext::new_with_page_for_test("CTX-headers", "page-headers");
+        projection.attach_active_session("session-headers");
+        projection.global_extra_headers = vec![("X-Global".into(), "global".into())];
+        projection.set_network_policy(ContextNetworkPolicy {
+            extra_headers: Vec::new(),
+            ..expected.clone()
+        });
+        projection.set_default_extra_headers(headers.clone());
+        let snapshot = projection.network_policy().clone();
+        projection.set_default_extra_headers(Vec::new());
+        assert_eq!(projection.network_policy().http_proxy, expected.http_proxy);
+        assert_eq!(
+            projection.network_policy().http_no_proxy,
+            expected.http_no_proxy
+        );
+        assert_eq!(
+            projection.network_policy().tls_verify_host,
+            expected.tls_verify_host
+        );
+        assert_eq!(
+            projection.effective_extra_headers(),
+            projection.global_extra_headers
+        );
+        assert_eq!(snapshot, expected);
+        projection.set_default_extra_headers(headers);
+        assert_eq!(
+            projection.detach_active_session().as_deref(),
+            Some("session-headers")
+        );
+        projection.physical
+    };
+    assert_eq!(physical.network_policy, expected);
+    let other = BrowserContext::new("CTX-other".into());
+    assert!(other.network_policy().extra_headers.is_empty());
+}
+
+#[test]
 fn context_browser_identity_preserves_independent_inputs_and_update_time_fallback() {
     use moli_browser_profile::BrowserIdentityProfile;
 
@@ -234,6 +317,7 @@ fn context_network_policy_outlives_page_and_protocol_projection() {
         http_proxy: Some("http://proxy.example:8080".into()),
         http_no_proxy: Some(String::new()),
         tls_verify_host: Some(false),
+        ..Default::default()
     };
     let (physical, before_tls_change) = {
         let mut projection = BrowserContext::new_with_page_for_test("CTX-policy", "page-policy");

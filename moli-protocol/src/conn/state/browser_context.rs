@@ -63,7 +63,6 @@ pub struct BrowserContext {
     pub(crate) dedicated_worker_targets: BTreeMap<u64, DedicatedWorkerTargetState>,
     pub(crate) service_worker_targets: BTreeMap<u64, ServiceWorkerTargetState>,
     pub(crate) service_worker_domain_sessions: BTreeSet<Option<String>>,
-    pub(crate) default_extra_headers: Vec<(String, String)>,
     pub(crate) global_extra_headers: Vec<(String, String)>,
     browser_identity_inputs: BrowserIdentityOverrideInputs,
     pub(crate) global_network_conditions: Option<EmulatedNetworkConditions>,
@@ -380,7 +379,6 @@ impl BrowserContext {
             dedicated_worker_targets: BTreeMap::new(),
             service_worker_targets: BTreeMap::new(),
             service_worker_domain_sessions: BTreeSet::new(),
-            default_extra_headers: Vec::new(),
             global_extra_headers: Vec::new(),
             browser_identity_inputs: BrowserIdentityOverrideInputs::default(),
             global_network_conditions: None,
@@ -1377,6 +1375,10 @@ impl BrowserContext {
 
     pub(crate) fn network_policy(&self) -> &ContextNetworkPolicy {
         &self.physical.network_policy
+    }
+
+    pub(crate) fn set_default_extra_headers(&mut self, headers: Vec<(String, String)>) {
+        self.physical.network_policy.extra_headers = headers;
     }
 
     pub(crate) fn set_network_policy(&mut self, policy: ContextNetworkPolicy) {
