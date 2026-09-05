@@ -182,15 +182,7 @@ async fn get_full_ax_tree_reads_live_renderer_dom_when_page_snapshot_is_stale() 
     .await;
 
     let mutation_completion = {
-        let page = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-            .expect("loaded page");
+        let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
         let mutation = json!({
             "id": 910,
             "method": "Runtime.evaluate",
@@ -199,8 +191,9 @@ async fn get_full_ax_tree_reads_live_renderer_dom_when_page_snapshot_is_stale() 
                 "returnByValue": true
             }
         });
-        let pending = page
-            .start_runtime_protocol_message(mutation.to_string())
+        let pending = ctx
+            .conn
+            .start_runtime_protocol_message_for_owner(&owner, mutation.to_string())
             .expect("runtime mutation should start");
         pending
             .wait()
@@ -226,18 +219,12 @@ async fn get_full_ax_tree_reads_live_renderer_dom_when_page_snapshot_is_stale() 
             .any(|node| node["name"]["value"] == json!("old"))
     );
 
-    let page = ctx
+    let _ = ctx
         .conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .loaded_page_mut()
-        .expect("loaded page");
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 async fn enable_runtime_async(ctx: &mut TestContext) {

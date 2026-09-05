@@ -2,7 +2,7 @@ use super::{
     Page, RendererAgentAttachmentId, RendererCommandTurnOutput, RendererPageCommand,
     RendererPageCommandPending, RendererPageReply, RendererRuntimeInspectorIoCommandClaim,
     RendererRuntimeInspectorIoCommandRoute, RendererRuntimeInspectorMainCommandCompletion,
-    RendererRuntimeInspectorMainCommandRoute, RendererRuntimeInspectorMessage,
+    RendererRuntimeInspectorMainCommandRoute,
 };
 use crate::RendererOutputFence;
 use anyhow::{Result, bail};
@@ -238,20 +238,6 @@ impl Page {
             operation,
             "a bool reply",
             RendererPageReply::Bool(value) => Ok(value),
-        )
-    }
-
-    pub(super) fn decode_runtime_inspector_protocol_messages_page_reply(
-        reply: RendererPageReply,
-        operation: &str,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        expect_page_reply!(
-            reply,
-            operation,
-            "runtime inspector protocol messages",
-            RendererPageReply::RuntimeInspectorProtocolMessages(messages) => {
-                Ok(messages.into_messages())
-            },
         )
     }
 

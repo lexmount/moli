@@ -2,32 +2,14 @@ use anyhow::{Result, anyhow};
 
 use super::Page;
 use super::RuntimeConsoleMessageSnapshot;
-use super::protocol_support::RuntimeContextRestoreEvent;
 use super::{
-    CompletedPageCommand, PendingPageCommand, RendererCommandTurnOutput,
-    RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
+    CompletedPageCommand, PendingPageCommand, RendererCommandTurnOutput, RendererRuntimeRealmInfo,
 };
 use crate::renderer::{
     RendererDomDebuggerDomBreakpointResolution, RendererDomDebuggerEventListenersResolution,
     RendererPageCommand, RendererPageReply, RendererPerformanceMetricSnapshot,
     RendererRuntimeHeapUsage,
 };
-
-fn dedupe_runtime_context_created_events(events: &mut Vec<RuntimeContextRestoreEvent>) {
-    let mut seen = Vec::new();
-    events.retain(|event| {
-        let RuntimeContextRestoreEvent::Created(event) = event else {
-            return true;
-        };
-        let key = (event.context_id, event.realm_id.clone());
-        if seen.contains(&key) {
-            false
-        } else {
-            seen.push(key);
-            true
-        }
-    });
-}
 
 impl Page {
     pub async fn evaluate_runtime_expression_async(
@@ -173,99 +155,6 @@ impl Page {
         )
     }
 
-    pub async fn dispatch_runtime_protocol_message_async(
-        &mut self,
-        raw_json: &str,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        let pending = self.start_runtime_protocol_message(raw_json.to_owned())?;
-        let completion = pending.wait().await?;
-        self.finish_runtime_protocol_message(completion)
-    }
-
-    pub fn start_runtime_protocol_message(&self, raw_json: String) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::dispatch_runtime_protocol_message(
-            None, raw_json,
-        ))
-    }
-
-    pub fn finish_runtime_protocol_message(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        self.observe_renderer_page_state(completion.page_state());
-        let output = completion.into_runtime_protocol_message_command_turn()?;
-        let (completion, _renderer_output_predecessor) = output.into_completion_and_predecessor();
-        let (reply, _, _) = completion.into_parts();
-        Self::decode_runtime_inspector_protocol_messages_page_reply(
-            reply,
-            "runtime protocol page command",
-        )
-    }
-
-    pub async fn runtime_enable_events_async(
-        &mut self,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        self.runtime_enable_events_for_inspector_session_async(None)
-            .await
-    }
-
-    pub async fn runtime_enable_events_for_inspector_session_async(
-        &mut self,
-        inspector_session_id: Option<&str>,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        let pending =
-            self.start_runtime_enable_events_for_inspector_session(inspector_session_id)?;
-        let completion = pending.wait().await?;
-        self.finish_runtime_enable_events(completion)
-    }
-
-    fn start_runtime_enable_events_for_inspector_session(
-        &self,
-        inspector_session_id: Option<&str>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::runtime_enable_events(
-            inspector_session_id.map(str::to_owned),
-        ))
-    }
-
-    pub fn finish_runtime_enable_events(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        Ok(self
-            .finish_runtime_enable_output(completion)?
-            .into_messages())
-    }
-
-    fn finish_runtime_enable_output(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererRuntimeCommandOutput> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "runtime enable page command",
-            "runtime inspector protocol messages reply",
-            RendererPageReply::RuntimeInspectorProtocolMessages(output) => Ok(output),
-        )
-    }
-
-    pub fn finish_runtime_enable_context_restore_events(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Vec<RuntimeContextRestoreEvent>> {
-        let mut events = self
-            .finish_runtime_enable_events(completion)?
-            .into_iter()
-            .filter_map(|message| match message {
-                RendererRuntimeInspectorMessage::RuntimeContext(event) => Some(event),
-                RendererRuntimeInspectorMessage::Protocol(_) => None,
-            })
-            .collect();
-        dedupe_runtime_context_created_events(&mut events);
-        Ok(events)
-    }
-
     pub async fn runtime_console_messages_with_context_async(
         &mut self,
     ) -> Result<Vec<RuntimeConsoleMessageSnapshot>> {
@@ -313,24 +202,8 @@ impl Page {
         execution_context_name: Option<&str>,
         execution_context_id: Option<i64>,
     ) -> Result<()> {
-        self.add_runtime_binding_for_inspector_session_async(
-            None,
-            name,
-            execution_context_name,
-            execution_context_id,
-        )
-        .await
-    }
-
-    pub async fn add_runtime_binding_for_inspector_session_async(
-        &mut self,
-        inspector_session_id: Option<String>,
-        name: &str,
-        execution_context_name: Option<&str>,
-        execution_context_id: Option<i64>,
-    ) -> Result<()> {
         let command = RendererPageCommand::add_runtime_binding(
-            inspector_session_id,
+            None,
             name.to_owned(),
             execution_context_name.map(str::to_owned),
             execution_context_id,

@@ -699,9 +699,7 @@ mod tests {
     use crate::conn::{BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent, PageTargetHost};
     use crate::domains::page::LOADER_ID;
     use crate::testing::{TestContext, wait_until_renderer_document_load};
-    use moli_core::page::{
-        CompletedPageCommand, Page, RENDERER_BACKEND_NODE_ID_START, is_renderer_backend_node_id,
-    };
+    use moli_core::page::{RENDERER_BACKEND_NODE_ID_START, is_renderer_backend_node_id};
     use serde_json::Value;
     use serde_json::json;
 
@@ -736,21 +734,10 @@ mod tests {
         wait_until_renderer_document_load(ctx, None, "TID-1", LOADER_ID).await;
     }
 
-    fn loaded_page_mut_for_test(ctx: &mut TestContext) -> &mut Page {
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-            .expect("loaded page")
-    }
-
     async fn append_live_css_target_without_refreshing_page_snapshot(
         ctx: &mut TestContext,
         style: &str,
-    ) -> (u32, CompletedPageCommand) {
+    ) -> (u32, crate::conn::CompletedRuntimeProtocolMessageDispatch) {
         with_loaded_document_async(ctx, "<html><body></body></html>").await;
         let cdp_node_id = RENDERER_BACKEND_NODE_ID_START - 1;
         let style_json = serde_json::to_string(style).expect("style should encode as JSON");
@@ -764,7 +751,7 @@ mod tests {
             }})()"#
         );
         let completion = {
-            let page = loaded_page_mut_for_test(ctx);
+            let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
             let mutation = json!({
                 "id": 910,
                 "method": "Runtime.evaluate",
@@ -773,8 +760,9 @@ mod tests {
                     "returnByValue": true
                 }
             });
-            let pending = page
-                .start_runtime_protocol_message(mutation.to_string())
+            let pending = ctx
+                .conn
+                .start_runtime_protocol_message_for_owner(&owner, mutation.to_string())
                 .expect("runtime mutation should start");
             pending
                 .wait()
@@ -1842,10 +1830,12 @@ mod tests {
             })
         );
 
-        let page = loaded_page_mut_for_test(&mut ctx);
-        let _ = page
-            .finish_runtime_protocol_message(mutation_completion)
-            .expect("runtime mutation completion should finish");
+        let _ = ctx
+            .conn
+            .complete_runtime_protocol_message_async(mutation_completion)
+            .await
+            .expect("runtime mutation completion should finish")
+            .expect("Main inspection must retain its frozen command output");
     }
 
     #[tokio::test]
@@ -1962,10 +1952,12 @@ mod tests {
             })
         );
 
-        let page = loaded_page_mut_for_test(&mut ctx);
-        let _ = page
-            .finish_runtime_protocol_message(mutation_completion)
-            .expect("runtime mutation completion should finish");
+        let _ = ctx
+            .conn
+            .complete_runtime_protocol_message_async(mutation_completion)
+            .await
+            .expect("runtime mutation completion should finish")
+            .expect("Main inspection must retain its frozen command output");
     }
 
     #[tokio::test]
