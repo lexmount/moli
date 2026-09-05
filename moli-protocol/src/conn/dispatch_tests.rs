@@ -4625,7 +4625,8 @@ async fn devtools_command_applies_known_user_context_viewport_default() {
         "userContext viewport should not create a page target"
     );
     let default_metrics = browser_context
-        .default_emulated_device_metrics
+        .emulation_defaults()
+        .device_metrics
         .as_ref()
         .expect("userContext should hold default emulated device metrics");
     assert_eq!(default_metrics.width, 800);

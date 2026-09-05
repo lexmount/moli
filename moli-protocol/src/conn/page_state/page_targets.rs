@@ -390,11 +390,11 @@ impl BrowserContext {
         let effective_locale = effective
             .locale_override()
             .map(str::to_owned)
-            .or_else(|| self.default_locale_override.clone());
+            .or_else(|| self.emulation_defaults().locale.clone());
         let effective_timezone = effective
             .timezone_override()
             .map(str::to_owned)
-            .or_else(|| self.default_timezone_override.clone());
+            .or_else(|| self.emulation_defaults().timezone.clone());
         let page = self
             .page_target_mut(target_id)
             .and_then(|target| target.runtime_slot.loaded_page_mut());
@@ -454,11 +454,11 @@ impl BrowserContext {
         let effective_locale = effective_policy
             .locale_override()
             .map(str::to_owned)
-            .or_else(|| self.default_locale_override.clone());
+            .or_else(|| self.emulation_defaults().locale.clone());
         let effective_timezone = effective_policy
             .timezone_override()
             .map(str::to_owned)
-            .or_else(|| self.default_timezone_override.clone());
+            .or_else(|| self.emulation_defaults().timezone.clone());
         let surface_script = if is_active {
             Some(self.generated_surface_override_script_for_active_target())
         } else {

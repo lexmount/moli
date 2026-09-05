@@ -262,13 +262,13 @@ impl TargetNavigationLoadInputs {
         let effective_network_conditions = page_state
             .emulation_policy()
             .network_conditions
-            .or(browser_context.default_network_conditions)
+            .or(browser_context.emulation_defaults().network_conditions)
             .or(browser_context.global_network_conditions);
         let emulated_device_metrics = page_state
             .emulation_policy()
             .emulated_device_metrics
             .clone()
-            .or_else(|| browser_context.default_emulated_device_metrics.clone());
+            .or_else(|| browser_context.emulation_defaults().device_metrics.clone());
         let effective_policy = page_state.effective_policy();
 
         Self {
@@ -305,11 +305,11 @@ impl TargetNavigationLoadInputs {
             locale_override: effective_policy
                 .locale_override()
                 .map(str::to_owned)
-                .or_else(|| browser_context.default_locale_override.clone()),
+                .or_else(|| browser_context.emulation_defaults().locale.clone()),
             timezone_override: effective_policy
                 .timezone_override()
                 .map(str::to_owned)
-                .or_else(|| browser_context.default_timezone_override.clone()),
+                .or_else(|| browser_context.emulation_defaults().timezone.clone()),
             script_execution_disabled: page_state.emulation_policy().script_execution_disabled,
             bypass_content_security_policy: page_state.bypass_content_security_policy(),
             cpu_throttling_rate: page_state.emulation_policy().cpu_throttling_rate,
@@ -348,7 +348,8 @@ impl TargetNavigationLoadInputs {
         inputs.locale_override = browser_context.effective_active_locale_override_owned();
         inputs.timezone_override = browser_context.effective_active_timezone_override_owned();
         inputs.viewport_surface = browser_context
-            .default_emulated_device_metrics
+            .emulation_defaults()
+            .device_metrics
             .as_ref()
             .map(|metrics| metrics.viewport_surface().to_page_viewport_surface());
         inputs.network_offline = browser_context.effective_active_network_offline();
@@ -586,7 +587,12 @@ impl<'a> TargetSessionOwnerRef<'a> {
             .emulation_policy()
             .emulated_device_metrics
             .clone()
-            .or_else(|| self.browser_context.default_emulated_device_metrics.clone())
+            .or_else(|| {
+                self.browser_context
+                    .emulation_defaults()
+                    .device_metrics
+                    .clone()
+            })
     }
 
     pub(super) fn navigation_load_inputs(&self) -> TargetNavigationLoadInputs {

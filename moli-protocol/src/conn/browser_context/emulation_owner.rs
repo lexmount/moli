@@ -177,7 +177,7 @@ impl BrowserContext {
             .emulation_policy()
             .emulated_device_metrics
             .clone()
-            .or_else(|| self.default_emulated_device_metrics.clone())
+            .or_else(|| self.emulation_defaults().device_metrics.clone())
     }
 }
 

@@ -2,6 +2,69 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn context_emulation_defaults_outlive_projection_without_inherited_mirrors() {
+    let metrics = EmulatedDeviceMetrics {
+        width: 640,
+        height: 480,
+        device_scale_factor: 2.0,
+        screen_width: 1024,
+        screen_height: 768,
+    };
+    let resized = EmulatedDeviceMetrics {
+        width: 800,
+        ..metrics.clone()
+    };
+    let (physical, snapshot) = {
+        let mut projection =
+            BrowserContext::new_with_page_for_test("CTX-emulation", "page-emulation");
+        projection.attach_active_session("session-emulation");
+        projection.set_default_locale_override(Some("fr-FR".into()), &Default::default());
+        projection.set_default_timezone_override(Some("Asia/Tokyo".into()));
+        projection.set_default_network_conditions(Some(EmulatedNetworkConditions::offline()));
+        projection.set_default_geolocation_override(Some(
+            EmulatedGeolocationOverrideState::PositionUnavailable,
+        ));
+        assert!(!projection.set_default_device_metrics(metrics.clone()));
+        let snapshot = projection.emulation_defaults().clone();
+
+        projection.set_default_timezone_override(None);
+        projection.set_default_network_conditions(None);
+        projection.global_network_conditions = Some(EmulatedNetworkConditions::offline());
+        assert!(projection.effective_active_network_offline());
+        assert!(projection.set_default_device_metrics(resized.clone()));
+        assert_eq!(
+            projection.detach_active_session().as_deref(),
+            Some("session-emulation")
+        );
+        (projection.physical, snapshot)
+    };
+    assert_eq!(
+        snapshot,
+        ContextEmulationDefaults {
+            locale: Some("fr-FR".into()),
+            timezone: Some("Asia/Tokyo".into()),
+            network_conditions: Some(EmulatedNetworkConditions::offline()),
+            geolocation: Some(EmulatedGeolocationOverrideState::PositionUnavailable),
+            device_metrics: Some(metrics),
+        }
+    );
+    assert_eq!(
+        physical.emulation_defaults,
+        ContextEmulationDefaults {
+            timezone: None,
+            network_conditions: None,
+            device_metrics: Some(resized),
+            ..snapshot
+        }
+    );
+    let other = BrowserContext::new("CTX-other".into());
+    assert_eq!(
+        other.emulation_defaults(),
+        &ContextEmulationDefaults::default()
+    );
+}
+
+#[test]
 fn physical_storage_operations_outlive_protocol_projection() {
     let origin = url::Url::parse("https://physical.test").unwrap();
     let origin_key = origin.origin().ascii_serialization();

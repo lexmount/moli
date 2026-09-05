@@ -1217,9 +1217,11 @@ async fn execute_devtools_set_geolocation_override_for_browser_contexts(
         let browser_context = conn
             .browser_context_by_id_mut(browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_geolocation_override = command
-            .override_state
-            .map(emulated_geolocation_override_state);
+        browser_context.set_default_geolocation_override(
+            command
+                .override_state
+                .map(emulated_geolocation_override_state),
+        );
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_geolocation_surface_updates_for_routes(
@@ -1307,8 +1309,9 @@ async fn execute_devtools_set_network_conditions_for_browser_contexts(
         let browser_context = conn
             .browser_context_by_id_mut(browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_network_conditions =
-            command.network_conditions.map(emulated_network_conditions);
+        browser_context.set_default_network_conditions(
+            command.network_conditions.map(emulated_network_conditions),
+        );
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_network_conditions_updates_for_routes(
@@ -1821,7 +1824,7 @@ async fn execute_devtools_set_timezone_override_for_browser_contexts(
         let browser_context = conn
             .browser_context_by_id_mut(browser_context_id)
             .expect("resolved browser context must remain addressable");
-        browser_context.default_timezone_override = command.timezone.clone();
+        browser_context.set_default_timezone_override(command.timezone.clone());
     }
     let routes = top_level_target_routes_for_browser_contexts(conn, Some(&browser_context_ids));
     execute_timezone_updates_for_routes(conn, devtools_command_session_id(&command.context), routes)
@@ -2155,7 +2158,7 @@ async fn execute_devtools_set_viewport_for_browser_contexts(
     for browser_context_id in browser_context_ids {
         let current_default = conn
             .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.default_emulated_device_metrics.as_ref());
+            .and_then(|context| context.emulation_defaults().device_metrics.as_ref());
         let metrics = set_viewport_metrics_from_current(current_default, &command)?;
         let browser_context = conn
             .browser_context_by_id(&browser_context_id)
@@ -2168,8 +2171,7 @@ async fn execute_devtools_set_viewport_for_browser_contexts(
         let browser_context = conn
             .browser_context_by_id_mut(&browser_context_id)
             .expect("resolved browser context must remain addressable");
-        let had_existing_default = browser_context.default_emulated_device_metrics.is_some();
-        browser_context.default_emulated_device_metrics = Some(metrics.clone());
+        let had_existing_default = browser_context.set_default_device_metrics(metrics.clone());
         pending.extend(start_browser_context_default_device_metrics_page_commands(
             browser_context,
             &metrics,

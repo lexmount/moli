@@ -8,6 +8,9 @@ use moli_core::{
     },
 };
 
+use super::super::emulation::{
+    EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedNetworkConditions,
+};
 use super::{
     BrowserContextStoragePartitionHandles,
     storage_partition::{StoragePartition, StoragePartitionKind},
@@ -20,6 +23,7 @@ pub(super) struct BrowserContext {
     pub(super) id: BrowserContextId,
     pub(super) page_navigation_runtime_config: Option<NavigationRuntimeConfig>,
     pub(super) network_policy: ContextNetworkPolicy,
+    pub(super) emulation_defaults: ContextEmulationDefaults,
     // The wrapper drops its page/engine residents first. Keep the stores alive
     // while the remaining runtime root stops producers and joins its network.
     renderer_runtime_owner: Option<RendererBrowserContextRuntimeOwner>,
@@ -37,6 +41,7 @@ impl BrowserContext {
             id: BrowserContextId::allocate(),
             page_navigation_runtime_config: None,
             network_policy: ContextNetworkPolicy::default(),
+            emulation_defaults: ContextEmulationDefaults::default(),
             renderer_runtime_owner: Some(RendererBrowserContextRuntime::new()),
             storage_partition: StoragePartition::new(
                 handles,
@@ -86,4 +91,14 @@ pub(crate) struct ContextNetworkPolicy {
     pub(crate) http_proxy: Option<String>,
     pub(crate) http_no_proxy: Option<String>,
     pub(crate) tls_verify_host: Option<bool>,
+}
+
+/// Installed context defaults; inherited process values are not copied here.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(crate) struct ContextEmulationDefaults {
+    pub(crate) locale: Option<String>,
+    pub(crate) timezone: Option<String>,
+    pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
+    pub(crate) geolocation: Option<EmulatedGeolocationOverrideState>,
+    pub(crate) device_metrics: Option<EmulatedDeviceMetrics>,
 }

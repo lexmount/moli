@@ -259,12 +259,14 @@ impl BrowserContext {
     fn page_surface_for_state(&self, state: &PageTargetHost, foreground: bool) -> PageSurface {
         state.runtime_slot.page_slot().contents.page_surface(
             foreground,
-            self.default_network_conditions
+            self.emulation_defaults()
+                .network_conditions
                 .or(self.global_network_conditions),
-            self.default_geolocation_override
+            self.emulation_defaults()
+                .geolocation
                 .as_ref()
                 .or(self.global_geolocation_override.as_ref()),
-            self.default_emulated_device_metrics.as_ref(),
+            self.emulation_defaults().device_metrics.as_ref(),
         )
     }
 

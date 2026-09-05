@@ -2483,7 +2483,7 @@ async fn clear_geolocation_override_restores_default_after_explicit_unavailable(
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    bc.default_geolocation_override = Some(EmulatedGeolocationOverrideState::Position(
+    bc.set_default_geolocation_override(Some(EmulatedGeolocationOverrideState::Position(
         EmulatedGeolocationOverride {
             latitude: 37.33182,
             longitude: -122.03118,
@@ -2493,7 +2493,7 @@ async fn clear_geolocation_override_restores_default_after_explicit_unavailable(
             heading: None,
             speed: None,
         },
-    ));
+    )));
     install_session_page_for_emulation_test(&mut ctx, bc, "data:text/html,<body>geo</body>").await;
 
     ctx.process_async(json!({
