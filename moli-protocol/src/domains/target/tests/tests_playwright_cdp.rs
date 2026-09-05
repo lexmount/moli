@@ -5949,7 +5949,7 @@ async fn playwright_over_cdp_context_profile_surfaces_permissions_tls_and_metric
     assert_eq!(active.active_target_id(), Some(target_id.as_str()));
     assert_eq!(active.active_session_id(), Some(session_id.as_str()));
     assert_eq!(
-        active.active_page_target().tls_verify_host_override,
+        active.active_page_target().tls_verify_host_override(),
         Some(false)
     );
     assert_eq!(

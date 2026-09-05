@@ -60,6 +60,7 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
         .unwrap();
     let policy = target.effective_policy();
     target.set_network_offline(true);
+    target.set_tls_verify_host_override(Some(false));
     let first_document = target.current_document_id().unwrap();
     let storage = target.session_storage_store().clone();
     assert!(
@@ -118,6 +119,7 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
     assert_eq!(target.emulation_policy().cpu_throttling_rate, 4.0);
     assert_eq!(target.effective_policy(), policy);
     assert!(target.network_offline());
+    assert_eq!(target.tls_verify_host_override(), Some(false));
     assert_ne!(first_document, reserved);
     assert_eq!(
         target
