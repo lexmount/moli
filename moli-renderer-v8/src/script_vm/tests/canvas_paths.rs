@@ -217,3 +217,138 @@ fn canvas_path_state_is_independent_between_contexts_and_after_reset() {
       return JSON.stringify([x.getImageData(5,5,1,1).data[3],y.getImageData(15,15,1,1).data[3],y.getImageData(5,5,1,1).data[3]]);
     })()"#).unwrap(),"[0,255,0]");
 }
+
+#[test]
+fn canvas_later_transforms_do_not_move_recorded_geometry() {
+    for transform in [
+        "ctx.translate(20,0)",
+        "ctx.scale(2,3)",
+        "ctx.rotate(Math.PI/2)",
+    ] {
+        canvas_pixels(
+            &format!("ctx.rect(5,5,10,10);{transform};ctx.fill();"),
+            &[(10, 10), (30, 10), (20, 30)],
+            &[255, 0, 0],
+        );
+    }
+}
+
+#[test]
+fn canvas_path_records_each_commands_coordinate_system() {
+    canvas_pixels(
+        "ctx.rect(0,0,10,10);ctx.translate(20,0);ctx.rect(0,0,10,10);ctx.resetTransform();ctx.fill();",
+        &[(5, 5), (25, 5), (45, 5)],
+        &[255, 255, 0],
+    );
+    // Adapted from WPT 2d.path.transformation.changing. The final CTM must
+    // not be applied a second time to the previously recorded rectangle.
+    canvas_pixels(
+        "ctx.moveTo(0,0);ctx.translate(40,0);ctx.lineTo(0,0);ctx.translate(0,40);ctx.lineTo(0,0);ctx.translate(-40,0);ctx.lineTo(0,0);ctx.translate(1000,1000);ctx.rotate(Math.PI/2);ctx.scale(.1,.1);ctx.fill();",
+        &[(20, 20), (50, 50)],
+        &[255, 0],
+    );
+}
+
+#[test]
+fn canvas_current_transform_changes_stroke_metrics_not_path_position() {
+    // Same contract as WPT 2d.path.stroke.scale1/scale2, without depending on
+    // the separately unsupported save/restore implementation.
+    canvas_pixels(
+        "ctx.moveTo(10,20);ctx.lineTo(30,20);ctx.scale(2,3);ctx.lineWidth=4;ctx.stroke();",
+        &[(15, 15), (15, 20), (15, 25), (15, 27), (40, 60)],
+        &[255, 255, 255, 0, 0],
+    );
+    canvas_pixels(
+        "ctx.moveTo(10,20);ctx.lineTo(30,20);ctx.rotate(Math.PI/2);ctx.scale(3,2);ctx.lineWidth=4;ctx.stroke();",
+        &[(15, 15), (15, 20), (15, 25), (15, 27)],
+        &[255, 255, 255, 0],
+    );
+}
+
+#[test]
+fn canvas_stroke_dashes_follow_the_current_transform() {
+    canvas_pixels(
+        "ctx.moveTo(10,20);ctx.lineTo(90,20);ctx.scale(2,1);ctx.setLineDash([10,10]);ctx.stroke();",
+        &[
+            (15, 20),
+            (25, 20),
+            (35, 20),
+            (45, 20),
+            (55, 20),
+            (65, 20),
+            (75, 20),
+        ],
+        &[255, 255, 0, 0, 255, 255, 0],
+    );
+}
+
+#[test]
+fn canvas_arc_to_resolves_the_old_point_in_the_new_user_space() {
+    canvas_pixels(
+        "ctx.moveTo(10,20);ctx.translate(20,0);ctx.arcTo(20,20,20,50,10);ctx.stroke();",
+        &[(15, 20), (30, 20), (39, 29), (50, 20)],
+        &[255, 255, 255, 0],
+    );
+}
+
+#[test]
+fn canvas_continuing_a_closed_subpath_does_not_transform_its_start_again() {
+    canvas_pixels(
+        "ctx.moveTo(5,5);ctx.lineTo(15,5);ctx.lineTo(15,15);ctx.closePath();ctx.translate(20,0);ctx.lineTo(-15,25);ctx.stroke();",
+        &[(5, 20), (25, 20)],
+        &[255, 0],
+    );
+}
+
+#[test]
+fn canvas_stroke_rect_uses_current_transform_without_changing_default_path() {
+    canvas_pixels(
+        "ctx.rect(5,5,10,10);ctx.translate(20,0);ctx.strokeRect(0,30,10,10);ctx.resetTransform();ctx.fill();",
+        &[(10, 10), (25, 35), (20, 35)],
+        &[255, 0, 255],
+    );
+}
+
+#[test]
+fn canvas_singular_transform_suppresses_paint_without_losing_the_old_path() {
+    canvas_pixels(
+        "ctx.rect(5,5,10,10);ctx.scale(0,1);ctx.fill();ctx.stroke();",
+        &[(10, 10)],
+        &[0],
+    );
+    canvas_pixels(
+        "ctx.rect(5,5,10,10);ctx.scale(0,1);ctx.fill();ctx.resetTransform();ctx.fill();",
+        &[(10, 10)],
+        &[255],
+    );
+}
+
+#[test]
+fn canvas_small_invertible_scale_is_not_treated_as_singular() {
+    canvas_pixels(
+        "ctx.scale(1e-9,1e-9);ctx.rect(0,0,1e10,1e10);ctx.fill();",
+        &[(5, 5), (15, 5)],
+        &[255, 0],
+    );
+}
+
+#[test]
+fn canvas_curves_are_transformed_when_recorded() {
+    for curve in [
+        "ctx.quadraticCurveTo(5,0,10,0)",
+        "ctx.bezierCurveTo(3,0,7,0,10,0)",
+    ] {
+        canvas_pixels(
+            &format!(
+                "ctx.translate(10,20);ctx.moveTo(0,0);{curve};ctx.resetTransform();ctx.stroke();"
+            ),
+            &[(15, 20), (15, 0)],
+            &[255, 0],
+        );
+    }
+    canvas_pixels(
+        "ctx.translate(20,20);ctx.arc(12,12,10,0,2*Math.PI);ctx.resetTransform();ctx.fill();",
+        &[(32, 32), (12, 12)],
+        &[255, 0],
+    );
+}

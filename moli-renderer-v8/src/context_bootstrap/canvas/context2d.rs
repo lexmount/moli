@@ -1059,13 +1059,13 @@ pub(crate) fn canvas_context_fill_callback<'s>(
     };
     let path_state = canvas_path_state(scope, args.this());
     let fragment = with_path_state(&path_state, |state| {
-        if state.is_empty() {
+        if state.is_empty() || state.inverse_transform().is_none() {
             return None;
         }
         Some(PaintFragment::Fill {
             shape: PaintShape::Path(state.paint_path()),
             brush: PaintBrush::Solid(context_fill_color(scope, args.this())),
-            transform: state.transform(),
+            transform: PaintTransform2D::IDENTITY,
         })
     });
     if let Some(fragment) = fragment {
@@ -1093,7 +1093,7 @@ pub(crate) fn canvas_context_stroke_callback<'s>(
         Some(PaintFragment::Stroke(context_stroke(
             scope,
             args.this(),
-            state.paint_path(),
+            state.stroke_path()?,
             state.transform(),
         )))
     });
@@ -1133,12 +1133,15 @@ pub(crate) fn canvas_context_stroke_rect_callback<'s>(
     };
     let path_state = canvas_path_state(scope, args.this());
     // strokeRect must not alter the current default path.
-    let (path, transform) = with_path_state(&path_state, |state| {
-        let mut rect_path = state.clone();
-        rect_path.begin_path();
+    let path = with_path_state(&path_state, |state| {
+        let mut rect_path = super::path::Canvas2dPathState::default();
         rect_path.rect(x, y, width, height);
-        (rect_path.paint_path(), state.transform())
+        state.inverse_transform()?;
+        Some((rect_path.paint_path(), state.transform()))
     });
+    let Some((path, transform)) = path else {
+        return;
+    };
     let stroke = context_stroke(scope, args.this(), path, transform);
     rasterize_canvas_fragment(scope, canvas, PaintFragment::Stroke(stroke));
     rv.set_undefined();
