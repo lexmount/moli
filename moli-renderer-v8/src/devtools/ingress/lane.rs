@@ -247,10 +247,6 @@ impl<C: RendererDevToolsIngressCommand> RendererDevToolsSessionLanes<C> {
 
     pub(crate) fn close_and_drain(&mut self) -> Vec<C> {
         self.closed = true;
-        self.drain_queued()
-    }
-
-    pub(crate) fn drain_queued(&mut self) -> Vec<C> {
         self.ready_sessions.clear();
         let commands = self
             .sessions
@@ -259,6 +255,20 @@ impl<C: RendererDevToolsIngressCommand> RendererDevToolsSessionLanes<C> {
             .collect();
         self.sessions
             .retain(|_, lane| lane.active_command_id.is_some());
+        commands
+    }
+
+    pub(crate) fn drain_agent_queued(&mut self, agent: RendererDevToolsAgentToken) -> Vec<C> {
+        self.ready_sessions.retain(|key| key.agent_token != agent);
+        let mut commands = Vec::new();
+        self.sessions.retain(|key, lane| {
+            if key.agent_token != agent {
+                return true;
+            }
+            lane.ready = false;
+            commands.extend(lane.queued.drain(..));
+            lane.active_command_id.is_some() || lane.pending_detaches != 0
+        });
         commands
     }
 
