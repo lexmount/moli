@@ -370,11 +370,14 @@ fn start_pending_inline_style_command(
             kind,
         );
     }
-    let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let Some(inspection) = crate::domains::dom::dom_inspection_for_owner(conn, &owner) else {
         return Err(PendingCssCommandStartError::no_document_loaded());
     };
     let pending = if let Some(backend_node_id) = params.backend_node_id {
-        page.start_document_node_attributes_for_backend_node_id(backend_node_id)
+        inspection
+            .start_document_node_attributes_for_backend_node_id(backend_node_id)
+            .map(PendingPageCommand::from_inspector_main_route)
     } else {
         return Err(PendingCssCommandStartError::node_not_found());
     }
@@ -398,6 +401,11 @@ pub(crate) fn complete_pending_css_command(
         completed,
     } = completed;
     let session_id = owner_scope.session_id();
+    if let Ok(completion) = &completed
+        && let Err(error) = conn.observe_renderer_inspection_completion(&owner_scope, completion)
+    {
+        return CssCommandDispatchStep::Complete(CommandOutputPlan::error(-32000, error));
+    }
     let Some(page) = conn
         .loaded_page_mut_for_protocol_access_for_owner(&owner_scope)
         .ok()
@@ -451,7 +459,7 @@ pub(crate) fn complete_pending_css_command(
                     ));
                 }
             };
-            let backend_node_id = match page.finish_document_frontend_node_binding(completion) {
+            let backend_node_id = match completion.finish_document_frontend_node_binding() {
                 Ok(resolution) => {
                     match node_references::backend_node_id_from_frontend_resolution(resolution) {
                         Some(backend_node_id) => backend_node_id,
@@ -496,7 +504,7 @@ pub(crate) fn complete_pending_css_command(
                     ));
                 }
             };
-            let backend_node_id = match page.finish_document_frontend_node_binding(completion) {
+            let backend_node_id = match completion.finish_document_frontend_node_binding() {
                 Ok(resolution) => {
                     match node_references::backend_node_id_from_frontend_resolution(resolution) {
                         Some(backend_node_id) => backend_node_id,
@@ -515,16 +523,26 @@ pub(crate) fn complete_pending_css_command(
                     ));
                 }
             };
-            let pending =
-                match page.start_document_node_attributes_for_backend_node_id(backend_node_id) {
-                    Ok(pending) => pending,
-                    Err(error) => {
-                        return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
-                            -32000,
-                            error.to_string(),
-                        ));
-                    }
-                };
+            let Some(inspection) =
+                crate::domains::dom::dom_inspection_for_owner(conn, &owner_scope)
+            else {
+                return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
+                    -32000,
+                    "NoDocumentLoaded",
+                ));
+            };
+            let pending = match inspection
+                .start_document_node_attributes_for_backend_node_id(backend_node_id)
+                .map(PendingPageCommand::from_inspector_main_route)
+            {
+                Ok(pending) => pending,
+                Err(error) => {
+                    return CssCommandDispatchStep::Complete(CommandOutputPlan::error(
+                        -32000,
+                        error.to_string(),
+                    ));
+                }
+            };
             CssCommandDispatchStep::Pending(PendingCssCommandDispatch {
                 command_id,
                 owner_scope,
@@ -609,18 +627,12 @@ pub(crate) fn complete_pending_css_command(
                     ));
                 }
             };
-            CssCommandDispatchStep::Complete(
-                match page.finish_document_node_attributes(completion) {
-                    Ok(resolution) => {
-                        inline_style_result_from_attributes_resolution(resolution, kind)
-                            .map(CommandOutputPlan::result)
-                            .unwrap_or_else(|error| {
-                                CommandOutputPlan::error(error.code, error.message)
-                            })
-                    }
-                    Err(error) => CommandOutputPlan::error(-32000, error.to_string()),
-                },
-            )
+            CssCommandDispatchStep::Complete(match completion.finish_document_node_attributes() {
+                Ok(resolution) => inline_style_result_from_attributes_resolution(resolution, kind)
+                    .map(CommandOutputPlan::result)
+                    .unwrap_or_else(|error| CommandOutputPlan::error(error.code, error.message)),
+                Err(error) => CommandOutputPlan::error(-32000, error.to_string()),
+            })
         }
     }
 }

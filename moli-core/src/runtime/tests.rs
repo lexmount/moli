@@ -161,9 +161,21 @@ async fn query_selector_node_from_live_document(
     page: &mut Page,
     selector: &str,
 ) -> Result<Option<RendererDocumentQuerySelectorNode>> {
-    let pending = page.start_document_query_selector_for_document(selector.to_owned(), false)?;
+    let endpoint = page.renderer_inspection_endpoint();
+    let route = endpoint
+        .dom_inspection(
+            moli_renderer_v8::RendererAgentAttachmentId::allocate(),
+            None,
+        )
+        .start_document_query_selector_for_document_in_inspector_session(
+            true,
+            selector.to_owned(),
+            false,
+        )?;
+    let pending = crate::page::PendingPageCommand::from_inspector_main_route(route);
     let completion = pending.wait().await?;
-    match page.finish_document_query_selector(completion)? {
+    page.observe_renderer_page_state(completion.page_state());
+    match completion.finish_document_query_selector()? {
         RendererDocumentQuerySelectorResolution::Found(nodes) => Ok(nodes.into_iter().next()),
         RendererDocumentQuerySelectorResolution::MissingRoot => Ok(None),
         RendererDocumentQuerySelectorResolution::InvalidSelector(message) => {
@@ -178,14 +190,21 @@ async fn resolve_runtime_object_for_backend_node_id(
     execution_context_id: Option<i64>,
     object_group: Option<&str>,
 ) -> Result<crate::page::DocumentNodeRuntimeObjectResolution> {
-    let pending = page.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
-        None,
-        backend_node_id,
-        execution_context_id,
-        object_group,
-    )?;
+    let endpoint = page.renderer_inspection_endpoint();
+    let route = endpoint
+        .dom_inspection(
+            moli_renderer_v8::RendererAgentAttachmentId::allocate(),
+            None,
+        )
+        .start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
+            backend_node_id,
+            execution_context_id,
+            object_group,
+        )?;
+    let pending = crate::page::PendingPageCommand::from_inspector_main_route(route);
     let completion = pending.wait().await?;
-    page.finish_resolve_runtime_object_for_backend_node_id(completion)
+    page.observe_renderer_page_state(completion.page_state());
+    completion.finish_resolve_runtime_object_for_backend_node_id()
 }
 
 #[tokio::test(flavor = "multi_thread")]

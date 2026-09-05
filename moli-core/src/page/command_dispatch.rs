@@ -115,6 +115,12 @@ impl CompletedPageCommand {
         self.output
     }
 
+    pub(super) fn into_reply(self) -> RendererPageReply {
+        let (completion, _) = self.output.into_completion_and_predecessor();
+        let (reply, _, _) = completion.into_parts();
+        reply
+    }
+
     pub fn page_state(&self) -> &std::sync::Arc<crate::renderer::RendererPageState> {
         self.output.completion().page_state()
     }

@@ -1,11 +1,11 @@
 use crate::devtools_runtime::DevToolsDomNodeReference;
-use moli_core::page::{CompletedPageCommand, Page, RendererDomFrontendNodeBindingResolution};
+use moli_core::page::{CompletedPageCommand, RendererDomFrontendNodeBindingResolution};
 
 pub(super) fn finish_reference(
-    page: &mut Page,
     completion: CompletedPageCommand,
 ) -> Result<DevToolsDomNodeReference, String> {
-    page.finish_document_frontend_node_binding(completion)
+    completion
+        .finish_document_frontend_node_binding()
         .map_err(|error| format!("Could not resolve frontend node binding: {error}"))
         .map(reference_from_resolution)
         .and_then(|reference| {

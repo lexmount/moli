@@ -502,6 +502,26 @@ impl RendererInspectorMainIngress {
         )
     }
 
+    pub(crate) fn enqueue_bound_protocol_page_command(
+        &self,
+        page_token: RendererPageToken,
+        agent_token: RendererDevToolsAgentToken,
+        command: RendererPageCommand,
+        inspector_session_id: Option<String>,
+        attachment: crate::RendererAgentAttachmentId,
+    ) -> RendererRuntimeInspectorMainCommandRoute {
+        self.enqueue_with_policy(
+            page_token,
+            agent_token,
+            RendererDevToolsMainCommandEnvelope::from_protocol_command_in_session(
+                command,
+                inspector_session_id,
+            )
+            .with_attachment(attachment),
+            RendererPageStateCapturePolicy::ProtocolTurn,
+        )
+    }
+
     fn enqueue_with_policy(
         &self,
         page_token: RendererPageToken,

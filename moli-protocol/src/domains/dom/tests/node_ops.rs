@@ -55,21 +55,23 @@ async fn renderer_frontend_binding_for_test(
     ctx: &mut TestContext,
     frontend_node_id: u32,
 ) -> moli_core::page::RendererDomFrontendNodeBindingResolution {
-    let renderer_inspector_session_id = ctx
-        .conn
-        .target_renderer_runtime_inspector_session_id_for_session(None);
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, None);
     let completion = {
-        let page = loaded_page_mut_for_test(ctx);
-        let pending = page
-            .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
+        let inspection = crate::domains::dom::dom_inspection_for_owner(&ctx.conn, &owner).unwrap();
+        let pending = inspection
+            .start_document_frontend_node_binding(frontend_node_id)
+            .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
             .expect("renderer frontend node binding lookup should start");
         pending
             .wait()
             .await
             .expect("renderer frontend node binding lookup should complete")
     };
-    let page = loaded_page_mut_for_test(ctx);
-    page.finish_document_frontend_node_binding(completion)
+    ctx.conn
+        .observe_renderer_inspection_completion(&owner, &completion)
+        .unwrap();
+    completion
+        .finish_document_frontend_node_binding()
         .expect("renderer frontend node binding lookup should finish")
 }
 

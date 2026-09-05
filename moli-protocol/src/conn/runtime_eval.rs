@@ -4000,25 +4000,26 @@ impl CdpConnection {
     ) -> Result<Option<DocumentNodeObjectSnapshot>, String> {
         let include_whitespace =
             crate::domains::dom::dom_agent_includes_whitespace_for_owner(self, owner);
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let pending = {
-            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-            page.start_document_node_snapshot_for_object_id_in_inspector_session(
-                inspector_session_id,
-                include_whitespace,
-                object_id,
-                depth,
-                pierce,
-            )
-            .map_err(|error| format!("resolve runtime node snapshot failed: {error}"))?
+            let inspection = crate::domains::dom::dom_inspection_for_owner(self, owner)
+                .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+            inspection
+                .start_document_node_snapshot_for_object_id_in_inspector_session(
+                    include_whitespace,
+                    object_id,
+                    depth,
+                    pierce,
+                )
+                .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
+                .map_err(|error| format!("resolve runtime node snapshot failed: {error}"))?
         };
         let completion = pending
             .wait()
             .await
             .map_err(|error| format!("resolve runtime node snapshot failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        page.finish_document_node_snapshot_for_object_id(completion)
+        self.observe_renderer_inspection_completion(owner, &completion)?;
+        completion
+            .finish_document_node_snapshot_for_object_id()
             .map_err(|error| format!("resolve runtime node snapshot failed: {error}"))
     }
 
@@ -4030,16 +4031,20 @@ impl CdpConnection {
         pierce: bool,
     ) -> Result<Option<DocumentNodeObjectSnapshot>, String> {
         let pending = {
-            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-            page.start_document_node_snapshot_for_backend_node_id(backend_node_id, depth, pierce)
+            let inspection = crate::domains::dom::dom_inspection_for_owner(self, owner)
+                .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+            inspection
+                .start_document_node_snapshot_for_backend_node_id(backend_node_id, depth, pierce)
+                .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
                 .map_err(|error| format!("resolve backend node snapshot failed: {error}"))?
         };
         let completion = pending
             .wait()
             .await
             .map_err(|error| format!("resolve backend node snapshot failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        page.finish_document_node_snapshot_for_backend_node_id(completion)
+        self.observe_renderer_inspection_completion(owner, &completion)?;
+        completion
+            .finish_document_node_snapshot_for_backend_node_id()
             .map_err(|error| format!("resolve backend node snapshot failed: {error}"))
     }
 
@@ -4049,23 +4054,21 @@ impl CdpConnection {
         shared_id: &str,
         backend_node_id: u32,
     ) -> Result<(), String> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let pending = {
-            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-            page.start_register_document_bidi_node_binding(
-                inspector_session_id,
-                shared_id.to_owned(),
-                backend_node_id,
-            )
-            .map_err(|error| format!("register BiDi node binding failed: {error}"))?
+            let inspection = crate::domains::dom::dom_inspection_for_owner(self, owner)
+                .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+            inspection
+                .start_register_document_bidi_node_binding(shared_id.to_owned(), backend_node_id)
+                .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
+                .map_err(|error| format!("register BiDi node binding failed: {error}"))?
         };
         let completion = pending
             .wait()
             .await
             .map_err(|error| format!("register BiDi node binding failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        page.finish_register_document_bidi_node_binding(completion)
+        self.observe_renderer_inspection_completion(owner, &completion)?;
+        completion
+            .finish_register_document_bidi_node_binding()
             .map_err(|error| format!("register BiDi node binding failed: {error}"))
     }
 
@@ -4074,19 +4077,21 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         shared_id: &str,
     ) -> Result<RendererDomBidiNodeBindingResolution, String> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let pending = {
-            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-            page.start_document_bidi_node_binding(inspector_session_id, shared_id.to_owned())
+            let inspection = crate::domains::dom::dom_inspection_for_owner(self, owner)
+                .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+            inspection
+                .start_document_bidi_node_binding(shared_id.to_owned())
+                .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
                 .map_err(|error| format!("resolve BiDi node binding failed: {error}"))?
         };
         let completion = pending
             .wait()
             .await
             .map_err(|error| format!("resolve BiDi node binding failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        page.finish_document_bidi_node_binding(completion)
+        self.observe_renderer_inspection_completion(owner, &completion)?;
+        completion
+            .finish_document_bidi_node_binding()
             .map_err(|error| format!("resolve BiDi node binding failed: {error}"))
     }
 
@@ -4095,22 +4100,21 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         backend_node_id: u32,
     ) -> Result<RendererDomBidiNodeSharedIdResolution, String> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let pending = {
-            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-            page.start_document_bidi_node_shared_id_for_backend_node_id(
-                inspector_session_id,
-                backend_node_id,
-            )
-            .map_err(|error| format!("resolve BiDi node shared id failed: {error}"))?
+            let inspection = crate::domains::dom::dom_inspection_for_owner(self, owner)
+                .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+            inspection
+                .start_document_bidi_node_shared_id_for_backend_node_id(backend_node_id)
+                .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
+                .map_err(|error| format!("resolve BiDi node shared id failed: {error}"))?
         };
         let completion = pending
             .wait()
             .await
             .map_err(|error| format!("resolve BiDi node shared id failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        page.finish_document_bidi_node_shared_id_for_backend_node_id(completion)
+        self.observe_renderer_inspection_completion(owner, &completion)?;
+        completion
+            .finish_document_bidi_node_shared_id_for_backend_node_id()
             .map_err(|error| format!("resolve BiDi node shared id failed: {error}"))
     }
 
@@ -4121,25 +4125,27 @@ impl CdpConnection {
         execution_context_id: Option<i64>,
         object_group: Option<&str>,
     ) -> Result<Option<Value>, String> {
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
         let pending = {
-            let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-            page.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
-                inspector_session_id,
-                backend_node_id,
-                execution_context_id,
-                object_group,
-            )
-            .map_err(|error| format!("resolve runtime object for backend node failed: {error}"))?
+            let inspection = crate::domains::dom::dom_inspection_for_owner(self, owner)
+                .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+            inspection
+                .start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
+                    backend_node_id,
+                    execution_context_id,
+                    object_group,
+                )
+                .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
+                .map_err(|error| {
+                    format!("resolve runtime object for backend node failed: {error}")
+                })?
         };
         let completion = pending
             .wait()
             .await
             .map_err(|error| format!("resolve runtime object for backend node failed: {error}"))?;
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        let result = page
-            .finish_resolve_runtime_object_for_backend_node_id(completion)
+        self.observe_renderer_inspection_completion(owner, &completion)?;
+        let result = completion
+            .finish_resolve_runtime_object_for_backend_node_id()
             .map_err(|error| format!("resolve runtime object for backend node failed: {error}"))?;
 
         match result {
@@ -4302,7 +4308,7 @@ impl CdpConnection {
         self.loaded_page_mut_for_protocol_access_for_owner(owner)
     }
 
-    fn renderer_inspection_binding_for_owner(
+    pub(crate) fn renderer_inspection_binding_for_owner(
         &self,
         owner: &CommandOwnerScope,
         lane: RendererInspectorCommandRoute,
@@ -6223,9 +6229,11 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         execution_context_id: i64,
     ) -> Result<PendingRuntimeChildDefaultContextLookupDispatch, String> {
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        let pending = page
+        let inspection = crate::domains::dom::dom_inspection_for_owner(self, owner)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+        let pending = inspection
             .start_child_frame_id_for_default_execution_context_id(execution_context_id)
+            .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
             .map_err(|error| format!("runtime child default context lookup failed: {error}"))?;
         Ok(PendingRuntimeChildDefaultContextLookupDispatch {
             owner: owner.clone(),
@@ -6237,8 +6245,10 @@ impl CdpConnection {
         &mut self,
         completed: CompletedRuntimeChildDefaultContextLookupDispatch,
     ) -> Result<bool, String> {
-        let page = self.runtime_session_owner_page_mut_for_owner(&completed.owner)?;
-        page.finish_child_frame_id_for_default_execution_context_id(completed.completion)
+        self.observe_renderer_inspection_completion(&completed.owner, &completed.completion)?;
+        completed
+            .completion
+            .finish_child_frame_id_for_default_execution_context_id()
             .map(|frame_id| frame_id.is_some())
             .map_err(|error| format!("runtime child default context lookup failed: {error}"))
     }

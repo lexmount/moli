@@ -70,13 +70,13 @@ async fn document_node_snapshot_for_backend_node_id(
         return Ok(None);
     }
 
-    let pending = page.start_document_node_snapshot_for_backend_node_id(
-        backend_node_id,
-        NODE_DETAILS_SNAPSHOT_DEPTH,
-        false,
-    )?;
-    let completion = pending.wait().await?;
-    let snapshot = page.finish_document_node_snapshot_for_backend_node_id(completion)?;
+    let snapshot = page
+        .document_node_snapshot_for_backend_node_id_async(
+            backend_node_id,
+            NODE_DETAILS_SNAPSHOT_DEPTH,
+            false,
+        )
+        .await?;
     Ok(snapshot.map(|snapshot| snapshot.snapshot))
 }
 

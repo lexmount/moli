@@ -52,6 +52,14 @@ impl fmt::Debug for RendererAgentBinding {
 }
 
 impl RendererAgentBinding {
+    pub(crate) fn dom_inspection(
+        &self,
+        inspector_session_id: Option<String>,
+    ) -> moli_renderer_v8::RendererDomInspection<'_> {
+        self.endpoint
+            .dom_inspection(self.attachment.id(), inspector_session_id)
+    }
+
     pub(crate) fn routes_output_stream(
         &self,
         stream: moli_core::RendererOutputStreamIdentity,

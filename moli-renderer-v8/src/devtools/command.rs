@@ -342,6 +342,12 @@ impl RendererDevToolsMainCommandEnvelope {
         }
     }
 
+    pub(crate) fn with_attachment(mut self, attachment: RendererAgentAttachmentId) -> Self {
+        self.ticket.bind_attachment(attachment);
+        self.payload.bind_inspector_attachment(attachment);
+        self
+    }
+
     pub(crate) fn inspector_envelope(&self) -> Option<&RendererInspectorCommandEnvelope> {
         match self.payload.as_ref() {
             RendererPageCommand::Inspector(envelope) => Some(envelope),

@@ -18,10 +18,9 @@ use crate::renderer::{
     RendererDocumentNodeClientRect, RendererDocumentNodeGeometry,
     RendererDocumentNodePropertyResolution, RendererDocumentNodeReference,
     RendererDocumentNodeTextResolution, RendererDocumentQuerySelectorResolution,
-    RendererDocumentQuerySelectorWithChildNodeSnapshotEvents, RendererDomAttributeMutation,
-    RendererDomAttributeMutationOutcome, RendererDomBidiNodeBindingResolution,
-    RendererDomBidiNodeSharedIdResolution, RendererDomEdit, RendererDomEditOutcome,
-    RendererDomFocusOutcome, RendererDomFrontendNodeBindingResolution,
+    RendererDocumentQuerySelectorWithChildNodeSnapshotEvents, RendererDomAttributeMutationOutcome,
+    RendererDomBidiNodeBindingResolution, RendererDomBidiNodeSharedIdResolution,
+    RendererDomEditOutcome, RendererDomFocusOutcome, RendererDomFrontendNodeBindingResolution,
     RendererDomNodeStackTraceResolution, RendererDomSearchRegistration,
     RendererDomSearchResultsResolution, RendererDomSnapshotCaptureOptions,
     RendererDomSnapshotCapturePayload, RendererLayoutMetrics, RendererPageCommand,
@@ -369,30 +368,6 @@ impl Page {
         ))
     }
 
-    pub fn start_scroll_node_into_view_if_needed_for_object_id_in_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        object_id: &str,
-        rect: Option<moli_page_types::DomScrollIntoViewRect>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::scroll_object_node_into_view_if_needed(
-            inspector_session_id,
-            object_id.to_owned(),
-            rect,
-        ))
-    }
-
-    pub fn start_scroll_backend_node_into_view_if_needed(
-        &self,
-        backend_node_id: u32,
-        rect: Option<moli_page_types::DomScrollIntoViewRect>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ScrollBackendNodeIntoViewIfNeeded {
-            backend_node_id,
-            rect,
-        })
-    }
-
     pub fn finish_node_has_geometry_for_object_id(
         &mut self,
         completion: CompletedPageCommand,
@@ -425,19 +400,6 @@ impl Page {
             "node has geometry backend node id page command",
             "an optional bool reply",
             RendererPageReply::OptionalBool(has_geometry) => Ok(has_geometry),
-        )
-    }
-
-    pub fn finish_scroll_node_into_view_if_needed(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<super::RendererScrollIntoViewResult> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "scroll document node into view page command",
-            "a scroll-into-view reply",
-            RendererPageReply::ScrollIntoViewResult(result) => Ok(result),
         )
     }
 
@@ -505,185 +467,6 @@ impl Page {
         )
     }
 
-    pub fn start_document_geometry_for_object_id_in_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        object_id: &str,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::document_geometry_for_object_id(
-            inspector_session_id,
-            object_id.to_owned(),
-        ))
-    }
-
-    pub fn finish_document_geometry_for_object_id(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<RendererDocumentNodeGeometry>> {
-        self.finish_document_geometry(completion, "document geometry object id page command")
-    }
-
-    pub fn start_document_geometry_for_backend_node_id(
-        &self,
-        backend_node_id: u32,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentGeometryForBackendNodeId {
-            backend_node_id,
-        })
-    }
-
-    pub fn finish_document_geometry_for_backend_node_id(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<RendererDocumentNodeGeometry>> {
-        self.finish_document_geometry(completion, "document geometry backend node id page command")
-    }
-
-    fn finish_document_geometry(
-        &mut self,
-        completion: CompletedPageCommand,
-        operation: &str,
-    ) -> Result<Option<RendererDocumentNodeGeometry>> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            operation,
-            "an optional document node geometry reply",
-            RendererPageReply::OptionalDocumentNodeGeometry(geometry) => Ok(geometry),
-        )
-    }
-
-    pub fn start_document_hit_test(
-        &self,
-        inspector_session_id: Option<String>,
-        x: f64,
-        y: f64,
-        include_user_agent_shadow_dom: bool,
-        ignore_pointer_events_none: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentHitTest {
-            inspector_session_id,
-            x,
-            y,
-            include_user_agent_shadow_dom,
-            ignore_pointer_events_none,
-        })
-    }
-
-    pub fn finish_document_hit_test(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<RendererDocumentHitTestResult>> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document hit-test page command",
-            "an optional document hit-test reply",
-            RendererPageReply::OptionalDocumentHitTest(hit) => Ok(hit),
-        )
-    }
-
-    pub fn start_remove_document_backend_node_id(
-        &self,
-        backend_node_id: u32,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::RemoveDocumentBackendNodeId {
-            backend_node_id,
-        })
-    }
-
-    pub fn finish_remove_document_node(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<bool> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "remove document node page command",
-            "a bool reply",
-            RendererPageReply::Bool(value) => Ok(value),
-        )
-    }
-
-    pub fn start_mutate_document_backend_node_attribute(
-        &self,
-        backend_node_id: u32,
-        mutation: RendererDomAttributeMutation,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::MutateDocumentBackendNodeAttribute {
-            backend_node_id,
-            mutation,
-        })
-    }
-
-    pub fn finish_mutate_document_node_attribute(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDomAttributeMutationOutcome> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "mutate document node attribute page command",
-            "a DOM attribute mutation outcome reply",
-            RendererPageReply::DomAttributeMutationOutcome(outcome) => Ok(outcome),
-        )
-    }
-
-    pub fn start_edit_document_node(
-        &self,
-        inspector_session_id: Option<String>,
-        edit: RendererDomEdit,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::EditDocumentNode {
-            inspector_session_id,
-            edit,
-        })
-    }
-
-    pub fn finish_edit_document_node(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDomEditOutcome> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "edit document node page command",
-            "a DOM edit outcome reply",
-            RendererPageReply::DomEditOutcome(outcome) => Ok(outcome),
-        )
-    }
-
-    pub fn start_focus_document_backend_node_id(
-        &self,
-        backend_node_id: u32,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::FocusDocumentBackendNode { backend_node_id })
-    }
-
-    pub fn finish_focus_document_node_id(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDomFocusOutcome> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "focus document node page command",
-            "a DOM focus outcome reply",
-            RendererPageReply::DomFocusOutcome(outcome) => Ok(outcome),
-        )
-    }
-
-    pub fn start_focus_document_node_for_object_id(
-        &self,
-        inspector_session_id: Option<String>,
-        object_id: String,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::focus_document_node_for_object_id(
-            inspector_session_id,
-            object_id,
-        ))
-    }
-
     pub fn start_autofill_trigger(
         &self,
         request: RendererAutofillTriggerRequest,
@@ -701,185 +484,6 @@ impl Page {
             "autofill trigger page command",
             "an Autofill trigger outcome reply",
             RendererPageReply::AutofillTriggerOutcome(outcome) => Ok(outcome),
-        )
-    }
-
-    pub fn start_set_file_input_files_for_backend_node_id(
-        &self,
-        backend_node_id: u32,
-        files: Vec<super::SelectedFile>,
-        append: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::SetFileInputFilesForBackendNodeId {
-            backend_node_id,
-            files,
-            append,
-        })
-    }
-
-    pub fn finish_set_file_input_files(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<bool>> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "set file input files page command",
-            "an optional bool reply",
-            RendererPageReply::OptionalBool(value) => Ok(value),
-        )
-    }
-
-    pub fn start_set_file_input_files_for_object_id_in_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        object_id: &str,
-        files: Vec<super::SelectedFile>,
-        append: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::set_file_input_files_for_object_id(
-            inspector_session_id,
-            object_id.to_owned(),
-            files,
-            append,
-        ))
-    }
-
-    pub fn finish_set_file_input_files_for_object_id(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<bool>> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "set file input files object id page command",
-            "an optional bool reply",
-            RendererPageReply::OptionalBool(value) => Ok(value),
-        )
-    }
-
-    pub fn start_document_node_snapshot_for_object_id_in_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        include_whitespace: bool,
-        object_id: &str,
-        depth: i32,
-        pierce: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::document_node_snapshot_for_object_id(
-            inspector_session_id,
-            include_whitespace,
-            object_id.to_owned(),
-            depth,
-            pierce,
-        ))
-    }
-
-    pub fn finish_document_node_snapshot_for_object_id(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<DocumentNodeObjectSnapshot>> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "describe node object id page command",
-            "an optional document node object snapshot reply",
-            RendererPageReply::OptionalDocumentNodeObjectSnapshot(snapshot) => Ok(*snapshot),
-        )
-    }
-
-    pub fn start_document_node_snapshot_for_backend_node_id(
-        &self,
-        backend_node_id: u32,
-        depth: i32,
-        pierce: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentNodeSnapshotForBackendNodeId {
-            backend_node_id,
-            depth,
-            pierce,
-        })
-    }
-
-    pub fn start_document_node_snapshot_for_backend_node_id_in_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        include_whitespace: bool,
-        backend_node_id: u32,
-        depth: i32,
-        pierce: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::DocumentNodeSnapshotForBackendNodeIdInInspectorSession {
-                inspector_session_id,
-                include_whitespace,
-                backend_node_id,
-                depth,
-                pierce,
-            },
-        )
-    }
-
-    pub fn finish_document_node_snapshot_for_backend_node_id(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<DocumentNodeObjectSnapshot>> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "backend document node snapshot page command",
-            "an optional document node object snapshot reply",
-            RendererPageReply::OptionalDocumentNodeObjectSnapshot(snapshot) => Ok(*snapshot),
-        )
-    }
-
-    pub fn start_document_node_snapshot_for_document(
-        &self,
-        inspector_session_id: Option<String>,
-        include_whitespace: bool,
-        depth: i32,
-        pierce: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentNodeSnapshotForDocument {
-            inspector_session_id,
-            include_whitespace,
-            depth,
-            pierce,
-        })
-    }
-
-    pub fn finish_document_node_snapshot_for_document(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<DocumentNodeObjectSnapshot>> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document snapshot page command",
-            "an optional document node object snapshot reply",
-            RendererPageReply::OptionalDocumentNodeObjectSnapshot(snapshot) => Ok(*snapshot),
-        )
-    }
-
-    pub fn start_discard_dom_agent_frontend_bindings(
-        &self,
-        inspector_session_id: Option<String>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DiscardDomAgentFrontendBindings {
-            inspector_session_id,
-        })
-    }
-
-    pub fn finish_discard_dom_agent_frontend_bindings(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<()> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "discard DOM agent frontend bindings page command",
-            "a unit reply",
-            RendererPageReply::Unit => Ok(()),
         )
     }
 
@@ -904,527 +508,6 @@ impl Page {
             "DOMSnapshot capture page command",
             "an optional DOMSnapshot capture payload",
             RendererPageReply::OptionalDomSnapshotCapturePayload(payload) => Ok(payload),
-        )
-    }
-
-    pub fn start_document_child_node_snapshot_events_for_backend_node_id(
-        &self,
-        inspector_session_id: Option<String>,
-        include_whitespace: bool,
-        backend_node_id: u32,
-        depth: i32,
-        pierce: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::DocumentChildNodeSnapshotEventsForBackendNodeId {
-                inspector_session_id,
-                include_whitespace,
-                backend_node_id,
-                depth,
-                pierce,
-            },
-        )
-    }
-
-    pub fn finish_document_child_node_snapshot_events(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<RendererDocumentChildNodeSnapshotEvents>> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document child node snapshot events page command",
-            "optional document child node snapshot events",
-            RendererPageReply::OptionalDocumentChildNodeSnapshotEvents(events) => Ok(events),
-        )
-    }
-
-    pub fn start_document_query_selector_for_document(
-        &self,
-        selector: String,
-        multiple: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_document_query_selector_for_document_in_inspector_session(
-            None, false, selector, multiple,
-        )
-    }
-
-    pub fn start_document_query_selector_for_document_in_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        include_whitespace: bool,
-        selector: String,
-        multiple: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentQuerySelectorForDocument {
-            inspector_session_id,
-            include_whitespace,
-            selector,
-            multiple,
-        })
-    }
-
-    pub fn start_document_query_selector_for_backend_node_id(
-        &self,
-        root_backend_node_id: u32,
-        selector: String,
-        multiple: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_document_query_selector_for_backend_node_id_in_inspector_session(
-            None,
-            false,
-            root_backend_node_id,
-            selector,
-            multiple,
-        )
-    }
-
-    pub fn start_document_query_selector_for_backend_node_id_in_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        include_whitespace: bool,
-        root_backend_node_id: u32,
-        selector: String,
-        multiple: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentQuerySelectorForBackendNodeId {
-            inspector_session_id,
-            include_whitespace,
-            root_backend_node_id,
-            selector,
-            multiple,
-        })
-    }
-
-    pub fn start_child_frame_document_query_selector_for_backend_node_id(
-        &self,
-        inspector_session_id: Option<String>,
-        include_whitespace: bool,
-        frame_id: String,
-        root_backend_node_id: u32,
-        selector: String,
-        multiple: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::DocumentQuerySelectorForChildFrameBackendNodeId {
-                inspector_session_id,
-                include_whitespace,
-                frame_id,
-                root_backend_node_id,
-                selector,
-                multiple,
-            },
-        )
-    }
-
-    pub fn finish_document_query_selector(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDocumentQuerySelectorResolution> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document query selector page command",
-            "a document query selector resolution",
-            RendererPageReply::DocumentQuerySelectorResolution(resolution) => Ok(resolution),
-        )
-    }
-
-    pub fn start_document_query_selector_with_child_node_snapshot_events_for_backend_node_id(
-        &self,
-        inspector_session_id: Option<String>,
-        include_whitespace: bool,
-        root_backend_node_id: u32,
-        selector: String,
-        multiple: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::DocumentQuerySelectorWithChildNodeSnapshotEventsForBackendNodeId {
-                inspector_session_id,
-                include_whitespace,
-                root_backend_node_id,
-                selector,
-                multiple,
-            },
-        )
-    }
-
-    pub fn finish_document_query_selector_with_child_node_snapshot_events(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDocumentQuerySelectorWithChildNodeSnapshotEvents> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document query selector with child node snapshot events page command",
-            "a document query selector with child node snapshot events reply",
-            RendererPageReply::DocumentQuerySelectorWithChildNodeSnapshotEvents(result) => Ok(result),
-        )
-    }
-
-    pub fn start_document_perform_search(
-        &self,
-        inspector_session_id: Option<String>,
-        query: String,
-        include_user_agent_shadow_dom: bool,
-        include_whitespace: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentPerformSearch {
-            inspector_session_id,
-            query,
-            include_user_agent_shadow_dom,
-            include_whitespace,
-        })
-    }
-
-    pub fn finish_document_perform_search(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDomSearchRegistration> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document perform search page command",
-            "a document search registration reply",
-            RendererPageReply::DocumentPerformSearch(result) => Ok(result),
-        )
-    }
-
-    pub fn start_document_search_results(
-        &self,
-        inspector_session_id: Option<String>,
-        search_id: String,
-        from_index: usize,
-        to_index: usize,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentGetSearchResults {
-            inspector_session_id,
-            search_id,
-            from_index,
-            to_index,
-        })
-    }
-
-    pub fn finish_document_search_results(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDomSearchResultsResolution> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document search results page command",
-            "a document search results resolution",
-            RendererPageReply::DocumentSearchResults(result) => Ok(result),
-        )
-    }
-
-    pub fn start_discard_document_search_results(
-        &self,
-        inspector_session_id: Option<String>,
-        search_id: String,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentDiscardSearchResults {
-            inspector_session_id,
-            search_id,
-        })
-    }
-
-    pub fn finish_discard_document_search_results(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<()> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document discard search results page command",
-            "a document search results discarded reply",
-            RendererPageReply::DocumentSearchResultsDiscarded => Ok(()),
-        )
-    }
-
-    pub fn start_set_document_node_stack_traces_enabled(
-        &self,
-        inspector_session_id: Option<String>,
-        enabled: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentSetNodeStackTracesEnabled {
-            inspector_session_id,
-            enabled,
-        })
-    }
-
-    pub fn finish_set_document_node_stack_traces_enabled(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<()> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "set document node stack traces enabled page command",
-            "a document node stack traces enabled reply",
-            RendererPageReply::DocumentNodeStackTracesEnabled => Ok(()),
-        )
-    }
-
-    pub fn start_document_node_stack_trace(
-        &self,
-        inspector_session_id: Option<String>,
-        frontend_node_id: u32,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentNodeStackTrace {
-            inspector_session_id,
-            frontend_node_id,
-        })
-    }
-
-    pub fn finish_document_node_stack_trace(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDomNodeStackTraceResolution> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document node stack trace page command",
-            "a document node stack trace resolution",
-            RendererPageReply::DocumentNodeStackTrace(result) => Ok(result),
-        )
-    }
-
-    pub fn start_document_frontend_node_binding(
-        &self,
-        inspector_session_id: Option<String>,
-        frontend_node_id: u32,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentFrontendNodeBinding {
-            inspector_session_id,
-            frontend_node_id,
-        })
-    }
-
-    pub fn finish_document_frontend_node_binding(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDomFrontendNodeBindingResolution> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document frontend node binding page command",
-            "a document frontend node binding resolution",
-            RendererPageReply::DocumentFrontendNodeBinding(result) => Ok(result),
-        )
-    }
-
-    pub fn start_register_document_bidi_node_binding(
-        &self,
-        inspector_session_id: Option<String>,
-        shared_id: String,
-        backend_node_id: u32,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::RegisterDocumentBidiNodeBinding {
-            inspector_session_id,
-            shared_id,
-            backend_node_id,
-        })
-    }
-
-    pub fn finish_register_document_bidi_node_binding(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<()> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document BiDi node binding registration page command",
-            "a document BiDi node binding registered reply",
-            RendererPageReply::DocumentBidiNodeBindingRegistered => Ok(()),
-        )
-    }
-
-    pub fn start_document_bidi_node_binding(
-        &self,
-        inspector_session_id: Option<String>,
-        shared_id: String,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentBidiNodeBinding {
-            inspector_session_id,
-            shared_id,
-        })
-    }
-
-    pub fn finish_document_bidi_node_binding(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDomBidiNodeBindingResolution> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document BiDi node binding page command",
-            "a document BiDi node binding resolution",
-            RendererPageReply::DocumentBidiNodeBinding(result) => Ok(result),
-        )
-    }
-
-    pub fn start_document_bidi_node_shared_id_for_backend_node_id(
-        &self,
-        inspector_session_id: Option<String>,
-        backend_node_id: u32,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::DocumentBidiNodeSharedIdForBackendNodeId {
-                inspector_session_id,
-                backend_node_id,
-            },
-        )
-    }
-
-    pub fn finish_document_bidi_node_shared_id_for_backend_node_id(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDomBidiNodeSharedIdResolution> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document BiDi node shared id page command",
-            "a document BiDi node shared id resolution",
-            RendererPageReply::DocumentBidiNodeSharedId(result) => Ok(result),
-        )
-    }
-
-    pub fn start_document_node_attributes_for_backend_node_id(
-        &self,
-        backend_node_id: u32,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::DocumentNodeAttributesForBackendNodeId { backend_node_id },
-        )
-    }
-
-    pub fn finish_document_node_attributes(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDocumentNodeAttributesResolution> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document node attributes page command",
-            "a document node attributes resolution",
-            RendererPageReply::DocumentNodeAttributesResolution(resolution) => Ok(resolution),
-        )
-    }
-
-    pub fn start_document_node_text_for_backend_node_id(
-        &self,
-        backend_node_id: u32,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentNodeTextForBackendNodeId {
-            backend_node_id,
-        })
-    }
-
-    pub fn finish_document_node_text(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDocumentNodeTextResolution> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document node text page command",
-            "a document node text resolution",
-            RendererPageReply::DocumentNodeTextResolution(resolution) => Ok(resolution),
-        )
-    }
-
-    pub fn start_document_node_property_for_backend_node_id(
-        &self,
-        backend_node_id: u32,
-        name: &str,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DocumentNodePropertyForBackendNodeId {
-            backend_node_id,
-            name: name.to_owned(),
-        })
-    }
-
-    pub fn finish_document_node_property(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDocumentNodePropertyResolution> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "document node property page command",
-            "a document node property resolution",
-            RendererPageReply::DocumentNodePropertyResolution(resolution) => Ok(resolution),
-        )
-    }
-
-    pub fn start_outer_html_for_document(
-        &self,
-        include_shadow_dom: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::OuterHtmlForDocument { include_shadow_dom })
-    }
-
-    pub fn finish_outer_html_for_document(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<String> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "outerHTML document page command",
-            "a string reply",
-            RendererPageReply::OptionalString(Some(outer_html)) => Ok(outer_html),
-        )
-    }
-
-    pub fn start_outer_html_for_object_id_in_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        object_id: &str,
-        include_shadow_dom: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::outer_html_for_object_id(
-            inspector_session_id,
-            object_id.to_owned(),
-            include_shadow_dom,
-        ))
-    }
-
-    pub fn finish_outer_html_for_object_id(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<String>> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "outerHTML object id page command",
-            "an optional string reply",
-            RendererPageReply::OptionalString(outer_html) => Ok(outer_html),
-        )
-    }
-
-    pub fn start_outer_html_for_backend_node_id(
-        &self,
-        backend_node_id: u32,
-        include_shadow_dom: bool,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::OuterHtmlForBackendNodeId {
-            backend_node_id,
-            include_shadow_dom,
-        })
-    }
-
-    pub fn finish_outer_html_for_backend_node_id(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<String>> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "outerHTML backend node id page command",
-            "an optional string reply",
-            RendererPageReply::OptionalString(outer_html) => Ok(outer_html),
         )
     }
 
@@ -1551,33 +634,6 @@ impl Page {
         )
     }
 
-    pub fn start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        backend_node_id: u32,
-        execution_context_id: Option<i64>,
-        object_group: Option<&str>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::resolve_runtime_object_for_backend_node_id(
-                inspector_session_id,
-                backend_node_id,
-                execution_context_id,
-                object_group.map(str::to_owned),
-            ),
-        )
-    }
-
-    pub fn finish_resolve_runtime_object_for_backend_node_id(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<DocumentNodeRuntimeObjectResolution> {
-        self.finish_runtime_remote_object_resolution(
-            completion,
-            "resolve backend node runtime object page command",
-        )
-    }
-
     pub fn start_resolve_blob_object_in_inspector_session(
         &self,
         inspector_session_id: Option<String>,
@@ -1616,56 +672,6 @@ impl Page {
             "read Blob backing page command",
             "optional Blob bytes",
             RendererPageReply::OptionalBlobBytes(bytes) => Ok(bytes),
-        )
-    }
-
-    fn finish_runtime_remote_object_resolution(
-        &mut self,
-        completion: CompletedPageCommand,
-        command_name: &'static str,
-    ) -> Result<DocumentNodeRuntimeObjectResolution> {
-        let reply = self.finish_page_command(completion);
-        let resolution = expect_page_reply!(
-            reply,
-            command_name,
-            "a runtime remote object resolution reply",
-            RendererPageReply::RuntimeRemoteObjectResolution(resolution) => Ok(resolution),
-        )?;
-        match resolution {
-            crate::renderer::RendererRuntimeRemoteObjectResolution::Found(remote_object) => {
-                Ok(DocumentNodeRuntimeObjectResolution::Found(remote_object))
-            }
-            crate::renderer::RendererRuntimeRemoteObjectResolution::MissingContext => {
-                Ok(DocumentNodeRuntimeObjectResolution::MissingContext)
-            }
-            crate::renderer::RendererRuntimeRemoteObjectResolution::MissingNode => {
-                Ok(DocumentNodeRuntimeObjectResolution::MissingNode)
-            }
-        }
-    }
-
-    pub fn start_document_frontend_node_ids_for_backend_node_ids(
-        &self,
-        inspector_session_id: Option<String>,
-        backend_node_ids: Vec<u32>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::DocumentFrontendNodeIdsForBackendNodeIds {
-                inspector_session_id,
-                backend_node_ids,
-            },
-        )
-    }
-
-    pub fn finish_document_frontend_node_ids_for_backend_node_ids(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererDocumentFrontendNodeIdsResolution> {
-        expect_page_reply!(
-            self.finish_page_command(completion),
-            "document frontend node ids for backend node ids page command",
-            "frontend node ids resolution reply",
-            RendererPageReply::DocumentFrontendNodeIds(resolution) => Ok(resolution),
         )
     }
 
@@ -1713,59 +719,440 @@ impl Page {
         )
     }
 
+    /// An owned Browser/CLI DOM read, independent of DevTools session binding.
+    pub async fn document_node_snapshot_for_backend_node_id_async(
+        &mut self,
+        backend_node_id: u32,
+        depth: i32,
+        pierce: bool,
+    ) -> Result<Option<DocumentNodeObjectSnapshot>> {
+        let pending =
+            self.start_page_command(RendererPageCommand::DocumentNodeSnapshotForBackendNodeId {
+                backend_node_id,
+                depth,
+                pierce,
+            })?;
+        let completion = pending.wait().await?;
+        self.observe_renderer_page_state(completion.page_state());
+        completion.finish_document_node_snapshot_for_backend_node_id()
+    }
+
     pub async fn child_frame_owner_node_reference_async(
         &mut self,
         frame_id: &str,
-        inspector_session_id: Option<String>,
     ) -> Result<Option<RendererDocumentNodeReference>> {
+        // Browser/CLI semantic reads do not choose a DevTools session.
         let pending =
-            self.start_child_frame_owner_node_reference(frame_id, inspector_session_id)?;
+            self.start_page_command(RendererPageCommand::ChildFrameOwnerNodeReference {
+                frame_id: frame_id.to_owned(),
+                inspector_session_id: None,
+            })?;
         let completion = pending.wait().await?;
-        self.finish_document_node_reference(completion)
+        self.observe_renderer_page_state(completion.page_state());
+        completion.finish_document_node_reference()
     }
+}
 
-    pub fn start_child_frame_owner_node_reference(
-        &self,
-        frame_id: &str,
-        inspector_session_id: Option<String>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ChildFrameOwnerNodeReference {
-            inspector_session_id,
-            frame_id: frame_id.to_owned(),
-        })
-    }
-
-    pub async fn child_frame_document_root_node_reference_async(
-        &mut self,
-        frame_id: &str,
-        inspector_session_id: Option<String>,
-    ) -> Result<Option<RendererDocumentNodeReference>> {
-        let pending =
-            self.start_child_frame_document_root_node_reference(frame_id, inspector_session_id)?;
-        let completion = pending.wait().await?;
-        self.finish_document_node_reference(completion)
-    }
-
-    pub fn start_child_frame_document_root_node_reference(
-        &self,
-        frame_id: &str,
-        inspector_session_id: Option<String>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ChildFrameDocumentRootNodeReference {
-            inspector_session_id,
-            frame_id: frame_id.to_owned(),
-        })
-    }
-
-    pub fn finish_document_node_reference(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<RendererDocumentNodeReference>> {
+// Decoding a frozen DOM reply requires no Browser Page residence.
+impl CompletedPageCommand {
+    pub fn finish_discard_document_search_results(self) -> Result<()> {
+        let reply = self.into_reply();
         expect_page_reply!(
-            self.finish_page_command(completion),
+            reply,
+            "document discard search results page command",
+            "a document search results discarded reply",
+            RendererPageReply::DocumentSearchResultsDiscarded => Ok(()),
+        )
+    }
+
+    pub fn finish_discard_dom_agent_frontend_bindings(self) -> Result<()> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "discard DOM agent frontend bindings page command",
+            "a unit reply",
+            RendererPageReply::Unit => Ok(()),
+        )
+    }
+
+    pub fn finish_document_bidi_node_binding(self) -> Result<RendererDomBidiNodeBindingResolution> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document BiDi node binding page command",
+            "a document BiDi node binding resolution",
+            RendererPageReply::DocumentBidiNodeBinding(result) => Ok(result),
+        )
+    }
+
+    pub fn finish_document_child_node_snapshot_events(
+        self,
+    ) -> Result<Option<RendererDocumentChildNodeSnapshotEvents>> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document child node snapshot events page command",
+            "optional document child node snapshot events",
+            RendererPageReply::OptionalDocumentChildNodeSnapshotEvents(events) => Ok(events),
+        )
+    }
+
+    pub fn finish_document_frontend_node_binding(
+        self,
+    ) -> Result<RendererDomFrontendNodeBindingResolution> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document frontend node binding page command",
+            "a document frontend node binding resolution",
+            RendererPageReply::DocumentFrontendNodeBinding(result) => Ok(result),
+        )
+    }
+
+    pub fn finish_document_frontend_node_ids_for_backend_node_ids(
+        self,
+    ) -> Result<RendererDocumentFrontendNodeIdsResolution> {
+        expect_page_reply!(
+            self.into_reply(),
+            "document frontend node ids for backend node ids page command",
+            "frontend node ids resolution reply",
+            RendererPageReply::DocumentFrontendNodeIds(resolution) => Ok(resolution),
+        )
+    }
+
+    pub fn finish_document_geometry_for_backend_node_id(
+        self,
+    ) -> Result<Option<RendererDocumentNodeGeometry>> {
+        self.finish_document_geometry("document geometry backend node id page command")
+    }
+
+    pub fn finish_document_geometry_for_object_id(
+        self,
+    ) -> Result<Option<RendererDocumentNodeGeometry>> {
+        self.finish_document_geometry("document geometry object id page command")
+    }
+
+    pub fn finish_document_hit_test(self) -> Result<Option<RendererDocumentHitTestResult>> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document hit-test page command",
+            "an optional document hit-test reply",
+            RendererPageReply::OptionalDocumentHitTest(hit) => Ok(hit),
+        )
+    }
+
+    pub fn finish_document_node_attributes(
+        self,
+    ) -> Result<RendererDocumentNodeAttributesResolution> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document node attributes page command",
+            "a document node attributes resolution",
+            RendererPageReply::DocumentNodeAttributesResolution(resolution) => Ok(resolution),
+        )
+    }
+
+    pub fn finish_document_node_property(self) -> Result<RendererDocumentNodePropertyResolution> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document node property page command",
+            "a document node property resolution",
+            RendererPageReply::DocumentNodePropertyResolution(resolution) => Ok(resolution),
+        )
+    }
+
+    pub fn finish_document_node_reference(self) -> Result<Option<RendererDocumentNodeReference>> {
+        expect_page_reply!(
+            self.into_reply(),
             "document node reference page command",
             "an optional document node reference reply",
             RendererPageReply::OptionalDocumentNodeReference(reference) => Ok(reference),
+        )
+    }
+
+    pub fn finish_document_node_snapshot_for_backend_node_id(
+        self,
+    ) -> Result<Option<DocumentNodeObjectSnapshot>> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "backend document node snapshot page command",
+            "an optional document node object snapshot reply",
+            RendererPageReply::OptionalDocumentNodeObjectSnapshot(snapshot) => Ok(*snapshot),
+        )
+    }
+
+    pub fn finish_document_node_snapshot_for_document(
+        self,
+    ) -> Result<Option<DocumentNodeObjectSnapshot>> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document snapshot page command",
+            "an optional document node object snapshot reply",
+            RendererPageReply::OptionalDocumentNodeObjectSnapshot(snapshot) => Ok(*snapshot),
+        )
+    }
+
+    pub fn finish_document_node_snapshot_for_object_id(
+        self,
+    ) -> Result<Option<DocumentNodeObjectSnapshot>> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "describe node object id page command",
+            "an optional document node object snapshot reply",
+            RendererPageReply::OptionalDocumentNodeObjectSnapshot(snapshot) => Ok(*snapshot),
+        )
+    }
+
+    pub fn finish_document_node_stack_trace(self) -> Result<RendererDomNodeStackTraceResolution> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document node stack trace page command",
+            "a document node stack trace resolution",
+            RendererPageReply::DocumentNodeStackTrace(result) => Ok(result),
+        )
+    }
+
+    pub fn finish_document_node_text(self) -> Result<RendererDocumentNodeTextResolution> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document node text page command",
+            "a document node text resolution",
+            RendererPageReply::DocumentNodeTextResolution(resolution) => Ok(resolution),
+        )
+    }
+
+    pub fn finish_document_perform_search(self) -> Result<RendererDomSearchRegistration> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document perform search page command",
+            "a document search registration reply",
+            RendererPageReply::DocumentPerformSearch(result) => Ok(result),
+        )
+    }
+
+    pub fn finish_document_query_selector(self) -> Result<RendererDocumentQuerySelectorResolution> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document query selector page command",
+            "a document query selector resolution",
+            RendererPageReply::DocumentQuerySelectorResolution(resolution) => Ok(resolution),
+        )
+    }
+
+    pub fn finish_document_query_selector_with_child_node_snapshot_events(
+        self,
+    ) -> Result<RendererDocumentQuerySelectorWithChildNodeSnapshotEvents> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document query selector with child node snapshot events page command",
+            "a document query selector with child node snapshot events reply",
+            RendererPageReply::DocumentQuerySelectorWithChildNodeSnapshotEvents(result) => Ok(result),
+        )
+    }
+
+    pub fn finish_document_search_results(self) -> Result<RendererDomSearchResultsResolution> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document search results page command",
+            "a document search results resolution",
+            RendererPageReply::DocumentSearchResults(result) => Ok(result),
+        )
+    }
+
+    pub fn finish_edit_document_node(self) -> Result<RendererDomEditOutcome> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "edit document node page command",
+            "a DOM edit outcome reply",
+            RendererPageReply::DomEditOutcome(outcome) => Ok(outcome),
+        )
+    }
+
+    pub fn finish_focus_document_node_id(self) -> Result<RendererDomFocusOutcome> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "focus document node page command",
+            "a DOM focus outcome reply",
+            RendererPageReply::DomFocusOutcome(outcome) => Ok(outcome),
+        )
+    }
+
+    pub fn finish_mutate_document_node_attribute(
+        self,
+    ) -> Result<RendererDomAttributeMutationOutcome> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "mutate document node attribute page command",
+            "a DOM attribute mutation outcome reply",
+            RendererPageReply::DomAttributeMutationOutcome(outcome) => Ok(outcome),
+        )
+    }
+
+    pub fn finish_outer_html_for_backend_node_id(self) -> Result<Option<String>> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "outerHTML backend node id page command",
+            "an optional string reply",
+            RendererPageReply::OptionalString(outer_html) => Ok(outer_html),
+        )
+    }
+
+    pub fn finish_outer_html_for_document(self) -> Result<String> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "outerHTML document page command",
+            "a string reply",
+            RendererPageReply::OptionalString(Some(outer_html)) => Ok(outer_html),
+        )
+    }
+
+    pub fn finish_outer_html_for_object_id(self) -> Result<Option<String>> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "outerHTML object id page command",
+            "an optional string reply",
+            RendererPageReply::OptionalString(outer_html) => Ok(outer_html),
+        )
+    }
+
+    pub fn finish_remove_document_node(self) -> Result<bool> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "remove document node page command",
+            "a bool reply",
+            RendererPageReply::Bool(value) => Ok(value),
+        )
+    }
+
+    pub fn finish_resolve_runtime_object_for_backend_node_id(
+        self,
+    ) -> Result<DocumentNodeRuntimeObjectResolution> {
+        self.finish_runtime_remote_object_resolution(
+            "resolve backend node runtime object page command",
+        )
+    }
+
+    pub fn finish_scroll_node_into_view_if_needed(
+        self,
+    ) -> Result<super::RendererScrollIntoViewResult> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "scroll document node into view page command",
+            "a scroll-into-view reply",
+            RendererPageReply::ScrollIntoViewResult(result) => Ok(result),
+        )
+    }
+
+    pub fn finish_set_document_node_stack_traces_enabled(self) -> Result<()> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "set document node stack traces enabled page command",
+            "a document node stack traces enabled reply",
+            RendererPageReply::DocumentNodeStackTracesEnabled => Ok(()),
+        )
+    }
+
+    pub fn finish_set_file_input_files(self) -> Result<Option<bool>> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "set file input files page command",
+            "an optional bool reply",
+            RendererPageReply::OptionalBool(value) => Ok(value),
+        )
+    }
+
+    pub fn finish_set_file_input_files_for_object_id(self) -> Result<Option<bool>> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "set file input files object id page command",
+            "an optional bool reply",
+            RendererPageReply::OptionalBool(value) => Ok(value),
+        )
+    }
+
+    fn finish_document_geometry(
+        self,
+        operation: &str,
+    ) -> Result<Option<RendererDocumentNodeGeometry>> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            operation,
+            "an optional document node geometry reply",
+            RendererPageReply::OptionalDocumentNodeGeometry(geometry) => Ok(geometry),
+        )
+    }
+
+    fn finish_runtime_remote_object_resolution(
+        self,
+        command_name: &'static str,
+    ) -> Result<DocumentNodeRuntimeObjectResolution> {
+        let reply = self.into_reply();
+        let resolution = expect_page_reply!(
+            reply,
+            command_name,
+            "a runtime remote object resolution reply",
+            RendererPageReply::RuntimeRemoteObjectResolution(resolution) => Ok(resolution),
+        )?;
+        match resolution {
+            crate::renderer::RendererRuntimeRemoteObjectResolution::Found(remote_object) => {
+                Ok(DocumentNodeRuntimeObjectResolution::Found(remote_object))
+            }
+            crate::renderer::RendererRuntimeRemoteObjectResolution::MissingContext => {
+                Ok(DocumentNodeRuntimeObjectResolution::MissingContext)
+            }
+            crate::renderer::RendererRuntimeRemoteObjectResolution::MissingNode => {
+                Ok(DocumentNodeRuntimeObjectResolution::MissingNode)
+            }
+        }
+    }
+}
+
+impl CompletedPageCommand {
+    pub fn finish_register_document_bidi_node_binding(self) -> Result<()> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document BiDi node binding registration page command",
+            "a document BiDi node binding registered reply",
+            RendererPageReply::DocumentBidiNodeBindingRegistered => Ok(()),
+        )
+    }
+}
+
+impl CompletedPageCommand {
+    pub fn finish_document_bidi_node_shared_id_for_backend_node_id(
+        self,
+    ) -> Result<RendererDomBidiNodeSharedIdResolution> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "document BiDi node shared id page command",
+            "a document BiDi node shared id resolution",
+            RendererPageReply::DocumentBidiNodeSharedId(result) => Ok(result),
         )
     }
 }

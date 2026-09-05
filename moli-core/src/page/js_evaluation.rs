@@ -345,28 +345,6 @@ impl Page {
         )
     }
 
-    pub fn start_child_frame_id_for_default_execution_context_id(
-        &self,
-        execution_context_id: i64,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::ChildFrameIdForDefaultExecutionContextId(execution_context_id),
-        )
-    }
-
-    pub fn finish_child_frame_id_for_default_execution_context_id(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<String>> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "child default context frame id page command",
-            "an optional string reply",
-            RendererPageReply::OptionalString(frame_id) => Ok(frame_id),
-        )
-    }
-
     pub async fn create_isolated_world_async(
         &mut self,
         name: &str,
@@ -1048,6 +1026,19 @@ impl Page {
             operation,
             "a unit reply",
             RendererPageReply::Unit => Ok(()),
+        )
+    }
+}
+
+// Decoding a frozen DOM reply requires no Browser Page residence.
+impl CompletedPageCommand {
+    pub fn finish_child_frame_id_for_default_execution_context_id(self) -> Result<Option<String>> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "child default context frame id page command",
+            "an optional string reply",
+            RendererPageReply::OptionalString(frame_id) => Ok(frame_id),
         )
     }
 }
