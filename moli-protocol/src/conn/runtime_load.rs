@@ -19,9 +19,7 @@ use tokio::sync::{mpsc, oneshot};
 use url::Url;
 
 use super::*;
-use crate::conn::state::{
-    InitialDocumentPageBuildWaiter, RendererPageResidenceIdentity, TargetPageAbsenceReason,
-};
+use crate::conn::state::{InitialDocumentPageBuildWaiter, RendererPageResidenceIdentity};
 use crate::domains::network::{
     CompletedDocumentProgressTransfer, CompletedDownloadProgressTransfer,
     CompletedMainDocumentNetworkEvents, MainDocumentBodyNetworkProgress,
@@ -1586,13 +1584,9 @@ impl CdpConnection {
         // not on the DevTools target. Preserve it only while a same-site
         // navigation can retain that frame-host state; a cross-site renderer
         // replacement must start with the actual idle state.
-        let page = self
-            .runtime_session_owner_slot_for_owner(owner)
-            .ok()?
-            .loaded_page()?;
-        moli_site::same_site_urls(page.final_url(), final_url, true)
-            .then(|| page.idle_override())
-            .flatten()
+        let (context_id, target_id) = self.resolved_page_owner_identity_for_owner(owner)?;
+        self.browser_context_by_id(&context_id)?
+            .target_idle_override_for_navigation(&target_id, final_url)
     }
 
     pub(crate) async fn prepare_paused_streaming_response_navigation_async(
@@ -1743,11 +1737,10 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
     ) -> Result<Option<PendingInitialDocumentPageBuild>, String> {
-        let runtime_slot = match self.runtime_session_owner_slot_for_owner(owner) {
-            Ok(slot) => slot,
-            Err(_) => return Ok(None),
-        };
-        if runtime_slot.has_loaded_page() {
+        if self.runtime_session_owner_slot_for_owner(owner).is_err() {
+            return Ok(None);
+        }
+        if self.has_loaded_page_for_owner(owner) {
             return Ok(None);
         }
         if !self.runtime_session_owner_target_is_initial_about_blank_for_owner(owner) {
@@ -1867,14 +1860,23 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
     ) -> Result<Option<PendingInitialDocumentPageBuild>, String> {
+        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
+        else {
+            return Ok(None);
+        };
         let runtime_slot = match self.runtime_session_owner_slot_for_owner(owner) {
             Ok(slot) => slot,
             Err(_) => return Ok(None),
         };
-        if runtime_slot.has_loaded_page() {
+        if self.has_loaded_page_for_owner(owner) {
             return Ok(None);
         }
-        if runtime_slot.has_initial_document_page_build_in_progress() {
+        if self
+            .browser_context_by_id(&context_id)
+            .is_some_and(|context| {
+                context.target_has_initial_document_page_build_in_progress(&target_id)
+            })
+        {
             let waiter = runtime_slot
                 .initial_document_page_build_waiter()
                 .ok_or_else(|| "InitialDocumentPageBuildInProgressWithoutWaiter".to_owned())?;
@@ -1896,27 +1898,24 @@ impl CdpConnection {
         let page_storage = load_inputs.page_storage_handles();
         let top_level_storage_key =
             self.runtime_session_owner_initial_empty_document_storage_key_for_owner(owner);
-        self.runtime_session_owner_slot_mut_for_owner(owner)?
-            .start_initial_document_page_build();
+        self.browser_context_by_id_mut(&context_id)
+            .ok_or("TargetNotLoaded")?
+            .start_initial_document_page_build_for_target(&target_id);
         let page_reservation = engine.reserve_page_for_creation();
         let renderer_page = RendererPageResidenceIdentity::from_parts(
             page_reservation.local_host_id(),
             page_reservation.page_id(),
         );
         if !self
-            .runtime_session_owner_slot_mut_for_owner(owner)?
-            .bind_initial_document_page_build_renderer_page(renderer_page)
+            .browser_context_by_id_mut(&context_id)
+            .ok_or("TargetNotLoaded")?
+            .bind_initial_document_page_build_renderer_page_for_target(&target_id, renderer_page)
         {
             let message =
                 "initial document Page reservation no longer matches its target build".to_owned();
-            let _ = self
-                .runtime_session_owner_slot_mut_for_owner(owner)
-                .map(|slot| {
-                    slot.fail_initial_document_page_build(message.clone());
-                    slot.mark_loaded_page_absent(
-                        TargetPageAbsenceReason::InitialDocumentPageBuildPending,
-                    );
-                });
+            if let Some(context) = self.browser_context_by_id_mut(&context_id) {
+                context.fail_target_initial_document_page_build(&target_id, message.clone());
+            }
             return Err(message);
         }
         // The renderer command below can open the Page output stream and
@@ -1963,14 +1962,9 @@ impl CdpConnection {
             )
             .map_err(|error| {
                 let message = format!("failed to start initial document page build: {error}");
-                let _ = self
-                    .runtime_session_owner_slot_mut_for_owner(owner)
-                    .map(|slot| {
-                        slot.fail_initial_document_page_build(message.clone());
-                        slot.mark_loaded_page_absent(
-                            TargetPageAbsenceReason::InitialDocumentPageBuildPending,
-                        );
-                    });
+                if let Some(context) = self.browser_context_by_id_mut(&context_id) {
+                    context.fail_target_initial_document_page_build(&target_id, message.clone());
+                }
                 message
             })?;
         Ok(Some(PendingInitialDocumentPageBuild {
@@ -1988,38 +1982,8 @@ impl CdpConnection {
         failed: FailedInitialDocumentPageBuild,
     ) -> String {
         let message = failed.message().to_owned();
-        if let Some(owner) = failed.build_owner()
-            && let Some(browser_context) = self.browser_context_by_id_mut(&owner.browser_context_id)
-        {
-            if browser_context.active_target_id() == Some(owner.target_id.as_str()) {
-                if browser_context
-                    .active_page_target()
-                    .runtime_slot
-                    .has_initial_document_page_build_in_progress()
-                {
-                    browser_context
-                        .active_page_target_mut()
-                        .runtime_slot
-                        .fail_initial_document_page_build(message.clone());
-                    browser_context
-                        .active_page_target_mut()
-                        .runtime_slot
-                        .mark_loaded_page_absent(
-                            TargetPageAbsenceReason::InitialDocumentPageBuildPending,
-                        );
-                }
-            } else if let Some(target) = browser_context.background_target_mut(&owner.target_id)
-                && target
-                    .runtime_slot
-                    .has_initial_document_page_build_in_progress()
-            {
-                target
-                    .runtime_slot
-                    .fail_initial_document_page_build(message.clone());
-                target.runtime_slot.mark_loaded_page_absent(
-                    TargetPageAbsenceReason::InitialDocumentPageBuildPending,
-                );
-            }
+        if let Some(owner) = failed.build_owner() {
+            self.fail_initial_document_page_build_for_owner(owner, message);
         }
         failed.into_message()
     }
@@ -2043,15 +2007,10 @@ impl CdpConnection {
         &mut self,
         owner: &InitialDocumentPageOwner,
     ) {
-        if let Some(browser_context) = self.browser_context_by_id_mut(&owner.browser_context_id) {
-            if browser_context.active_target_id() == Some(owner.target_id.as_str()) {
-                browser_context
-                    .active_page_target_mut()
-                    .runtime_slot
-                    .complete_initial_document_page_build();
-            } else if let Some(target) = browser_context.background_target_mut(&owner.target_id) {
-                target.runtime_slot.complete_initial_document_page_build();
-            }
+        if let Some(context) = self.browser_context_by_id_mut(&owner.browser_context_id)
+            && let Some(target) = context.page_target_mut(&owner.target_id)
+        {
+            target.runtime_slot.complete_initial_document_page_build();
         }
     }
 
@@ -2077,24 +2036,10 @@ impl CdpConnection {
         owner: &InitialDocumentPageOwner,
         message: String,
     ) {
-        if let Some(browser_context) = self.browser_context_by_id_mut(&owner.browser_context_id) {
-            if browser_context.active_target_id() == Some(owner.target_id.as_str()) {
-                let runtime_slot = &mut browser_context.active_page_target_mut().runtime_slot;
-                if runtime_slot.has_initial_document_page_build_in_progress() {
-                    runtime_slot.fail_initial_document_page_build(message);
-                    runtime_slot.mark_loaded_page_absent(
-                        TargetPageAbsenceReason::InitialDocumentPageBuildPending,
-                    );
-                }
-            } else if let Some(target) = browser_context.background_target_mut(&owner.target_id) {
-                let runtime_slot = &mut target.runtime_slot;
-                if runtime_slot.has_initial_document_page_build_in_progress() {
-                    runtime_slot.fail_initial_document_page_build(message);
-                    runtime_slot.mark_loaded_page_absent(
-                        TargetPageAbsenceReason::InitialDocumentPageBuildPending,
-                    );
-                }
-            }
+        if let Some(context) = self.browser_context_by_id_mut(&owner.browser_context_id)
+            && context.target_has_initial_document_page_build_in_progress(&owner.target_id)
+        {
+            context.fail_target_initial_document_page_build(&owner.target_id, message);
         }
     }
 

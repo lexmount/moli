@@ -22,7 +22,7 @@ use crate::testing::{
 use crate::{
     conn::{
         BrowserContext, CapturedBody, CdpConnection, DocumentBodySource, NETWORK_ERROR_PAGE_URL,
-        NavigationDispatchState, PageTargetHost, TargetIdentityState, TargetPageSlot,
+        NavigationDispatchState, TargetIdentityState, TargetPageSlot,
     },
     domains::page::LOADER_ID,
 };

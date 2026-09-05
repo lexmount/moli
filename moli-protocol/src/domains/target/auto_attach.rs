@@ -589,7 +589,9 @@ async fn set_auto_attach_inner_async(
                 } else {
                     bc.background_targets()
                         .rev()
-                        .find(|target| !target.has_session() && target.has_loaded_page())
+                        .find(|target| {
+                            !target.has_session() && bc.target_has_loaded_page(target.target_id())
+                        })
                         .map(|target| target.target_id().to_owned())
                         .or_else(|| {
                             bc.background_targets()

@@ -183,9 +183,7 @@ async fn capture_screenshot_rejects_completion_from_replaced_renderer_attachment
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(replacement));
+        .replace_active_page_for_test(Some(replacement));
 
     let mut command_context = CommandDispatchContext::default();
     let PageCommandTaskStep::Complete(plan) =
@@ -266,9 +264,7 @@ async fn capture_snapshot_returns_minimal_mhtml_for_loaded_page() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+        .replace_active_page_for_test(Some(page));
 
     ctx.process_async(json!({
         "id": 1110,
@@ -318,9 +314,7 @@ async fn capture_snapshot_dispatch_serializes_html_in_renderer_owner() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+        .replace_active_page_for_test(Some(page));
 
     let params = serde_json::Value::Null;
     let cmd = Cmd::for_test(
@@ -487,16 +481,14 @@ async fn capture_screenshot_uses_emulated_device_metrics() {
 #[tokio::test(flavor = "multi_thread")]
 async fn capture_screenshot_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
+    let mut bc = BrowserContext::new("BID-screenshot-background".to_owned());
+    bc.set_active_target_id("TID-active".to_owned());
+    bc.attach_active_session("SID-active".to_owned());
+    bc.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     );
-
-    let mut bc = BrowserContext::new("BID-screenshot-background".to_owned());
-    bc.set_active_target_id("TID-active".to_owned());
-    bc.attach_active_session("SID-active".to_owned());
-    bc.insert_page_target_host(background);
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>Background Screenshot</title><main>background</main>",
@@ -513,17 +505,16 @@ async fn capture_screenshot_targets_loaded_background_owner_without_activation()
         .browser_context
         .as_mut()
         .expect("browser context")
-        .background_target_mut("TID-background")
-        .expect("background target must exist")
-        .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::DeviceMetrics(Some(
-            EmulatedDeviceMetrics {
+        .apply_target_emulation_policy_change(
+            "TID-background",
+            crate::conn::EmulationPolicyChange::DeviceMetrics(Some(EmulatedDeviceMetrics {
                 width: 320,
                 height: 240,
                 device_scale_factor: 2.0,
                 screen_width: 320,
                 screen_height: 240,
-            },
-        )));
+            })),
+        );
 
     ctx.process_async(json!({
         "id": 114,
@@ -562,17 +553,22 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
     let mut inactive = BrowserContext::new("BID-inactive-screenshot".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
-    inactive
-        .active_page_target_mut()
-        .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::DeviceMetrics(Some(
-            EmulatedDeviceMetrics {
+    {
+        let context = &mut inactive;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.apply_target_emulation_policy_change(
+            &target_id,
+            crate::conn::EmulationPolicyChange::DeviceMetrics(Some(EmulatedDeviceMetrics {
                 width: 500,
                 height: 300,
                 device_scale_factor: 1.5,
                 screen_width: 500,
                 screen_height: 300,
-            },
-        )));
+            })),
+        )
+    };
     inactive.replace_loaded_page(Some(page));
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);
@@ -929,9 +925,7 @@ async fn get_layout_metrics_queries_live_renderer_for_loaded_pages() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+        .replace_active_page_for_test(Some(page));
 
     ctx.process_async(json!({
         "id": 125,
@@ -955,17 +949,16 @@ async fn get_layout_metrics_queries_live_renderer_for_loaded_pages() {
 async fn get_layout_metrics_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let page_url = "data:text/html,<html style='width:2300px;height:1700px'><body style='margin:0;width:2300px;height:1700px'><div style='width:2300px;height:1700px'></div></body></html>";
-    let background = PageTargetHost::with_url(
-        "TID-background".to_owned(),
-        Some("SID-background".to_owned()),
-        "about:blank".to_owned(),
-    );
 
     let mut bc = BrowserContext::new("BID-1".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<body>active</body>".to_owned());
-    bc.insert_page_target_host(background);
+    bc.register_page_target_url_fixture(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "about:blank".to_owned(),
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(page_url, Some("SID-background"))
         .await;

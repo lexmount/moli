@@ -274,16 +274,23 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         .expect("the original Page should have a residence identity");
     let pending = ctx
         .conn
-        .loaded_page_mut_for_protocol_access(None)
-        .expect("the original Page should be loaded")
-        .start_dispatch_mouse_event_at_point_with_outcome(
-            INPUT_HIT_X.into(),
-            INPUT_HIT_Y.into(),
-            "mousemove",
-            -1,
-            None,
-            0.0,
-            0.0,
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .start_target_input_command(
+            original_owner.target_id().unwrap(),
+            crate::conn::PageInputCommand::Mouse {
+                x: INPUT_HIT_X.into(),
+                y: INPUT_HIT_Y.into(),
+                event_name: "mousemove",
+                button: -1,
+                buttons: None,
+                click_count: 0,
+                delta_x: 0.0,
+                delta_y: 0.0,
+                pointer: Default::default(),
+                modifiers: 0,
+            },
         )
         .expect("the original Page should admit the mouse event");
     let completed = PendingInputCommandDispatch {
@@ -318,8 +325,8 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|context| context.active_page_target().runtime_slot.loaded_page())
-            .is_some_and(|page| page.final_url().as_str() == replacement_url),
+            .and_then(|context| context.target_document_url(context.active_target_id().unwrap()))
+            .is_some_and(|url| url.as_str() == replacement_url),
         "settling the original input command must not install its Page state into the replacement"
     );
 }
@@ -1687,14 +1694,20 @@ async fn coordinate_touch_commands_complete_through_pending_layout_dispatch() {
         ctx.expect_result(id, json!({}), None);
     }
 
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("loaded browser context")
-        .active_page_target_mut()
-        .apply_emulation_policy_change(
+    {
+        let context = &mut ctx
+            .conn
+            .browser_context
+            .as_mut()
+            .expect("loaded browser context");
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.apply_target_emulation_policy_change(
+            &target_id,
             crate::conn::EmulationPolicyChange::EmitTouchEventsForMouse(true),
-        );
+        )
+    };
     for (id, event_type, buttons) in [(4107, "mousePressed", 1), (4108, "mouseReleased", 0)] {
         ctx.process_async(json!({
             "id": id,

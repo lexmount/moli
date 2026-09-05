@@ -1430,17 +1430,18 @@ fn start_top_level_same_document_navigate(
     url: String,
     result_payload: Value,
 ) -> NavigateCommandStart {
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
+    let Some((page_context_id, page_target_id)) =
+        conn.loaded_document_owner_identity_for_owner(owner)
     else {
         return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
             -32000,
             "NoDocumentLoaded",
         ));
     };
-    match page.start_top_level_same_document_navigation(url) {
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("resolved document context remains registered");
+    match page_context.start_top_level_same_document_navigation_for_target(&page_target_id, url) {
         Ok(pending) => NavigateCommandStart::PendingSameDocument(Box::new(
             PendingSameDocumentNavigateCommand {
                 pending,
@@ -1489,17 +1490,22 @@ fn start_child_frame_navigate_command(
             "NoDocumentLoaded",
         ));
     };
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
+    let Some((page_context_id, page_target_id)) =
+        conn.loaded_document_owner_identity_for_owner(owner)
     else {
         return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
             -32000,
             "NoDocumentLoaded",
         ));
     };
-    match page.start_child_frame_navigation_to_url(frame_id, url) {
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("resolved document context remains registered");
+    match page_context.start_child_frame_navigation_to_url_for_target(
+        &page_target_id,
+        frame_id,
+        url,
+    ) {
         Ok(pending) => {
             NavigateCommandStart::PendingChildFrame(Box::new(PendingChildFrameNavigateCommand {
                 prefix_events: Vec::new(),
@@ -1738,13 +1744,11 @@ fn start_same_document_history_traversal_command(
     delta: i64,
     fallback: HistoryTraversalUrlFallback,
 ) -> PageCommandTaskStep {
-    let page = conn
-        .runtime_session_owner_slot_mut_for_owner(&fallback.owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page())
+    let route = conn
+        .loaded_document_owner_identity_for_owner(&fallback.owner)
         .ok_or_else(|| anyhow::anyhow!("TargetNotLoaded"));
-    let page = match page {
-        Ok(page) => page,
+    let (page_context_id, page_target_id) = match route {
+        Ok(route) => route,
         Err(error) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                 -31998,
@@ -1752,7 +1756,12 @@ fn start_same_document_history_traversal_command(
             ));
         }
     };
-    let pending = match page.start_top_level_history_traversal_by_delta(delta) {
+    let page_context = conn
+        .browser_context_by_id(&page_context_id)
+        .expect("resolved document context remains registered");
+    let pending = match page_context
+        .start_top_level_history_traversal_by_delta_for_target(&page_target_id, delta)
+    {
         Ok(pending) => pending,
         Err(error) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -1786,11 +1795,13 @@ pub(super) fn complete_pending_same_document_history_traversal_command(
         }
     };
     let result = conn
-        .runtime_session_owner_slot_mut_for_owner(&fallback.owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
-        .ok_or_else(|| anyhow::anyhow!("TargetNotLoaded"))
-        .and_then(|page| page.finish_top_level_history_traversal_by_delta(completion));
+        .loaded_document_owner_identity_for_owner(&fallback.owner)
+        .ok_or_else(|| "TargetNotLoaded".to_owned())
+        .and_then(|(context_id, target_id)| {
+            conn.browser_context_by_id_mut(&context_id)
+                .ok_or("TargetNotLoaded")?
+                .finish_top_level_history_traversal_by_delta_for_target(&target_id, completion)
+        });
     match result {
         Ok(true) => PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_result(
             DevToolsCommandResult::Empty,
@@ -2459,17 +2470,21 @@ pub(super) fn try_start_reset_navigation_history_command(
         }
     }
     let pending = {
-        let Some(page) = conn
-            .runtime_session_owner_slot_mut(cmd.session_id)
-            .ok()
-            .and_then(|slot| slot.loaded_page_mut())
+        let Some((page_context_id, page_target_id)) = conn
+            .loaded_document_owner_identity_for_owner(&CommandOwnerScope::capture(
+                conn,
+                cmd.session_id,
+            ))
         else {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                 -32000,
                 "NoDocumentLoaded",
             ));
         };
-        match page.start_reset_navigation_history() {
+        let page_context = conn
+            .browser_context_by_id_mut(&page_context_id)
+            .expect("resolved document context remains registered");
+        match page_context.start_reset_navigation_history_for_target(&page_target_id) {
             Ok(pending) => pending,
             Err(error) => {
                 return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -2497,14 +2512,15 @@ pub(super) fn complete_reset_navigation_history_command(
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
         }
     };
-    let Some(page) = conn
-        .runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()
-        .and_then(|slot| slot.loaded_page_mut())
+    let Some((page_context_id, page_target_id)) =
+        conn.loaded_document_owner_identity_for_owner(owner)
     else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, "NoDocumentLoaded"));
     };
-    match page.finish_reset_navigation_history(completion) {
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("resolved document context remains registered");
+    match page_context.finish_reset_navigation_history_for_target(&page_target_id, completion) {
         Ok(true) => {}
         Ok(false) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -3077,14 +3093,18 @@ pub(super) async fn complete_pending_child_frame_navigate_command(
         }
     };
     let (navigated, renderer_output) = {
-        let Some(page) = conn
-            .runtime_session_owner_slot_mut_for_owner(owner)
-            .ok()
-            .and_then(|slot| slot.loaded_page_mut())
+        let Some((page_context_id, page_target_id)) =
+            conn.loaded_document_owner_identity_for_owner(owner)
         else {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-31998, "NoSuchTarget"));
         };
-        match page.finish_child_frame_navigation_to_url_command_turn(completion) {
+        let page_context = conn
+            .browser_context_by_id_mut(&page_context_id)
+            .expect("resolved document context remains registered");
+        match page_context.finish_child_frame_navigation_to_url_command_turn_for_target(
+            &page_target_id,
+            completion,
+        ) {
             Ok(navigated) => navigated,
             Err(error) => {
                 return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -3164,14 +3184,18 @@ pub(super) async fn complete_pending_same_document_navigate_command(
         }
     };
     let (navigated, output) = {
-        let Some(page) = conn
-            .runtime_session_owner_slot_mut_for_owner(owner)
-            .ok()
-            .and_then(|slot| slot.loaded_page_mut())
+        let Some((page_context_id, page_target_id)) =
+            conn.loaded_document_owner_identity_for_owner(owner)
         else {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-31998, "NoSuchTarget"));
         };
-        match page.finish_top_level_same_document_navigation_command_turn(completion) {
+        let page_context = conn
+            .browser_context_by_id_mut(&page_context_id)
+            .expect("resolved document context remains registered");
+        match page_context.finish_top_level_same_document_navigation_command_turn_for_target(
+            &page_target_id,
+            completion,
+        ) {
             Ok(navigated) => navigated,
             Err(error) => {
                 return PageCommandTaskStep::Complete(CommandOutputPlan::error(

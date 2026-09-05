@@ -1,7 +1,7 @@
 use crate::conn::{
     BrowserContext, CdpCommandTaskStep, EmulatedGeolocationOverride,
-    EmulatedGeolocationOverrideState, PageTargetHost, PendingCdpCommandDispatch,
-    TargetIdentityState, TargetPageSlot,
+    EmulatedGeolocationOverrideState, PendingCdpCommandDispatch, TargetIdentityState,
+    TargetPageSlot,
 };
 use crate::devtools_runtime::{
     DevToolsBrowserContextId, DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
@@ -29,13 +29,12 @@ async fn complete_pending_command_task_for_test(
 }
 
 async fn loaded_page_html_for_test(ctx: &mut TestContext) -> String {
-    let page = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
-        .expect("loaded page");
-    page.serialize_html_async()
+    let context = ctx.conn.browser_context.as_mut().expect("browser context");
+    let target_id = context
+        .active_target_id_owned()
+        .expect("active document target");
+    context
+        .serialize_target_html_for_test(&target_id)
         .await
         .expect("loaded page should serialize HTML")
 }
@@ -269,13 +268,13 @@ async fn script_execution_disabled_completes_through_io_pending_dispatch() {
             && message["result"] == json!({})
     }));
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .emulation_policy()
-            .script_execution_disabled
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context
+                .target_emulation_policy(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .script_execution_disabled
     );
 }
 
@@ -313,13 +312,13 @@ async fn attached_session_first_io_emulation_response_uses_its_session_host() {
 
     ctx.expect_result(9_111, json!({}), Some("SID-attached"));
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .emulation_policy()
-            .script_execution_disabled
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context
+                .target_emulation_policy(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .script_execution_disabled
     );
 }
 
@@ -347,13 +346,11 @@ async fn timezone_override_can_complete_through_pending_command_dispatch() {
             && message["result"] == json!({})
     }));
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .timezone_override(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .timezone_override(),
         Some("Asia/Shanghai")
     );
 }
@@ -386,14 +383,13 @@ async fn emulated_media_can_complete_through_pending_command_dispatch() {
             && message["sessionId"] == json!("SID-1")
             && message["result"] == json!({})
     }));
-    let media = &ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target()
-        .emulation_policy()
-        .emulated_media;
+    let media = &{
+        let context = &ctx.conn.browser_context.as_ref().unwrap();
+        context
+            .target_emulation_policy(context.active_target_id().unwrap())
+            .expect("registered WebContents")
+    }
+    .emulated_media;
     assert_eq!(media.media.as_deref(), Some("screen"));
     assert_eq!(media.color_scheme.as_deref(), Some("dark"));
 }
@@ -406,9 +402,9 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
         .conn
         .browser_context
         .as_ref()
-        .and_then(|browser_context| browser_context.page_target("TID-1"))
-        .and_then(PageTargetHost::loaded_page)
-        .map(moli_core::browser::RendererPageResidenceIdentity::from_page)
+        .and_then(|browser_context| {
+            browser_context.target_renderer_page_residence_identity("TID-1")
+        })
         .expect("the original target should have a physical Page");
     let target = super::PendingEmulationPageTarget::BrowserContextTarget {
         browser_context_id: "BID-1".to_owned(),
@@ -416,19 +412,19 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
     };
 
     let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-    assert!(
-        browser_context.insert_page_target_host(PageTargetHost::with_url(
-            "TID-2".to_owned(),
-            None,
-            "about:blank".to_owned(),
-        ))
-    );
+    assert!(browser_context.register_page_target_url_fixture(
+        "TID-2".to_owned(),
+        None,
+        "about:blank".to_owned(),
+    ));
     browser_context.set_active_target_id("TID-2");
     assert!(
         !super::pending_emulation_page_configuration_will_be_replayed(
             &ctx.conn,
             &target,
-            &super::PendingEmulationPageOperation::SetTimezoneOverride,
+            &super::PendingEmulationPageOperation::Policy(
+                crate::conn::PagePolicyUpdateKind::SetTimezoneOverride
+            ),
             super::EmulationPageCommandSource::Browser(Some(dispatched_page)),
         ),
         "changing foreground selection must not make an error from the same Page look stale"
@@ -446,7 +442,9 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
         super::pending_emulation_page_configuration_will_be_replayed(
             &ctx.conn,
             &target,
-            &super::PendingEmulationPageOperation::SetTimezoneOverride,
+            &super::PendingEmulationPageOperation::Policy(
+                crate::conn::PagePolicyUpdateKind::SetTimezoneOverride
+            ),
             super::EmulationPageCommandSource::Browser(Some(dispatched_page)),
         ),
         "only replacement of the exact target attachment may retire its renderer error"
@@ -455,7 +453,9 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
         !super::pending_emulation_page_configuration_will_be_replayed(
             &ctx.conn,
             &target,
-            &super::PendingEmulationPageOperation::SetIdleOverride,
+            &super::PendingEmulationPageOperation::Policy(
+                crate::conn::PagePolicyUpdateKind::SetIdleOverride
+            ),
             super::EmulationPageCommandSource::Browser(Some(dispatched_page)),
         ),
         "frame-host idle state must not use the target-policy replay path",
@@ -469,7 +469,9 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
             completed: super::CompletedEmulationRendererDispatch::Pages(vec![
                 super::CompletedEmulationPageCommand {
                     target,
-                    operation: super::PendingEmulationPageOperation::SetTimezoneOverride,
+                    operation: super::PendingEmulationPageOperation::Policy(
+                        crate::conn::PagePolicyUpdateKind::SetTimezoneOverride,
+                    ),
                     source: super::EmulationPageCommandSource::Browser(Some(dispatched_page)),
                     completed: Err("renderer attachment retired".to_owned()),
                 },
@@ -516,15 +518,13 @@ async fn pending_idle_override_response_does_not_replay_into_replacement_page() 
             && message["sessionId"] == json!("SID-1")
             && message["result"] == json!({})
     }));
-    let page = ctx
+    let context = ctx
         .conn
         .browser_context
         .as_ref()
-        .and_then(|context| context.page_target("TID-1"))
-        .and_then(PageTargetHost::loaded_page)
-        .expect("replacement Page");
+        .expect("replacement context");
     assert_eq!(
-        page.idle_override(),
+        context.target_idle_override_for_test("TID-1").unwrap(),
         None,
         "a settled command on the retired frame host must not become target-level policy",
     );
@@ -534,28 +534,41 @@ async fn pending_idle_override_response_does_not_replay_into_replacement_page() 
 async fn renderer_candidate_binding_does_not_retire_outgoing_browser_policy_commands() {
     let mut ctx = TestContext::new();
     load_session_page_for_pending_emulation_test(&mut ctx).await;
-    let slot = ctx
-        .conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
+    let context = ctx.conn.browser_context.as_mut().unwrap();
+    let page_source = super::EmulationPageCommandSource::browser(context, "TID-1");
+    let residence = context
+        .target_renderer_page_residence_identity("TID-1")
         .unwrap();
-    let page = slot.loaded_page().unwrap();
-    let page_source = super::EmulationPageCommandSource::browser(page);
-    let residence = moli_core::browser::RendererPageResidenceIdentity::from_page(page);
-    let agent = page.renderer_devtools_agent_token();
-    let document_id = slot.document_id();
-    let old_attachment = slot.current_renderer_attachment().unwrap();
-    let navigation = slot.start_document_navigation("candidate-rebind".to_owned());
-    let candidate = slot
+    let document_id = context.target_document_id("TID-1");
+    let old_attachment = context
+        .page_target("TID-1")
+        .unwrap()
+        .runtime_slot
+        .current_renderer_attachment()
+        .unwrap();
+    let agent = old_attachment.agent_token();
+    let navigation =
+        context.begin_target_document_navigation("TID-1", "candidate-rebind".to_owned());
+    let candidate = context
+        .page_target("TID-1")
+        .unwrap()
+        .runtime_slot
         .prepare_renderer_agent_candidate_token(&navigation, agent)
         .unwrap();
-    let transaction = slot
-        .commit_renderer_agent_candidate_transaction(candidate, residence)
+    let transaction = context
+        .commit_renderer_agent_candidate_transaction_for_target("TID-1", candidate, residence)
         .unwrap();
     assert_ne!(
-        slot.current_renderer_attachment().unwrap().id(),
+        context
+            .page_target("TID-1")
+            .unwrap()
+            .runtime_slot
+            .current_renderer_attachment()
+            .unwrap()
+            .id(),
         old_attachment.id()
     );
-    assert_eq!(slot.document_id(), document_id);
+    assert_eq!(context.target_document_id("TID-1"), document_id);
     let target = super::PendingEmulationPageTarget::SessionOwner {
         owner_scope: crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1")),
     };
@@ -563,7 +576,9 @@ async fn renderer_candidate_binding_does_not_retire_outgoing_browser_policy_comm
         !super::pending_emulation_page_configuration_will_be_replayed(
             &ctx.conn,
             &target,
-            &super::PendingEmulationPageOperation::SetTimezoneOverride,
+            &super::PendingEmulationPageOperation::Policy(
+                crate::conn::PagePolicyUpdateKind::SetTimezoneOverride
+            ),
             page_source,
         ),
         "a renderer reservation must not hide a Browser error on the still-current Page"
@@ -637,15 +652,13 @@ async fn admitted_idle_override_is_visible_to_concurrent_same_site_navigation() 
             && message["sessionId"] == json!("SID-1")
             && message["result"] == json!({})
     }));
-    let page = ctx
+    let context = ctx
         .conn
         .browser_context
         .as_ref()
-        .and_then(|context| context.page_target("TID-1"))
-        .and_then(PageTargetHost::loaded_page)
-        .expect("replacement Page");
+        .expect("replacement context");
     assert_eq!(
-        page.idle_override(),
+        context.target_idle_override_for_test("TID-1").unwrap(),
         Some(moli_core::page::EmulatedIdleOverride {
             is_user_active: false,
             is_screen_unlocked: false,
@@ -675,29 +688,26 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
         .await;
 
     {
-        let page = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .and_then(|context| {
-                context
-                    .active_page_target_mut()
-                    .runtime_slot
-                    .loaded_page_mut()
-            })
-            .expect("loaded page");
-        page.set_permission_overrides_async(&[moli_core::page::PermissionOverrideRegistration {
-            permission: json!("idleDetection"),
-            setting: "granted".to_owned(),
-            origin: None,
-            embedded_origin: None,
-        }])
-        .await
-        .expect("idle detection permission should reach the renderer");
-        assert_eq!(
-            page.evaluate_runtime_expression_async(
-                "globalThis.idleEvents=[];globalThis.idleDetector=new IdleDetector();idleDetector.addEventListener('change',()=>idleEvents.push(idleDetector.userState+'/'+idleDetector.screenState));idleDetector.start();JSON.stringify([idleDetector.userState,idleDetector.screenState,idleEvents])"
+        let context = ctx.conn.browser_context.as_mut().expect("loaded context");
+        let completion = context
+            .start_target_permission_update(
+                "TID-1",
+                &[moli_core::page::PermissionOverrideRegistration {
+                    permission: json!("idleDetection"),
+                    setting: "granted".to_owned(),
+                    origin: None,
+                    embedded_origin: None,
+                }],
             )
+            .unwrap()
+            .wait()
+            .await
+            .unwrap();
+        context
+            .finish_target_permission_update("TID-1", completion)
+            .expect("idle detection permission should reach the renderer");
+        assert_eq!(
+            context.evaluate_target_expression_for_test("TID-1", "globalThis.idleEvents=[];globalThis.idleDetector=new IdleDetector();idleDetector.addEventListener('change',()=>idleEvents.push(idleDetector.userState+'/'+idleDetector.screenState));idleDetector.start();JSON.stringify([idleDetector.userState,idleDetector.screenState,idleEvents])", false)
             .await
             .expect("IdleDetector should start"),
             json!({
@@ -726,23 +736,16 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
     }));
 
     {
-        let page = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .and_then(|context| {
-                context
-                    .active_page_target_mut()
-                    .runtime_slot
-                    .loaded_page_mut()
-            })
-            .expect("loaded page");
+        let context = ctx.conn.browser_context.as_mut().expect("loaded context");
         assert_eq!(
-            page.evaluate_runtime_expression_async(
-                "JSON.stringify([idleDetector.userState,idleDetector.screenState,idleEvents])"
-            )
-            .await
-            .expect("overridden IdleDetector state should evaluate"),
+            context
+                .evaluate_target_expression_for_test(
+                    "TID-1",
+                    "JSON.stringify([idleDetector.userState,idleDetector.screenState,idleEvents])",
+                    false
+                )
+                .await
+                .expect("overridden IdleDetector state should evaluate"),
             json!({
                 "type": "string",
                 "value": r#"["idle","locked",["active/unlocked","idle/locked"]]"#
@@ -767,23 +770,16 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
             && message["sessionId"] == json!("SID-1")
             && message["result"] == json!({})
     }));
-    let page = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .and_then(|context| {
-            context
-                .active_page_target_mut()
-                .runtime_slot
-                .loaded_page_mut()
-        })
-        .expect("loaded page");
+    let context = ctx.conn.browser_context.as_mut().expect("loaded context");
     assert_eq!(
-        page.evaluate_runtime_expression_async(
-            "JSON.stringify([idleDetector.userState,idleDetector.screenState,idleEvents])"
-        )
-        .await
-        .expect("cleared IdleDetector state should evaluate"),
+        context
+            .evaluate_target_expression_for_test(
+                "TID-1",
+                "JSON.stringify([idleDetector.userState,idleDetector.screenState,idleEvents])",
+                false
+            )
+            .await
+            .expect("cleared IdleDetector state should evaluate"),
         json!({
             "type": "string",
             "value": r#"["active","unlocked",["active/unlocked","idle/locked","active/unlocked"]]"#
@@ -888,26 +884,26 @@ async fn pure_state_emulation_commands_complete_through_command_dispatch() {
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     assert!(
         browser_context
-            .active_page_target()
-            .emulation_policy()
+            .target_emulation_policy(browser_context.active_target_id().unwrap())
+            .expect("registered WebContents")
             .focus_emulation_enabled
     );
     assert!(
         browser_context
-            .active_page_target()
-            .emulation_policy()
+            .target_emulation_policy(browser_context.active_target_id().unwrap())
+            .expect("registered WebContents")
             .touch_emulation_enabled
     );
     assert!(
         browser_context
-            .active_page_target()
-            .emulation_policy()
+            .target_emulation_policy(browser_context.active_target_id().unwrap())
+            .expect("registered WebContents")
             .emit_touch_events_for_mouse
     );
     assert_eq!(
         browser_context
-            .active_page_target()
-            .emulation_policy()
+            .target_emulation_policy(browser_context.active_target_id().unwrap())
+            .expect("registered WebContents")
             .cpu_throttling_rate,
         1.0
     );
@@ -931,13 +927,13 @@ async fn set_cpu_throttling_rate_rejects_invalid_params() {
     ctx.expect_error(9115, -32602, "InvalidParams");
 
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .emulation_policy()
-            .cpu_throttling_rate,
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context
+                .target_emulation_policy(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .cpu_throttling_rate,
         1.0
     );
 }
@@ -1002,13 +998,13 @@ async fn live_apply_emulation_commands_without_loaded_page_do_not_use_legacy_fal
     }
 
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .emulation_policy()
-            .cpu_throttling_rate,
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context
+                .target_emulation_policy(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .cpu_throttling_rate,
         2.5
     );
 }
@@ -1138,13 +1134,13 @@ async fn live_cpu_throttling_rate_uses_pending_command_dispatch() {
             && message["result"] == json!({})
     }));
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .emulation_policy()
-            .cpu_throttling_rate,
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context
+                .target_emulation_policy(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .cpu_throttling_rate,
         3.0
     );
 }
@@ -1216,18 +1212,17 @@ async fn multi_session_locale_and_timezone_claims_match_chromium() {
     )
     .await;
 
-    let page_state = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context")
-        .active_page_target();
+    let page_context = ctx.conn.browser_context.as_ref().expect("browser context");
     assert_eq!(
-        page_state.effective_policy().locale_override(),
+        page_context
+            .effective_policy_for_target(page_context.active_target_id().unwrap())
+            .locale_override(),
         Some("fr-FR")
     );
     assert_eq!(
-        page_state.effective_policy().timezone_override(),
+        page_context
+            .effective_policy_for_target(page_context.active_target_id().unwrap())
+            .timezone_override(),
         Some("Europe/Paris")
     );
 }
@@ -1254,25 +1249,21 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
         .await;
     }
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .effective_policy()
-            .browser_identity_override()
-            .map(|identity| identity.user_agent()),
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .browser_identity_override()
+        .map(|identity| identity.user_agent()),
         Some("Moli/Aux-1")
     );
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .browser_identity_override()
-            .expect("renderer identity")
-            .user_agent(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context.browser_identity_override_for_target(context.active_target_id().unwrap())
+        }
+        .expect("renderer identity")
+        .user_agent(),
         "Moli/Aux-1",
         "renderer agents use attachment order rather than setter order"
     );
@@ -1286,14 +1277,12 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
     )
     .await;
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .effective_policy()
-            .browser_identity_override()
-            .map(|identity| identity.user_agent()),
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .browser_identity_override()
+        .map(|identity| identity.user_agent()),
         Some("Moli/Primary-2")
     );
 
@@ -1309,13 +1298,10 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
         }),
     )
     .await;
-    let effective_policy = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context")
-        .active_page_target()
-        .effective_policy();
+    let effective_policy = {
+        let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+        context.effective_policy_for_target(context.active_target_id().unwrap())
+    };
     let identity = effective_policy
         .browser_identity_override()
         .expect("UA and per-field contributions should compose an identity");
@@ -1340,14 +1326,12 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
     )
     .await;
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .effective_policy()
-            .browser_identity_override()
-            .map(|identity| identity.user_agent()),
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .browser_identity_override()
+        .map(|identity| identity.user_agent()),
         Some("Moli/Aux-2"),
         "Network.disable must not dispose the shared Emulation agent state"
     );
@@ -1357,14 +1341,12 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
         .await
         .expect("detaching the attached session should restore the previous UA");
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .effective_policy()
-            .browser_identity_override()
-            .map(|identity| identity.user_agent()),
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .browser_identity_override()
+        .map(|identity| identity.user_agent()),
         Some("Moli/Primary-2")
     );
 }
@@ -1456,36 +1438,53 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
     assert!(primary.focus_emulation_enabled);
     assert!(!attached.focus_emulation_enabled);
 
-    let target = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context")
-        .active_page_target();
-    assert_eq!(target.emulation_policy().cpu_throttling_rate, 2.0);
+    let page_context = ctx.conn.browser_context.as_ref().expect("browser context");
     assert_eq!(
-        target
-            .emulation_policy()
+        page_context
+            .target_emulation_policy(page_context.active_target_id().unwrap())
+            .unwrap()
+            .cpu_throttling_rate,
+        2.0
+    );
+    assert_eq!(
+        page_context
+            .target_emulation_policy(page_context.active_target_id().unwrap())
+            .unwrap()
             .emulated_device_metrics
             .as_ref()
             .map(|metrics| (metrics.width, metrics.height)),
         Some((640, 480))
     );
-    assert!(target.emulation_policy().focus_emulation_enabled);
+    assert!(
+        page_context
+            .target_emulation_policy(page_context.active_target_id().unwrap())
+            .unwrap()
+            .focus_emulation_enabled
+    );
 
     super::dispose_page_session_async(&mut ctx.conn, "SID-attached")
         .await
         .expect("attached Emulation handler disposal");
-    let target = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context")
-        .active_page_target();
-    assert_eq!(target.emulation_policy().cpu_throttling_rate, 1.0);
-    assert!(target.emulation_policy().emulated_device_metrics.is_none());
+    let page_context = ctx.conn.browser_context.as_ref().expect("browser context");
+    assert_eq!(
+        page_context
+            .target_emulation_policy(page_context.active_target_id().unwrap())
+            .unwrap()
+            .cpu_throttling_rate,
+        1.0
+    );
     assert!(
-        target.emulation_policy().focus_emulation_enabled,
+        page_context
+            .target_emulation_policy(page_context.active_target_id().unwrap())
+            .unwrap()
+            .emulated_device_metrics
+            .is_none()
+    );
+    assert!(
+        page_context
+            .target_emulation_policy(page_context.active_target_id().unwrap())
+            .unwrap()
+            .focus_emulation_enabled,
         "disposing an untouched handler must not clear another session's focus input"
     );
     let primary = ctx
@@ -1526,13 +1525,13 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
         .await
         .expect("new contribution is also revoked on disposal");
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .emulation_policy()
-            .cpu_throttling_rate,
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context
+                .target_emulation_policy(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .cpu_throttling_rate,
         1.0
     );
 }
@@ -1550,13 +1549,13 @@ async fn async_emulation_device_state_updates_browser_context() {
     .await;
     ctx.expect_result(501, json!({}), None);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .emulation_policy()
-            .focus_emulation_enabled
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context
+                .target_emulation_policy(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .focus_emulation_enabled
     );
 
     ctx.process_async(json!({
@@ -1567,13 +1566,13 @@ async fn async_emulation_device_state_updates_browser_context() {
     .await;
     ctx.expect_result(502, json!({}), None);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .emulation_policy()
-            .touch_emulation_enabled
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context
+                .target_emulation_policy(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .touch_emulation_enabled
     );
 
     ctx.process_async(json!({
@@ -1584,13 +1583,13 @@ async fn async_emulation_device_state_updates_browser_context() {
     .await;
     ctx.expect_result(505, json!({}), None);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .emulation_policy()
-            .emit_touch_events_for_mouse
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context
+                .target_emulation_policy(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .emit_touch_events_for_mouse
     );
 
     ctx.process_async(json!({
@@ -1605,8 +1604,8 @@ async fn async_emulation_device_state_updates_browser_context() {
         .browser_context
         .as_ref()
         .and_then(|bc| {
-            bc.active_page_target()
-                .emulation_policy()
+            bc.target_emulation_policy(bc.active_target_id().unwrap())
+                .expect("registered WebContents")
                 .geolocation_override
                 .as_ref()
         })
@@ -1628,8 +1627,8 @@ async fn async_emulation_device_state_updates_browser_context() {
         .browser_context
         .as_ref()
         .and_then(|bc| {
-            bc.active_page_target()
-                .emulation_policy()
+            bc.target_emulation_policy(bc.active_target_id().unwrap())
+                .expect("registered WebContents")
                 .emulated_device_metrics
                 .as_ref()
         })
@@ -1645,14 +1644,14 @@ async fn async_emulation_device_state_updates_browser_context() {
     .await;
     ctx.expect_result(504, json!({}), None);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .emulation_policy()
-            .emulated_device_metrics
-            .is_none()
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context
+                .target_emulation_policy(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .emulated_device_metrics
+        .is_none()
     );
 }
 
@@ -2599,8 +2598,8 @@ async fn clear_geolocation_override_restores_default_after_explicit_unavailable(
             .browser_context
             .as_ref()
             .and_then(|browser_context| browser_context
-                .active_page_target()
-                .emulation_policy()
+                .target_emulation_policy(browser_context.active_target_id().unwrap())
+                .expect("registered WebContents")
                 .geolocation_override
                 .as_ref()),
         Some(EmulatedGeolocationOverrideState::PositionUnavailable)
@@ -2618,14 +2617,14 @@ async fn clear_geolocation_override_restores_default_after_explicit_unavailable(
     .await;
     ctx.expect_result(99, json!({}), Some("SID-1"));
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .emulation_policy()
-            .geolocation_override
-            .is_none()
+        {
+            let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+            context
+                .target_emulation_policy(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .geolocation_override
+        .is_none()
     );
 
     let value = evaluate_geolocation_once(&mut ctx, 100).await;
@@ -2999,17 +2998,16 @@ async fn locale_and_timezone_overrides_apply_to_locale_date_formatting() {
 #[tokio::test(flavor = "multi_thread")]
 async fn context_emulated_media_applies_to_loaded_background_page_without_activation() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::new(
+
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-active".to_owned());
+    bc.attach_active_session("SID-active");
+    bc.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     );
-
-    let mut bc = BrowserContext::new("BID-1".into());
-    bc.set_active_target_id("TID-active".to_owned());
-    bc.attach_active_session("SID-active");
-    bc.insert_page_target_host(background);
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background</body>",
@@ -3075,17 +3073,16 @@ async fn context_emulated_media_applies_to_loaded_background_page_without_activa
 #[tokio::test(flavor = "multi_thread")]
 async fn context_locale_override_applies_to_loaded_background_page_without_activation() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::new(
+
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-active".to_owned());
+    bc.attach_active_session("SID-active");
+    bc.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     );
-
-    let mut bc = BrowserContext::new("BID-1".into());
-    bc.set_active_target_id("TID-active".to_owned());
-    bc.attach_active_session("SID-active");
-    bc.insert_page_target_host(background);
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background</body>",
@@ -3141,18 +3138,18 @@ async fn context_locale_override_applies_to_loaded_background_page_without_activ
     );
     assert_eq!(
         browser_context
-            .active_page_target()
-            .effective_policy()
+            .effective_policy_for_target(browser_context.active_target_id().unwrap())
             .locale_override(),
         Some("fr-FR")
     );
     assert!(
         browser_context
             .background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
+            .filter(|target| browser_context
+                .has_non_default_session_state_for_target(target.target_id()))
             .and_then(|state| {
-                state
-                    .effective_policy()
+                browser_context
+                    .effective_policy_for_target(state.target_id())
                     .locale_override()
                     .map(str::to_owned)
             })
@@ -3164,17 +3161,16 @@ async fn context_locale_override_applies_to_loaded_background_page_without_activ
 #[tokio::test(flavor = "multi_thread")]
 async fn session_emulation_routes_to_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::new(
+
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-active".to_owned());
+    bc.attach_active_session("SID-active");
+    bc.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     );
-
-    let mut bc = BrowserContext::new("BID-1".into());
-    bc.set_active_target_id("TID-active".to_owned());
-    bc.attach_active_session("SID-active");
-    bc.insert_page_target_host(background);
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>background</body>",
@@ -3266,8 +3262,8 @@ async fn session_emulation_routes_to_loaded_background_owner_without_activation(
     let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
     assert!(
         browser_context
-            .active_page_target()
-            .emulation_policy()
+            .target_emulation_policy(browser_context.active_target_id().unwrap())
+            .expect("registered WebContents")
             .emulated_media
             .color_scheme
             .is_none(),
@@ -3275,31 +3271,36 @@ async fn session_emulation_routes_to_loaded_background_owner_without_activation(
     );
     assert!(
         browser_context
-            .active_page_target()
-            .effective_policy()
+            .effective_policy_for_target(browser_context.active_target_id().unwrap())
             .locale_override()
             .is_none(),
         "background Emulation should not mutate the active target locale override"
     );
     let background = browser_context
         .background_target("TID-background")
-        .filter(|target| target.has_non_default_session_state())
+        .filter(|target| {
+            browser_context.has_non_default_session_state_for_target(target.target_id())
+        })
         .expect("background target state");
     assert_eq!(
-        background
-            .emulation_policy()
+        browser_context
+            .target_emulation_policy(background.target_id())
+            .expect("registered WebContents")
             .emulated_media
             .color_scheme
             .as_deref(),
         Some("dark")
     );
     assert_eq!(
-        background.effective_policy().locale_override(),
+        browser_context
+            .effective_policy_for_target(background.target_id())
+            .locale_override(),
         Some("zh-CN")
     );
     assert_eq!(
-        background
-            .emulation_policy()
+        browser_context
+            .target_emulation_policy(background.target_id())
+            .expect("registered WebContents")
             .geolocation_override
             .as_ref()
             .and_then(EmulatedGeolocationOverrideState::position)
@@ -3492,15 +3493,15 @@ async fn target_session_detach_disposes_non_aggregated_emulation_state_before_re
     .await;
     ctx.expect_result(192, json!({}), None);
     let _ = ctx.take_all();
-    let target = ctx
+    let policy = ctx
         .conn
         .browser_context
         .as_ref()
-        .and_then(|browser_context| browser_context.page_target("TID-1"))
+        .and_then(|browser_context| browser_context.target_emulation_policy("TID-1"))
         .expect("detached target remains addressable");
-    assert_eq!(target.emulation_policy().cpu_throttling_rate, 1.0);
+    assert_eq!(policy.cpu_throttling_rate, 1.0);
     assert_eq!(
-        target.emulation_policy().emulated_media,
+        policy.emulated_media,
         crate::conn::EmulatedMediaOverrides::default()
     );
 

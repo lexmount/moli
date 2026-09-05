@@ -99,8 +99,13 @@ pub(super) fn try_start_get_app_manifest_command(
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32602, error));
         }
     };
-    let pending = match conn.loaded_page_mut_for_protocol_access(cmd.session_id) {
-        Ok(page) => page.start_prepare_app_manifest_load(),
+    let pending = match conn
+        .resolve_document_command_owner(&CommandOwnerScope::capture(conn, cmd.session_id))
+    {
+        Ok((context_id, target_id)) => conn
+            .browser_context_by_id(&context_id)
+            .expect("admitted document context remains registered")
+            .start_target_app_manifest_load(&target_id),
         Err(message) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
         }
@@ -139,12 +144,13 @@ pub(super) fn complete_get_app_manifest_command(
                     ));
                 }
             };
-            let preparation = match conn
-                .loaded_page_mut_for_protocol_access_for_owner(owner)
-                .and_then(|page| {
-                    page.finish_prepare_app_manifest_load(completion)
-                        .map_err(|error| error.to_string())
-                }) {
+            let preparation = match conn.resolve_document_command_owner(owner).and_then(
+                |(context_id, target_id)| {
+                    conn.browser_context_by_id_mut(&context_id)
+                        .ok_or("NoDocumentLoaded")?
+                        .finish_target_app_manifest_load_preparation(&target_id, completion)
+                },
+            ) {
                 Ok(preparation) => preparation,
                 Err(message) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -172,8 +178,11 @@ pub(super) fn complete_get_app_manifest_command(
         }
         CompletedGetAppManifestWork::Fetch(outcome) => {
             let (result, publication) = (*outcome).into_parts();
-            let pending = match conn.loaded_page_mut_for_protocol_access_for_owner(owner) {
-                Ok(page) => page.start_publish_app_manifest_load(publication),
+            let pending = match conn.resolve_document_command_owner(owner) {
+                Ok((context_id, target_id)) => conn
+                    .browser_context_by_id(&context_id)
+                    .expect("admitted document context remains registered")
+                    .start_target_app_manifest_publication(&target_id, publication),
                 Err(message) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000, message,
@@ -208,12 +217,13 @@ pub(super) fn complete_get_app_manifest_command(
                     ));
                 }
             };
-            let output = match conn
-                .loaded_page_mut_for_protocol_access_for_owner(owner)
-                .and_then(|page| {
-                    page.finish_publish_app_manifest_load(completion)
-                        .map_err(|error| error.to_string())
-                }) {
+            let output = match conn.resolve_document_command_owner(owner).and_then(
+                |(context_id, target_id)| {
+                    conn.browser_context_by_id_mut(&context_id)
+                        .ok_or("NoDocumentLoaded")?
+                        .finish_target_app_manifest_publication(&target_id, completion)
+                },
+            ) {
                 Ok(output) => output,
                 Err(message) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(

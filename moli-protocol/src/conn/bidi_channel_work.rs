@@ -166,9 +166,10 @@ mod tests {
         browser_context.set_active_target_id("TID-owner");
         browser_context.attach_active_session("SID-owner".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
-        conn.runtime_session_owner_slot_mut(Some("SID-owner"))
-            .expect("test runtime slot")
-            .set_document_id_for_test(1);
+        conn.set_document_fixture_for_owner_test(
+            &crate::conn::CommandOwnerScope::capture(&conn, Some("SID-owner")),
+            1,
+        );
         conn
     }
 
@@ -182,9 +183,10 @@ mod tests {
         .expect("test Page attachment");
         assert!(owner.is_current(&conn));
 
-        conn.runtime_session_owner_slot_mut(Some("SID-owner"))
-            .expect("test runtime slot")
-            .replace_document_id_for_test();
+        conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &conn,
+            Some("SID-owner"),
+        ));
 
         assert!(
             !owner.is_current(&conn),

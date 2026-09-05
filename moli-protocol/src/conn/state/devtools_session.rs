@@ -1304,14 +1304,13 @@ mod tests {
 
     #[test]
     fn prepared_handler_reset_preserves_unrelated_later_policy_updates() {
-        let mut target = crate::conn::PageTargetHost::empty("TID-policy-reset".into());
+        let mut installed = crate::conn::EmulationPolicy::default();
         let mut handler = DevToolsEmulationSessionState::default();
         let reset = handler.disable_policy_changes();
-        target
-            .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::FocusEnabled(true));
-        target.apply_emulation_policy_changes(reset);
+        installed.apply(crate::conn::EmulationPolicyChange::FocusEnabled(true));
+        installed.apply_changes(reset);
         assert!(
-            target.emulation_policy().focus_emulation_enabled,
+            installed.focus_emulation_enabled,
             "a prepared reset must not overwrite a field this handler never controlled"
         );
     }

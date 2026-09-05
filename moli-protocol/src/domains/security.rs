@@ -155,20 +155,21 @@ mod tests {
         assert_eq!(ctx.conn.browser_context.as_ref().unwrap().id, "BID-1");
         assert!(ctx.conn.tls_verify_host());
         assert_eq!(
-            ctx.conn
-                .inactive_browser_contexts
-                .iter()
-                .find(|bc| bc.id == "BID-2")
-                .expect("session browser context")
-                .active_page_target()
-                .tls_verify_host_override(),
+            {
+                let context = &ctx
+                    .conn
+                    .inactive_browser_contexts
+                    .iter()
+                    .find(|bc| bc.id == "BID-2")
+                    .expect("session browser context");
+                context.tls_verify_host_override_for_target(context.active_target_id().unwrap())
+            },
             Some(false)
         );
         assert_eq!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .and_then(|bc| bc.active_page_target().tls_verify_host_override()),
+            ctx.conn.browser_context.as_ref().and_then(
+                |bc| bc.tls_verify_host_override_for_target(bc.active_target_id().unwrap())
+            ),
             None
         );
     }

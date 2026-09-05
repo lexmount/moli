@@ -1106,14 +1106,10 @@ mod devtools_runtime_entry_tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0]["id"], json!(41));
         assert!(out[0]["result"]["targetId"].as_str().is_some());
-        assert!(
-            conn.browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .runtime_slot
-                .has_loaded_page()
-        );
+        assert!({
+            let context = &conn.browser_context.as_ref().expect("browser context");
+            context.target_has_loaded_page(context.active_target_id().unwrap())
+        });
     }
 
     #[tokio::test]
@@ -1190,9 +1186,7 @@ mod devtools_runtime_entry_tests {
         conn.browser_context
             .as_mut()
             .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(page);
+            .replace_active_page_for_test(Some(page));
         conn.register_pending_inspector_await(7101, Some("SID-runtime-ready-close"));
         assert!(
             conn.claim_pending_inspector_await_for_scheduler_deferred_reply(

@@ -46,13 +46,11 @@ async fn set_blocked_urls_updates_browser_context_state() {
     .await;
     ctx.expect_result(2802, json!({}), None);
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .blocked_url_patterns(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .blocked_url_patterns(),
         vec![
             "http://example.test/*.png".to_owned(),
             "*://cdn.example.test/*".to_owned()
@@ -67,14 +65,12 @@ async fn set_blocked_urls_updates_browser_context_state() {
     .await;
     ctx.expect_result(2803, json!({}), None);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .blocked_url_patterns()
-            .is_empty()
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .blocked_url_patterns()
+        .is_empty()
     );
 }
 
@@ -91,26 +87,22 @@ async fn set_blocked_urls_contribution_activates_with_network_handler() {
     .await;
     ctx.expect_result(28_021, json!({}), None);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .blocked_url_patterns()
-            .is_empty(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .blocked_url_patterns()
+        .is_empty(),
         "Chromium does not instrument blocked URLs until the Network handler is enabled"
     );
 
     enable_network_domain(&mut ctx, 28_022, None).await;
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .blocked_url_patterns(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .blocked_url_patterns(),
         ["*without-enable*".to_owned()],
         "Network.enable activates the handler's retained blocked URL contribution"
     );
@@ -303,14 +295,13 @@ async fn background_set_blocked_urls_updates_loaded_owner_page_without_activatio
     ctx.conn.browser_context = None;
     ctx.sent.clear();
 
-    let background = PageTargetHost::new(
+    let mut inactive = BrowserContext::new("BID-background".to_owned());
+    inactive.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     );
-    let mut inactive = BrowserContext::new("BID-background".to_owned());
-    inactive.insert_page_target_host(background);
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
@@ -1301,14 +1292,10 @@ async fn emulate_network_conditions_rejects_invalid_params() {
         }))
         .await;
         ctx.expect_error(29, -32602, "InvalidParams");
-        assert!(
-            !ctx.conn
-                .browser_context
-                .as_ref()
-                .unwrap()
-                .active_page_target()
-                .network_offline()
-        );
+        assert!(!{
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.network_offline_for_target(context.active_target_id().unwrap())
+        });
     }
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -1331,7 +1318,7 @@ async fn emulate_network_conditions_installs_only_the_supported_offline_value() 
     ctx.expect_result(30, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    assert!(bc.active_page_target().network_offline());
+    assert!(bc.network_offline_for_target(bc.active_target_id().unwrap()));
     ctx.process_async(json!({
         "id": 30_001,
         "method": "Network.emulateNetworkConditions",
@@ -1345,15 +1332,11 @@ async fn emulate_network_conditions_installs_only_the_supported_offline_value() 
     }))
     .await;
     ctx.expect_result(30_001, json!({}), None);
-    let target = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target();
-    assert!(!target.network_offline());
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    let target = context.active_page_target();
+    assert!(!context.network_offline_for_target(target.target_id()));
     assert!(
-        !target.has_non_default_session_state(),
+        !context.has_non_default_session_state_for_target(target.target_id()),
         "unimplemented throttling values must not keep runtime state"
     );
 }

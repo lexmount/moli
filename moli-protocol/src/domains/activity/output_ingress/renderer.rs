@@ -288,10 +288,7 @@ mod tests {
                 "SID-owner-action".to_owned(),
             )
         );
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_document_id_for_test(1);
+        browser_context.set_active_document_fixture_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         let owner = CommandOwnerScope::capture(&conn, None);
 

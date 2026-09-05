@@ -1,6 +1,6 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 use moli_core::page::{
-    CompletedPageCommand, Page, PendingPageCommand, RendererResourceTextSearchOutcome,
+    CompletedPageCommand, PendingPageCommand, RendererResourceTextSearchOutcome,
     RendererTextSearchMatch, SubresourceNetworkOutcome, SubresourceNetworkRecord,
     SubresourceResourceType,
 };
@@ -154,18 +154,37 @@ pub(super) fn try_start_search_in_resource_command(
                 None => SelectedResource::Unavailable,
             }
         } else {
-            let Some(page) = loaded_page(conn, &owner) else {
+            let Some((page_context_id, page_target_id)) =
+                conn.loaded_document_owner_identity_for_owner(&owner)
+            else {
                 return complete_error(CONTENT_UNAVAILABLE);
             };
-            select_subresource(page, &root_frame_id, true, &params.url, materialize_limit)
+            let page_context = conn
+                .browser_context_by_id_mut(&page_context_id)
+                .expect("resolved document context remains registered");
+            select_subresource(
+                page_context
+                    .target_subresource_network_records(&page_target_id)
+                    .expect("loaded document resource records"),
+                &root_frame_id,
+                true,
+                &params.url,
+                materialize_limit,
+            )
         };
         return start_selected_resource_search(conn, cmd.id, owner, params, selected);
     }
 
-    let Some(page) = loaded_page(conn, &owner) else {
+    let Some((page_context_id, page_target_id)) =
+        conn.loaded_document_owner_identity_for_owner(&owner)
+    else {
         return complete_error(CONTENT_UNAVAILABLE);
     };
-    match page.start_child_frame_resource_search_by_lines(
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("resolved document context remains registered");
+    match page_context.start_child_frame_resource_search_by_lines_for_target(
+        &page_target_id,
         params.frame_id.clone(),
         params.url.clone(),
         params.query.clone(),
@@ -192,14 +211,21 @@ pub(super) fn complete_search_in_resource_command(
     completed: CompletedSearchInResourceCommand,
 ) -> PageCommandTaskStep {
     let materialize_limit = conn.response_body_materialize_limit();
-    let Some(page) = loaded_page(conn, owner) else {
+    let Some((page_context_id, page_target_id)) =
+        conn.loaded_document_owner_identity_for_owner(owner)
+    else {
         return complete_error(CONTENT_UNAVAILABLE);
     };
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("resolved document context remains registered");
     let completion = match completed.completed {
         Ok(completion) => completion,
         Err(message) => return complete_error(format!("Failed to search resource: {message}")),
     };
-    let outcome = match page.finish_resource_search_by_lines(completion) {
+    let outcome = match page_context
+        .finish_resource_search_by_lines_for_target(&page_target_id, completion)
+    {
         Ok(outcome) => outcome,
         Err(error) => return complete_error(format!("Failed to search resource: {error}")),
     };
@@ -219,7 +245,9 @@ pub(super) fn complete_search_in_resource_command(
             RendererResourceTextSearchOutcome::ResourceNotFound,
         ) => {
             let selected = select_subresource(
-                page,
+                page_context
+                    .target_subresource_network_records(&page_target_id)
+                    .expect("loaded document resource records"),
                 &completed.params.frame_id,
                 false,
                 &completed.params.url,
@@ -248,10 +276,16 @@ fn start_selected_resource_search(
         SelectedResource::Unavailable => return complete_error(CONTENT_UNAVAILABLE),
         SelectedResource::Missing => return complete_error(RESOURCE_NOT_FOUND),
     };
-    let Some(page) = loaded_page(conn, &owner) else {
+    let Some((page_context_id, page_target_id)) =
+        conn.loaded_document_owner_identity_for_owner(&owner)
+    else {
         return complete_error(CONTENT_UNAVAILABLE);
     };
-    match page.start_text_search_by_lines(
+    let page_context = conn
+        .browser_context_by_id_mut(&page_context_id)
+        .expect("resolved document context remains registered");
+    match page_context.start_text_search_by_lines_for_target(
+        &page_target_id,
         text,
         params.query.clone(),
         params.case_sensitive,
@@ -298,27 +332,17 @@ fn complete_error(message: impl Into<String>) -> PageCommandTaskStep {
     PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message))
 }
 
-fn loaded_page<'a>(conn: &'a mut CdpConnection, owner: &CommandOwnerScope) -> Option<&'a mut Page> {
-    conn.runtime_session_owner_slot_mut_for_owner(owner)
-        .ok()?
-        .loaded_page_mut()
-}
-
 fn select_subresource(
-    page: &Page,
+    records: &[SubresourceNetworkRecord],
     frame_id: &str,
     root_frame: bool,
     requested_url: &str,
     materialize_limit: usize,
 ) -> SelectedResource {
-    let record = page
-        .subresource_network_records()
-        .iter()
-        .rev()
-        .find(|record| {
-            resource_belongs_to_frame(record, frame_id, root_frame)
-                && subresource_url_matches(record, requested_url)
-        });
+    let record = records.iter().rev().find(|record| {
+        resource_belongs_to_frame(record, frame_id, root_frame)
+            && subresource_url_matches(record, requested_url)
+    });
     let Some(record) = record else {
         return SelectedResource::Missing;
     };

@@ -53,7 +53,7 @@ fn runtime_observable_cursor_end_from_owner_queue_for_owner(
     let runtime_slot = conn.runtime_session_owner_slot_for_owner(owner).ok()?;
     let source = runtime_slot.observable_output_latest_source_tail()?;
     let url = conn.runtime_session_owner_target_url_for_owner(owner)?;
-    (source.url() == url && runtime_slot.document_id() == Some(source.document_id()))
+    (source.url() == url && conn.current_document_id_for_owner(owner) == Some(source.document_id()))
         .then_some(source)?
         .cursor_end()
 }
@@ -282,15 +282,12 @@ mod tests {
                 .as_mut()
                 .expect("browser context should exist");
             bc.set_target_url("http://example.test/runtime-source".to_owned());
-            bc.active_page_target_mut()
-                .runtime_slot
-                .set_document_id_for_test(3);
-            bc.active_page_target_mut()
-                .runtime_slot
-                .sync_observable_output_source_from_renderer_snapshot(
-                    "http://example.test/runtime-source".to_owned(),
-                    &source_snapshot,
-                );
+            bc.set_active_document_fixture_for_test(3);
+            bc.sync_observable_output_source_from_renderer_snapshot_for_target(
+                &bc.active_target_id_owned().unwrap(),
+                "http://example.test/runtime-source".to_owned(),
+                &source_snapshot,
+            );
         }
 
         advance_runtime_observable_cursors_to_current_for_session_owner(&mut conn, None);

@@ -1,5 +1,4 @@
 use super::*;
-use crate::conn::PageTargetHost;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn get_browser_contexts_returns_active_and_inactive_ids() {
@@ -111,7 +110,10 @@ async fn cross_document_navigation_keeps_target_session_and_replaces_page_reside
     assert_eq!(browser_context.browser_context_id(), browser_context_id);
     assert_eq!(target.web_contents_id(), web_contents_id);
     assert_eq!(target.main_frame_slot_id(), main_frame_slot_id);
-    assert_eq!(target.current_document_id(), Some(after.document_id()));
+    assert_eq!(
+        browser_context.target_document_id(target.target_id()),
+        Some(after.document_id())
+    );
     assert_eq!(after.browser_context_id(), before.browser_context_id());
     assert_eq!(after.target_id(), before.target_id());
     assert_ne!(
@@ -141,11 +143,11 @@ async fn close_active_target_fails_only_active_owner_pending_awaits() {
         "TID-active-await",
         "SID-active-attached-await".to_owned(),
     ));
-    bc.insert_page_target_host(PageTargetHost::with_url(
+    bc.register_page_target_url_fixture(
         "TID-bg-await".to_owned(),
         Some("SID-bg-await".to_owned()),
         "about:blank#bg-await".to_owned(),
-    ));
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.conn
         .register_pending_inspector_await(1041201, Some("SID-active-await"));
@@ -689,8 +691,7 @@ async fn page_command_on_auto_attached_background_target_session_routes_without_
         Some(session_id.as_str())
     );
     assert!(
-        bc.background_target(&second_target_id)
-            .is_some_and(|target| target.has_loaded_page()),
+        bc.target_has_loaded_page(&second_target_id),
         "background Page.navigate should load the background target without activating it"
     );
 
@@ -875,8 +876,7 @@ async fn page_navigate_on_auto_attached_background_target_session_routes_without
         Some(session_id.as_str())
     );
     assert!(
-        bc.background_target(&second_target_id)
-            .is_some_and(|target| target.has_loaded_page()),
+        bc.target_has_loaded_page(&second_target_id),
         "background Page.navigate should load the background target without activating it"
     );
 
@@ -1787,10 +1787,7 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         .expect("first target page should initialize");
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        let _ = bc
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(first_page));
+        let _ = bc.replace_active_page_for_test(Some(first_page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state

@@ -398,16 +398,15 @@ async fn disable_drains_fetch_owned_pending_when_same_session_network_intercept_
 #[tokio::test(flavor = "multi_thread")]
 async fn enable_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
-        "TID-background".to_owned(),
-        Some("SID-background".to_owned()),
-        "about:blank".to_owned(),
-    );
 
     let mut bc = BrowserContext::new("BID-fetch-bg".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.insert_page_target_host(background);
+    bc.register_page_target_url_fixture(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "about:blank".to_owned(),
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>fetch background</title>",
@@ -434,7 +433,7 @@ async fn enable_targets_loaded_background_owner_without_activation() {
     assert!(!bc.active_page_target().fetch_owner.is_enabled());
     let staged = bc
         .background_target("TID-background")
-        .filter(|target| target.has_non_default_session_state())
+        .filter(|target| bc.has_non_default_session_state_for_target(target.target_id()))
         .expect("background owner fetch config should be staged");
     assert!(staged.fetch_owner.config_snapshot().is_enabled());
     assert_eq!(
@@ -451,15 +450,14 @@ async fn enable_targets_loaded_background_owner_without_activation() {
 #[tokio::test(flavor = "multi_thread")]
 async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
+
+    let mut bc = BrowserContext::new("BID-fetch-owner-route".to_owned());
+    bc.set_active_target_id("TID-fetch-active".to_owned());
+    bc.register_page_target_url_fixture(
         "TID-fetch-background".to_owned(),
         Some("SID-fetch-background".to_owned()),
         "about:blank".to_owned(),
     );
-
-    let mut bc = BrowserContext::new("BID-fetch-owner-route".to_owned());
-    bc.set_active_target_id("TID-fetch-active".to_owned());
-    bc.insert_page_target_host(background);
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.install_navigation_fixture_for_session_owner(
@@ -514,7 +512,7 @@ async fn pending_fetch_enable_keeps_background_owner_route_across_completion() {
     assert!(!bc.active_page_target().fetch_owner.is_enabled());
     let staged = bc
         .background_target("TID-fetch-background")
-        .filter(|target| target.has_non_default_session_state())
+        .filter(|target| bc.has_non_default_session_state_for_target(target.target_id()))
         .expect("background fetch config should stay background");
     assert!(staged.fetch_owner.config_snapshot().is_enabled());
     assert_eq!(staged.fetch_owner.config_snapshot().patterns().len(), 1);
@@ -591,16 +589,15 @@ async fn enable_targets_inactive_owner_without_activation() {
 #[tokio::test(flavor = "multi_thread")]
 async fn disable_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let background = PageTargetHost::with_url(
-        "TID-background".to_owned(),
-        Some("SID-background".to_owned()),
-        "about:blank".to_owned(),
-    );
 
     let mut bc = BrowserContext::new("BID-fetch-disable-bg".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.insert_page_target_host(background);
+    bc.register_page_target_url_fixture(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "about:blank".to_owned(),
+    );
     {
         let state = bc
             .background_target_mut("TID-background")
@@ -636,7 +633,7 @@ async fn disable_targets_loaded_background_owner_without_activation() {
     assert!(!bc.active_page_target().fetch_owner.is_enabled());
     assert!(
         bc.background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
+            .filter(|target| bc.has_non_default_session_state_for_target(target.target_id()))
             .is_none(),
         "disabled background fetch config should collapse to default"
     );

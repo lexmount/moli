@@ -292,7 +292,7 @@ impl CdpConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{BrowserContext, PageTargetHost};
+    use crate::conn::BrowserContext;
 
     #[test]
     fn committed_page_session_route_is_stable_across_foreground_selection() {
@@ -300,7 +300,12 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-route".to_owned());
         browser_context.set_active_target_id("TID-a");
         browser_context.attach_active_session("SID-a");
-        assert!(browser_context.insert_page_target_host(PageTargetHost::empty("TID-b".to_owned())));
+        assert!(browser_context.register_page_target_fixture(
+            "TID-b".to_owned(),
+            None,
+            crate::conn::TargetIdentityState::about_blank(),
+            crate::conn::TargetPageSlot::default(),
+        ));
         connection.install_browser_context_fixture_for_test(browser_context);
 
         let route = CdpSessionRoute::PageTarget {

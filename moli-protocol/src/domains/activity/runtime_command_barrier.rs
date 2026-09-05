@@ -511,10 +511,7 @@ mod tests {
         browser_context.set_active_target_id("TID-runtime-command-barrier");
         browser_context.attach_active_session(SESSION_ID);
         browser_context.set_target_url(page.final_url().as_str().to_owned());
-        let _ = browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        let _ = browser_context.replace_active_page_for_test(Some(page));
         conn.install_browser_context_fixture_for_test(browser_context);
         conn
     }
@@ -523,12 +520,14 @@ mod tests {
     /// fixture. The fixture installs a loaded Page directly, so it has no
     /// separate protocol-side root-Document binding to query.
     fn loaded_page_source_document(conn: &CdpConnection) -> RendererDocumentLifecycleIdentity {
+        let owner = crate::conn::CommandOwnerScope::capture(conn, Some(SESSION_ID));
+        let (context_id, target_id) = conn.resolved_page_owner_identity_for_owner(&owner).unwrap();
         let page_id = conn
-            .runtime_session_owner_slot(Some(SESSION_ID))
-            .expect("loaded Page should retain its runtime slot")
-            .loaded_page()
-            .expect("runtime slot should retain the loaded Page")
-            .renderer_page_id();
+            .browser_context_by_id(&context_id)
+            .unwrap()
+            .target_renderer_page_residence_identity(&target_id)
+            .unwrap()
+            .page_id();
         RendererDocumentLifecycleIdentity {
             frame: RendererFrameToken { page_id },
             document: RendererDocumentToken::new_for_testing(page_id, 1),
@@ -727,15 +726,22 @@ mod tests {
         let mut barriers = RuntimeCommandOutputBarriers::default();
         let permit = admit_registered_command(&mut conn, &mut barriers, 2);
         let cause = renderer_cause_for_permit(&conn, &permit);
-        let page = conn
+        let attachment = conn
             .runtime_session_owner_slot(Some(SESSION_ID))
             .expect("loaded Page should retain its runtime slot")
-            .loaded_page()
-            .expect("runtime slot should retain the loaded Page");
-        let agent_token = page.renderer_devtools_agent_token();
+            .current_renderer_attachment()
+            .expect("loaded Page should retain its renderer attachment");
+        let owner = crate::conn::CommandOwnerScope::capture(&conn, Some(SESSION_ID));
+        let (context_id, target_id) = conn.resolved_page_owner_identity_for_owner(&owner).unwrap();
+        let residence = conn
+            .browser_context_by_id(&context_id)
+            .unwrap()
+            .target_renderer_page_residence_identity(&target_id)
+            .unwrap();
+        let agent_token = attachment.agent_token();
         let source_residence = RendererOutputResidenceIdentity::Page {
-            owner_local_host_id: page.renderer_owner_local_host_id(),
-            page_id: page.renderer_page_id(),
+            owner_local_host_id: residence.owner_local_host_id(),
+            page_id: residence.page_id(),
         };
         let observation = RendererProtocolObservation::RuntimeInspector(
             RendererRuntimeInspectorMessageBatch::new_after_command_response(
@@ -987,9 +993,10 @@ mod tests {
         let mut conn = connection_with_loaded_page().await;
         let mut barriers = RuntimeCommandOutputBarriers::default();
         let permit = admit_registered_command(&mut conn, &mut barriers, 21);
-        conn.runtime_session_owner_slot_mut(Some(SESSION_ID))
-            .expect("runtime slot should remain installed")
-            .replace_document_id_for_test();
+        conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &conn,
+            Some(SESSION_ID),
+        ));
         let mut command_context = CommandDispatchContext::default();
 
         route_same_document_navigation(
@@ -1037,9 +1044,10 @@ mod tests {
         .await;
         assert_eq!(barriers.held_output_count(), 1);
 
-        conn.runtime_session_owner_slot_mut(Some(SESSION_ID))
-            .expect("runtime slot should remain installed")
-            .replace_document_id_for_test();
+        conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &conn,
+            Some(SESSION_ID),
+        ));
         assert_eq!(
             barriers
                 .release(&mut conn, permit, &mut command_context)

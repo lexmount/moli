@@ -327,9 +327,7 @@ lateBinding("author-script");
         .browser_context
         .as_mut()
         .expect("browser context should remain installed")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(initial_page));
+        .replace_active_page_for_test(Some(initial_page));
 
     ctx.process_async(json!({
         "id": 36_500,
@@ -515,9 +513,7 @@ async fn response_stage_xml_commit_uses_live_configuration_before_first_author_s
         .browser_context
         .as_mut()
         .expect("browser context should remain installed")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(initial_page));
+        .replace_active_page_for_test(Some(initial_page));
 
     ctx.process_async(json!({
         "id": 36_550,
@@ -706,9 +702,7 @@ async fn fulfill_request_commit_uses_configuration_added_while_paused_before_aut
         .browser_context
         .as_mut()
         .expect("browser context should remain installed")
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(initial_page));
+        .replace_active_page_for_test(Some(initial_page));
 
     ctx.process_async(json!({
         "id": 36_600,

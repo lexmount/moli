@@ -50,7 +50,7 @@ pub(super) fn push_background_target(
             .browser_context
             .as_mut()
             .expect("browser context must exist before adding background target");
-        bc.insert_page_target_host(crate::conn::PageTargetHost::new(
+        bc.register_page_target_fixture(
             target_id.to_owned(),
             session_id.map(str::to_owned),
             crate::conn::TargetIdentityState::new(
@@ -59,7 +59,7 @@ pub(super) fn push_background_target(
                 "Secure".into(),
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+        );
     }
     if let Some(session_id) = session_id {
         ctx.conn.register_session_route_for_test(
@@ -76,19 +76,6 @@ pub(super) fn push_background_target(
                 session_key: moli_page_types::DevToolsSessionKey::Primary,
             },
         );
-    }
-}
-
-pub(super) fn loaded_page_for_target<'a>(
-    browser_context: &'a BrowserContext,
-    target_id: &str,
-) -> Option<&'a moli_core::page::Page> {
-    if browser_context.is_active_target(target_id) {
-        browser_context.loaded_page()
-    } else {
-        browser_context
-            .background_target(target_id)
-            .and_then(crate::conn::PageTargetHost::loaded_page)
     }
 }
 
@@ -230,10 +217,7 @@ pub(super) async fn load_bc_with_titled_page_async(
         .as_mut()
         .expect("loaded Target fixture must retain its BrowserContext owner");
     bc.set_target_url(url);
-    let _ = bc
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    let _ = bc.replace_active_page_for_test(Some(page));
     // Even this lightweight Target-domain fixture owns a real renderer Page
     // with a concrete output stream. Bind that stream before any later test
     // turn consumes its queued `Opened`/publication records; resolving the

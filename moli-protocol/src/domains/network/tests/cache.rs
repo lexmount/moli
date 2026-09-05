@@ -756,13 +756,11 @@ async fn set_cache_disabled_updates_browser_context_state() {
     .await;
     ctx.expect_result(22, json!({}), None);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .cache_disabled()
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .cache_disabled()
     );
 
     ctx.process_async(json!({
@@ -773,13 +771,11 @@ async fn set_cache_disabled_updates_browser_context_state() {
     .await;
     ctx.expect_result(23, json!({}), None);
     assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .cache_disabled()
+        !{
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .cache_disabled()
     );
 }
 
@@ -788,12 +784,12 @@ async fn devtools_set_cache_behavior_global_updates_existing_targets_and_default
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
-    bc.insert_page_target_host(PageTargetHost::new(
+    bc.register_page_target_fixture(
         "TID-background".to_owned(),
         None,
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
-    ));
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
     let result = ctx
@@ -822,12 +818,15 @@ async fn devtools_set_cache_behavior_global_updates_existing_targets_and_default
     );
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(bc.active_page_target().effective_policy().cache_disabled());
+    assert!(
+        bc.effective_policy_for_target(bc.active_target_id().unwrap())
+            .cache_disabled()
+    );
     assert!(
         bc.background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
-            .expect("background state")
-            .effective_policy()
+            .filter(|target| bc.has_non_default_session_state_for_target(target.target_id()))
+            .map(|target| bc.effective_policy_for_target(target.target_id()))
+            .expect("background target should retain its network policy")
             .cache_disabled()
     );
     assert!(
@@ -842,12 +841,12 @@ async fn devtools_set_cache_behavior_contexts_only_updates_requested_targets() {
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
-    bc.insert_page_target_host(PageTargetHost::new(
+    bc.register_page_target_fixture(
         "TID-background".to_owned(),
         None,
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
-    ));
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
     ctx.conn
@@ -873,12 +872,15 @@ async fn devtools_set_cache_behavior_contexts_only_updates_requested_targets() {
         .expect("context-scoped BiDi cache behavior should succeed");
 
     let bc = ctx.conn.browser_context.as_ref().expect("browser context");
-    assert!(!bc.active_page_target().effective_policy().cache_disabled());
+    assert!(
+        !bc.effective_policy_for_target(bc.active_target_id().unwrap())
+            .cache_disabled()
+    );
     assert!(
         bc.background_target("TID-background")
-            .filter(|target| target.has_non_default_session_state())
-            .expect("background state")
-            .effective_policy()
+            .filter(|target| bc.has_non_default_session_state_for_target(target.target_id()))
+            .map(|target| bc.effective_policy_for_target(target.target_id()))
+            .expect("background target should retain its network policy")
             .cache_disabled()
     );
     assert!(
@@ -996,13 +998,11 @@ async fn set_bypass_service_worker_updates_browser_context_state() {
     .await;
     ctx.expect_result(26, json!({}), None);
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .bypass_service_worker()
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .bypass_service_worker()
     );
 
     ctx.process_async(json!({
@@ -1013,12 +1013,10 @@ async fn set_bypass_service_worker_updates_browser_context_state() {
     .await;
     ctx.expect_result(27, json!({}), None);
     assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .bypass_service_worker()
+        !{
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .bypass_service_worker()
     );
 }

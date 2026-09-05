@@ -691,21 +691,20 @@ fn start_loaded_page_permission_override_commands(
                 embedded_origin: entry.embedded_origin.clone(),
             })
             .collect::<Vec<_>>();
-        for target in browser_context.page_targets.iter_mut() {
+        for target in browser_context.page_targets.iter() {
             let target_id = target.target_id().to_owned();
-            let Some(page) = target.loaded_page_mut() else {
+            if !browser_context.target_has_loaded_page(&target_id) {
                 continue;
-            };
+            }
+            let pending_update = browser_context
+                .start_target_permission_update(&target_id, &effective_overrides)
+                .map_err(|error| format!("failed to update page permission overrides: {error}"))?;
             pending.push(PendingBrowserPageCommand {
                 target: PendingBrowserPageTarget {
                     browser_context_id: browser_context_id.clone(),
                     target_id,
                 },
-                pending: page
-                    .start_set_permission_overrides(&effective_overrides)
-                    .map_err(|error| {
-                        format!("failed to update page permission overrides: {error}")
-                    })?,
+                pending: pending_update,
             });
         }
     }
@@ -750,13 +749,9 @@ fn finish_pending_permission_override_command(
     target: PendingBrowserPageTarget,
     completion: CompletedPageCommand,
 ) -> Result<(), String> {
-    let page = conn
-        .browser_context_by_id_mut(&target.browser_context_id)
-        .and_then(|browser_context| browser_context.page_target_mut(&target.target_id))
-        .and_then(|target| target.loaded_page_mut())
-        .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-    page.finish_set_permission_overrides(completion)
-        .map_err(|error| error.to_string())
+    conn.browser_context_by_id_mut(&target.browser_context_id)
+        .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+        .finish_target_permission_update(&target.target_id, completion)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

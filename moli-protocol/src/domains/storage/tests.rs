@@ -12,7 +12,7 @@ use url::Url;
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
 use crate::{
-    conn::{BrowserContext, CdpCommandTaskStep, PageTargetHost},
+    conn::{BrowserContext, CdpCommandTaskStep},
     domains::page::LOADER_ID,
     testing::{TestContext, wait_until_message, wait_until_renderer_document_load},
 };
@@ -774,16 +774,15 @@ async fn storage_key_targets_loaded_background_owner_without_activation() {
         .expect("page url should parse")
         .origin()
         .ascii_serialization();
-    let background = PageTargetHost::with_url(
-        "TID-background".to_owned(),
-        Some("SID-background".to_owned()),
-        "about:blank".to_owned(),
-    );
 
     let mut bc = BrowserContext::new("BID-SK-BG".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.insert_page_target_host(background);
+    bc.register_page_target_url_fixture(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "about:blank".to_owned(),
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
         .await;
@@ -858,20 +857,16 @@ async fn pending_storage_key_keeps_background_owner_route_across_completion() {
         .await
         .expect("background page should load");
 
-    let mut background = PageTargetHost::with_url(
+    let mut bc = BrowserContext::new("BID-storage-owner-route".to_owned());
+    bc.set_active_target_id("TID-storage-active".to_owned());
+    bc.set_target_url(active_page.final_url().as_str().to_owned());
+    bc.replace_active_page_for_test(Some(active_page));
+    bc.register_page_target_url_fixture(
         "TID-storage-background".to_owned(),
         Some("SID-storage-background".to_owned()),
         background_page.final_url().as_str().to_owned(),
     );
-    background.replace_loaded_page(Some(background_page));
-
-    let mut bc = BrowserContext::new("BID-storage-owner-route".to_owned());
-    bc.set_active_target_id("TID-storage-active".to_owned());
-    bc.set_target_url(active_page.final_url().as_str().to_owned());
-    bc.active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(active_page);
-    bc.insert_page_target_host(background);
+    bc.replace_target_page_for_test("TID-storage-background", Some(background_page));
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
     let raw = serde_json::to_string(&json!({
@@ -2365,17 +2360,11 @@ async fn storage_get_usage_and_quota_reports_indexed_db_usage_for_origin() {
     install_storage_test_completion_binding(&mut ctx).await;
 
     {
-        let page = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-            .unwrap();
-        let scheduled = page
-            .evaluate_runtime_expression_async(
+        let context = ctx.conn.browser_context.as_mut().unwrap();
+        let target_id = context.active_target_id_owned().unwrap();
+        let scheduled = context
+            .evaluate_target_expression_for_test(
+                &target_id,
                 r#"
 (() => {
   const open = indexedDB.open("usage", 1);
@@ -2404,6 +2393,7 @@ async fn storage_get_usage_and_quota_reports_indexed_db_usage_for_origin() {
   return "scheduled";
 })()
 "#,
+                false,
             )
             .await
             .expect("indexeddb setup should evaluate");
@@ -2985,17 +2975,11 @@ async fn storage_clear_data_for_origin_clears_indexed_db_backend() {
     install_storage_test_completion_binding(&mut ctx).await;
 
     {
-        let page = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-            .unwrap();
-        let scheduled = page
-            .evaluate_runtime_expression_async(
+        let context = ctx.conn.browser_context.as_mut().unwrap();
+        let target_id = context.active_target_id_owned().unwrap();
+        let scheduled = context
+            .evaluate_target_expression_for_test(
+                &target_id,
                 r#"
 (() => {
   const open = indexedDB.open("app", 1);
@@ -3024,6 +3008,7 @@ async fn storage_clear_data_for_origin_clears_indexed_db_backend() {
   return "scheduled";
 })()
 "#,
+                false,
             )
             .await
             .expect("indexeddb setup should evaluate");
@@ -3043,17 +3028,11 @@ async fn storage_clear_data_for_origin_clears_indexed_db_backend() {
     ctx.expect_result(12_529, json!({}), None);
 
     {
-        let page = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-            .unwrap();
-        let scheduled = page
-            .evaluate_runtime_expression_async(
+        let context = ctx.conn.browser_context.as_mut().unwrap();
+        let target_id = context.active_target_id_owned().unwrap();
+        let scheduled = context
+            .evaluate_target_expression_for_test(
+                &target_id,
                 r#"
 (() => {
   let oldVersion = "no-upgrade";
@@ -3080,6 +3059,7 @@ async fn storage_clear_data_for_origin_clears_indexed_db_backend() {
   return "scheduled";
 })()
 "#,
+                false,
             )
             .await
             .expect("indexeddb reopen should evaluate");

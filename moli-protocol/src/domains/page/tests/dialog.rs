@@ -13,12 +13,9 @@ fn page_owner_for_test(
     ctx: &mut TestContext,
     session_id: Option<&str>,
 ) -> crate::conn::TargetPageResidenceIdentity {
-    let runtime_slot = ctx
-        .conn
-        .runtime_session_owner_slot_mut(session_id)
-        .expect("target session should expose a runtime owner slot");
-    if runtime_slot.document_id().is_none() {
-        runtime_slot.replace_document_id_for_test();
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, session_id);
+    if ctx.conn.current_document_id_for_owner(&owner).is_none() {
+        ctx.conn.replace_document_fixture_for_owner_test(&owner);
     }
     ctx.conn
         .target_page_residence_identity_for_session(session_id)
@@ -80,9 +77,10 @@ fn retiring_page_scope_and_clearing_dialog_state_dismisses_installed_dialog() {
         .javascript_dialog_scope_observer();
 
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-dialog-clear"))
-        .expect("target Page runtime slot")
-        .replace_document_id_for_test();
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &ctx.conn,
+            Some("SID-dialog-clear"),
+        ));
 
     ctx.conn
         .with_target_devtools_session_state_for_session_mut(Some("SID-dialog-clear"), |state| {
@@ -124,7 +122,7 @@ async fn pending_javascript_dialogs_are_preserved_per_background_target() {
         .browser_context
         .as_mut()
         .unwrap()
-        .insert_page_target_host(PageTargetHost::new(
+        .register_page_target_fixture(
             "TID-B".into(),
             Some("SID-B".into()),
             crate::conn::TargetIdentityState::new(
@@ -133,7 +131,7 @@ async fn pending_javascript_dialogs_are_preserved_per_background_target() {
                 "Secure".into(),
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+        );
     ctx.conn.commit_declared_session_fixtures_for_test();
     assert!(
         ctx.conn
@@ -190,9 +188,7 @@ async fn javascript_dialog_events_round_trip_through_page_domain() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     ctx.process_async(json!({
         "id": 2,
@@ -627,9 +623,7 @@ async fn javascript_dialog_events_are_emitted_after_runtime_call_function_on() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     ctx.process_async(json!({
         "id": 4,
@@ -690,9 +684,7 @@ async fn javascript_dialog_events_are_emitted_from_playwright_utility_world_call
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     ctx.process_async(json!({
         "id": 7,
@@ -777,9 +769,7 @@ async fn javascript_dialog_events_are_emitted_from_playwright_serialized_utility
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     ctx.process_async(json!({
         "id": 11,

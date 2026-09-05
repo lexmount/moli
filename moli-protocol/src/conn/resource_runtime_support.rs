@@ -104,7 +104,7 @@ impl CdpConnection {
             (Some(browser_context_id), None) => {
                 let active_target_id = self
                     .browser_context_by_id(browser_context_id)
-                    .and_then(|context| context.page_targets.active_target_id())
+                    .and_then(|context| context.active_target_id())
                     .map(str::to_owned);
                 if let Some(target_id) = active_target_id {
                     self.ensure_page_navigation_engine_for_target(browser_context_id, &target_id)
@@ -167,25 +167,9 @@ impl CdpConnection {
 
     #[cfg(test)]
     pub(crate) async fn reset_resource_runtime_async(&mut self) {
-        if let Some(contents) = self
-            .browser_context
-            .as_mut()
-            .and_then(|context| context.page_targets.active_mut())
-            .filter(|host| host.navigation_engine().is_some())
-            .map(|host| &mut host.runtime_slot.page_slot_mut().contents)
+        if let Some(context) = self.browser_context.as_mut()
+            && context.reset_selected_resource_runtime_async().await
         {
-            contents
-                .navigation_engine
-                .as_mut()
-                .expect("filtered navigation engine")
-                .reset_resource_runtime_async(
-                    contents
-                        .main_frame
-                        .current_document
-                        .as_mut()
-                        .map(|document| &mut document.page),
-                )
-                .await;
             return;
         }
         self.standalone_navigation_engine
@@ -195,62 +179,19 @@ impl CdpConnection {
     }
 
     pub(crate) async fn rebuild_resource_runtime_for_loaded_page_async(&mut self) {
-        let storage = self.resource_storage_handles();
-        let rebuild_result = if let Some(contents) = self
-            .browser_context
-            .as_mut()
-            .and_then(|context| context.page_targets.active_mut())
-            .filter(|host| host.navigation_engine().is_some())
-            .map(|host| &mut host.runtime_slot.page_slot_mut().contents)
+        if let Some(context) = self.browser_context.as_mut()
+            && context.rebuild_selected_resource_runtime_async().await
         {
-            contents
-                .navigation_engine
-                .as_mut()
-                .expect("filtered navigation engine")
-                .rebuild_resource_runtime_for_page_with_storage_async(
-                    storage.into_navigation_storage(),
-                    contents
-                        .main_frame
-                        .current_document
-                        .as_mut()
-                        .map(|document| &mut document.page),
-                )
-                .await
-        } else {
-            self.standalone_navigation_engine
-                .ensure_mut()
-                .rebuild_resource_runtime_for_page_with_storage_async(
-                    storage.into_navigation_storage(),
-                    None,
-                )
-                .await
-        };
-        if rebuild_result.is_err() {
-            if let Some(contents) = self
-                .browser_context
-                .as_mut()
-                .and_then(|context| context.page_targets.active_mut())
-                .filter(|host| host.navigation_engine().is_some())
-                .map(|host| &mut host.runtime_slot.page_slot_mut().contents)
-            {
-                contents
-                    .navigation_engine
-                    .as_mut()
-                    .expect("filtered navigation engine")
-                    .reset_resource_runtime_async(
-                        contents
-                            .main_frame
-                            .current_document
-                            .as_mut()
-                            .map(|document| &mut document.page),
-                    )
-                    .await;
-            } else {
-                self.standalone_navigation_engine
-                    .ensure_mut()
-                    .reset_resource_runtime_async(None)
-                    .await;
-            }
+            return;
+        }
+        let storage = self.resource_storage_handles().into_navigation_storage();
+        let engine = self.standalone_navigation_engine.ensure_mut();
+        if engine
+            .rebuild_resource_runtime_for_page_with_storage_async(storage, None)
+            .await
+            .is_err()
+        {
+            engine.reset_resource_runtime_async(None).await;
         }
     }
 
@@ -280,15 +221,16 @@ impl CdpConnection {
                 storage.into_navigation_storage(),
             )
             .map_err(|error| format!("failed to rebuild resource runtime: {error}"))?;
-        let Some(page) = self.resource_runtime_apply_page_for_owner(owner) else {
+        let Some((context_id, target_id)) = self.resource_runtime_apply_owner(owner) else {
             return Ok(None);
         };
-        page.start_replace_browser_resource_runtime_with_navigator_identity(
-            &request_client.browser_resource_runtime(),
-            navigator_identity,
-        )
-        .map(Some)
-        .map_err(|error| format!("failed to update page resource runtime: {error}"))
+        self.browser_context_by_id(&context_id)
+            .ok_or("NoDocumentLoaded")?
+            .start_target_resource_runtime_update(
+                &target_id,
+                &request_client.browser_resource_runtime(),
+                navigator_identity,
+            )
     }
 
     pub(crate) fn finish_rebuild_resource_runtime_for_session_owner(
@@ -296,10 +238,8 @@ impl CdpConnection {
         session_id: Option<&str>,
         completion: CompletedPageCommand,
     ) -> Result<(), String> {
-        finish_resource_runtime_update_on_current_attachment(
-            self.resource_runtime_apply_page_for_session_owner(session_id),
-            completion,
-        )
+        let owner = super::CommandOwnerScope::capture(self, session_id);
+        self.finish_rebuild_resource_runtime_for_owner(&owner, completion)
     }
 
     pub(crate) fn finish_rebuild_resource_runtime_for_owner(
@@ -307,63 +247,25 @@ impl CdpConnection {
         owner: &super::CommandOwnerScope,
         completion: CompletedPageCommand,
     ) -> Result<(), String> {
-        finish_resource_runtime_update_on_current_attachment(
-            self.resource_runtime_apply_page_for_owner(owner),
-            completion,
-        )
-    }
-
-    fn resource_runtime_apply_page_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Option<&mut moli_core::page::Page> {
-        if matches!(
-            self.session_route(session_id),
-            Some(super::CdpSessionRoute::Browser)
-        ) {
-            return self
-                .browser_context
-                .as_mut()
-                .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut());
+        if let Some((context_id, target_id)) = self.resource_runtime_apply_owner(owner)
+            && let Some(context) = self.browser_context_by_id_mut(&context_id)
+        {
+            return context.finish_target_resource_runtime_update(&target_id, completion);
         }
-        self.loaded_page_mut_for_target_configuration(session_id)
-            .ok()
+        BrowserContext::finish_unobserved_resource_runtime_update(completion)
     }
 
-    fn resource_runtime_apply_page_for_owner(
-        &mut self,
+    fn resource_runtime_apply_owner(
+        &self,
         owner: &super::CommandOwnerScope,
-    ) -> Option<&mut moli_core::page::Page> {
+    ) -> Option<(String, String)> {
         if matches!(
             owner.resolve_route(self),
             Some(super::CdpSessionRoute::Browser)
         ) {
-            return self
-                .browser_context
-                .as_mut()
-                .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut());
+            let context = self.browser_context.as_ref()?;
+            return Some((context.id.clone(), context.active_target_id()?.to_owned()));
         }
-        self.loaded_page_mut_for_target_configuration_for_owner(owner)
-            .ok()
+        self.resolved_page_owner_identity_for_owner(owner)
     }
-}
-
-fn finish_resource_runtime_update_on_current_attachment(
-    page: Option<&mut moli_core::page::Page>,
-    completion: CompletedPageCommand,
-) -> Result<(), String> {
-    if let Some(page) = page
-        && completion.is_from_page(page)
-    {
-        return page
-            .finish_replace_browser_resource_runtime(completion)
-            .map_err(|error| format!("failed to update page resource runtime: {error}"));
-    }
-
-    completion
-        .into_unit_page_command_turn()
-        .map(drop)
-        .map_err(|error| {
-            format!("stale resource-runtime update returned an unexpected reply: {error}")
-        })
 }

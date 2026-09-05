@@ -359,12 +359,7 @@ impl<'a> TargetInfo<'a> {
                 .owner_state
                 .committed_document_title()
                 .map(str::to_owned)
-                .or_else(|| {
-                    bc.active_page_target()
-                        .runtime_slot
-                        .loaded_page()
-                        .map(|page| page.document_title())
-                })
+                .or_else(|| bc.target_document_title(bc.active_target_id()?))
                 .unwrap_or_default(),
             url: bc.target_url(),
             attached,

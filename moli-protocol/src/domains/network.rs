@@ -1,3 +1,4 @@
+use crate::conn::NetworkPolicyUpdateKind;
 use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::devtools_runtime::{
     DevToolsAddNetworkDataCollectorCommand, DevToolsBrowserContextId, DevToolsCommand,
@@ -167,10 +168,7 @@ impl PendingNetworkCommandWork {
         pending: moli_core::page::PendingPageCommand,
     ) -> Self {
         Self::Page {
-            document: conn
-                .runtime_session_owner_slot_for_owner(owner)
-                .ok()
-                .and_then(|slot| slot.document_id()),
+            document: conn.current_document_id_for_owner(owner),
             pending,
         }
     }
@@ -670,28 +668,28 @@ pub(crate) fn complete_pending_network_command(
             NetworkCommandTaskStep::Complete(complete_unit_page_network_command(
                 conn,
                 completed,
-                NetworkPageCommandFinish::ExtraHttpHeaders,
+                NetworkPolicyUpdateKind::ExtraHttpHeaders,
             ))
         }
         PendingNetworkCommandKind::SetBlockedUrls => {
             NetworkCommandTaskStep::Complete(complete_unit_page_network_command(
                 conn,
                 completed,
-                NetworkPageCommandFinish::BlockedUrls,
+                NetworkPolicyUpdateKind::BlockedUrls,
             ))
         }
         PendingNetworkCommandKind::SetBypassServiceWorker => {
             NetworkCommandTaskStep::Complete(complete_unit_page_network_command(
                 conn,
                 completed,
-                NetworkPageCommandFinish::BypassServiceWorker,
+                NetworkPolicyUpdateKind::BypassServiceWorker,
             ))
         }
         PendingNetworkCommandKind::EmulateNetworkConditions => {
             NetworkCommandTaskStep::Complete(complete_unit_page_network_command(
                 conn,
                 completed,
-                NetworkPageCommandFinish::NetworkOffline,
+                NetworkPolicyUpdateKind::NetworkOffline,
             ))
         }
         PendingNetworkCommandKind::SetUserAgentOverride => NetworkCommandTaskStep::Complete(
@@ -704,15 +702,6 @@ pub(crate) fn complete_pending_network_command(
             load_resource::complete_network_resource_fetch(conn, completed),
         ),
     }
-}
-
-#[derive(Clone, Copy)]
-enum NetworkPageCommandFinish {
-    RequestPolicy,
-    ExtraHttpHeaders,
-    BlockedUrls,
-    BypassServiceWorker,
-    NetworkOffline,
 }
 
 fn complete_network_policy_refresh(
@@ -745,9 +734,9 @@ fn complete_network_policy_refresh(
         }
     };
     if let Err(error) = finish_network_page_operation_on_current_attachment(
-        conn.loaded_page_mut_for_target_configuration_for_owner(&owner_scope)
-            .ok(),
-        NetworkPageCommandFinish::RequestPolicy,
+        conn,
+        &owner_scope,
+        NetworkPolicyUpdateKind::RequestPolicy,
         completion,
     ) {
         return CommandOutputPlan::error(-32000, error);
@@ -762,7 +751,7 @@ fn complete_network_policy_refresh(
 fn complete_unit_page_network_command(
     conn: &mut CdpConnection,
     completed: CompletedNetworkCommandDispatch,
-    finish: NetworkPageCommandFinish,
+    finish: NetworkPolicyUpdateKind,
 ) -> CommandOutputPlan {
     let owner_scope = completed.owner_scope.clone();
     let completion = match completed.completed {
@@ -784,8 +773,8 @@ fn complete_unit_page_network_command(
         }
     };
     match finish_network_page_operation_on_current_attachment(
-        conn.loaded_page_mut_for_target_configuration_for_owner(&owner_scope)
-            .ok(),
+        conn,
+        &owner_scope,
         finish,
         completion,
     ) {
@@ -795,40 +784,17 @@ fn complete_unit_page_network_command(
 }
 
 fn finish_network_page_operation_on_current_attachment(
-    page: Option<&mut moli_core::page::Page>,
-    finish: NetworkPageCommandFinish,
+    conn: &mut CdpConnection,
+    owner: &CommandOwnerScope,
+    finish: NetworkPolicyUpdateKind,
     completion: moli_core::page::CompletedPageCommand,
 ) -> Result<(), String> {
-    if let Some(page) = page
-        && completion.is_from_page(page)
+    if let Some((context_id, target_id)) = conn.resolved_page_owner_identity_for_owner(owner)
+        && let Some(context) = conn.browser_context_by_id_mut(&context_id)
     {
-        let result = match finish {
-            NetworkPageCommandFinish::RequestPolicy => {
-                page.finish_set_network_request_policy(completion)
-            }
-            NetworkPageCommandFinish::ExtraHttpHeaders => {
-                page.finish_set_extra_http_headers(completion)
-            }
-            NetworkPageCommandFinish::BlockedUrls => {
-                page.finish_set_blocked_url_patterns(completion)
-            }
-            NetworkPageCommandFinish::BypassServiceWorker => {
-                page.finish_set_bypass_service_worker(completion)
-            }
-            NetworkPageCommandFinish::NetworkOffline => page.finish_set_network_offline(completion),
-        };
-        return result.map_err(|error| error.to_string());
+        return context.finish_target_network_policy_update(&target_id, finish, completion);
     }
-
-    // Target/session policy was committed before renderer dispatch. If a
-    // navigation installs another attachment before this frozen unit reply is
-    // decoded, consume the old turn without applying its PageState snapshot
-    // to the replacement. Prepared-document commit configuration carries the
-    // authoritative policy into that replacement.
-    completion
-        .into_unit_page_command_turn()
-        .map(drop)
-        .map_err(|error| format!("stale Network command returned an unexpected reply: {error}"))
+    crate::conn::BrowserContext::finish_unobserved_network_policy_update(completion)
 }
 
 fn complete_rebuild_loader_network_command(
@@ -869,7 +835,7 @@ fn network_page_configuration_will_be_replayed(
         return false;
     };
     conn.runtime_session_owner_slot_for_owner(owner_scope)
-        .is_ok_and(|slot| slot.document_id() != Some(dispatched_document))
+        .is_ok_and(|_| conn.current_document_id_for_owner(owner_scope) != Some(dispatched_document))
 }
 
 #[cfg(test)]

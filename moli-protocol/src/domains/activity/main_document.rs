@@ -963,10 +963,7 @@ mod tests {
         browser_context.set_active_target_id("TID-deferred-load-observer");
         browser_context.attach_active_session("SID-nav");
         browser_context.set_target_url("https://example.test/start".to_owned());
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_document_id_for_test(1);
+        browser_context.set_active_document_fixture_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
 
         let page_id = moli_core::PageId::new_for_testing(71);
@@ -1374,10 +1371,10 @@ mod tests {
         );
         assert_eq!(out[dcl_index]["params"]["timestamp"], json!(12.345678));
         assert!(
-            conn.runtime_session_owner_slot(Some("SID-nav"))
-                .expect("owner slot should exist")
-                .loaded_page()
-                .is_none(),
+            !conn.has_loaded_page_for_owner(&crate::conn::CommandOwnerScope::capture(
+                &conn,
+                Some("SID-nav")
+            )),
             "main-document lifecycle emission must not read back from a live page"
         );
     }

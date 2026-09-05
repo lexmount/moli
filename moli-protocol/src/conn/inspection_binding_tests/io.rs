@@ -37,17 +37,7 @@ async fn blob_inspection_round_trip(start_before_move: bool) {
     ctx.conn.commit_declared_session_fixtures_for_test();
     let object_id = blob_object(&mut ctx, Some(session)).await;
     let owner = CommandOwnerScope::capture(&ctx.conn, Some(session));
-    let take_document = |ctx: &mut TestContext| {
-        ctx.conn
-            .runtime_session_owner_slot_mut_for_owner(&owner)
-            .unwrap()
-            .page_slot_mut()
-            .contents
-            .main_frame
-            .current_document
-            .take()
-            .unwrap()
-    };
+    let take_document = |ctx: &mut TestContext| take_inspection_document(&mut ctx.conn, &owner);
     let mut document = (!start_before_move).then(|| take_document(&mut ctx));
     let raw = json!({"id": 2, "sessionId": session, "method": "IO.resolveBlob", "params": {
         "objectId": object_id,
@@ -88,12 +78,7 @@ async fn blob_inspection_round_trip(start_before_move: bool) {
         &*bytes, b"bound blob",
         "the reply must resolve the actual session object"
     );
-    assert!(
-        !ctx.conn
-            .runtime_session_owner_slot_for_owner(&owner)
-            .unwrap()
-            .has_loaded_page()
-    );
+    assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -114,16 +99,8 @@ async fn blob_inspection_rejects_frozen_reply_after_rebind() {
         panic!("Blob inspection must start on the original renderer");
     };
     let completed = pending.wait().await;
-    let old_document = ctx
-        .conn
-        .runtime_session_owner_slot_mut(None)
-        .unwrap()
-        .page_slot_mut()
-        .contents
-        .main_frame
-        .current_document
-        .take()
-        .unwrap();
+    let owner = CommandOwnerScope::capture(&ctx.conn, None);
+    let old_document = take_inspection_document(&mut ctx.conn, &owner);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>replacement</title>",
         None,

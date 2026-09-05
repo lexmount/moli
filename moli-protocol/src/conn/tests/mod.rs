@@ -671,14 +671,8 @@ async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
         .await
         .expect("second shared diagnostics page should load");
     let browser_context = conn.browser_context.as_mut().expect("browser context");
-    browser_context
-        .page_target_mut("TID-shared-diagnostics-active")
-        .expect("active diagnostics target")
-        .replace_loaded_page(Some(first_page));
-    browser_context
-        .page_target_mut("TID-shared-diagnostics-bg")
-        .expect("background diagnostics target")
-        .replace_loaded_page(Some(second_page));
+    browser_context.replace_target_page_for_test("TID-shared-diagnostics-active", Some(first_page));
+    browser_context.replace_target_page_for_test("TID-shared-diagnostics-bg", Some(second_page));
 
     let pending_diagnostics = conn
         .start_moli_diagnostics()
@@ -775,24 +769,20 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
     ));
     let context = conn.browser_context.as_mut().unwrap();
     assert_eq!(
-        context.active_page_target().runtime_slot.document_id(),
+        context.target_document_id(context.active_target_id().unwrap()),
         None
     );
 
     assert!(context.replace_loaded_page(Some(first_page)).is_none());
     let first_attachment = context
-        .active_page_target()
-        .runtime_slot
-        .document_id()
+        .target_document_id(context.active_target_id().unwrap())
         .expect("first Page attachment");
 
     let first = context
         .replace_loaded_page(Some(second_page))
         .expect("first Page should be replaced");
     let second_attachment = context
-        .active_page_target()
-        .runtime_slot
-        .document_id()
+        .target_document_id(context.active_target_id().unwrap())
         .expect("second Page attachment");
     assert_ne!(second_attachment, first_attachment);
     let _ = first.close_async().await;
@@ -801,7 +791,7 @@ async fn replacing_or_retiring_a_loaded_page_changes_its_attachment_identity() {
         .clear_loaded_page_with_reason(TargetPageAbsenceReason::TargetClosed)
         .expect("second Page should be retired");
     assert_eq!(
-        context.active_page_target().runtime_slot.document_id(),
+        context.target_document_id(context.active_target_id().unwrap()),
         None
     );
     let _ = second.close_async().await;
@@ -819,10 +809,7 @@ async fn moli_diagnostics_preserves_runtime_observable_diagnostics() {
     browser_context.set_active_target_id("TID-diagnostics-capture");
     browser_context.attach_active_session("SID-diagnostics-capture");
     browser_context.set_target_url(page.final_url().as_str().to_owned());
-    let _ = browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    let _ = browser_context.replace_active_page_for_test(Some(page));
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
 
@@ -905,13 +892,8 @@ async fn memory_diagnostics_excludes_empty_page_hosts_from_document_isolates() {
         .expect("second shared diagnostics page should load");
     let browser_context = conn.browser_context.as_mut().expect("browser context");
     browser_context
-        .page_target_mut("TID-doc-owner-diagnostics-active")
-        .expect("active diagnostics target")
-        .replace_loaded_page(Some(first_page));
-    browser_context
-        .page_target_mut("TID-doc-owner-diagnostics-bg")
-        .expect("background diagnostics target")
-        .replace_loaded_page(Some(second_page));
+        .replace_target_page_for_test("TID-doc-owner-diagnostics-active", Some(first_page));
+    browser_context.replace_target_page_for_test("TID-doc-owner-diagnostics-bg", Some(second_page));
 
     let mut empty_context = BrowserContext::new("BID-empty-page".to_owned());
     empty_context.set_active_target_id("TID-empty-page");
@@ -994,14 +976,12 @@ async fn memory_diagnostics_sync_counts_dedicated_worker_from_cached_page_snapsh
         let ready_response = conn
             .browser_context
             .as_mut()
-            .and_then(|context| {
-                context
-                    .active_page_target_mut()
-                    .runtime_slot
-                    .loaded_page_mut()
-            })
-            .expect("loaded sync diagnostics page")
-            .evaluate_runtime_expression_async("globalThis.__lmSyncDiagnosticsWorkerReady === true")
+            .expect("loaded sync diagnostics context")
+            .evaluate_target_expression_for_test(
+                "TID-sync-dedicated-worker",
+                "globalThis.__lmSyncDiagnosticsWorkerReady === true",
+                false,
+            )
             .await
             .expect("worker ready probe should evaluate");
         if ready_response["value"] != json!(true) {
@@ -1232,15 +1212,17 @@ async fn memory_diagnostics_splits_pending_inspector_await_counts_by_target_owne
             Some("active-group"),
         );
 
-    let mut background = super::PageTargetHost::with_url(
+    browser_context.register_page_target_url_fixture(
         "TID-pending-await-bg".to_owned(),
         Some("SID-pending-await-bg".to_owned()),
         "data:text/html,<!doctype html><body>background</body>".to_owned(),
     );
-    background.replace_loaded_page(Some(background_page));
-    background.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    browser_context.replace_target_page_for_test("TID-pending-await-bg", Some(background_page));
+    browser_context
+        .page_target_mut("TID-pending-await-bg")
+        .unwrap()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .register_pending_inspector_await(20_001, Some("SID-pending-await-bg"), None);
-    browser_context.insert_page_target_host(background);
 
     let shared_worker_instance_id = SharedWorkerInstanceId::from_u64(30_001);
     let mut shared_worker_target = SharedWorkerTargetState::new(

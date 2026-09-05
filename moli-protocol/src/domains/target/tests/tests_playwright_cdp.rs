@@ -5949,13 +5949,13 @@ async fn playwright_over_cdp_context_profile_surfaces_permissions_tls_and_metric
     assert_eq!(active.active_target_id(), Some(target_id.as_str()));
     assert_eq!(active.active_session_id(), Some(session_id.as_str()));
     assert_eq!(
-        active.active_page_target().tls_verify_host_override(),
+        active.tls_verify_host_override_for_target(active.active_target_id().unwrap()),
         Some(false)
     );
     assert_eq!(
         active
-            .active_page_target()
-            .emulation_policy()
+            .target_emulation_policy(active.active_target_id().unwrap())
+            .expect("registered WebContents")
             .emulated_device_metrics
             .as_ref()
             .map(|metrics| (metrics.width, metrics.height, metrics.device_scale_factor)),
@@ -6136,19 +6136,27 @@ async fn playwright_over_cdp_script_execution_disabled_blocks_page_scripts_but_n
         &loader_id,
     )
     .await;
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .and_then(|browser_context| {
-            browser_context
-                .active_page_target_mut()
-                .runtime_slot
-                .loaded_page_mut()
-        })
-        .expect("script-disabled loaded page")
-        .refresh_script_execution_report_async()
+    let context = ctx.conn.browser_context.as_mut().unwrap();
+    let completion = context
+        .start_target_page_diagnostics_snapshot(&attached.target_id)
+        .unwrap()
+        .wait()
         .await
-        .expect("script-disabled report refresh");
+        .unwrap();
+    let skipped_script = completion
+        .page_state()
+        .script_execution
+        .runs()
+        .iter()
+        .any(|run| {
+            matches!(
+                run.outcome(),
+                ScriptRunOutcome::Skipped(ScriptSkipReason::ScriptExecutionDisabled)
+            )
+        });
+    context
+        .finish_target_page_diagnostics_snapshot(&attached.target_id, completion)
+        .unwrap();
 
     let active = ctx
         .conn
@@ -6157,22 +6165,12 @@ async fn playwright_over_cdp_script_execution_disabled_blocks_page_scripts_but_n
         .expect("active browser context");
     assert!(
         active
-            .active_page_target()
-            .emulation_policy()
+            .target_emulation_policy(active.active_target_id().unwrap())
+            .expect("registered WebContents")
             .script_execution_disabled
     );
-    let script_runs = active
-        .active_page_target()
-        .runtime_slot
-        .loaded_page()
-        .expect("loaded page should exist")
-        .script_execution()
-        .runs();
     assert!(
-        script_runs.iter().any(|run| matches!(
-            run.outcome(),
-            ScriptRunOutcome::Skipped(ScriptSkipReason::ScriptExecutionDisabled)
-        )),
+        skipped_script,
         "expected at least one skipped page script when script execution is disabled"
     );
 

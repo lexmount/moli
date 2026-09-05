@@ -24,12 +24,13 @@ fn stored_cookie(name: &str, value: &str) -> moli_cookie_jar::StoredCookie {
 async fn create_target_clears_stale_crash_state() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-9", "TID-stale");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .mark_crashed();
+    {
+        let context = &mut ctx.conn.browser_context.as_mut().unwrap();
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.set_target_crash_state(&target_id, true)
+    };
 
     ctx.process_async(json!({"id": 9, "method": "Target.createTarget",
                        "params": {"browserContextId": "BID-9", "url": "about:blank"}}))
@@ -43,14 +44,10 @@ async fn create_target_clears_stale_crash_state() {
         .expect("target id after create");
     ctx.expect_result(9, json!({ "targetId": target_id }), None);
 
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .is_crashed()
-    );
+    assert!(!{
+        let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+        context.target_is_crashed(context.active_target_id().unwrap())
+    });
 }
 
 /// cdp.target: createTarget – no existing browser context, creates one
@@ -1108,10 +1105,7 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
     {
         let browser_context = ctx.conn.browser_context.as_mut().unwrap();
         browser_context.set_target_url(page.final_url().as_str().to_owned());
-        let _ = browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+        let _ = browser_context.replace_active_page_for_test(Some(page));
     }
     ctx.enable_background_navigation_scheduler_for_test();
 
@@ -1211,9 +1205,9 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
         |conn| {
             conn.browser_context_by_id("BID-popup-storage")
                 .and_then(|browser_context| {
-                    loaded_page_for_target(browser_context, &popup_target_id)
+                    browser_context.target_document_url(&popup_target_id)
                 })
-                .is_some_and(|page| page.final_url().as_str() == first_cross_origin_url)
+                .is_some_and(|page| page.as_str() == first_cross_origin_url)
         },
     )
     .await;
@@ -1281,7 +1275,7 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
         conn.browser_context_by_id("BID-popup-storage")
             .is_some_and(|browser_context| {
                 browser_context
-                    .has_pending_document_navigation_for_target(Some(&cross_origin_target_id))
+                    .has_pending_document_navigation_for_target(&cross_origin_target_id)
             })
     })
     .await;
@@ -1312,7 +1306,7 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
         ctx.conn
             .browser_context_by_id("BID-popup-storage")
             .is_some_and(|browser_context| browser_context
-                .has_pending_document_navigation_for_target(Some(&cross_origin_target_id))),
+                .has_pending_document_navigation_for_target(&cross_origin_target_id)),
         "attaching a DevTools session must not replace the target-owned navigation"
     );
     ctx.sent.clear();
@@ -1331,9 +1325,9 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
         |conn| {
             conn.browser_context_by_id("BID-popup-storage")
                 .and_then(|browser_context| {
-                    loaded_page_for_target(browser_context, &cross_origin_target_id)
+                    browser_context.target_document_url(&cross_origin_target_id)
                 })
-                .is_some_and(|page| page.final_url().as_str() == cross_origin_url)
+                .is_some_and(|page| page.as_str() == cross_origin_url)
         },
     )
     .await;
@@ -1540,9 +1534,7 @@ async fn popup_initial_empty_document_record_captures_creator_identity() {
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     let initial = browser_context
-        .background_target(popup_target_id)
-        .expect("background target must exist")
-        .initial_empty_document_state()
+        .target_initial_empty_document_state(popup_target_id)
         .expect("popup target should record initial empty document");
     let creator = initial
         .creator()
@@ -1631,9 +1623,7 @@ async fn popup_initial_empty_document_frame_tree_inherits_opener_origin() {
 
     let browser_context = ctx.conn.browser_context.as_ref().unwrap();
     let initial = browser_context
-        .background_target(&popup_target_id)
-        .expect("background target must exist")
-        .initial_empty_document_state()
+        .target_initial_empty_document_state(&popup_target_id)
         .expect("popup target should still record initial empty document");
     assert!(initial.is_on_initial_empty_document());
 }
@@ -1860,9 +1850,9 @@ async fn window_open_named_target_reuses_existing_popup_target() {
                 conn.browser_context_by_id("BID-popup-name")
                     .is_some_and(|browser_context| {
                         browser_context.active_target_id() == Some(target_id.as_str())
-                            && loaded_page_for_target(browser_context, &target_id).is_some_and(
+                            && browser_context.target_document_url(&target_id).is_some_and(
                                 |page| {
-                                    page.final_url().as_str() == "data:text/html,second-popup"
+                                    page.as_str() == "data:text/html,second-popup"
                                 },
                             )
                     })
@@ -1934,7 +1924,8 @@ async fn window_open_named_target_reused_in_same_command_emits_one_page_event() 
     assert_eq!(browser_context.background_target_count(), 1);
     assert_eq!(
         browser_context
-            .background_target_at(0)
+            .background_targets()
+            .next()
             .unwrap()
             .target_url(),
         "https://example.com/second-popup"
@@ -2199,11 +2190,7 @@ async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_de
                 "foreground selection must not wait for initial navigation"
             );
             assert!(
-                browser_context
-                    .active_page_target()
-                    .runtime_slot
-                    .loaded_page()
-                    .is_some_and(|page| moli_url::is_about_blank(page.final_url())),
+                browser_context.target_document_url(browser_context.active_target_id().unwrap()).is_some_and(moli_url::is_about_blank),
                 "waitForDebuggerOnStart should retain the active popup's initial about:blank document"
             );
 
@@ -2218,11 +2205,7 @@ async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_de
                 conn.browser_context_by_id("BID-anchor-debugger-wait")
                     .is_some_and(|browser_context| {
                         browser_context.active_target_id() == Some(popup_target_id.as_str())
-                            && browser_context
-                                .active_page_target()
-                                .runtime_slot
-                                .loaded_page()
-                                .is_some_and(|page| page.final_url().as_str() == POPUP_URL)
+                            && browser_context.target_document_url(browser_context.active_target_id().unwrap()).is_some_and(|url| url.as_str() == POPUP_URL)
                     })
             })
             .await;
@@ -3576,7 +3559,7 @@ async fn create_target_with_background_true_stages_second_target_in_background_s
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
     assert_eq!(bc.background_target_count(), 1);
-    assert_eq!(bc.background_target_at(0).unwrap().target_id(), created);
+    assert_eq!(bc.background_targets().next().unwrap().target_id(), created);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3599,7 +3582,7 @@ async fn create_target_with_focus_false_stages_second_target_in_background_slot(
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
     assert_eq!(bc.background_target_count(), 1);
-    assert_eq!(bc.background_target_at(0).unwrap().target_id(), created);
+    assert_eq!(bc.background_targets().next().unwrap().target_id(), created);
 }
 
 #[tokio::test(flavor = "multi_thread")]
