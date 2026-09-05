@@ -404,7 +404,7 @@ impl TargetPageSlot {
         if let Some(fixture) = self.document_fixture.take() {
             fixture.lifetime.supersede();
         }
-        self.contents.main_frame.replace_document(next_document)
+        self.contents.replace_document(next_document)
     }
 
     pub(crate) fn replace_loaded_page(&mut self, page: Option<Page>) -> Option<Page> {
@@ -444,20 +444,49 @@ impl TargetPageSlot {
         lifecycle
     }
 
-    fn document_lifecycle_mut(&mut self) -> Option<&mut DocumentLifecycle> {
-        let lifecycle = self
-            .contents
-            .main_frame
-            .current_document
-            .as_mut()
-            .map(|document| &mut document.lifecycle);
+    fn bind_document_lifecycle(&mut self, snapshot: RendererDocumentLifecycleSnapshot) {
+        if self.contents.bind_document_lifecycle(snapshot) {
+            return;
+        }
         #[cfg(test)]
-        let lifecycle = lifecycle.or_else(|| {
-            self.document_fixture
-                .as_mut()
-                .map(|fixture| &mut fixture.lifecycle)
-        });
-        lifecycle
+        if let Some(fixture) = self.document_fixture.as_mut() {
+            let previous = fixture
+                .lifecycle
+                .snapshot()
+                .map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch));
+            fixture.lifecycle = DocumentLifecycle::from_snapshot(snapshot);
+            if previous != Some((snapshot.frame, snapshot.document, snapshot.epoch))
+                || snapshot.terminated.is_some()
+            {
+                self.contents.javascript_dialogs.clear();
+            }
+            return;
+        }
+        panic!("current Document must own its lifecycle");
+    }
+
+    fn observe_document_lifecycle(&mut self, event: RendererDocumentLifecycleEvent) -> bool {
+        #[cfg(test)]
+        if self.contents.main_frame.current_document.is_none()
+            && let Some(fixture) = self.document_fixture.as_mut()
+        {
+            let restarts = fixture
+                .lifecycle
+                .snapshot()
+                .is_some_and(|snapshot| snapshot.epoch != event.epoch);
+            let accepted = fixture.lifecycle.observe(event);
+            if accepted
+                && (restarts
+                    || matches!(
+                        event.kind,
+                        RendererDocumentLifecycleEventKind::Terminated { .. }
+                    ))
+            {
+                self.contents.javascript_dialogs.clear();
+            }
+            return accepted;
+        }
+        self.contents.observe_document_lifecycle(event)
     }
 
     fn document_lifetime_mut(&mut self) -> Option<&mut DocumentLifetime> {
@@ -545,6 +574,7 @@ impl TargetPageSlot {
         if self.document_id() == Some(document_id) {
             return;
         }
+        self.contents.javascript_dialogs.clear();
         self.finish_renderer_document_lifecycle_observers(
             RendererDocumentLifecycleObservation::Superseded,
         );
@@ -818,10 +848,7 @@ impl TargetPageSlot {
             document_id = binding.document_id.get(),
             "bound renderer document lifecycle to committed protocol document"
         );
-        *self
-            .document_lifecycle_mut()
-            .expect("current Document must own its lifecycle") =
-            DocumentLifecycle::from_snapshot(initial_snapshot);
+        self.bind_document_lifecycle(initial_snapshot);
         self.renderer_document_lifecycle = RendererDocumentLifecycleProtocolState {
             binding: Some(binding),
             visible: Some(initial_snapshot),
@@ -977,10 +1004,7 @@ impl TargetPageSlot {
                 .binding
                 .as_ref()
                 .is_some_and(|binding| event.epoch != binding.renderer_epoch);
-            if !self
-                .document_lifecycle_mut()
-                .is_some_and(|lifecycle| lifecycle.observe(event))
-            {
+            if !self.observe_document_lifecycle(event) {
                 tracing::debug!(
                     sequence = event.sequence,
                     event_epoch = event.epoch.0,

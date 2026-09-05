@@ -3,6 +3,7 @@ use crate::domains::audits::SessionOwnerAuditsEnableResult;
 use crate::domains::log::{SessionOwnerLogControlResult, SessionOwnerLogEnableResult};
 use serde_json::Value;
 
+mod dialog_owner;
 mod emulation_owner;
 mod fetch_owner;
 mod lifecycle;

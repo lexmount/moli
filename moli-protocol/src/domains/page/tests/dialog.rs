@@ -43,15 +43,12 @@ fn push_dialog_for_session(
             .or_else(|| page_owner.target_id().map(str::to_owned))
             .expect("test target should expose a root frame"),
     };
-    let dialog = crate::conn::TargetJavaScriptDialog::new(page_owner, source_frame_id, dialog);
-    ctx.conn
-        .with_target_devtools_session_state_for_session_mut(session_id, |state| {
-            state
-                .page_session_state
-                .javascript_dialog_state
-                .push(dialog);
-        })
-        .expect("target session state should exist");
+    assert!(ctx.conn.install_javascript_dialog_for_session(
+        session_id,
+        page_owner,
+        source_frame_id,
+        dialog
+    ));
 }
 
 #[test]
@@ -85,7 +82,7 @@ fn retiring_page_scope_and_clearing_dialog_state_dismisses_installed_dialog() {
     ctx.conn
         .runtime_session_owner_slot_mut(Some("SID-dialog-clear"))
         .expect("target Page runtime slot")
-        .retire_javascript_dialog_scope();
+        .replace_document_id_for_test();
 
     ctx.conn
         .with_target_devtools_session_state_for_session_mut(Some("SID-dialog-clear"), |state| {
@@ -116,95 +113,68 @@ fn retiring_page_scope_and_clearing_dialog_state_dismisses_installed_dialog() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn pending_javascript_dialogs_are_preserved_per_background_target() {
-    fn dialog(target_id: &str, message: &str) -> crate::conn::TargetJavaScriptDialog {
-        target_dialog_for_test(
-            crate::conn::TargetPageResidenceIdentity::new_for_test(
-                "BID-1".to_owned(),
-                Some(target_id.to_owned()),
-                1,
-            ),
-            target_id,
-            "alert",
-            message,
-            "",
-            None,
-        )
-    }
-
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-A", "SID-A", "about:blank");
-
-    {
-        let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-        browser_context.active_page_target_mut().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .page_session_state
-            .javascript_dialog_state
-            .push(dialog("TID-A", "a"));
-        browser_context.insert_page_target_host(PageTargetHost::new(
-            "TID-B".to_owned(),
-            Some("SID-B".to_owned()),
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-A"),
+        dialog_for_test(Some("TID-A"), "alert", "a"),
+    );
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .insert_page_target_host(PageTargetHost::new(
+            "TID-B".into(),
+            Some("SID-B".into()),
             crate::conn::TargetIdentityState::new(
-                "about:blank".to_owned(),
-                URL_BASE.to_owned(),
-                "Secure".to_owned(),
+                "about:blank".into(),
+                URL_BASE.into(),
+                "Secure".into(),
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
         ));
-        assert!(
-            browser_context
-                .select_page_target_async("TID-B")
-                .await
-                .unwrap()
-        );
-        assert!(
-            browser_context.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .javascript_dialog_state
-                .is_empty()
-        );
-        browser_context.active_page_target_mut().devtools_sessions
-            [moli_page_types::DevToolsSessionKey::Primary]
-            .page_session_state
-            .javascript_dialog_state
-            .push(dialog("TID-B", "b"));
-    }
+    ctx.conn.commit_declared_session_fixtures_for_test();
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .select_page_target_async("TID-B")
+            .await
+            .unwrap()
+    );
+    assert!(
+        ctx.conn
+            .javascript_dialog_snapshot_for_owner(&crate::conn::CommandOwnerScope::for_session(
+                "SID-B"
+            ))
+            .is_none()
+    );
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-B"),
+        dialog_for_test(Some("TID-B"), "alert", "b"),
+    );
 
-    {
-        let browser_context = ctx.conn.browser_context.as_mut().unwrap();
+    for (target, session, message) in [("TID-A", "SID-A", "a"), ("TID-B", "SID-B", "b")] {
         assert!(
-            browser_context
-                .select_page_target_async("TID-A")
+            ctx.conn
+                .browser_context
+                .as_mut()
+                .unwrap()
+                .select_page_target_async(target)
                 .await
                 .unwrap()
         );
-        assert_eq!(
-            browser_context.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .javascript_dialog_state
-                .pending_dialogs(),
-            &[dialog("TID-A", "a")]
-        );
-    }
-
-    {
-        let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-        assert!(
-            browser_context
-                .select_page_target_async("TID-B")
-                .await
-                .unwrap()
-        );
-        assert_eq!(
-            browser_context.active_page_target().devtools_sessions
-                [moli_page_types::DevToolsSessionKey::Primary]
-                .page_session_state
-                .javascript_dialog_state
-                .pending_dialogs(),
-            &[dialog("TID-B", "b")]
-        );
+        let dialog = ctx
+            .conn
+            .javascript_dialog_snapshot_for_owner(&crate::conn::CommandOwnerScope::for_session(
+                session,
+            ))
+            .expect("switching must preserve the Browser-owned pending dialog");
+        assert_eq!(dialog.message, message);
+        assert_eq!(dialog.dialog_type, "alert");
     }
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -327,22 +297,11 @@ async fn document_open_preserves_dialog_order_and_retires_replaced_document_stat
 async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page_owner = page_owner_for_test(&mut ctx, Some("SID-1"));
-    ctx.conn
-        .with_target_devtools_session_state_for_session_mut(Some("SID-1"), |state| {
-            state
-                .page_session_state
-                .javascript_dialog_state
-                .push(target_dialog_for_test(
-                    page_owner,
-                    "TID-1",
-                    "alert",
-                    "classic alert",
-                    "",
-                    None,
-                ));
-        })
-        .expect("target session state should exist");
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-1"),
+        dialog_for_test(Some("TID-1"), "alert", "classic alert"),
+    );
 
     let context = crate::devtools_runtime::DevToolsCommandContext {
         protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverClassic,
@@ -411,17 +370,11 @@ async fn get_javascript_dialog_text_peeks_without_closing_dialog() {
 async fn set_javascript_dialog_prompt_text_is_used_when_accepting_prompt() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
-    let page_owner = page_owner_for_test(&mut ctx, Some("SID-1"));
-    ctx.conn
-        .with_target_devtools_session_state_for_session_mut(Some("SID-1"), |state| {
-            state
-                .page_session_state
-                .javascript_dialog_state
-                .push(target_dialog_for_test(
-                    page_owner, "TID-1", "prompt", "prompt?", "", None,
-                ));
-        })
-        .expect("target session state should exist");
+    push_dialog_for_session(
+        &mut ctx,
+        Some("SID-1"),
+        dialog_for_test(Some("TID-1"), "prompt", "prompt?"),
+    );
 
     let context = crate::devtools_runtime::DevToolsCommandContext {
         protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverClassic,
@@ -627,17 +580,13 @@ async fn handle_javascript_dialog_rejects_dialog_without_current_page_residence(
             state
                 .page_session_state
                 .javascript_dialog_state
-                .push(target_dialog_for_test(
+                .push(dialog_projection_for_test(
                     crate::conn::TargetPageResidenceIdentity::new_for_test(
                         "BID-dialog-missing-frame".to_owned(),
                         Some("retired-target".to_owned()),
                         1,
                     ),
                     "retired-target",
-                    "alert",
-                    "stale dialog",
-                    "",
-                    None,
                 ));
         })
         .expect("target session state should exist");

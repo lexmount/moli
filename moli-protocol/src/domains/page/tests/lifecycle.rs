@@ -177,18 +177,16 @@ fn mark_page_domain_enabled(state: &mut crate::conn::TargetPageSessionState) {
     state
         .page_screencast
         .start(crate::conn::PageScreencastConfig::default());
-    state.javascript_dialog_state.push(target_dialog_for_test(
-        crate::conn::TargetPageResidenceIdentity::new_for_test(
-            "BID-dialog".to_owned(),
-            Some("TID-dialog".to_owned()),
-            1,
-        ),
-        "TID-dialog",
-        "alert",
-        "pending",
-        "",
-        None,
-    ));
+    state
+        .javascript_dialog_state
+        .push(dialog_projection_for_test(
+            crate::conn::TargetPageResidenceIdentity::new_for_test(
+                "BID-dialog".to_owned(),
+                Some("TID-dialog".to_owned()),
+                1,
+            ),
+            "TID-dialog",
+        ));
 }
 
 fn assert_page_domain_enabled(state: &crate::conn::TargetPageSessionState) {
@@ -247,17 +245,13 @@ fn enable_page_domain_for_session(conn: &mut crate::conn::CdpConnection, session
         state
             .page_session_state
             .javascript_dialog_state
-            .push(target_dialog_for_test(
+            .push(dialog_projection_for_test(
                 crate::conn::TargetPageResidenceIdentity::new_for_test(
                     "BID-dialog".to_owned(),
                     Some("TID-dialog".to_owned()),
                     1,
                 ),
                 "TID-dialog",
-                "alert",
-                "pending",
-                "",
-                None,
             ));
     });
 }

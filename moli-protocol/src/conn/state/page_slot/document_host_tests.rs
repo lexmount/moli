@@ -5,6 +5,254 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+async fn page_with_installed_dialog_for_test(
+    browser: &Browser,
+) -> (
+    crate::conn::PageTargetHost,
+    moli_core::page::RendererJavaScriptDialogCompletion,
+) {
+    use moli_core::page::{
+        RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId,
+        RendererJavaScriptDialogSource, RendererPendingJavaScriptDialog,
+    };
+
+    let mut page = browser
+        .fetch("data:text/html,<p>dialog owner</p>")
+        .await
+        .unwrap();
+    let artifacts = page.take_page_creation_artifacts().unwrap();
+    let source = artifacts.lifecycle_snapshot;
+    let mut slot = TargetPageSlot::with_loaded_page_for_test(page);
+    slot.bind_renderer_document_lifecycle(
+        artifacts,
+        None,
+        "FRAME-dialog-owner".into(),
+        "loader".into(),
+    );
+    let mut target = crate::conn::PageTargetHost::new(
+        "TID-dialog-owner".into(),
+        Some("SID-dialog-owner".into()),
+        crate::conn::TargetIdentityState::about_blank(),
+        slot,
+    );
+    let completion = RendererJavaScriptDialogCompletion::pending();
+    assert!(target.install_javascript_dialog(
+        &moli_page_types::DevToolsSessionKey::Primary,
+        crate::conn::TargetPageResidenceIdentity::new(
+            "BID-dialog-owner".into(),
+            Some("TID-dialog-owner".into()),
+            target.current_document_id().unwrap(),
+        ),
+        "FRAME-dialog-owner".into(),
+        RendererPendingJavaScriptDialog::new(
+            RendererJavaScriptDialogId::new(1),
+            RendererDocumentLifecycleIdentity {
+                frame: source.frame,
+                document: source.document,
+                epoch: source.epoch,
+            },
+            RendererJavaScriptDialogSource::RootFrame,
+            "about:blank".into(),
+            "prompt".into(),
+            "owned dialog".into(),
+            "default".into(),
+            Some(completion.clone()),
+        ),
+    ));
+    (target, completion)
+}
+
+#[tokio::test]
+async fn document_replacement_dismisses_dialog_without_protocol_session_cleanup() {
+    let browser = Browser::new(BrowserConfig::default()).unwrap();
+    let (mut target, completion) = page_with_installed_dialog_for_test(&browser).await;
+    let page = browser
+        .fetch("data:text/html,<p>replacement</p>")
+        .await
+        .unwrap();
+    let previous = target.runtime_slot.replace_loaded_page(Some(page)).unwrap();
+
+    assert!(
+        !completion.finish(true, "late reply".into()),
+        "Browser Document replacement must dismiss its dialog before Protocol cleanup"
+    );
+    assert!(!completion.wait().accepted);
+    previous.close_async().await.unwrap();
+}
+
+#[tokio::test]
+async fn browser_drop_dismisses_dialog_even_when_session_snapshot_survives() {
+    let browser = Browser::new(BrowserConfig::default()).unwrap();
+    let (mut target, completion) = page_with_installed_dialog_for_test(&browser).await;
+    let snapshot = target.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].clone();
+    let contents = std::mem::take(&mut target.runtime_slot.page_slot_mut().contents);
+    drop(target);
+    assert!(contents.main_frame.current_document.is_some());
+    assert!(!contents.javascript_dialogs.is_empty());
+    drop(contents);
+
+    assert!(
+        !completion.finish(true, "late reply".into()),
+        "Browser drop must dismiss the dialog even if a cloned session projection survives"
+    );
+    assert!(!completion.wait().accepted);
+    drop(snapshot);
+}
+
+#[tokio::test]
+async fn browser_dialog_can_be_handled_after_protocol_projection_is_dropped() {
+    let browser = Browser::new(BrowserConfig::default()).unwrap();
+    let (mut target, completion) = page_with_installed_dialog_for_test(&browser).await;
+    let key = target.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .page_session_state
+        .javascript_dialog_state
+        .pending_dialogs()[0]
+        .key;
+    let mut contents = std::mem::take(&mut target.runtime_slot.page_slot_mut().contents);
+    drop(target);
+
+    assert_eq!(
+        contents.javascript_dialogs.snapshot(key).unwrap().message,
+        "owned dialog"
+    );
+    contents
+        .javascript_dialogs
+        .set_prompt_text(key, "Browser input".into())
+        .unwrap();
+    let closed = contents.javascript_dialogs.finish(key, true, None).unwrap();
+    assert_eq!(closed.dialog_type, "prompt");
+    assert_eq!(closed.user_input, "Browser input");
+    assert!(contents.javascript_dialogs.snapshot(key).is_none());
+    assert!(
+        contents
+            .javascript_dialogs
+            .finish(key, false, None)
+            .is_none()
+    );
+    assert!(!completion.finish(false, "late reply".into()));
+    let result = completion.wait();
+    assert!(result.accepted);
+    assert_eq!(result.user_input, "Browser input");
+}
+
+#[tokio::test]
+async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_projection() {
+    use moli_core::page::RendererDocumentTerminationReason;
+    let browser = Browser::new(BrowserConfig::default()).unwrap();
+    let (mut target, completion) = page_with_installed_dialog_for_test(&browser).await;
+    let contents = &mut target.runtime_slot.page_slot_mut().contents;
+    let document = contents.main_frame.current_document.as_ref().unwrap();
+    let id = document.id;
+    let snapshot = document.lifecycle.snapshot().unwrap();
+    assert!(contents.bind_document_lifecycle(snapshot));
+    assert!(
+        !contents.javascript_dialogs.is_empty(),
+        "same-source rebind must preserve its dialog"
+    );
+    let terminated = RendererDocumentLifecycleEvent {
+        frame: snapshot.frame,
+        document: snapshot.document,
+        epoch: snapshot.epoch,
+        sequence: u64::MAX - 2,
+        timestamp_micros: 10,
+        kind: RendererDocumentLifecycleEventKind::Terminated {
+            last_reached: None,
+            reason: RendererDocumentTerminationReason::RestartedByDocumentOpen,
+        },
+    };
+    assert!(
+        !contents.observe_document_lifecycle(RendererDocumentLifecycleEvent {
+            document: snapshot.document.successor_for_testing(),
+            ..terminated
+        })
+    );
+    assert!(
+        !contents.javascript_dialogs.is_empty(),
+        "foreign lifecycle must not dismiss current dialog"
+    );
+    assert!(contents.observe_document_lifecycle(terminated));
+    assert!(contents.javascript_dialogs.is_empty());
+    assert!(!completion.finish(true, "late reply".into()));
+    assert!(!completion.wait().accepted);
+    assert!(
+        contents.observe_document_lifecycle(RendererDocumentLifecycleEvent {
+            epoch: RendererLifecycleEpoch(snapshot.epoch.0 + 1),
+            sequence: u64::MAX - 1,
+            kind: RendererDocumentLifecycleEventKind::Started {
+                reason: RendererLifecycleStartReason::ExplicitDocumentOpen
+            },
+            ..terminated
+        })
+    );
+    assert_eq!(
+        contents.main_frame.current_document.as_ref().unwrap().id,
+        id
+    );
+}
+
+#[tokio::test]
+async fn dialog_disable_and_exact_detach_dismiss_only_their_browser_dialogs() {
+    use moli_core::page::{
+        RendererJavaScriptDialogCompletion, RendererJavaScriptDialogId,
+        RendererJavaScriptDialogSource, RendererPendingJavaScriptDialog,
+    };
+    use moli_page_types::DevToolsSessionKey;
+    let browser = Browser::new(BrowserConfig::default()).unwrap();
+    let (mut target, primary_completion) = page_with_installed_dialog_for_test(&browser).await;
+    let peer = DevToolsSessionKey::Attached("SID-dialog-peer".into());
+    let peer_completion = RendererJavaScriptDialogCompletion::pending();
+    let document = target.current_document_id().unwrap();
+    let snapshot = target
+        .runtime_slot
+        .page_slot()
+        .contents
+        .main_frame
+        .current_document
+        .as_ref()
+        .unwrap()
+        .lifecycle
+        .snapshot()
+        .unwrap();
+    assert!(target.install_javascript_dialog(
+        &peer,
+        crate::conn::TargetPageResidenceIdentity::new(
+            "BID-dialog-owner".into(),
+            Some("TID-dialog-owner".into()),
+            document
+        ),
+        "FRAME-dialog-owner".into(),
+        RendererPendingJavaScriptDialog::new(
+            RendererJavaScriptDialogId::new(2),
+            RendererDocumentLifecycleIdentity {
+                frame: snapshot.frame,
+                document: snapshot.document,
+                epoch: snapshot.epoch
+            },
+            RendererJavaScriptDialogSource::RootFrame,
+            "about:blank".into(),
+            "alert".into(),
+            "peer".into(),
+            String::new(),
+            Some(peer_completion.clone())
+        )
+    ));
+    target.disable_devtools_page_domain(&DevToolsSessionKey::Primary);
+    assert!(!primary_completion.finish(true, "late primary".into()));
+    assert!(!primary_completion.wait().accepted);
+    assert!(target.has_pending_javascript_dialog());
+    assert_eq!(
+        target.javascript_dialog_snapshot(&peer).unwrap().message,
+        "peer"
+    );
+    assert!(!target.dispose_devtools_session("SID-wrong", &peer));
+    assert!(target.javascript_dialog_snapshot(&peer).is_some());
+    assert!(target.dispose_devtools_session("SID-dialog-peer", &peer));
+    assert!(!peer_completion.finish(true, "late peer".into()));
+    assert!(!peer_completion.wait().accepted);
+    assert!(!target.has_pending_javascript_dialog());
+    assert_eq!(target.current_document_id(), Some(document));
+}
+
 #[tokio::test]
 async fn document_replacement_preserves_stable_page_engine_history_and_storage() {
     let browser = Browser::new(BrowserConfig::default()).unwrap();
