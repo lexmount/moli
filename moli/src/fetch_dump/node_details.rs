@@ -48,12 +48,8 @@ async fn accessibility_node_payload_for_backend_node_id(
     if backend_node_id == 0 || !is_renderer_backend_node_id(backend_node_id) {
         return Ok(None);
     }
-    let pending = page.start_accessibility_node_payload_for_backend_node_id(backend_node_id)?;
-    let completion = pending.wait().await?;
-    Ok(page
-        .finish_accessibility_payloads_for_backend_node_id(completion)?
-        .and_then(|payloads| payloads.payloads)
-        .and_then(|payloads| payloads.into_iter().next()))
+    page.accessibility_node_payload_for_backend_node_id_async(backend_node_id)
+        .await
 }
 
 async fn document_node_snapshot_for_backend_node_id(

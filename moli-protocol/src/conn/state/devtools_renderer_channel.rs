@@ -52,6 +52,22 @@ impl fmt::Debug for RendererAgentBinding {
 }
 
 impl RendererAgentBinding {
+    pub(crate) fn css_inspection(
+        &self,
+        inspector_session_id: Option<String>,
+    ) -> moli_renderer_v8::RendererCssInspection<'_> {
+        self.endpoint
+            .css_inspection(self.attachment.id(), inspector_session_id)
+    }
+
+    pub(crate) fn accessibility_inspection(
+        &self,
+        inspector_session_id: Option<String>,
+    ) -> moli_renderer_v8::RendererAccessibilityInspection<'_> {
+        self.endpoint
+            .accessibility_inspection(self.attachment.id(), inspector_session_id)
+    }
+
     pub(crate) fn dom_inspection(
         &self,
         inspector_session_id: Option<String>,

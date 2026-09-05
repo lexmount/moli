@@ -29,20 +29,22 @@ impl RendererDomInspection<'_> {
         &self,
         command: RendererPageCommand,
     ) -> Result<RendererRuntimeInspectorMainCommandRoute> {
-        self.endpoint
-            .page_context_cancel_tx
-            .with_inspector_admission(|| {
-                self.endpoint
-                    .devtools_target
-                    .main_ref()
-                    .enqueue_bound_protocol_page_command(
-                        self.endpoint.token,
-                        self.endpoint.devtools_agent_token,
-                        command,
-                        self.inspector_session_id.clone(),
-                        self.attachment,
-                    )
-            })
+        self.endpoint.enqueue_typed_inspection_command(
+            self.attachment,
+            self.inspector_session_id.clone(),
+            command,
+        )
+    }
+
+    pub fn start_dom_snapshot_capture(
+        &self,
+        top_frame_id: String,
+        options: RendererDomSnapshotCaptureOptions,
+    ) -> Result<RendererRuntimeInspectorMainCommandRoute> {
+        self.start_page_command(RendererPageCommand::DomSnapshotCapture {
+            top_frame_id,
+            options,
+        })
     }
 
     pub fn start_child_frame_document_query_selector_for_backend_node_id(

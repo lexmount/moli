@@ -22,10 +22,9 @@ use crate::renderer::{
     RendererDomBidiNodeBindingResolution, RendererDomBidiNodeSharedIdResolution,
     RendererDomEditOutcome, RendererDomFocusOutcome, RendererDomFrontendNodeBindingResolution,
     RendererDomNodeStackTraceResolution, RendererDomSearchRegistration,
-    RendererDomSearchResultsResolution, RendererDomSnapshotCaptureOptions,
-    RendererDomSnapshotCapturePayload, RendererLayoutMetrics, RendererPageCommand,
-    RendererPageDumpOptions, RendererPageReply, RendererPageState, RendererRuntimeRemoteObject,
-    RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload,
+    RendererDomSearchResultsResolution, RendererDomSnapshotCapturePayload, RendererLayoutMetrics,
+    RendererPageCommand, RendererPageDumpOptions, RendererPageReply, RendererPageState,
+    RendererRuntimeRemoteObject, RendererStyleSheetInventoryUpdate, RendererStyleSheetPayload,
 };
 
 // ---------------------------------------------------------------------------
@@ -200,159 +199,6 @@ impl Page {
         self.page_state.observe(page_state)
     }
 
-    pub fn start_set_inline_style_sheet_text_for_style_sheet_id(
-        &self,
-        style_sheet_id: &str,
-        text: &str,
-    ) -> Result<PendingPageCommand> {
-        self.start_set_inline_style_sheet_text_for_style_sheet_id_and_inspector_session(
-            None,
-            style_sheet_id,
-            text,
-        )
-    }
-
-    pub fn start_set_inline_style_sheet_text_for_style_sheet_id_and_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        style_sheet_id: &str,
-        text: &str,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::SetInlineStyleSheetTextForStyleSheetId {
-                inspector_session_id,
-                style_sheet_id: style_sheet_id.to_owned(),
-                text: text.to_owned(),
-            },
-        )
-    }
-
-    pub fn finish_set_inline_style_sheet_text(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<bool> {
-        Self::decode_bool_page_reply(
-            self.finish_page_command(completion),
-            "set inline stylesheet text page command",
-        )
-    }
-
-    pub fn start_style_sheet_payload_for_style_sheet_id(
-        &self,
-        style_sheet_id: &str,
-    ) -> Result<PendingPageCommand> {
-        self.start_style_sheet_payload_for_style_sheet_id_and_inspector_session(
-            None,
-            style_sheet_id,
-        )
-    }
-
-    pub fn start_style_sheet_payload_for_style_sheet_id_and_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        style_sheet_id: &str,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::StyleSheetPayloadForStyleSheetId {
-            inspector_session_id,
-            style_sheet_id: style_sheet_id.to_owned(),
-        })
-    }
-
-    pub fn finish_style_sheet_payload(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<RendererStyleSheetPayload>> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "stylesheet payload page command",
-            "an optional stylesheet payload",
-            RendererPageReply::OptionalStyleSheetPayload(payload) => Ok(payload),
-        )
-    }
-
-    pub fn start_style_sheet_inventory_for_document(&self) -> Result<PendingPageCommand> {
-        self.start_style_sheet_inventory_for_document_and_inspector_session(None)
-    }
-
-    pub fn start_style_sheet_inventory_for_document_and_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::StyleSheetInventoryForDocument {
-            inspector_session_id,
-        })
-    }
-
-    pub fn finish_style_sheet_inventory_for_document(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererStyleSheetInventoryUpdate> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "stylesheet inventory page command",
-            "stylesheet inventory update",
-            RendererPageReply::StyleSheetInventory(update) => Ok(update),
-        )
-    }
-
-    pub fn start_reset_css_agent_session(
-        &self,
-        inspector_session_id: Option<String>,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::ResetCssAgentSession {
-            inspector_session_id,
-        })
-    }
-
-    pub fn finish_reset_css_agent_session(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<()> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "CSS agent reset page command",
-            "a unit reply",
-            RendererPageReply::Unit => Ok(()),
-        )
-    }
-
-    pub fn start_computed_style_properties_for_backend_node_id(
-        &self,
-        backend_node_id: u32,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::ComputedStylePropertiesForBackendNodeId { backend_node_id },
-        )
-    }
-
-    pub fn start_computed_style_properties_for_object_id_in_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        object_id: &str,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::computed_style_properties_for_object_id(
-                inspector_session_id,
-                object_id.to_owned(),
-            ),
-        )
-    }
-
-    pub fn finish_computed_style_properties(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<Vec<(String, String)>>> {
-        expect_page_reply!(
-            self.finish_page_command(completion),
-            "computed style page command",
-            "computed style properties",
-            RendererPageReply::ComputedStyleProperties(properties) => Ok(properties),
-        )
-    }
-
     pub fn document_title(&self) -> String {
         self.page_state.document_title().to_owned()
     }
@@ -484,30 +330,6 @@ impl Page {
             "autofill trigger page command",
             "an Autofill trigger outcome reply",
             RendererPageReply::AutofillTriggerOutcome(outcome) => Ok(outcome),
-        )
-    }
-
-    pub fn start_dom_snapshot_capture(
-        &self,
-        top_frame_id: String,
-        options: RendererDomSnapshotCaptureOptions,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::DomSnapshotCapture {
-            top_frame_id,
-            options,
-        })
-    }
-
-    pub fn finish_dom_snapshot_capture(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<Option<RendererDomSnapshotCapturePayload>> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "DOMSnapshot capture page command",
-            "an optional DOMSnapshot capture payload",
-            RendererPageReply::OptionalDomSnapshotCapturePayload(payload) => Ok(payload),
         )
     }
 
@@ -755,6 +577,66 @@ impl Page {
 
 // Decoding a frozen DOM reply requires no Browser Page residence.
 impl CompletedPageCommand {
+    pub fn finish_set_inline_style_sheet_text(self) -> Result<bool> {
+        expect_page_reply!(
+            self.into_reply(),
+            "set inline stylesheet text page command",
+            "a bool reply",
+            RendererPageReply::Bool(value) => Ok(value),
+        )
+    }
+
+    pub fn finish_style_sheet_payload(self) -> Result<Option<RendererStyleSheetPayload>> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "stylesheet payload page command",
+            "an optional stylesheet payload",
+            RendererPageReply::OptionalStyleSheetPayload(payload) => Ok(payload),
+        )
+    }
+
+    pub fn finish_style_sheet_inventory_for_document(
+        self,
+    ) -> Result<RendererStyleSheetInventoryUpdate> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "stylesheet inventory page command",
+            "stylesheet inventory update",
+            RendererPageReply::StyleSheetInventory(update) => Ok(update),
+        )
+    }
+
+    pub fn finish_reset_css_agent_session(self) -> Result<()> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "CSS agent reset page command",
+            "a unit reply",
+            RendererPageReply::Unit => Ok(()),
+        )
+    }
+
+    pub fn finish_computed_style_properties(self) -> Result<Option<Vec<(String, String)>>> {
+        expect_page_reply!(
+            self.into_reply(),
+            "computed style page command",
+            "computed style properties",
+            RendererPageReply::ComputedStyleProperties(properties) => Ok(properties),
+        )
+    }
+
+    pub fn finish_dom_snapshot_capture(self) -> Result<Option<RendererDomSnapshotCapturePayload>> {
+        let reply = self.into_reply();
+        expect_page_reply!(
+            reply,
+            "DOMSnapshot capture page command",
+            "an optional DOMSnapshot capture payload",
+            RendererPageReply::OptionalDomSnapshotCapturePayload(payload) => Ok(payload),
+        )
+    }
+
     pub fn finish_discard_document_search_results(self) -> Result<()> {
         let reply = self.into_reply();
         expect_page_reply!(

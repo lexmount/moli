@@ -2,7 +2,6 @@ use crate::conn::CdpConnection;
 pub(super) use chromiumoxide_cdp::cdp::browser_protocol::accessibility::{
     GetChildAxNodesParams as ChildAxNodesParams, GetFullAxTreeParams,
 };
-use moli_core::page::Page;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -54,13 +53,6 @@ pub(super) struct PartialAxTreeParams {
     pub(super) frame_id: Option<String>,
     #[serde(default)]
     pub(super) fetch_relatives: Option<bool>,
-}
-
-pub(super) fn loaded_page_mut_for_session<'a>(
-    conn: &'a mut CdpConnection,
-    session_id: Option<&str>,
-) -> Option<&'a mut Page> {
-    conn.loaded_page_mut_for_protocol_access(session_id).ok()
 }
 
 pub(super) fn top_frame_id_for_session(

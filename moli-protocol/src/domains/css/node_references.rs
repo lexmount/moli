@@ -11,10 +11,10 @@ pub(super) fn start_frontend_node_binding_for_computed_style(
     frontend_node_id: u32,
 ) -> Result<PendingCssCommandDispatch, PendingCssCommandStartError> {
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
-    let Some(page) = crate::domains::dom::dom_inspection_for_owner(conn, &owner) else {
+    let Some(inspection) = crate::domains::dom::dom_inspection_for_owner(conn, &owner) else {
         return Err(PendingCssCommandStartError::no_document_loaded());
     };
-    let pending = page
+    let pending = inspection
         .start_document_frontend_node_binding(frontend_node_id)
         .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingCssCommandStartError::renderer_error)?;
@@ -33,10 +33,10 @@ pub(super) fn start_frontend_node_binding_for_inline_style(
     kind: InlineStyleQueryKind,
 ) -> Result<Option<PendingCssCommandDispatch>, PendingCssCommandStartError> {
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
-    let Some(page) = crate::domains::dom::dom_inspection_for_owner(conn, &owner) else {
+    let Some(inspection) = crate::domains::dom::dom_inspection_for_owner(conn, &owner) else {
         return Err(PendingCssCommandStartError::no_document_loaded());
     };
-    let pending = page
+    let pending = inspection
         .start_document_frontend_node_binding(frontend_node_id)
         .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingCssCommandStartError::renderer_error)?;
