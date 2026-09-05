@@ -4,7 +4,8 @@ use serde_json::json;
 use moli_browser_profile::{DEFAULT_PROFILE_PARTITION_ID, ProfilePartitionId};
 
 use crate::conn::{
-    BackgroundProtocolEvent, WindowSurface, WindowSurfaceState, monotonic_timestamp_seconds,
+    BackgroundProtocolEvent, ContextNetworkPolicy, WindowSurface, WindowSurfaceState,
+    monotonic_timestamp_seconds,
 };
 use crate::devtools_runtime::{
     DevToolsClientWindowInfo, DevToolsCommand, DevToolsCommandResult,
@@ -286,13 +287,11 @@ pub(super) fn execute_devtools_create_browser_context_command(
     }
 
     let mut browser_context = conn.new_ephemeral_browser_context(id.clone());
-    browser_context.default_tls_verify_host_override =
-        command.accept_insecure_certs.map(|accept| !accept);
-    browser_context.default_http_proxy_override = command.proxy_server;
-    browser_context.default_http_no_proxy_override =
-        normalize_proxy_bypass_list_for_loader(command.proxy_bypass_list.as_deref());
-    browser_context.proxy_autoconfig_url = command.proxy_autoconfig_url;
-    browser_context.proxy_socks_version = command.proxy_socks_version;
+    browser_context.set_network_policy(ContextNetworkPolicy {
+        http_proxy: command.proxy_server,
+        http_no_proxy: normalize_proxy_bypass_list_for_loader(command.proxy_bypass_list.as_deref()),
+        tls_verify_host: command.accept_insecure_certs.map(|accept| !accept),
+    });
     conn.insert_browser_context(browser_context);
     Ok(DevToolsCreateBrowserContextResult {
         browser_context_id: crate::devtools_runtime::DevToolsBrowserContextId::from(id),
@@ -505,9 +504,11 @@ pub(super) fn create_browser_context(conn: &mut CdpConnection, cmd: &Cmd<'_>) ->
     }
     let id = conn.gen_bc_id();
     let mut browser_context = conn.new_ephemeral_browser_context(id.clone());
-    browser_context.default_http_proxy_override = params.proxy_server;
-    browser_context.default_http_no_proxy_override =
-        normalize_proxy_bypass_list_for_loader(params.proxy_bypass_list.as_deref());
+    browser_context.set_network_policy(ContextNetworkPolicy {
+        http_proxy: params.proxy_server,
+        http_no_proxy: normalize_proxy_bypass_list_for_loader(params.proxy_bypass_list.as_deref()),
+        ..Default::default()
+    });
     conn.insert_browser_context(browser_context);
     CommandOutputPlan::result(json!({ "browserContextId": id }))
 }

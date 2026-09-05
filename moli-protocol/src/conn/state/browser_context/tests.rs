@@ -2,6 +2,39 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn context_network_policy_outlives_page_and_protocol_projection() {
+    let expected = ContextNetworkPolicy {
+        http_proxy: Some("http://proxy.example:8080".into()),
+        http_no_proxy: Some(String::new()),
+        tls_verify_host: Some(false),
+    };
+    let (physical, before_tls_change) = {
+        let mut projection = BrowserContext::new_with_page_for_test("CTX-policy", "page-policy");
+        projection.attach_active_session("session-policy");
+        projection.set_network_policy(expected.clone());
+        let before_tls_change = projection.network_policy().clone();
+        // A field-level update must not reinstall an old proxy snapshot.
+        projection.set_tls_verify_host_override(true);
+        assert_eq!(
+            projection.detach_active_session().as_deref(),
+            Some("session-policy")
+        );
+        (projection.physical, before_tls_change)
+    };
+    assert_eq!(before_tls_change, expected);
+    assert_eq!(
+        physical.network_policy,
+        ContextNetworkPolicy {
+            tls_verify_host: Some(true),
+            ..expected
+        }
+    );
+    let other = BrowserContext::new("CTX-other".into());
+    assert_ne!(physical.id, other.browser_context_id());
+    assert_eq!(other.network_policy(), &ContextNetworkPolicy::default());
+}
+
+#[test]
 fn physical_context_storage_and_runtime_outlive_protocol_projection() {
     let (mut physical, id, runtime_id, local_storage) = {
         let mut projection = BrowserContext::new_with_page_for_test("CTX-owner", "page-owner");

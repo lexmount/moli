@@ -12,12 +12,12 @@ impl CdpConnection {
         let http_proxy = self
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.default_http_proxy_override.clone())
+            .and_then(|bc| bc.network_policy().http_proxy.clone())
             .or_else(|| self.base_http_proxy.clone());
         let http_no_proxy = self
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.default_http_no_proxy_override.clone())
+            .and_then(|bc| bc.network_policy().http_no_proxy.clone())
             .or_else(|| self.base_http_no_proxy.clone());
         let tls_verify_host = self
             .browser_context
@@ -39,7 +39,7 @@ impl CdpConnection {
 
     pub async fn set_tls_verify_host_async(&mut self, enabled: bool) {
         if let Some(browser_context) = self.browser_context.as_mut() {
-            browser_context.default_tls_verify_host_override = Some(enabled);
+            browser_context.set_tls_verify_host_override(enabled);
         } else {
             self.base_tls_verify_host = enabled;
         }
@@ -125,7 +125,7 @@ impl CdpConnection {
     #[cfg(test)]
     pub(crate) async fn set_http_proxy_override_async(&mut self, proxy: Option<String>) {
         if let Some(browser_context) = self.browser_context.as_mut() {
-            browser_context.default_http_proxy_override = proxy;
+            browser_context.set_http_proxy_override_for_test(proxy);
         } else {
             self.base_http_proxy = proxy;
         }
@@ -136,7 +136,7 @@ impl CdpConnection {
     pub fn http_proxy(&self) -> Option<&str> {
         self.browser_context
             .as_ref()
-            .and_then(|bc| bc.default_http_proxy_override.as_deref())
+            .and_then(|bc| bc.network_policy().http_proxy.as_deref())
             .or(self.base_http_proxy.as_deref())
     }
 
@@ -152,7 +152,7 @@ impl CdpConnection {
     pub fn http_no_proxy(&self) -> Option<&str> {
         self.browser_context
             .as_ref()
-            .and_then(|bc| bc.default_http_no_proxy_override.as_deref())
+            .and_then(|bc| bc.network_policy().http_no_proxy.as_deref())
             .or(self.base_http_no_proxy.as_deref())
     }
 

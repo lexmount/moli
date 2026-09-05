@@ -755,7 +755,7 @@ impl CdpConnection {
             )
         {
             if let Some(browser_context) = self.browser_context.as_mut() {
-                browser_context.default_tls_verify_host_override = Some(enabled);
+                browser_context.set_tls_verify_host_override(enabled);
             } else {
                 self.base_tls_verify_host = enabled;
             }
@@ -818,7 +818,7 @@ mod tests {
         conn.browser_context
             .as_mut()
             .unwrap()
-            .default_tls_verify_host_override = Some(true);
+            .set_tls_verify_host_override(true);
         for (session, enabled) in [
             ("SID-attached", false),
             ("SID-background", true),
@@ -852,7 +852,7 @@ mod tests {
             let target = context.page_target("TID-background").unwrap();
             assert!(target.is_session("SID-background"));
             assert_eq!(target.tls_verify_host_override(), installed);
-            assert_eq!(context.default_tls_verify_host_override, Some(true));
+            assert_eq!(context.network_policy().tls_verify_host, Some(true));
             let inputs = conn.navigation_load_inputs_for_session_owner(Some("SID-background"));
             assert_eq!(inputs.tls_verify_host_override, Some(effective));
             assert_eq!(

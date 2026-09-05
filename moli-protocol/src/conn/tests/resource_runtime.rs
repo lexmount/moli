@@ -1148,11 +1148,17 @@ async fn loader_uses_active_browser_context_user_agent_override() {
 async fn loader_uses_active_browser_context_http_proxy_override() {
     let mut conn = CdpConnection::new();
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-    first.default_http_proxy_override = Some("http://proxy-a.test:8080".into());
+    first.set_network_policy(crate::conn::ContextNetworkPolicy {
+        http_proxy: Some("http://proxy-a.test:8080".into()),
+        ..Default::default()
+    });
     conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
-    second.default_http_proxy_override = Some("http://proxy-b.test:8080".into());
+    second.set_network_policy(crate::conn::ContextNetworkPolicy {
+        http_proxy: Some("http://proxy-b.test:8080".into()),
+        ..Default::default()
+    });
     conn.push_inactive_browser_context_fixture_for_test(second);
 
     assert_eq!(
@@ -1175,11 +1181,17 @@ async fn loader_uses_active_browser_context_http_proxy_override() {
 async fn loader_uses_active_browser_context_http_no_proxy_override() {
     let mut conn = CdpConnection::new();
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-    first.default_http_no_proxy_override = Some("localhost,127.0.0.1".into());
+    first.set_network_policy(crate::conn::ContextNetworkPolicy {
+        http_no_proxy: Some("localhost,127.0.0.1".into()),
+        ..Default::default()
+    });
     conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
-    second.default_http_no_proxy_override = Some("::1,.example.com".into());
+    second.set_network_policy(crate::conn::ContextNetworkPolicy {
+        http_no_proxy: Some("::1,.example.com".into()),
+        ..Default::default()
+    });
     conn.push_inactive_browser_context_fixture_for_test(second);
 
     assert_eq!(

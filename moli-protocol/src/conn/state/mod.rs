@@ -118,7 +118,7 @@ pub(in crate::conn) use web_contents::{PageSurface, WindowOpener};
 pub use browser_context::BrowserContext;
 pub(crate) use browser_context::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles,
-    BrowserContextStoragePartitionHandles, SiteDataClearOptions,
+    BrowserContextStoragePartitionHandles, ContextNetworkPolicy, SiteDataClearOptions,
 };
 
 pub(crate) use navigation_controller::{InitialDocument, InitialDocumentCreator};
