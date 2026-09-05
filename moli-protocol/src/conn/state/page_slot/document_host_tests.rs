@@ -46,6 +46,18 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
             None,
         ),
     );
+    target
+        .set_devtools_locale_override(
+            &moli_page_types::DevToolsSessionKey::Primary,
+            Some("de-DE".into()),
+        )
+        .unwrap();
+    target
+        .set_devtools_timezone_override(
+            &moli_page_types::DevToolsSessionKey::Primary,
+            Some("Europe/Berlin".into()),
+        )
+        .unwrap();
     let policy = target.effective_policy();
     let first_document = target.current_document_id().unwrap();
     let storage = target.session_storage_store().clone();

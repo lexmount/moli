@@ -1588,18 +1588,14 @@ impl BrowserContext {
     pub(crate) fn effective_active_locale_override_owned(&self) -> Option<String> {
         self.page_targets
             .active()
-            .and_then(|host| host.effective_policy().locale_override().map(str::to_owned))
+            .and_then(|host| host.locale_override().map(str::to_owned))
             .or_else(|| self.default_locale_override.clone())
     }
 
     pub(crate) fn effective_active_timezone_override_owned(&self) -> Option<String> {
         self.page_targets
             .active()
-            .and_then(|host| {
-                host.effective_policy()
-                    .timezone_override()
-                    .map(str::to_owned)
-            })
+            .and_then(|host| host.timezone_override().map(str::to_owned))
             .or_else(|| self.default_timezone_override.clone())
     }
 
@@ -1667,12 +1663,7 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<String> {
         self.page_target(target_id)
-            .and_then(|state| {
-                state
-                    .effective_policy()
-                    .locale_override()
-                    .map(str::to_owned)
-            })
+            .and_then(|state| state.locale_override().map(str::to_owned))
             .or_else(|| self.default_locale_override.clone())
     }
 

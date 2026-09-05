@@ -36,6 +36,8 @@ pub(in crate::conn) struct WebContents {
     pub(in crate::conn) network_request_policy: NetworkRequestPolicy,
     pub(in crate::conn) browser_identity_override:
         Option<moli_browser_profile::BrowserIdentityProfile>,
+    pub(in crate::conn) locale_override: Option<String>,
+    pub(in crate::conn) timezone_override: Option<String>,
 }
 
 impl Default for WebContents {
@@ -51,6 +53,8 @@ impl Default for WebContents {
             emulation_policy: EmulationPolicy::default(),
             network_request_policy: NetworkRequestPolicy::default(),
             browser_identity_override: None,
+            locale_override: None,
+            timezone_override: None,
         }
     }
 }
@@ -79,6 +83,14 @@ impl WebContents {
         engine.set_cache_disabled(self.network_request_policy.cache_disabled);
         engine.set_bypass_service_worker(self.network_request_policy.bypass_service_worker);
         self.navigation_engine = Some(engine);
+    }
+
+    pub(in crate::conn) fn set_locale_override(&mut self, locale: Option<String>) {
+        self.locale_override = locale;
+    }
+
+    pub(in crate::conn) fn set_timezone_override(&mut self, timezone: Option<String>) {
+        self.timezone_override = timezone;
     }
 }
 
