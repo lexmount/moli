@@ -1,6 +1,7 @@
 use moli_core::page::{
     Page, RendererAgentAttachmentId, RendererDevToolsAgentToken, RendererDocumentLifecycleIdentity,
-    RendererRuntimeInspectorMessageBatch, ScriptNetworkOutputItem, SubresourceNetworkRequestHandle,
+    RendererRuntimeInspectorMessageBatch, ScriptNetworkOutputItem, ScriptObservableOutputItem,
+    SubresourceNetworkRequestHandle,
 };
 #[cfg(test)]
 use moli_core::page::{RendererPageDiagnosticsSnapshot, RendererRuntimeObservableSourceSummary};
@@ -862,19 +863,21 @@ impl TargetRuntimeSlot {
     }
 
     pub(crate) fn ingest_owner_page_observable_output_updates(&mut self) -> bool {
-        let Some(page) = self.page_slot.loaded_page_mut() else {
+        let Some(page) = self.page_slot.loaded_page() else {
             self.observable_queue.reset_output_queue();
             return false;
         };
-        Self::ingest_page_observable_output_update(&mut self.observable_queue, page);
+        self.observable_queue
+            .ingest_observable_output_snapshot(page.script_execution().observable_output_items());
         true
     }
 
-    fn ingest_page_observable_output_update(
-        observable_queue: &mut TargetRuntimeObservableQueueState,
-        page: &mut Page,
+    pub(crate) fn ingest_observable_output_snapshot(
+        &mut self,
+        items: &[ScriptObservableOutputItem],
     ) {
-        observable_queue.ingest_page_output_update(page.take_observable_output_update());
+        self.observable_queue
+            .ingest_observable_output_snapshot(items);
     }
 
     pub(crate) fn primary_network_events_enabled(&self) -> bool {
