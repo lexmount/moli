@@ -7,9 +7,41 @@ use moli_browser_profile::BrowserIdentityProfile;
 /// Navigator surfaces so setting or clearing either input cannot erase the
 /// other one.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(super) struct BrowserIdentityOverrideInputs {
+    pub(super) user_agent: Option<String>,
+    pub(super) accept_language: Option<String>,
+}
+
+impl BrowserIdentityOverrideInputs {
+    pub(super) fn from_profile(profile: &BrowserIdentityProfile) -> Self {
+        Self {
+            user_agent: Some(profile.user_agent().to_owned()),
+            accept_language: Some(profile.accept_language().to_owned()),
+        }
+    }
+
+    pub(super) fn materialize(
+        &self,
+        fallback: &BrowserIdentityProfile,
+    ) -> Option<BrowserIdentityProfile> {
+        if self.user_agent.is_none() && self.accept_language.is_none() {
+            return None;
+        }
+        Some(BrowserIdentityProfile::new(
+            self.user_agent
+                .as_deref()
+                .unwrap_or_else(|| fallback.user_agent()),
+            self.accept_language
+                .as_deref()
+                .unwrap_or_else(|| fallback.accept_language()),
+        ))
+    }
+}
+
+/// Page-level base contribution retained beneath the frontend session overlays.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct BaseBrowserIdentityOverrideState {
-    user_agent: Option<String>,
-    accept_language: Option<String>,
+    inputs: BrowserIdentityOverrideInputs,
     materialized: Option<BrowserIdentityProfile>,
 }
 
@@ -27,8 +59,8 @@ impl BaseBrowserIdentityOverrideState {
         user_agent: Option<String>,
         fallback: &BrowserIdentityProfile,
     ) {
-        self.user_agent = user_agent;
-        self.refresh(fallback);
+        self.inputs.user_agent = user_agent;
+        self.materialized = self.inputs.materialize(fallback);
     }
 
     pub(crate) fn set_accept_language(
@@ -36,29 +68,13 @@ impl BaseBrowserIdentityOverrideState {
         accept_language: Option<String>,
         fallback: &BrowserIdentityProfile,
     ) {
-        self.accept_language = accept_language;
-        self.refresh(fallback);
+        self.inputs.accept_language = accept_language;
+        self.materialized = self.inputs.materialize(fallback);
     }
 
     pub(crate) fn replace_profile(&mut self, profile: BrowserIdentityProfile) {
-        self.user_agent = Some(profile.user_agent().to_owned());
-        self.accept_language = Some(profile.accept_language().to_owned());
+        self.inputs = BrowserIdentityOverrideInputs::from_profile(&profile);
         self.materialized = Some(profile);
-    }
-
-    fn refresh(&mut self, fallback: &BrowserIdentityProfile) {
-        if self.user_agent.is_none() && self.accept_language.is_none() {
-            self.materialized = None;
-            return;
-        }
-        self.materialized = Some(BrowserIdentityProfile::new(
-            self.user_agent
-                .as_deref()
-                .unwrap_or_else(|| fallback.user_agent()),
-            self.accept_language
-                .as_deref()
-                .unwrap_or_else(|| fallback.accept_language()),
-        ));
     }
 }
 

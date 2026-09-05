@@ -27,6 +27,7 @@ use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 
 use super::{
     DevToolsSessionState,
+    browser_identity::BrowserIdentityOverrideInputs,
     dedicated_worker_target::DedicatedWorkerTargetState,
     emulation::{
         EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedNetworkConditions,
@@ -64,7 +65,7 @@ pub struct BrowserContext {
     pub(crate) service_worker_domain_sessions: BTreeSet<Option<String>>,
     pub(crate) default_extra_headers: Vec<(String, String)>,
     pub(crate) global_extra_headers: Vec<(String, String)>,
-    default_browser_identity: super::BaseBrowserIdentityOverrideState,
+    browser_identity_inputs: BrowserIdentityOverrideInputs,
     pub(crate) global_network_conditions: Option<EmulatedNetworkConditions>,
     pub(crate) global_geolocation_override: Option<EmulatedGeolocationOverrideState>,
     pub(crate) global_cache_disabled: bool,
@@ -381,7 +382,7 @@ impl BrowserContext {
             service_worker_domain_sessions: BTreeSet::new(),
             default_extra_headers: Vec::new(),
             global_extra_headers: Vec::new(),
-            default_browser_identity: super::BaseBrowserIdentityOverrideState::default(),
+            browser_identity_inputs: BrowserIdentityOverrideInputs::default(),
             global_network_conditions: None,
             global_geolocation_override: None,
             global_cache_disabled: false,
@@ -1258,7 +1259,7 @@ impl BrowserContext {
         self.page_targets
             .active()
             .and_then(|host| host.browser_identity_override().cloned())
-            .or_else(|| self.default_browser_identity.profile_owned())
+            .or_else(|| self.default_browser_identity_override_owned())
     }
 
     pub(crate) fn reported_active_user_agent_override(&self) -> Option<&str> {
@@ -1266,8 +1267,7 @@ impl BrowserContext {
             .active()
             .and_then(PageTargetHost::reported_user_agent_override)
             .or_else(|| {
-                self.default_browser_identity
-                    .profile()
+                self.default_browser_identity_override()
                     .map(moli_browser_profile::BrowserIdentityProfile::user_agent)
             })
     }
@@ -1275,13 +1275,13 @@ impl BrowserContext {
     pub(crate) fn default_browser_identity_override(
         &self,
     ) -> Option<&moli_browser_profile::BrowserIdentityProfile> {
-        self.default_browser_identity.profile()
+        self.physical.browser_identity_override.as_ref()
     }
 
     pub(crate) fn default_browser_identity_override_owned(
         &self,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
-        self.default_browser_identity.profile_owned()
+        self.default_browser_identity_override().cloned()
     }
 
     pub(crate) fn set_default_user_agent_override(
@@ -1289,8 +1289,9 @@ impl BrowserContext {
         user_agent: Option<String>,
         fallback: &moli_browser_profile::BrowserIdentityProfile,
     ) {
-        self.default_browser_identity
-            .set_user_agent(user_agent, fallback);
+        self.browser_identity_inputs.user_agent = user_agent;
+        self.physical.browser_identity_override =
+            self.browser_identity_inputs.materialize(fallback);
     }
 
     pub(crate) fn set_default_locale_override(
@@ -1299,8 +1300,9 @@ impl BrowserContext {
         fallback: &moli_browser_profile::BrowserIdentityProfile,
     ) {
         self.physical.emulation_defaults.locale = locale.clone();
-        self.default_browser_identity
-            .set_accept_language(locale, fallback);
+        self.browser_identity_inputs.accept_language = locale;
+        self.physical.browser_identity_override =
+            self.browser_identity_inputs.materialize(fallback);
     }
 
     #[cfg(test)]
@@ -1308,7 +1310,8 @@ impl BrowserContext {
         &mut self,
         identity: moli_browser_profile::BrowserIdentityProfile,
     ) {
-        self.default_browser_identity.replace_profile(identity);
+        self.browser_identity_inputs = BrowserIdentityOverrideInputs::from_profile(&identity);
+        self.physical.browser_identity_override = Some(identity);
     }
 
     pub(crate) fn effective_active_locale_override_owned(&self) -> Option<String> {

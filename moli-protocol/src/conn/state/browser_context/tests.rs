@@ -2,6 +2,102 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn context_browser_identity_preserves_independent_inputs_and_update_time_fallback() {
+    use moli_browser_profile::BrowserIdentityProfile;
+
+    let fallback = BrowserIdentityProfile::new("Base-UA", "en-US");
+    let next_fallback = BrowserIdentityProfile::new("Next-UA", "de-DE");
+    let combined = BrowserIdentityProfile::new("Context-UA", "fr-FR");
+    for locale_first in [false, true] {
+        let mut context = BrowserContext::new("CTX-identity".into());
+        assert!(context.default_browser_identity_override().is_none());
+        if locale_first {
+            context.set_default_locale_override(Some("fr-FR".into()), &fallback);
+            assert_eq!(
+                context.reported_active_user_agent_override(),
+                Some("Base-UA")
+            );
+            context.set_default_user_agent_override(Some("Context-UA".into()), &fallback);
+        } else {
+            context.set_default_user_agent_override(Some("Context-UA".into()), &fallback);
+            context.set_default_locale_override(Some("fr-FR".into()), &fallback);
+        }
+        let snapshot = context.default_browser_identity_override_owned().unwrap();
+        assert_eq!(snapshot, combined);
+        assert_eq!(
+            context
+                .effective_active_browser_identity_override_owned()
+                .as_ref(),
+            Some(&combined)
+        );
+        assert_eq!(
+            context.emulation_defaults().locale.as_deref(),
+            Some("fr-FR")
+        );
+        assert!(!context.has_active_target());
+
+        context.set_default_user_agent_override(None, &next_fallback);
+        assert_eq!(
+            context.default_browser_identity_override(),
+            Some(&BrowserIdentityProfile::new("Next-UA", "fr-FR"))
+        );
+        assert_eq!(
+            context.reported_active_user_agent_override(),
+            Some("Next-UA")
+        );
+        assert_eq!(
+            context.emulation_defaults().locale.as_deref(),
+            Some("fr-FR")
+        );
+        context.set_default_locale_override(None, &next_fallback);
+        assert!(context.default_browser_identity_override().is_none());
+        assert!(context.reported_active_user_agent_override().is_none());
+        assert!(context.emulation_defaults().locale.is_none());
+
+        context.set_default_user_agent_override(Some("Context-UA".into()), &fallback);
+        context.set_default_locale_override(Some("fr-FR".into()), &fallback);
+        context.set_default_locale_override(None, &next_fallback);
+        assert_eq!(
+            context.default_browser_identity_override(),
+            Some(&BrowserIdentityProfile::new("Context-UA", "de-DE"))
+        );
+        assert!(context.emulation_defaults().locale.is_none());
+        assert_eq!(snapshot, combined);
+        context.set_default_user_agent_override(None, &next_fallback);
+        assert!(context.default_browser_identity_override().is_none());
+    }
+}
+
+#[test]
+fn context_browser_identity_outlives_projection() {
+    use moli_browser_profile::BrowserIdentityProfile;
+
+    let expected = BrowserIdentityProfile::new("Context-UA", "fr-FR");
+    let physical = {
+        let mut projection =
+            BrowserContext::new_with_page_for_test("CTX-identity", "page-identity");
+        projection.attach_active_session("session-identity");
+        projection.set_default_user_agent_override(Some("Context-UA".into()), &Default::default());
+        projection.set_default_locale_override(Some("fr-FR".into()), &Default::default());
+        assert_eq!(
+            projection
+                .effective_active_browser_identity_override_owned()
+                .as_ref(),
+            Some(&expected)
+        );
+        assert_eq!(
+            projection.detach_active_session().as_deref(),
+            Some("session-identity")
+        );
+        projection.physical
+    };
+    assert_eq!(physical.browser_identity_override.as_ref(), Some(&expected));
+    assert_eq!(physical.emulation_defaults.locale.as_deref(), Some("fr-FR"));
+    let other = BrowserContext::new("CTX-other".into());
+    assert!(other.default_browser_identity_override().is_none());
+}
+
+#[test]
 fn context_emulation_defaults_outlive_projection_without_inherited_mirrors() {
     let metrics = EmulatedDeviceMetrics {
         width: 640,

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 
+use moli_browser_profile::BrowserIdentityProfile;
 use moli_core::{
     browser::BrowserContextId,
     runtime::{
@@ -24,6 +25,7 @@ pub(super) struct BrowserContext {
     pub(super) page_navigation_runtime_config: Option<NavigationRuntimeConfig>,
     pub(super) network_policy: ContextNetworkPolicy,
     pub(super) emulation_defaults: ContextEmulationDefaults,
+    pub(super) browser_identity_override: Option<BrowserIdentityProfile>,
     // The wrapper drops its page/engine residents first. Keep the stores alive
     // while the remaining runtime root stops producers and joins its network.
     renderer_runtime_owner: Option<RendererBrowserContextRuntimeOwner>,
@@ -42,6 +44,7 @@ impl BrowserContext {
             page_navigation_runtime_config: None,
             network_policy: ContextNetworkPolicy::default(),
             emulation_defaults: ContextEmulationDefaults::default(),
+            browser_identity_override: None,
             renderer_runtime_owner: Some(RendererBrowserContextRuntime::new()),
             storage_partition: StoragePartition::new(
                 handles,
