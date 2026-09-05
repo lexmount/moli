@@ -161,14 +161,14 @@ mod tests {
                 .find(|bc| bc.id == "BID-2")
                 .expect("session browser context")
                 .active_page_target()
-                .tls_verify_host_override,
+                .tls_verify_host_override(),
             Some(false)
         );
         assert_eq!(
             ctx.conn
                 .browser_context
                 .as_ref()
-                .and_then(|bc| bc.active_page_target().tls_verify_host_override),
+                .and_then(|bc| bc.active_page_target().tls_verify_host_override()),
             None
         );
     }

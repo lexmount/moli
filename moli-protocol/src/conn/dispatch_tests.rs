@@ -8517,7 +8517,7 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
             .and_then(|browser_context| {
                 browser_context.background_target("TID-security-background")
             })
-            .and_then(|target| target.tls_verify_host_override),
+            .and_then(|target| target.tls_verify_host_override()),
         Some(false),
         "the attached background session should update only its target"
     );

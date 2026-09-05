@@ -1,4 +1,4 @@
-use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionStateMut};
+use super::target_session_owner::TargetSessionOwnerMut;
 use super::*;
 use crate::conn::CdpSessionRoute;
 use crate::conn::{CapturedBody, TargetRuntimeSlot};
@@ -10,13 +10,6 @@ use crate::domains::network::{
 };
 use moli_core::page::PendingPageCommand;
 use moli_page_types::DevToolsSessionKey;
-
-impl TargetSessionStateMut<'_> {
-    fn set_tls_verify_host_override(mut self, enabled: bool) -> bool {
-        *self.tls_verify_host_override_mut() = Some(enabled);
-        true
-    }
-}
 
 struct TargetNetworkListenerOwnerMut<'a> {
     target: &'a mut crate::conn::PageTargetHost,
@@ -264,8 +257,10 @@ impl TargetSessionOwnerMut<'_> {
         true
     }
 
-    fn set_tls_verify_host_override(mut self, enabled: bool) -> bool {
-        self.mutate_session_state_ref(|state| state.set_tls_verify_host_override(enabled))
+    fn set_tls_verify_host_override(mut self, enabled: bool) {
+        self.mutate_page_state(|target, _session| {
+            target.set_tls_verify_host_override(Some(enabled));
+        });
     }
 
     fn start_set_network_offline(
@@ -771,9 +766,7 @@ impl CdpConnection {
         let Some(owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
-        if !owner.set_tls_verify_host_override(enabled) {
-            return Err("BrowserContextNotLoaded".to_owned());
-        }
+        owner.set_tls_verify_host_override(enabled);
         self.start_rebuild_resource_runtime_for_session_owner(session_id)
     }
 
@@ -817,6 +810,58 @@ mod tests {
         );
         conn.install_browser_context_fixture_for_test(browser_context);
         conn
+    }
+
+    #[tokio::test]
+    async fn tls_policy_is_shared_by_page_sessions_and_primary_cleanup_reveals_context_default() {
+        let mut conn = connection_with_background_attached_session();
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .default_tls_verify_host_override = Some(true);
+        for (session, enabled) in [
+            ("SID-attached", false),
+            ("SID-background", true),
+            ("SID-attached", false),
+        ] {
+            assert!(
+                conn.start_set_tls_verify_host_for_session_owner(Some(session), enabled)
+                    .unwrap()
+                    .is_none()
+            );
+            for observer in ["SID-background", "SID-attached"] {
+                let inputs = conn.navigation_load_inputs_for_session_owner(Some(observer));
+                assert_eq!(inputs.tls_verify_host_override, Some(enabled));
+                assert_eq!(
+                    conn.ensure_resource_request_client_for_navigation_load_inputs(&inputs)
+                        .unwrap()
+                        .tls_verify_host(),
+                    enabled
+                );
+            }
+        }
+        for (session, installed, effective) in [
+            ("SID-attached", Some(false), false),
+            ("SID-background", None, true),
+        ] {
+            let context = conn.browser_context.as_mut().unwrap();
+            context
+                .reset_primary_page_session_target_state_async("TID-background", session)
+                .await
+                .unwrap();
+            let target = context.page_target("TID-background").unwrap();
+            assert!(target.is_session("SID-background"));
+            assert_eq!(target.tls_verify_host_override(), installed);
+            assert_eq!(context.default_tls_verify_host_override, Some(true));
+            let inputs = conn.navigation_load_inputs_for_session_owner(Some("SID-background"));
+            assert_eq!(inputs.tls_verify_host_override, Some(effective));
+            assert_eq!(
+                conn.ensure_resource_request_client_for_navigation_load_inputs(&inputs)
+                    .unwrap()
+                    .tls_verify_host(),
+                effective
+            );
+        }
     }
 
     #[test]

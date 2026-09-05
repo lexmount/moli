@@ -152,6 +152,21 @@ impl PageTargetHost {
             .set_network_offline(offline);
     }
 
+    pub(crate) fn tls_verify_host_override(&self) -> Option<bool> {
+        self.runtime_slot
+            .page_slot()
+            .contents
+            .tls_verify_host_override
+    }
+
+    // Value-only bridge until AgentHost/BrowserHandle install (Commits 14/22).
+    pub(crate) fn set_tls_verify_host_override(&mut self, enabled: Option<bool>) {
+        self.runtime_slot
+            .page_slot_mut()
+            .contents
+            .set_tls_verify_host_override(enabled);
+    }
+
     // Like request policy, this value-only bridge is replaced by the typed
     // AgentHost/BrowserHandle install in Commits 14/22, before 24b.
     fn install_effective_browser_identity(&mut self) {
@@ -323,7 +338,7 @@ impl PageTargetHost {
             || self.browser_identity_override().is_some()
             || self.http_proxy_override.is_some()
             || self.http_no_proxy_override.is_some()
-            || self.tls_verify_host_override.is_some()
+            || self.tls_verify_host_override().is_some()
             || self.base_locale_override.is_some()
             || self.base_timezone_override.is_some()
             || self.locale_override().is_some()
@@ -350,7 +365,7 @@ impl PageTargetHost {
         self.set_network_offline(false);
         self.http_proxy_override = None;
         self.http_no_proxy_override = None;
-        self.tls_verify_host_override = None;
+        self.set_tls_verify_host_override(None);
         self.input_intercept_drags_enabled = false;
         self.input_drag_intercepted = false;
         self.css_enabled = false;
@@ -696,6 +711,23 @@ mod tests {
     use super::{PageScreencastConfig, PageScreencastFormat, PageScreencastSessionState};
     use crate::conn::PageTargetHost;
     use moli_page_types::DevToolsSessionKey;
+
+    #[test]
+    fn tls_policy_survives_projection_drop_and_updates_without_session_state() {
+        let mut target = PageTargetHost::empty("TID-owned-tls".into());
+        target.set_tls_verify_host_override(Some(false));
+        target.set_network_offline(true);
+        let id = target.web_contents_id();
+        let mut contents = std::mem::take(&mut target.runtime_slot.page_slot_mut().contents);
+        drop(target);
+        assert_eq!(contents.id(), id);
+        assert_eq!(contents.tls_verify_host_override, Some(false));
+        for enabled in [Some(true), None] {
+            contents.set_tls_verify_host_override(enabled);
+            assert_eq!(contents.tls_verify_host_override, enabled);
+            assert!(contents.network_offline);
+        }
+    }
 
     #[test]
     fn network_offline_survives_projection_drop_without_overwriting_request_policy() {

@@ -893,7 +893,7 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
                 .map(|identity| identity.user_agent()),
             Some("Moli/Target-B")
         );
-        assert_eq!(background.tls_verify_host_override, Some(true));
+        assert_eq!(background.tls_verify_host_override(), Some(true));
         assert!(
             background
                 .navigation_engine()
@@ -928,7 +928,7 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
             Some("Moli/Target-B")
         );
         assert_eq!(
-            active.active_page_target().tls_verify_host_override,
+            active.active_page_target().tls_verify_host_override(),
             Some(true)
         );
     }
@@ -962,7 +962,7 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
             Some("Moli/Target-A")
         );
         assert_eq!(
-            active.active_page_target().tls_verify_host_override,
+            active.active_page_target().tls_verify_host_override(),
             Some(false)
         );
     }
@@ -1229,7 +1229,7 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_close_tar
             Some("Moli/Close-A")
         );
         assert_eq!(
-            active.active_page_target().tls_verify_host_override,
+            active.active_page_target().tls_verify_host_override(),
             Some(false)
         );
     }

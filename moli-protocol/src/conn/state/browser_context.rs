@@ -1624,7 +1624,7 @@ impl BrowserContext {
     pub(crate) fn effective_active_tls_verify_host_override(&self) -> Option<bool> {
         self.page_targets
             .active()
-            .and_then(|host| host.tls_verify_host_override)
+            .and_then(|host| host.tls_verify_host_override())
             .or(self.default_tls_verify_host_override)
     }
 

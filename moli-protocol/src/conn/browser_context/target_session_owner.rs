@@ -89,7 +89,6 @@ impl ClosedPageTarget {
 
 pub(super) struct TargetSessionStateMut<'a> {
     pub(super) devtools_session_state: &'a mut DevToolsSessionState,
-    pub(super) tls_verify_host_override: &'a mut Option<bool>,
 }
 
 pub(crate) struct TargetLoadedNavigationCommitState {
@@ -295,7 +294,7 @@ impl TargetNavigationLoadInputs {
                 .clone()
                 .or_else(|| browser_context.default_http_no_proxy_override.clone()),
             tls_verify_host_override: page_state
-                .tls_verify_host_override
+                .tls_verify_host_override()
                 .or(browser_context.default_tls_verify_host_override),
             navigation_initiator_url: target_navigation_initiator_url(
                 target.target_url(),
@@ -618,10 +617,6 @@ impl TargetSessionStateMut<'_> {
     pub(super) fn runtime_session_state_mut(&mut self) -> &mut TargetRuntimeSessionState {
         &mut self.devtools_session_state.runtime_session_state
     }
-
-    pub(super) fn tls_verify_host_override_mut(&mut self) -> &mut Option<bool> {
-        self.tls_verify_host_override
-    }
 }
 
 impl<'a> TargetSessionOwnerMut<'a> {
@@ -680,7 +675,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
         let devtools_session_state = target.devtools_sessions.ensure_session(&self.session_key);
         f(TargetSessionStateMut {
             devtools_session_state,
-            tls_verify_host_override: &mut target.tls_verify_host_override,
         })
     }
 
@@ -3202,7 +3196,7 @@ mod tests {
             state.set_base_timezone_override(Some("Europe/Paris".to_owned()));
             state.http_proxy_override = Some("http://proxy.example:8080".to_owned());
             state.http_no_proxy_override = Some("localhost,127.0.0.1".to_owned());
-            state.tls_verify_host_override = Some(false);
+            state.set_tls_verify_host_override(Some(false));
             state.apply_emulation_policy_change(
                 crate::conn::EmulationPolicyChange::ScriptExecutionDisabled(true),
             );

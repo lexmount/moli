@@ -1202,11 +1202,15 @@ async fn loader_uses_active_browser_context_http_no_proxy_override() {
 async fn loader_uses_active_browser_context_tls_verify_host_override() {
     let mut conn = CdpConnection::new();
     let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-    first.active_page_target_mut().tls_verify_host_override = Some(false);
+    first
+        .active_page_target_mut()
+        .set_tls_verify_host_override(Some(false));
     conn.install_browser_context_fixture_for_test(first);
 
     let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
-    second.active_page_target_mut().tls_verify_host_override = Some(true);
+    second
+        .active_page_target_mut()
+        .set_tls_verify_host_override(Some(true));
     conn.push_inactive_browser_context_fixture_for_test(second);
 
     assert!(
