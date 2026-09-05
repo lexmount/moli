@@ -38,10 +38,16 @@ use super::{
     shared_worker_target::SharedWorkerTargetState,
 };
 
+mod physical;
+#[cfg(test)]
+mod tests;
+use physical::{BrowserContext as PhysicalBrowserContext, StoragePartitionKind};
+
+/// DevTools context projection with a privately embedded Browser context.
+/// Storage/runtime live in the Browser owner; the page collection moves with
+/// selection at Commit 7b and this wrapper is removed at Commits 24b/30.
 pub struct BrowserContext {
-    browser_context_id: BrowserContextId,
     pub id: String,
-    storage_partition: BrowserContextStoragePartition,
     pub(crate) page_targets: PageTargetRegistry,
     /// Test-only cookie overrides, inherited by the first page fixture.
     #[cfg(test)]
@@ -70,32 +76,9 @@ pub struct BrowserContext {
     pub(crate) default_emulated_device_metrics: Option<EmulatedDeviceMetrics>,
     pub(crate) next_default_document_start_script_id: u32,
     pub(crate) default_document_start_scripts: Vec<(String, DocumentStartScript)>,
-    pub(crate) storage_quota_overrides: HashMap<String, f64>,
-    pub(crate) http_cache_root: Option<PathBuf>,
-    pub(crate) http_cache_max_bytes: Option<u64>,
-    pub(crate) page_navigation_runtime_config: Option<NavigationRuntimeConfig>,
     renderer_output_transport_sender: Option<moli_core::RendererOutputTransportSender>,
-    // Keep the sole strong per-context network owner last. Protocol teardown
-    // must drop pages and NavigationEngines before this field is released.
-    pub(crate) renderer_runtime_owner: Option<RendererBrowserContextRuntimeOwner>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum BrowserContextStoragePartitionKind {
-    ProfileBacked,
-    Ephemeral,
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub(crate) struct BrowserContextStoragePartitionIdentity {
-    kind: BrowserContextStoragePartitionKind,
-    id: String,
-}
-
-#[derive(Clone)]
-struct BrowserContextStoragePartition {
-    identity: BrowserContextStoragePartitionIdentity,
-    handles: BrowserContextStoragePartitionHandles,
+    // Embedded page/engine residents must be dropped before the context root.
+    physical: PhysicalBrowserContext,
 }
 
 #[derive(Clone)]
@@ -128,79 +111,6 @@ pub(crate) struct BrowserContextOriginStorageUsage {
     pub(crate) indexed_db_usage: u64,
     pub(crate) storage_buckets_usage: u64,
     pub(crate) total_usage: u64,
-}
-
-impl BrowserContextStoragePartition {
-    fn new(
-        identity: BrowserContextStoragePartitionIdentity,
-        handles: BrowserContextStoragePartitionHandles,
-    ) -> Self {
-        Self { identity, handles }
-    }
-
-    fn identity(&self) -> &BrowserContextStoragePartitionIdentity {
-        &self.identity
-    }
-
-    fn cookie_store(&self) -> &SharedBrowserCookieStore {
-        &self.handles.cookie_store
-    }
-
-    fn web_storage_store(&self) -> &SharedWebStorageStore {
-        &self.handles.web_storage_store
-    }
-
-    fn indexed_db_manager(&self) -> &SharedIndexedDbManager {
-        &self.handles.indexed_db_manager
-    }
-
-    fn storage_bucket_store(&self) -> &SharedStorageBucketStore {
-        &self.handles.storage_bucket_store
-    }
-
-    #[cfg(test)]
-    fn replace_storage_bucket_store(&mut self, storage_bucket_store: SharedStorageBucketStore) {
-        self.handles.storage_bucket_store = storage_bucket_store;
-    }
-}
-
-impl std::fmt::Debug for BrowserContextStoragePartition {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BrowserContextStoragePartition")
-            .field("identity", &self.identity)
-            .finish_non_exhaustive()
-    }
-}
-
-impl BrowserContextStoragePartitionIdentity {
-    pub(crate) fn profile_backed_default() -> Self {
-        Self {
-            kind: BrowserContextStoragePartitionKind::ProfileBacked,
-            id: "default".to_owned(),
-        }
-    }
-
-    pub(crate) fn ephemeral(id: impl Into<String>) -> Self {
-        Self {
-            kind: BrowserContextStoragePartitionKind::Ephemeral,
-            id: id.into(),
-        }
-    }
-
-    pub(crate) fn kind(&self) -> BrowserContextStoragePartitionKind {
-        self.kind
-    }
-
-    pub(crate) fn id(&self) -> &str {
-        &self.id
-    }
-
-    pub(crate) fn kind_label(&self) -> &'static str {
-        match self.kind {
-            BrowserContextStoragePartitionKind::ProfileBacked => "profile-backed",
-            BrowserContextStoragePartitionKind::Ephemeral => "ephemeral",
-        }
-    }
 }
 
 impl BrowserContextStoragePartitionHandles {
@@ -317,15 +227,6 @@ impl BrowserContextPageStorageHandles {
     }
 }
 
-impl std::fmt::Debug for BrowserContextStoragePartitionIdentity {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("BrowserContextStoragePartitionIdentity")
-            .field("kind", &self.kind)
-            .field("id", &self.id)
-            .finish()
-    }
-}
-
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(crate) struct SiteDataClearOptions {
     pub cookies: bool,
@@ -338,9 +239,9 @@ pub(crate) struct SiteDataClearOptions {
 impl std::fmt::Debug for BrowserContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BrowserContext")
-            .field("browser_context_id", &self.browser_context_id)
+            .field("browser_context_id", &self.physical.id)
             .field("id", &self.id)
-            .field("storage_partition", &self.storage_partition)
+            .field("storage_partition", &self.physical.storage_partition)
             .field("active_target_id", &self.active_target_id())
             .field("active_session_id", &self.active_session_id())
             .field("has_loaded_page", &self.has_loaded_page())
@@ -354,7 +255,7 @@ fn usize_to_u64_saturating(value: usize) -> u64 {
 
 impl BrowserContext {
     pub fn browser_context_id(&self) -> BrowserContextId {
-        self.browser_context_id
+        self.physical.id
     }
 
     pub(crate) fn active_page_target(&self) -> &PageTargetHost {
@@ -433,13 +334,12 @@ impl BrowserContext {
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
     ) -> Self {
-        let storage_partition = BrowserContextStoragePartitionIdentity::ephemeral(id.as_str());
-        Self::new_with_storage_partition_and_storage_partition_identity(
+        Self::new_with_storage_partition_kind(
             id,
             partition,
             http_cache_root,
             http_cache_max_bytes,
-            storage_partition,
+            StoragePartitionKind::Ephemeral,
         )
     }
 
@@ -462,12 +362,12 @@ impl BrowserContext {
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
     ) -> Self {
-        Self::new_with_storage_partition_and_storage_partition_identity(
+        Self::new_with_storage_partition_kind(
             id,
             partition,
             http_cache_root,
             http_cache_max_bytes,
-            BrowserContextStoragePartitionIdentity::profile_backed_default(),
+            StoragePartitionKind::ProfileBacked,
         )
     }
 
@@ -485,19 +385,18 @@ impl BrowserContext {
         )
     }
 
-    fn new_with_storage_partition_and_storage_partition_identity(
+    fn new_with_storage_partition_kind(
         id: String,
         partition: BrowserContextStoragePartitionHandles,
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
-        identity: BrowserContextStoragePartitionIdentity,
+        kind: StoragePartitionKind,
     ) -> Self {
-        let storage_partition = BrowserContextStoragePartition::new(identity, partition);
+        let physical =
+            PhysicalBrowserContext::new(partition, kind, http_cache_root, http_cache_max_bytes);
 
         Self {
-            browser_context_id: BrowserContextId::allocate(),
             id,
-            storage_partition,
             page_targets: PageTargetRegistry::default(),
             #[cfg(test)]
             default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
@@ -525,12 +424,8 @@ impl BrowserContext {
             default_emulated_device_metrics: None,
             next_default_document_start_script_id: 0,
             default_document_start_scripts: Vec::new(),
-            storage_quota_overrides: HashMap::new(),
-            http_cache_root,
-            http_cache_max_bytes,
-            page_navigation_runtime_config: None,
             renderer_output_transport_sender: None,
-            renderer_runtime_owner: Some(RendererBrowserContextRuntime::new()),
+            physical,
         }
     }
 
@@ -538,15 +433,17 @@ impl BrowserContext {
         &self,
         config: NavigationRuntimeConfig,
     ) -> NavigationEngine {
-        let engine = NavigationEngine::new_with_runtime_config_and_browser_context_access(
-            config,
-            self.renderer_runtime_owner_access(),
-        )
-        .expect("live BrowserContext owner must accept a page engine");
+        let engine = self.physical.new_page_navigation_engine(config);
         if let Some(sender) = self.renderer_output_transport_sender.clone() {
             engine.set_renderer_output_transport_sender(sender);
         }
         engine
+    }
+
+    pub(in crate::conn) fn page_navigation_runtime_config(
+        &self,
+    ) -> Option<NavigationRuntimeConfig> {
+        self.physical.page_navigation_runtime_config.clone()
     }
 
     pub(crate) fn bind_page_navigation_engines(
@@ -554,20 +451,15 @@ impl BrowserContext {
         config: NavigationRuntimeConfig,
         renderer_output_transport_sender: Option<moli_core::RendererOutputTransportSender>,
     ) {
-        self.page_navigation_runtime_config = Some(config.clone());
+        self.physical.page_navigation_runtime_config = Some(config.clone());
         self.renderer_output_transport_sender = renderer_output_transport_sender;
 
-        let renderer_runtime = self.renderer_runtime_owner_access();
         let sender = self.renderer_output_transport_sender.clone();
         for host in self.page_targets.iter_mut() {
             if host.navigation_engine().is_some() {
                 continue;
             }
-            let engine = NavigationEngine::new_with_runtime_config_and_browser_context_access(
-                config.clone(),
-                renderer_runtime.clone(),
-            )
-            .expect("live BrowserContext owner must accept a page engine");
+            let engine = self.physical.new_page_navigation_engine(config.clone());
             if let Some(sender) = sender.clone() {
                 engine.set_renderer_output_transport_sender(sender);
             }
@@ -599,16 +491,18 @@ impl BrowserContext {
     }
 
     pub(crate) fn is_profile_backed_storage_partition(&self) -> bool {
-        self.storage_partition.identity().kind()
-            == BrowserContextStoragePartitionKind::ProfileBacked
+        self.physical.storage_partition.kind == StoragePartitionKind::ProfileBacked
     }
 
     pub(crate) fn storage_partition_id(&self) -> &str {
-        self.storage_partition.identity().id()
+        match self.physical.storage_partition.kind {
+            StoragePartitionKind::ProfileBacked => "default",
+            StoragePartitionKind::Ephemeral => &self.id,
+        }
     }
 
     pub(crate) fn storage_partition_kind_label(&self) -> &'static str {
-        self.storage_partition.identity().kind_label()
+        self.physical.storage_partition.kind_label()
     }
 
     pub(crate) fn resource_storage_handles(&self) -> BrowserContextResourceStorageHandles {
@@ -617,7 +511,8 @@ impl BrowserContext {
             .active()
             .map(|target| target.session_storage_store().clone())
             .unwrap_or_else(new_shared_web_storage_store);
-        self.storage_partition
+        self.physical
+            .storage_partition
             .handles
             .resource_storage_handles(session_storage_store)
     }
@@ -628,7 +523,8 @@ impl BrowserContext {
             .active()
             .map(|target| target.session_storage_store().clone())
             .unwrap_or_else(new_shared_web_storage_store);
-        self.storage_partition
+        self.physical
+            .storage_partition
             .handles
             .page_storage_handles(session_storage_store)
     }
@@ -639,7 +535,8 @@ impl BrowserContext {
     ) -> Option<BrowserContextPageStorageHandles> {
         let target = self.page_target(target_id)?;
         Some(
-            self.storage_partition
+            self.physical
+                .storage_partition
                 .handles
                 .page_storage_handles(target.session_storage_store().clone()),
         )
@@ -647,7 +544,7 @@ impl BrowserContext {
 
     #[cfg(test)]
     pub(crate) fn with_cookie_store<R>(&self, f: impl FnOnce(&BrowserCookieStore) -> R) -> R {
-        let cookie_store = self.storage_partition.cookie_store().lock();
+        let cookie_store = self.physical.storage_partition.cookie_store().lock();
         f(&cookie_store)
     }
 
@@ -655,7 +552,7 @@ impl BrowserContext {
         &self,
         f: impl FnOnce(&mut BrowserCookieStore) -> R,
     ) -> R {
-        let mut cookie_store = self.storage_partition.cookie_store().lock();
+        let mut cookie_store = self.physical.storage_partition.cookie_store().lock();
         f(&mut cookie_store)
     }
 
@@ -669,7 +566,7 @@ impl BrowserContext {
         request_url: &url::Url,
         request_context: NetworkCookieRequestContext,
     ) -> Option<StoredCookieQueryReport> {
-        let mut cookie_store = self.storage_partition.cookie_store().lock();
+        let mut cookie_store = self.physical.storage_partition.cookie_store().lock();
         let report =
             cookie_store.observe_cookie_access_report_for_request(request_url, request_context);
         (!report.included_cookies.is_empty() || !report.excluded_cookies.is_empty())
@@ -677,22 +574,21 @@ impl BrowserContext {
     }
 
     pub(crate) fn storage_quota_for_origin(&self, origin: &str) -> (f64, bool) {
-        self.storage_quota_overrides
-            .get(origin)
-            .copied()
-            .map(|quota| (quota, true))
-            .unwrap_or((
-                moli_core::storage::DEFAULT_ORIGIN_STORAGE_QUOTA_BYTES as f64,
-                false,
-            ))
+        self.physical
+            .storage_partition
+            .storage_quota_for_origin(origin)
     }
 
     pub(crate) fn set_storage_quota_override(&mut self, origin: String, quota: f64) {
-        self.storage_quota_overrides.insert(origin, quota);
+        self.physical
+            .storage_partition
+            .set_storage_quota_override(origin, quota);
     }
 
     pub(crate) fn clear_storage_quota_override(&mut self, origin: &str) {
-        self.storage_quota_overrides.remove(origin);
+        self.physical
+            .storage_partition
+            .clear_storage_quota_override(origin);
     }
 
     pub(crate) fn storage_usage_for_origin(
@@ -700,11 +596,11 @@ impl BrowserContext {
         serialized_origin: &str,
     ) -> Result<BrowserContextOriginStorageUsage, String> {
         let local_storage_usage = {
-            let store = self.storage_partition.web_storage_store().lock();
+            let store = self.physical.storage_partition.web_storage_store().lock();
             usize_to_u64_saturating(store.usage_bytes_for_origin_areas(serialized_origin))
         };
         let indexed_db_usage = moli_core::storage::indexed_db_origins_with_prefix_usage_bytes(
-            self.storage_partition.indexed_db_manager(),
+            self.physical.storage_partition.indexed_db_manager(),
             &moli_storage_key::storage_key_prefix_for_origin(serialized_origin),
         )?;
         let storage_buckets_usage = self.storage_bucket_usage_for_origin(serialized_origin)?;
@@ -720,7 +616,11 @@ impl BrowserContext {
 
     fn storage_bucket_usage_for_origin(&self, serialized_origin: &str) -> Result<u64, String> {
         let (bucket_identities, cache_usage, storage_service) = {
-            let store = self.storage_partition.storage_bucket_store().lock();
+            let store = self
+                .physical
+                .storage_partition
+                .storage_bucket_store()
+                .lock();
             (
                 store.bucket_identities_for_origin_areas(serialized_origin),
                 store.cache_usage_for_origin_areas(serialized_origin),
@@ -730,7 +630,7 @@ impl BrowserContext {
         let mut usage = cache_usage;
         for identity in bucket_identities {
             let indexed_db_usage = moli_core::storage::indexed_db_origin_usage_bytes(
-                self.storage_partition.indexed_db_manager(),
+                self.physical.storage_partition.indexed_db_manager(),
                 &identity.indexed_db_storage_key(),
             )?;
             let opfs_usage = storage_service
@@ -747,7 +647,7 @@ impl BrowserContext {
         &self,
         cleanups: Vec<StorageBucketIdentity>,
     ) -> Result<(), String> {
-        let bucket_store = self.storage_partition.storage_bucket_store();
+        let bucket_store = self.physical.storage_partition.storage_bucket_store();
         for cleanup in cleanups {
             moli_core::storage::complete_storage_bucket_deletion(bucket_store, &cleanup)
                 .map_err(|error| format!("FailedToCompleteStorageBucketDeletion: {error}"))?;
@@ -756,23 +656,17 @@ impl BrowserContext {
     }
 
     pub(crate) fn renderer_runtime(&self) -> RendererBrowserContextRuntime {
-        self.renderer_runtime_owner
-            .as_ref()
-            .expect("BrowserContext renderer owner was already taken for teardown")
-            .handle()
+        self.physical.renderer_runtime()
     }
 
     pub(crate) fn renderer_runtime_owner_access(&self) -> RendererBrowserContextRuntimeOwnerAccess {
-        self.renderer_runtime_owner
-            .as_ref()
-            .expect("BrowserContext renderer owner was already taken for teardown")
-            .owner_access()
+        self.physical.renderer_runtime_owner_access()
     }
 
     pub(crate) fn take_renderer_runtime_owner_for_teardown(
         &mut self,
     ) -> Option<RendererBrowserContextRuntimeOwner> {
-        self.renderer_runtime_owner.take()
+        self.physical.take_renderer_runtime_owner_for_teardown()
     }
 
     pub(crate) fn routes_renderer_browser_context_runtime(
@@ -1316,7 +1210,7 @@ impl BrowserContext {
 
     pub(crate) fn clear_indexed_db_origin(&self, origin: &str) -> Result<(), String> {
         moli_core::storage::clear_indexed_db_origin(
-            self.storage_partition.indexed_db_manager(),
+            self.physical.storage_partition.indexed_db_manager(),
             origin,
         )
     }
@@ -1329,13 +1223,13 @@ impl BrowserContext {
         if options.cookies
             && let Some(host) = origin.host_str().map(str::to_ascii_lowercase)
         {
-            let mut cookie_store = self.storage_partition.cookie_store().lock();
+            let mut cookie_store = self.physical.storage_partition.cookie_store().lock();
             cookie_store.delete_cookies(None, None, None, Some(host.as_str()));
         }
 
         let serialized_origin = origin.origin().ascii_serialization();
         if options.local_storage {
-            let mut store = self.storage_partition.web_storage_store().lock();
+            let mut store = self.physical.storage_partition.web_storage_store().lock();
             store
                 .try_clear_origin_areas(&serialized_origin)
                 .map_err(|error| format!("FailedToClearLocalStorage: {error}"))?;
@@ -1343,13 +1237,14 @@ impl BrowserContext {
 
         if options.indexed_db {
             moli_core::storage::clear_indexed_db_origins_with_prefix(
-                self.storage_partition.indexed_db_manager(),
+                self.physical.storage_partition.indexed_db_manager(),
                 &moli_storage_key::storage_key_prefix_for_origin(&serialized_origin),
             )?;
         }
 
         if options.storage_buckets {
             let cleanups = self
+                .physical
                 .storage_partition
                 .storage_bucket_store()
                 .lock()
@@ -1379,13 +1274,13 @@ impl BrowserContext {
         if options.cookies
             && let Some(host) = origin.host_str().map(str::to_ascii_lowercase)
         {
-            let mut cookie_store = self.storage_partition.cookie_store().lock();
+            let mut cookie_store = self.physical.storage_partition.cookie_store().lock();
             cookie_store.delete_cookies(None, None, None, Some(host.as_str()));
         }
 
         let serialized_storage_key = storage_key.serialized_storage_key();
         if options.local_storage {
-            let mut store = self.storage_partition.web_storage_store().lock();
+            let mut store = self.physical.storage_partition.web_storage_store().lock();
             store
                 .try_clear_origin(&serialized_storage_key)
                 .map_err(|error| format!("FailedToClearLocalStorage: {error}"))?;
@@ -1397,6 +1292,7 @@ impl BrowserContext {
 
         if options.storage_buckets {
             let cleanups = self
+                .physical
                 .storage_partition
                 .storage_bucket_store()
                 .lock()
@@ -1413,23 +1309,28 @@ impl BrowserContext {
     }
 
     pub(crate) fn clear_http_cache(&self) -> Result<(), String> {
-        let Some(cache_root) = self.http_cache_root.as_ref() else {
-            return Ok(());
-        };
-        moli_fetch::clear_http_cache_root(cache_root, self.http_cache_max_bytes)
-            .map_err(|error| format!("FailedToClearHttpCache: {error}"))
+        self.physical.storage_partition.clear_http_cache()
     }
 
     pub(crate) fn clear_http_cache_for_origin(&self, origin: &url::Url) -> Result<usize, String> {
-        let Some(cache_root) = self.http_cache_root.as_ref() else {
-            return Ok(0);
-        };
-        moli_fetch::clear_http_cache_root_for_origin(cache_root, self.http_cache_max_bytes, origin)
-            .map_err(|error| format!("FailedToClearHttpCache: {error}"))
+        self.physical
+            .storage_partition
+            .clear_http_cache_for_origin(origin)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn http_cache_configuration_for_test(
+        &self,
+    ) -> (Option<&std::path::Path>, Option<u64>) {
+        self.physical.storage_partition.http_cache_configuration()
     }
 
     pub(crate) fn snapshot_cookies(&self) -> Vec<StoredCookie> {
-        self.storage_partition.cookie_store().lock().cookies()
+        self.physical
+            .storage_partition
+            .cookie_store()
+            .lock()
+            .cookies()
     }
 
     #[cfg(test)]
@@ -1445,12 +1346,12 @@ impl BrowserContext {
 
     #[cfg(test)]
     pub(crate) fn cookie_store_for_test(&self) -> &SharedBrowserCookieStore {
-        self.storage_partition.cookie_store()
+        self.physical.storage_partition.cookie_store()
     }
 
     #[cfg(test)]
     pub(crate) fn web_storage_store_for_test(&self) -> &SharedWebStorageStore {
-        self.storage_partition.web_storage_store()
+        self.physical.storage_partition.web_storage_store()
     }
 
     #[cfg(test)]
@@ -1460,12 +1361,12 @@ impl BrowserContext {
 
     #[cfg(test)]
     pub(crate) fn indexed_db_manager_for_test(&self) -> &SharedIndexedDbManager {
-        self.storage_partition.indexed_db_manager()
+        self.physical.storage_partition.indexed_db_manager()
     }
 
     #[cfg(test)]
     pub(crate) fn storage_bucket_store_for_test(&self) -> &SharedStorageBucketStore {
-        self.storage_partition.storage_bucket_store()
+        self.physical.storage_partition.storage_bucket_store()
     }
 
     #[cfg(test)]
@@ -1473,7 +1374,8 @@ impl BrowserContext {
         &mut self,
         storage_bucket_store: SharedStorageBucketStore,
     ) {
-        self.storage_partition
+        self.physical
+            .storage_partition
             .replace_storage_bucket_store(storage_bucket_store);
     }
 
@@ -1516,7 +1418,7 @@ impl BrowserContext {
         url_host: Option<&str>,
         partition_key: Option<&moli_cookie_jar::StoredCookiePartitionKey>,
     ) {
-        let mut cookie_store = self.storage_partition.cookie_store().lock();
+        let mut cookie_store = self.physical.storage_partition.cookie_store().lock();
         cookie_store.delete_cookies_with_partition_key(name, domain, path, url_host, partition_key);
     }
 
