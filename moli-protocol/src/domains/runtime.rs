@@ -33,10 +33,7 @@ pub(in crate::domains) async fn detach_page_session_inspector_async(
     conn: &mut CdpConnection,
     session_id: &str,
 ) {
-    if let Err(error) = conn
-        .detach_runtime_inspector_session_for_session_owner_async(Some(session_id))
-        .await
-    {
+    if let Err(error) = conn.detach_runtime_inspector_session_for_session_owner(Some(session_id)) {
         tracing::debug!(
             session_id,
             %error,

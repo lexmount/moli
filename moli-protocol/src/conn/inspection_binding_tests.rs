@@ -4,6 +4,7 @@ use super::{BrowserContext, CdpCommandTaskStep, CommandOwnerScope};
 use crate::testing::TestContext;
 
 mod document_agents;
+mod lifecycle;
 mod runtime_agents;
 
 #[tokio::test(flavor = "multi_thread")]

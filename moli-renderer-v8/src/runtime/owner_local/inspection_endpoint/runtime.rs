@@ -1,5 +1,5 @@
 use super::super::*;
-use crate::protocol_types::RuntimeBindingRegistration;
+use crate::protocol_types::{RuntimeBindingRegistration, RuntimeIsolatedWorldDefinition};
 
 /// A borrowed, session-scoped Runtime realm/binding capability, without Page access.
 pub struct RendererRuntimeInspection<'a> {
@@ -23,6 +23,22 @@ impl RendererInspectionEndpoint {
 }
 
 impl RendererRuntimeInspection<'_> {
+    pub fn start_apply_runtime_protocol_state(
+        &self,
+        session_restore_snapshots: &[RendererInspectorSessionRestoreSnapshot],
+        isolated_worlds: &[RuntimeIsolatedWorldDefinition],
+        stored_runtime_bindings: &[RuntimeBindingRegistration],
+        session_runtime_bindings: &[RuntimeBindingRegistration],
+    ) -> Result<RendererRuntimeInspectorMainCommandRoute> {
+        self.start_page_command(RendererPageCommand::apply_runtime_protocol_state(
+            self.inspector_session_id.clone(),
+            session_restore_snapshots.to_vec(),
+            isolated_worlds.to_vec(),
+            stored_runtime_bindings.to_vec(),
+            session_runtime_bindings.to_vec(),
+        ))
+    }
+
     fn start_page_command(
         &self,
         command: RendererPageCommand,

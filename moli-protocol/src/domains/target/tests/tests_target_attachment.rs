@@ -1721,7 +1721,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
     ctx.sent.clear();
 
     let baseline_session_count =
-        page_renderer_inspector_session_count(&mut ctx, None, "before Runtime.enable").await;
+        page_renderer_inspector_session_count(&mut ctx, "before Runtime.enable").await;
     ctx.process_async(json!({
         "id": 120_001,
         "sessionId": "SID-detach-primary",
@@ -1739,7 +1739,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
     ctx.sent.clear();
 
     assert_eq!(
-        page_renderer_inspector_session_count(&mut ctx, None, "after both sessions enabled").await,
+        page_renderer_inspector_session_count(&mut ctx, "after both sessions enabled").await,
         baseline_session_count + 1,
         "primary Runtime.enable must reuse the target default Inspector session while attached Runtime.enable adds one session"
     );
@@ -1768,7 +1768,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         "attached detach must publish exactly one target detach event"
     );
     assert_eq!(
-        page_renderer_inspector_session_count(&mut ctx, None, "after attached detach").await,
+        page_renderer_inspector_session_count(&mut ctx, "after attached detach").await,
         baseline_session_count,
         "attached detach should drop only that renderer V8 inspector session"
     );
@@ -1808,8 +1808,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
     ctx.expect_result(120_006, json!({}), Some("SID-detach-attached-replacement"));
     ctx.sent.clear();
     assert_eq!(
-        page_renderer_inspector_session_count(&mut ctx, None, "after replacement attached enable",)
-            .await,
+        page_renderer_inspector_session_count(&mut ctx, "after replacement attached enable",).await,
         baseline_session_count + 1
     );
     ctx.process_async(json!({
@@ -1852,12 +1851,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         "primary detach must publish exactly one target detach event"
     );
     assert_eq!(
-        page_renderer_inspector_session_count(
-            &mut ctx,
-            Some("SID-detach-attached-replacement"),
-            "after primary detach",
-        )
-        .await,
+        page_renderer_inspector_session_count(&mut ctx, "after primary detach",).await,
         baseline_session_count,
         "primary detach must release the default Inspector session while preserving the attached replacement session"
     );
@@ -1946,7 +1940,7 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
     .await;
     ctx.expect_result(120_014, json!({}), Some("SID-detach-diagnostic"));
     assert_eq!(
-        page_renderer_inspector_session_count(&mut ctx, None, "after fresh primary attach").await,
+        page_renderer_inspector_session_count(&mut ctx, "after fresh primary attach").await,
         baseline_session_count,
         "a fresh primary session must not observe a leaked attached renderer session"
     );
@@ -2556,21 +2550,15 @@ async fn detach_fail_closes_page_when_fetch_disable_cannot_reach_renderer() {
     );
 }
 
-async fn page_renderer_inspector_session_count(
-    ctx: &mut TestContext,
-    inspector_session_id: Option<&str>,
-    stage: &str,
-) -> u64 {
+async fn page_renderer_inspector_session_count(ctx: &mut TestContext, stage: &str) -> u64 {
     let page = ctx
         .conn
         .browser_context
         .as_mut()
         .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
         .expect("active target should still have a loaded page");
-    // This diagnostic bypasses CdpConnection's session-aware Page accessor, so
-    // bind the exact surviving Inspector route instead of inheriting whichever
-    // session the prior command happened to stamp on the Page facade.
-    page.set_renderer_devtools_command_session_id(inspector_session_id.map(str::to_owned));
+    // Browser diagnostics have no frontend session and must not re-create a
+    // detached Inspector session merely by observing renderer accounting.
     let response = page
         .runtime_heap_usage_async()
         .await

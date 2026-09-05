@@ -12,6 +12,30 @@ pub use dom_debugger::RendererDomDebuggerInspection;
 pub use runtime::RendererRuntimeInspection;
 
 impl RendererInspectionEndpoint {
+    /// Seals the frontend's Main/IO ingress synchronously, then lets the
+    /// original renderer owner destroy its V8 session. This lifecycle control
+    /// does not wait behind paused JavaScript or introduce another command lane.
+    pub fn detach_session(&self, inspector_session_id: Option<String>) -> Result<()> {
+        self.page_context_cancel_tx.with_inspector_admission(|| {
+            let session = DevToolsSessionKey::from_wire_session_id(
+                inspector_session_id.as_deref().filter(|id| !id.is_empty()),
+            );
+            let pause_guard = RendererRuntimeInspectorSessionDetachGuard::new(
+                self.devtools_target.pause(),
+                self.devtools_target.clone(),
+                self.devtools_agent_token,
+                session,
+            );
+            self.render_runtime.dispatch_detached(
+                RendererOwnerCommand::FinalizeRuntimeInspectorSessionDetach {
+                    token: self.token,
+                    inspector_session_id,
+                    pause_guard,
+                },
+            )
+        })?
+    }
+
     // Only the finite typed agent facades may enter this path. Keep the native
     // PageAgent versus V8 OwnerOnly dispatch boundary of the original command.
     fn enqueue_typed_inspection_command(
@@ -167,6 +191,7 @@ mod tests {
         let io = RendererInspectorIoIngress::new(pause.pause_loop_wake(), None);
         let (page_context_cancel_tx, _) = renderer_page_context_cancel_channel();
         RendererInspectionEndpoint {
+            render_runtime: RenderRuntimeHandle::disconnected(),
             token: RendererPageToken::new_for_testing(PageId::new_for_testing(1)),
             devtools_agent_token: RendererDevToolsAgentToken::allocate(),
             page_context_cancel_tx,
@@ -292,9 +317,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn runtime_bootstrap_preserves_owner_only_main_fifo() {
+        use crate::devtools::command::RendererDevToolsMainNestedDispatch;
+
+        let endpoint = endpoint();
+        let attachment = RendererAgentAttachmentId::allocate();
+        let runtime = endpoint.runtime_inspection(attachment, Some("bootstrap-session".to_owned()));
+        let _bootstrap = runtime
+            .start_apply_runtime_protocol_state(&[], &[], &[], &[])
+            .unwrap();
+        let _following = runtime
+            .start_install_runtime_binding("afterBootstrap", None, None)
+            .unwrap();
+        let main = endpoint.devtools_target.main_ref();
+        assert!(
+            main.claim_for_pause().is_none(),
+            "bootstrap enters V8 only on its owner"
+        );
+        let mut bootstrap = main.claim_for_owner().unwrap();
+        assert_eq!(
+            bootstrap.nested_dispatch(),
+            RendererDevToolsMainNestedDispatch::OwnerOnly
+        );
+        assert_eq!(bootstrap.ticket().attachment(), Some(attachment));
+        assert_eq!(
+            bootstrap.ticket().session().wire_session_id(),
+            Some("bootstrap-session")
+        );
+        let handoff = main.first_dispatch_guard(&mut bootstrap);
+        assert!(
+            main.claim_for_pause().is_none(),
+            "native follow-up cannot overtake bootstrap handoff"
+        );
+        drop(handoff);
+        let following = main.claim_for_pause().unwrap();
+        assert_eq!(
+            following.nested_dispatch(),
+            RendererDevToolsMainNestedDispatch::PageAgent
+        );
+        assert_eq!(following.ticket().attachment(), Some(attachment));
+    }
+
     fn document_agent_commands(
         endpoint: &RendererInspectionEndpoint,
-    ) -> [Result<RendererRuntimeInspectorMainCommandRoute>; 15] {
+    ) -> [Result<RendererRuntimeInspectorMainCommandRoute>; 16] {
         let attachment = RendererAgentAttachmentId::allocate();
         let dom = endpoint.dom_inspection(attachment, None);
         let css = endpoint.css_inspection(attachment, None);
@@ -314,6 +381,7 @@ mod tests {
             runtime.start_install_runtime_binding("binding", None, None),
             runtime.start_remove_runtime_binding("binding"),
             runtime.start_set_runtime_binding_state(&[], &[]),
+            runtime.start_apply_runtime_protocol_state(&[], &[], &[], &[]),
             runtime.start_create_isolated_world_runtime_activity(None, "world", false),
             runtime.start_runtime_realm_inventory(),
             runtime.start_remove_document_start_script_by_registry_key("preload"),
@@ -448,6 +516,7 @@ mod tests {
         let old = endpoint();
         let (page_context_cancel_tx, _) = renderer_page_context_cancel_channel();
         let replacement = RendererInspectionEndpoint {
+            render_runtime: RenderRuntimeHandle::disconnected(),
             token: RendererPageToken::new_for_testing(PageId::new_for_testing(2)),
             devtools_agent_token: RendererDevToolsAgentToken::allocate(),
             page_context_cancel_tx,
@@ -486,6 +555,10 @@ mod tests {
 
         old.retire_page();
 
+        assert!(
+            old.detach_session(None).is_err(),
+            "retired detach must not close replacement ingress"
+        );
         assert_retired(&old);
         assert!(!old.routes_output_stream(old_stream));
         assert!(replacement.routes_output_stream(replacement_stream));
@@ -531,6 +604,19 @@ mod tests {
             );
         }
         assert!(io.claim_for_owner().is_none());
+    }
+
+    #[test]
+    fn failed_session_finalization_settles_pending_main_and_io_commands() {
+        let endpoint = endpoint();
+        let main = endpoint.enqueue_main_command(main_command()).unwrap();
+        let io = endpoint.enqueue_io_command(io_command()).unwrap();
+        let error = endpoint.detach_session(None).unwrap_err();
+        assert!(error.to_string().contains("shut down"));
+        assert_main_canceled(main);
+        assert_io_canceled(io);
+        assert_main_canceled(endpoint.enqueue_main_command(main_command()).unwrap());
+        assert_io_canceled(endpoint.enqueue_io_command(io_command()).unwrap());
     }
 
     async fn real_page() -> (JsRuntimeOwner, RendererPageHandle) {

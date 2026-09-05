@@ -1,17 +1,12 @@
 use anyhow::{Result, anyhow};
-use serde_json::{Value, json};
 
 use super::Page;
 use super::RuntimeConsoleMessageSnapshot;
-use super::protocol_support::{
-    RuntimeBindingRegistration, RuntimeContextRestoreEvent, RuntimeIsolatedWorldDefinition,
-};
+use super::protocol_support::RuntimeContextRestoreEvent;
 use super::{
     CompletedPageCommand, PendingPageCommand, RendererCommandTurnOutput,
-    RendererInspectorSessionRestoreSnapshot, RendererRuntimeCommandOutput,
-    RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
+    RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
 };
-use crate::RendererOutputFence;
 use crate::renderer::{
     RendererDomDebuggerDomBreakpointResolution, RendererDomDebuggerEventListenersResolution,
     RendererPageCommand, RendererPageReply, RendererPerformanceMetricSnapshot,
@@ -159,23 +154,6 @@ impl Page {
         )
     }
 
-    pub async fn child_frame_id_for_default_execution_context_id_async(
-        &mut self,
-        execution_context_id: i64,
-    ) -> Result<Option<String>> {
-        let reply = self
-            .dispatch_page_command_async(
-                RendererPageCommand::ChildFrameIdForDefaultExecutionContextId(execution_context_id),
-            )
-            .await?;
-        expect_page_reply!(
-            reply,
-            "child default context frame id page command",
-            "an optional string reply",
-            RendererPageReply::OptionalString(frame_id) => Ok(frame_id),
-        )
-    }
-
     pub async fn create_isolated_world_async(
         &mut self,
         name: &str,
@@ -224,41 +202,6 @@ impl Page {
         )
     }
 
-    pub async fn prepare_runtime_protocol_message_async(
-        &mut self,
-        action: &str,
-        raw_json: &str,
-    ) -> Result<String> {
-        let context_param_name = match action {
-            "evaluate" => Some("contextId"),
-            "callFunctionOn" => Some("executionContextId"),
-            _ => None,
-        };
-        let Some(context_param_name) = context_param_name else {
-            return Ok(raw_json.to_owned());
-        };
-
-        let mut message: Value = serde_json::from_str(raw_json)?;
-        let params = message
-            .as_object_mut()
-            .and_then(|message| {
-                message
-                    .entry("params")
-                    .or_insert_with(|| json!({}))
-                    .as_object_mut()
-            })
-            .ok_or_else(|| anyhow!("runtime protocol params must be an object"))?;
-
-        if !params.contains_key(context_param_name)
-            && !params.contains_key("objectId")
-            && let Some(execution_context_id) = self.default_execution_context_id_async().await?
-        {
-            params.insert(context_param_name.to_owned(), json!(execution_context_id));
-        }
-
-        Ok(serde_json::to_string(&message)?)
-    }
-
     pub async fn runtime_enable_events_async(
         &mut self,
     ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
@@ -274,16 +217,6 @@ impl Page {
             self.start_runtime_enable_events_for_inspector_session(inspector_session_id)?;
         let completion = pending.wait().await?;
         self.finish_runtime_enable_events(completion)
-    }
-
-    pub async fn runtime_enable_context_restore_events_for_inspector_session_async(
-        &mut self,
-        inspector_session_id: Option<&str>,
-    ) -> Result<Vec<RuntimeContextRestoreEvent>> {
-        let pending =
-            self.start_runtime_enable_events_for_inspector_session(inspector_session_id)?;
-        let completion = pending.wait().await?;
-        self.finish_runtime_enable_context_restore_events(completion)
     }
 
     fn start_runtime_enable_events_for_inspector_session(
@@ -331,23 +264,6 @@ impl Page {
             .collect();
         dedupe_runtime_context_created_events(&mut events);
         Ok(events)
-    }
-
-    pub async fn detach_runtime_inspector_session_async(
-        &mut self,
-        inspector_session_id: Option<&str>,
-    ) -> Result<bool> {
-        self.handle
-            .detach_runtime_inspector_session(inspector_session_id.map(str::to_owned))?;
-        if self.renderer_devtools_command_session_id.as_deref() == inspector_session_id {
-            // `runtime_session_owner_slot_mut` stamps the current frontend
-            // session onto the Page before command construction. Do not leave
-            // a detached child session as the fallback provenance for a
-            // later owner-side observation that is not itself entered through
-            // a CDP session lookup.
-            self.renderer_devtools_command_session_id = None;
-        }
-        Ok(true)
     }
 
     pub async fn runtime_console_messages_with_context_async(
@@ -427,102 +343,6 @@ impl Page {
         let command = RendererPageCommand::RemoveRuntimeBinding(name.to_owned());
         self.dispatch_unit_page_command_async(command, "remove runtime binding")
             .await
-    }
-
-    pub async fn restore_runtime_protocol_state_async(
-        &mut self,
-        inspector_session_id: Option<String>,
-        session_restore_snapshots: &[RendererInspectorSessionRestoreSnapshot],
-        isolated_worlds: &[RuntimeIsolatedWorldDefinition],
-        stored_runtime_bindings: &[RuntimeBindingRegistration],
-        session_runtime_bindings: &[RuntimeBindingRegistration],
-        runtime_enabled: bool,
-    ) -> Result<Option<RendererOutputFence>> {
-        let mut predecessor = self
-            .apply_runtime_protocol_state_for_inspector_session_async(
-                inspector_session_id.clone(),
-                session_restore_snapshots,
-                isolated_worlds,
-                stored_runtime_bindings,
-                session_runtime_bindings,
-            )
-            .await?;
-        if runtime_enabled
-            && let Ok(Some(runtime_predecessor)) = self
-                .runtime_enable_concrete_output_for_inspector_session_async(
-                    inspector_session_id.as_deref(),
-                )
-                .await
-        {
-            predecessor = Some(match predecessor {
-                Some(predecessor) => predecessor.latest_in_same_stream(runtime_predecessor),
-                None => runtime_predecessor,
-            });
-        }
-        Ok(predecessor)
-    }
-
-    pub async fn apply_runtime_protocol_state_async(
-        &mut self,
-        isolated_worlds: &[RuntimeIsolatedWorldDefinition],
-        runtime_bindings: &[RuntimeBindingRegistration],
-    ) -> Result<Option<RendererOutputFence>> {
-        self.apply_runtime_protocol_state_for_inspector_session_async(
-            None,
-            &[],
-            isolated_worlds,
-            runtime_bindings,
-            runtime_bindings,
-        )
-        .await
-    }
-
-    pub async fn apply_runtime_protocol_state_for_inspector_session_async(
-        &mut self,
-        inspector_session_id: Option<String>,
-        session_restore_snapshots: &[RendererInspectorSessionRestoreSnapshot],
-        isolated_worlds: &[RuntimeIsolatedWorldDefinition],
-        stored_runtime_bindings: &[RuntimeBindingRegistration],
-        session_runtime_bindings: &[RuntimeBindingRegistration],
-    ) -> Result<Option<RendererOutputFence>> {
-        let pending =
-            self.start_page_command(RendererPageCommand::apply_runtime_protocol_state(
-                inspector_session_id.clone(),
-                session_restore_snapshots.to_vec(),
-                isolated_worlds.to_vec(),
-                stored_runtime_bindings.to_vec(),
-                session_runtime_bindings.to_vec(),
-            ))?;
-        let completion = pending.wait().await?;
-        let output = self.finish_page_command_turn(completion);
-        let (completion, predecessor) = output.into_completion_and_predecessor();
-        let (reply, _, _) = completion.into_parts();
-        expect_page_reply!(
-            reply,
-            "apply runtime protocol state page command",
-            "a unit reply",
-            RendererPageReply::Unit => Ok(()),
-        )?;
-        Ok(predecessor)
-    }
-
-    async fn runtime_enable_concrete_output_for_inspector_session_async(
-        &mut self,
-        inspector_session_id: Option<&str>,
-    ) -> Result<Option<RendererOutputFence>> {
-        let pending =
-            self.start_runtime_enable_events_for_inspector_session(inspector_session_id)?;
-        let completion = pending.wait().await?;
-        let output = self.finish_page_command_turn(completion);
-        let (completion, predecessor) = output.into_completion_and_predecessor();
-        let (reply, _, _) = completion.into_parts();
-        expect_page_reply!(
-            reply,
-            "runtime enable page command",
-            "runtime inspector protocol messages reply",
-            RendererPageReply::RuntimeInspectorProtocolMessages(_) => Ok(()),
-        )?;
-        Ok(predecessor)
     }
 
     pub async fn run_page_surface_override_script_async(&mut self, source: &str) -> Result<()> {

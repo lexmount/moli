@@ -343,8 +343,9 @@ impl TargetRuntimeSlot {
         token: &NavigationId,
         page: &mut Page,
     ) -> Result<PreparedRendererAgentAttachment, DevToolsRendererChannelError> {
-        let candidate = self
+        let mut candidate = self
             .prepare_renderer_agent_candidate_token(token, page.renderer_devtools_agent_token())?;
+        candidate.bind(page.renderer_inspection_endpoint())?;
         page.bind_renderer_agent_attachment(candidate.id());
         Ok(candidate)
     }
@@ -412,12 +413,11 @@ impl TargetRuntimeSlot {
         };
         if page.renderer_agent_attachment_id() != Some(candidate.id())
             || page.renderer_devtools_agent_token() != candidate.agent_token()
+            || candidate.binding().is_none()
         {
             return Err(DevToolsRendererChannelError::CandidatePageAttachmentMismatch);
         }
         let previous = self.devtools_renderer_channel.commit_candidate(candidate)?;
-        self.devtools_renderer_channel
-            .bind_current(page.renderer_inspection_endpoint())?;
         Ok(previous)
     }
 

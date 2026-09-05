@@ -24,7 +24,7 @@ struct LoadedPageCommitOutcome {
 pub(super) async fn commit_loaded_navigation_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
-    token: Option<&NavigationId>,
+    token: &NavigationId,
     state: NavigationDispatchState,
     navigation: MaterializedLoadedDocumentProgress,
     committed_renderer_attachment: Option<CommittedRendererAgentAttachment>,
@@ -64,12 +64,8 @@ pub(super) async fn commit_loaded_navigation_async(
     let is_network_error_page = network_error_page.is_some();
     let (page_creation_artifacts, mut deferred_initial_renderer_document_lifecycle_events) =
         split_renderer_page_creation_lifecycle_at_load_boundary(page_creation_artifacts);
-    let mut navigation_activity = MainDocumentNavigationActivity::new(
-        state,
-        final_url.clone(),
-        progress_gate,
-        token.cloned(),
-    );
+    let mut navigation_activity =
+        MainDocumentNavigationActivity::new(state, final_url.clone(), progress_gate, Some(*token));
     if let Some(error_page) = network_error_page.as_ref() {
         navigation_activity =
             navigation_activity.with_network_error_page_result(error_page.error_text().to_owned());
@@ -110,7 +106,7 @@ pub(super) async fn commit_loaded_navigation_async(
         .bind_renderer_document_lifecycle_for_owner(
             &navigation_activity.state().owner,
             page_creation_artifacts,
-            token.cloned(),
+            Some(*token),
             navigation_activity.state().frame_id.clone(),
             navigation_activity.state().loader_id.clone(),
         );
@@ -231,7 +227,7 @@ pub(super) async fn commit_download_navigation_async(
 async fn restore_and_commit_loaded_navigation_page_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
-    token: Option<&NavigationId>,
+    token: &NavigationId,
     state: &NavigationDispatchState,
     page: Page,
     final_url: &Url,
@@ -255,7 +251,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
     let mut page = page;
     let page_agent_token = page.renderer_devtools_agent_token();
     if let Some(transaction) = committed_renderer_attachment.as_ref() {
-        if token != Some(transaction.navigation())
+        if token != transaction.navigation()
             || transaction.current().agent_token() != page_agent_token
             || conn.current_renderer_agent_attachment_id_for_owner(&state.owner)
                 != Some(transaction.current().id())
@@ -268,8 +264,8 @@ async fn restore_and_commit_loaded_navigation_page_async(
         }
         page.bind_renderer_agent_attachment(transaction.current().id());
     }
-    let renderer_agent_candidate = match (token, committed_renderer_attachment.as_ref()) {
-        (Some(token), None) => {
+    let renderer_agent_candidate = match committed_renderer_attachment.as_ref() {
+        None => {
             match conn.prepare_renderer_agent_candidate_for_owner(&state.owner, token, &mut page) {
                 Ok(candidate) => Some(candidate),
                 Err(error) => {
@@ -283,7 +279,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
                 }
             }
         }
-        _ => None,
+        Some(_) => None,
     };
     let Some(commit_state) = conn.prepare_loaded_navigation_commit_for_owner(&state.owner) else {
         return Some(outcome);
@@ -292,23 +288,31 @@ async fn restore_and_commit_loaded_navigation_page_async(
         .effective_permission_overrides_for_browser_context_id(&commit_state.browser_context_id);
 
     let restore_started = timing_enabled.then(std::time::Instant::now);
-    let runtime_output_predecessor = if prepared_configuration_committed {
-        Ok(None)
+    let runtime_restoration = if let Some(candidate) = renderer_agent_candidate.as_ref() {
+        candidate
+            .binding()
+            .expect("a materialized renderer candidate has its own binding")
+            .restore_runtime_state(
+                commit_state.renderer_runtime_inspector_session_id.clone(),
+                &commit_state.runtime_inspector_session_restore_snapshots,
+                &commit_state.stored_runtime_bindings,
+                &commit_state.session_runtime_bindings,
+                commit_state.runtime_frontend_enabled,
+            )
+            .await
+            .map(Some)
     } else {
-        page.restore_runtime_protocol_state_async(
-            commit_state.renderer_runtime_inspector_session_id.clone(),
-            &commit_state.runtime_inspector_session_restore_snapshots,
-            &[],
-            &commit_state.stored_runtime_bindings,
-            &commit_state.session_runtime_bindings,
-            commit_state.runtime_frontend_enabled,
-        )
-        .await
+        Ok(None)
     };
-    match runtime_output_predecessor {
-        Ok(runtime_output_predecessor) => {
-            if let Some(predecessor) = runtime_output_predecessor {
-                command_context.set_renderer_output_predecessor(predecessor);
+    match runtime_restoration {
+        Ok(restored) => {
+            if let Some((snapshot, predecessor)) = restored {
+                // Migration-only Browser observation: restore ran entirely
+                // on the candidate binding; no Inspector command borrowed Page.
+                page.observe_renderer_page_state(&snapshot);
+                if let Some(predecessor) = predecessor {
+                    command_context.set_renderer_output_predecessor(predecessor);
+                }
             }
             let preload_channel_execution_context_ids = initial_runtime_realms
                 .iter()
@@ -486,9 +490,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
         let _ = conn
             .set_renderer_runtime_agent_owns_page_console_api_events_for_owner(&state.owner, true);
     }
-    if let Some(token) = token {
-        conn.commit_document_navigation_for_owner_if_matches(&state.owner, token);
-    }
+    conn.commit_document_navigation_for_owner_if_matches(&state.owner, token);
     if let Some(started) = page_commit_started {
         tracing::info!(
             target: "moli_cdp_nav_timing",

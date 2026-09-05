@@ -169,10 +169,11 @@ impl Page {
             command.bind_inspector_attachment(attachment_id);
         }
         let pending = if self.renderer_agent_attachment_id.is_some() {
-            self.handle.enqueue_protocol_command_in_inspector_session(
-                command,
-                self.renderer_devtools_command_session_id.clone(),
-            )?
+            // Migration-only native Page command ingress. Browser/embedding
+            // operations never inherit the last DevTools caller's session;
+            // session-scoped inspection enters its explicit endpoint binding.
+            self.handle
+                .enqueue_protocol_command_in_inspector_session(command, None)?
         } else {
             // CLI, embedding and other renderer-owner callers reuse the thin
             // protocol-turn capture policy, but they are not a

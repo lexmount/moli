@@ -70,8 +70,8 @@ impl RendererAttachedPage {
         (
             RendererPageHandle {
                 local_executor,
-                render_runtime,
                 inspection: Some(RendererInspectionEndpoint {
+                    render_runtime,
                     token: self.token,
                     devtools_agent_token: self.devtools_agent_token,
                     page_context_cancel_tx: self.page_context_cancel_tx,
@@ -93,7 +93,6 @@ impl RendererAttachedPage {
 
 pub struct RendererPageHandle {
     local_executor: JsLocalExecutor,
-    render_runtime: RenderRuntimeHandle,
     inspection: Option<RendererInspectionEndpoint>,
     javascript_dialog_broker: RendererJavaScriptDialogBroker,
     committed_document_post_response_continuation:
@@ -107,6 +106,9 @@ pub struct RendererPageHandle {
 /// They neither keep the physical Page alive nor expose owner-local V8 state.
 #[derive(Clone)]
 pub struct RendererInspectionEndpoint {
+    // The existing weak owner route permits detached session finalization;
+    // holding an endpoint does not keep the runtime or physical Page alive.
+    render_runtime: RenderRuntimeHandle,
     token: RendererPageToken,
     devtools_agent_token: RendererDevToolsAgentToken,
     page_context_cancel_tx: RendererPageContextCancelSender,
@@ -227,42 +229,6 @@ impl RendererPageHandle {
         self.javascript_dialog_broker.take_pending()
     }
 
-    /// Disconnects one frontend Inspector route without waiting for the Page
-    /// owner to return from JavaScript.
-    ///
-    /// Chromium acknowledges `Target.detachFromTarget` after dropping the
-    /// browser-side DevToolsSession pipes; destruction of the renderer-side
-    /// V8InspectorSession is a subsequent Main-thread task. Mirror that
-    /// boundary here: cancel both ingress lanes synchronously, then enqueue an
-    /// owner-only cleanup whose reply is deliberately detached. The retained
-    /// guard also releases a nested debugger loop and holds any replacement
-    /// attachment's commands until cleanup reaches the owner.
-    pub fn detach_runtime_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-    ) -> anyhow::Result<()> {
-        let session = DevToolsSessionKey::from_wire_session_id(
-            inspector_session_id
-                .as_deref()
-                .filter(|session_id| !session_id.is_empty()),
-        );
-        let pause_guard = RendererRuntimeInspectorSessionDetachGuard::new(
-            self.inspection().devtools_target.pause(),
-            self.inspection().devtools_target.clone(),
-            self.inspection().devtools_agent_token,
-            session,
-        );
-        let reply_rx = self.render_runtime.enqueue(
-            RendererOwnerCommand::FinalizeRuntimeInspectorSessionDetach {
-                token: self.token(),
-                inspector_session_id,
-                pause_guard,
-            },
-        )?;
-        drop(reply_rx);
-        Ok(())
-    }
-
     pub fn enqueue_async_command(
         &self,
         command: RendererPageCommand,
@@ -378,7 +344,7 @@ impl RendererPageHandle {
                 }
             }
         };
-        let reply_rx = self.render_runtime.enqueue(owner_command)?;
+        let reply_rx = self.inspection().render_runtime.enqueue(owner_command)?;
         Ok(RendererPageCommandPending {
             dispatch: RendererPageCommandPendingDispatch::Owner(reply_rx),
             javascript_dialog_watch,
@@ -402,6 +368,7 @@ impl RendererPageHandle {
         loader: ResourceRequestClient,
     ) -> Result<(RendererPageReply, Arc<RendererPageState>)> {
         match self
+            .inspection()
             .render_runtime
             .dispatch(RendererOwnerCommand::WaitForNetworkIdle {
                 token: self.token(),
@@ -423,6 +390,7 @@ impl RendererPageHandle {
         loader: ResourceRequestClient,
     ) -> Result<(RendererPageReply, Arc<RendererPageState>)> {
         match self
+            .inspection()
             .render_runtime
             .dispatch(RendererOwnerCommand::WaitForDomStable {
                 token: self.token(),
@@ -467,7 +435,7 @@ impl RendererPageHandle {
 
         // Keep the token installed until the owner acknowledges removal. If
         // this future is cancelled, Drop can still enqueue detached cleanup.
-        match self
+        match inspection
             .render_runtime
             .dispatch(RendererOwnerCommand::RemovePage { token })
             .await?
@@ -582,7 +550,7 @@ impl Drop for RendererPageHandle {
             page_id = token.page_id.as_u64(),
             "dropping renderer page handle; enqueueing detached remove-page command"
         );
-        let _ = self
+        let _ = inspection
             .render_runtime
             .dispatch_detached(RendererOwnerCommand::RemovePage { token });
     }
@@ -591,7 +559,7 @@ impl Drop for RendererPageHandle {
 impl RendererPageTestingHandle {
     pub fn new_for_testing(handle: &RendererPageHandle) -> Self {
         Self {
-            render_runtime: handle.render_runtime.clone(),
+            render_runtime: handle.inspection().render_runtime.clone(),
             token: handle.token(),
             _not_send: PhantomData,
         }
