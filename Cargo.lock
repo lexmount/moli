@@ -2290,6 +2290,7 @@ dependencies = [
  "moli-process-signal",
  "moli-protocol",
  "moli-protocol-server",
+ "moli-renderer-v8",
  "moli-robots",
  "moli-test-support",
  "parking_lot",

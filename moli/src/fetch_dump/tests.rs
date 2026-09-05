@@ -7,6 +7,9 @@ use moli_core::{
     page::Page,
     runtime::{Browser, BrowserConfig},
 };
+use moli_renderer_v8::{
+    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute, RendererInspectorIngressTicket,
+};
 use serde_json::{Value, json};
 use tokio::{net::TcpListener, task::JoinHandle};
 
@@ -52,6 +55,29 @@ fn png_dimensions(bytes: &[u8]) -> (u32, u32) {
         u32::from_be_bytes(bytes[16..20].try_into().unwrap()),
         u32::from_be_bytes(bytes[20..24].try_into().unwrap()),
     )
+}
+
+// A renderer-only mutation is deliberate: dumps must read live state before
+// the Browser observes this frozen inspection completion.
+async fn mutate_renderer_without_page_observation(
+    page: &Page,
+    message: Value,
+) -> Result<moli_core::page::CompletedPageCommand> {
+    let route = page.renderer_inspection_endpoint().enqueue_main_command(
+        RendererInspectorCommandEnvelope::new_main_protocol_on_page_owner(
+            RendererInspectorIngressTicket::new(
+                None,
+                None,
+                RendererInspectorCommandRoute::MainThread,
+            ),
+            None,
+            message.to_string(),
+            None,
+        ),
+    )?;
+    moli_core::page::PendingPageCommand::from_inspector_main_route(route)
+        .wait()
+        .await
 }
 
 #[tokio::test]
@@ -107,8 +133,7 @@ async fn render_page_dump_default_html_uses_renderer_live_serialize() -> Result<
             "returnByValue": true
         }
     });
-    let pending = page.start_runtime_protocol_message(serde_json::to_string(&mutation)?)?;
-    let completion = pending.wait().await?;
+    let completion = mutate_renderer_without_page_observation(&page, mutation).await?;
 
     let rendered = render_page_dump_with_options_async(
         &mut page,
@@ -124,7 +149,8 @@ async fn render_page_dump_default_html_uses_renderer_live_serialize() -> Result<
     assert!(rendered.contains(r#"<main id="target">live</main>"#));
     assert!(!rendered.contains(r#"<main id="target">old</main>"#));
 
-    let _ = page.finish_runtime_protocol_message(completion)?;
+    page.observe_renderer_page_state(completion.page_state());
+    let _ = completion.into_runtime_protocol_message_command_turn()?;
     http_server.abort();
     Ok(())
 }
@@ -144,8 +170,7 @@ async fn render_page_dump_postprocessed_html_uses_renderer_live_dump() -> Result
             "returnByValue": true
         }
     });
-    let pending = page.start_runtime_protocol_message(serde_json::to_string(&mutation)?)?;
-    let completion = pending.wait().await?;
+    let completion = mutate_renderer_without_page_observation(&page, mutation).await?;
 
     let rendered = render_page_dump_with_options_async(
         &mut page,
@@ -171,7 +196,8 @@ async fn render_page_dump_postprocessed_html_uses_renderer_live_dump() -> Result
     assert!(!rendered.contains("onclick="));
     assert!(!rendered.contains("style="));
 
-    let _ = page.finish_runtime_protocol_message(completion)?;
+    page.observe_renderer_page_state(completion.page_state());
+    let _ = completion.into_runtime_protocol_message_command_turn()?;
     http_server.abort();
     Ok(())
 }
@@ -190,8 +216,7 @@ async fn render_markdown_dump_uses_renderer_live_dump() -> Result<()> {
             "returnByValue": true
         }
     });
-    let pending = page.start_runtime_protocol_message(serde_json::to_string(&mutation)?)?;
-    let completion = pending.wait().await?;
+    let completion = mutate_renderer_without_page_observation(&page, mutation).await?;
 
     let rendered = render_page_dump_with_options_async(
         &mut page,
@@ -207,7 +232,8 @@ async fn render_markdown_dump_uses_renderer_live_dump() -> Result<()> {
     assert_eq!(rendered, "live");
     assert!(!rendered.contains("old"));
 
-    let _ = page.finish_runtime_protocol_message(completion)?;
+    page.observe_renderer_page_state(completion.page_state());
+    let _ = completion.into_runtime_protocol_message_command_turn()?;
     http_server.abort();
     Ok(())
 }
@@ -226,8 +252,7 @@ async fn render_semantic_tree_dump_uses_renderer_live_accessibility_tree() -> Re
             "returnByValue": true
         }
     });
-    let pending = page.start_runtime_protocol_message(serde_json::to_string(&mutation)?)?;
-    let completion = pending.wait().await?;
+    let completion = mutate_renderer_without_page_observation(&page, mutation).await?;
 
     let rendered = render_page_dump_with_options_async(
         &mut page,
@@ -243,7 +268,8 @@ async fn render_semantic_tree_dump_uses_renderer_live_accessibility_tree() -> Re
     assert!(rendered.contains(r#""value": "live""#));
     assert!(!rendered.contains(r#""value": "old""#));
 
-    let _ = page.finish_runtime_protocol_message(completion)?;
+    page.observe_renderer_page_state(completion.page_state());
+    let _ = completion.into_runtime_protocol_message_command_turn()?;
     http_server.abort();
     Ok(())
 }

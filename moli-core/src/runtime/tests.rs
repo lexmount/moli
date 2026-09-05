@@ -26,7 +26,10 @@ use moli_fetch::{
     StreamingRawResponse,
 };
 use moli_page_types::{LayoutPolicy, OptionalResourceFetchMask};
-use moli_renderer_v8::new_shared_web_storage_store;
+use moli_renderer_v8::{
+    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
+    RendererInspectorIngressTicket, new_shared_web_storage_store,
+};
 use std::{
     fs,
     path::PathBuf,
@@ -3970,7 +3973,7 @@ async fn renderer_owner_tracks_page_command_epoch_progress() -> Result<()> {
         "first page command should advance owner-side command epoch"
     );
 
-    let _ = page.runtime_enable_events_async().await?;
+    let _ = enable_test_runtime(&mut page).await?;
     assert_eq!(
         renderer_owner.command_epoch(page_id),
         Some(2),
@@ -4508,18 +4511,69 @@ async fn completed_page_title_update(
     command_id: i32,
     title: &str,
 ) -> Result<crate::page::CompletedPageCommand> {
-    page.start_runtime_protocol_message(
+    dispatch_test_inspection(
+        page,
         serde_json::json!({
             "id": command_id,
             "method": "Runtime.evaluate",
             "params": {
                 "expression": format!("document.title = {}; 42", serde_json::to_string(title)?),
             },
-        })
-        .to_string(),
-    )?
-    .wait()
+        }),
+    )
     .await
+}
+
+// Direct renderer fixtures have no AgentHost/session binding. Keep inspection
+// in test code and leave the Browser cache untouched until explicitly observed.
+async fn dispatch_test_inspection(
+    page: &Page,
+    message: serde_json::Value,
+) -> Result<crate::page::CompletedPageCommand> {
+    let route = page.renderer_inspection_endpoint().enqueue_main_command(
+        RendererInspectorCommandEnvelope::new_main_protocol_on_page_owner(
+            RendererInspectorIngressTicket::new(
+                None,
+                None,
+                RendererInspectorCommandRoute::MainThread,
+            ),
+            None,
+            message.to_string(),
+            None,
+        ),
+    )?;
+    PendingPageCommand::from_inspector_main_route(route)
+        .wait()
+        .await
+}
+
+async fn enable_test_runtime(page: &mut Page) -> Result<Vec<RendererRuntimeInspectorMessage>> {
+    let route = page.renderer_inspection_endpoint().enqueue_main_command(
+        RendererInspectorCommandEnvelope::new_main_runtime_enable_events(
+            RendererInspectorIngressTicket::new(
+                None,
+                None,
+                RendererInspectorCommandRoute::MainThread,
+            ),
+        ),
+    )?;
+    let completion = PendingPageCommand::from_inspector_main_route(route)
+        .wait()
+        .await?;
+    finish_test_inspection(page, completion)
+}
+
+fn finish_test_inspection(
+    page: &mut Page,
+    completion: crate::page::CompletedPageCommand,
+) -> Result<Vec<RendererRuntimeInspectorMessage>> {
+    page.observe_renderer_page_state(completion.page_state());
+    let output = completion.into_runtime_protocol_message_command_turn()?;
+    let (completion, _) = output.into_completion_and_predecessor();
+    Ok(completion
+        .into_runtime_inspector_output()
+        .context("runtime inspection output")?
+        .into_messages())
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -4849,7 +4903,7 @@ async fn renderer_owner_created_page_runs_runtime_protocol_commands() -> Result<
         .await?;
     let mut page = materialize_page_created_reply(&renderer_owner, reply)?;
 
-    let runtime_messages = page.runtime_enable_events_async().await?;
+    let runtime_messages = enable_test_runtime(&mut page).await?;
     assert!(
         !runtime_messages.is_empty(),
         "runtime enable should emit at least one event-like message"
@@ -5192,7 +5246,7 @@ async fn renderer_owner_created_page_runs_input_query_commands() -> Result<()> {
     assert_eq!(rect.width, 120.0);
     assert_eq!(rect.height, 24.0);
 
-    let _ = page.runtime_enable_events_async().await?;
+    let _ = enable_test_runtime(&mut page).await?;
     let default_context_id = page
         .default_execution_context_id_async()
         .await?
@@ -5352,7 +5406,7 @@ async fn renderer_owner_created_page_resolves_backend_node_runtime_object() -> R
         .await?
         .context("target div should exist")?
         .backend_node_id;
-    let _ = page.runtime_enable_events_async().await?;
+    let _ = enable_test_runtime(&mut page).await?;
     let execution_context_id = page
         .default_execution_context_id_async()
         .await?
@@ -5437,7 +5491,7 @@ async fn runtime_object_resolve_uses_live_backend_node_for_stale_snapshot_path()
         .await?
         .context("target div should exist")?
         .backend_node_id;
-    let _ = page.runtime_enable_events_async().await?;
+    let _ = enable_test_runtime(&mut page).await?;
     let execution_context_id = page
         .default_execution_context_id_async()
         .await?
@@ -5451,9 +5505,7 @@ async fn runtime_object_resolve_uses_live_backend_node_for_stale_snapshot_path()
             "returnByValue": true
         }
     });
-    let mutation_pending =
-        page.start_runtime_protocol_message(serde_json::to_string(&mutation)?)?;
-    let mutation_completion = mutation_pending.wait().await?;
+    let mutation_completion = dispatch_test_inspection(&page, mutation).await?;
 
     let resolved_object = resolve_runtime_object_for_backend_node_id(
         &mut page,
@@ -5481,7 +5533,7 @@ async fn runtime_object_resolve_uses_live_backend_node_for_stale_snapshot_path()
         .as_str()
         .context("resolved runtime object should carry an objectId")?;
 
-    let _mutation_messages = page.finish_runtime_protocol_message(mutation_completion)?;
+    let _mutation_messages = finish_test_inspection(&mut page, mutation_completion)?;
     let call = serde_json::json!({
         "id": 92,
         "method": "Runtime.callFunctionOn",
@@ -5491,9 +5543,8 @@ async fn runtime_object_resolve_uses_live_backend_node_for_stale_snapshot_path()
             "returnByValue": true
         }
     });
-    let messages = page
-        .dispatch_runtime_protocol_message_async(&serde_json::to_string(&call)?)
-        .await?;
+    let completion = dispatch_test_inspection(&page, call).await?;
+    let messages = finish_test_inspection(&mut page, completion)?;
     let response =
         runtime_protocol_response_by_id(&messages, 92).context("callFunctionOn should respond")?;
     assert_eq!(
