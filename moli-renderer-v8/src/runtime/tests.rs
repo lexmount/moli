@@ -27,6 +27,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{mpsc, oneshot};
 
 mod open_streaming;
+mod redirect_chain;
 
 async fn prepare_test_external_raw_document(
     runtime: &JsRuntime,

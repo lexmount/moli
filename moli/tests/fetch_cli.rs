@@ -51,6 +51,8 @@ mod disable_js;
 mod eval;
 #[path = "fetch_cli/readiness.rs"]
 mod readiness;
+#[path = "fetch_cli/redirect_chain.rs"]
+mod redirect_chain;
 
 struct Output {
     status: OutputStatus,
