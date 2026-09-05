@@ -22,7 +22,9 @@ use crate::{
     },
 };
 
-use super::devtools_renderer_channel::{DevToolsRendererChannel, RendererAgentDetachReason};
+use super::devtools_renderer_channel::{
+    DevToolsRendererChannel, RendererAgentBinding, RendererAgentDetachReason,
+};
 use super::page_slot::{InitialDocumentPageBuildWaiter, TargetPageAbsenceReason, TargetPageSlot};
 use super::{
     CommittedRendererAgentAttachment, CommittedRendererDocumentBinding,
@@ -356,13 +358,6 @@ impl TargetRuntimeSlot {
             .attach_candidate(token, agent_token)
     }
 
-    pub(crate) fn commit_renderer_agent_candidate(
-        &mut self,
-        candidate: PreparedRendererAgentAttachment,
-    ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
-        self.devtools_renderer_channel.commit_candidate(candidate)
-    }
-
     pub(crate) fn commit_renderer_agent_candidate_transaction(
         &mut self,
         candidate: PreparedRendererAgentAttachment,
@@ -391,7 +386,7 @@ impl TargetRuntimeSlot {
     }
 
     pub(crate) fn bind_page_to_committed_renderer_agent_candidate(
-        &self,
+        &mut self,
         page: &mut Page,
         transaction: &CommittedRendererAgentAttachment,
     ) -> Result<(), DevToolsRendererChannelError> {
@@ -401,6 +396,8 @@ impl TargetRuntimeSlot {
         {
             return Err(DevToolsRendererChannelError::CommittedCandidateMismatch);
         }
+        self.devtools_renderer_channel
+            .bind_current(page.renderer_inspection_endpoint())?;
         page.bind_renderer_agent_attachment(current.id());
         Ok(())
     }
@@ -413,10 +410,15 @@ impl TargetRuntimeSlot {
         let Some(candidate) = candidate else {
             return self.attach_page_renderer_agent_as_current(page);
         };
-        if page.renderer_agent_attachment_id() != Some(candidate.id()) {
+        if page.renderer_agent_attachment_id() != Some(candidate.id())
+            || page.renderer_devtools_agent_token() != candidate.agent_token()
+        {
             return Err(DevToolsRendererChannelError::CandidatePageAttachmentMismatch);
         }
-        self.commit_renderer_agent_candidate(candidate)
+        let previous = self.devtools_renderer_channel.commit_candidate(candidate)?;
+        self.devtools_renderer_channel
+            .bind_current(page.renderer_inspection_endpoint())?;
+        Ok(previous)
     }
 
     pub(crate) fn route_current_renderer_inspector_output(
@@ -456,6 +458,10 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn current_renderer_attachment(&self) -> Option<RendererAgentAttachment> {
         self.devtools_renderer_channel.current()
+    }
+
+    pub(crate) fn current_renderer_inspection_binding(&self) -> Option<&RendererAgentBinding> {
+        self.devtools_renderer_channel.current_binding()
     }
 
     pub(crate) fn routes_current_renderer_page_owner(
@@ -506,7 +512,7 @@ impl TargetRuntimeSlot {
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
         let previous = self
             .devtools_renderer_channel
-            .attach_current(page.renderer_devtools_agent_token())?;
+            .attach_current(page.renderer_inspection_endpoint())?;
         let current = self
             .devtools_renderer_channel
             .current()
@@ -649,10 +655,9 @@ impl TargetRuntimeSlot {
         let Some(page) = self.page_slot.loaded_page_mut() else {
             return;
         };
-        let agent_token = page.renderer_devtools_agent_token();
         let attachment = self
             .devtools_renderer_channel
-            .attach_current(agent_token)
+            .attach_current(page.renderer_inspection_endpoint())
             .expect("a loaded page cannot be attached to a closed renderer channel");
         debug_assert!(attachment.is_none());
         let current = self
@@ -692,17 +697,26 @@ impl TargetRuntimeSlot {
     }
 
     fn ensure_renderer_attachment_for_replacement(&mut self, page: Option<&mut Page>) {
-        if self.devtools_renderer_channel.current().is_some() {
-            return;
-        }
         let Some(page) = page else {
             return;
         };
-        let attachment = self
+        if self
             .devtools_renderer_channel
-            .attach_current(page.renderer_devtools_agent_token())
-            .expect("a loaded page cannot be installed into a closed renderer channel");
-        debug_assert!(attachment.is_none());
+            .current()
+            .is_some_and(|attachment| {
+                attachment.agent_token() == page.renderer_devtools_agent_token()
+            })
+        {
+            if self.devtools_renderer_channel.current_binding().is_none() {
+                self.devtools_renderer_channel
+                    .bind_current(page.renderer_inspection_endpoint())
+                    .expect("a matching candidate Page must bind its reserved attachment");
+            }
+        } else {
+            self.devtools_renderer_channel
+                .attach_current(page.renderer_inspection_endpoint())
+                .expect("a loaded page cannot be installed into a closed renderer channel");
+        }
         let current = self
             .devtools_renderer_channel
             .current()
@@ -791,8 +805,8 @@ impl TargetRuntimeSlot {
     pub(crate) fn observable_output_queue_snapshot(
         &self,
     ) -> Option<crate::domains::observable_output::TargetRuntimeObservableQueueSnapshot> {
-        self.page_slot
-            .has_loaded_page()
+        self.current_renderer_inspection_binding()
+            .is_some()
             .then(|| self.observable_queue.snapshot())
     }
 
@@ -803,15 +817,15 @@ impl TargetRuntimeSlot {
     }
 
     pub(crate) fn observable_output_cursor_end(&self) -> Option<(usize, usize)> {
-        self.page_slot
-            .has_loaded_page()
+        self.current_renderer_inspection_binding()
+            .is_some()
             .then(|| self.observable_queue.observable_output_cursor_end())
             .flatten()
     }
 
     pub(crate) fn inspector_issues(&self) -> Option<Vec<moli_core::page::InspectorIssueSnapshot>> {
-        self.page_slot
-            .has_loaded_page()
+        self.current_renderer_inspection_binding()
+            .is_some()
             .then(|| self.observable_queue.inspector_issues())
     }
 
@@ -878,6 +892,15 @@ impl TargetRuntimeSlot {
     ) {
         self.observable_queue
             .ingest_observable_output_snapshot(items);
+    }
+
+    pub(crate) fn observe_renderer_page_state(
+        &mut self,
+        snapshot: &std::sync::Arc<moli_renderer_v8::RendererPageState>,
+    ) -> bool {
+        self.page_slot
+            .contents
+            .observe_renderer_page_state(snapshot)
     }
 
     pub(crate) fn primary_network_events_enabled(&self) -> bool {

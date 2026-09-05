@@ -13,6 +13,13 @@ pub struct PendingPageCommand {
 }
 
 impl PendingPageCommand {
+    pub fn from_inspector_main_route(route: RendererRuntimeInspectorMainCommandRoute) -> Self {
+        Self {
+            renderer_agent_attachment_id: route.ticket().attachment(),
+            pending: RendererPageCommandPending::from_inspector_main_route(route),
+        }
+    }
+
     pub fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
         self.renderer_agent_attachment_id
     }
@@ -20,6 +27,22 @@ impl PendingPageCommand {
 
 pub struct PendingRuntimeInspectorCommandDispatch {
     kind: PendingRuntimeInspectorCommandDispatchKind,
+}
+
+impl PendingRuntimeInspectorCommandDispatch {
+    pub fn from_main_route(route: RendererRuntimeInspectorMainCommandRoute) -> Self {
+        Self {
+            kind: PendingRuntimeInspectorCommandDispatchKind::MainIngress(Box::new(route)),
+        }
+    }
+
+    pub fn from_io_route(route: RendererRuntimeInspectorIoCommandRoute) -> Self {
+        Self {
+            kind: PendingRuntimeInspectorCommandDispatchKind::Io(
+                PendingDevToolsIoCommandDispatch { route },
+            ),
+        }
+    }
 }
 
 /// One non-V8 renderer agent command admitted through the Page IO
@@ -178,34 +201,10 @@ impl Page {
         completion.output
     }
 
-    fn pending_runtime_inspector_command_dispatch(
-        kind: PendingRuntimeInspectorCommandDispatchKind,
-    ) -> PendingRuntimeInspectorCommandDispatch {
-        PendingRuntimeInspectorCommandDispatch { kind }
-    }
-
-    pub(crate) fn pending_io_runtime_inspector_command_dispatch(
-        route: RendererRuntimeInspectorIoCommandRoute,
-    ) -> PendingRuntimeInspectorCommandDispatch {
-        Self::pending_runtime_inspector_command_dispatch(
-            PendingRuntimeInspectorCommandDispatchKind::Io(
-                Self::pending_devtools_io_command_dispatch(route),
-            ),
-        )
-    }
-
     pub(crate) fn pending_devtools_io_command_dispatch(
         route: RendererRuntimeInspectorIoCommandRoute,
     ) -> PendingDevToolsIoCommandDispatch {
         PendingDevToolsIoCommandDispatch { route }
-    }
-
-    pub(crate) fn pending_main_ingress_runtime_inspector_command_dispatch(
-        route: RendererRuntimeInspectorMainCommandRoute,
-    ) -> PendingRuntimeInspectorCommandDispatch {
-        Self::pending_runtime_inspector_command_dispatch(
-            PendingRuntimeInspectorCommandDispatchKind::MainIngress(Box::new(route)),
-        )
     }
 
     pub(crate) fn finish_page_command(

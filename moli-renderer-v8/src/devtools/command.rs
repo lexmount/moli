@@ -389,6 +389,19 @@ enum RendererInspectorCommandPayload {
 }
 
 impl RendererInspectorCommandEnvelope {
+    #[doc(hidden)]
+    pub fn new_main_runtime_enable_events(ticket: RendererInspectorIngressTicket) -> Self {
+        assert_eq!(ticket.route(), RendererInspectorCommandRoute::MainThread);
+        Self {
+            ticket,
+            pause_effect: RendererInspectorPauseCommandEffect::None,
+            main_dispatch_boundary: RendererInspectorMainDispatchBoundary::PageOwner,
+            payload: RendererInspectorCommandPayload::MainThread(
+                RendererInspectorPageCommand::RuntimeEnableEvents,
+            ),
+        }
+    }
+
     pub(crate) fn new(
         inspector_session_id: Option<String>,
         command: RendererInspectorPageCommand,
@@ -412,11 +425,6 @@ impl RendererInspectorCommandEnvelope {
         raw_json: String,
         response: RendererRuntimeInspectorResponseSender,
     ) -> Self {
-        assert_eq!(
-            ticket.route(),
-            RendererInspectorCommandRoute::MainThread,
-            "a Main Inspector protocol payload must use the MainThread route"
-        );
         let message = serde_json::from_str::<Value>(&raw_json).ok();
         let main_dispatch_boundary = if main_protocol_can_dispatch_at_inspector_session_boundary(
             owner_context_resolution_action.as_deref(),
@@ -426,21 +434,49 @@ impl RendererInspectorCommandEnvelope {
         } else {
             RendererInspectorMainDispatchBoundary::PageOwner
         };
-        let command = match owner_context_resolution_action {
-            Some(action) => RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
+        let mut envelope = Self::new_main_protocol_on_page_owner(
+            ticket,
+            owner_context_resolution_action,
+            raw_json,
+            Some(response),
+        );
+        envelope.pause_effect = RendererInspectorPauseCommandEffect::from_message(message.as_ref());
+        envelope.main_dispatch_boundary = main_dispatch_boundary;
+        envelope
+    }
+
+    /// Preserves the renderer-owner reply turn used by raw commands and
+    /// adapter-reply replay. This is still the renderer Main receiver, not a
+    /// Browser owner operation or a mutable Page capability.
+    #[doc(hidden)]
+    pub fn new_main_protocol_on_page_owner(
+        ticket: RendererInspectorIngressTicket,
+        context_resolution_action: Option<String>,
+        raw_json: String,
+        response: Option<RendererRuntimeInspectorResponseSender>,
+    ) -> Self {
+        assert_eq!(
+            ticket.route(),
+            RendererInspectorCommandRoute::MainThread,
+            "a Main Inspector protocol payload must use the MainThread route"
+        );
+        let command = match (context_resolution_action, response) {
+            (Some(action), Some(response)) => RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolutionAndDeferredResponse {
                 action,
                 raw_json,
                 deferred_response: response,
             },
-            None => RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
+            (None, Some(response)) => RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithDeferredResponse {
                 raw_json,
                 deferred_response: response,
             },
+            (Some(action), None) => RendererInspectorPageCommand::DispatchRuntimeProtocolMessageWithContextResolution { action, raw_json },
+            (None, None) => RendererInspectorPageCommand::DispatchRuntimeProtocolMessage { raw_json },
         };
         Self {
             ticket,
-            pause_effect: RendererInspectorPauseCommandEffect::from_message(message.as_ref()),
-            main_dispatch_boundary,
+            pause_effect: RendererInspectorPauseCommandEffect::None,
+            main_dispatch_boundary: RendererInspectorMainDispatchBoundary::PageOwner,
             payload: RendererInspectorCommandPayload::MainThread(command),
         }
     }

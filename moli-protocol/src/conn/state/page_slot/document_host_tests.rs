@@ -5,6 +5,34 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+#[tokio::test]
+async fn document_replacement_updates_inspection_binding_with_physical_page() {
+    let browser = Browser::new(BrowserConfig::default()).unwrap();
+    let first = browser
+        .fetch("data:text/html,<title>first</title>")
+        .await
+        .unwrap();
+    let second = browser
+        .fetch("data:text/html,<title>second</title>")
+        .await
+        .unwrap();
+    let agent = second.renderer_devtools_agent_token();
+    let mut slot = crate::conn::TargetRuntimeSlot::from_page_slot(
+        TargetPageSlot::with_loaded_page_for_test(first),
+    );
+    let old_attachment = slot.current_renderer_attachment().unwrap();
+    let previous = slot.replace_loaded_page(Some(second)).unwrap();
+    let attachment = slot.current_renderer_attachment().unwrap();
+    assert_eq!(attachment.agent_token(), agent);
+    assert_ne!(attachment.id(), old_attachment.id());
+    assert_eq!(
+        slot.loaded_page().unwrap().renderer_agent_attachment_id(),
+        Some(attachment.id())
+    );
+    assert!(slot.current_renderer_inspection_binding().is_some());
+    drop(previous);
+}
+
 async fn page_with_installed_dialog_for_test(
     browser: &Browser,
 ) -> (

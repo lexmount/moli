@@ -2762,6 +2762,7 @@ dependencies = [
  "moli-image",
  "moli-page-types",
  "moli-protocol-cdp",
+ "moli-renderer-v8",
  "moli-shared-worker",
  "moli-site",
  "moli-storage-key",

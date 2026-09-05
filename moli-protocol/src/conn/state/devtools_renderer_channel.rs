@@ -2,7 +2,13 @@ use std::collections::HashSet;
 use std::fmt;
 
 use moli_core::page::{
-    RendererAgentAttachmentId, RendererDevToolsAgentToken, RendererRuntimeInspectorMessageBatch,
+    PendingPageCommand, PendingRuntimeInspectorCommandDispatch, RendererAgentAttachmentId,
+    RendererDevToolsAgentToken, RendererInspectorCommandRoute,
+    RendererRuntimeInspectorMessageBatch,
+};
+use moli_renderer_v8::{
+    RendererInspectionEndpoint, RendererInspectorCommandEnvelope, RendererInspectorIngressTicket,
+    RendererRuntimeInspectorMainCommandRoute, RendererRuntimeInspectorResponseSender,
 };
 
 use super::NavigationId;
@@ -30,6 +36,134 @@ impl RendererAgentAttachment {
     }
 }
 
+/// The DevTools binding owns inspection ingress, never the Browser Page.
+pub(crate) struct RendererAgentBinding {
+    attachment: RendererAgentAttachment,
+    endpoint: RendererInspectionEndpoint,
+}
+
+impl fmt::Debug for RendererAgentBinding {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("RendererAgentBinding")
+            .field("attachment", &self.attachment)
+            .finish_non_exhaustive()
+    }
+}
+
+impl RendererAgentBinding {
+    pub(crate) fn attachment(&self) -> RendererAgentAttachment {
+        self.attachment
+    }
+
+    pub(crate) fn start_runtime_enable_events(
+        &self,
+        inspector_session_id: Option<String>,
+    ) -> anyhow::Result<PendingPageCommand> {
+        self.endpoint
+            .enqueue_main_command(
+                RendererInspectorCommandEnvelope::new_main_runtime_enable_events(
+                    RendererInspectorIngressTicket::new(
+                        Some(self.attachment.id()),
+                        inspector_session_id,
+                        RendererInspectorCommandRoute::MainThread,
+                    ),
+                ),
+            )
+            .map(PendingPageCommand::from_inspector_main_route)
+    }
+
+    pub(crate) fn start_main_protocol_on_page_owner(
+        &self,
+        inspector_session_id: Option<String>,
+        context_resolution_action: Option<String>,
+        raw_json: String,
+        response: Option<RendererRuntimeInspectorResponseSender>,
+    ) -> anyhow::Result<RendererRuntimeInspectorMainCommandRoute> {
+        self.endpoint.enqueue_main_command(
+            RendererInspectorCommandEnvelope::new_main_protocol_on_page_owner(
+                RendererInspectorIngressTicket::new(
+                    Some(self.attachment.id()),
+                    inspector_session_id,
+                    RendererInspectorCommandRoute::MainThread,
+                ),
+                context_resolution_action,
+                raw_json,
+                response,
+            ),
+        )
+    }
+
+    pub(crate) fn start_protocol_message(
+        &self,
+        inspector_session_id: Option<String>,
+        lane: RendererInspectorCommandRoute,
+        context_resolution_action: Option<String>,
+        raw_json: String,
+        response: RendererRuntimeInspectorResponseSender,
+    ) -> anyhow::Result<PendingRuntimeInspectorCommandDispatch> {
+        match lane {
+            RendererInspectorCommandRoute::MainThread => self
+                .endpoint
+                .enqueue_main_command(RendererInspectorCommandEnvelope::new_main_protocol(
+                    RendererInspectorIngressTicket::new(
+                        Some(self.attachment.id()),
+                        inspector_session_id,
+                        lane,
+                    ),
+                    context_resolution_action,
+                    raw_json,
+                    response,
+                ))
+                .map(PendingRuntimeInspectorCommandDispatch::from_main_route),
+            RendererInspectorCommandRoute::Io => {
+                anyhow::ensure!(
+                    context_resolution_action.is_none(),
+                    "an IO Inspector command cannot require Page owner context resolution"
+                );
+                self.start_io_protocol_message(inspector_session_id, raw_json, Some(response))
+            }
+        }
+    }
+
+    pub(crate) fn start_io_protocol_message(
+        &self,
+        inspector_session_id: Option<String>,
+        raw_json: String,
+        response: Option<RendererRuntimeInspectorResponseSender>,
+    ) -> anyhow::Result<PendingRuntimeInspectorCommandDispatch> {
+        self.endpoint
+            .enqueue_io_command(RendererInspectorCommandEnvelope::new_io(
+                RendererInspectorIngressTicket::new(
+                    Some(self.attachment.id()),
+                    inspector_session_id,
+                    RendererInspectorCommandRoute::Io,
+                ),
+                raw_json,
+                response,
+            ))
+            .map(PendingRuntimeInspectorCommandDispatch::from_io_route)
+    }
+}
+
+#[derive(Debug)]
+enum RendererChannelAttachment {
+    // Migration only: streaming navigation reserves its output route before
+    // renderer bootstrap creates the Page. Commit 20 removes this Protocol
+    // transaction participant; it never grants inspection of the old Page.
+    AwaitingPage(RendererAgentAttachment),
+    Bound(RendererAgentBinding),
+}
+
+impl RendererChannelAttachment {
+    fn attachment(&self) -> RendererAgentAttachment {
+        match self {
+            Self::AwaitingPage(attachment) => *attachment,
+            Self::Bound(binding) => binding.attachment,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct PreparedRendererAgentAttachment {
     navigation: NavigationId,
@@ -49,13 +183,17 @@ impl PreparedRendererAgentAttachment {
     pub(crate) fn id(&self) -> RendererAgentAttachmentId {
         self.attachment.id()
     }
+
+    pub(crate) fn agent_token(&self) -> RendererDevToolsAgentToken {
+        self.attachment.agent_token()
+    }
 }
 
 #[derive(Debug)]
 pub(crate) struct CommittedRendererAgentAttachment {
     navigation: NavigationId,
     current: RendererAgentAttachment,
-    previous: Option<RendererAgentAttachment>,
+    previous: Option<RendererChannelAttachment>,
 }
 
 impl CommittedRendererAgentAttachment {
@@ -69,6 +207,8 @@ impl CommittedRendererAgentAttachment {
 
     pub(crate) fn previous(&self) -> Option<RendererAgentAttachment> {
         self.previous
+            .as_ref()
+            .map(RendererChannelAttachment::attachment)
     }
 }
 
@@ -89,7 +229,7 @@ enum DevToolsRendererChannelLifecycle {
 #[derive(Debug, Default)]
 pub(crate) struct DevToolsRendererChannel {
     lifecycle: DevToolsRendererChannelLifecycle,
-    current: Option<RendererAgentAttachment>,
+    current: Option<RendererChannelAttachment>,
     inflight_cross_document_navigations: HashSet<NavigationId>,
     suspended_attachment: Option<RendererAgentAttachment>,
     latest_started_navigation: Option<NavigationId>,
@@ -123,16 +263,45 @@ struct BufferedRendererInspectorBatch {
 impl DevToolsRendererChannel {
     pub(crate) fn attach_current(
         &mut self,
-        agent_token: RendererDevToolsAgentToken,
+        endpoint: RendererInspectionEndpoint,
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
         self.ensure_open()?;
         Ok(self
             .current
-            .replace(RendererAgentAttachment::new(agent_token)))
+            .replace(RendererChannelAttachment::Bound(RendererAgentBinding {
+                attachment: RendererAgentAttachment::new(endpoint.agent_token()),
+                endpoint,
+            }))
+            .map(|previous| previous.attachment()))
     }
 
     pub(crate) fn current(&self) -> Option<RendererAgentAttachment> {
         self.current
+            .as_ref()
+            .map(RendererChannelAttachment::attachment)
+    }
+
+    pub(crate) fn current_binding(&self) -> Option<&RendererAgentBinding> {
+        match self.current.as_ref()? {
+            RendererChannelAttachment::Bound(binding) => Some(binding),
+            RendererChannelAttachment::AwaitingPage(_) => None,
+        }
+    }
+
+    pub(crate) fn bind_current(
+        &mut self,
+        endpoint: RendererInspectionEndpoint,
+    ) -> Result<(), DevToolsRendererChannelError> {
+        self.ensure_open()?;
+        let attachment = self
+            .current()
+            .filter(|attachment| attachment.agent_token() == endpoint.agent_token())
+            .ok_or(DevToolsRendererChannelError::CandidatePageAttachmentMismatch)?;
+        self.current = Some(RendererChannelAttachment::Bound(RendererAgentBinding {
+            attachment,
+            endpoint,
+        }));
+        Ok(())
     }
 
     pub(crate) fn navigation_started(
@@ -145,7 +314,7 @@ impl DevToolsRendererChannel {
             return Err(DevToolsRendererChannelError::DuplicateNavigation);
         }
         if !was_suspended {
-            self.suspended_attachment = self.current;
+            self.suspended_attachment = self.current();
         }
         self.latest_started_navigation = Some(navigation);
         self.committed_latest_navigation = None;
@@ -175,7 +344,7 @@ impl DevToolsRendererChannel {
         candidate: PreparedRendererAgentAttachment,
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
         self.commit_candidate_transaction(candidate)
-            .map(|transaction| transaction.previous)
+            .map(|transaction| transaction.previous())
     }
 
     pub(crate) fn commit_candidate_transaction(
@@ -199,7 +368,9 @@ impl DevToolsRendererChannel {
             .retain(|navigation| navigation == candidate.navigation());
         self.committed_latest_navigation = Some(candidate.navigation);
         let current = candidate.attachment;
-        let previous = self.current.replace(current);
+        let previous = self
+            .current
+            .replace(RendererChannelAttachment::AwaitingPage(current));
         Ok(CommittedRendererAgentAttachment {
             navigation: candidate.navigation,
             current,
@@ -213,7 +384,7 @@ impl DevToolsRendererChannel {
     ) -> Result<(), DevToolsRendererChannelError> {
         self.ensure_open()?;
         if self.committed_latest_navigation.as_ref() != Some(transaction.navigation())
-            || self.current != Some(transaction.current())
+            || self.current() != Some(transaction.current())
         {
             return Err(DevToolsRendererChannelError::CommittedCandidateMismatch);
         }
@@ -228,7 +399,7 @@ impl DevToolsRendererChannel {
         batches: Vec<RendererRuntimeInspectorMessageBatch>,
     ) -> Result<Vec<RendererRuntimeInspectorMessageBatch>, DevToolsRendererChannelError> {
         self.ensure_open()?;
-        let Some(current) = self.current else {
+        let Some(current) = self.current() else {
             return Ok(Vec::new());
         };
         if current.id() != attachment_id {
@@ -275,7 +446,7 @@ impl DevToolsRendererChannel {
         }
         Ok(Some(RendererChannelResume {
             suspended_attachment: self.suspended_attachment.take(),
-            current_attachment: self.current,
+            current_attachment: self.current(),
         }))
     }
 
@@ -296,7 +467,7 @@ impl DevToolsRendererChannel {
         if self.output_is_suspended() {
             return Vec::new();
         }
-        let Some(current) = self.current else {
+        let Some(current) = self.current() else {
             self.buffered_output.clear();
             return Vec::new();
         };
@@ -310,7 +481,7 @@ impl DevToolsRendererChannel {
         _reason: RendererAgentDetachReason,
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
         self.ensure_open()?;
-        Ok(self.current.take())
+        Ok(self.current.take().map(|current| current.attachment()))
     }
 
     pub(crate) fn close(
@@ -326,7 +497,7 @@ impl DevToolsRendererChannel {
         self.latest_started_navigation = None;
         self.committed_latest_navigation = None;
         self.buffered_output.clear();
-        self.current.take()
+        self.current.take().map(|current| current.attachment())
     }
 
     pub(crate) fn is_closed(&self) -> bool {
@@ -356,7 +527,7 @@ impl DevToolsRendererChannel {
         attachment_id: RendererAgentAttachmentId,
         batches: Vec<RendererRuntimeInspectorMessageBatch>,
     ) -> Result<Vec<RendererRuntimeInspectorMessageBatch>, DevToolsRendererChannelError> {
-        let Some(current) = self.current else {
+        let Some(current) = self.current() else {
             return Ok(Vec::new());
         };
         if batches
@@ -466,6 +637,15 @@ mod tests {
     use moli_core::page::{DevToolsSessionKey, RendererRuntimeInspectorMessage};
     use serde_json::json;
 
+    async fn inspection_page() -> (moli_core::runtime::Browser, moli_core::page::Page) {
+        let browser = moli_core::runtime::Browser::new(Default::default()).unwrap();
+        let page = browser
+            .fetch("data:text/html,<title>binding</title>")
+            .await
+            .unwrap();
+        (browser, page)
+    }
+
     fn batch(
         agent_token: RendererDevToolsAgentToken,
         marker: &str,
@@ -504,17 +684,21 @@ mod tests {
         )
     }
 
-    #[test]
-    fn initial_attach_and_reattach_allocate_distinct_route_leases() {
-        let agent = RendererDevToolsAgentToken::allocate();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn initial_attach_and_reattach_allocate_distinct_route_leases() {
+        let (_browser, page) = inspection_page().await;
+        let agent = page.renderer_devtools_agent_token();
         let mut channel = DevToolsRendererChannel::default();
 
-        assert_eq!(channel.attach_current(agent), Ok(None));
+        assert_eq!(
+            channel.attach_current(page.renderer_inspection_endpoint()),
+            Ok(None)
+        );
         let first = channel.current().expect("first attachment");
         assert_eq!(first.agent_token(), agent);
 
         let replaced = channel
-            .attach_current(agent)
+            .attach_current(page.renderer_inspection_endpoint())
             .expect("reattach")
             .expect("replaced attachment");
         let second = channel.current().expect("second attachment");
@@ -523,14 +707,14 @@ mod tests {
         assert_ne!(second.id(), first.id());
     }
 
-    #[test]
-    fn failed_candidate_keeps_current_attachment() {
-        let current_agent = RendererDevToolsAgentToken::allocate();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_candidate_keeps_current_attachment() {
+        let (_browser, page) = inspection_page().await;
         let candidate_agent = RendererDevToolsAgentToken::allocate();
         let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(current_agent)
+            .attach_current(page.renderer_inspection_endpoint())
             .expect("initial attach");
         let current = channel.current();
 
@@ -553,16 +737,17 @@ mod tests {
         assert!(!channel.output_is_suspended());
     }
 
-    #[test]
-    fn overlapping_navigation_rejects_superseded_candidate() {
-        let initial_agent = RendererDevToolsAgentToken::allocate();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn overlapping_navigation_rejects_superseded_candidate() {
+        let (_browser, page) = inspection_page().await;
+        let initial_agent = page.renderer_devtools_agent_token();
         let candidate_a_agent = RendererDevToolsAgentToken::allocate();
         let candidate_b_agent = RendererDevToolsAgentToken::allocate();
         let request_a = NavigationId::allocate();
         let request_b = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(initial_agent)
+            .attach_current(page.renderer_inspection_endpoint())
             .expect("initial attach");
         channel.navigation_started(request_a).expect("navigation A");
         let candidate_a = channel
@@ -600,14 +785,15 @@ mod tests {
         assert_eq!(channel.navigation_finished(&request_a), Ok(None));
     }
 
-    #[test]
-    fn committed_candidate_transaction_rolls_back_to_exact_previous_attachment() {
-        let initial_agent = RendererDevToolsAgentToken::allocate();
-        let candidate_agent = RendererDevToolsAgentToken::allocate();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn committed_candidate_transaction_rolls_back_to_exact_previous_attachment() {
+        let (_browser, page) = inspection_page().await;
+        let (_candidate_browser, candidate_page) = inspection_page().await;
+        let candidate_agent = candidate_page.renderer_devtools_agent_token();
         let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(initial_agent)
+            .attach_current(page.renderer_inspection_endpoint())
             .expect("initial attach");
         let initial = channel.current().expect("initial attachment");
         channel
@@ -622,11 +808,31 @@ mod tests {
             .expect("candidate commit");
         assert_eq!(transaction.previous(), Some(initial));
         assert_eq!(channel.current(), Some(transaction.current()));
+        assert!(
+            channel.current_binding().is_none(),
+            "reservation cannot inspect the outgoing Page"
+        );
+        assert_eq!(
+            channel.bind_current(page.renderer_inspection_endpoint()),
+            Err(DevToolsRendererChannelError::CandidatePageAttachmentMismatch)
+        );
+        assert!(channel.current_binding().is_none());
+        channel
+            .bind_current(candidate_page.renderer_inspection_endpoint())
+            .unwrap();
+        assert_eq!(
+            channel.current_binding().unwrap().endpoint.agent_token(),
+            candidate_agent
+        );
 
         channel
             .rollback_committed_candidate(transaction)
             .expect("matching transaction should roll back");
         assert_eq!(channel.current(), Some(initial));
+        assert_eq!(
+            channel.current_binding().unwrap().endpoint.agent_token(),
+            initial.agent_token()
+        );
         assert_eq!(
             channel.committed_latest_navigation, None,
             "a rolled-back candidate is no longer committed"
@@ -640,6 +846,54 @@ mod tests {
                 .navigation_finished(&request)
                 .expect("rolled-back navigation finish")
                 .is_some()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn binding_does_not_keep_retired_page_admission_open() {
+        let (_browser, page) = inspection_page().await;
+        let mut channel = DevToolsRendererChannel::default();
+        channel
+            .attach_current(page.renderer_inspection_endpoint())
+            .unwrap();
+        drop(page);
+        let binding = channel.current_binding().unwrap();
+        for lane in [
+            RendererInspectorCommandRoute::MainThread,
+            RendererInspectorCommandRoute::Io,
+        ] {
+            let (tx, _rx) = tokio::sync::oneshot::channel();
+            let error = binding
+                .start_protocol_message(
+                    None,
+                    lane,
+                    None,
+                    json!({"id": 1, "method": "Debugger.pause"}).to_string(),
+                    RendererRuntimeInspectorResponseSender::new(1, tx),
+                )
+                .err()
+                .expect("retired Page must seal both lanes even while its binding survives");
+            assert!(error.to_string().contains("Inspector Page is retired"));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn detach_and_drop_binding_leave_browser_page_alive() {
+        let (_browser, mut page) = inspection_page().await;
+        let mut channel = DevToolsRendererChannel::default();
+        channel
+            .attach_current(page.renderer_inspection_endpoint())
+            .unwrap();
+        channel
+            .detach_current(RendererAgentDetachReason::ExplicitDetach)
+            .unwrap();
+        assert!(channel.current_binding().is_none());
+        drop(channel);
+        assert_eq!(
+            page.evaluate_runtime_expression_async("40 + 2")
+                .await
+                .unwrap(),
+            json!({"type": "number", "value": 42, "description": "42"})
         );
     }
 
@@ -696,12 +950,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn closed_channel_cannot_attach_or_restart() {
+    #[tokio::test(flavor = "multi_thread")]
+    async fn closed_channel_cannot_attach_or_restart() {
         let request = NavigationId::allocate();
-        let agent = RendererDevToolsAgentToken::allocate();
+        let (_browser, page) = inspection_page().await;
+        let agent = page.renderer_devtools_agent_token();
         let mut channel = DevToolsRendererChannel::default();
-        channel.attach_current(agent).expect("initial attach");
+        channel
+            .attach_current(page.renderer_inspection_endpoint())
+            .expect("initial attach");
         channel
             .navigation_started(request)
             .expect("navigation start");
@@ -716,7 +973,7 @@ mod tests {
         assert!(channel.is_closed());
         assert_eq!(channel.inflight_navigation_count(), 0);
         assert_eq!(
-            channel.attach_current(agent),
+            channel.attach_current(page.renderer_inspection_endpoint()),
             Err(DevToolsRendererChannelError::Closed)
         );
         assert_eq!(
@@ -731,11 +988,14 @@ mod tests {
         assert!(!channel.reopen_after_target_crash());
     }
 
-    #[test]
-    fn crashed_channel_reopens_for_target_recovery_navigation() {
-        let agent = RendererDevToolsAgentToken::allocate();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn crashed_channel_reopens_for_target_recovery_navigation() {
+        let (_browser, page) = inspection_page().await;
+        let agent = page.renderer_devtools_agent_token();
         let mut channel = DevToolsRendererChannel::default();
-        channel.attach_current(agent).expect("initial attach");
+        channel
+            .attach_current(page.renderer_inspection_endpoint())
+            .expect("initial attach");
 
         let detached = channel
             .close(RendererAgentDetachReason::TargetCrashed)
@@ -748,13 +1008,16 @@ mod tests {
         assert!(channel.navigation_started(NavigationId::allocate()).is_ok());
     }
 
-    #[test]
-    fn successful_cutover_releases_only_current_attachment_output() {
-        let old_agent = RendererDevToolsAgentToken::allocate();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn successful_cutover_releases_only_current_attachment_output() {
+        let (_browser, page) = inspection_page().await;
+        let old_agent = page.renderer_devtools_agent_token();
         let new_agent = RendererDevToolsAgentToken::allocate();
         let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
-        channel.attach_current(old_agent).expect("old attach");
+        channel
+            .attach_current(page.renderer_inspection_endpoint())
+            .expect("old attach");
         let old_attachment = channel.current().expect("old attachment");
         channel
             .navigation_started(request)
@@ -792,12 +1055,15 @@ mod tests {
         assert_eq!(batch_marker(&released[0]), Some("new"));
     }
 
-    #[test]
-    fn failed_navigation_releases_buffered_current_output() {
-        let agent = RendererDevToolsAgentToken::allocate();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn failed_navigation_releases_buffered_current_output() {
+        let (_browser, page) = inspection_page().await;
+        let agent = page.renderer_devtools_agent_token();
         let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
-        channel.attach_current(agent).expect("current attach");
+        channel
+            .attach_current(page.renderer_inspection_endpoint())
+            .expect("current attach");
         let attachment = channel.current().expect("current attachment");
         channel
             .navigation_started(request)
@@ -819,12 +1085,15 @@ mod tests {
         assert_eq!(batch_marker(&released[0]), Some("retained"));
     }
 
-    #[test]
-    fn current_session_response_releases_its_buffered_prefix_during_navigation() {
-        let agent = RendererDevToolsAgentToken::allocate();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn current_session_response_releases_its_buffered_prefix_during_navigation() {
+        let (_browser, page) = inspection_page().await;
+        let agent = page.renderer_devtools_agent_token();
         let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
-        channel.attach_current(agent).expect("current attach");
+        channel
+            .attach_current(page.renderer_inspection_endpoint())
+            .expect("current attach");
         let attachment = channel.current().expect("current attachment");
         channel
             .navigation_started(request)
@@ -847,14 +1116,19 @@ mod tests {
         assert!(channel.take_released_output().is_empty());
     }
 
-    #[test]
-    fn stale_attachment_and_mismatched_agent_are_rejected() {
-        let agent = RendererDevToolsAgentToken::allocate();
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stale_attachment_and_mismatched_agent_are_rejected() {
+        let (_browser, page) = inspection_page().await;
+        let agent = page.renderer_devtools_agent_token();
         let other_agent = RendererDevToolsAgentToken::allocate();
         let mut channel = DevToolsRendererChannel::default();
-        channel.attach_current(agent).expect("first attach");
+        channel
+            .attach_current(page.renderer_inspection_endpoint())
+            .expect("first attach");
         let stale = channel.current().expect("first attachment");
-        channel.attach_current(agent).expect("reattach");
+        channel
+            .attach_current(page.renderer_inspection_endpoint())
+            .expect("reattach");
         let current = channel.current().expect("current attachment");
 
         assert_eq!(

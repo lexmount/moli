@@ -1,6 +1,10 @@
 use super::*;
 
 impl RendererInspectionEndpoint {
+    pub fn agent_token(&self) -> RendererDevToolsAgentToken {
+        self.devtools_agent_token
+    }
+
     pub fn enqueue_main_command(
         &self,
         envelope: RendererInspectorCommandEnvelope,
