@@ -818,7 +818,6 @@ impl CdpConnection {
                 match crate::domains::performance::try_start_performance_command_dispatch(
                     self,
                     &cmd,
-                    command.renderer_access(),
                 ) {
                     crate::domains::performance::PerformanceCommandTaskStep::Pending(pending) => {
                         self.pending_step(PendingCdpCommandDispatchKind::Performance(pending))

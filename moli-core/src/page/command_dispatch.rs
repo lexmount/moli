@@ -201,12 +201,6 @@ impl Page {
         completion.output
     }
 
-    pub(crate) fn pending_devtools_io_command_dispatch(
-        route: RendererRuntimeInspectorIoCommandRoute,
-    ) -> PendingDevToolsIoCommandDispatch {
-        PendingDevToolsIoCommandDispatch { route }
-    }
-
     pub(crate) fn finish_page_command(
         &mut self,
         completion: CompletedPageCommand,
@@ -280,7 +274,6 @@ impl Page {
             }
             RendererPageReply::RuntimeConsoleMessageSnapshots(_) => "runtime console snapshots",
             RendererPageReply::RuntimeHeapUsage(_) => "runtime heap usage",
-            RendererPageReply::PerformanceMetricSnapshot(_) => "performance metric snapshot",
             RendererPageReply::DomDebuggerEventListeners(_) => {
                 "a DOMDebugger event listeners resolution"
             }
@@ -509,6 +502,10 @@ impl PendingRuntimeInspectorCommandDispatch {
 }
 
 impl PendingDevToolsIoCommandDispatch {
+    pub fn from_route(route: RendererRuntimeInspectorIoCommandRoute) -> Self {
+        Self { route }
+    }
+
     pub async fn wait(self) -> Result<CompletedDevToolsIoCommandDispatch> {
         match self
             .route

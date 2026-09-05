@@ -1941,16 +1941,43 @@ impl CdpConnection {
         renderer_inspector_session_id: Option<&str>,
     ) -> Option<crate::conn::TargetPageProtocolAttachmentIdentity> {
         let source = self.target_page_protocol_attachment_identity_for_owner(source_owner)?;
+        let protocol_owner = self.target_protocol_owner_for_renderer_inspector_owner(
+            source_owner,
+            renderer_inspector_session_id,
+        )?;
+        let attachment =
+            self.target_page_protocol_attachment_identity_for_owner(&protocol_owner)?;
+        (attachment.page_owner() == source.page_owner()).then_some(attachment)
+    }
+
+    /// Resolve the DevTools session for Inspector output without borrowing its
+    /// Browser Document. A concrete target route also pins implicit replies
+    /// across foreground selection changes.
+    pub(crate) fn target_protocol_owner_for_renderer_inspector_owner(
+        &self,
+        source_owner: &CommandOwnerScope,
+        renderer_inspector_session_id: Option<&str>,
+    ) -> Option<CommandOwnerScope> {
+        let source = self
+            .target_session_owner_ref_for_owner(source_owner)?
+            .owner_identity();
         let protocol_session_id = renderer_inspector_session_id
             .map(str::to_owned)
             .or_else(|| self.runtime_session_owner_primary_session_id_for_owner(source_owner));
         let protocol_owner = protocol_session_id
             .as_deref()
             .map(CommandOwnerScope::for_session)
-            .unwrap_or_else(|| source_owner.clone());
-        let attachment =
-            self.target_page_protocol_attachment_identity_for_owner(&protocol_owner)?;
-        if attachment.page_owner() != source.page_owner()
+            .or_else(|| {
+                Some(CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
+                    browser_context_id: source.0.clone(),
+                    target_id: source.1.clone()?,
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
+                }))
+            })?;
+        if self
+            .target_session_owner_ref_for_owner(&protocol_owner)?
+            .owner_identity()
+            != source
             || self
                 .target_renderer_runtime_inspector_session_id_for_owner(&protocol_owner)
                 .as_deref()
@@ -1958,7 +1985,7 @@ impl CdpConnection {
         {
             return None;
         }
-        Some(attachment)
+        Some(protocol_owner)
     }
 
     /// Checks both the target Page residence and the session that originally

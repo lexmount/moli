@@ -82,66 +82,6 @@ where
     }
 }
 
-const PERFORMANCE_METRICS_SNAPSHOT_EXPRESSION: &str = r#"
-(() => {
-  const numeric = (value) => {
-    const number = Number(value);
-    return Number.isFinite(number) ? number : 0;
-  };
-  const perf = globalThis.performance || {};
-  const timing = perf.timing || {};
-  const timeOriginMs =
-    numeric(perf.timeOrigin) || numeric(timing.navigationStart) || Date.now();
-  const nowMs = typeof perf.now === "function" ? numeric(perf.now()) : 0;
-  const navigationStartMs = numeric(timing.navigationStart) || timeOriginMs;
-  const domContentLoadedMs =
-    numeric(timing.domContentLoadedEventEnd) ||
-    numeric(timing.domContentLoadedEventStart) ||
-    timeOriginMs + nowMs;
-  const loadEventMs =
-    numeric(timing.loadEventEnd) ||
-    numeric(timing.loadEventStart) ||
-    domContentLoadedMs;
-
-  let nodeCount = 0;
-  let documentCount = 0;
-  let frameCount = 0;
-  let resourceCount = 0;
-  try {
-    if (globalThis.document) {
-      documentCount = 1;
-      nodeCount = 1;
-      if (document.querySelectorAll) {
-        nodeCount += document.querySelectorAll("*").length;
-        frameCount = document.querySelectorAll("iframe,frame").length;
-      }
-      frameCount += 1;
-    }
-  } catch (_error) {
-  }
-  try {
-    if (typeof perf.getEntriesByType === "function") {
-      resourceCount = perf.getEntriesByType("resource").length;
-    } else if (typeof perf.getEntries === "function") {
-      resourceCount = perf.getEntries().length;
-    }
-  } catch (_error) {
-  }
-
-  return JSON.stringify({
-    timeOriginMs,
-    nowMs,
-    navigationStartMs,
-    domContentLoadedMs,
-    loadEventMs,
-    documentCount,
-    frameCount,
-    nodeCount,
-    resourceCount,
-  });
-})()
-"#;
-
 fn moli_dom_memory_counters(document: &NativeDom) -> RendererMoliDomMemoryDiagnostics {
     let mut node_counts = BTreeMap::<String, usize>::new();
     let mut element_tags = BTreeMap::<String, usize>::new();
@@ -7387,15 +7327,6 @@ impl ScriptVm {
             RuntimeEvaluateResultMode::ByValue,
         )?;
         self.require_completed_runtime_evaluate(outcome)
-    }
-
-    pub(crate) fn performance_metric_snapshot(
-        &mut self,
-    ) -> Result<RendererPerformanceMetricSnapshot> {
-        let snapshot_json = self
-            .eval(PERFORMANCE_METRICS_SNAPSHOT_EXPRESSION)
-            .context("failed to evaluate performance metric snapshot")?;
-        serde_json::from_str(&snapshot_json).context("failed to decode performance metric snapshot")
     }
 
     pub(crate) fn performance_metric_snapshot_without_script(

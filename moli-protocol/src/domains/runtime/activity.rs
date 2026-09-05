@@ -332,15 +332,17 @@ impl RuntimePreparedOutputs {
             .into_iter()
             .filter(|batch| !batch.messages.is_empty())
         {
-            let Some(attachment) = conn
-                .target_page_protocol_attachment_identity_for_renderer_inspector_owner(
-                    source_owner,
-                    batch.session.wire_session_id(),
-                )
-            else {
+            let Some(response_owner) = conn.target_protocol_owner_for_renderer_inspector_owner(
+                source_owner,
+                batch.session.wire_session_id(),
+            ) else {
                 continue;
             };
-            let response_owner = CommandOwnerScope::for_page_attachment(&attachment);
+            let attachment =
+                conn.target_page_protocol_attachment_identity_for_owner(&response_owner);
+            let response_target_id = conn
+                .target_owner_identity_for_owner(&response_owner)
+                .and_then(|(_, target_id)| target_id);
             let response_route = response_owner.resolve_route(conn);
             let renderer_agent_attachment_id = batch.renderer_agent_attachment_id();
             let order = batch.command_response_order();
@@ -372,12 +374,12 @@ impl RuntimePreparedOutputs {
                         },
                         RuntimeInspectorMessage::from_renderer_message(
                             response,
-                            attachment.page_owner().target_id(),
+                            response_target_id.as_deref(),
                         ),
                     );
                     continue;
                 }
-                if observations_are_current {
+                if observations_are_current && let Some(attachment) = &attachment {
                     outputs.append_inspector_message(
                         order,
                         RuntimeInspectorMessageAuthority::CurrentPage(attachment.clone()),

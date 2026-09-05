@@ -8,16 +8,16 @@ use super::protocol_support::{
     RuntimeIsolatedWorldDefinition,
 };
 use super::{
-    CompletedPageCommand, PendingDevToolsIoCommandDispatch, PendingPageCommand,
-    RendererCommandTurnOutput, RendererInspectorSessionRestoreSnapshot,
-    RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
+    CompletedPageCommand, PendingPageCommand, RendererCommandTurnOutput,
+    RendererInspectorSessionRestoreSnapshot, RendererRuntimeCommandOutput,
+    RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
 };
 use crate::RendererOutputFence;
 use crate::renderer::{
     RendererDomDebuggerDomBreakpointResolution, RendererDomDebuggerEventListenerBreakpoint,
     RendererDomDebuggerEventListenersResolution, RendererDomDebuggerXhrBreakpoint,
     RendererPageCommand, RendererPageReply, RendererPerformanceMetricSnapshot,
-    RendererRuntimeHeapUsage, RendererRuntimeInspectorResponseSender,
+    RendererRuntimeHeapUsage,
 };
 
 fn dedupe_runtime_context_created_events(events: &mut Vec<RuntimeContextRestoreEvent>) {
@@ -650,67 +650,8 @@ impl Page {
         )
     }
 
-    pub fn start_performance_metric_snapshot(&self) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::PerformanceMetricSnapshot)
-    }
-
-    /// Admits `Performance.getMetrics` through the same target IO task FIFO used
-    /// by interruptible V8 Inspector commands. The snapshot remains the latest
-    /// owner-published value because collecting a fresh JS-derived snapshot is
-    /// not re-entrant while the isolate is executing JavaScript.
-    pub fn start_performance_metric_snapshot_from_io(
-        &self,
-    ) -> (
-        PendingDevToolsIoCommandDispatch,
-        RendererPerformanceMetricSnapshot,
-    ) {
-        let route = self.handle.enqueue_performance_get_metrics_io_command(
-            self.renderer_agent_attachment_id,
-            self.renderer_devtools_command_session_id.clone(),
-        );
-        (
-            Self::pending_devtools_io_command_dispatch(route),
-            self.cached_performance_metric_snapshot(),
-        )
-    }
-
-    /// Publishes the terminal `Performance.getMetrics` response through the
-    /// concrete renderer DevTools session that owns this Page attachment.
-    pub fn start_performance_get_metrics_from_io_with_response(
-        &self,
-        inspector_session_id: Option<String>,
-        result: Value,
-        response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<PendingDevToolsIoCommandDispatch> {
-        let attachment = self
-            .renderer_agent_attachment_id
-            .ok_or_else(|| anyhow!("Performance IO response requires a renderer attachment"))?;
-        let route = self
-            .handle
-            .enqueue_performance_get_metrics_io_command_with_response(
-                attachment,
-                inspector_session_id,
-                result,
-                response,
-            );
-        Ok(Self::pending_devtools_io_command_dispatch(route))
-    }
-
     pub fn cached_performance_metric_snapshot(&self) -> RendererPerformanceMetricSnapshot {
         self.page_state.performance_metric_snapshot().clone()
-    }
-
-    pub fn finish_performance_metric_snapshot(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererPerformanceMetricSnapshot> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "performance metric snapshot page command",
-            "performance metric snapshot",
-            RendererPageReply::PerformanceMetricSnapshot(snapshot) => Ok(*snapshot),
-        )
     }
 
     pub fn start_dom_debugger_get_event_listeners(

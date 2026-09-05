@@ -22,8 +22,7 @@ pub(crate) use moli_renderer_v8::{
     RendererPageCommand, RendererPageCommandPending, RendererPageCookieFacadeSnapshotReply,
     RendererPageDumpOptions, RendererPageHandle, RendererPageReply, RendererPageState,
     RendererPendingDownloadActivation, RendererPerformanceMetricSnapshot, RendererRuntimeHeapUsage,
-    RendererRuntimeInspectorResponseSender, RendererRuntimeRemoteObjectResolution,
-    ScriptRunOutcome,
+    RendererRuntimeRemoteObjectResolution, ScriptRunOutcome,
 };
 pub use moli_renderer_v8::{
     RendererDocumentFrontendNodeIdsResolution, RendererDocumentNodeAttributesResolution,

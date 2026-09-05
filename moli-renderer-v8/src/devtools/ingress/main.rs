@@ -1170,7 +1170,7 @@ mod tests {
         let _page = ingress.enqueue_protocol_page_command(
             page_token,
             agent,
-            RendererPageCommand::PerformanceMetricSnapshot,
+            RendererPageCommand::RuntimeHeapUsage,
             Some("session-a".to_owned()),
             RendererPageStateCapturePolicy::ProtocolTurn,
         );

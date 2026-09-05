@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::fmt;
 
 use moli_core::page::{
-    PendingPageCommand, PendingRuntimeInspectorCommandDispatch, RendererAgentAttachmentId,
-    RendererDevToolsAgentToken, RendererInspectorCommandRoute,
+    PendingDevToolsIoCommandDispatch, PendingPageCommand, PendingRuntimeInspectorCommandDispatch,
+    RendererAgentAttachmentId, RendererDevToolsAgentToken, RendererInspectorCommandRoute,
     RendererRuntimeInspectorMessageBatch,
 };
 use moli_renderer_v8::{
@@ -52,6 +52,51 @@ impl fmt::Debug for RendererAgentBinding {
 }
 
 impl RendererAgentBinding {
+    pub(crate) fn routes_output_stream(
+        &self,
+        stream: moli_core::RendererOutputStreamIdentity,
+    ) -> bool {
+        self.endpoint.routes_output_stream(stream)
+    }
+
+    pub(crate) fn start_performance_get_metrics(
+        &self,
+        inspector_session_id: Option<String>,
+        result: serde_json::Value,
+        response: Option<RendererRuntimeInspectorResponseSender>,
+    ) -> anyhow::Result<PendingDevToolsIoCommandDispatch> {
+        self.endpoint
+            .enqueue_performance_get_metrics(
+                RendererInspectorIngressTicket::new(
+                    Some(self.attachment.id()),
+                    inspector_session_id,
+                    RendererInspectorCommandRoute::Io,
+                ),
+                result,
+                response,
+            )
+            .map(PendingDevToolsIoCommandDispatch::from_route)
+    }
+
+    pub(crate) fn start_set_script_execution_disabled(
+        &self,
+        inspector_session_id: Option<String>,
+        disabled: bool,
+        response: Option<RendererRuntimeInspectorResponseSender>,
+    ) -> anyhow::Result<PendingDevToolsIoCommandDispatch> {
+        self.endpoint
+            .enqueue_set_script_execution_disabled(
+                RendererInspectorIngressTicket::new(
+                    Some(self.attachment.id()),
+                    inspector_session_id,
+                    RendererInspectorCommandRoute::Io,
+                ),
+                disabled,
+                response,
+            )
+            .map(PendingDevToolsIoCommandDispatch::from_route)
+    }
+
     pub(crate) fn attachment(&self) -> RendererAgentAttachment {
         self.attachment
     }

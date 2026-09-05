@@ -5,6 +5,19 @@ impl RendererInspectionEndpoint {
         self.devtools_agent_token
     }
 
+    pub fn routes_output_stream(&self, stream: RendererOutputStreamIdentity) -> bool {
+        self.page_context_cancel_tx
+            .with_inspector_admission(|| {
+                stream.renderer_agent() == self.devtools_agent_token
+                    && stream.residence()
+                        == RendererOutputResidenceIdentity::Page {
+                            owner_local_host_id: self.token.local_host_id,
+                            page_id: self.token.page_id,
+                        }
+            })
+            .unwrap_or(false)
+    }
+
     pub fn enqueue_main_command(
         &self,
         envelope: RendererInspectorCommandEnvelope,
@@ -22,11 +35,64 @@ impl RendererInspectionEndpoint {
         &self,
         envelope: RendererInspectorCommandEnvelope,
     ) -> Result<RendererRuntimeInspectorIoCommandRoute> {
+        self.enqueue_io_agent_command(RendererDevToolsIoCommandEnvelope::inspector(envelope))
+    }
+
+    pub fn enqueue_performance_get_metrics(
+        &self,
+        ticket: RendererInspectorIngressTicket,
+        result: serde_json::Value,
+        response: Option<RendererRuntimeInspectorResponseSender>,
+    ) -> Result<RendererRuntimeInspectorIoCommandRoute> {
+        let envelope = match response {
+            Some(response) => {
+                debug_assert_eq!(
+                    response.renderer_agent_attachment_id(),
+                    ticket.attachment(),
+                    "Performance response must belong to the command attachment"
+                );
+                RendererDevToolsIoCommandEnvelope::performance_get_metrics_with_response(
+                    ticket, result, response,
+                )
+            }
+            None => RendererDevToolsIoCommandEnvelope::performance_get_metrics(ticket),
+        };
+        self.enqueue_io_agent_command(envelope)
+    }
+
+    pub fn enqueue_set_script_execution_disabled(
+        &self,
+        ticket: RendererInspectorIngressTicket,
+        disabled: bool,
+        response: Option<RendererRuntimeInspectorResponseSender>,
+    ) -> Result<RendererRuntimeInspectorIoCommandRoute> {
+        let control = self.script_execution_control.clone();
+        let envelope = match response {
+            Some(response) => {
+                debug_assert_eq!(
+                    response.renderer_agent_attachment_id(),
+                    ticket.attachment(),
+                    "Emulation response must belong to the command attachment"
+                );
+                RendererDevToolsIoCommandEnvelope::set_script_execution_disabled_with_response(
+                    ticket, control, disabled, response,
+                )
+            }
+            None => RendererDevToolsIoCommandEnvelope::set_script_execution_disabled(
+                ticket, control, disabled,
+            ),
+        };
+        self.enqueue_io_agent_command(envelope)
+    }
+
+    fn enqueue_io_agent_command(
+        &self,
+        envelope: RendererDevToolsIoCommandEnvelope,
+    ) -> Result<RendererRuntimeInspectorIoCommandRoute> {
         self.page_context_cancel_tx.with_inspector_admission(|| {
-            self.devtools_target.io_ref().enqueue_command(
-                self.devtools_agent_token,
-                RendererDevToolsIoCommandEnvelope::inspector(envelope),
-            )
+            self.devtools_target
+                .io_ref()
+                .enqueue_command(self.devtools_agent_token, envelope)
         })
     }
 
@@ -73,6 +139,7 @@ mod tests {
             devtools_agent_token: RendererDevToolsAgentToken::allocate(),
             page_context_cancel_tx,
             devtools_target: RendererDevToolsTargetHandle::new(pause, main, io),
+            script_execution_control: Default::default(),
         }
     }
 
@@ -96,6 +163,17 @@ mod tests {
             r#"{"id":2,"method":"Debugger.pause"}"#.into(),
             None,
         )
+    }
+
+    fn dedicated_io_commands(
+        endpoint: &RendererInspectionEndpoint,
+    ) -> [Result<RendererRuntimeInspectorIoCommandRoute>; 2] {
+        let ticket =
+            || RendererInspectorIngressTicket::new(None, None, RendererInspectorCommandRoute::Io);
+        [
+            endpoint.enqueue_performance_get_metrics(ticket(), serde_json::Value::Null, None),
+            endpoint.enqueue_set_script_execution_disabled(ticket(), true, None),
+        ]
     }
 
     #[test]
@@ -134,7 +212,7 @@ mod tests {
     fn inspection_admission_racing_page_retirement_settles_without_executor() {
         let endpoint = endpoint();
         let start = std::sync::Barrier::new(2);
-        let (main, io) = std::thread::scope(|scope| {
+        let (main, io, dedicated) = std::thread::scope(|scope| {
             scope.spawn(|| {
                 start.wait();
                 endpoint.retire_page();
@@ -143,6 +221,7 @@ mod tests {
             (
                 endpoint.enqueue_main_command(main_command()),
                 endpoint.enqueue_io_command(io_command()),
+                dedicated_io_commands(&endpoint),
             )
         });
 
@@ -152,8 +231,10 @@ mod tests {
         if let Ok(io) = io {
             assert_io_canceled(io);
         }
-        assert!(endpoint.enqueue_main_command(main_command()).is_err());
-        assert!(endpoint.enqueue_io_command(io_command()).is_err());
+        for route in dedicated.into_iter().flatten() {
+            assert_io_canceled(route);
+        }
+        assert_retired(&endpoint);
     }
 
     #[test]
@@ -163,15 +244,22 @@ mod tests {
         let _registration = registry.register(endpoint.devtools_target.clone()).unwrap();
         let main = endpoint.enqueue_main_command(main_command()).unwrap();
         let io = endpoint.enqueue_io_command(io_command()).unwrap();
+        let dedicated = dedicated_io_commands(&endpoint).map(Result::unwrap);
 
         registry.terminate_all();
 
         assert_main_canceled(main);
         assert_io_canceled(io);
+        for route in dedicated {
+            assert_io_canceled(route);
+        }
         // The target can become terminal before the Context broadcasts Page
         // cancellation. Its existing receivers must also seal late admission.
         assert_main_canceled(endpoint.enqueue_main_command(main_command()).unwrap());
         assert_io_canceled(endpoint.enqueue_io_command(io_command()).unwrap());
+        for route in dedicated_io_commands(&endpoint) {
+            assert_io_canceled(route.unwrap());
+        }
     }
 
     #[test]
@@ -183,7 +271,21 @@ mod tests {
             devtools_agent_token: RendererDevToolsAgentToken::allocate(),
             page_context_cancel_tx,
             devtools_target: old.devtools_target.clone(),
+            script_execution_control: Default::default(),
         };
+        let old_stream = RendererOutputStreamIdentity::new_page(
+            old.token.local_host_id,
+            old.token.page_id,
+            old.devtools_agent_token,
+        );
+        let replacement_stream = RendererOutputStreamIdentity::new_page(
+            replacement.token.local_host_id,
+            replacement.token.page_id,
+            replacement.devtools_agent_token,
+        );
+        assert!(old.routes_output_stream(old_stream));
+        assert!(!old.routes_output_stream(replacement_stream));
+        assert!(!replacement.routes_output_stream(old_stream));
         replacement
             .devtools_target
             .pause_ref()
@@ -196,14 +298,21 @@ mod tests {
             ));
         let old_main = old.enqueue_main_command(main_command()).unwrap();
         let old_io = old.enqueue_io_command(io_command()).unwrap();
+        let old_dedicated = dedicated_io_commands(&old).map(Result::unwrap);
         let _new_main = replacement.enqueue_main_command(main_command()).unwrap();
         let new_io = replacement.enqueue_io_command(io_command()).unwrap();
+        let new_dedicated = dedicated_io_commands(&replacement).map(Result::unwrap);
 
         old.retire_page();
 
         assert_retired(&old);
+        assert!(!old.routes_output_stream(old_stream));
+        assert!(replacement.routes_output_stream(replacement_stream));
         assert_main_canceled(old_main);
         assert_io_canceled(old_io);
+        for route in old_dedicated {
+            assert_io_canceled(route);
+        }
         let main = replacement.devtools_target.main_ref();
         let io = replacement.devtools_target.io_ref();
         let mut main_command = main.claim_for_owner().unwrap();
@@ -221,6 +330,25 @@ mod tests {
             RendererRuntimeInspectorIoCommandClaim::Dispatched
         );
         assert!(main.claim_for_owner().is_none());
+        for route in new_dedicated {
+            let mut command = io
+                .claim_for_owner()
+                .expect("replacement IO agent must remain queued");
+            assert_eq!(command.agent_token, replacement.devtools_agent_token);
+            assert!(
+                io.claim_for_owner().is_none(),
+                "dedicated agents share the same first-dispatch FIFO"
+            );
+            io.first_dispatch_guard(&mut command).release();
+            assert_eq!(
+                route
+                    .wait_for_first_dispatch()
+                    .now_or_never()
+                    .unwrap()
+                    .unwrap(),
+                RendererRuntimeInspectorIoCommandClaim::Dispatched
+            );
+        }
         assert!(io.claim_for_owner().is_none());
     }
 
@@ -309,6 +437,11 @@ mod tests {
     fn assert_retired(endpoint: &RendererInspectionEndpoint) {
         assert!(endpoint.enqueue_main_command(main_command()).is_err());
         assert!(endpoint.enqueue_io_command(io_command()).is_err());
+        assert!(
+            dedicated_io_commands(endpoint)
+                .into_iter()
+                .all(|route| route.is_err())
+        );
         assert!(!endpoint.pause_active());
     }
 
