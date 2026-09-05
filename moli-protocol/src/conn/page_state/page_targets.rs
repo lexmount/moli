@@ -381,7 +381,7 @@ impl BrowserContext {
         };
         let effective = target.effective_policy();
         let delta = previous.delta(&effective);
-        let browser_identity_changed = delta.browser_identity_changed();
+        let browser_identity_changed = delta.browser_identity;
 
         if delta.is_empty() {
             return Ok(false);

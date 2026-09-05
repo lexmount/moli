@@ -1216,7 +1216,7 @@ async fn multi_session_browser_identity_uses_attachment_order_and_field_contribu
             .as_ref()
             .expect("browser context")
             .active_page_target()
-            .effective_renderer_browser_identity_override_owned()
+            .browser_identity_override()
             .expect("renderer identity")
             .user_agent(),
         "Moli/Aux-1",

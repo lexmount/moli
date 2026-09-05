@@ -57,7 +57,7 @@ impl CdpConnection {
     pub fn user_agent(&self) -> &str {
         self.browser_context
             .as_ref()
-            .and_then(|browser_context| browser_context.effective_active_user_agent_override())
+            .and_then(|browser_context| browser_context.reported_active_user_agent_override())
             .or_else(|| {
                 self.global_browser_identity_override
                     .as_ref()
@@ -75,8 +75,7 @@ impl CdpConnection {
         if let Some(browser_context) = self.browser_context.as_mut() {
             browser_context
                 .active_page_target_mut()
-                .network_policy
-                .set_browser_identity_override(browser_identity);
+                .set_base_browser_identity_override(Some(browser_identity));
         } else {
             self.base_browser_identity = browser_identity;
         }

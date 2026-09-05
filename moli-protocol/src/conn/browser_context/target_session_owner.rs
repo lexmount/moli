@@ -149,10 +149,8 @@ pub(crate) struct TargetNavigationLoadInputs {
     storage_handles: TargetNavigationStorageHandles,
     pub(crate) root_frame_id: Option<String>,
     pub(crate) renderer_runtime: RendererBrowserContextRuntimeOwnerAccess,
-    /// Browser-side identity used for navigation request headers.
+    /// One identity for navigation request headers and the Document's Navigator.
     pub(crate) browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
-    /// Renderer-agent identity exposed through the committed Document's Navigator.
-    pub(crate) navigator_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
     pub(crate) http_proxy_override: Option<String>,
     pub(crate) http_no_proxy_override: Option<String>,
     pub(crate) tls_verify_host_override: Option<bool>,
@@ -289,9 +287,6 @@ impl TargetNavigationLoadInputs {
                 .browser_identity_override()
                 .cloned()
                 .or_else(|| browser_context.default_browser_identity_override_owned()),
-            navigator_identity_override: page_state
-                .effective_renderer_browser_identity_override_owned()
-                .or_else(|| browser_context.default_browser_identity_override_owned()),
             http_proxy_override: page_state
                 .http_proxy_override
                 .clone()
@@ -353,8 +348,6 @@ impl TargetNavigationLoadInputs {
         inputs.browser_context_id = Some(browser_context.id.clone());
         inputs.browser_identity_override =
             browser_context.effective_active_browser_identity_override_owned();
-        inputs.navigator_identity_override =
-            browser_context.effective_active_renderer_browser_identity_override_owned();
         inputs.http_proxy_override = browser_context.effective_active_http_proxy_override_owned();
         inputs.http_no_proxy_override =
             browser_context.effective_active_http_no_proxy_override_owned();
@@ -382,7 +375,6 @@ impl TargetNavigationLoadInputs {
             root_frame_id: None,
             renderer_runtime,
             browser_identity_override: None,
-            navigator_identity_override: None,
             http_proxy_override: None,
             http_no_proxy_override: None,
             tls_verify_host_override: None,
@@ -3041,8 +3033,7 @@ mod tests {
             .set_base_locale_override(Some("zh-CN".to_owned()));
         background
             .active_page_target_mut()
-            .network_policy
-            .set_browser_identity_override(test_browser_identity("Active-Only-UA"));
+            .set_base_browser_identity_override(Some(test_browser_identity("Active-Only-UA")));
         background.replace_default_browser_identity_override_for_test(test_browser_identity(
             "Browser-Context-Default-UA",
         ));
@@ -3221,9 +3212,7 @@ mod tests {
             state.apply_emulation_policy_change(
                 crate::conn::EmulationPolicyChange::ScriptExecutionDisabled(true),
             );
-            state
-                .network_policy
-                .set_user_agent_override("OwnerUA/1.0".to_owned());
+            state.set_user_agent_override_for_test("OwnerUA/1.0".to_owned());
             state.network_policy.set_network_offline(true);
             state.mutate_devtools_network_session_state(&DevToolsSessionKey::Primary, |network| {
                 network.network_enabled = true;

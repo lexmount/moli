@@ -59,15 +59,26 @@ impl TargetPerformanceSessionState {
 }
 
 impl PageTargetHost {
-    pub(crate) fn effective_user_agent_override(&self) -> Option<&str> {
+    // Browser.getVersion reports explicit frontend UA contributions, which
+    // differ from a language-only runtime profile. This is projection state.
+    pub(crate) fn reported_user_agent_override(&self) -> Option<&str> {
         self.devtools_sessions
-            .effective_user_agent_override()
+            .reported_user_agent_override()
             .or_else(|| {
-                self.network_policy
-                    .base_browser_identity
+                self.base_browser_identity
                     .profile()
                     .map(moli_browser_profile::BrowserIdentityProfile::user_agent)
             })
+    }
+
+    pub(crate) fn browser_identity_override(
+        &self,
+    ) -> Option<&moli_browser_profile::BrowserIdentityProfile> {
+        self.runtime_slot
+            .page_slot()
+            .contents
+            .browser_identity_override
+            .as_ref()
     }
 
     pub(crate) fn effective_policy(&self) -> EffectiveTargetPolicy {
@@ -78,14 +89,7 @@ impl PageTargetHost {
                 .contents
                 .network_request_policy
                 .clone(),
-            browser_identity_override: self
-                .devtools_sessions
-                .effective_network_browser_identity_override()
-                .or_else(|| self.network_policy.base_browser_identity.profile_owned()),
-            renderer_browser_identity_override: self
-                .devtools_sessions
-                .effective_renderer_browser_identity_override()
-                .or_else(|| self.network_policy.base_browser_identity.profile_owned()),
+            browser_identity_override: self.browser_identity_override().cloned(),
             locale_override: self
                 .devtools_sessions
                 .effective_locale_override()
@@ -132,11 +136,59 @@ impl PageTargetHost {
         self.install_effective_network_request_policy();
     }
 
-    pub(crate) fn effective_renderer_browser_identity_override_owned(
-        &self,
-    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
-        self.effective_policy()
-            .renderer_browser_identity_override_owned()
+    // Like request policy, this value-only bridge is replaced by the typed
+    // AgentHost/BrowserHandle install in Commits 14/22, before 24b.
+    fn install_effective_browser_identity(&mut self) {
+        let identity = self
+            .devtools_sessions
+            .effective_browser_identity_override()
+            .or_else(|| self.base_browser_identity.profile_owned());
+        self.runtime_slot
+            .page_slot_mut()
+            .contents
+            .set_browser_identity_override(identity);
+    }
+
+    pub(crate) fn set_base_browser_identity_override(
+        &mut self,
+        identity: Option<moli_browser_profile::BrowserIdentityProfile>,
+    ) {
+        if let Some(identity) = identity {
+            self.base_browser_identity.replace_profile(identity);
+        } else {
+            self.base_browser_identity = Default::default();
+        }
+        self.install_effective_browser_identity();
+    }
+
+    pub(crate) fn set_base_user_agent_override(
+        &mut self,
+        user_agent: Option<String>,
+        fallback: &moli_browser_profile::BrowserIdentityProfile,
+    ) {
+        self.base_browser_identity
+            .set_user_agent(user_agent, fallback);
+        self.install_effective_browser_identity();
+    }
+
+    pub(crate) fn set_base_accept_language_override(
+        &mut self,
+        language: Option<String>,
+        fallback: &moli_browser_profile::BrowserIdentityProfile,
+    ) {
+        self.base_browser_identity
+            .set_accept_language(language, fallback);
+        self.install_effective_browser_identity();
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_user_agent_override_for_test(&mut self, user_agent: String) {
+        self.set_base_browser_identity_override(Some(
+            moli_browser_profile::BrowserIdentityProfile::new(
+                user_agent,
+                moli_browser_profile::DEFAULT_ACCEPT_LANGUAGE,
+            ),
+        ));
     }
 
     pub(crate) fn mutate_devtools_network_session_state<T>(
@@ -157,6 +209,7 @@ impl PageTargetHost {
     ) {
         self.devtools_sessions
             .set_browser_identity_override(session_key, browser_identity_override);
+        self.install_effective_browser_identity();
     }
 
     pub(crate) fn set_devtools_locale_override(
@@ -199,6 +252,7 @@ impl PageTargetHost {
     ) {
         self.devtools_sessions
             .clear_emulation_policy_state(session_key);
+        self.install_effective_browser_identity();
     }
 
     pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
@@ -214,6 +268,8 @@ impl PageTargetHost {
         self.devtools_sessions.has_non_default_state()
             || self.runtime_slot.primary_network_events_enabled()
             || self.network_policy != TargetNetworkPolicyState::default()
+            || self.base_browser_identity != super::BaseBrowserIdentityOverrideState::default()
+            || self.browser_identity_override().is_some()
             || self.http_proxy_override.is_some()
             || self.http_no_proxy_override.is_some()
             || self.tls_verify_host_override.is_some()
@@ -255,13 +311,12 @@ fn overlay_extra_headers(effective: &mut Vec<(String, String)>, layer: &[(String
     }
 }
 
-/// Migration snapshot: request values come from WebContents; identity/locale
-/// still come from frontend contributions until their separate policy cutover.
+/// Migration snapshot: request/identity values come from WebContents; locale
+/// and timezone still come from contributions until their policy cutover.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct EffectiveTargetPolicy {
     network_request: NetworkRequestPolicy,
     browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
-    renderer_browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
     locale_override: Option<String>,
     timezone_override: Option<String>,
 }
@@ -271,8 +326,6 @@ impl EffectiveTargetPolicy {
         EffectiveTargetPolicyDelta {
             network_request: self.network_request != next.network_request,
             browser_identity: self.browser_identity_override != next.browser_identity_override,
-            renderer_browser_identity: self.renderer_browser_identity_override
-                != next.renderer_browser_identity_override,
             locale: self.locale_override != next.locale_override,
             timezone: self.timezone_override != next.timezone_override,
         }
@@ -300,12 +353,6 @@ impl EffectiveTargetPolicy {
         self.browser_identity_override.as_ref()
     }
 
-    pub(crate) fn renderer_browser_identity_override_owned(
-        &self,
-    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
-        self.renderer_browser_identity_override.clone()
-    }
-
     pub(crate) fn locale_override(&self) -> Option<&str> {
         self.locale_override.as_deref()
     }
@@ -320,22 +367,13 @@ impl EffectiveTargetPolicy {
 pub(crate) struct EffectiveTargetPolicyDelta {
     pub(crate) network_request: bool,
     pub(crate) browser_identity: bool,
-    pub(crate) renderer_browser_identity: bool,
     pub(crate) locale: bool,
     pub(crate) timezone: bool,
 }
 
 impl EffectiveTargetPolicyDelta {
-    pub(crate) fn browser_identity_changed(self) -> bool {
-        self.browser_identity || self.renderer_browser_identity
-    }
-
     pub(crate) fn is_empty(self) -> bool {
-        !self.network_request
-            && !self.browser_identity
-            && !self.renderer_browser_identity
-            && !self.locale
-            && !self.timezone
+        !self.network_request && !self.browser_identity && !self.locale && !self.timezone
     }
 }
 
@@ -602,7 +640,6 @@ pub(crate) struct TargetNetworkPolicyState {
     emulated_download_throughput: f64,
     emulated_upload_throughput: f64,
     emulated_connection_type: Option<String>,
-    base_browser_identity: super::BaseBrowserIdentityOverrideState,
     // Target-scoped headers contributed by WebDriver BiDi.
     base_extra_headers: Vec<(String, String)>,
 }
@@ -616,7 +653,6 @@ impl Default for TargetNetworkPolicyState {
             emulated_download_throughput: -1.0,
             emulated_upload_throughput: -1.0,
             emulated_connection_type: None,
-            base_browser_identity: super::BaseBrowserIdentityOverrideState::default(),
             base_extra_headers: Vec::new(),
         }
     }
@@ -626,11 +662,9 @@ impl TargetNetworkPolicyState {
     pub(crate) fn clear_session_scoped_state(&mut self) {
         let base_cache_disabled = self.base_cache_disabled;
         let base_extra_headers = std::mem::take(&mut self.base_extra_headers);
-        let base_browser_identity = std::mem::take(&mut self.base_browser_identity);
         *self = Self::default();
         self.base_cache_disabled = base_cache_disabled;
         self.base_extra_headers = base_extra_headers;
-        self.base_browser_identity = base_browser_identity;
     }
 
     pub(crate) fn network_offline(&self) -> bool {
@@ -640,43 +674,6 @@ impl TargetNetworkPolicyState {
     #[cfg(test)]
     pub(crate) fn set_network_offline(&mut self, network_offline: bool) {
         self.network_offline = network_offline;
-    }
-
-    #[cfg(test)]
-    pub(crate) fn set_user_agent_override(&mut self, user_agent: String) {
-        self.set_browser_identity_override(moli_browser_profile::BrowserIdentityProfile::new(
-            user_agent,
-            moli_browser_profile::DEFAULT_ACCEPT_LANGUAGE,
-        ));
-    }
-
-    pub(crate) fn set_browser_identity_override(
-        &mut self,
-        browser_identity: moli_browser_profile::BrowserIdentityProfile,
-    ) {
-        self.base_browser_identity.replace_profile(browser_identity);
-    }
-
-    pub(crate) fn clear_browser_identity_override(&mut self) {
-        self.base_browser_identity = super::BaseBrowserIdentityOverrideState::default();
-    }
-
-    pub(crate) fn set_base_user_agent_override(
-        &mut self,
-        user_agent: Option<String>,
-        fallback: &moli_browser_profile::BrowserIdentityProfile,
-    ) {
-        self.base_browser_identity
-            .set_user_agent(user_agent, fallback);
-    }
-
-    pub(crate) fn set_base_accept_language_override(
-        &mut self,
-        accept_language: Option<String>,
-        fallback: &moli_browser_profile::BrowserIdentityProfile,
-    ) {
-        self.base_browser_identity
-            .set_accept_language(accept_language, fallback);
     }
 
     #[cfg(test)]
@@ -721,6 +718,89 @@ mod tests {
     use super::{PageScreencastConfig, PageScreencastFormat, PageScreencastSessionState};
     use crate::conn::PageTargetHost;
     use moli_page_types::DevToolsSessionKey;
+
+    #[test]
+    fn browser_identity_survives_projection_drop_and_updates_without_sessions() {
+        let mut target = PageTargetHost::empty("TID-owned-identity".into());
+        let base = moli_browser_profile::BrowserIdentityProfile::new("Moli/Base", "en-US");
+        target.set_devtools_browser_identity_override(
+            &DevToolsSessionKey::Primary,
+            crate::conn::DevToolsBrowserIdentityOverride::from_command(
+                &base,
+                "Moli/Installed".into(),
+                Some("fr-FR".into()),
+                Some("TestPlatform".into()),
+                None,
+            ),
+        );
+        let installed = target.browser_identity_override().unwrap().clone();
+        let snapshot = target.effective_policy();
+        target
+            .runtime_slot
+            .page_slot_mut()
+            .contents
+            .set_browser_identity_override(Some(base.clone()));
+        assert_eq!(target.browser_identity_override(), Some(&base));
+        assert_eq!(
+            target.effective_policy().browser_identity_override(),
+            Some(&base)
+        );
+        assert_eq!(
+            target.reported_user_agent_override(),
+            Some("Moli/Installed")
+        );
+        assert_eq!(snapshot.browser_identity_override(), Some(&installed));
+        let id = target.web_contents_id();
+        let mut contents = std::mem::take(&mut target.runtime_slot.page_slot_mut().contents);
+        drop(target);
+        assert_eq!(contents.id(), id);
+        assert_eq!(contents.browser_identity_override, Some(base));
+        contents.set_browser_identity_override(Some(installed.clone()));
+        assert_eq!(contents.browser_identity_override, Some(installed));
+        contents.set_browser_identity_override(None);
+        assert!(contents.browser_identity_override.is_none());
+    }
+
+    #[test]
+    fn reported_user_agent_keeps_its_fallback_for_language_only_runtime_overrides() {
+        let mut target = PageTargetHost::empty("TID-language-only".into());
+        let base = moli_browser_profile::BrowserIdentityProfile::new("Moli/Base", "de-DE");
+        target.set_base_browser_identity_override(Some(base.clone()));
+        let handler_base =
+            moli_browser_profile::BrowserIdentityProfile::new("Moli/Handler", "en-US");
+        target.set_devtools_browser_identity_override(
+            &DevToolsSessionKey::Primary,
+            crate::conn::DevToolsBrowserIdentityOverride::from_command(
+                &handler_base,
+                String::new(),
+                Some("fr-FR".into()),
+                Some("TestPlatform".into()),
+                None,
+            ),
+        );
+        let snapshot = target.effective_policy();
+        let profile = snapshot.browser_identity_override().unwrap();
+        assert_eq!(profile.user_agent(), "Moli/Handler");
+        assert_eq!(profile.accept_language(), "fr-FR");
+        assert_eq!(profile.navigator_platform(), "TestPlatform");
+        assert_eq!(target.browser_identity_override(), Some(profile));
+        assert_eq!(target.reported_user_agent_override(), Some("Moli/Base"));
+        target.set_base_browser_identity_override(None);
+        assert_eq!(target.effective_policy(), snapshot);
+        assert_eq!(target.reported_user_agent_override(), None);
+        target.clear_devtools_emulation_policy_state(&DevToolsSessionKey::Primary);
+        assert!(
+            target
+                .effective_policy()
+                .browser_identity_override()
+                .is_none()
+        );
+        target.set_base_browser_identity_override(Some(base.clone()));
+        assert_eq!(
+            target.effective_policy().browser_identity_override(),
+            Some(&base)
+        );
+    }
 
     #[test]
     fn network_request_policy_survives_projection_drop_and_updates_without_sessions() {
@@ -827,9 +907,9 @@ mod tests {
         let mut state = PageTargetHost::empty("TID-policy-test".to_owned());
         state.set_base_locale_override(Some("en-GB".to_owned()));
         state.set_base_timezone_override(Some("Europe/London".to_owned()));
-        state.network_policy.set_browser_identity_override(
+        state.set_base_browser_identity_override(Some(
             moli_browser_profile::BrowserIdentityProfile::new("Moli/Base", "en-GB"),
-        );
+        ));
 
         state
             .set_devtools_locale_override(&DevToolsSessionKey::Primary, Some("fr-FR".to_owned()))

@@ -44,9 +44,7 @@ impl TargetSessionOwnerMut<'_> {
     ) -> bool {
         self.mutate_page_state(|state, _session_key| {
             state.set_base_locale_override(locale_override.clone());
-            state
-                .network_policy
-                .set_base_accept_language_override(locale_override, fallback_identity);
+            state.set_base_accept_language_override(locale_override, fallback_identity);
         });
         true
     }

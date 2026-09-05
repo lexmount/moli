@@ -1544,7 +1544,7 @@ impl CdpConnection {
             .ensure_resource_request_client_for_navigation_load_inputs(&load_inputs)?
             .browser_resource_runtime();
         let navigator_identity = load_inputs
-            .navigator_identity_override
+            .browser_identity_override
             .clone()
             .or_else(|| self.global_browser_identity_override.clone())
             .unwrap_or_else(|| self.base_browser_identity.clone());

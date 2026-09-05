@@ -268,7 +268,7 @@ impl CdpConnection {
     ) -> Result<Option<PendingPageCommand>, String> {
         let load_inputs = self.navigation_load_inputs_for_owner(owner);
         let navigator_identity = load_inputs
-            .navigator_identity_override
+            .browser_identity_override
             .clone()
             .or_else(|| self.global_browser_identity_override.clone())
             .unwrap_or_else(|| self.base_browser_identity.clone());
