@@ -57,6 +57,17 @@ impl LayoutSize {
     }
 }
 
+/// A short-lived CSSOM projection of one sampled sizing box. Physical and
+/// logical dimensions are untransformed, unzoomed CSS pixels, and use the
+/// writing axes captured with that box rather than the current live style.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LayoutUsedSize {
+    pub width: f32,
+    pub height: f32,
+    pub inline_size: f32,
+    pub block_size: f32,
+}
+
 /// Frozen resolved track list for one axis of a CSS Grid formatting context.
 ///
 /// Track sizes are retained in layout CSS pixels at Blink-compatible 1/64-pixel

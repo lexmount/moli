@@ -2,6 +2,7 @@ use super::*;
 
 mod chromium;
 mod lifecycle;
+mod logical;
 
 fn page_with_size_fixture(html: &str) -> anyhow::Result<PageVm> {
     let loader = crate::network::ResourceRequestClient::new(&FetchConfig::default())?;

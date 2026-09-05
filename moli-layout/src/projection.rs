@@ -2,7 +2,7 @@ use std::{collections::HashMap, fmt::Debug, hash::Hash, time::Instant};
 
 use taffy::ResolveOrZero;
 
-use crate::layout_tree::{CssSizingBox, LayoutCoordinateSpace};
+use crate::layout_tree::{CssSizing, CssSizingBox, LayoutCoordinateSpace};
 use crate::overflow::{OverflowProjection, inset_rect, offset_rect, outset_rect};
 use crate::stacking::{PaintOrderEvent, build_paint_order};
 use crate::style::ResolvedLayoutTransform;
@@ -951,15 +951,18 @@ where
                 )| {
                     let layout_box = &world.boxes[geometry.id.index()];
                     let display = layout_box.style.display();
-                    let css_sizing_box = (principal_source.is_some()
+                    let css_sizing = (principal_source.is_some()
                         && !matches!(
                             display,
                             crate::LayoutDisplay::None | crate::LayoutDisplay::Contents
                         )
                         && (!display.is_inline_flow() || layout_box.is_replaced()))
-                    .then_some(match layout_box.style.taffy.box_sizing {
-                        taffy::BoxSizing::ContentBox => CssSizingBox::Content,
-                        taffy::BoxSizing::BorderBox => CssSizingBox::Border,
+                    .then_some(CssSizing {
+                        box_kind: match layout_box.style.taffy.box_sizing {
+                            taffy::BoxSizing::ContentBox => CssSizingBox::Content,
+                            taffy::BoxSizing::BorderBox => CssSizingBox::Border,
+                        },
+                        horizontal: layout_box.style.uses_horizontal_writing_mode(),
                     });
                     let resolved_grid_tracks = layout_box.resolved_grid_tracks.clone();
                     FrozenLayoutBox {
@@ -969,7 +972,7 @@ where
                         geometry_source,
                         principal_source,
                         hit_source,
-                        css_sizing_box,
+                        css_sizing,
                         resolved_grid_tracks,
                         control_paint_order,
                     }

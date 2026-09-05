@@ -73,9 +73,11 @@ fn eval_computed_sizes_only_use_existing_geometry_with_or_without_css() -> Resul
       const canvas = document.getElementById('canvas');
       const targetStyle = getComputedStyle(target), canvasStyle = getComputedStyle(canvas);
       const read = () => [targetStyle.width, targetStyle.height, canvasStyle.width, canvasStyle.height];
+      const readLogical = () => [targetStyle.inlineSize, targetStyle.blockSize, canvasStyle.inlineSize, canvasStyle.blockSize];
       const before = read();
+      const logicalBefore = readLogical();
       const geometry = [target.offsetWidth, target.offsetHeight, canvas.offsetWidth, canvas.offsetHeight];
-      return { before, geometry, after: read() };
+      return { before, logicalBefore, geometry, after: read(), logicalAfter: readLogical() };
     })()"#;
     for args in [
         vec![],
@@ -90,6 +92,14 @@ fn eval_computed_sizes_only_use_existing_geometry_with_or_without_css() -> Resul
             clean_output(&output.stderr)
         );
         let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+        assert_eq!(
+            value["logicalBefore"], value["before"],
+            "cold axes: {args:?}"
+        );
+        assert_eq!(
+            value["logicalAfter"], value["after"],
+            "sampled axes: {args:?}"
+        );
         assert_eq!(
             value["before"],
             serde_json::json!(["auto", "auto", "auto", "auto"]),

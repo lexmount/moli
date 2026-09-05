@@ -5125,13 +5125,15 @@ fn resolve_moli_computed_style_value(
     {
         return tracks;
     }
-    if matches!(property, "width" | "height")
+    if matches!(property, "width" | "height" | "inline-size" | "block-size")
         && let Some(size) = used_size_from_layout_snapshot(runtime, handle)
     {
-        let value = if property == "width" {
-            size.width
-        } else {
-            size.height
+        let value = match property {
+            "width" => size.width,
+            "height" => size.height,
+            "inline-size" => size.inline_size,
+            "block-size" => size.block_size,
+            _ => unreachable!(),
         };
         return format_non_negative_used_css_px(f64::from(value));
     }
@@ -5184,7 +5186,7 @@ fn resolve_moli_computed_style_value(
 fn used_size_from_layout_snapshot(
     runtime: &JsContextHost,
     handle: DomHandle,
-) -> Option<moli_layout::LayoutSize> {
+) -> Option<moli_layout::LayoutUsedSize> {
     if !runtime.layout_policy().uses_real_layout() || !runtime.dom_host().is_connected(handle) {
         return None;
     }

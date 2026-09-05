@@ -1956,7 +1956,12 @@ fn frozen_used_size_keeps_its_sizing_basis_after_style_inputs_are_discarded() {
         drop(source);
         assert_eq!(
             output.used_size_for_source(1),
-            Some(moli_layout::LayoutSize::new(100.25, 50.5))
+            Some(moli_layout::LayoutUsedSize {
+                width: 100.25,
+                height: 50.5,
+                inline_size: 100.25,
+                block_size: 50.5
+            })
         );
         let model = output.box_model_for_source(1).expect("sized box");
         let expected_border_width = if box_sizing == BoxSizing::ContentBox {
@@ -2001,7 +2006,12 @@ fn frozen_used_size_excludes_non_replaced_inlines_and_suppressed_boxes() {
     }
     assert_eq!(
         output.used_size_for_source(4),
-        Some(moli_layout::LayoutSize::new(60.0, 25.0))
+        Some(moli_layout::LayoutUsedSize {
+            width: 60.0,
+            height: 25.0,
+            inline_size: 60.0,
+            block_size: 25.0
+        })
     );
 }
 

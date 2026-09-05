@@ -8,7 +8,7 @@ use super::{
     model::{
         LayoutBoxModel, LayoutCoordinateSpaceId, LayoutFragmentBoxModel, LayoutFragmentKind,
         LayoutOutputBoxId, LayoutPoint, LayoutQuad, LayoutRect, LayoutResolvedGridTracks,
-        LayoutSize, LayoutTransform2D,
+        LayoutSize, LayoutTransform2D, LayoutUsedSize,
     },
     query::{LayoutElementMetrics, LayoutNodeOutput},
     tree::{CssSizingBox, FrozenLayoutTree},
@@ -61,22 +61,32 @@ where
         self.element_metrics_for_source_with_offset_parent_filter(source, |_| true)
     }
 
-    /// CSSOM width/height from this snapshot's sizing box, without transforms,
+    /// Physical and logical CSSOM sizes from this snapshot's sizing box, without transforms,
     /// integer rounding, or absolute CSS zoom. A source without an applicable
     /// principal box has no used size; consumers keep its computed value.
-    pub fn used_size_for_source(&self, source: N) -> Option<LayoutSize> {
+    pub fn used_size_for_source(&self, source: N) -> Option<LayoutUsedSize> {
         let layout_box = self
             .boxes
             .iter()
             .find(|layout_box| layout_box.principal_source == Some(source))?;
-        let rect = match layout_box.css_sizing_box? {
+        let sizing = layout_box.css_sizing?;
+        let rect = match sizing.box_kind {
             CssSizingBox::Content => layout_box.content_box,
             CssSizingBox::Border => layout_box.border_box,
         };
-        Some(
-            CssomAbsoluteZoom::new(layout_box.effective_zoom)
-                .size(LayoutSize::new(rect.width, rect.height)),
-        )
+        let size = CssomAbsoluteZoom::new(layout_box.effective_zoom)
+            .size(LayoutSize::new(rect.width, rect.height));
+        let (inline_size, block_size) = if sizing.horizontal {
+            (size.width, size.height)
+        } else {
+            (size.height, size.width)
+        };
+        Some(LayoutUsedSize {
+            width: size.width,
+            height: size.height,
+            inline_size,
+            block_size,
+        })
     }
 
     /// Returns the exact unprojected content box produced for a source's
@@ -801,7 +811,7 @@ mod tests {
                 geometry_source: Some(1),
                 principal_source: Some(1),
                 hit_source: Some(1),
-                css_sizing_box: None,
+                css_sizing: None,
                 resolved_grid_tracks: None,
                 control_paint_order: None,
             }],
