@@ -1,25 +1,8 @@
-//! Canvas 2D current-path geometry.
-//!
-//! The CanvasRenderingContext2D path methods are thin V8 callbacks that
-//! translate into this module's geometry. The accumulated path is kept in a
-//! per-context side table keyed by a private-slot id (V8 private slots can
-//! only hold `Value`, so a numeric id + global map is used instead of storing
-//! a `Vec` directly on the object).
-//!
-//! Path elements map 1:1 onto [`moli_layout::PaintPathElement`] so the
-//! existing `moli_paint::raster_snapshot` pipeline (vello CPU) can fill and
-//! stroke them.
-
-use std::collections::HashMap;
-use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
+//! Canvas 2D current-path geometry, owned by the context's native state.
 
 use moli_layout::{
     LayoutPoint, LayoutRect, LayoutTransform2D, PaintPath, PaintPathElement, PaintRect,
 };
-use parking_lot::Mutex;
-
-pub(crate) const CANVAS_CONTEXT_PATH_STATE_ID_SLOT: &str = "__moliCanvasContextPathStateId";
 
 /// A Bezier path in the same flat form as a kurbo path: one `MoveTo` starts a
 /// subpath, `Close` ends it, and a new `MoveTo` begins the next one.
@@ -44,28 +27,6 @@ impl Default for Canvas2dPathState {
             transform: LayoutTransform2D::IDENTITY,
         }
     }
-}
-
-static NEXT_CANVAS_PATH_STATE_ID: AtomicU64 = AtomicU64::new(1);
-static CANVAS_PATH_STATES: OnceLock<Mutex<HashMap<u64, Canvas2dPathState>>> = OnceLock::new();
-
-fn canvas_path_states() -> &'static Mutex<HashMap<u64, Canvas2dPathState>> {
-    CANVAS_PATH_STATES.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-pub(crate) fn allocate_canvas_path_state_id() -> u64 {
-    NEXT_CANVAS_PATH_STATE_ID.fetch_add(1, Ordering::Relaxed)
-}
-
-/// Runs `update` against the current-path state for `id`, inserting a fresh
-/// state when the context has never recorded one.
-pub(crate) fn with_canvas_path_state_mut<T>(
-    id: u64,
-    update: impl FnOnce(&mut Canvas2dPathState) -> T,
-) -> T {
-    let mut states = canvas_path_states().lock();
-    let state = states.entry(id).or_default();
-    update(state)
 }
 
 const TWO_PI: f64 = std::f64::consts::TAU;

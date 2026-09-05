@@ -152,7 +152,9 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
         return;
     };
     let value = (match kind {
-        CanvasContextKind::TwoD => build_offscreen_2d_context_object(scope).map(Into::into),
+        CanvasContextKind::TwoD => super::backing_store::canvas_2d_context(scope, args.this())
+            .or_else(|| build_offscreen_2d_context_object(scope))
+            .map(Into::into),
         CanvasContextKind::WebGl => build_webgl_context_object(scope).map(Into::into),
         CanvasContextKind::WebGl2 => build_webgl2_context_object(scope).map(Into::into),
     })

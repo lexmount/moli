@@ -192,6 +192,7 @@ mod image_bitmap;
 mod objects;
 mod offscreen;
 mod path;
+mod state;
 mod webgl;
 
 pub(crate) use backing_store::{

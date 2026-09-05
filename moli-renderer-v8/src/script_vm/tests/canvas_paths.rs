@@ -146,3 +146,74 @@ fn canvas_arc_to_degenerate_segments_remain_lines() {
         );
     }
 }
+
+#[test]
+fn canvas_resize_discards_the_current_path_even_when_size_is_unchanged() {
+    for assignment in [
+        "canvas.width=canvas.width",
+        "canvas.height=canvas.height",
+        "canvas.width=64",
+        "canvas.height=0;canvas.height=96",
+    ] {
+        canvas_pixels(
+            &format!("ctx.rect(0,0,10,10);{assignment};ctx.fill();"),
+            &[(5, 5)],
+            &[0],
+        );
+    }
+}
+
+#[test]
+fn canvas_dimension_attribute_mutation_resets_path_and_transform() {
+    let mut vm = new_storage_test_vm("https://canvas-reset.test/");
+    let result = vm.eval(r#"(() => {
+      const canvas = document.createElement('canvas');
+      canvas.width=96;canvas.height=96;
+      const ctx=canvas.getContext('2d');
+      ctx.translate(30,0);ctx.rect(0,0,10,10);
+      canvas.setAttribute('width','96');
+      ctx.fill();
+      const old=ctx.getImageData(35,5,1,1).data[3];
+      ctx.rect(0,0,10,10);ctx.fill();
+      return JSON.stringify([old,ctx.getImageData(5,5,1,1).data[3],ctx.getImageData(35,5,1,1).data[3]]);
+    })()"#).unwrap();
+    assert_eq!(result, "[0,255,0]");
+}
+
+#[test]
+fn canvas_resize_resets_all_implemented_drawing_state_without_replacing_context() {
+    for constructor in [
+        "document.createElement('canvas')",
+        "new OffscreenCanvas(96,96)",
+    ] {
+        let mut vm = new_storage_test_vm("https://canvas-state.test/");
+        let result=vm.eval(&format!(r#"(() => {{
+          const canvas={constructor},ctx=canvas.getContext('2d');
+          ctx.fillStyle='red';ctx.strokeStyle='blue';ctx.font='30px serif';
+          ctx.lineWidth=8;ctx.miterLimit=4;ctx.lineCap='round';ctx.lineJoin='bevel';
+          ctx.lineDashOffset=3;ctx.setLineDash([2,3]);ctx.globalAlpha=.5;
+          ctx.globalCompositeOperation='copy';ctx.imageSmoothingEnabled=false;
+          ctx.imageSmoothingQuality='high';ctx.translate(20,0);
+          canvas.height=canvas.height;
+          return JSON.stringify([ctx===canvas.getContext('2d'),ctx.fillStyle,ctx.strokeStyle,ctx.font,
+            ctx.lineWidth,ctx.miterLimit,ctx.lineCap,ctx.lineJoin,ctx.lineDashOffset,ctx.getLineDash(),
+            ctx.globalAlpha,ctx.globalCompositeOperation,ctx.imageSmoothingEnabled,ctx.imageSmoothingQuality]);
+        }})()"#)).unwrap();
+        assert_eq!(
+            result,
+            r##"[true,"#000000","#000000","10px sans-serif",1,10,"butt","miter",0,[],1,"source-over",true,"low"]"##
+        );
+    }
+}
+
+#[test]
+fn canvas_path_state_is_independent_between_contexts_and_after_reset() {
+    let mut vm = new_storage_test_vm("https://canvas-independent.test/");
+    assert_eq!(vm.eval(r#"(() => {
+      const a=new OffscreenCanvas(20,20), b=new OffscreenCanvas(20,20);
+      const x=a.getContext('2d'),y=b.getContext('2d');
+      x.rect(0,0,10,10);y.rect(10,10,10,10);a.width=20;
+      x.fill();y.fill();
+      return JSON.stringify([x.getImageData(5,5,1,1).data[3],y.getImageData(15,15,1,1).data[3],y.getImageData(5,5,1,1).data[3]]);
+    })()"#).unwrap(),"[0,255,0]");
+}
