@@ -43,7 +43,7 @@ const SUBRESOURCE_RESPONSE_BODY_MEMORY_LIMIT: usize = 1024 * 1024;
 pub use document_activity::DocumentActivity;
 pub use inspector_identity::{
     DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId, RendererCallId,
-    RendererCallIdOutOfRange, RendererDevToolsAgentToken, RendererDevToolsCommandId,
+    RendererCallIdOutOfRange, RendererCommandId, RendererDevToolsAgentToken,
     RendererInspectorResponseDelivery,
 };
 pub use layout::LayoutPolicy;

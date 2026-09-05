@@ -9,7 +9,7 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
             .start_document_navigation_for_active_target(LOADER_ID.to_owned())
             .expect("document-content test navigation should start")
     };
-    let mut navigation = ctx
+    let navigation = ctx
         .conn
         .load_navigation_via_runtime_for_session_owner_async(Some("SID-1"), url)
         .await
@@ -20,14 +20,14 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
         let renderer_agent_candidate = browser_context
             .active_page_target_mut()
             .runtime_slot
-            .prepare_renderer_agent_candidate(&committed_document, &mut navigation.page)
+            .prepare_renderer_agent_candidate(&committed_document, &navigation.page)
             .expect("document-content test renderer candidate should attach");
         browser_context.commit_document_navigation_if_matches(&committed_document);
         browser_context
             .active_page_target_mut()
             .runtime_slot
             .commit_loaded_navigation_renderer_attachment(
-                &mut navigation.page,
+                &navigation.page,
                 Some(renderer_agent_candidate),
             )
             .expect("document-content test renderer candidate should commit");

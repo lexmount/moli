@@ -815,6 +815,9 @@ pub(in crate::runtime) async fn advance_page_owner_one_turn_via_local_task(
 ) -> (LivePageEntry, Result<()>) {
     run_entry_on_bound_owner_local_store_local_task(local_executor, entry, move |entry| {
         Box::pin(async move {
+            // Timer/task JavaScript may enter the same nested pause loop as a
+            // direct command. This turn retains its live PageVm in the entry.
+            let _nested_main_page = super::super::nested_main::bind_active_nested_main_page(entry);
             let replacement_lifecycle_snapshot = entry
                 .page_vm()
                 .document_replacement_lifecycle_action_snapshot();
@@ -874,6 +877,7 @@ pub(in crate::runtime) async fn advance_document_lifecycle_one_page_turn_via_loc
                     DocumentLifecycleTurnAction::None,
                 ));
             };
+            let _nested_main_page = super::super::nested_main::bind_active_nested_main_page(entry);
             let (page_vm, pending_document_lifecycle_turn) =
                 entry.page_vm_and_document_lifecycle_turn_mut();
             let outcome = page_vm

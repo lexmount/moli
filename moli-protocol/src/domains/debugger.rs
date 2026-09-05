@@ -285,6 +285,91 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn browser_capture_completes_while_renderer_javascript_is_paused() {
+        let mut ctx = TestContext::new();
+        with_loaded_document(&mut ctx).await;
+        let enabled = command(&mut ctx, json!({"id": 81, "method": "Debugger.enable"}), 81).await;
+        assert!(enabled.get("error").is_none(), "{enabled}");
+        let scheduled = command(
+            &mut ctx,
+            json!({"id": 82, "method": "Runtime.evaluate", "params": {
+                "expression": r#"
+globalThis.captureImageLoaded = false;
+globalThis.captureImageCompletion = new Promise(resolve => { globalThis.finishCaptureImage = resolve; });
+const pixel = document.createElement('canvas');
+pixel.width = pixel.height = 1;
+const source = pixel.toDataURL();
+setTimeout(() => {
+    const image = document.createElement('img');
+    image.loading = 'lazy';
+    image.width = image.height = 1;
+    image.onload = () => { captureImageLoaded = true; finishCaptureImage(true); };
+    image.onerror = () => finishCaptureImage(false);
+    image.src = source;
+    document.body.appendChild(image);
+    debugger;
+}, 50);
+true
+"#,
+            }}),
+            82,
+        )
+        .await;
+        assert_eq!(scheduled["result"]["result"]["value"], json!(true));
+        ctx.wait_for_scheduler_message("capture Debugger.paused", |message| {
+            message["method"] == json!("Debugger.paused")
+                && message["params"]["callFrames"]
+                    .as_array()
+                    .is_some_and(|frames| !frames.is_empty())
+        })
+        .await;
+        let screenshot = tokio::time::timeout(
+            Duration::from_secs(2),
+            command(
+                &mut ctx,
+                json!({"id": 83, "method": "Page.captureScreenshot"}),
+                83,
+            ),
+        )
+        .await
+        .expect("Browser capture must not wait for JavaScript to resume");
+        assert!(
+            screenshot["result"]["data"]
+                .as_str()
+                .is_some_and(|data| !data.is_empty()),
+            "{screenshot}"
+        );
+        let pending_image = command(
+            &mut ctx,
+            json!({"id": 85, "method": "Runtime.evaluate", "params": {
+                "expression": "captureImageLoaded",
+            }}),
+            85,
+        )
+        .await;
+        assert_eq!(
+            pending_image["result"]["result"]["value"],
+            json!(false),
+            "capture must not run resource callbacks on the paused Page stack"
+        );
+        let resumed = command(&mut ctx, json!({"id": 84, "method": "Debugger.resume"}), 84).await;
+        assert_eq!(resumed["result"], json!({}));
+        let loaded = tokio::time::timeout(
+            Duration::from_secs(2),
+            command(
+                &mut ctx,
+                json!({"id": 86, "method": "Runtime.evaluate", "params": {
+                    "expression": "captureImageCompletion", "awaitPromise": true,
+                }}),
+                86,
+            ),
+        )
+        .await
+        .expect("captured lazy-image admission must run after resume");
+        assert_eq!(loaded["result"]["result"]["value"], json!(true), "{loaded}");
+    }
+
+    #[tokio::test]
     async fn debugger_instrumentation_breakpoint_ignores_internal_snapshot_scripts() {
         let mut ctx = TestContext::new();
         with_loaded_document(&mut ctx).await;
@@ -396,6 +481,15 @@ mod tests {
 
     #[tokio::test]
     async fn debugger_paused_attached_session_detach_wakes_owner() {
+        paused_session_policy_cleanup("SID-debugger-attached", "SID-debugger-primary").await;
+    }
+
+    #[tokio::test]
+    async fn debugger_paused_primary_session_detach_restores_policy_before_acknowledgement() {
+        paused_session_policy_cleanup("SID-debugger-primary", "SID-debugger-attached").await;
+    }
+
+    async fn paused_session_policy_cleanup(session: &str, peer: &str) {
         let mut ctx = TestContext::new();
         with_loaded_document(&mut ctx).await;
         {
@@ -426,11 +520,43 @@ mod tests {
             );
         }
 
+        for (id, method, params) in [
+            (400, "Fetch.enable", json!({})),
+            (
+                401,
+                "Page.addScriptToEvaluateOnNewDocument",
+                json!({"source": "globalThis.detached = true;"}),
+            ),
+            (
+                402,
+                "Emulation.setDeviceMetricsOverride",
+                json!({
+                    "width": 400, "height": 300, "deviceScaleFactor": 2, "mobile": false,
+                }),
+            ),
+            (403, "Network.enable", json!({})),
+            (
+                404,
+                "Network.setExtraHTTPHeaders",
+                json!({"headers": {"X-Detached": "gone"}}),
+            ),
+        ] {
+            let result = command(
+                &mut ctx,
+                json!({
+                    "id": id, "sessionId": session, "method": method, "params": params,
+                }),
+                id,
+            )
+            .await;
+            assert!(result.get("error").is_none(), "{method}: {result}");
+        }
+
         let enable = command(
             &mut ctx,
             json!({
                 "id": 41,
-                "sessionId": "SID-debugger-attached",
+                "sessionId": session,
                 "method": "Debugger.enable"
             }),
             41,
@@ -441,7 +567,7 @@ mod tests {
             &mut ctx,
             json!({
                 "id": 42,
-                "sessionId": "SID-debugger-attached",
+                "sessionId": session,
                 "method": "Runtime.evaluate",
                 "params": {
                     "expression": "setTimeout(() => { debugger; globalThis.__afterDebuggerDetach = 1; }, 50); true"
@@ -453,8 +579,7 @@ mod tests {
         assert_eq!(timer["result"]["result"]["value"], json!(true));
 
         ctx.wait_for_scheduler_message("attached Debugger.paused", |message| {
-            message["method"] == json!("Debugger.paused")
-                && message["sessionId"] == json!("SID-debugger-attached")
+            message["method"] == json!("Debugger.paused") && message["sessionId"] == json!(session)
         })
         .await;
 
@@ -467,7 +592,7 @@ mod tests {
                     "method": "Target.detachFromTarget",
                     "params": {
                         "targetId": "TID-debugger",
-                        "sessionId": "SID-debugger-attached"
+                        "sessionId": session
                     }
                 }),
                 43,
@@ -476,12 +601,23 @@ mod tests {
         .await
         .expect("detaching a paused Debugger session must wake the renderer owner");
         assert_eq!(detach["result"], json!({}), "{detach:?}");
+        let target = ctx
+            .conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target();
+        assert!(!target.is_crashed());
+        assert!(!target.fetch_owner.is_enabled());
+        assert!(target.owner_state.document_start_scripts.is_empty());
+        assert!(target.emulation_policy().emulated_device_metrics.is_none());
+        assert!(target.effective_policy().extra_headers().is_empty());
 
         let continued = command(
             &mut ctx,
             json!({
                 "id": 44,
-                "sessionId": "SID-debugger-primary",
+                "sessionId": peer,
                 "method": "Runtime.evaluate",
                 "params": {"expression": "globalThis.__afterDebuggerDetach"}
             }),

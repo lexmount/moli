@@ -52,51 +52,9 @@ impl EmulationPolicy {
         }
     }
 
-    pub(in crate::conn) fn apply_changes(
-        &mut self,
-        changes: Vec<EmulationPolicyChange>,
-    ) -> EmulationPolicyDelta {
-        let previous = self.clone();
+    pub(in crate::conn) fn apply_changes(&mut self, changes: Vec<EmulationPolicyChange>) {
         for change in changes {
             self.apply(change);
         }
-        previous.delta(self)
-    }
-
-    fn delta(&self, next: &Self) -> EmulationPolicyDelta {
-        EmulationPolicyDelta {
-            navigator_queries: false,
-            network_conditions: self.network_conditions != next.network_conditions,
-            geolocation_override: self.geolocation_override != next.geolocation_override,
-            emulated_media: self.emulated_media != next.emulated_media,
-            emulated_device_metrics: self.emulated_device_metrics != next.emulated_device_metrics,
-            max_touch_points: self.max_touch_points != next.max_touch_points,
-            focus_emulation_enabled: self.focus_emulation_enabled != next.focus_emulation_enabled,
-            script_execution_disabled: self.script_execution_disabled
-                != next.script_execution_disabled,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(crate) struct EmulationPolicyDelta {
-    pub(crate) navigator_queries: bool,
-    pub(crate) network_conditions: bool,
-    pub(crate) geolocation_override: bool,
-    pub(crate) emulated_media: bool,
-    pub(crate) emulated_device_metrics: bool,
-    pub(crate) max_touch_points: bool,
-    pub(crate) focus_emulation_enabled: bool,
-    pub(crate) script_execution_disabled: bool,
-}
-
-impl EmulationPolicyDelta {
-    pub(crate) fn surface_changed(self) -> bool {
-        self.network_conditions
-            || self.geolocation_override
-            || self.emulated_device_metrics
-            || self.max_touch_points
-            || self.navigator_queries
-            || self.focus_emulation_enabled
     }
 }

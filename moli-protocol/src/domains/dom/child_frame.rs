@@ -1,3 +1,5 @@
+use moli_renderer_v8::RendererDomInspection;
+
 use serde_json::json;
 
 use super::{
@@ -19,24 +21,11 @@ use crate::devtools_runtime::{
     DevToolsScrollIntoViewIfNeededCommand,
 };
 use moli_core::page::{
-    DocumentNodeRuntimeObjectResolution, Page, PendingPageCommand, RendererDocumentNodeGeometry,
+    DocumentNodeRuntimeObjectResolution, PendingPageCommand, RendererDocumentNodeGeometry,
     RendererDocumentNodeReference,
 };
 
-fn loaded_page_mut_for_owner<'a>(
-    conn: &'a mut CdpConnection,
-    owner: &CommandOwnerScope,
-) -> Option<&'a mut Page> {
-    conn.loaded_page_mut_for_protocol_access_for_owner(owner)
-        .ok()
-}
-
-fn renderer_inspector_session_id_for_owner(
-    conn: &CdpConnection,
-    owner: &CommandOwnerScope,
-) -> Option<String> {
-    conn.target_renderer_runtime_inspector_session_id_for_owner(owner)
-}
+use super::dom_inspection_for_owner;
 
 pub(super) async fn execute_devtools_dom_command(
     conn: &mut CdpConnection,
@@ -109,8 +98,6 @@ async fn query_selector_command(
     selector: &str,
     multiple: bool,
 ) -> Result<DevToolsQuerySelectorResult, PendingDomCommandStartError> {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     let root_backend_node_id = match root {
         Some(reference) => {
@@ -123,24 +110,29 @@ async fn query_selector_command(
                 .backend_node_id
         }
     };
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
+    let pending = inspection
         .start_child_frame_document_query_selector_for_backend_node_id(
-            renderer_inspector_session_id,
             include_whitespace,
             frame_id.to_owned(),
             root_backend_node_id,
             selector.to_owned(),
             multiple,
         )
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
         .await
         .map_err(PendingDomCommandStartError::renderer_error)?;
-    let resolution = page
-        .finish_document_query_selector(completion)
+    conn.observe_renderer_inspection_completion(owner, &completion)
+        .map_err(|message| PendingDomCommandStartError {
+            code: -32000,
+            message,
+        })?;
+    let resolution = completion
+        .finish_document_query_selector()
         .map_err(PendingDomCommandStartError::renderer_error)?;
     query_selector_result_from_renderer_resolution(resolution, multiple)
 }
@@ -153,23 +145,26 @@ async fn resolve_frontend_node_reference(
     let DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) = reference else {
         return Ok(reference);
     };
-    let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
+
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
+    let pending = inspection
+        .start_document_frontend_node_binding(frontend_node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
         .await
         .map_err(PendingDomCommandStartError::renderer_error)?;
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    frontend_binding::finish_reference(page, completion).map_err(|message| {
-        PendingDomCommandStartError {
+    conn.observe_renderer_inspection_completion(owner, &completion)
+        .map_err(|message| PendingDomCommandStartError {
             code: -32000,
             message,
-        }
+        })?;
+
+    frontend_binding::finish_reference(completion).map_err(|message| PendingDomCommandStartError {
+        code: -32000,
+        message,
     })
 }
 
@@ -178,19 +173,24 @@ async fn child_frame_document_root_node_reference(
     owner: &CommandOwnerScope,
     frame_id: &str,
 ) -> Result<RendererDocumentNodeReference, PendingDomCommandStartError> {
-    let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_child_frame_document_root_node_reference(frame_id, renderer_inspector_session_id)
+    let pending = inspection
+        .start_child_frame_document_root_node_reference(frame_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
         .await
         .map_err(PendingDomCommandStartError::renderer_error)?;
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    page.finish_document_node_reference(completion)
+    conn.observe_renderer_inspection_completion(owner, &completion)
+        .map_err(|message| PendingDomCommandStartError {
+            code: -32000,
+            message,
+        })?;
+
+    completion
+        .finish_document_node_reference()
         .map_err(PendingDomCommandStartError::renderer_error)?
         .ok_or_else(PendingDomCommandStartError::node_not_found)
 }
@@ -201,24 +201,32 @@ async fn attributes_command(
     reference: DevToolsDomNodeReference,
 ) -> Result<DevToolsGetAttributesResult, PendingDomCommandStartError> {
     let reference = resolve_frontend_node_reference(conn, owner, reference).await?;
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_document_node_attributes_for_reference(page, reference)?;
+    let pending = start_document_node_attributes_for_reference(&inspection, reference)?;
     let completion = pending
         .wait()
         .await
         .map_err(PendingDomCommandStartError::renderer_error)?;
-    page.finish_document_node_attributes(completion)
+    conn.observe_renderer_inspection_completion(owner, &completion)
+        .map_err(|message| PendingDomCommandStartError {
+            code: -32000,
+            message,
+        })?;
+    completion
+        .finish_document_node_attributes()
         .map_err(PendingDomCommandStartError::renderer_error)
         .and_then(attributes_result_from_renderer_resolution)
 }
 
 fn start_document_node_attributes_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
 ) -> Result<PendingPageCommand, PendingDomCommandStartError> {
     let backend_node_id = required_child_frame_backend_node_id(&reference)?;
-    page.start_document_node_attributes_for_backend_node_id(backend_node_id)
+    inspection
+        .start_document_node_attributes_for_backend_node_id(backend_node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)
 }
 
@@ -228,24 +236,32 @@ async fn text_command(
     reference: DevToolsDomNodeReference,
 ) -> Result<DevToolsGetTextResult, PendingDomCommandStartError> {
     let reference = resolve_frontend_node_reference(conn, owner, reference).await?;
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_document_node_text_for_reference(page, reference)?;
+    let pending = start_document_node_text_for_reference(&inspection, reference)?;
     let completion = pending
         .wait()
         .await
         .map_err(PendingDomCommandStartError::renderer_error)?;
-    page.finish_document_node_text(completion)
+    conn.observe_renderer_inspection_completion(owner, &completion)
+        .map_err(|message| PendingDomCommandStartError {
+            code: -32000,
+            message,
+        })?;
+    completion
+        .finish_document_node_text()
         .map_err(PendingDomCommandStartError::renderer_error)
         .and_then(text_result_from_renderer_resolution)
 }
 
 fn start_document_node_text_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
 ) -> Result<PendingPageCommand, PendingDomCommandStartError> {
     let backend_node_id = required_child_frame_backend_node_id(&reference)?;
-    page.start_document_node_text_for_backend_node_id(backend_node_id)
+    inspection
+        .start_document_node_text_for_backend_node_id(backend_node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)
 }
 
@@ -256,25 +272,33 @@ async fn property_command(
     name: &str,
 ) -> Result<DevToolsGetPropertyResult, PendingDomCommandStartError> {
     let reference = resolve_frontend_node_reference(conn, owner, reference).await?;
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_document_node_property_for_reference(page, reference, name)?;
+    let pending = start_document_node_property_for_reference(&inspection, reference, name)?;
     let completion = pending
         .wait()
         .await
         .map_err(PendingDomCommandStartError::renderer_error)?;
-    page.finish_document_node_property(completion)
+    conn.observe_renderer_inspection_completion(owner, &completion)
+        .map_err(|message| PendingDomCommandStartError {
+            code: -32000,
+            message,
+        })?;
+    completion
+        .finish_document_node_property()
         .map_err(PendingDomCommandStartError::renderer_error)
         .and_then(property_result_from_renderer_resolution)
 }
 
 fn start_document_node_property_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
     name: &str,
 ) -> Result<PendingPageCommand, PendingDomCommandStartError> {
     let backend_node_id = required_child_frame_backend_node_id(&reference)?;
-    page.start_document_node_property_for_backend_node_id(backend_node_id, name)
+    inspection
+        .start_document_node_property_for_backend_node_id(backend_node_id, name)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)
 }
 
@@ -297,16 +321,23 @@ async fn outer_html_command(
                 .backend_node_id
         }
     };
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
+    let pending = inspection
         .start_outer_html_for_backend_node_id(backend_node_id, include_shadow_dom)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
         .await
         .map_err(PendingDomCommandStartError::renderer_error)?;
-    page.finish_outer_html_for_backend_node_id(completion)
+    conn.observe_renderer_inspection_completion(owner, &completion)
+        .map_err(|message| PendingDomCommandStartError {
+            code: -32000,
+            message,
+        })?;
+    completion
+        .finish_outer_html_for_backend_node_id()
         .map_err(PendingDomCommandStartError::renderer_error)?
         .ok_or_else(PendingDomCommandStartError::node_not_found)
 }
@@ -318,25 +349,30 @@ async fn resolve_node_command(
 ) -> Result<DevToolsResolveNodeResult, PendingDomCommandStartError> {
     let reference = resolve_frontend_node_reference(conn, owner, command.reference).await?;
     let object_group = command.object_group;
-    let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
+
     let remote_object = {
-        let page = loaded_page_mut_for_owner(conn, owner)
+        let inspection = dom_inspection_for_owner(conn, owner)
             .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
         let backend_node_id = required_child_frame_backend_node_id(&reference)?;
-        let pending = page
+        let pending = inspection
             .start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
-                renderer_inspector_session_id,
                 backend_node_id,
                 command.execution_context_id,
                 object_group.as_deref(),
             )
+            .map(PendingPageCommand::from_inspector_main_route)
             .map_err(PendingDomCommandStartError::renderer_error)?;
         let completion = pending
             .wait()
             .await
             .map_err(PendingDomCommandStartError::renderer_error)?;
-        match page
-            .finish_resolve_runtime_object_for_backend_node_id(completion)
+        conn.observe_renderer_inspection_completion(owner, &completion)
+            .map_err(|message| PendingDomCommandStartError {
+                code: -32000,
+                message,
+            })?;
+        match completion
+            .finish_resolve_runtime_object_for_backend_node_id()
             .map_err(PendingDomCommandStartError::renderer_error)?
         {
             DocumentNodeRuntimeObjectResolution::Found(remote_object) => remote_object,
@@ -404,25 +440,31 @@ async fn node_snapshot_for_reference(
     pierce: bool,
 ) -> Result<moli_core::page::DocumentNodeSnapshot, PendingDomCommandStartError> {
     let reference = resolve_frontend_node_reference(conn, owner, reference).await?;
-    let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
+
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let backend_node_id = required_child_frame_backend_node_id(&reference)?;
-    let pending = page
+    let pending = inspection
         .start_document_node_snapshot_for_backend_node_id_in_inspector_session(
-            renderer_inspector_session_id,
             include_whitespace,
             backend_node_id,
             depth,
             pierce,
         )
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
         .await
         .map_err(PendingDomCommandStartError::renderer_error)?;
-    page.finish_document_node_snapshot_for_backend_node_id(completion)
+    conn.observe_renderer_inspection_completion(owner, &completion)
+        .map_err(|message| PendingDomCommandStartError {
+            code: -32000,
+            message,
+        })?;
+    completion
+        .finish_document_node_snapshot_for_backend_node_id()
         .map_err(PendingDomCommandStartError::renderer_error)?
         .map(|snapshot| snapshot.snapshot)
         .ok_or_else(PendingDomCommandStartError::node_not_found)
@@ -438,24 +480,30 @@ async fn child_frame_root_node_snapshot(
     let backend_node_id = child_frame_document_root_node_reference(conn, owner, frame_id)
         .await?
         .backend_node_id;
-    let renderer_inspector_session_id = renderer_inspector_session_id_for_owner(conn, owner);
+
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
+    let pending = inspection
         .start_document_node_snapshot_for_backend_node_id_in_inspector_session(
-            renderer_inspector_session_id,
             include_whitespace,
             backend_node_id,
             depth,
             pierce,
         )
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
         .await
         .map_err(PendingDomCommandStartError::renderer_error)?;
-    page.finish_document_node_snapshot_for_backend_node_id(completion)
+    conn.observe_renderer_inspection_completion(owner, &completion)
+        .map_err(|message| PendingDomCommandStartError {
+            code: -32000,
+            message,
+        })?;
+    completion
+        .finish_document_node_snapshot_for_backend_node_id()
         .map_err(PendingDomCommandStartError::renderer_error)?
         .map(|snapshot| snapshot.snapshot)
         .ok_or_else(PendingDomCommandStartError::node_not_found)
@@ -503,18 +551,24 @@ async fn document_geometry_for_reference(
     reference: DevToolsDomNodeReference,
 ) -> Result<RendererDocumentNodeGeometry, PendingDomCommandStartError> {
     let reference = resolve_frontend_node_reference(conn, owner, reference).await?;
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let backend_node_id = required_child_frame_backend_node_id(&reference)?;
-    let pending = page
+    let pending = inspection
         .start_document_geometry_for_backend_node_id(backend_node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     let completion = pending
         .wait()
         .await
         .map_err(PendingDomCommandStartError::renderer_error)?;
-    match page
-        .finish_document_geometry_for_backend_node_id(completion)
+    conn.observe_renderer_inspection_completion(owner, &completion)
+        .map_err(|message| PendingDomCommandStartError {
+            code: -32000,
+            message,
+        })?;
+    match completion
+        .finish_document_geometry_for_backend_node_id()
         .map_err(PendingDomCommandStartError::renderer_error)?
     {
         Some(resolution) => Ok(resolution),

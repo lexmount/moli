@@ -351,11 +351,6 @@ impl PageVm {
                         .renderer_document_isolate_heap_usage()?,
                 )))
             }
-            RendererPageCommand::PerformanceMetricSnapshot => Ok(
-                RendererPageReply::PerformanceMetricSnapshot(Box::new(
-                    self.vm_mut().performance_metric_snapshot()?,
-                )),
-            ),
             RendererPageCommand::DomDebuggerConfigureEventListenerBreakpoint {
                 inspector_session_id,
                 breakpoint,

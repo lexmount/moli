@@ -1,10 +1,11 @@
+use moli_core::page::PendingPageCommand;
 use moli_core::page::{CompletedPageCommand, RendererDomNodeStackTraceResolution};
 use serde::Deserialize;
 use serde_json::json;
 
 use super::resolve::{
     DomCommandOutput, DomCommandTaskStep, PendingDomCommandDispatch, PendingDomCommandKind,
-    PendingDomCommandStartError, PendingDomCommandWork,
+    PendingDomCommandStartError,
 };
 use super::*;
 
@@ -28,18 +29,17 @@ pub(super) fn start_set_node_stack_traces_enabled_command(
         Ok(Some(params)) => params,
         _ => return Err(PendingDomCommandStartError::invalid_params()),
     };
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
-    let page = super::loaded_page_mut_for_owner(conn, &owner)
+    let inspection = super::dom_inspection_for_owner(conn, &owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_set_document_node_stack_traces_enabled(renderer_inspector_session_id, params.enable)
+    let pending = inspection
+        .start_set_document_node_stack_traces_enabled(params.enable)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id: cmd.id,
         owner_scope: owner,
         kind: PendingDomCommandKind::SetNodeStackTracesEnabled,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -52,32 +52,25 @@ pub(super) fn start_get_node_stack_traces_command(
         Ok(Some(params)) => params,
         _ => return Err(PendingDomCommandStartError::invalid_params()),
     };
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
-    let page = super::loaded_page_mut_for_owner(conn, &owner)
+    let inspection = super::dom_inspection_for_owner(conn, &owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_document_node_stack_trace(renderer_inspector_session_id, params.node_id)
+    let pending = inspection
+        .start_document_node_stack_trace(params.node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id: cmd.id,
         owner_scope: owner,
         kind: PendingDomCommandKind::GetNodeStackTraces,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
 pub(super) fn complete_set_node_stack_traces_enabled_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
-        out.push_error(-32000, "NoDocumentLoaded");
-        return DomCommandTaskStep::Complete;
-    };
-    if let Err(error) = page.finish_set_document_node_stack_traces_enabled(completion) {
+    if let Err(error) = completion.finish_set_document_node_stack_traces_enabled() {
         out.push_error(
             -32000,
             format!("Could not configure DOM node stack traces: {error}"),
@@ -89,17 +82,11 @@ pub(super) fn complete_set_node_stack_traces_enabled_command(
 }
 
 pub(super) fn complete_get_node_stack_traces_command(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
     let resolution = {
-        let Some(page) = super::loaded_page_mut_for_owner(conn, owner) else {
-            out.push_error(-32000, "NoDocumentLoaded");
-            return DomCommandTaskStep::Complete;
-        };
-        match page.finish_document_node_stack_trace(completion) {
+        match completion.finish_document_node_stack_trace() {
             Ok(resolution) => resolution,
             Err(error) => {
                 out.push_error(

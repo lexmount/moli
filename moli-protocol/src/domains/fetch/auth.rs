@@ -230,7 +230,7 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                         PendingFetchCommandKind::ContinueWithAuth {
                             state: Box::new(state),
                         },
-                        PendingFetchCommandOperation::Page(pending_page),
+                        PendingFetchCommandOperation::Page(Ok(pending_page)),
                     ),
                 ));
             }
@@ -298,7 +298,7 @@ pub(super) fn start_devtools_continue_with_auth_command_for_pending(
                                 },
                             ),
                         },
-                        PendingFetchCommandOperation::Page(pending_page),
+                        PendingFetchCommandOperation::Page(Ok(pending_page)),
                     ),
                 ));
             }

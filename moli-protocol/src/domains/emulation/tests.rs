@@ -436,14 +436,14 @@ async fn emulated_media_can_complete_through_pending_command_dispatch() {
 async fn pending_emulation_completion_follows_the_exact_target_across_activation_and_navigation() {
     let mut ctx = TestContext::new();
     load_session_page_for_pending_emulation_test(&mut ctx).await;
-    let dispatched_attachment_id = ctx
+    let dispatched_page = ctx
         .conn
         .browser_context
         .as_ref()
         .and_then(|browser_context| browser_context.page_target("TID-1"))
         .and_then(PageTargetHost::loaded_page)
-        .and_then(moli_core::page::Page::renderer_agent_attachment_id)
-        .expect("the original target should have a renderer attachment");
+        .map(moli_core::browser::RendererPageResidenceIdentity::from_page)
+        .expect("the original target should have a physical Page");
     let target = super::PendingEmulationPageTarget::BrowserContextTarget {
         browser_context_id: "BID-1".to_owned(),
         target_id: "TID-1".to_owned(),
@@ -463,7 +463,7 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
             &ctx.conn,
             &target,
             &super::PendingEmulationPageOperation::SetEmulatedMedia,
-            Some(dispatched_attachment_id),
+            super::EmulationPageCommandSource::Browser(Some(dispatched_page)),
         ),
         "changing foreground selection must not make an error from the same Page look stale"
     );
@@ -481,7 +481,7 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
             &ctx.conn,
             &target,
             &super::PendingEmulationPageOperation::SetEmulatedMedia,
-            Some(dispatched_attachment_id),
+            super::EmulationPageCommandSource::Browser(Some(dispatched_page)),
         ),
         "only replacement of the exact target attachment may retire its renderer error"
     );
@@ -490,7 +490,7 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
             &ctx.conn,
             &target,
             &super::PendingEmulationPageOperation::SetIdleOverride,
-            Some(dispatched_attachment_id),
+            super::EmulationPageCommandSource::Browser(Some(dispatched_page)),
         ),
         "frame-host idle state must not use the target-policy replay path",
     );
@@ -504,7 +504,7 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
                 super::CompletedEmulationPageCommand {
                     target,
                     operation: super::PendingEmulationPageOperation::SetEmulatedMedia,
-                    dispatched_attachment_id: Some(dispatched_attachment_id),
+                    source: super::EmulationPageCommandSource::Browser(Some(dispatched_page)),
                     completed: Err("renderer attachment retired".to_owned()),
                 },
             ]),
@@ -562,6 +562,51 @@ async fn pending_idle_override_response_does_not_replay_into_replacement_page() 
         None,
         "a settled command on the retired frame host must not become target-level policy",
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn renderer_candidate_binding_does_not_retire_outgoing_browser_policy_commands() {
+    let mut ctx = TestContext::new();
+    load_session_page_for_pending_emulation_test(&mut ctx).await;
+    let slot = ctx
+        .conn
+        .runtime_session_owner_slot_mut(Some("SID-1"))
+        .unwrap();
+    let page = slot.loaded_page().unwrap();
+    let page_source = super::EmulationPageCommandSource::browser(page);
+    let residence = moli_core::browser::RendererPageResidenceIdentity::from_page(page);
+    let agent = page.renderer_devtools_agent_token();
+    let document_id = slot.document_id();
+    let old_attachment = slot.current_renderer_attachment().unwrap();
+    let navigation = slot.start_document_navigation("candidate-rebind".to_owned());
+    let candidate = slot
+        .prepare_renderer_agent_candidate_token(&navigation, agent)
+        .unwrap();
+    let transaction = slot
+        .commit_renderer_agent_candidate_transaction(candidate, residence)
+        .unwrap();
+    assert_ne!(
+        slot.current_renderer_attachment().unwrap().id(),
+        old_attachment.id()
+    );
+    assert_eq!(slot.document_id(), document_id);
+    let target = super::PendingEmulationPageTarget::SessionOwner {
+        owner_scope: crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1")),
+    };
+    assert!(
+        !super::pending_emulation_page_configuration_will_be_replayed(
+            &ctx.conn,
+            &target,
+            &super::PendingEmulationPageOperation::SetEmulatedMedia,
+            page_source,
+        ),
+        "a renderer reservation must not hide a Browser error on the still-current Page"
+    );
+    ctx.conn
+        .runtime_session_owner_slot_mut(Some("SID-1"))
+        .unwrap()
+        .rollback_committed_renderer_agent_candidate(transaction)
+        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1408,15 +1453,17 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
     let primary = ctx
         .conn
         .emulation_session_state_for_session_owner(Some("SID-primary"))
-        .expect("primary Emulation handler state");
+        .expect("primary Emulation handler state")
+        .overrides
+        .expect("active primary Emulation handler");
     let attached = ctx
         .conn
         .emulation_session_state_for_session_owner(Some("SID-attached"))
-        .expect("attached Emulation handler state");
-
+        .expect("attached Emulation handler state")
+        .overrides
+        .expect("active attached Emulation handler");
     assert_eq!(
         primary
-            .overrides
             .emulated_device_metrics
             .as_ref()
             .map(|metrics| (metrics.width, metrics.height)),
@@ -1424,14 +1471,13 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
     );
     assert_eq!(
         attached
-            .overrides
             .emulated_device_metrics
             .as_ref()
             .map(|metrics| (metrics.width, metrics.height)),
         Some((640, 480))
     );
-    assert!(primary.overrides.focus_emulation_enabled);
-    assert!(!attached.overrides.focus_emulation_enabled);
+    assert!(primary.focus_emulation_enabled);
+    assert!(!attached.focus_emulation_enabled);
 
     let target = ctx
         .conn
@@ -1467,15 +1513,48 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
     let primary = ctx
         .conn
         .emulation_session_state_for_session_owner(Some("SID-primary"))
-        .expect("primary Emulation handler state survives attached disposal");
-
-    assert!(primary.overrides.emulated_device_metrics.is_some());
-    assert!(primary.overrides.focus_emulation_enabled);
+        .expect("primary Emulation handler state survives attached disposal")
+        .overrides
+        .expect("primary Emulation handler remains active");
+    assert!(primary.emulated_device_metrics.is_some());
+    assert!(primary.focus_emulation_enabled);
+    let mut disposed = crate::conn::DevToolsEmulationSessionState::default();
+    assert!(disposed.overrides.take().is_some());
     assert_eq!(
         ctx.conn
             .emulation_session_state_for_session_owner(Some("SID-attached"))
             .expect("disposed handler remains addressable until session detach commits"),
-        crate::conn::DevToolsEmulationSessionState::default()
+        disposed
+    );
+    expect_session_command_result(
+        &mut ctx,
+        71_106,
+        "SID-attached",
+        "Emulation.setTouchEmulationEnabled",
+        json!({ "enabled": true, "maxTouchPoints": 3 }),
+    )
+    .await;
+    assert_eq!(
+        ctx.conn
+            .emulation_session_state_for_session_owner(Some("SID-attached"))
+            .unwrap()
+            .overrides
+            .expect("new command reactivates the consumed handler")
+            .max_touch_points,
+        3
+    );
+    super::dispose_page_session_async(&mut ctx.conn, "SID-attached")
+        .await
+        .expect("new contribution is also revoked on disposal");
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .emulation_policy()
+            .max_touch_points,
+        0
     );
 }
 

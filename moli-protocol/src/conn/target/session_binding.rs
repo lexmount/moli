@@ -154,29 +154,35 @@ impl CdpConnection {
             return Ok(());
         };
 
-        let browser_identity_changed = match self.browser_context_by_id_mut(&browser_context_id) {
+        let policy_result = match self.browser_context_by_id_mut(&browser_context_id) {
             Some(browser_context) => {
                 browser_context
                     .clear_devtools_emulation_session_policy_async(&target_id, &session_key)
-                    .await?
+                    .await
             }
-            None => false,
+            None => Ok(()),
         };
-        if !browser_identity_changed {
-            return Ok(());
+        if !self
+            .runtime_session_owner_slot(Some(session_id))
+            .is_ok_and(|slot| slot.has_loaded_page())
+        {
+            return policy_result;
         }
-
-        let Some(pending) = self
-            .start_rebuild_resource_runtime_for_session_owner(Some(session_id))
-            .map_err(anyhow::Error::msg)?
-        else {
-            return Ok(());
-        };
-        let completion = pending.wait().await.map_err(|error| {
-            anyhow::anyhow!("failed to restore detached session user agent: {error}")
-        })?;
-        self.finish_rebuild_resource_runtime_for_session_owner(Some(session_id), completion)
-            .map_err(anyhow::Error::msg)
+        let identity_result = async {
+            let Some(pending) = self
+                .start_rebuild_resource_runtime_for_session_owner(Some(session_id))
+                .map_err(anyhow::Error::msg)?
+            else {
+                return Ok(());
+            };
+            let completion = pending.wait().await.map_err(|error| {
+                anyhow::anyhow!("failed to restore detached session user agent: {error}")
+            })?;
+            self.finish_rebuild_resource_runtime_for_session_owner(Some(session_id), completion)
+                .map_err(anyhow::Error::msg)
+        }
+        .await;
+        policy_result.and(identity_result)
     }
 
     pub(crate) fn is_browser_session_id(&self, session_id: Option<&str>) -> bool {

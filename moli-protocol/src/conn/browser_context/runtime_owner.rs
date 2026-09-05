@@ -131,7 +131,7 @@ impl CdpConnection {
         let owns = owns
             && self
                 .runtime_session_owner_slot_for_owner(owner)
-                .is_ok_and(|slot| slot.has_loaded_page());
+                .is_ok_and(|slot| slot.current_renderer_inspection_binding().is_some());
         self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
             state
                 .console_output_session_state

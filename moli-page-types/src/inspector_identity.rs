@@ -20,7 +20,7 @@ pub enum RendererInspectorResponseDelivery {
 
 static NEXT_RENDERER_DEVTOOLS_AGENT_TOKEN: AtomicU64 = AtomicU64::new(1);
 static NEXT_RENDERER_AGENT_ATTACHMENT_ID: AtomicU64 = AtomicU64::new(1);
-static NEXT_RENDERER_DEVTOOLS_COMMAND_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_RENDERER_COMMAND_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum DevToolsSessionKey {
@@ -82,20 +82,20 @@ impl RendererAgentAttachmentId {
     }
 }
 
-/// Process-unique identity of one command admitted to a renderer DevTools
-/// endpoint.
+/// Process-unique identity of one command admitted to a renderer receiver.
+/// Native Page work and DevTools work share this allocator, not their authority.
 ///
 /// This is deliberately not an ordering primitive. Receiver-local ingress
 /// order and session-local output order use their own types below, so a
 /// process-global allocation gap can never be mistaken for a missing command.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct RendererDevToolsCommandId(NonZeroU64);
+pub struct RendererCommandId(NonZeroU64);
 
-impl RendererDevToolsCommandId {
+impl RendererCommandId {
     pub fn allocate() -> Self {
         Self(allocate_nonzero_u64(
-            &NEXT_RENDERER_DEVTOOLS_COMMAND_ID,
-            "renderer DevTools command id",
+            &NEXT_RENDERER_COMMAND_ID,
+            "renderer command id",
         ))
     }
 
@@ -207,8 +207,8 @@ mod tests {
         assert_ne!(first_attachment, second_attachment);
         assert_ne!(first_attachment.get(), 0);
 
-        let first_command = RendererDevToolsCommandId::allocate();
-        let second_command = RendererDevToolsCommandId::allocate();
+        let first_command = RendererCommandId::allocate();
+        let second_command = RendererCommandId::allocate();
         assert_ne!(first_command, second_command);
         assert_ne!(first_command.get(), 0);
     }
@@ -224,8 +224,8 @@ mod tests {
             size_of::<RendererAgentAttachmentId>()
         );
         assert_eq!(
-            size_of::<Option<RendererDevToolsCommandId>>(),
-            size_of::<RendererDevToolsCommandId>()
+            size_of::<Option<RendererCommandId>>(),
+            size_of::<RendererCommandId>()
         );
     }
 

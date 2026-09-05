@@ -331,6 +331,10 @@ impl DevToolsSessionRegistry {
             self.navigator_emulation.session_mut(session_key);
         }
         let state = self.ensure_session(session_key);
+        state
+            .emulation_session_state
+            .overrides
+            .get_or_insert_default();
         state.emulation_session_state.browser_identity_override = browser_identity_override;
     }
 
@@ -365,7 +369,10 @@ impl DevToolsSessionRegistry {
         // an existing claim; a rejected first claim or same-timezone non-owner
         // success must leave neither an owner entry nor a phantom session.
         if owner.has_override() {
-            self.ensure_session(key);
+            self.ensure_session(key)
+                .emulation_session_state
+                .overrides
+                .get_or_insert_default();
         } else {
             self.environment_owners.remove(key);
         }
@@ -667,20 +674,33 @@ pub(crate) struct DevToolsNetworkSessionState {
     pub(crate) service_worker_fetch_diagnostic_entries: usize,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct DevToolsEmulationSessionState {
     // UA, Accept-Language, and platform are independent handler contributions.
     pub(in crate::conn::state) browser_identity_override: Option<DevToolsBrowserIdentityOverride>,
-    pub(crate) overrides: super::EmulationPolicy,
+    // Consumed on handler disable. Retrying failed renderer cleanup must not
+    // reset policy subsequently installed by another session.
+    pub(crate) overrides: Option<super::EmulationPolicy>,
+}
+
+impl Default for DevToolsEmulationSessionState {
+    fn default() -> Self {
+        Self {
+            browser_identity_override: None,
+            overrides: Some(super::EmulationPolicy::default()),
+        }
+    }
 }
 
 impl DevToolsEmulationSessionState {
     /// Handler-disable semantics belong to DevTools. Browser receives only
     /// source-free changes, without learning which session caused a reset or
     /// requiring a read-modify-write round trip through Browser state.
-    pub(in crate::conn) fn disable_policy_changes(&self) -> Vec<super::EmulationPolicyChange> {
+    pub(in crate::conn) fn disable_policy_changes(&mut self) -> Vec<super::EmulationPolicyChange> {
         use super::EmulationPolicyChange;
-        let raw = &self.overrides;
+        let Some(raw) = self.overrides.take() else {
+            return Vec::new();
+        };
         // Blink clears media and script execution on every handler disable.
         let mut changes = vec![
             EmulationPolicyChange::DefaultBackgroundColor(None),
@@ -1173,6 +1193,90 @@ mod tests {
     use super::*;
 
     #[test]
+    fn consumed_emulation_handler_preserves_new_peer_policy_on_cleanup_retry() {
+        let mut handler = DevToolsEmulationSessionState::default();
+        let mut effective = crate::conn::EmulationPolicy::default();
+        effective.apply_changes(handler.disable_policy_changes());
+        effective.apply(super::super::EmulationPolicyChange::Media(
+            crate::conn::EmulatedMediaOverrides {
+                color_scheme: Some("dark".to_owned()),
+                ..Default::default()
+            },
+        ));
+        effective.apply(super::super::EmulationPolicyChange::ScriptExecutionDisabled(true));
+        let peer_policy = effective.clone();
+        effective.apply_changes(handler.disable_policy_changes());
+        assert_eq!(
+            effective, peer_policy,
+            "cleanup retry must not disable a peer's later policy"
+        );
+    }
+
+    #[test]
+    fn accepted_emulation_contributions_reactivate_a_consumed_handler() {
+        let mut sessions = DevToolsSessionRegistry::default();
+        let primary = DevToolsSessionKey::Primary;
+        sessions
+            .primary_mut()
+            .emulation_session_state
+            .disable_policy_changes();
+        sessions.set_browser_identity_override(&primary, identity_override("Moli/New", None, None));
+        assert!(
+            !sessions
+                .primary_mut()
+                .emulation_session_state
+                .disable_policy_changes()
+                .is_empty()
+        );
+
+        sessions
+            .set_locale_override(&primary, Some("fr-FR".to_owned()))
+            .unwrap();
+        assert!(
+            !sessions
+                .primary_mut()
+                .emulation_session_state
+                .disable_policy_changes()
+                .is_empty()
+        );
+
+        sessions
+            .set_timezone_override(&primary, Some("Europe/Paris".to_owned()))
+            .unwrap();
+        assert!(
+            !sessions
+                .primary_mut()
+                .emulation_session_state
+                .disable_policy_changes()
+                .is_empty()
+        );
+
+        let attached = DevToolsSessionKey::Attached("SID-consumed".to_owned());
+        sessions
+            .ensure_session(&attached)
+            .emulation_session_state
+            .disable_policy_changes();
+        assert!(
+            sessions
+                .set_locale_override(&attached, Some("de-DE".to_owned()))
+                .is_err()
+        );
+        assert!(
+            sessions
+                .set_timezone_override(&attached, Some("Europe/Berlin".to_owned()))
+                .is_err()
+        );
+        assert!(
+            sessions
+                .session(&attached)
+                .unwrap()
+                .emulation_session_state
+                .overrides
+                .is_none()
+        );
+    }
+
+    #[test]
     fn handler_disable_uses_raw_state_for_conditional_target_resets() {
         let mut effective = crate::conn::EmulationPolicy {
             focus_emulation_enabled: true,
@@ -1183,8 +1287,8 @@ mod tests {
             },
             ..Default::default()
         };
-        let raw = DevToolsEmulationSessionState::default();
-        let delta = effective.apply_changes(raw.disable_policy_changes());
+        let mut raw = DevToolsEmulationSessionState::default();
+        effective.apply_changes(raw.disable_policy_changes());
 
         assert!(
             effective.focus_emulation_enabled,
@@ -1194,16 +1298,20 @@ mod tests {
             effective.emulated_media.color_scheme.is_none(),
             "Blink clears the shared media override on every handler disable"
         );
-        assert!(!delta.focus_emulation_enabled);
-        assert!(delta.emulated_media);
         assert!(!effective.script_execution_disabled);
-        assert!(delta.script_execution_disabled);
+        assert_eq!(
+            effective,
+            crate::conn::EmulationPolicy {
+                focus_emulation_enabled: true,
+                ..Default::default()
+            }
+        );
     }
 
     #[test]
     fn prepared_handler_reset_preserves_unrelated_later_policy_updates() {
         let mut target = crate::conn::PageTargetHost::empty("TID-policy-reset".into());
-        let handler = DevToolsEmulationSessionState::default();
+        let mut handler = DevToolsEmulationSessionState::default();
         let reset = handler.disable_policy_changes();
         target
             .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::FocusEnabled(true));

@@ -146,7 +146,7 @@ pub(crate) struct CompletedNetworkCommandDispatch {
 
 enum PendingNetworkCommandWork {
     Page {
-        attachment_id: Option<moli_core::page::RendererAgentAttachmentId>,
+        document: Option<moli_core::browser::DocumentId>,
         pending: moli_core::page::PendingPageCommand,
     },
     Resource(Box<moli_core::page::RendererPreparedNetworkResourceLoad>),
@@ -154,16 +154,23 @@ enum PendingNetworkCommandWork {
 
 enum CompletedNetworkCommandWork {
     Page {
-        attachment_id: Option<moli_core::page::RendererAgentAttachmentId>,
+        document: Option<moli_core::browser::DocumentId>,
         completed: Result<Box<moli_core::page::CompletedPageCommand>, String>,
     },
     Resource(moli_core::page::RendererNetworkResourceLoadOutcome),
 }
 
 impl PendingNetworkCommandWork {
-    fn page(pending: moli_core::page::PendingPageCommand) -> Self {
+    fn page(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
+        pending: moli_core::page::PendingPageCommand,
+    ) -> Self {
         Self::Page {
-            attachment_id: pending.renderer_agent_attachment_id(),
+            document: conn
+                .runtime_session_owner_slot_for_owner(owner)
+                .ok()
+                .and_then(|slot| slot.document_id()),
             pending,
         }
     }
@@ -190,17 +197,16 @@ enum PendingNetworkCommandKind {
 impl PendingNetworkCommandDispatch {
     pub(crate) async fn wait(self) -> CompletedNetworkCommandDispatch {
         let completed = match self.pending {
-            PendingNetworkCommandWork::Page {
-                attachment_id,
-                pending,
-            } => CompletedNetworkCommandWork::Page {
-                attachment_id,
-                completed: pending
-                    .wait()
-                    .await
-                    .map(Box::new)
-                    .map_err(|error| error.to_string()),
-            },
+            PendingNetworkCommandWork::Page { document, pending } => {
+                CompletedNetworkCommandWork::Page {
+                    document,
+                    completed: pending
+                        .wait()
+                        .await
+                        .map(Box::new)
+                        .map_err(|error| error.to_string()),
+                }
+            }
             PendingNetworkCommandWork::Resource(pending) => {
                 CompletedNetworkCommandWork::Resource((*pending).execute().await)
             }
@@ -487,9 +493,9 @@ fn pending_network_page_command_step(
     match result {
         Ok(Some(pending)) => NetworkCommandTaskStep::Pending(PendingNetworkCommandDispatch {
             command_id,
-            owner_scope,
             kind,
-            pending: PendingNetworkCommandWork::page(pending),
+            pending: PendingNetworkCommandWork::page(conn, &owner_scope, pending),
+            owner_scope,
         }),
         Ok(None) => NetworkCommandTaskStep::Complete(CommandOutputPlan::success()),
         Err(message) if message == "BrowserContextNotLoaded" => NetworkCommandTaskStep::Complete(
@@ -525,9 +531,9 @@ fn start_set_network_domain_enabled_command(
     match conn.start_replay_effective_network_request_policy_for_session_owner(cmd.session_id) {
         Ok(Some(pending)) => NetworkCommandTaskStep::Pending(PendingNetworkCommandDispatch {
             command_id: cmd.id,
-            owner_scope,
             kind,
-            pending: PendingNetworkCommandWork::page(pending),
+            pending: PendingNetworkCommandWork::page(conn, &owner_scope, pending),
+            owner_scope,
         }),
         Ok(None) => NetworkCommandTaskStep::Complete(if enabled {
             settings::enabled_command_output_plan(conn, cmd.session_id)
@@ -722,10 +728,10 @@ fn complete_network_policy_refresh(
             ..
         } => *completion,
         CompletedNetworkCommandWork::Page {
-            attachment_id,
+            document,
             completed: Err(error),
         } => {
-            if network_page_configuration_will_be_replayed(conn, &owner_scope, attachment_id) {
+            if network_page_configuration_will_be_replayed(conn, &owner_scope, document) {
                 return if enabled {
                     settings::enabled_command_output_plan(conn, session_id.as_deref())
                 } else {
@@ -765,10 +771,10 @@ fn complete_unit_page_network_command(
             ..
         } => *completion,
         CompletedNetworkCommandWork::Page {
-            attachment_id,
+            document,
             completed: Err(error),
         } => {
-            if network_page_configuration_will_be_replayed(conn, &owner_scope, attachment_id) {
+            if network_page_configuration_will_be_replayed(conn, &owner_scope, document) {
                 return CommandOutputPlan::success();
             }
             return CommandOutputPlan::error(-32000, error);
@@ -793,9 +799,8 @@ fn finish_network_page_operation_on_current_attachment(
     finish: NetworkPageCommandFinish,
     completion: moli_core::page::CompletedPageCommand,
 ) -> Result<(), String> {
-    let completion_attachment = completion.renderer_agent_attachment_id();
     if let Some(page) = page
-        && page.renderer_agent_attachment_id() == completion_attachment
+        && completion.is_from_page(page)
     {
         let result = match finish {
             NetworkPageCommandFinish::RequestPolicy => {
@@ -837,10 +842,10 @@ fn complete_rebuild_loader_network_command(
             ..
         } => *completion,
         CompletedNetworkCommandWork::Page {
-            attachment_id,
+            document,
             completed: Err(error),
         } => {
-            if network_page_configuration_will_be_replayed(conn, &owner_scope, attachment_id) {
+            if network_page_configuration_will_be_replayed(conn, &owner_scope, document) {
                 return CommandOutputPlan::success();
             }
             return CommandOutputPlan::error(-32000, error);
@@ -856,19 +861,15 @@ fn complete_rebuild_loader_network_command(
 }
 
 fn network_page_configuration_will_be_replayed(
-    conn: &mut CdpConnection,
+    conn: &CdpConnection,
     owner_scope: &CommandOwnerScope,
-    dispatched_attachment: Option<moli_core::page::RendererAgentAttachmentId>,
+    dispatched_document: Option<moli_core::browser::DocumentId>,
 ) -> bool {
-    let Some(dispatched_attachment) = dispatched_attachment else {
+    let Some(dispatched_document) = dispatched_document else {
         return false;
     };
-    let owner_still_exists = conn.target_owner_identity_for_owner(owner_scope).is_some();
-    let current_attachment = conn
-        .loaded_page_mut_for_target_configuration_for_owner(owner_scope)
-        .ok()
-        .and_then(|page| page.renderer_agent_attachment_id());
-    owner_still_exists && current_attachment != Some(dispatched_attachment)
+    conn.runtime_session_owner_slot_for_owner(owner_scope)
+        .is_ok_and(|slot| slot.document_id() != Some(dispatched_document))
 }
 
 #[cfg(test)]

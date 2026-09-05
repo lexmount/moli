@@ -5,7 +5,7 @@
 //! include resolved computed styles plus lightweight geometry for automation clients.
 
 use moli_core::page::{
-    CompletedPageCommand, Page, PendingPageCommand, RendererDomSnapshotCaptureOptions,
+    CompletedPageCommand, PendingPageCommand, RendererDomSnapshotCaptureOptions,
 };
 use serde::Deserialize;
 
@@ -121,13 +121,17 @@ fn start_capture_snapshot_command_with_params(
     params: CaptureSnapshotParams,
 ) -> DomSnapshotCommandDispatchStep {
     let frame_id = top_frame_id_for_session(conn, session_id).unwrap_or_default();
-    let Some(page) = loaded_page_mut_for_session(conn, session_id) else {
+    let owner_scope = CommandOwnerScope::capture(conn, session_id);
+    let Some(inspection) = crate::domains::dom::dom_inspection_for_owner(conn, &owner_scope) else {
         return DomSnapshotCommandDispatchStep::Complete(CommandOutputPlan::error(
             -32000,
             "NoDocumentLoaded",
         ));
     };
-    let pending = match page.start_dom_snapshot_capture(frame_id, params.into()) {
+    let pending = match inspection
+        .start_dom_snapshot_capture(frame_id, params.into())
+        .map(PendingPageCommand::from_inspector_main_route)
+    {
         Ok(pending) => pending,
         Err(error) => {
             return DomSnapshotCommandDispatchStep::Complete(CommandOutputPlan::error(
@@ -139,7 +143,7 @@ fn start_capture_snapshot_command_with_params(
 
     DomSnapshotCommandDispatchStep::Pending(PendingDomSnapshotCommandDispatch {
         command_id,
-        owner_scope: CommandOwnerScope::capture(conn, session_id),
+        owner_scope,
         pending,
     })
 }
@@ -148,15 +152,6 @@ pub(crate) fn complete_pending_dom_snapshot_command(
     conn: &mut CdpConnection,
     completed: CompletedDomSnapshotCommandDispatch,
 ) -> DomSnapshotCommandDispatchStep {
-    let Some(page) = conn
-        .loaded_page_mut_for_protocol_access_for_owner(&completed.owner_scope)
-        .ok()
-    else {
-        return DomSnapshotCommandDispatchStep::Complete(CommandOutputPlan::error(
-            -32000,
-            "NoDocumentLoaded",
-        ));
-    };
     let completion = match completed.completed {
         Ok(completion) => completion,
         Err(error) => {
@@ -165,7 +160,12 @@ pub(crate) fn complete_pending_dom_snapshot_command(
             ));
         }
     };
-    let payload = match page.finish_dom_snapshot_capture(completion) {
+    if let Err(error) =
+        conn.observe_renderer_inspection_completion(&completed.owner_scope, &completion)
+    {
+        return DomSnapshotCommandDispatchStep::Complete(CommandOutputPlan::error(-32000, error));
+    }
+    let payload = match completion.finish_dom_snapshot_capture() {
         Ok(Some(payload)) => payload,
         Ok(None) => {
             return DomSnapshotCommandDispatchStep::Complete(CommandOutputPlan::error(
@@ -183,13 +183,6 @@ pub(crate) fn complete_pending_dom_snapshot_command(
     DomSnapshotCommandDispatchStep::Complete(CommandOutputPlan::result(
         payload.into_protocol_payload(),
     ))
-}
-
-fn loaded_page_mut_for_session<'a>(
-    conn: &'a mut CdpConnection,
-    session_id: Option<&str>,
-) -> Option<&'a mut Page> {
-    conn.loaded_page_mut_for_protocol_access(session_id).ok()
 }
 
 fn top_frame_id_for_session(conn: &CdpConnection, session_id: Option<&str>) -> Option<String> {

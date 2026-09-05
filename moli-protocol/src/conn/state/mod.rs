@@ -41,7 +41,7 @@ pub(crate) use moli_core::browser::{DocumentId, NavigationId, RendererPageReside
 
 pub(crate) use devtools_renderer_channel::{
     CommittedRendererAgentAttachment, DevToolsRendererChannelError,
-    PreparedRendererAgentAttachment, RendererAgentAttachment,
+    PreparedRendererAgentAttachment, RendererAgentAttachment, RendererAgentBinding,
 };
 
 pub(crate) use dedicated_worker_target::{
@@ -107,8 +107,8 @@ pub(crate) use shared_worker_target::SharedWorkerTargetState;
 #[cfg(test)]
 pub(crate) use web_contents::JavaScriptDialogKey;
 pub(crate) use web_contents::{
-    EmulationPolicy, EmulationPolicyChange, EmulationPolicyDelta, SessionStorageNamespace,
-    WindowSurface, WindowSurfaceState,
+    EmulationPolicy, EmulationPolicyChange, SessionStorageNamespace, WindowSurface,
+    WindowSurfaceState,
 };
 pub(crate) use web_contents::{
     JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogSnapshot,

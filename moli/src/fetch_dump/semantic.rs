@@ -28,7 +28,7 @@ async fn collect_payloads(page: &mut Page, with_frames: bool) -> Result<Vec<Valu
 
     for frame_id in frame_ids {
         let Some(owner) = page
-            .child_frame_owner_node_reference_async(&frame_id, None)
+            .child_frame_owner_node_reference_async(&frame_id)
             .await?
         else {
             continue;

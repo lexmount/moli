@@ -170,9 +170,9 @@ mod tests {
             },
             ..Default::default()
         };
-        let raw = crate::conn::DevToolsEmulationSessionState::default();
+        let mut raw = crate::conn::DevToolsEmulationSessionState::default();
 
-        let delta = effective.apply_changes(raw.disable_policy_changes());
+        effective.apply_changes(raw.disable_policy_changes());
 
         assert!(
             effective.focus_emulation_enabled,
@@ -182,9 +182,6 @@ mod tests {
             effective.emulated_media.color_scheme.is_none(),
             "Blink clears the shared media override on every handler disable"
         );
-        assert!(!delta.focus_emulation_enabled);
-        assert!(delta.emulated_media);
         assert!(!effective.script_execution_disabled);
-        assert!(delta.script_execution_disabled);
     }
 }

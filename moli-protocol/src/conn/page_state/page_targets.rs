@@ -1,8 +1,6 @@
 //! Stable page-target registry behavior and foreground target selection.
 
-use super::super::state::{
-    EffectiveTargetPolicy, SessionStorageNamespace, TargetPageAbsenceReason,
-};
+use super::super::state::{SessionStorageNamespace, TargetPageAbsenceReason};
 use super::super::{
     BrowserContext, DedicatedWorkerTargetState, InitialDocumentCreator, PageTargetHost,
     ServiceWorkerTargetState, SharedWorkerTargetState, TargetIdentityState,
@@ -327,7 +325,6 @@ impl BrowserContext {
         let Some(target) = self.page_target_mut(target_id) else {
             return Ok(());
         };
-        let previous = target.effective_policy();
         let listener_session_id = session_key.wire_session_id().map(str::to_owned);
         match session_key {
             moli_page_types::DevToolsSessionKey::Primary => {
@@ -350,52 +347,16 @@ impl BrowserContext {
             target.runtime_slot.clear_websocket_request_ids();
         }
         target.clear_devtools_network_state(session_key);
-        self.apply_effective_devtools_policy_delta_async(target_id, previous)
-            .await?;
-        Ok(())
-    }
-
-    pub(crate) async fn clear_devtools_emulation_session_policy_async(
-        &mut self,
-        target_id: &str,
-        session_key: &moli_page_types::DevToolsSessionKey,
-    ) -> anyhow::Result<bool> {
-        let Some(target) = self.page_target_mut(target_id) else {
-            return Ok(false);
-        };
-        let previous = target.effective_policy();
-        target.clear_devtools_emulation_policy_state(session_key);
-        self.apply_effective_devtools_policy_delta_async(target_id, previous)
-            .await
-    }
-
-    async fn apply_effective_devtools_policy_delta_async(
-        &mut self,
-        target_id: &str,
-        previous: EffectiveTargetPolicy,
-    ) -> anyhow::Result<bool> {
-        let Some(target) = self.page_target(target_id) else {
-            return Ok(false);
-        };
         let effective = target.effective_policy();
-        let delta = previous.delta(&effective);
-        let browser_identity_changed = delta.browser_identity;
-
-        if delta.is_empty() {
-            return Ok(false);
-        }
-
-        let effective_headers =
-            self.merged_extra_headers_for_target_policy(effective.extra_headers());
-        let page = self
+        let headers = self.merged_extra_headers_for_target_policy(effective.extra_headers());
+        if let Some(page) = self
             .page_target_mut(target_id)
-            .and_then(|target| target.runtime_slot.loaded_page_mut());
-        let Some(page) = page else {
-            return Ok(browser_identity_changed);
-        };
-        if delta.network_request {
+            .and_then(|target| target.runtime_slot.loaded_page_mut())
+        {
+            // Reconcile current Browser policy even on a repeated disposal:
+            // clearing a contribution is not proof the renderer applied it.
             page.set_network_request_policy_async(
-                &effective_headers,
+                &headers,
                 effective.bypass_service_worker(),
                 effective.cache_disabled(),
                 effective.blocked_url_patterns(),
@@ -407,9 +368,19 @@ impl BrowserContext {
                 )
             })?;
         }
-        // Session disposal already released its process-wide ICU claims.
-        // Do not recreate them on the Page while restoring target-local policy.
-        Ok(browser_identity_changed)
+        Ok(())
+    }
+
+    pub(crate) async fn clear_devtools_emulation_session_policy_async(
+        &mut self,
+        target_id: &str,
+        session_key: &moli_page_types::DevToolsSessionKey,
+    ) -> anyhow::Result<()> {
+        if let Some(target) = self.page_target_mut(target_id) {
+            // Releasing the unique process owner publishes the ICU change to all realms.
+            target.clear_devtools_emulation_policy_state(session_key);
+        }
+        Ok(())
     }
 
     pub(crate) async fn reset_primary_page_session_target_state_async(
@@ -433,6 +404,7 @@ impl BrowserContext {
             .page_target(target_id)
             .expect("disposing page target must remain registered");
         let effective_policy = target.effective_policy();
+        let script_execution_disabled = target.emulation_policy().script_execution_disabled;
         let document_activity = self
             .document_activity_for_target(target_id)
             .expect("disposing target retains document activity");
@@ -459,7 +431,10 @@ impl BrowserContext {
                     anyhow::anyhow!("failed to clear page offline state: {error}")
                 });
             }
-            if let Err(error) = page.set_script_execution_disabled_async(false).await {
+            if let Err(error) = page
+                .set_script_execution_disabled_async(script_execution_disabled)
+                .await
+            {
                 first_error.get_or_insert_with(|| {
                     anyhow::anyhow!("failed to clear page script execution disabled state: {error}")
                 });
@@ -1690,9 +1665,9 @@ mod tests {
         assert_eq!(
             background_target
                 .loaded_page()
-                .and_then(|page| page.renderer_agent_attachment_id()),
-            Some(active_attachment.id()),
-            "the background Page and its renderer channel must retain the same attachment"
+                .map(|page| page.renderer_devtools_agent_token()),
+            Some(active_attachment.agent_token()),
+            "the background Page and its renderer channel must retain the same physical agent"
         );
         assert!(
             background_target

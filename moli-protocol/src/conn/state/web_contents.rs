@@ -17,7 +17,7 @@ mod page_surface;
 mod session_storage;
 mod window;
 pub(in crate::conn) use document_host::DocumentHost;
-pub(crate) use emulation_policy::{EmulationPolicy, EmulationPolicyChange, EmulationPolicyDelta};
+pub(crate) use emulation_policy::{EmulationPolicy, EmulationPolicyChange};
 use javascript_dialog::JavaScriptDialogs;
 pub(crate) use javascript_dialog::{
     JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogKey, JavaScriptDialogSnapshot,
@@ -77,6 +77,31 @@ impl Default for WebContents {
 }
 
 impl WebContents {
+    pub(in crate::conn) fn performance_metric_snapshot(
+        &self,
+    ) -> Option<moli_core::page::RendererPerformanceMetricSnapshot> {
+        Some(
+            self.main_frame
+                .current_document
+                .as_ref()?
+                .page
+                .cached_performance_metric_snapshot(),
+        )
+    }
+
+    /// Browser observation is independent of the DevTools command that
+    /// produced this snapshot. The Page cache validates physical residence
+    /// and revision; a rejected observation never invalidates a frozen reply.
+    pub(in crate::conn) fn observe_renderer_page_state(
+        &mut self,
+        snapshot: &std::sync::Arc<moli_renderer_v8::RendererPageState>,
+    ) -> bool {
+        self.main_frame
+            .current_document
+            .as_mut()
+            .is_some_and(|document| document.page.observe_renderer_page_state(snapshot))
+    }
+
     pub(in crate::conn) fn bind_document_lifecycle(
         &mut self,
         snapshot: RendererDocumentLifecycleSnapshot,

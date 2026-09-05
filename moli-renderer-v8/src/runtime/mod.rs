@@ -290,7 +290,9 @@ pub use self::owner::{
 };
 pub use self::owner_local::RendererPageTestingHandle;
 pub use self::owner_local::{
-    RendererPageCommandPending, RendererPageHandle, RendererRuntimeInspectorSessionDetachGuard,
+    RendererAccessibilityInspection, RendererCssInspection, RendererDomDebuggerInspection,
+    RendererDomInspection, RendererInspectionEndpoint, RendererPageCommandPending,
+    RendererPageHandle, RendererRuntimeInspection, RendererRuntimeInspectorSessionDetachGuard,
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
 pub use self::page::{
@@ -420,9 +422,8 @@ pub use self::protocol_output::{
 };
 pub use self::service_worker_run::RendererServiceWorkerRunIdentity;
 pub use crate::devtools::command::{
-    RendererDevToolsIoCommandEnvelope, RendererDevToolsMainCommandEnvelope,
-    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
-    RendererInspectorIngressTicket,
+    RendererDevToolsIoCommandEnvelope, RendererInspectorCommandEnvelope,
+    RendererInspectorCommandRoute, RendererInspectorIngressTicket, RendererMainCommandEnvelope,
 };
 pub(crate) use crate::devtools::command::{
     RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,

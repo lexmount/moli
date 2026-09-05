@@ -15,10 +15,7 @@ use super::{
     runtime_slot::TargetRuntimeSlot,
     session::BaseNetworkRequestPolicy,
     target_state::TargetOwnerState,
-    web_contents::{
-        EmulationPolicy, EmulationPolicyChange, EmulationPolicyDelta, WindowSurface,
-        WindowSurfaceState,
-    },
+    web_contents::{EmulationPolicy, EmulationPolicyChange, WindowSurface, WindowSurfaceState},
 };
 #[cfg(test)]
 use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
@@ -162,7 +159,7 @@ impl PageTargetHost {
     pub(in crate::conn) fn apply_emulation_policy_changes(
         &mut self,
         changes: Vec<EmulationPolicyChange>,
-    ) -> EmulationPolicyDelta {
+    ) {
         self.runtime_slot
             .page_slot_mut()
             .contents

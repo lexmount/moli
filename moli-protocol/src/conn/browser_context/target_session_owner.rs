@@ -46,7 +46,6 @@ pub(super) struct TargetSessionOwnerRef<'a> {
 type FetchDisableStateWithSubresourceConfig = (
     super::fetch_owner::SessionOwnerPendingFetchState,
     (bool, Option<SubresourceResourceType>),
-    bool,
 );
 
 fn empty_pending_fetch_state() -> super::fetch_owner::SessionOwnerPendingFetchState {
@@ -750,7 +749,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
         session_id: Option<&str>,
     ) -> FetchDisableStateWithSubresourceConfig {
         let target = self.target_mut();
-        let previous_subresource_config = target.fetch_owner.subresource_interception_config();
         let removed = target.fetch_owner.remove_fetch_session(session_id);
         let subresource_config = target.fetch_owner.subresource_interception_config();
         let pending = if removed {
@@ -760,8 +758,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         } else {
             empty_pending_fetch_state()
         };
-        let page_update_required = removed && previous_subresource_config != subresource_config;
-        (pending, subresource_config, page_update_required)
+        (pending, subresource_config)
     }
 
     pub(super) fn drain_fetch_pending_state(
@@ -1933,16 +1930,43 @@ impl CdpConnection {
         renderer_inspector_session_id: Option<&str>,
     ) -> Option<crate::conn::TargetPageProtocolAttachmentIdentity> {
         let source = self.target_page_protocol_attachment_identity_for_owner(source_owner)?;
+        let protocol_owner = self.target_protocol_owner_for_renderer_inspector_owner(
+            source_owner,
+            renderer_inspector_session_id,
+        )?;
+        let attachment =
+            self.target_page_protocol_attachment_identity_for_owner(&protocol_owner)?;
+        (attachment.page_owner() == source.page_owner()).then_some(attachment)
+    }
+
+    /// Resolve the DevTools session for Inspector output without borrowing its
+    /// Browser Document. A concrete target route also pins implicit replies
+    /// across foreground selection changes.
+    pub(crate) fn target_protocol_owner_for_renderer_inspector_owner(
+        &self,
+        source_owner: &CommandOwnerScope,
+        renderer_inspector_session_id: Option<&str>,
+    ) -> Option<CommandOwnerScope> {
+        let source = self
+            .target_session_owner_ref_for_owner(source_owner)?
+            .owner_identity();
         let protocol_session_id = renderer_inspector_session_id
             .map(str::to_owned)
             .or_else(|| self.runtime_session_owner_primary_session_id_for_owner(source_owner));
         let protocol_owner = protocol_session_id
             .as_deref()
             .map(CommandOwnerScope::for_session)
-            .unwrap_or_else(|| source_owner.clone());
-        let attachment =
-            self.target_page_protocol_attachment_identity_for_owner(&protocol_owner)?;
-        if attachment.page_owner() != source.page_owner()
+            .or_else(|| {
+                Some(CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
+                    browser_context_id: source.0.clone(),
+                    target_id: source.1.clone()?,
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
+                }))
+            })?;
+        if self
+            .target_session_owner_ref_for_owner(&protocol_owner)?
+            .owner_identity()
+            != source
             || self
                 .target_renderer_runtime_inspector_session_id_for_owner(&protocol_owner)
                 .as_deref()
@@ -1950,7 +1974,7 @@ impl CdpConnection {
         {
             return None;
         }
-        Some(attachment)
+        Some(protocol_owner)
     }
 
     /// Checks both the target Page residence and the session that originally
@@ -2095,6 +2119,29 @@ impl CdpConnection {
         Some(owner.session_key.wire_session_id().map(str::to_owned))
     }
 
+    pub(crate) fn observe_renderer_inspection_completion(
+        &mut self,
+        owner: &CommandOwnerScope,
+        completion: &moli_core::page::CompletedPageCommand,
+    ) -> Result<(), String> {
+        let slot = self
+            .target_session_owner_mut_for_owner(owner)
+            .map(|owner| owner.into_runtime_slot_mut())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+        let Some(attachment) = completion.renderer_agent_attachment_id() else {
+            return Err("Renderer attachment changed".to_owned());
+        };
+        if slot
+            .current_renderer_inspection_binding()
+            .map(|binding| binding.attachment().id())
+            != Some(attachment)
+        {
+            return Err("Renderer attachment changed".to_owned());
+        }
+        slot.observe_renderer_page_state(completion.page_state());
+        Ok(())
+    }
+
     pub(crate) fn runtime_session_owner_slot_mut(
         &mut self,
         session_id: Option<&str>,
@@ -2107,16 +2154,9 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
     ) -> Result<&mut TargetRuntimeSlot, String> {
-        let renderer_inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let slot = self
-            .target_session_owner_mut_for_owner(owner)
+        self.target_session_owner_mut_for_owner(owner)
             .map(TargetSessionOwnerMut::into_runtime_slot_mut)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        if let Some(page) = slot.loaded_page_mut() {
-            page.set_renderer_devtools_command_session_id(renderer_inspector_session_id);
-        }
-        Ok(slot)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())
     }
 
     pub(crate) fn runtime_session_owner_slot(
@@ -2809,10 +2849,9 @@ mod tests {
                 "FETCH-active".to_owned(),
                 pending_subresource_fetch(11),
             ));
-            let (pending, subresource_config, page_update_required) =
+            let (pending, subresource_config) =
                 owner.reset_fetch_config_for_session_and_drain_pending_state(Some("SID-active"));
             assert_eq!(subresource_config, (false, None));
-            assert!(page_update_required);
             assert_eq!(pending.3.len(), 1);
         }
         assert!(
@@ -2845,10 +2884,9 @@ mod tests {
                 "FETCH-background".to_owned(),
                 pending_subresource_fetch(22),
             ));
-            let (pending, subresource_config, page_update_required) = owner
+            let (pending, subresource_config) = owner
                 .reset_fetch_config_for_session_and_drain_pending_state(Some("SID-background"));
             assert_eq!(subresource_config, (false, None));
-            assert!(page_update_required);
             assert_eq!(pending.3.len(), 1);
         }
         assert!(

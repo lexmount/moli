@@ -48,6 +48,8 @@ mod devtools_command;
 mod dispatch;
 mod downloads;
 mod fetch_support;
+#[cfg(test)]
+mod inspection_binding_tests;
 mod inspector_route;
 mod navigation_error;
 mod output;
@@ -564,8 +566,8 @@ pub(crate) use state::{
     DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
     DevToolsLogViolationThreshold, DocumentId, DuplicatePendingRendererCommand,
     EmulatedNetworkConditions, EmulatedViewportSurface, EmulationPolicyChange,
-    EmulationPolicyDelta, InitialDocumentCreator, InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL,
-    NavigationId, NavigationResultProjection, NavigationSourceDocumentSecurityContext,
+    InitialDocumentCreator, InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationId,
+    NavigationResultProjection, NavigationSourceDocumentSecurityContext,
     NetworkErrorPageNavigation, PageScreencastConfig, PageScreencastFormat,
     PendingBidiChannelListener, PendingInspectorAwait, PendingRendererCommandKey,
     PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,

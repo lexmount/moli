@@ -35,14 +35,16 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
         token: &NavigationId,
-        page: &mut Page,
+        page: &Page,
     ) -> Result<PreparedRendererAgentAttachment, String> {
-        let candidate = self.prepare_renderer_agent_candidate_token_for_owner(
+        let mut candidate = self.prepare_renderer_agent_candidate_token_for_owner(
             owner,
             token,
             page.renderer_devtools_agent_token(),
         )?;
-        page.bind_renderer_agent_attachment(candidate.id());
+        candidate
+            .bind(page.renderer_inspection_endpoint())
+            .map_err(|error| error.to_string())?;
         Ok(candidate)
     }
 

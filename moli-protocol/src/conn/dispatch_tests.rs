@@ -2481,10 +2481,10 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
     assert_eq!(large_id_evaluation["result"]["result"]["value"], json!(42));
 
     let current_attachment_id = conn
-        .browser_context
-        .as_ref()
-        .and_then(|context| context.loaded_page())
-        .and_then(moli_core::page::Page::renderer_agent_attachment_id)
+        .runtime_session_owner_slot(None)
+        .ok()
+        .and_then(|slot| slot.current_renderer_attachment())
+        .map(|attachment| attachment.id())
         .expect("loaded page should have a renderer attachment");
     let stale_attachment_id = moli_core::page::RendererAgentAttachmentId::allocate();
     let attachment_test_frontend_id = 8_101;
@@ -5272,15 +5272,8 @@ async fn devtools_command_low_backend_node_refs_miss_without_backend_binding() {
         }
     });
     let pending_mutation = {
-        let page = conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .loaded_page_mut()
-            .expect("loaded page");
-        page.start_runtime_protocol_message(mutation.to_string())
+        let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
+        conn.start_runtime_protocol_message_for_owner(&owner, mutation.to_string())
             .expect("runtime mutation should start")
     };
     let mutation_completion = pending_mutation
@@ -5364,17 +5357,11 @@ async fn devtools_command_low_backend_node_refs_miss_without_backend_binding() {
     assert_eq!(error.kind, DevToolsErrorKind::NoSuchNode);
     assert_eq!(error.message, "Could not find node with given id");
 
-    let page = conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .loaded_page_mut()
-        .expect("loaded page");
-    let _ = page
-        .finish_runtime_protocol_message(mutation_completion)
-        .expect("runtime mutation completion should finish");
+    let _ = conn
+        .complete_runtime_protocol_message_async(mutation_completion)
+        .await
+        .expect("runtime mutation completion should finish")
+        .expect("Main inspection must retain its frozen command output");
 }
 
 #[tokio::test]

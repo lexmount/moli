@@ -420,13 +420,6 @@ pub(crate) struct EffectiveTargetPolicy {
 }
 
 impl EffectiveTargetPolicy {
-    pub(crate) fn delta(&self, next: &Self) -> EffectiveTargetPolicyDelta {
-        EffectiveTargetPolicyDelta {
-            network_request: self.network_request != next.network_request,
-            browser_identity: self.browser_identity_override != next.browser_identity_override,
-        }
-    }
-
     pub(crate) fn cache_disabled(&self) -> bool {
         self.network_request.cache_disabled
     }
@@ -447,19 +440,6 @@ impl EffectiveTargetPolicy {
         &self,
     ) -> Option<&moli_browser_profile::BrowserIdentityProfile> {
         self.browser_identity_override.as_ref()
-    }
-}
-
-/// Renderer surfaces that must be replayed after an effective policy change.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct EffectiveTargetPolicyDelta {
-    pub(crate) network_request: bool,
-    pub(crate) browser_identity: bool,
-}
-
-impl EffectiveTargetPolicyDelta {
-    pub(crate) fn is_empty(self) -> bool {
-        !self.network_request && !self.browser_identity
     }
 }
 
@@ -1107,6 +1087,8 @@ mod tests {
             .primary_mut()
             .emulation_session_state
             .overrides
+            .as_mut()
+            .unwrap()
             .max_touch_points = 4;
         let effective = state.effective_policy();
         assert_eq!(
@@ -1125,6 +1107,8 @@ mod tests {
                 .primary()
                 .emulation_session_state
                 .overrides
+                .as_ref()
+                .unwrap()
                 .max_touch_points,
             4,
             "clearing policy contributions must leave the handler's renderer state intact"
