@@ -20,6 +20,7 @@ moli-browser-profile = { path = "../moli-browser-profile" }
 moli-cookie-jar = { path = "../moli-cookie-jar" }
 moli-encoding = { path = "../moli-encoding" }
 moli-protocol-cdp = { path = "../moli-protocol-cdp" }
+moli-renderer-v8 = { path = "../moli-renderer-v8" }
 moli-fetch = { path = "../moli-fetch" }
 moli-css-parse = { path = "../moli-css-parse" }
 moli-shared-worker = { path = "../moli-shared-worker" }

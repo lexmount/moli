@@ -79,6 +79,19 @@ impl Default for WebContents {
 }
 
 impl WebContents {
+    /// Browser observation is independent of the DevTools command that
+    /// produced this snapshot. The Page cache validates physical residence
+    /// and revision; a rejected observation never invalidates a frozen reply.
+    pub(in crate::conn) fn observe_renderer_page_state(
+        &mut self,
+        snapshot: &std::sync::Arc<moli_renderer_v8::RendererPageState>,
+    ) -> bool {
+        self.main_frame
+            .current_document
+            .as_mut()
+            .is_some_and(|document| document.page.observe_renderer_page_state(snapshot))
+    }
+
     pub(in crate::conn) fn bind_document_lifecycle(
         &mut self,
         snapshot: RendererDocumentLifecycleSnapshot,

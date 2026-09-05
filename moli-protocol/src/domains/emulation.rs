@@ -1,7 +1,7 @@
 use crate::conn::{
     BrowserContext, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope, EmulatedDeviceMetrics,
     EmulatedGeolocationOverrideState, EmulatedViewportSurface, EmulationPolicyChange,
-    PageTargetHost, RendererCommandCorrelation, RendererCommandDescriptor,
+    RendererAgentBinding, RendererCommandCorrelation, RendererCommandDescriptor,
     RuntimeInspectorAsyncCompletionReceiver, WindowSurfaceState,
 };
 use crate::devtools_runtime::{
@@ -931,7 +931,9 @@ fn start_clear_device_metrics_override_command(
         }
     };
     match start_runtime_emulation_protocol_message(
-        page,
+        conn.runtime_session_owner_slot_for_owner(&owner_scope)
+            .ok()
+            .and_then(|slot| slot.current_renderer_inspection_binding()),
         runtime_call_id,
         device::LIVE_DEVICE_METRICS_CLEAR_SCRIPT.to_owned(),
     ) {
@@ -1000,9 +1002,14 @@ fn start_devtools_set_viewport_command(
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))?;
     let script =
         device::live_device_metrics_override_script(&metrics, !had_existing_device_metrics);
-    let (pending_runtime, runtime_response_rx) =
-        start_runtime_emulation_protocol_message(page, runtime_call_id, script)
-            .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
+    let (pending_runtime, runtime_response_rx) = start_runtime_emulation_protocol_message(
+        conn.runtime_session_owner_slot_for_owner(&owner_scope)
+            .ok()
+            .and_then(|slot| slot.current_renderer_inspection_binding()),
+        runtime_call_id,
+        script,
+    )
+    .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
     Ok(Some(PendingEmulationCommandDispatch {
         command_id,
         session_id: session_id.clone(),
@@ -2317,7 +2324,9 @@ fn start_browser_context_default_device_metrics_page_commands(
             runtime_response_rx: None,
         });
         let (pending_runtime, runtime_response_rx) = start_runtime_emulation_protocol_message(
-            page,
+            active_target
+                .runtime_slot
+                .current_renderer_inspection_binding(),
             runtime_call_ids.pop().ok_or_else(|| {
                 DevToolsError::new(DevToolsErrorKind::Internal, "MissingRuntimeInspectorCallId")
             })?,
@@ -2346,10 +2355,10 @@ fn start_browser_context_default_device_metrics_page_commands(
         if has_target_override {
             continue;
         }
-        let Some(page) = browser_context
+        let target = browser_context
             .background_target_at_mut(index)
-            .and_then(PageTargetHost::loaded_page_mut)
-        else {
+            .expect("background target index must remain valid");
+        let Some(page) = target.loaded_page_mut() else {
             continue;
         };
         pending.push(PendingEmulationPageCommand {
@@ -2366,7 +2375,7 @@ fn start_browser_context_default_device_metrics_page_commands(
             runtime_response_rx: None,
         });
         let (pending_runtime, runtime_response_rx) = start_runtime_emulation_protocol_message(
-            page,
+            target.runtime_slot.current_renderer_inspection_binding(),
             runtime_call_ids.pop().ok_or_else(|| {
                 DevToolsError::new(DevToolsErrorKind::Internal, "MissingRuntimeInspectorCallId")
             })?,
@@ -2426,7 +2435,7 @@ fn complete_pending_devtools_emulation_command(
 }
 
 fn start_runtime_emulation_protocol_message(
-    page: &moli_core::page::Page,
+    binding: Option<&RendererAgentBinding>,
     command_id: u64,
     expression: String,
 ) -> Result<
@@ -2436,20 +2445,29 @@ fn start_runtime_emulation_protocol_message(
     ),
     String,
 > {
+    let binding =
+        binding.ok_or_else(|| "renderer has no DevTools inspection binding".to_owned())?;
     let raw_json = runtime_evaluate_json(command_id, expression);
     let call_id = i32::try_from(command_id)
         .map_err(|_| format!("runtime inspector command id {command_id} does not fit i32"))?;
     let (tx, rx) = tokio::sync::oneshot::channel();
-    let attachment_id = page
-        .renderer_agent_attachment_id()
-        .ok_or_else(|| "renderer page has no DevTools attachment".to_owned())?;
-    page.start_runtime_protocol_message_with_deferred_response(
-        raw_json,
-        RendererRuntimeInspectorResponseSender::new(call_id, tx)
-            .with_renderer_agent_attachment(attachment_id),
-    )
-    .map(|pending| (pending, Some(rx)))
-    .map_err(|error| error.to_string())
+    binding
+        .start_main_protocol_on_page_owner(
+            None,
+            None,
+            raw_json,
+            Some(
+                RendererRuntimeInspectorResponseSender::new(call_id, tx)
+                    .with_renderer_agent_attachment(binding.attachment().id()),
+            ),
+        )
+        .map(|route| {
+            (
+                PendingPageCommand::from_inspector_main_route(route),
+                Some(rx),
+            )
+        })
+        .map_err(|error| error.to_string())
 }
 
 fn runtime_evaluate_json(command_id: u64, expression: String) -> String {
@@ -2840,11 +2858,11 @@ fn start_geolocation_surface_override_page_commands(
     let Some(target_id) = browser_context.active_target_id_owned() else {
         return Ok(Vec::new());
     };
-    let Some(page) = browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .loaded_page_mut()
-    else {
+    let slot = &browser_context.active_page_target().runtime_slot;
+    let (Some(page), Some(binding)) = (
+        slot.loaded_page(),
+        slot.current_renderer_inspection_binding(),
+    ) else {
         return Ok(Vec::new());
     };
     start_surface_override_page_command(
@@ -2853,6 +2871,7 @@ fn start_geolocation_surface_override_page_commands(
             target_id,
         },
         page,
+        binding,
         script,
         navigator_overrides,
         runtime_call_id,
@@ -2900,10 +2919,13 @@ fn start_session_surface_override_page_command_for_owner(
         return Ok(Vec::new());
     };
     let runtime_call_id = conn.next_internal_runtime_command_id();
-    let Some(page) = conn
-        .loaded_page_mut_for_target_configuration_for_owner(owner_scope)
-        .ok()
-    else {
+    let Ok(slot) = conn.runtime_session_owner_slot_for_owner(owner_scope) else {
+        return Ok(Vec::new());
+    };
+    let (Some(page), Some(binding)) = (
+        slot.loaded_page(),
+        slot.current_renderer_inspection_binding(),
+    ) else {
         return Ok(Vec::new());
     };
     start_surface_override_page_command(
@@ -2911,6 +2933,7 @@ fn start_session_surface_override_page_command_for_owner(
             owner_scope: owner_scope.clone(),
         },
         page,
+        binding,
         script,
         navigator_overrides,
         runtime_call_id,
@@ -2951,18 +2974,29 @@ fn start_surface_override_for_route(
     };
     let runtime_call_id = conn.next_internal_runtime_command_id();
     let owner = CommandOwnerScope::for_route(route.clone());
-    let Some(page) = conn
-        .loaded_page_mut_for_target_configuration_for_owner(&owner)
-        .ok()
-    else {
+    let Ok(slot) = conn.runtime_session_owner_slot_for_owner(&owner) else {
         return Ok(Vec::new());
     };
-    start_surface_override_page_command(target, page, script, navigator_overrides, runtime_call_id)
+    let (Some(page), Some(binding)) = (
+        slot.loaded_page(),
+        slot.current_renderer_inspection_binding(),
+    ) else {
+        return Ok(Vec::new());
+    };
+    start_surface_override_page_command(
+        target,
+        page,
+        binding,
+        script,
+        navigator_overrides,
+        runtime_call_id,
+    )
 }
 
 fn start_surface_override_page_command(
     target: PendingEmulationPageTarget,
     page: &moli_core::page::Page,
+    binding: &RendererAgentBinding,
     script: String,
     navigator_overrides: moli_page_types::NavigatorOverrides,
     runtime_call_id: u64,
@@ -2971,7 +3005,7 @@ fn start_surface_override_page_command(
         .start_set_navigator_overrides(&navigator_overrides)
         .map_err(|error| error.to_string())?;
     let (pending, runtime_response_rx) =
-        start_runtime_emulation_protocol_message(page, runtime_call_id, script)?;
+        start_runtime_emulation_protocol_message(Some(binding), runtime_call_id, script)?;
     Ok(vec![
         PendingEmulationPageCommand {
             target: target.clone(),
@@ -3030,6 +3064,35 @@ fn finish_pending_emulation_page_command(
     target: PendingEmulationPageTarget,
     completion: CompletedPageCommand,
 ) -> Result<(), String> {
+    if matches!(
+        operation,
+        PendingEmulationPageOperation::RuntimeProtocolMessage
+    ) {
+        let slot = match &target {
+            PendingEmulationPageTarget::SessionOwner { owner_scope } => conn
+                .runtime_session_owner_slot_mut_for_owner(owner_scope)
+                .ok(),
+            PendingEmulationPageTarget::BrowserContextTarget {
+                browser_context_id,
+                target_id,
+            } => conn
+                .browser_context_by_id_mut(browser_context_id)
+                .and_then(|context| context.page_target_mut(target_id))
+                .map(|target| &mut target.runtime_slot),
+        };
+        if let Some(slot) = slot
+            && slot
+                .current_renderer_attachment()
+                .map(|attachment| attachment.id())
+                == completion.renderer_agent_attachment_id()
+        {
+            slot.observe_renderer_page_state(completion.page_state());
+        }
+        return completion
+            .into_runtime_protocol_message_command_turn()
+            .map(drop)
+            .map_err(|error| error.to_string());
+    }
     match target {
         PendingEmulationPageTarget::SessionOwner { owner_scope } => {
             if matches!(operation, PendingEmulationPageOperation::SetUserAgentLoader) {
@@ -3070,13 +3133,8 @@ fn finish_emulation_page_operation_on_current_attachment(
     // frozen completion; decode the terminal reply, but never apply the old
     // PageState snapshot to the replacement attachment. Whether state carries
     // across the navigation is decided separately at the commit boundary.
-    let output = match operation {
-        PendingEmulationPageOperation::RuntimeProtocolMessage => {
-            completion.into_runtime_protocol_message_command_turn()
-        }
-        _ => completion.into_unit_page_command_turn(),
-    };
-    output
+    completion
+        .into_unit_page_command_turn()
         .map(drop)
         .map_err(|error| format!("stale Emulation command returned an unexpected reply: {error}"))
 }
@@ -3120,9 +3178,8 @@ fn finish_emulation_page_operation(
         PendingEmulationPageOperation::SetUserAgentLoader => {
             unreachable!("user agent loader rebuild finishes through the session owner")
         }
-        PendingEmulationPageOperation::RuntimeProtocolMessage => page
-            .finish_runtime_protocol_message(completion)
-            .map(|_| ())
-            .map_err(|error| error.to_string()),
+        PendingEmulationPageOperation::RuntimeProtocolMessage => {
+            unreachable!("inspection completion is decoded without borrowing Page")
+        }
     }
 }

@@ -9,18 +9,15 @@ use super::protocol_support::{
 };
 use super::{
     CompletedPageCommand, PendingDevToolsIoCommandDispatch, PendingPageCommand,
-    PendingRuntimeInspectorCommandDispatch, RendererCommandTurnOutput,
-    RendererInspectorSessionRestoreSnapshot, RendererRuntimeCommandOutput,
-    RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
+    RendererCommandTurnOutput, RendererInspectorSessionRestoreSnapshot,
+    RendererRuntimeCommandOutput, RendererRuntimeInspectorMessage, RendererRuntimeRealmInfo,
 };
 use crate::RendererOutputFence;
 use crate::renderer::{
     RendererDomDebuggerDomBreakpointResolution, RendererDomDebuggerEventListenerBreakpoint,
     RendererDomDebuggerEventListenersResolution, RendererDomDebuggerXhrBreakpoint,
-    RendererInspectorCommandEnvelope, RendererInspectorCommandRoute,
-    RendererInspectorIngressTicket, RendererPageCommand, RendererPageReply,
-    RendererPerformanceMetricSnapshot, RendererRuntimeHeapUsage,
-    RendererRuntimeInspectorResponseSender,
+    RendererPageCommand, RendererPageReply, RendererPerformanceMetricSnapshot,
+    RendererRuntimeHeapUsage, RendererRuntimeInspectorResponseSender,
 };
 
 fn dedupe_runtime_context_created_events(events: &mut Vec<RuntimeContextRestoreEvent>) {
@@ -470,184 +467,10 @@ impl Page {
         self.finish_runtime_protocol_message(completion)
     }
 
-    pub async fn dispatch_runtime_protocol_message_for_inspector_session_async(
-        &mut self,
-        inspector_session_id: Option<String>,
-        raw_json: &str,
-    ) -> Result<Vec<RendererRuntimeInspectorMessage>> {
-        let pending = self.start_runtime_protocol_message_for_inspector_session(
-            inspector_session_id,
-            raw_json.to_owned(),
-        )?;
-        let completion = pending.wait().await?;
-        self.finish_runtime_protocol_message(completion)
-    }
-
     pub fn start_runtime_protocol_message(&self, raw_json: String) -> Result<PendingPageCommand> {
-        self.start_runtime_protocol_message_for_inspector_session(None, raw_json)
-    }
-
-    pub fn start_runtime_protocol_message_for_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-    ) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::dispatch_runtime_protocol_message(
-            inspector_session_id,
-            raw_json,
+            None, raw_json,
         ))
-    }
-
-    pub fn start_runtime_protocol_message_with_deferred_response(
-        &self,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<PendingPageCommand> {
-        self.start_runtime_protocol_message_for_inspector_session_with_deferred_response(
-            None,
-            raw_json,
-            deferred_response,
-        )
-    }
-
-    pub fn start_runtime_protocol_message_for_inspector_session_with_deferred_response(
-        &self,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::dispatch_runtime_protocol_message_with_deferred_response(
-                inspector_session_id,
-                raw_json,
-                deferred_response,
-            ),
-        )
-    }
-
-    pub fn start_routable_runtime_protocol_message_for_inspector_session(
-        &self,
-        inspector_session_id: Option<String>,
-        inspector_route: RendererInspectorCommandRoute,
-        owner_context_resolution_action: Option<String>,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<PendingRuntimeInspectorCommandDispatch> {
-        match inspector_route {
-            RendererInspectorCommandRoute::MainThread => {
-                let route = self.renderer_inspection_endpoint().enqueue_main_command(
-                    RendererInspectorCommandEnvelope::new_main_protocol(
-                        RendererInspectorIngressTicket::new(
-                            self.renderer_agent_attachment_id,
-                            inspector_session_id,
-                            RendererInspectorCommandRoute::MainThread,
-                        ),
-                        owner_context_resolution_action,
-                        raw_json,
-                        deferred_response,
-                    ),
-                )?;
-                Ok(Self::pending_main_ingress_runtime_inspector_command_dispatch(route))
-            }
-            RendererInspectorCommandRoute::Io => {
-                if owner_context_resolution_action.is_some() {
-                    return Err(anyhow!(
-                        "an IO Inspector command cannot require Page owner context resolution"
-                    ));
-                }
-                let route = self.renderer_inspection_endpoint().enqueue_io_command(
-                    RendererInspectorCommandEnvelope::new_io(
-                        RendererInspectorIngressTicket::new(
-                            self.renderer_agent_attachment_id,
-                            inspector_session_id,
-                            RendererInspectorCommandRoute::Io,
-                        ),
-                        raw_json,
-                        Some(deferred_response),
-                    ),
-                )?;
-                Ok(Self::pending_io_runtime_inspector_command_dispatch(route))
-            }
-        }
-    }
-
-    pub fn start_runtime_inspector_io_message_without_response(
-        &self,
-        inspector_session_id: Option<String>,
-        raw_json: String,
-    ) -> Result<PendingRuntimeInspectorCommandDispatch> {
-        let route = self.renderer_inspection_endpoint().enqueue_io_command(
-            RendererInspectorCommandEnvelope::new_io(
-                RendererInspectorIngressTicket::new(
-                    self.renderer_agent_attachment_id,
-                    inspector_session_id,
-                    RendererInspectorCommandRoute::Io,
-                ),
-                raw_json,
-                None,
-            ),
-        )?;
-        Ok(Self::pending_io_runtime_inspector_command_dispatch(route))
-    }
-
-    pub fn runtime_inspector_pause_active(&self) -> bool {
-        self.renderer_inspection_endpoint().pause_active()
-    }
-
-    pub fn start_runtime_protocol_message_with_context_resolution(
-        &self,
-        action: String,
-        raw_json: String,
-    ) -> Result<PendingPageCommand> {
-        self.start_runtime_protocol_message_for_inspector_session_with_context_resolution(
-            None, action, raw_json,
-        )
-    }
-
-    pub fn start_runtime_protocol_message_for_inspector_session_with_context_resolution(
-        &self,
-        inspector_session_id: Option<String>,
-        action: String,
-        raw_json: String,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::dispatch_runtime_protocol_message_with_context_resolution(
-                inspector_session_id,
-                action,
-                raw_json,
-            ),
-        )
-    }
-
-    pub fn start_runtime_protocol_message_with_context_resolution_and_deferred_response(
-        &self,
-        action: String,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<PendingPageCommand> {
-        self.start_runtime_protocol_message_for_inspector_session_with_context_resolution_and_deferred_response(
-            None,
-            action,
-            raw_json,
-            deferred_response,
-        )
-    }
-
-    pub fn start_runtime_protocol_message_for_inspector_session_with_context_resolution_and_deferred_response(
-        &self,
-        inspector_session_id: Option<String>,
-        action: String,
-        raw_json: String,
-        deferred_response: RendererRuntimeInspectorResponseSender,
-    ) -> Result<PendingPageCommand> {
-        self.start_page_command(
-            RendererPageCommand::dispatch_runtime_protocol_message_with_context_resolution_and_deferred_response(
-                inspector_session_id,
-                action,
-                raw_json,
-                deferred_response,
-            ),
-        )
     }
 
     pub fn finish_runtime_protocol_message(
@@ -726,11 +549,7 @@ impl Page {
         self.finish_runtime_enable_context_restore_events(completion)
     }
 
-    pub fn start_runtime_enable_events(&self) -> Result<PendingPageCommand> {
-        self.start_runtime_enable_events_for_inspector_session(None)
-    }
-
-    pub fn start_runtime_enable_events_for_inspector_session(
+    fn start_runtime_enable_events_for_inspector_session(
         &self,
         inspector_session_id: Option<&str>,
     ) -> Result<PendingPageCommand> {
@@ -748,8 +567,7 @@ impl Page {
             .into_messages())
     }
 
-    #[doc(hidden)]
-    pub fn finish_runtime_enable_output(
+    fn finish_runtime_enable_output(
         &mut self,
         completion: CompletedPageCommand,
     ) -> Result<RendererRuntimeCommandOutput> {

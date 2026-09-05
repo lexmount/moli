@@ -577,6 +577,15 @@ impl RendererPageHandle {
 }
 
 impl RendererPageCommandPending {
+    /// Waits for an inspector command that retains a renderer-owner reply
+    /// turn. No Page handle or Browser-owner admission is involved.
+    pub fn from_inspector_main_route(route: RendererRuntimeInspectorMainCommandRoute) -> Self {
+        Self {
+            dispatch: RendererPageCommandPendingDispatch::InspectorMain(Box::new(route)),
+            javascript_dialog_watch: None,
+        }
+    }
+
     pub async fn wait(self) -> Result<RendererCommandTurnOutput> {
         let RendererPageCommandPending {
             dispatch,
