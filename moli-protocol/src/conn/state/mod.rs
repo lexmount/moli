@@ -107,8 +107,8 @@ pub(crate) use shared_worker_target::SharedWorkerTargetState;
 #[cfg(test)]
 pub(crate) use web_contents::JavaScriptDialogKey;
 pub(crate) use web_contents::{
-    EmulationPolicy, EmulationPolicyChange, EmulationPolicyDelta, SessionStorageNamespace,
-    WindowSurface, WindowSurfaceState,
+    EmulationPolicy, EmulationPolicyChange, SessionStorageNamespace, WindowSurface,
+    WindowSurfaceState,
 };
 pub(crate) use web_contents::{
     JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogSnapshot,

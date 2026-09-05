@@ -994,6 +994,99 @@ async fn intercepted_navigation_start_events_stay_before_network_pause_with_back
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn disable_failure_still_settles_the_drained_navigation() {
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(
+        &mut ctx,
+        "data:text/html,<body>outgoing</body>",
+        "SID-1",
+        "TID-1",
+    )
+    .await;
+    ctx.process_async(json!({"id": 1, "sessionId": "SID-1", "method": "Fetch.enable"}))
+        .await;
+    ctx.expect_result(1, json!({}), Some("SID-1"));
+    ctx.process_async(
+        json!({"id": 2, "sessionId": "SID-1", "method": "Page.navigate", "params": {
+            "url": "http://example.test/paused-before-fetch",
+        }}),
+    )
+    .await;
+    let paused = ctx
+        .wait_for_scheduler_message("exact failed-disable navigation pause", |event| {
+            event["method"] == json!("Fetch.requestPaused")
+                && event["sessionId"] == json!("SID-1")
+                && event["params"]["resourceType"] == json!("Document")
+                && event["params"]["request"]["url"]
+                    == json!("http://example.test/paused-before-fetch")
+        })
+        .await;
+    let network_id = paused["params"]["networkId"].clone();
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .fetch_owner
+            .has_pending_fetch_state_for_test()
+    );
+    ctx.conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .active_page_target()
+        .loaded_page()
+        .unwrap()
+        .crash_devtools_target_from_io();
+
+    ctx.process_async(json!({"id": 3, "sessionId": "SID-1", "method": "Fetch.disable"}))
+        .await;
+    let disable = ctx.take_response_by_id(3);
+    assert!(
+        disable["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("failed to clear page fetch interception")),
+        "{disable}"
+    );
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|event| event["id"] == json!(2))
+            .count(),
+        1,
+        "the original navigation must receive exactly one terminal reply"
+    );
+    assert_eq!(
+        ctx.take_response_by_id(2)["error"]["message"],
+        json!("Fetch interception disabled")
+    );
+    assert_eq!(
+        ctx.sent
+            .iter()
+            .filter(|event| {
+                event["method"] == json!("Network.loadingFailed")
+                    && event["params"]["requestId"] == network_id
+                    && event["params"]["errorText"] == json!("Fetch interception disabled")
+            })
+            .count(),
+        1
+    );
+    let target = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .active_page_target();
+    assert!(!target.fetch_owner.is_enabled());
+    assert!(!target.fetch_owner.has_pending_fetch_state_for_test());
+    assert!(
+        !target.is_crashed(),
+        "Fetch failure has no Browser termination authority"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn disable_aborts_paused_main_document_navigation() {
     async fn page() -> impl IntoResponse {
         (

@@ -46,6 +46,55 @@ fn pending_request(
     }
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn fetch_interception_update_rejects_a_replaced_page() {
+    let mut ctx = context_with_loaded_fetch_page().await;
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+    let completion = ctx
+        .conn
+        .loaded_page_mut_for_target_configuration_for_owner(&owner)
+        .unwrap()
+        .start_set_fetch_subresource_interception(false, None)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    let replacement = ctx
+        .conn
+        .load_page_via_runtime_async("data:text/html,<title>replacement</title>")
+        .await
+        .unwrap();
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_target_mut()
+        .runtime_slot
+        .replace_loaded_page(Some(replacement));
+    assert_eq!(
+        super::super::finish_fetch_interception_update(&mut ctx.conn, &owner, completion),
+        Err("Renderer Page changed".to_owned())
+    );
+    assert_eq!(
+        ctx.conn
+            .loaded_page_mut_for_target_configuration_for_owner(&owner)
+            .unwrap()
+            .document_title(),
+        "replacement"
+    );
+
+    let completion = ctx
+        .conn
+        .loaded_page_mut_for_target_configuration_for_owner(&owner)
+        .unwrap()
+        .start_set_fetch_subresource_interception(false, None)
+        .unwrap()
+        .wait()
+        .await
+        .unwrap();
+    super::super::finish_fetch_interception_update(&mut ctx.conn, &owner, completion).unwrap();
+}
+
 fn pending_auth(
     page_owner: &crate::conn::TargetPageResidenceIdentity,
     internal_id: u64,

@@ -6549,19 +6549,31 @@ impl CdpConnection {
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn detach_runtime_inspector_session_for_session_owner(
-        &self,
+    pub(crate) async fn detach_runtime_inspector_session_for_session_owner(
+        &mut self,
         session_id: Option<&str>,
-    ) -> Result<bool, String> {
+    ) -> Result<(), String> {
         let owner = CommandOwnerScope::capture(self, session_id);
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(&owner);
-        self.runtime_session_owner_slot_for_owner(&owner)?
-            .current_renderer_inspection_binding()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
-            .detach_session(inspector_session_id)
-            .map_err(|error| format!("runtime inspector session detach failed: {error}"))?;
-        Ok(true)
+        let slot = self.runtime_session_owner_slot_for_owner(&owner)?;
+        if let Some(binding) = slot.current_renderer_inspection_binding() {
+            binding
+                .detach_session(inspector_session_id.clone())
+                .await
+                .map_err(|error| format!("runtime inspector session detach failed: {error}"))?;
+        } else if slot.has_loaded_page() {
+            return Err("Renderer binding unavailable during session detach".to_owned());
+        }
+        // The renderer owns its session's scripts/bindings/worlds. Discard
+        // replay metadata only after its acknowledgement (or no Document).
+        let session = moli_page_types::DevToolsSessionKey::from_wire_session_id(
+            inspector_session_id.as_deref(),
+        );
+        self.with_target_owner_state_for_owner_mut(&owner, |state| {
+            state.remove_document_start_scripts_for_session(&session)
+        });
+        Ok(())
     }
 }
 

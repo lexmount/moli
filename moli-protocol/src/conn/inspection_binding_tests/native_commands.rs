@@ -22,6 +22,7 @@ async fn browser_native_commands_do_not_require_a_live_inspector_session() {
         .current_renderer_inspection_binding()
         .unwrap()
         .detach_session(None)
+        .await
         .unwrap();
 
     let completion = pending_capture.wait().await.unwrap();

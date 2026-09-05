@@ -46,7 +46,6 @@ pub(super) struct TargetSessionOwnerRef<'a> {
 type FetchDisableStateWithSubresourceConfig = (
     super::fetch_owner::SessionOwnerPendingFetchState,
     (bool, Option<SubresourceResourceType>),
-    bool,
 );
 
 fn empty_pending_fetch_state() -> super::fetch_owner::SessionOwnerPendingFetchState {
@@ -746,7 +745,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
         session_id: Option<&str>,
     ) -> FetchDisableStateWithSubresourceConfig {
         let target = self.target_mut();
-        let previous_subresource_config = target.fetch_owner.subresource_interception_config();
         let removed = target.fetch_owner.remove_fetch_session(session_id);
         let subresource_config = target.fetch_owner.subresource_interception_config();
         let pending = if removed {
@@ -756,8 +754,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         } else {
             empty_pending_fetch_state()
         };
-        let page_update_required = removed && previous_subresource_config != subresource_config;
-        (pending, subresource_config, page_update_required)
+        (pending, subresource_config)
     }
 
     pub(super) fn drain_fetch_pending_state(
@@ -2840,10 +2837,9 @@ mod tests {
                 "FETCH-active".to_owned(),
                 pending_subresource_fetch(11),
             ));
-            let (pending, subresource_config, page_update_required) =
+            let (pending, subresource_config) =
                 owner.reset_fetch_config_for_session_and_drain_pending_state(Some("SID-active"));
             assert_eq!(subresource_config, (false, None));
-            assert!(page_update_required);
             assert_eq!(pending.3.len(), 1);
         }
         assert!(
@@ -2876,10 +2872,9 @@ mod tests {
                 "FETCH-background".to_owned(),
                 pending_subresource_fetch(22),
             ));
-            let (pending, subresource_config, page_update_required) = owner
+            let (pending, subresource_config) = owner
                 .reset_fetch_config_for_session_and_drain_pending_state(Some("SID-background"));
             assert_eq!(subresource_config, (false, None));
-            assert!(page_update_required);
             assert_eq!(pending.3.len(), 1);
         }
         assert!(

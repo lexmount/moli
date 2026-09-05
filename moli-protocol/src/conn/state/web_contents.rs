@@ -17,7 +17,7 @@ mod page_surface;
 mod session_storage;
 mod window;
 pub(in crate::conn) use document_host::DocumentHost;
-pub(crate) use emulation_policy::{EmulationPolicy, EmulationPolicyChange, EmulationPolicyDelta};
+pub(crate) use emulation_policy::{EmulationPolicy, EmulationPolicyChange};
 use javascript_dialog::JavaScriptDialogs;
 pub(crate) use javascript_dialog::{
     JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogKey, JavaScriptDialogSnapshot,

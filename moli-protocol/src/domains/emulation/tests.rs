@@ -1428,16 +1428,19 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
     let primary = ctx
         .conn
         .emulation_session_state_for_session_owner(Some("SID-primary"))
-        .expect("primary Emulation handler state");
+        .expect("primary Emulation handler state")
+        .overrides
+        .expect("active primary Emulation handler");
     let attached = ctx
         .conn
         .emulation_session_state_for_session_owner(Some("SID-attached"))
-        .expect("attached Emulation handler state");
-    assert_eq!(primary.overrides.cpu_throttling_rate, 4.0);
-    assert_eq!(attached.overrides.cpu_throttling_rate, 2.0);
+        .expect("attached Emulation handler state")
+        .overrides
+        .expect("active attached Emulation handler");
+    assert_eq!(primary.cpu_throttling_rate, 4.0);
+    assert_eq!(attached.cpu_throttling_rate, 2.0);
     assert_eq!(
         primary
-            .overrides
             .emulated_device_metrics
             .as_ref()
             .map(|metrics| (metrics.width, metrics.height)),
@@ -1445,14 +1448,13 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
     );
     assert_eq!(
         attached
-            .overrides
             .emulated_device_metrics
             .as_ref()
             .map(|metrics| (metrics.width, metrics.height)),
         Some((640, 480))
     );
-    assert!(primary.overrides.focus_emulation_enabled);
-    assert!(!attached.overrides.focus_emulation_enabled);
+    assert!(primary.focus_emulation_enabled);
+    assert!(!attached.focus_emulation_enabled);
 
     let target = ctx
         .conn
@@ -1489,15 +1491,49 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
     let primary = ctx
         .conn
         .emulation_session_state_for_session_owner(Some("SID-primary"))
-        .expect("primary Emulation handler state survives attached disposal");
-    assert_eq!(primary.overrides.cpu_throttling_rate, 4.0);
-    assert!(primary.overrides.emulated_device_metrics.is_some());
-    assert!(primary.overrides.focus_emulation_enabled);
+        .expect("primary Emulation handler state survives attached disposal")
+        .overrides
+        .expect("primary Emulation handler remains active");
+    assert_eq!(primary.cpu_throttling_rate, 4.0);
+    assert!(primary.emulated_device_metrics.is_some());
+    assert!(primary.focus_emulation_enabled);
+    let mut disposed = crate::conn::DevToolsEmulationSessionState::default();
+    assert!(disposed.overrides.take().is_some());
     assert_eq!(
         ctx.conn
             .emulation_session_state_for_session_owner(Some("SID-attached"))
             .expect("disposed handler remains addressable until session detach commits"),
-        crate::conn::DevToolsEmulationSessionState::default()
+        disposed
+    );
+    expect_session_command_result(
+        &mut ctx,
+        71_106,
+        "SID-attached",
+        "Emulation.setCPUThrottlingRate",
+        json!({ "rate": 3 }),
+    )
+    .await;
+    assert_eq!(
+        ctx.conn
+            .emulation_session_state_for_session_owner(Some("SID-attached"))
+            .unwrap()
+            .overrides
+            .expect("new command reactivates the consumed handler")
+            .cpu_throttling_rate,
+        3.0
+    );
+    super::dispose_page_session_async(&mut ctx.conn, "SID-attached")
+        .await
+        .expect("new contribution is also revoked on disposal");
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .emulation_policy()
+            .cpu_throttling_rate,
+        1.0
     );
 }
 

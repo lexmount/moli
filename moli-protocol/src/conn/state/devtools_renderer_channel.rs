@@ -52,11 +52,11 @@ impl fmt::Debug for RendererAgentBinding {
 }
 
 impl RendererAgentBinding {
-    pub(crate) fn detach_session(
+    pub(crate) async fn detach_session(
         &self,
         inspector_session_id: Option<String>,
     ) -> anyhow::Result<()> {
-        self.endpoint.detach_session(inspector_session_id)
+        self.endpoint.detach_session(inspector_session_id).await
     }
 
     pub(crate) async fn restore_runtime_state(

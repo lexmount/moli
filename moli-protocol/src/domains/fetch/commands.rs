@@ -334,7 +334,7 @@ fn start_devtools_continue_intercepted_request_command(
             PendingFetchCommandKind::ContinueRequest {
                 state: Box::new(PendingContinueRequestState::SubresourceFetch { correlation }),
             },
-            PendingFetchCommandOperation::Page(pending_page),
+            PendingFetchCommandOperation::Page(Ok(pending_page)),
         ));
     }
     if let Some(mut pending) = take_pending_navigation(conn, owner, action_session_id, &request_id)
@@ -574,7 +574,7 @@ fn start_devtools_fail_intercepted_request_command(
                     pending: Box::new(pending),
                 }),
             },
-            PendingFetchCommandOperation::Page(pending_page),
+            PendingFetchCommandOperation::Page(Ok(pending_page)),
         ));
     }
 
@@ -615,7 +615,7 @@ fn start_devtools_fail_intercepted_request_command(
                     pending: Box::new(pending),
                 }),
             },
-            PendingFetchCommandOperation::Page(pending_page),
+            PendingFetchCommandOperation::Page(Ok(pending_page)),
         ));
     }
 
@@ -959,7 +959,7 @@ fn start_devtools_fulfill_intercepted_request_command(
                     register_synthetic_websocket,
                 }),
             },
-            PendingFetchCommandOperation::Page(pending_page),
+            PendingFetchCommandOperation::Page(Ok(pending_page)),
         ));
     }
 
@@ -1003,7 +1003,7 @@ fn start_devtools_fulfill_intercepted_request_command(
                     pending: Box::new(pending),
                 }),
             },
-            PendingFetchCommandOperation::Page(pending_page),
+            PendingFetchCommandOperation::Page(Ok(pending_page)),
         ));
     }
 
@@ -1299,7 +1299,7 @@ pub(super) fn start_dispatch_websocket_message_command(
         cmd.id,
         cmd.session_id,
         PendingFetchCommandKind::DispatchWebSocketMessage { operation },
-        PendingFetchCommandOperation::Page(pending),
+        PendingFetchCommandOperation::Page(Ok(pending)),
     ))
 }
 
@@ -1352,7 +1352,7 @@ pub(super) fn start_close_websocket_command(
         cmd.id,
         cmd.session_id,
         PendingFetchCommandKind::CloseWebSocket,
-        PendingFetchCommandOperation::Page(pending),
+        PendingFetchCommandOperation::Page(Ok(pending)),
     ))
 }
 
@@ -1674,7 +1674,7 @@ fn start_devtools_continue_intercepted_response_command(
                     pending: Box::new(pending),
                 }),
             },
-            PendingFetchCommandOperation::Page(pending_page),
+            PendingFetchCommandOperation::Page(Ok(pending_page)),
         ));
     }
     if let Some(step) = super::auth::start_devtools_continue_with_auth_command_for_pending(
