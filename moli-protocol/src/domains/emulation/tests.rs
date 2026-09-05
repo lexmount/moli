@@ -687,25 +687,21 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
     load_session_page_for_pending_emulation_test_at_url(&mut ctx, &format!("http://{address}/"))
         .await;
 
+    let context_id = ctx.conn.browser_context.as_ref().unwrap().id.clone();
+    ctx.process_async(json!({
+        "id": 9103,
+        "method": "Browser.setPermission",
+        "params": {
+            "browserContextId": context_id,
+            "permission": "idleDetection",
+            "setting": "granted"
+        }
+    }))
+    .await;
+    ctx.expect_result(9103, json!({}), None);
+
     {
         let context = ctx.conn.browser_context.as_mut().expect("loaded context");
-        let completion = context
-            .start_target_permission_update(
-                "TID-1",
-                &[moli_core::page::PermissionOverrideRegistration {
-                    permission: json!("idleDetection"),
-                    setting: "granted".to_owned(),
-                    origin: None,
-                    embedded_origin: None,
-                }],
-            )
-            .unwrap()
-            .wait()
-            .await
-            .unwrap();
-        context
-            .finish_target_permission_update("TID-1", completion)
-            .expect("idle detection permission should reach the renderer");
         assert_eq!(
             context.evaluate_target_expression_for_test("TID-1", "globalThis.idleEvents=[];globalThis.idleDetector=new IdleDetector();idleDetector.addEventListener('change',()=>idleEvents.push(idleDetector.userState+'/'+idleDetector.screenState));idleDetector.start();JSON.stringify([idleDetector.userState,idleDetector.screenState,idleEvents])", false)
             .await

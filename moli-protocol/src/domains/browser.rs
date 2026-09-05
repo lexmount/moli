@@ -5,7 +5,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use std::str::FromStr;
 
-use crate::conn::{BrowserWindowBounds, CdpConnection, Cmd};
+use crate::conn::{
+    BrowserWindowBounds, CdpConnection, Cmd, CompletedContextPermissionUpdate,
+    PendingContextPermissionUpdate,
+};
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandResult, DevToolsError, DevToolsErrorKind,
     DevToolsSetDownloadBehaviorCommand, DevToolsSetPermissionCommand,
@@ -13,7 +16,7 @@ use crate::devtools_runtime::{
 use crate::domains::actions::BrowserAction;
 use crate::domains::command_output::CommandOutputPlan;
 use crate::version;
-use moli_core::page::{CompletedPageCommand, PendingPageCommand};
+use moli_core::page::PermissionOverrideRegistration;
 
 const DEV_TOOLS_WINDOW_ID: u32 = 1_923_710_101;
 const DOWNLOAD_BEHAVIORS: &[&str] = &["default", "deny", "allow", "allowAndName"];
@@ -50,7 +53,7 @@ enum PendingBrowserCommandKind {
         pending: tokio::task::JoinHandle<Result<Vec<u8>, String>>,
     },
     ApplyPermissionOverrides {
-        pending: Vec<PendingBrowserPageCommand>,
+        pending: Vec<PendingContextPermissionUpdate>,
     },
 }
 
@@ -59,24 +62,8 @@ enum CompletedBrowserCommandKind {
         completed: Result<Vec<u8>, String>,
     },
     ApplyPermissionOverrides {
-        completed: Vec<CompletedBrowserPageCommand>,
+        completed: Vec<CompletedContextPermissionUpdate>,
     },
-}
-
-struct PendingBrowserPageCommand {
-    target: PendingBrowserPageTarget,
-    pending: PendingPageCommand,
-}
-
-struct CompletedBrowserPageCommand {
-    target: PendingBrowserPageTarget,
-    completed: Result<CompletedPageCommand, String>,
-}
-
-#[derive(Clone)]
-struct PendingBrowserPageTarget {
-    browser_context_id: String,
-    target_id: String,
 }
 
 impl PendingBrowserCommandDispatch {
@@ -92,15 +79,8 @@ impl PendingBrowserCommandDispatch {
             }
             PendingBrowserCommandKind::ApplyPermissionOverrides { pending } => {
                 let mut completed = Vec::with_capacity(pending.len());
-                for page_command in pending {
-                    completed.push(CompletedBrowserPageCommand {
-                        target: page_command.target,
-                        completed: page_command
-                            .pending
-                            .wait()
-                            .await
-                            .map_err(|error| error.to_string()),
-                    });
+                for update in pending {
+                    completed.push(update.wait().await);
                 }
                 CompletedBrowserCommandKind::ApplyPermissionOverrides { completed }
             }
@@ -458,22 +438,19 @@ async fn execute_devtools_set_permission_command_async(
         .browser_context_id
         .map(|browser_context_id| browser_context_id.into_string());
 
-    conn.permission_overrides.retain(|override_entry| {
-        override_entry.permission != command.permission
-            || override_entry.origin.as_deref() != Some(command.origin.as_str())
-            || override_entry.embedded_origin != command.embedded_origin
-            || override_entry.browser_context_id != browser_context_id
-    });
-    conn.permission_overrides
-        .push(crate::conn::PermissionOverride {
+    conn.set_permission_override(
+        browser_context_id.as_deref(),
+        PermissionOverrideRegistration {
             permission: command.permission,
             setting: normalize_permission_setting(command.setting),
             origin: Some(command.origin),
             embedded_origin: command.embedded_origin,
-            browser_context_id,
-        });
+        },
+    )
+    .expect("validated BrowserContext remains available");
 
-    let pending = start_loaded_page_permission_override_commands(conn)
+    let pending = conn
+        .start_permission_updates()
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
     if pending.is_empty() {
         return Ok(DevToolsCommandResult::Empty);
@@ -495,10 +472,7 @@ async fn execute_devtools_set_permission_command_async(
         unreachable!("set permission can only wait for permission override commands")
     };
     for command in commands {
-        let completion = command
-            .completed
-            .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
-        finish_pending_permission_override_command(conn, command.target, completion)
+        conn.finish_permission_update(command)
             .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
     }
     Ok(DevToolsCommandResult::Empty)
@@ -562,20 +536,16 @@ fn start_set_permission_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> Brow
         return browser_error_step(-31998, "UnknownBrowserContextId");
     }
 
-    conn.permission_overrides.retain(|override_entry| {
-        override_entry.permission != params.permission
-            || override_entry.origin != params.origin
-            || override_entry.embedded_origin != params.embedded_origin
-            || override_entry.browser_context_id != params.browser_context_id
-    });
-    conn.permission_overrides
-        .push(crate::conn::PermissionOverride {
+    conn.set_permission_override(
+        params.browser_context_id.as_deref(),
+        PermissionOverrideRegistration {
             permission: params.permission,
             setting: normalize_permission_setting(params.setting),
             origin: params.origin,
             embedded_origin: params.embedded_origin,
-            browser_context_id: params.browser_context_id,
-        });
+        },
+    )
+    .expect("validated BrowserContext remains available");
     start_apply_permission_overrides_command(conn, cmd)
 }
 
@@ -594,20 +564,16 @@ fn start_grant_permissions_command(
     }
 
     for permission in params.permissions {
-        conn.permission_overrides.retain(|override_entry| {
-            override_entry.permission != permission
-                || override_entry.origin != params.origin
-                || override_entry.embedded_origin.is_some()
-                || override_entry.browser_context_id != params.browser_context_id
-        });
-        conn.permission_overrides
-            .push(crate::conn::PermissionOverride {
+        conn.set_permission_override(
+            params.browser_context_id.as_deref(),
+            PermissionOverrideRegistration {
                 permission,
                 setting: PermissionSetting::Granted.label().to_owned(),
                 origin: params.origin.clone(),
                 embedded_origin: None,
-                browser_context_id: params.browser_context_id.clone(),
-            });
+            },
+        )
+        .expect("validated BrowserContext remains available");
     }
 
     start_apply_permission_overrides_command(conn, cmd)
@@ -630,13 +596,8 @@ fn start_reset_permissions_command(
         return browser_error_step(-31998, "UnknownBrowserContextId");
     }
 
-    if let Some(browser_context_id) = params.browser_context_id {
-        conn.permission_overrides.retain(|entry| {
-            entry.browser_context_id.as_deref() != Some(browser_context_id.as_str())
-        });
-    } else {
-        conn.permission_overrides.clear();
-    }
+    conn.clear_permission_overrides(params.browser_context_id.as_deref())
+        .expect("validated BrowserContext remains available");
 
     start_apply_permission_overrides_command(conn, cmd)
 }
@@ -653,7 +614,7 @@ fn start_apply_permission_overrides_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> BrowserCommandTaskStep {
-    let pending = match start_loaded_page_permission_override_commands(conn) {
+    let pending = match conn.start_permission_updates() {
         Ok(pending) => pending,
         Err(message) => return browser_error_step(-32000, message),
     };
@@ -665,50 +626,6 @@ fn start_apply_permission_overrides_command(
         response_session_id: cmd.session_id.map(str::to_owned),
         kind: PendingBrowserCommandKind::ApplyPermissionOverrides { pending },
     })
-}
-
-fn start_loaded_page_permission_override_commands(
-    conn: &mut CdpConnection,
-) -> Result<Vec<PendingBrowserPageCommand>, String> {
-    let all_overrides = conn.permission_overrides.clone();
-    let mut pending = Vec::new();
-    for browser_context in conn
-        .browser_context
-        .iter_mut()
-        .chain(conn.inactive_browser_contexts.iter_mut())
-    {
-        let browser_context_id = browser_context.id.clone();
-        let effective_overrides = all_overrides
-            .iter()
-            .filter(|entry| {
-                entry.browser_context_id.is_none()
-                    || entry.browser_context_id.as_deref() == Some(browser_context_id.as_str())
-            })
-            .map(|entry| moli_core::page::PermissionOverrideRegistration {
-                permission: entry.permission.clone(),
-                setting: entry.setting.clone(),
-                origin: entry.origin.clone(),
-                embedded_origin: entry.embedded_origin.clone(),
-            })
-            .collect::<Vec<_>>();
-        for target in browser_context.page_targets.iter() {
-            let target_id = target.target_id().to_owned();
-            if !browser_context.target_has_loaded_page(&target_id) {
-                continue;
-            }
-            let pending_update = browser_context
-                .start_target_permission_update(&target_id, &effective_overrides)
-                .map_err(|error| format!("failed to update page permission overrides: {error}"))?;
-            pending.push(PendingBrowserPageCommand {
-                target: PendingBrowserPageTarget {
-                    browser_context_id: browser_context_id.clone(),
-                    target_id,
-                },
-                pending: pending_update,
-            });
-        }
-    }
-    Ok(pending)
 }
 
 pub(crate) fn complete_pending_browser_command(
@@ -727,31 +644,13 @@ pub(crate) fn complete_pending_browser_command(
             completed: commands,
         } => {
             for command in commands {
-                let completion = match command.completed {
-                    Ok(completion) => completion,
-                    Err(error) => {
-                        return CommandOutputPlan::error(-32000, error);
-                    }
-                };
-                if let Err(error) =
-                    finish_pending_permission_override_command(conn, command.target, completion)
-                {
+                if let Err(error) = conn.finish_permission_update(command) {
                     return CommandOutputPlan::error(-32000, error);
                 }
             }
             CommandOutputPlan::success()
         }
     }
-}
-
-fn finish_pending_permission_override_command(
-    conn: &mut CdpConnection,
-    target: PendingBrowserPageTarget,
-    completion: CompletedPageCommand,
-) -> Result<(), String> {
-    conn.browser_context_by_id_mut(&target.browser_context_id)
-        .ok_or_else(|| "NoDocumentLoaded".to_owned())?
-        .finish_target_permission_update(&target.target_id, completion)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

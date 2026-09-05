@@ -47,6 +47,8 @@ mod page_runtime;
 pub(crate) use page_runtime::{NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind};
 pub(in crate::conn) mod page_slot;
 mod page_state;
+mod permissions;
+pub(crate) use permissions::{CompletedContextPermissionUpdate, PendingContextPermissionUpdate};
 mod physical;
 pub(in crate::conn) mod runtime_slot;
 pub(in crate::conn) mod session;
