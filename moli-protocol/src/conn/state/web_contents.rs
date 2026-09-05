@@ -1,6 +1,9 @@
 use moli_core::{
-    browser::{MainFrameSlotId, WebContentsId},
-    page::Page,
+    browser::{DocumentLifecycle, MainFrameSlotId, WebContentsId},
+    page::{
+        Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
+        RendererDocumentLifecycleSnapshot,
+    },
     runtime::NavigationEngine,
 };
 
@@ -8,11 +11,16 @@ use super::navigation_controller::NavigationController;
 
 mod document_host;
 mod emulation_policy;
+mod javascript_dialog;
 mod network_request_policy;
 mod session_storage;
 mod window;
 pub(in crate::conn) use document_host::DocumentHost;
 pub(crate) use emulation_policy::{EmulationPolicy, EmulationPolicyChange, EmulationPolicyDelta};
+use javascript_dialog::JavaScriptDialogs;
+pub(crate) use javascript_dialog::{
+    JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogKey, JavaScriptDialogSnapshot,
+};
 pub(in crate::conn) use network_request_policy::NetworkRequestPolicy;
 pub(crate) use session_storage::SessionStorageNamespace;
 pub(in crate::conn) use window::{Window, WindowOpener};
@@ -27,6 +35,8 @@ pub(crate) use window::{WindowSurface, WindowSurfaceState};
 pub(in crate::conn) struct WebContents {
     id: WebContentsId,
     pub(in crate::conn) navigation: NavigationController,
+    // Dismiss modal renderer work before Document/Page teardown.
+    pub(in crate::conn) javascript_dialogs: JavaScriptDialogs,
     pub(in crate::conn) main_frame: MainFrameSlot,
     pub(in crate::conn) navigation_engine: Option<NavigationEngine>,
     pub(in crate::conn) session_storage: SessionStorageNamespace,
@@ -48,6 +58,7 @@ impl Default for WebContents {
         Self {
             id: WebContentsId::allocate(),
             navigation: NavigationController::default(),
+            javascript_dialogs: JavaScriptDialogs::default(),
             main_frame: MainFrameSlot::default(),
             navigation_engine: None,
             session_storage: SessionStorageNamespace::default(),
@@ -66,6 +77,56 @@ impl Default for WebContents {
 }
 
 impl WebContents {
+    pub(in crate::conn) fn bind_document_lifecycle(
+        &mut self,
+        snapshot: RendererDocumentLifecycleSnapshot,
+    ) -> bool {
+        let Some(document) = self.main_frame.current_document.as_mut() else {
+            return false;
+        };
+        let previous = document
+            .lifecycle
+            .snapshot()
+            .map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch));
+        document.lifecycle = DocumentLifecycle::from_snapshot(snapshot);
+        if previous != Some((snapshot.frame, snapshot.document, snapshot.epoch))
+            || snapshot.terminated.is_some()
+        {
+            self.javascript_dialogs.clear();
+        }
+        true
+    }
+
+    pub(in crate::conn) fn observe_document_lifecycle(
+        &mut self,
+        event: RendererDocumentLifecycleEvent,
+    ) -> bool {
+        let Some(document) = self.main_frame.current_document.as_mut() else {
+            return false;
+        };
+        let restarts = document
+            .lifecycle
+            .snapshot()
+            .is_some_and(|snapshot| snapshot.epoch != event.epoch);
+        if !document.lifecycle.observe(event) {
+            return false;
+        }
+        if restarts
+            || matches!(
+                event.kind,
+                RendererDocumentLifecycleEventKind::Terminated { .. }
+            )
+        {
+            self.javascript_dialogs.clear();
+        }
+        true
+    }
+
+    pub(in crate::conn) fn replace_document(&mut self, next: Option<DocumentHost>) -> Option<Page> {
+        self.javascript_dialogs.clear();
+        self.main_frame.replace_document(next)
+    }
+
     pub(in crate::conn) fn id(&self) -> WebContentsId {
         self.id
     }
@@ -133,7 +194,7 @@ impl MainFrameSlot {
         self.id
     }
 
-    pub(in crate::conn) fn replace_document(&mut self, next: Option<DocumentHost>) -> Option<Page> {
+    fn replace_document(&mut self, next: Option<DocumentHost>) -> Option<Page> {
         std::mem::replace(&mut self.current_document, next).map(DocumentHost::retire)
     }
 }

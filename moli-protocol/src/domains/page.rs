@@ -2151,25 +2151,21 @@ fn complete_devtools_handle_javascript_dialog_command(
     }
 }
 
+fn no_javascript_dialog() -> DevToolsError {
+    DevToolsError::new(DevToolsErrorKind::NoSuchAlert, "No dialog is showing")
+}
+
 fn finish_devtools_get_javascript_dialog_command(
     conn: &CdpConnection,
     owner: &CommandOwnerScope,
 ) -> Result<DevToolsJavaScriptDialogResult, DevToolsError> {
-    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
-    let Some(dialog) = conn
-        .target_page_session_state_for_owner(owner)
-        .and_then(|page_state| page_state.javascript_dialog_state.peek_next())
-        .filter(|dialog| current_page_owner.as_ref() == Some(dialog.page_owner()))
-    else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchAlert,
-            "No dialog is showing",
-        ));
-    };
+    let dialog = conn
+        .javascript_dialog_snapshot_for_owner(owner)
+        .ok_or_else(no_javascript_dialog)?;
     Ok(DevToolsJavaScriptDialogResult {
-        dialog_type: dialog.dialog_type().to_owned(),
-        message: dialog.message().to_owned(),
-        default_prompt: dialog.default_prompt().to_owned(),
+        dialog_type: dialog.dialog_type,
+        message: dialog.message,
+        default_prompt: dialog.default_prompt,
     })
 }
 
@@ -2178,38 +2174,14 @@ fn finish_devtools_set_javascript_dialog_prompt_text_command(
     command: DevToolsSetJavaScriptDialogPromptTextCommand,
     owner: &CommandOwnerScope,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
-    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
-    let Some(result) = conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
-        let dialog_state = &mut state.page_session_state.javascript_dialog_state;
-        let Some(dialog) = dialog_state
-            .peek_next()
-            .filter(|dialog| current_page_owner.as_ref() == Some(dialog.page_owner()))
-        else {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::NoSuchAlert,
-                "No dialog is showing",
-            ));
-        };
-        if dialog.dialog_type() != "prompt" {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::InvalidArgument,
-                "Dialog is not a prompt",
-            ));
-        }
-        if !dialog_state.set_next_prompt_text(command.prompt_text) {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::NoSuchAlert,
-                "No dialog is showing",
-            ));
-        }
-        Ok(DevToolsCommandResult::Empty)
-    }) else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchAlert,
-            "No dialog is showing",
-        ));
-    };
-    result
+    conn.set_javascript_dialog_prompt_text_for_owner(owner, command.prompt_text)
+        .map(|()| DevToolsCommandResult::Empty)
+        .map_err(|error| match error {
+            crate::conn::JavaScriptDialogError::NotFound => no_javascript_dialog(),
+            crate::conn::JavaScriptDialogError::NotPrompt => {
+                DevToolsError::new(DevToolsErrorKind::InvalidArgument, "Dialog is not a prompt")
+            }
+        })
 }
 
 fn finish_devtools_handle_javascript_dialog_command(
@@ -2218,40 +2190,16 @@ fn finish_devtools_handle_javascript_dialog_command(
     owner: &CommandOwnerScope,
 ) -> Result<BackgroundProtocolEvent, DevToolsError> {
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
-    let command_prompt_text = command.prompt_text;
-    let current_page_owner = conn.target_page_residence_identity_for_owner(owner);
-    let Some(dialog) = conn
-        .with_target_devtools_session_state_for_owner_mut(owner, |state| {
-            let dialog_state = &mut state.page_session_state.javascript_dialog_state;
-            if dialog_state
-                .peek_next()
-                .is_some_and(|dialog| current_page_owner.as_ref() != Some(dialog.page_owner()))
-            {
-                dialog_state.clear();
-                return None;
-            }
-            dialog_state.pop_next_with_prompt_text()
-        })
-        .flatten()
-    else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchAlert,
-            "No dialog is showing",
-        ));
-    };
-    let (dialog, stored_prompt_text) = dialog;
-    let user_input = if command_prompt_text.is_empty() {
-        stored_prompt_text.unwrap_or_default()
-    } else {
-        command_prompt_text
-    };
-    let _ = dialog.finish(command.accept, user_input.clone());
+    let prompt_text = (!command.prompt_text.is_empty()).then_some(command.prompt_text);
+    let (frame_id, outcome) = conn
+        .handle_javascript_dialog_for_owner(owner, command.accept, prompt_text)
+        .ok_or_else(no_javascript_dialog)?;
     let closed_event = UserPromptClosedEvent {
         target_id: command.context.target_id,
-        frame_id: dialog.source_frame_id().into(),
-        prompt_type: dialog.dialog_type().to_owned(),
+        frame_id: frame_id.into(),
+        prompt_type: outcome.dialog_type,
         accepted: command.accept,
-        user_text: user_input,
+        user_text: outcome.user_input,
     };
     Ok(BackgroundProtocolEvent::page_javascript_dialog_closed(
         session_id,
@@ -2679,6 +2627,7 @@ mod producer_tests {
     }
 
     fn renderer_popup_javascript_dialog_for_test(
+        dialog_sequence: u64,
         source_document: RendererDocumentLifecycleIdentity,
         popup_id: u64,
         popup_document_id: u64,
@@ -2686,7 +2635,7 @@ mod producer_tests {
         completion: Option<RendererJavaScriptDialogCompletion>,
     ) -> RendererPendingJavaScriptDialog {
         RendererPendingJavaScriptDialog::new(
-            RendererJavaScriptDialogId::new(2),
+            RendererJavaScriptDialogId::new(dialog_sequence),
             source_document,
             RendererJavaScriptDialogSource::LightweightPopup {
                 popup_id,
@@ -2829,9 +2778,14 @@ mod producer_tests {
             .javascript_dialog_state
             .pending_dialogs();
         assert_eq!(installed.len(), 1);
-        assert_eq!(installed[0].page_owner(), &page_owner);
+        assert_eq!(installed[0].document_id(), page_owner.document_id());
         assert_eq!(installed[0].source_frame_id(), "FRAME-1");
-        assert_eq!(installed[0].message(), "prepared dialog");
+        assert_eq!(
+            conn.javascript_dialog_snapshot_for_owner(&CommandOwnerScope::for_session("SID-1"))
+                .unwrap()
+                .message,
+            "prepared dialog"
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2974,6 +2928,7 @@ mod producer_tests {
                     javascript_dialog_scope_for_test(&conn, "SID-source"),
                     "TID-popup-stale-source",
                     vec![renderer_popup_javascript_dialog_for_test(
+                        2,
                         source_document,
                         POPUP_ID,
                         8,
@@ -3065,6 +3020,7 @@ mod producer_tests {
                     source_dialog_scope.clone(),
                     "TID-opener",
                     vec![renderer_popup_javascript_dialog_for_test(
+                        2,
                         source_document,
                         POPUP_ID,
                         9,
@@ -3161,6 +3117,7 @@ mod producer_tests {
                     source_dialog_scope,
                     "TID-opener",
                     vec![renderer_popup_javascript_dialog_for_test(
+                        3,
                         source_document,
                         POPUP_ID,
                         9,
@@ -3191,10 +3148,7 @@ mod producer_tests {
             2,
             "a later output batch should resolve through the existing popup attachment"
         );
-        conn.with_target_devtools_session_state_for_session_mut(Some(&popup_session_id), |state| {
-            state.page_session_state.javascript_dialog_state.clear()
-        })
-        .expect("popup session state should clear");
+        assert!(conn.disable_page_domain_for_session_owner(Some(&popup_session_id)));
         assert!(!completion.wait().accepted);
     }
 
@@ -3218,6 +3172,7 @@ mod producer_tests {
                     javascript_dialog_scope_for_test(&conn, "SID-opener-no-session"),
                     "TID-opener-no-session",
                     vec![renderer_popup_javascript_dialog_for_test(
+                        2,
                         source_document,
                         POPUP_ID,
                         10,

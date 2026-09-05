@@ -91,6 +91,7 @@ impl PageTargetHost {
         &mut self,
         session_key: &moli_page_types::DevToolsSessionKey,
     ) {
+        self.dismiss_devtools_javascript_dialogs(session_key);
         let state = &mut self
             .devtools_sessions
             .ensure_session(session_key)
@@ -102,7 +103,6 @@ impl PageTargetHost {
         state.page_file_chooser_opened_event_enabled = false;
         state.page_intercept_file_chooser_dialog_enabled = false;
         state.page_screencast.stop();
-        state.javascript_dialog_state.clear();
         self.install_effective_content_security_policy();
     }
 
@@ -111,14 +111,18 @@ impl PageTargetHost {
         session_id: &str,
         session_key: &moli_page_types::DevToolsSessionKey,
     ) -> bool {
-        let removed = self
-            .devtools_sessions
-            .dispose(session_id, session_key)
-            .is_some();
-        if removed {
-            self.install_effective_content_security_policy();
-        }
-        removed
+        let removed = self.devtools_sessions.dispose(session_id, session_key);
+        let Some(mut removed) = removed else {
+            return false;
+        };
+        self.dismiss_javascript_dialog_projections(
+            removed
+                .page_session_state
+                .javascript_dialog_state
+                .take_pending(),
+        );
+        self.install_effective_content_security_policy();
+        true
     }
 
     // Browser.getVersion reports explicit frontend UA contributions, which
@@ -383,12 +387,12 @@ impl PageTargetHost {
     }
 
     pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
-        self.devtools_sessions.states().any(|session| {
-            !session
-                .page_session_state
-                .javascript_dialog_state
-                .is_empty()
-        })
+        !self
+            .runtime_slot
+            .page_slot()
+            .contents
+            .javascript_dialogs
+            .is_empty()
     }
 
     pub(crate) fn has_non_default_session_state(&self) -> bool {

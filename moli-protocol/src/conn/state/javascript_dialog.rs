@@ -7,6 +7,13 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use super::{
+    PageTargetHost,
+    web_contents::{
+        JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogKey,
+        JavaScriptDialogSnapshot,
+    },
+};
 use super::{TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity};
 
 /// Stable lifetime of one target Page's JavaScript-dialog output.
@@ -193,18 +200,10 @@ impl TargetPreparedJavaScriptDialog {
         self.dismiss_inner();
     }
 
-    pub(crate) fn into_target_dialog(
-        mut self,
-        destination_page_owner: TargetPageResidenceIdentity,
-        source_frame_id: String,
-    ) -> TargetJavaScriptDialog {
-        TargetJavaScriptDialog::new(
-            destination_page_owner,
-            source_frame_id,
-            self.renderer_dialog
-                .take()
-                .expect("prepared dialog must own its renderer payload"),
-        )
+    pub(crate) fn into_renderer_dialog(mut self) -> RendererPendingJavaScriptDialog {
+        self.renderer_dialog
+            .take()
+            .expect("prepared dialog must own its renderer payload")
     }
 
     fn renderer_dialog(&self) -> &RendererPendingJavaScriptDialog {
@@ -226,75 +225,33 @@ impl Drop for TargetPreparedJavaScriptDialog {
     }
 }
 
-/// One dialog installed for a concrete protocol Page residence.
-///
-/// The renderer payload retains the causal Document, source URL, popup/frame
-/// identity and one-shot completion. `source_frame_id` is resolved exactly
-/// once during capture, so command handling and event projection never fall
-/// back to whichever frame happens to be current later. Prompt text belongs
-/// to this same residence; it cannot drift into a parallel queue.
+/// A session's projection of a Browser-owned dialog, not its completion owner.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TargetJavaScriptDialog {
-    page_owner: TargetPageResidenceIdentity,
     source_frame_id: String,
-    renderer_dialog: RendererPendingJavaScriptDialog,
-    pending_prompt_text: Option<String>,
+    pub(in crate::conn::state) key: JavaScriptDialogKey,
 }
 
 impl TargetJavaScriptDialog {
-    pub(crate) fn new(
-        page_owner: TargetPageResidenceIdentity,
-        source_frame_id: String,
-        renderer_dialog: RendererPendingJavaScriptDialog,
-    ) -> Self {
+    pub(crate) fn new(source_frame_id: String, key: JavaScriptDialogKey) -> Self {
         Self {
-            page_owner,
             source_frame_id,
-            renderer_dialog,
-            pending_prompt_text: None,
+            key,
         }
     }
 
-    pub(crate) fn page_owner(&self) -> &TargetPageResidenceIdentity {
-        &self.page_owner
+    #[cfg(test)]
+    pub(crate) fn document_id(&self) -> moli_core::browser::DocumentId {
+        self.key.document
     }
 
+    #[cfg(test)]
     pub(crate) fn source_frame_id(&self) -> &str {
         &self.source_frame_id
     }
-
-    pub(crate) fn dialog_type(&self) -> &str {
-        self.renderer_dialog.dialog_type()
-    }
-
-    pub(crate) fn message(&self) -> &str {
-        self.renderer_dialog.message()
-    }
-
-    pub(crate) fn default_prompt(&self) -> &str {
-        self.renderer_dialog.default_prompt()
-    }
-
-    pub(crate) fn finish(&self, accepted: bool, user_input: String) -> bool {
-        self.renderer_dialog.finish(accepted, user_input)
-    }
-
-    fn set_prompt_text(&mut self, prompt_text: String) {
-        self.pending_prompt_text = Some(prompt_text);
-    }
-
-    fn into_prompt_text(mut self) -> (Self, Option<String>) {
-        let prompt_text = self.pending_prompt_text.take();
-        (self, prompt_text)
-    }
 }
 
-/// Installed modal-dialog state for one protocol attachment and Page lifetime.
-///
-/// Clearing dismisses every installed renderer completion. In-flight prepared
-/// output is authorized separately by the stable Page scope in
-/// `TargetRuntimeSlot`; keeping that authority out of this state lets an
-/// otherwise-default session state disappear without losing Page identity.
+/// Clone/clear only affects frontend visibility. Browser owns all modal work.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(crate) struct TargetJavaScriptDialogState {
     pending_dialogs: Vec<TargetJavaScriptDialog>,
@@ -302,11 +259,10 @@ pub(crate) struct TargetJavaScriptDialogState {
 
 impl TargetJavaScriptDialogState {
     pub(crate) fn clear(&mut self) {
-        for dialog in self.pending_dialogs.drain(..) {
-            let _ = dialog.finish(false, String::new());
-        }
+        self.pending_dialogs.clear();
     }
 
+    #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.pending_dialogs.is_empty()
     }
@@ -315,30 +271,141 @@ impl TargetJavaScriptDialogState {
         self.pending_dialogs.push(dialog);
     }
 
-    pub(crate) fn peek_next(&self) -> Option<&TargetJavaScriptDialog> {
+    fn peek_next(&self) -> Option<&TargetJavaScriptDialog> {
         self.pending_dialogs.first()
     }
 
-    pub(crate) fn set_next_prompt_text(&mut self, prompt_text: String) -> bool {
-        let Some(dialog) = self.pending_dialogs.first_mut() else {
-            return false;
-        };
-        dialog.set_prompt_text(prompt_text);
-        true
+    fn pop_next(&mut self) -> Option<TargetJavaScriptDialog> {
+        (!self.pending_dialogs.is_empty()).then(|| self.pending_dialogs.remove(0))
     }
 
-    pub(crate) fn pop_next_with_prompt_text(
-        &mut self,
-    ) -> Option<(TargetJavaScriptDialog, Option<String>)> {
-        if self.pending_dialogs.is_empty() {
-            return None;
-        }
-        Some(self.pending_dialogs.remove(0).into_prompt_text())
+    pub(in crate::conn::state) fn take_pending(&mut self) -> Vec<TargetJavaScriptDialog> {
+        std::mem::take(&mut self.pending_dialogs)
     }
 
     #[cfg(test)]
     pub(crate) fn pending_dialogs(&self) -> &[TargetJavaScriptDialog] {
         &self.pending_dialogs
+    }
+}
+
+// In-place AgentHost -> Browser bridge, replaced by typed commands in Commit 22.
+// Session authority stays here; WebContents only receives exact neutral keys.
+impl PageTargetHost {
+    pub(crate) fn install_javascript_dialog(
+        &mut self,
+        session: &moli_page_types::DevToolsSessionKey,
+        page_owner: TargetPageResidenceIdentity,
+        source_frame_id: String,
+        dialog: RendererPendingJavaScriptDialog,
+    ) -> bool {
+        if self.current_document_id() != Some(page_owner.document_id()) {
+            let _ = dialog.finish(false, String::new());
+            return false;
+        }
+        let key = self
+            .runtime_slot
+            .page_slot_mut()
+            .contents
+            .javascript_dialogs
+            .install(page_owner.document_id(), dialog);
+        self.devtools_sessions
+            .ensure_session(session)
+            .page_session_state
+            .javascript_dialog_state
+            .push(TargetJavaScriptDialog::new(source_frame_id, key));
+        true
+    }
+
+    fn javascript_dialog_key(
+        &self,
+        session: &moli_page_types::DevToolsSessionKey,
+    ) -> Option<JavaScriptDialogKey> {
+        let dialog = self
+            .devtools_sessions
+            .session(session)?
+            .page_session_state
+            .javascript_dialog_state
+            .peek_next()?;
+        (Some(dialog.key.document) == self.current_document_id()).then_some(dialog.key)
+    }
+
+    pub(crate) fn javascript_dialog_snapshot(
+        &self,
+        session: &moli_page_types::DevToolsSessionKey,
+    ) -> Option<JavaScriptDialogSnapshot> {
+        let key = self.javascript_dialog_key(session)?;
+        self.runtime_slot
+            .page_slot()
+            .contents
+            .javascript_dialogs
+            .snapshot(key)
+    }
+
+    pub(crate) fn set_javascript_dialog_prompt_text(
+        &mut self,
+        session: &moli_page_types::DevToolsSessionKey,
+        prompt_text: String,
+    ) -> Result<(), JavaScriptDialogError> {
+        let key = self
+            .javascript_dialog_key(session)
+            .ok_or(JavaScriptDialogError::NotFound)?;
+        self.runtime_slot
+            .page_slot_mut()
+            .contents
+            .javascript_dialogs
+            .set_prompt_text(key, prompt_text)
+    }
+
+    pub(crate) fn handle_javascript_dialog(
+        &mut self,
+        session: &moli_page_types::DevToolsSessionKey,
+        accepted: bool,
+        prompt_text: Option<String>,
+    ) -> Option<(String, JavaScriptDialogClosed)> {
+        let Some(key) = self.javascript_dialog_key(session) else {
+            self.dismiss_devtools_javascript_dialogs(session);
+            return None;
+        };
+        let projection = self
+            .devtools_sessions
+            .ensure_session(session)
+            .page_session_state
+            .javascript_dialog_state
+            .pop_next()?;
+        let outcome = self
+            .runtime_slot
+            .page_slot_mut()
+            .contents
+            .javascript_dialogs
+            .finish(key, accepted, prompt_text)?;
+        Some((projection.source_frame_id, outcome))
+    }
+
+    pub(crate) fn dismiss_devtools_javascript_dialogs(
+        &mut self,
+        session: &moli_page_types::DevToolsSessionKey,
+    ) {
+        let projections = self
+            .devtools_sessions
+            .ensure_session(session)
+            .page_session_state
+            .javascript_dialog_state
+            .take_pending();
+        self.dismiss_javascript_dialog_projections(projections);
+    }
+
+    pub(in crate::conn::state) fn dismiss_javascript_dialog_projections(
+        &mut self,
+        projections: Vec<TargetJavaScriptDialog>,
+    ) {
+        for projection in projections {
+            self.runtime_slot
+                .page_slot_mut()
+                .contents
+                .javascript_dialogs
+                .dismiss(projection.key);
+        }
     }
 }
 

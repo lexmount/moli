@@ -543,6 +543,7 @@ pub use scheduler_state::{CdpRendererOwnerTurnOutcome, CdpSchedulerEvent, CdpTur
 pub(crate) use site_data_manager_surface::{
     BrowserContextReservedSiteDataOwnerState, BrowserContextSiteDataManagerOwnerState,
 };
+pub(crate) use state::JavaScriptDialogError;
 pub use state::{
     BrowserContext, BrowserWindowBounds, DevToolsPageResidenceIdentity, DocumentStartScript,
     DownloadNavigation, EmulatedDeviceMetrics, EmulatedGeolocationOverride,
@@ -581,8 +582,9 @@ pub(crate) use state::{
 };
 #[cfg(test)]
 pub(crate) use state::{
-    DevToolsEmulationSessionState, DevToolsSessionState, EmulationPolicy, TargetJavaScriptDialog,
-    TargetJavaScriptDialogScopeObserver, TargetPageSlot, TargetRuntimeSessionState,
+    DevToolsEmulationSessionState, DevToolsSessionState, EmulationPolicy, JavaScriptDialogKey,
+    TargetJavaScriptDialog, TargetJavaScriptDialogScopeObserver, TargetPageSlot,
+    TargetRuntimeSessionState,
 };
 pub(crate) use target::{
     PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,
