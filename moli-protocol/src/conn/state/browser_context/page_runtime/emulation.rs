@@ -19,27 +19,6 @@ pub(crate) enum PagePolicyUpdateKind {
 }
 
 impl BrowserContext {
-    pub(crate) fn start_target_permission_update(
-        &self,
-        target_id: &str,
-        overrides: &[moli_core::page::PermissionOverrideRegistration],
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_set_permission_overrides(overrides)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn finish_target_permission_update(
-        &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
-    ) -> Result<(), String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_set_permission_overrides(completion)
-            .map_err(|error| error.to_string())
-    }
     #[allow(clippy::too_many_arguments)]
     pub(crate) async fn reconcile_target_runtime_policy_async(
         &mut self,

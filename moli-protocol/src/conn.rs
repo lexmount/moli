@@ -52,6 +52,9 @@ mod fetch_support;
 mod inspection_binding_tests;
 mod inspector_route;
 mod output;
+#[cfg(test)]
+mod permission_tests;
+mod permissions;
 mod popup_activation_work;
 mod popup_navigation_work;
 mod protocol_output;
@@ -65,6 +68,7 @@ mod settings;
 #[cfg(test)]
 mod site_data_manager_surface;
 mod state;
+pub(crate) use state::{CompletedContextPermissionUpdate, PendingContextPermissionUpdate};
 pub(crate) use state::{NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind};
 mod target;
 mod top_level_navigation_work;
@@ -1187,7 +1191,9 @@ pub struct CdpConnection {
     // Browser profile, permissions, download and global IO state.
     pub window_bounds: BrowserWindowBounds,
     pub download_behavior: BrowserDownloadBehavior,
-    pub permission_overrides: Vec<PermissionOverride>,
+    // Browser defaults remain embedded until the Browser aggregate cutover.
+    // Each physical Context owns its scoped rules; no wire-id registry lives here.
+    permission_defaults: moli_core::browser::PermissionDefaults,
     next_global_io_stream_id: u64,
     base_browser_identity: moli_browser_profile::BrowserIdentityProfile,
     global_extra_headers: Vec<(String, String)>,
@@ -1479,7 +1485,7 @@ impl CdpConnection {
             install_default_target_on_auto_attach: false,
             window_bounds: BrowserWindowBounds::default(),
             download_behavior: BrowserDownloadBehavior::default(),
-            permission_overrides: Vec::new(),
+            permission_defaults: moli_core::browser::PermissionDefaults::default(),
             next_bc_id: 0,
             next_global_io_stream_id: 0,
             next_target_id: 0,
@@ -3003,7 +3009,7 @@ impl CdpConnection {
                 "browserSessionIdCount": self.target_control.browser_session_count(),
                 "globalIoStreamCount": self.global_io_streams.len(),
                 "tracing": self.tracing_state.diagnostics(),
-                "permissionOverrideCount": self.permission_overrides.len(),
+                "permissionOverrideCount": self.permission_override_count(),
                 "pageNavigationEngineCount": page_navigation_engine_count,
                 "pageNavigationEngineKeys": page_engine_keys,
                 "autoAttach": self.auto_attach_enabled(),
@@ -4168,15 +4174,6 @@ impl BrowserDownloadBehavior {
             automation_events_enabled: self.automation_events_enabled,
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct PermissionOverride {
-    pub permission: serde_json::Value,
-    pub setting: String,
-    pub origin: Option<String>,
-    pub embedded_origin: Option<String>,
-    pub browser_context_id: Option<String>,
 }
 
 #[cfg(test)]

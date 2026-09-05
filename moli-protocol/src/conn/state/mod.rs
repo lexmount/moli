@@ -124,6 +124,9 @@ pub(crate) use browser_context::{
     BrowserContextStoragePartitionHandles, ContextNetworkPolicy, SiteDataClearOptions,
 };
 pub(crate) use browser_context::{
+    CompletedContextPermissionUpdate, PendingContextPermissionUpdate,
+};
+pub(crate) use browser_context::{
     LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit, NetworkPolicyUpdateKind,
     PageInputCommand, PagePolicyUpdateKind,
 };

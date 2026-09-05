@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use indexmap::IndexMap;
 use moli_browser_profile::BrowserIdentityProfile;
 use moli_core::{
-    browser::{BrowserContextId, WebContentsId},
+    browser::{BrowserContextId, PermissionOverrides, WebContentsId},
     runtime::{
         NavigationEngine, NavigationRuntimeConfig, RendererBrowserContextRuntime,
         RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
@@ -27,6 +27,7 @@ pub(super) struct BrowserContext {
     pub(super) network_policy: ContextNetworkPolicy,
     pub(super) emulation_defaults: ContextEmulationDefaults,
     pub(super) browser_identity_override: Option<BrowserIdentityProfile>,
+    pub(super) permission_overrides: PermissionOverrides,
     // The Browser collection and its only selector have the same lifetime.
     // Keep insertion order when choosing a replacement foreground page.
     pub(super) web_contents: IndexMap<WebContentsId, WebContents>,
@@ -49,6 +50,7 @@ impl BrowserContext {
             network_policy: ContextNetworkPolicy::default(),
             emulation_defaults: ContextEmulationDefaults::default(),
             browser_identity_override: None,
+            permission_overrides: PermissionOverrides::default(),
             web_contents: IndexMap::new(),
             selected_web_contents: None,
             renderer_runtime_owner: Some(RendererBrowserContextRuntime::new()),

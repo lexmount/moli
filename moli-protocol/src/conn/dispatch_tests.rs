@@ -6949,7 +6949,7 @@ async fn command_dispatch_completes_live_browser_permission_without_legacy_fallb
         complete_messages(step),
         vec![json!({ "id": 28, "result": {} })]
     );
-    assert_eq!(conn.permission_overrides.len(), 1);
+    assert_eq!(conn.permission_override_count(), 1);
 }
 
 #[tokio::test]
