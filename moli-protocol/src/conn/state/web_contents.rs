@@ -13,6 +13,7 @@ mod document_host;
 mod emulation_policy;
 mod javascript_dialog;
 mod network_request_policy;
+mod page_surface;
 mod session_storage;
 mod window;
 pub(in crate::conn) use document_host::DocumentHost;
@@ -22,6 +23,7 @@ pub(crate) use javascript_dialog::{
     JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogKey, JavaScriptDialogSnapshot,
 };
 pub(in crate::conn) use network_request_policy::NetworkRequestPolicy;
+pub(in crate::conn) use page_surface::PageSurface;
 pub(crate) use session_storage::SessionStorageNamespace;
 pub(in crate::conn) use window::{Window, WindowOpener};
 pub(crate) use window::{WindowSurface, WindowSurfaceState};

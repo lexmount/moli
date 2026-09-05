@@ -1,130 +1,11 @@
 #[cfg(test)]
 use super::super::cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
 use super::super::{
-    BrowserContext, CdpConnection, DocumentStartScript, EmulatedDeviceMetrics,
-    EmulatedGeolocationOverrideState, EmulatedNetworkConditions, EmulatedViewportSurface,
-    PageTargetHost, viewport_surface_install_script,
+    BrowserContext, CdpConnection, DocumentStartScript, EmulatedViewportSurface, PageTargetHost,
 };
+use crate::conn::state::PageSurface;
 #[cfg(test)]
 use moli_cookie_jar::{BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides};
-use serde_json::json;
-
-struct SurfaceOverrideInputs {
-    network_conditions: Option<EmulatedNetworkConditions>,
-    geolocation_override: Option<EmulatedGeolocationOverrideState>,
-    emulated_device_metrics: Option<EmulatedDeviceMetrics>,
-    touch_emulation_enabled: bool,
-    focus_emulation_enabled: bool,
-    active_target_surface: bool,
-    window_document_hidden: bool,
-}
-
-impl SurfaceOverrideInputs {
-    fn from_active(browser_context: &BrowserContext) -> Self {
-        Self {
-            network_conditions: browser_context.effective_active_network_conditions(),
-            geolocation_override: browser_context.effective_active_geolocation_override(),
-            emulated_device_metrics: browser_context.effective_active_emulated_device_metrics(),
-            touch_emulation_enabled: browser_context
-                .active_page_target()
-                .emulation_policy()
-                .touch_emulation_enabled,
-            focus_emulation_enabled: browser_context
-                .active_page_target()
-                .emulation_policy()
-                .focus_emulation_enabled,
-            active_target_surface: true,
-            window_document_hidden: browser_context
-                .active_page_target()
-                .window_surface()
-                .state
-                .document_hidden(),
-        }
-    }
-
-    fn from_background(
-        state: &PageTargetHost,
-        default_network_conditions: Option<EmulatedNetworkConditions>,
-        default_geolocation_override: Option<EmulatedGeolocationOverrideState>,
-        default_emulated_device_metrics: Option<EmulatedDeviceMetrics>,
-    ) -> Self {
-        Self {
-            network_conditions: state
-                .emulation_policy()
-                .network_conditions
-                .or(default_network_conditions),
-            geolocation_override: state
-                .emulation_policy()
-                .geolocation_override
-                .clone()
-                .or(default_geolocation_override),
-            emulated_device_metrics: state
-                .emulation_policy()
-                .emulated_device_metrics
-                .clone()
-                .or(default_emulated_device_metrics),
-            touch_emulation_enabled: state.emulation_policy().touch_emulation_enabled,
-            focus_emulation_enabled: state.emulation_policy().focus_emulation_enabled,
-            active_target_surface: false,
-            window_document_hidden: state.window_surface().state.document_hidden(),
-        }
-    }
-
-    fn max_touch_points(&self) -> u32 {
-        if self.touch_emulation_enabled { 1 } else { 0 }
-    }
-
-    fn document_has_focus(&self) -> bool {
-        self.document_is_focused()
-    }
-
-    fn document_hidden(&self) -> bool {
-        !self.document_is_visible()
-    }
-
-    fn document_visibility_state(&self) -> &'static str {
-        if self.document_is_visible() {
-            "visible"
-        } else {
-            "hidden"
-        }
-    }
-
-    fn navigator_overrides(&self) -> moli_page_types::NavigatorOverrides {
-        moli_page_types::NavigatorOverrides {
-            online: self
-                .network_conditions
-                .map(|conditions| conditions.navigator_online()),
-            max_touch_points: self.max_touch_points(),
-            geolocation: self
-                .geolocation_override
-                .as_ref()
-                .and_then(EmulatedGeolocationOverrideState::position)
-                .map(|position| moli_page_types::GeolocationPositionOverride {
-                    latitude: position.latitude,
-                    longitude: position.longitude,
-                    accuracy: position.accuracy,
-                    altitude: position.altitude,
-                    altitude_accuracy: position.altitude_accuracy,
-                    heading: position.heading,
-                    speed: position.speed,
-                }),
-        }
-    }
-
-    fn document_is_visible(&self) -> bool {
-        self.document_is_focused() && !self.window_document_hidden
-    }
-
-    fn document_is_focused(&self) -> bool {
-        // Focus and Page Visibility are target-state surfaces, not raw mirrors
-        // of the CDP focus-emulation flag. Chrome's created active targets
-        // report focused and visible by default; background targets
-        // stay unfocused/hidden unless CDP explicitly asks to simulate a
-        // focused and active page.
-        (self.active_target_surface && !self.window_document_hidden) || self.focus_emulation_enabled
-    }
-}
 
 impl BrowserContext {
     pub(crate) fn navigator_overrides_for_target(
@@ -133,21 +14,14 @@ impl BrowserContext {
     ) -> Option<moli_page_types::NavigatorOverrides> {
         let target = self.page_target(target_id)?;
         Some(
-            SurfaceOverrideInputs::from_background(
-                target,
-                self.default_network_conditions
-                    .or(self.global_network_conditions),
-                self.default_geolocation_override
-                    .clone()
-                    .or_else(|| self.global_geolocation_override.clone()),
-                self.default_emulated_device_metrics.clone(),
-            )
-            .navigator_overrides(),
+            self.page_surface_for_state(target, self.is_active_target(target_id))
+                .navigator_overrides(),
         )
     }
 
     pub(crate) fn active_navigator_overrides(&self) -> moli_page_types::NavigatorOverrides {
-        SurfaceOverrideInputs::from_active(self).navigator_overrides()
+        self.page_surface_for_state(self.active_page_target(), true)
+            .navigator_overrides()
     }
     #[cfg(test)]
     async fn mutate_document_cookie_manager_surface_async(
@@ -182,10 +56,9 @@ impl BrowserContext {
     }
 
     pub fn document_start_script_descriptors(&self) -> Vec<DocumentStartScript> {
-        let mut scripts = Vec::new();
-        if let Some(script) = self.generated_surface_override_script() {
-            scripts.push(script);
-        }
+        let mut scripts = vec![Self::surface_preload_descriptor(
+            self.generated_surface_override_script_for_active_target(),
+        )];
         scripts.extend(self.default_document_start_script_descriptors());
         let target_id = self.active_target_id();
         scripts.extend(
@@ -382,46 +255,65 @@ impl BrowserContext {
     }
 
     pub fn document_has_focus(&self) -> bool {
-        SurfaceOverrideInputs::from_active(self).document_has_focus()
+        self.page_surface_for_state(self.active_page_target(), true)
+            .document_has_focus()
     }
 
     pub fn document_hidden(&self) -> bool {
-        SurfaceOverrideInputs::from_active(self).document_hidden()
+        self.page_surface_for_state(self.active_page_target(), true)
+            .document_hidden()
     }
 
     pub fn document_visibility_state(&self) -> &'static str {
-        SurfaceOverrideInputs::from_active(self).document_visibility_state()
+        self.page_surface_for_state(self.active_page_target(), true)
+            .document_visibility_state()
     }
 
-    fn generated_surface_override_script(&self) -> Option<DocumentStartScript> {
-        Self::generated_surface_override_script_from_inputs(&SurfaceOverrideInputs::from_active(
-            self,
-        ))
+    // Context default resolution stays in this residence until Commit 7;
+    // source generation itself only reads the embedded Browser object.
+    fn page_surface_for_state(&self, state: &PageTargetHost, foreground: bool) -> PageSurface {
+        state.runtime_slot.page_slot().contents.page_surface(
+            foreground,
+            self.default_network_conditions
+                .or(self.global_network_conditions),
+            self.default_geolocation_override
+                .as_ref()
+                .or(self.global_geolocation_override.as_ref()),
+            self.default_emulated_device_metrics.as_ref(),
+        )
+    }
+
+    pub(crate) fn generated_surface_override_script_for_active_target(&self) -> String {
+        self.page_surface_for_state(self.active_page_target(), true)
+            .script()
     }
 
     pub(crate) fn generated_surface_override_script_for_background_target(
         &self,
         target_id: &str,
-    ) -> Option<DocumentStartScript> {
+    ) -> Option<String> {
         let target = self.background_target(target_id)?;
-        self.generated_surface_override_script_for_background_state(target)
+        Some(self.generated_surface_override_script_for_background_state(target))
     }
 
     pub(crate) fn generated_surface_override_script_for_background_state(
         &self,
         state: &PageTargetHost,
-    ) -> Option<DocumentStartScript> {
-        Self::generated_surface_override_script_from_inputs(
-            &SurfaceOverrideInputs::from_background(
-                state,
-                self.default_network_conditions
-                    .or(self.global_network_conditions),
-                self.default_geolocation_override
-                    .clone()
-                    .or_else(|| self.global_geolocation_override.clone()),
-                self.default_emulated_device_metrics.clone(),
-            ),
-        )
+    ) -> String {
+        self.page_surface_for_state(state, false).script()
+    }
+
+    // Navigation's legacy preload carrier is removed at Commits 12/14/20.
+    // The Browser generator never receives this descriptor or its session fields.
+    pub(in crate::conn) fn surface_preload_descriptor(source: String) -> DocumentStartScript {
+        DocumentStartScript {
+            registry_key: None,
+            devtools_session: None,
+            source,
+            world_name: None,
+            has_bidi_channel_argument: false,
+            bidi_channel_handoffs: Vec::new(),
+        }
     }
 
     pub(crate) async fn apply_background_target_surface_overrides_async(
@@ -442,88 +334,22 @@ impl BrowserContext {
             return Ok(false);
         };
         page.set_navigator_overrides_async(&overrides).await?;
-        page.run_page_surface_override_script_async(&script.source)
+        page.run_page_surface_override_script_async(&script)
             .await
             .map_err(|error| anyhow::anyhow!("failed to hide background page surface: {error}"))?;
         Ok(true)
     }
 
-    pub(crate) fn generated_surface_override_script_for_active_target(
-        &self,
-    ) -> Option<DocumentStartScript> {
-        self.generated_surface_override_script()
-    }
-
-    fn generated_surface_override_script_from_inputs(
-        inputs: &SurfaceOverrideInputs,
-    ) -> Option<DocumentStartScript> {
-        // Preserve the renderer's native Window/Screen descriptors unless a
-        // client explicitly enabled device emulation. Installing the default
-        // profile as JS getters makes otherwise native attributes observable
-        // as closure-backed properties and can mask child-frame dimensions.
-        // An explicit override retains the original descriptors so a later
-        // CDP clear can restore the native WebIDL surface.
-        let viewport_surface_script = inputs
-            .emulated_device_metrics
-            .as_ref()
-            .map(|metrics| viewport_surface_install_script(&metrics.viewport_surface(), true))
-            .unwrap_or_default();
-        let document_has_focus = inputs.document_has_focus();
-        let document_hidden = inputs.document_hidden();
-        let document_visibility_state = inputs.document_visibility_state();
-
-        let source = format!(
-            "(function() {{
-                const defineGetter = (obj, key, getter) => {{
-                    if (!obj) return;
-                    try {{
-                        Object.defineProperty(obj, key, {{ configurable: true, get: getter }});
-                    }} catch (_error) {{}}
-                }};
-                {viewport_surface_script}
-                if (document) {{
-                    // The renderer's Document bridge currently installs these
-                    // surfaces as own accessors, so CDP emulation must shadow
-                    // the document object directly for staged/background
-                    // overrides to win in the same realm.
-                    defineGetter(document, 'hidden', () => {document_hidden});
-                    defineGetter(document, 'visibilityState', () => {document_visibility_state});
-                    try {{
-                        Object.defineProperty(document, 'hasFocus', {{
-                            configurable: true,
-                            value: () => {document_has_focus}
-                        }});
-                    }} catch (_error) {{}}
-                }}
-            }})();",
-            viewport_surface_script = viewport_surface_script,
-            document_hidden = document_hidden,
-            document_visibility_state = json!(document_visibility_state),
-            document_has_focus = document_has_focus,
-        );
-
-        Some(DocumentStartScript {
-            registry_key: None,
-            devtools_session: None,
-            source,
-            world_name: None,
-            has_bidi_channel_argument: false,
-            bidi_channel_handoffs: Vec::new(),
-        })
-    }
-
     pub(crate) async fn apply_surface_overrides_to_loaded_page_async(
         &mut self,
     ) -> anyhow::Result<()> {
-        let Some(script) = self.generated_surface_override_script() else {
-            return Ok(());
-        };
+        let script = self.generated_surface_override_script_for_active_target();
         let overrides = self.active_navigator_overrides();
         let Some(page) = self.active_page_target_mut().runtime_slot.loaded_page_mut() else {
             return Ok(());
         };
         page.set_navigator_overrides_async(&overrides).await?;
-        page.run_page_surface_override_script_async(&script.source)
+        page.run_page_surface_override_script_async(&script)
             .await
             .map_err(|error| anyhow::anyhow!("failed to apply page surface overrides: {error}"))
     }
@@ -718,18 +544,20 @@ mod tests {
         target
             .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::FocusEnabled(true));
         target.set_window_surface_state(WindowSurfaceState::Minimized);
-        let minimized = SurfaceOverrideInputs::from_background(&target, None, None, None);
+        let mut contents = std::mem::take(&mut target.runtime_slot.page_slot_mut().contents);
+        drop(target);
+        let minimized = contents.page_surface(false, None, None, None);
         assert!(minimized.document_has_focus());
         assert!(
             minimized.document_hidden(),
             "focus emulation must not unminimize a window"
         );
 
-        target.set_window_surface_state(WindowSurfaceState::Fullscreen);
-        let fullscreen = SurfaceOverrideInputs::from_background(&target, None, None, None);
+        contents.window.surface.state = WindowSurfaceState::Fullscreen;
+        let fullscreen = contents.page_surface(false, None, None, None);
         assert!(!fullscreen.document_hidden());
         assert_eq!(
-            target.window_surface().state,
+            contents.window.surface.state,
             WindowSurfaceState::Fullscreen
         );
     }

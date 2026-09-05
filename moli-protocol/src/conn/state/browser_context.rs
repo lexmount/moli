@@ -1616,16 +1616,6 @@ impl BrowserContext {
             .or(self.default_tls_verify_host_override)
     }
 
-    pub(crate) fn effective_active_geolocation_override(
-        &self,
-    ) -> Option<EmulatedGeolocationOverrideState> {
-        self.page_targets
-            .active()
-            .and_then(|host| host.emulation_policy().geolocation_override.clone())
-            .or_else(|| self.default_geolocation_override.clone())
-            .or_else(|| self.global_geolocation_override.clone())
-    }
-
     pub(crate) fn effective_active_network_offline(&self) -> bool {
         self.effective_active_network_conditions()
             .is_some_and(|conditions| !conditions.navigator_online())

@@ -2832,9 +2832,7 @@ fn start_geolocation_surface_override_page_commands(
     let Some(browser_context) = conn.browser_context.as_mut() else {
         return Ok(Vec::new());
     };
-    let Some(script) = browser_context.generated_surface_override_script_for_active_target() else {
-        return Ok(Vec::new());
-    };
+    let script = browser_context.generated_surface_override_script_for_active_target();
     let navigator_overrides = browser_context.active_navigator_overrides();
     let browser_context_id = browser_context.id.clone();
     let Some(target_id) = browser_context.active_target_id_owned() else {
@@ -2891,7 +2889,7 @@ fn start_session_surface_override_page_command_for_owner(
             )
         } else {
             (
-                browser_context.generated_surface_override_script_for_active_target(),
+                Some(browser_context.generated_surface_override_script_for_active_target()),
                 browser_context.active_navigator_overrides(),
             )
         }
@@ -2931,7 +2929,7 @@ fn start_surface_override_for_route(
                 return Err("BrowserContextNotLoaded".to_owned());
             };
             let script = if browser_context.is_active_target(target_id) {
-                browser_context.generated_surface_override_script_for_active_target()
+                Some(browser_context.generated_surface_override_script_for_active_target())
             } else {
                 browser_context.generated_surface_override_script_for_background_target(target_id)
             };
@@ -2963,7 +2961,7 @@ fn start_surface_override_for_route(
 fn start_surface_override_page_command(
     target: PendingEmulationPageTarget,
     page: &moli_core::page::Page,
-    script: crate::conn::DocumentStartScript,
+    script: String,
     navigator_overrides: moli_page_types::NavigatorOverrides,
     runtime_call_id: u64,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
@@ -2971,7 +2969,7 @@ fn start_surface_override_page_command(
         .start_set_navigator_overrides(&navigator_overrides)
         .map_err(|error| error.to_string())?;
     let (pending, runtime_response_rx) =
-        start_runtime_emulation_protocol_message(page, runtime_call_id, script.source)?;
+        start_runtime_emulation_protocol_message(page, runtime_call_id, script)?;
     Ok(vec![
         PendingEmulationPageCommand {
             target: target.clone(),
