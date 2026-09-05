@@ -11610,9 +11610,7 @@ mod protocol_neutral_tests {
             .browser_context
             .as_mut()
             .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(page);
+            .replace_active_page_for_test(Some(page));
 
         let params = json!({});
         let enable = Cmd::for_test(

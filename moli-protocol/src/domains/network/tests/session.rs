@@ -15,9 +15,7 @@ async fn install_network_session_page(ctx: &mut TestContext, url: &str) {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 }
 
 /// Network.enable without a browser context fails.
@@ -197,11 +195,7 @@ async fn network_configuration_completion_does_not_restore_a_replaced_document()
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .loaded_page_mut()
-        .expect("the replacement Page should remain installed")
-        .serialize_html_async()
+        .serialize_target_html_for_test("TID-navigation")
         .await
         .expect("the replacement Page should remain usable");
     assert!(html.contains("id=\"replacement\""));
@@ -214,11 +208,11 @@ async fn commit_configuration_resolves_the_exact_target_network_runtime() {
     let mut browser_context = BrowserContext::new("BID-runtime".into());
     browser_context.set_active_target_id("TID-a");
     browser_context.attach_active_session("SID-a");
-    browser_context.insert_page_target_host(PageTargetHost::with_url(
+    browser_context.register_page_target_url_fixture(
         "TID-b".to_owned(),
         Some("SID-b".to_owned()),
         "about:blank".to_owned(),
-    ));
+    );
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
 
@@ -366,13 +360,10 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
         ctx.expect_result(id, json!({}), Some(session_id));
     }
 
-    let policy = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target()
-        .effective_policy();
+    let policy = {
+        let context = &ctx.conn.browser_context.as_ref().unwrap();
+        context.effective_policy_for_target(context.active_target_id().unwrap())
+    };
     assert!(policy.cache_disabled());
     assert!(policy.bypass_service_worker());
     assert_eq!(
@@ -401,13 +392,10 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
     .await;
     ctx.expect_result(20_009, json!({}), Some("SID-primary"));
 
-    let policy = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target()
-        .effective_policy();
+    let policy = {
+        let context = &ctx.conn.browser_context.as_ref().unwrap();
+        context.effective_policy_for_target(context.active_target_id().unwrap())
+    };
     assert!(!policy.cache_disabled());
     assert!(!policy.bypass_service_worker());
     assert_eq!(
@@ -431,13 +419,10 @@ async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers(
     .await;
     ctx.expect_result(20_010, json!({}), Some("SID-primary"));
 
-    let policy = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target()
-        .effective_policy();
+    let policy = {
+        let context = &ctx.conn.browser_context.as_ref().unwrap();
+        context.effective_policy_for_target(context.active_target_id().unwrap())
+    };
     assert!(!policy.cache_disabled());
     assert!(!policy.bypass_service_worker());
     assert_eq!(
@@ -505,9 +490,7 @@ async fn enable_after_page_load_does_not_replay_historical_subresource_events() 
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -592,11 +575,11 @@ async fn attached_enable_after_pending_subresource_does_not_replay_history_to_ne
         .await;
     assert!(
         ctx.conn
-            .runtime_session_owner_slot(Some("SID-primary"))
+            .browser_context
+            .as_ref()
             .unwrap()
-            .loaded_page()
+            .target_subresource_network_records("TID-1")
             .unwrap()
-            .subresource_network_records()
             .iter()
             .any(|record| record.url().as_str() == script_url)
     );
@@ -1005,15 +988,14 @@ async fn background_fetch_runtime_activity_broadcasts_to_attached_network_sessio
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let target = PageTargetHost::new(
+
+    let mut bc = BrowserContext::new("BID-background".into());
+    bc.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     );
-
-    let mut bc = BrowserContext::new("BID-background".into());
-    bc.insert_page_target_host(target);
     assert!(
         bc.assign_attached_session_to_target(
             "TID-background",
@@ -1186,11 +1168,11 @@ async fn get_response_body_reads_background_attached_target_slot() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.insert_page_target_host(PageTargetHost::with_url(
+    bc.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "https://background.example/".to_owned(),
-    ));
+    );
     assert!(
         bc.assign_attached_session_to_target(
             "TID-background",

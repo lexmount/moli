@@ -285,11 +285,11 @@ fn connection_with_background_pending_fetch_action(request_id: &str) -> CdpConne
     let mut browser_context = BrowserContext::new("BID-fetch-background".to_owned());
     browser_context.set_active_target_id("TID-active".to_owned());
     browser_context.attach_active_session("SID-active".to_owned());
-    browser_context.insert_page_target_host(PageTargetHost::with_url(
+    browser_context.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "https://example.test/background".to_owned(),
-    ));
+    );
     browser_context
         .background_target_mut("TID-background")
         .expect("background target")
@@ -629,11 +629,9 @@ async fn devtools_script_navigation_exact_cursor_rejects_replaced_page_owner_act
         .target_session_route_for_target_id(target_id.as_str())
         .expect("created target route");
     ctx.conn
-        .runtime_session_owner_slot_mut_for_owner(&crate::conn::CommandOwnerScope::for_route(
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::for_route(
             route.clone(),
-        ))
-        .expect("created target runtime slot")
-        .replace_document_id_for_test();
+        ));
 
     let sent_start = ctx.sent.len();
     ctx.route_direct_command_renderer_predecessor_for_test(predecessor)
@@ -703,11 +701,11 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
     let mut browser_context = BrowserContext::new("BID-fetch-background".to_owned());
     browser_context.set_active_target_id("TID-active".to_owned());
     browser_context.attach_active_session("SID-active".to_owned());
-    browser_context.insert_page_target_host(PageTargetHost::with_url(
+    browser_context.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "https://example.test/background".to_owned(),
-    ));
+    );
     conn.install_browser_context_fixture_for_test(browser_context);
 
     conn.register_pending_fetch_navigation_request_for_owner(
@@ -1203,9 +1201,7 @@ async fn devtools_runtime_call_function_popup_activity_drains_from_protocol_neut
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let context = DevToolsCommandContext {
         protocol: DevToolsProtocol::WebDriverBidi,
@@ -1688,9 +1684,7 @@ async fn devtools_runtime_command_uses_background_initial_document_without_resol
         "protocol-neutral runtime commands should not activate background targets"
     );
     assert!(
-        browser_context
-            .background_target(second_target_id.as_str())
-            .is_some_and(|target| target.has_loaded_page()),
+        browser_context.target_has_loaded_page(second_target_id.as_str()),
         "background initial document should already be available for script execution"
     );
 }
@@ -2071,16 +2065,11 @@ async fn runtime_enable_uses_background_initial_document_through_attached_sessio
         "background Runtime.enable must not activate or overwrite the active target"
     );
     assert!(
-        browser_context
-            .background_target(second_target_id.as_str())
-            .is_some_and(|target| target.has_loaded_page()),
+        browser_context.target_has_loaded_page(second_target_id.as_str()),
         "background target should keep its target-lifecycle initial page"
     );
     assert!(
-        !browser_context
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        !browser_context.target_has_loaded_page(browser_context.active_target_id().unwrap()),
         "Runtime.enable must not install a page on the active target"
     );
     assert!(
@@ -2183,16 +2172,11 @@ async fn page_enable_uses_background_initial_document_through_attached_session()
         "background Page.enable must not activate or overwrite the active target"
     );
     assert!(
-        browser_context
-            .background_target(second_target_id.as_str())
-            .is_some_and(|target| target.has_loaded_page()),
+        browser_context.target_has_loaded_page(second_target_id.as_str()),
         "background target should keep its target-lifecycle initial page"
     );
     assert!(
-        !browser_context
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        !browser_context.target_has_loaded_page(browser_context.active_target_id().unwrap()),
         "Page.enable must not install a page on the active target"
     );
 }
@@ -2265,16 +2249,11 @@ async fn initial_document_page_ensure_completion_uses_captured_owner() {
         "completion must not activate the background target"
     );
     assert!(
-        browser_context
-            .background_target(second_target_id.as_str())
-            .is_some_and(|target| target.has_loaded_page()),
+        browser_context.target_has_loaded_page(second_target_id.as_str()),
         "completion should install the materialized page on the captured background target"
     );
     assert!(
-        !browser_context
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        !browser_context.target_has_loaded_page(browser_context.active_target_id().unwrap()),
         "completion must not install the materialized page on the ambient active target"
     );
 }
@@ -2560,8 +2539,7 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         "current page should remain the committed navigation page"
     );
     let initial = browser_context
-        .active_page_target()
-        .initial_empty_document_state()
+        .target_initial_empty_document_state(browser_context.active_target_id().unwrap())
         .expect("initial empty document state should remain recorded");
     assert!(
         initial.exited(),
@@ -2674,16 +2652,11 @@ async fn target_lifecycle_ensure_installs_initial_about_blank_page_for_backgroun
         "background ensure must not activate the background target"
     );
     assert!(
-        browser_context
-            .background_target(second_target_id.as_str())
-            .is_some_and(|target| target.has_loaded_page()),
+        browser_context.target_has_loaded_page(second_target_id.as_str()),
         "ensure should install loaded page on background target"
     );
     assert!(
-        !browser_context
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        !browser_context.target_has_loaded_page(browser_context.active_target_id().unwrap()),
         "background ensure must not install the materialized page on the active target"
     );
 }
@@ -2772,9 +2745,7 @@ async fn devtools_get_realms_succeeds_when_page_loaded_before_session_attach() {
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
     conn.browser_context
         .as_mut()
         .expect("browser context")
@@ -3179,7 +3150,7 @@ async fn devtools_create_target_can_activate_created_target() {
         browser_context
             .background_targets()
             .find(|target| target.target_id() == "TID-1")
-            .is_some_and(|target| target.has_loaded_page()),
+            .is_some_and(|target| browser_context.target_has_loaded_page(target.target_id())),
         "the previous target should retain its loaded page after deactivation"
     );
 
@@ -4433,13 +4404,14 @@ async fn devtools_command_applies_window_state_to_document_surface() {
         DevToolsCommandResult::Empty
     );
     assert!(
-        conn.browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .window_surface()
-            .state
-            .document_hidden(),
+        {
+            let context = &conn.browser_context.as_ref().expect("browser context");
+            context
+                .target_window_surface(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .state
+        .document_hidden(),
         "SetWindowState must update the target owner state before applying document surfaces"
     );
     assert_eq!(
@@ -4467,14 +4439,15 @@ async fn devtools_command_applies_window_state_to_document_surface() {
         DevToolsCommandResult::Empty
     );
     assert_eq!(
-        conn.browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .window_surface()
-            .state,
+        {
+            let context = conn.browser_context.as_ref().expect("browser context");
+            context
+                .target_window_surface(context.active_target_id().unwrap())
+                .expect("registered WebContents")
+        }
+        .state,
         WindowSurfaceState::Fullscreen,
-        "SetWindowState fullscreen must update the target owner before applying document surfaces",
+        "SetWindowState fullscreen must update the target owner before applying document surfaces"
     );
     assert_eq!(
         evaluate_document_surface_payload(&mut conn, target_context.clone()).await,
@@ -6953,9 +6926,7 @@ async fn command_dispatch_completes_live_browser_permission_without_legacy_fallb
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let raw = serde_json::to_string(&json!({
         "id": 28,
@@ -7006,10 +6977,7 @@ async fn command_dispatch_completes_target_startup_commands_without_legacy_fallb
     let browser_context = conn.browser_context.as_ref().expect("browser context");
     assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
     assert!(
-        browser_context
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        browser_context.target_has_loaded_page(browser_context.active_target_id().unwrap()),
         "Target.createTarget should complete target lifecycle initial document ensure"
     );
 
@@ -7332,9 +7300,7 @@ async fn command_dispatch_completes_live_page_preload_without_legacy_fallback() 
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let add_raw = serde_json::to_string(&json!({
         "id": 42,
@@ -7814,9 +7780,7 @@ async fn command_dispatch_completes_live_storage_set_cookies_without_legacy_fall
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let raw = serde_json::to_string(&json!({
         "id": 67,
@@ -7862,9 +7826,7 @@ async fn command_dispatch_completes_live_network_extra_headers_without_legacy_fa
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let raw = serde_json::to_string(&json!({
         "id": 68,
@@ -7899,9 +7861,7 @@ async fn command_dispatch_completes_live_network_blocked_urls_without_legacy_fal
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let raw = serde_json::to_string(&json!({
         "id": 681,
@@ -7936,9 +7896,7 @@ async fn command_dispatch_completes_live_network_set_cookie_without_legacy_fallb
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let raw = serde_json::to_string(&json!({
         "id": 69,
@@ -7981,9 +7939,7 @@ async fn command_dispatch_completes_live_network_emulation_without_legacy_fallba
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let raw = serde_json::to_string(&json!({
         "id": 682,
@@ -8024,9 +7980,7 @@ async fn command_dispatch_completes_live_network_user_agent_without_legacy_fallb
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let raw = serde_json::to_string(&json!({
         "id": 683,
@@ -8061,9 +8015,7 @@ async fn command_dispatch_completes_live_emulation_user_agent_without_legacy_fal
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let raw = serde_json::to_string(&json!({
         "id": 684,
@@ -8099,10 +8051,7 @@ async fn pending_emulation_user_agent_loader_keeps_active_owner_route_across_com
 
     let mut browser_context = BrowserContext::new("BID-emulation-ua-owner-route".to_owned());
     browser_context.set_active_target_id("TID-emulation-ua-active".to_owned());
-    browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(active_page);
+    browser_context.replace_active_page_for_test(Some(active_page));
     browser_context.stage_background_target(
         "TID-emulation-ua-background".to_owned(),
         None,
@@ -8111,9 +8060,7 @@ async fn pending_emulation_user_agent_loader_keeps_active_owner_route_across_com
         None,
     );
     browser_context
-        .background_target_mut("TID-emulation-ua-background")
-        .expect("background target")
-        .replace_loaded_page(Some(background_page));
+        .replace_target_page_for_test("TID-emulation-ua-background", Some(background_page));
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let raw = serde_json::to_string(&json!({
@@ -8147,9 +8094,8 @@ async fn pending_emulation_user_agent_loader_keeps_active_owner_route_across_com
     assert_eq!(
         browser_context
             .background_target("TID-emulation-ua-background")
-            .and_then(|target| target.loaded_page())
-            .expect("background page should remain loaded")
-            .document_title(),
+            .and_then(|target| browser_context.target_document_title(target.target_id()))
+            .expect("background page should remain loaded"),
         "background emulation ua",
         "ambient background owner must not consume the active loader completion"
     );
@@ -8176,10 +8122,7 @@ async fn pending_emulation_viewport_keeps_original_page_when_active_target_chang
 
     let mut browser_context = BrowserContext::new("BID-emulation-viewport-owner".to_owned());
     browser_context.set_active_target_id("TID-emulation-viewport-original".to_owned());
-    browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(original_page);
+    browser_context.replace_active_page_for_test(Some(original_page));
     browser_context.stage_background_target(
         "TID-emulation-viewport-replacement".to_owned(),
         None,
@@ -8188,9 +8131,7 @@ async fn pending_emulation_viewport_keeps_original_page_when_active_target_chang
         None,
     );
     browser_context
-        .background_target_mut("TID-emulation-viewport-replacement")
-        .expect("replacement target")
-        .replace_loaded_page(Some(replacement_page));
+        .replace_target_page_for_test("TID-emulation-viewport-replacement", Some(replacement_page));
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let raw = serde_json::to_string(&json!({
@@ -8239,9 +8180,8 @@ async fn pending_emulation_viewport_keeps_original_page_when_active_target_chang
     assert_eq!(
         browser_context
             .background_target("TID-emulation-viewport-original")
-            .and_then(|target| target.loaded_page())
-            .expect("original page should remain loaded in its stable target")
-            .document_title(),
+            .and_then(|target| browser_context.target_document_title(target.target_id()))
+            .expect("original page should remain loaded in its stable target"),
         "original viewport owner"
     );
 }
@@ -8260,10 +8200,7 @@ async fn pending_emulation_timezone_keeps_background_owner_route_across_completi
 
     let mut browser_context = BrowserContext::new("BID-emulation-timezone-owner-route".to_owned());
     browser_context.set_active_target_id("TID-emulation-timezone-active".to_owned());
-    browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(active_page);
+    browser_context.replace_active_page_for_test(Some(active_page));
     browser_context.stage_background_target(
         "TID-emulation-timezone-background".to_owned(),
         None,
@@ -8272,9 +8209,7 @@ async fn pending_emulation_timezone_keeps_background_owner_route_across_completi
         None,
     );
     browser_context
-        .background_target_mut("TID-emulation-timezone-background")
-        .expect("background target")
-        .replace_loaded_page(Some(background_page));
+        .replace_target_page_for_test("TID-emulation-timezone-background", Some(background_page));
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let background_route = conn
@@ -8321,9 +8256,8 @@ async fn pending_emulation_timezone_keeps_background_owner_route_across_completi
     assert_eq!(
         browser_context
             .background_target("TID-emulation-timezone-background")
-            .and_then(|target| target.loaded_page())
-            .expect("background page should remain loaded")
-            .document_title(),
+            .and_then(|target| browser_context.target_document_title(target.target_id()))
+            .expect("background page should remain loaded"),
         "background timezone",
         "background Emulation completion should preserve the captured owner"
     );
@@ -8351,9 +8285,7 @@ async fn command_dispatch_completes_live_emulation_locale_without_legacy_fallbac
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let raw = serde_json::to_string(&json!({
         "id": 685,
@@ -8388,9 +8320,7 @@ async fn command_dispatch_completes_live_security_tls_without_legacy_fallback() 
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let raw = serde_json::to_string(&json!({
         "id": 686,
@@ -8427,10 +8357,7 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
 
     let mut browser_context = BrowserContext::new("BID-security-owner-route".to_owned());
     browser_context.set_active_target_id("TID-security-active".to_owned());
-    browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(active_page);
+    browser_context.replace_active_page_for_test(Some(active_page));
     browser_context.stage_background_target(
         "TID-security-background".to_owned(),
         None,
@@ -8438,10 +8365,7 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
         None,
         None,
     );
-    browser_context
-        .background_target_mut("TID-security-background")
-        .expect("background target")
-        .replace_loaded_page(Some(background_page));
+    browser_context.replace_target_page_for_test("TID-security-background", Some(background_page));
     conn.install_browser_context_fixture_for_test(browser_context);
 
     let background_session =
@@ -8485,9 +8409,8 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
     assert_eq!(
         browser_context
             .background_target("TID-security-background")
-            .and_then(|target| target.loaded_page())
-            .expect("background page should remain loaded")
-            .document_title(),
+            .and_then(|target| browser_context.target_document_title(target.target_id()))
+            .expect("background page should remain loaded"),
         "background tls",
         "background Security completion should preserve the original background page snapshot"
     );
@@ -8496,12 +8419,9 @@ async fn pending_security_tls_keeps_background_owner_route_across_completion() {
         "the background session override must not change the active target"
     );
     assert_eq!(
-        conn.browser_context
-            .as_ref()
-            .and_then(|browser_context| {
-                browser_context.background_target("TID-security-background")
-            })
-            .and_then(|target| target.tls_verify_host_override()),
+        conn.browser_context.as_ref().and_then(|browser_context| {
+            browser_context.tls_verify_host_override_for_target("TID-security-background")
+        }),
         Some(false),
         "the attached background session should update only its target"
     );
@@ -8523,9 +8443,7 @@ async fn command_dispatch_completes_live_fetch_enable_without_legacy_fallback() 
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let raw = serde_json::to_string(&json!({
         "id": 69,
@@ -8659,11 +8577,11 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
     conn.browser_context
         .as_mut()
         .expect("browser context")
-        .insert_page_target_host(PageTargetHost::with_url(
+        .register_page_target_url_fixture(
             "TID-bidi-intercept-background".to_owned(),
             None,
             "https://example.test/background".to_owned(),
-        ));
+        );
     let (result, _) = conn
         .execute_devtools_command(DevToolsCommand::AddNetworkIntercept(
             DevToolsAddNetworkInterceptCommand {
@@ -8680,12 +8598,15 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
         .into_parts();
     result.expect("background add intercept should succeed");
     assert!(
-        conn.browser_context
-            .as_ref()
-            .expect("browser context")
-            .background_target("TID-bidi-intercept-background")
-            .filter(|target| target.has_non_default_session_state())
-            .is_some_and(|state| state.fetch_owner.is_enabled()),
+        {
+            let context = &conn.browser_context.as_ref().expect("browser context");
+            context
+                .background_target("TID-bidi-intercept-background")
+                .filter(|target| {
+                    context.has_non_default_session_state_for_target(target.target_id())
+                })
+        }
+        .is_some_and(|state| state.fetch_owner.is_enabled()),
         "background target should own the intercept"
     );
 
@@ -8703,12 +8624,15 @@ async fn devtools_network_intercept_commands_route_to_fetch_owner() {
         DevToolsCommandResult::Empty
     );
     assert!(
-        conn.browser_context
-            .as_ref()
-            .expect("browser context")
-            .background_target("TID-bidi-intercept-background")
-            .filter(|target| target.has_non_default_session_state())
-            .is_none_or(|state| !state.fetch_owner.is_enabled()),
+        {
+            let context = &conn.browser_context.as_ref().expect("browser context");
+            context
+                .background_target("TID-bidi-intercept-background")
+                .filter(|target| {
+                    context.has_non_default_session_state_for_target(target.target_id())
+                })
+        }
+        .is_none_or(|state| !state.fetch_owner.is_enabled()),
         "target-less remove should clear the background intercept"
     );
 
@@ -8765,9 +8689,7 @@ async fn command_dispatch_completes_live_fetch_disable_without_legacy_fallback()
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let raw = serde_json::to_string(&json!({
         "id": 6901,

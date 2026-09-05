@@ -88,11 +88,11 @@ async fn runtime_capture_without_network_listener_does_not_advance_subresource_c
         .await;
     assert_eq!(
         ctx.conn
-            .runtime_session_owner_slot(Some("SID-1"))
+            .browser_context
+            .as_ref()
             .unwrap()
-            .loaded_page()
+            .target_subresource_network_records("TID-1")
             .unwrap()
-            .subresource_network_records()
             .len(),
         1
     );

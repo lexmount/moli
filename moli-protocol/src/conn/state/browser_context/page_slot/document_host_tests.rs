@@ -5,6 +5,24 @@ use std::{
     task::{Context, Poll, Waker},
 };
 
+const TARGET: &str = "TID-dialog-owner";
+
+fn empty_document_context() -> BrowserContext {
+    let mut owner = BrowserContext::new("BID-dialog-owner".into());
+    owner.set_active_target_id(TARGET);
+    owner
+}
+
+fn context_with_document(page: Page) -> BrowserContext {
+    let mut owner = empty_document_context();
+    assert!(
+        owner
+            .replace_target_page_for_test(TARGET, Some(page))
+            .is_none()
+    );
+    owner
+}
+
 #[tokio::test]
 async fn document_replacement_updates_inspection_binding_with_physical_page() {
     let browser = Browser::new(BrowserConfig::default()).unwrap();
@@ -17,26 +35,43 @@ async fn document_replacement_updates_inspection_binding_with_physical_page() {
         .await
         .unwrap();
     let agent = second.renderer_devtools_agent_token();
-    let mut slot = crate::conn::TargetRuntimeSlot::from_page_slot(
-        TargetPageSlot::with_loaded_page_for_test(first),
-    );
-    let old_attachment = slot.current_renderer_attachment().unwrap();
-    let previous = slot.replace_loaded_page(Some(second)).unwrap();
-    let attachment = slot.current_renderer_attachment().unwrap();
+    let mut owner = context_with_document(first);
+    let old_attachment = owner
+        .active_page_target()
+        .runtime_slot
+        .current_renderer_attachment()
+        .unwrap();
+    let previous = owner
+        .replace_loaded_page_for_target(TARGET, Some(second))
+        .unwrap();
+    let attachment = owner
+        .active_page_target()
+        .runtime_slot
+        .current_renderer_attachment()
+        .unwrap();
     assert_eq!(attachment.agent_token(), agent);
     assert_ne!(attachment.id(), old_attachment.id());
     assert_eq!(
-        slot.loaded_page().unwrap().renderer_devtools_agent_token(),
+        owner
+            .loaded_page_for_target(TARGET)
+            .unwrap()
+            .renderer_devtools_agent_token(),
         attachment.agent_token()
     );
-    assert!(slot.current_renderer_inspection_binding().is_some());
+    assert!(
+        owner
+            .active_page_target()
+            .runtime_slot
+            .current_renderer_inspection_binding()
+            .is_some()
+    );
     drop(previous);
 }
 
 async fn page_with_installed_dialog_for_test(
     browser: &Browser,
 ) -> (
-    crate::conn::PageTargetHost,
+    BrowserContext,
     moli_core::page::RendererJavaScriptDialogCompletion,
 ) {
     use moli_core::page::{
@@ -50,26 +85,23 @@ async fn page_with_installed_dialog_for_test(
         .unwrap();
     let artifacts = page.take_page_creation_artifacts().unwrap();
     let source = artifacts.lifecycle_snapshot;
-    let mut slot = TargetPageSlot::with_loaded_page_for_test(page);
-    slot.bind_renderer_document_lifecycle(
+    let mut owner = context_with_document(page);
+    owner.bind_renderer_document_lifecycle_for_target(
+        TARGET,
         artifacts,
         None,
         "FRAME-dialog-owner".into(),
         "loader".into(),
     );
-    let mut target = crate::conn::PageTargetHost::new(
-        "TID-dialog-owner".into(),
-        Some("SID-dialog-owner".into()),
-        crate::conn::TargetIdentityState::about_blank(),
-        slot,
-    );
+    owner.attach_active_session("SID-dialog-owner");
     let completion = RendererJavaScriptDialogCompletion::pending();
-    assert!(target.install_javascript_dialog(
+    assert!(owner.install_javascript_dialog_for_target(
+        TARGET,
         &moli_page_types::DevToolsSessionKey::Primary,
         crate::conn::TargetPageResidenceIdentity::new(
             "BID-dialog-owner".into(),
             Some("TID-dialog-owner".into()),
-            target.current_document_id().unwrap(),
+            owner.target_document_id(TARGET).unwrap(),
         ),
         "FRAME-dialog-owner".into(),
         RendererPendingJavaScriptDialog::new(
@@ -87,18 +119,20 @@ async fn page_with_installed_dialog_for_test(
             Some(completion.clone()),
         ),
     ));
-    (target, completion)
+    (owner, completion)
 }
 
 #[tokio::test]
 async fn document_replacement_dismisses_dialog_without_protocol_session_cleanup() {
     let browser = Browser::new(BrowserConfig::default()).unwrap();
-    let (mut target, completion) = page_with_installed_dialog_for_test(&browser).await;
+    let (mut owner, completion) = page_with_installed_dialog_for_test(&browser).await;
     let page = browser
         .fetch("data:text/html,<p>replacement</p>")
         .await
         .unwrap();
-    let previous = target.runtime_slot.replace_loaded_page(Some(page)).unwrap();
+    let previous = owner
+        .replace_loaded_page_for_target(TARGET, Some(page))
+        .unwrap();
 
     assert!(
         !completion.finish(true, "late reply".into()),
@@ -111,13 +145,16 @@ async fn document_replacement_dismisses_dialog_without_protocol_session_cleanup(
 #[tokio::test]
 async fn browser_drop_dismisses_dialog_even_when_session_snapshot_survives() {
     let browser = Browser::new(BrowserConfig::default()).unwrap();
-    let (mut target, completion) = page_with_installed_dialog_for_test(&browser).await;
-    let snapshot = target.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary].clone();
-    let contents = std::mem::take(&mut target.runtime_slot.page_slot_mut().contents);
-    drop(target);
+    let (mut owner, completion) = page_with_installed_dialog_for_test(&browser).await;
+    let snapshot = owner.active_page_target().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
+        .clone();
+    let id = owner.selected_web_contents_id().unwrap();
+    drop(owner.page_targets.remove(TARGET).unwrap());
+    let contents = owner.physical.web_contents.get(&id).unwrap();
     assert!(contents.main_frame.current_document.is_some());
     assert!(!contents.javascript_dialogs.is_empty());
-    drop(contents);
+    drop(owner);
 
     assert!(
         !completion.finish(true, "late reply".into()),
@@ -130,14 +167,16 @@ async fn browser_drop_dismisses_dialog_even_when_session_snapshot_survives() {
 #[tokio::test]
 async fn browser_dialog_can_be_handled_after_protocol_projection_is_dropped() {
     let browser = Browser::new(BrowserConfig::default()).unwrap();
-    let (mut target, completion) = page_with_installed_dialog_for_test(&browser).await;
-    let key = target.devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+    let (mut owner, completion) = page_with_installed_dialog_for_test(&browser).await;
+    let key = owner.active_page_target().devtools_sessions
+        [moli_page_types::DevToolsSessionKey::Primary]
         .page_session_state
         .javascript_dialog_state
         .pending_dialogs()[0]
         .key;
-    let mut contents = std::mem::take(&mut target.runtime_slot.page_slot_mut().contents);
-    drop(target);
+    let id = owner.selected_web_contents_id().unwrap();
+    drop(owner.page_targets.remove(TARGET).unwrap());
+    let contents = owner.physical.web_contents.get_mut(&id).unwrap();
 
     assert_eq!(
         contents.javascript_dialogs.snapshot(key).unwrap().message,
@@ -167,8 +206,10 @@ async fn browser_dialog_can_be_handled_after_protocol_projection_is_dropped() {
 async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_projection() {
     use moli_core::page::RendererDocumentTerminationReason;
     let browser = Browser::new(BrowserConfig::default()).unwrap();
-    let (mut target, completion) = page_with_installed_dialog_for_test(&browser).await;
-    let contents = &mut target.runtime_slot.page_slot_mut().contents;
+    let (mut owner, completion) = page_with_installed_dialog_for_test(&browser).await;
+    let contents_id = owner.selected_web_contents_id().unwrap();
+    drop(owner.page_targets.remove(TARGET).unwrap());
+    let contents = owner.physical.web_contents.get_mut(&contents_id).unwrap();
     let document = contents.main_frame.current_document.as_ref().unwrap();
     let id = document.id;
     let snapshot = document.lifecycle.snapshot().unwrap();
@@ -226,14 +267,13 @@ async fn dialog_disable_and_exact_detach_dismiss_only_their_browser_dialogs() {
     };
     use moli_page_types::DevToolsSessionKey;
     let browser = Browser::new(BrowserConfig::default()).unwrap();
-    let (mut target, primary_completion) = page_with_installed_dialog_for_test(&browser).await;
+    let (mut owner, primary_completion) = page_with_installed_dialog_for_test(&browser).await;
     let peer = DevToolsSessionKey::Attached("SID-dialog-peer".into());
     let peer_completion = RendererJavaScriptDialogCompletion::pending();
-    let document = target.current_document_id().unwrap();
-    let snapshot = target
-        .runtime_slot
-        .page_slot()
-        .contents
+    let document = owner.target_document_id(TARGET).unwrap();
+    let snapshot = owner
+        .web_contents_for_target(TARGET)
+        .unwrap()
         .main_frame
         .current_document
         .as_ref()
@@ -241,7 +281,8 @@ async fn dialog_disable_and_exact_detach_dismiss_only_their_browser_dialogs() {
         .lifecycle
         .snapshot()
         .unwrap();
-    assert!(target.install_javascript_dialog(
+    assert!(owner.install_javascript_dialog_for_target(
+        TARGET,
         &peer,
         crate::conn::TargetPageResidenceIdentity::new(
             "BID-dialog-owner".into(),
@@ -264,45 +305,56 @@ async fn dialog_disable_and_exact_detach_dismiss_only_their_browser_dialogs() {
             Some(peer_completion.clone())
         )
     ));
-    target.disable_devtools_page_domain(&DevToolsSessionKey::Primary);
+    owner.disable_devtools_page_domain_for_target(TARGET, &DevToolsSessionKey::Primary);
     assert!(!primary_completion.finish(true, "late primary".into()));
     assert!(!primary_completion.wait().accepted);
-    assert!(target.has_pending_javascript_dialog());
+    assert!(owner.has_pending_javascript_dialog_for_target(TARGET));
     assert_eq!(
-        target.javascript_dialog_snapshot(&peer).unwrap().message,
+        owner
+            .javascript_dialog_snapshot_for_target(TARGET, &peer)
+            .unwrap()
+            .message,
         "peer"
     );
-    assert!(!target.dispose_devtools_session("SID-wrong", &peer));
-    assert!(target.javascript_dialog_snapshot(&peer).is_some());
-    assert!(target.dispose_devtools_session("SID-dialog-peer", &peer));
+    assert!(!owner.dispose_devtools_session_for_target(TARGET, "SID-wrong", &peer));
+    assert!(
+        owner
+            .javascript_dialog_snapshot_for_target(TARGET, &peer)
+            .is_some()
+    );
+    assert!(owner.dispose_devtools_session_for_target(TARGET, "SID-dialog-peer", &peer));
     assert!(!peer_completion.finish(true, "late peer".into()));
     assert!(!peer_completion.wait().accepted);
-    assert!(!target.has_pending_javascript_dialog());
-    assert_eq!(target.current_document_id(), Some(document));
+    assert!(!owner.has_pending_javascript_dialog_for_target(TARGET));
+    assert_eq!(owner.target_document_id(TARGET), Some(document));
 }
 
 #[tokio::test]
 async fn document_replacement_preserves_stable_page_engine_history_and_storage() {
     let browser = Browser::new(BrowserConfig::default()).unwrap();
     let first = browser.fetch("data:text/html,<p>first</p>").await.unwrap();
-    let mut target = crate::conn::PageTargetHost::new(
-        "TID-stable-contents".into(),
-        None,
-        crate::conn::TargetIdentityState::about_blank(),
-        TargetPageSlot::with_loaded_page_for_test(first),
-    );
+    let mut owner = context_with_document(first);
     let mut config = moli_fetch::FetchConfig::default();
     config.set_user_agent("stable-engine");
-    target.install_navigation_engine(moli_core::runtime::NavigationEngine::new_with_fetch_config(
-        config,
-    ));
-    let stable_ids = (target.web_contents_id(), target.main_frame_slot_id());
-    target.set_window_surface_state(crate::conn::WindowSurfaceState::Fullscreen);
-    target.set_window_surface_geometry(Some(800), Some(600), Some(10), Some(20));
-    let window = target.window_surface();
-    target
-        .apply_emulation_policy_change(crate::conn::EmulationPolicyChange::CpuThrottlingRate(4.0));
-    target.mutate_devtools_network_session_state(
+    owner
+        .web_contents_for_target_mut(TARGET)
+        .unwrap()
+        .install_navigation_engine(moli_core::runtime::NavigationEngine::new_with_fetch_config(
+            config,
+        ));
+    let stable_ids = (
+        owner.selected_web_contents_id().unwrap(),
+        owner.active_page_target().main_frame_slot_id(),
+    );
+    owner.set_target_window_surface_state(TARGET, crate::conn::WindowSurfaceState::Fullscreen);
+    owner.set_target_window_surface_geometry(TARGET, Some(800), Some(600), Some(10), Some(20));
+    let window = owner.target_window_surface(TARGET).unwrap();
+    owner.apply_target_emulation_policy_change(
+        TARGET,
+        crate::conn::EmulationPolicyChange::CpuThrottlingRate(4.0),
+    );
+    owner.mutate_devtools_network_session_state_for_target(
+        TARGET,
         &moli_page_types::DevToolsSessionKey::Primary,
         |raw| {
             raw.network_enabled = true;
@@ -312,7 +364,8 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
             raw.extra_headers = vec![("X-Stable".into(), "contents".into())];
         },
     );
-    target.set_devtools_browser_identity_override(
+    owner.set_devtools_browser_identity_override_for_target(
+        TARGET,
         &moli_page_types::DevToolsSessionKey::Primary,
         crate::conn::DevToolsBrowserIdentityOverride::from_command(
             &moli_browser_profile::BrowserIdentityProfile::default(),
@@ -322,65 +375,63 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
             None,
         ),
     );
-    target
-        .set_devtools_locale_override(
+    owner
+        .set_devtools_locale_override_for_target(
+            TARGET,
             &moli_page_types::DevToolsSessionKey::Primary,
             Some("de-DE".into()),
         )
         .unwrap();
-    target
-        .set_devtools_timezone_override(
+    owner
+        .set_devtools_timezone_override_for_target(
+            TARGET,
             &moli_page_types::DevToolsSessionKey::Primary,
             Some("Europe/Berlin".into()),
         )
         .unwrap();
-    let policy = target.effective_policy();
-    target.set_network_offline(true);
-    target.set_tls_verify_host_override(Some(false));
-    target.set_devtools_bypass_csp_enabled(&moli_page_types::DevToolsSessionKey::Primary, true);
-    let first_document = target.current_document_id().unwrap();
-    let storage = target.session_storage_store().clone();
+    let policy = owner.effective_policy_for_target(TARGET);
+    owner.set_network_offline_for_target(TARGET, true);
+    owner.set_tls_verify_host_override_for_target(TARGET, Some(false));
+    owner.set_devtools_bypass_csp_enabled_for_target(
+        TARGET,
+        &moli_page_types::DevToolsSessionKey::Primary,
+        true,
+    );
+    let first_document = owner.target_document_id(TARGET).unwrap();
+    let storage = owner
+        .web_contents_for_target(TARGET)
+        .unwrap()
+        .session_storage
+        .store()
+        .clone();
     assert!(
         storage
             .lock()
             .set_item("https://example.test", "key", "value")
     );
-    target
-        .runtime_slot
-        .page_slot_mut()
-        .contents
+    owner
+        .web_contents_for_target_mut(TARGET)
+        .unwrap()
         .navigation
         .record_loaded_page_navigation_history((
             "https://example.test/first".into(),
             "first".into(),
         ));
-    let observer = target
-        .runtime_slot
-        .page_slot_mut()
-        .document_lifetime_observer()
-        .unwrap();
+    let observer = owner.document_lifetime_observer_for_target(TARGET).unwrap();
 
-    let navigation = target
-        .runtime_slot
-        .start_document_navigation("second-loader".into());
+    let navigation = owner.begin_target_document_navigation(TARGET, "second-loader".into());
     let second = browser.fetch("data:text/html,<p>second</p>").await.unwrap();
-    let reserved = target
-        .runtime_slot
-        .page_slot_mut()
-        .reserve_renderer_document(RendererPageResidenceIdentity::from_page(&second));
-    let first = target
-        .runtime_slot
-        .replace_loaded_page(Some(second))
-        .unwrap();
-    assert!(
-        target
-            .runtime_slot
-            .commit_pending_document_navigation_if_matches(&navigation)
+    let reserved = owner.reserve_renderer_document_for_target(
+        TARGET,
+        RendererPageResidenceIdentity::from_page(&second),
     );
-    target
-        .runtime_slot
-        .page_slot_mut()
-        .contents
+    let first = owner
+        .replace_loaded_page_for_target(TARGET, Some(second))
+        .unwrap();
+    assert!(owner.commit_pending_document_navigation_if_matches_for_target(TARGET, &navigation));
+    owner
+        .web_contents_for_target_mut(TARGET)
+        .unwrap()
         .navigation
         .record_loaded_page_navigation_history((
             "https://example.test/second".into(),
@@ -388,20 +439,32 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
         ));
 
     assert_eq!(
-        (target.web_contents_id(), target.main_frame_slot_id()),
+        (
+            owner.selected_web_contents_id().unwrap(),
+            owner.active_page_target().main_frame_slot_id()
+        ),
         stable_ids
     );
-    assert_eq!(target.current_document_id(), Some(reserved));
-    assert_eq!(target.window_surface(), window);
-    assert_eq!(target.emulation_policy().cpu_throttling_rate, 4.0);
-    assert_eq!(target.effective_policy(), policy);
-    assert!(target.network_offline());
-    assert_eq!(target.tls_verify_host_override(), Some(false));
-    assert!(target.bypass_content_security_policy());
+    assert_eq!(owner.target_document_id(TARGET), Some(reserved));
+    assert_eq!(owner.target_window_surface(TARGET).unwrap(), window);
+    assert_eq!(
+        owner
+            .target_emulation_policy(TARGET)
+            .unwrap()
+            .cpu_throttling_rate,
+        4.0
+    );
+    assert_eq!(owner.effective_policy_for_target(TARGET), policy);
+    assert!(owner.network_offline_for_target(TARGET));
+    assert_eq!(
+        owner.tls_verify_host_override_for_target(TARGET),
+        Some(false)
+    );
+    assert!(owner.bypass_content_security_policy_for_target(TARGET));
     assert_ne!(first_document, reserved);
     assert_eq!(
-        target
-            .navigation_engine()
+        owner
+            .page_navigation_engine(TARGET)
             .unwrap()
             .fetch_config()
             .user_agent(),
@@ -409,16 +472,19 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
     );
     assert!(std::sync::Arc::ptr_eq(
         &storage,
-        target.session_storage_store()
+        owner
+            .web_contents_for_target(TARGET)
+            .unwrap()
+            .session_storage
+            .store()
     ));
     assert_eq!(
         storage.lock().get_item("https://example.test", "key"),
         Some("value".into())
     );
-    let (index, history) = target
-        .runtime_slot
-        .page_slot_mut()
-        .contents
+    let (index, history) = owner
+        .web_contents_for_target_mut(TARGET)
+        .unwrap()
         .navigation
         .navigation_history_snapshot(None);
     assert_eq!(index, 1);
@@ -438,25 +504,34 @@ async fn web_contents_owns_live_document_and_navigation_after_protocol_residence
     let mut page = browser.fetch("data:text/html,<p>owned</p>").await.unwrap();
     let renderer = RendererPageResidenceIdentity::from_page(&page);
     let artifacts = page.take_page_creation_artifacts().unwrap();
-    let mut slot = TargetPageSlot::with_loaded_page_for_test(page);
-    slot.bind_renderer_document_lifecycle(artifacts, None, "frame".into(), "loader".into());
-    let document = slot.document_id().unwrap();
-    let observer = slot.document_lifetime_observer().unwrap();
-    let stable_id = slot.contents.id();
-    let frame_id = slot.contents.main_frame.id();
-    let navigation = slot.start_document_navigation("pending-loader".into());
-    let cancellation = slot
-        .document_navigation_cancellation_handle(&navigation)
+    let mut owner = context_with_document(page);
+    owner.bind_renderer_document_lifecycle_for_target(
+        TARGET,
+        artifacts,
+        None,
+        "frame".into(),
+        "loader".into(),
+    );
+    let document = owner.target_document_id(TARGET).unwrap();
+    let observer = owner.document_lifetime_observer_for_target(TARGET).unwrap();
+    let stable_id = owner.web_contents_for_target_mut(TARGET).unwrap().id();
+    let frame_id = owner
+        .web_contents_for_target_mut(TARGET)
+        .unwrap()
+        .main_frame
+        .id();
+    let navigation = owner.begin_target_document_navigation(TARGET, "pending-loader".into());
+    let cancellation = owner
+        .document_navigation_cancellation_handle_for_target(TARGET, &navigation)
         .unwrap();
-    let snapshot = slot
-        .renderer_document_lifecycle_authoritative_snapshot()
+    let snapshot = owner
+        .renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET)
         .unwrap();
 
-    // Move only the Browser subtree. All loader/binding/output state is dropped.
-    let contents = {
-        let protocol_residence = slot;
-        protocol_residence.contents
-    };
+    // Drop only DevTools; the registered Browser subtree stays in its Context.
+    drop(owner.page_targets.remove(TARGET).unwrap());
+    assert_eq!(owner.selected_web_contents_id(), Some(stable_id));
+    let contents = owner.physical.web_contents.get(&stable_id).unwrap();
     assert_eq!(contents.id(), stable_id);
     assert_eq!(contents.main_frame.id(), frame_id);
     let current = contents.main_frame.current_document.as_ref().unwrap();
@@ -478,7 +553,7 @@ async fn web_contents_owns_live_document_and_navigation_after_protocol_residence
         Poll::Pending
     );
 
-    drop(contents);
+    drop(owner);
     assert!(cancellation.is_cancelled());
     assert_eq!(
         wait.await,
@@ -492,31 +567,39 @@ async fn replacement_retires_document_identity_lifecycle_and_lifetime_together()
     let mut first = browser.fetch("data:text/html,<p>first</p>").await.unwrap();
     let first_renderer = RendererPageResidenceIdentity::from_page(&first);
     let first_artifacts = first.take_page_creation_artifacts().unwrap();
-    let mut slot = TargetPageSlot::default();
-    let first_id = slot.reserve_renderer_document(first_renderer);
-    assert!(slot.replace_loaded_page(Some(first)).is_none());
-    assert_eq!(slot.document_id(), Some(first_id));
-    slot.bind_renderer_document_lifecycle(
+    let mut owner = empty_document_context();
+    let first_id = owner.reserve_renderer_document_for_target(TARGET, first_renderer);
+    assert!(
+        owner
+            .replace_loaded_page_for_target(TARGET, Some(first))
+            .is_none()
+    );
+    assert_eq!(owner.target_document_id(TARGET), Some(first_id));
+    owner.bind_renderer_document_lifecycle_for_target(
+        TARGET,
         first_artifacts.clone(),
         None,
         "frame".into(),
         "first-loader".into(),
     );
     assert!(
-        slot.renderer_document_lifecycle_authoritative_snapshot()
+        owner
+            .renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET)
             .is_some()
     );
-    let first_observer = slot.document_lifetime_observer().unwrap();
-    let another_first_observer = slot.document_lifetime_observer().unwrap();
+    let first_observer = owner.document_lifetime_observer_for_target(TARGET).unwrap();
+    let another_first_observer = owner.document_lifetime_observer_for_target(TARGET).unwrap();
 
-    // Moving the whole slot or failing a pending navigation must not retire
+    // Moving the whole Context or failing a pending navigation must not retire
     // the current Document. Its Page/lifecycle/identity move as one object.
-    let mut moved = slot;
-    let failed_navigation = moved.start_document_navigation("failed-loader".into());
-    let before = moved.renderer_document_lifecycle_authoritative_snapshot();
-    assert!(moved.clear_pending_document_navigation_if_matches(&failed_navigation));
+    let mut moved = owner;
+    let failed_navigation = moved.begin_target_document_navigation(TARGET, "failed-loader".into());
+    let before = moved.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET);
+    assert!(
+        moved.clear_pending_document_navigation_if_matches_for_target(TARGET, &failed_navigation)
+    );
     assert_eq!(
-        moved.renderer_document_lifecycle_authoritative_snapshot(),
+        moved.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET),
         before
     );
     let mut first_wait = Box::pin(first_observer.wait());
@@ -526,18 +609,26 @@ async fn replacement_retires_document_identity_lifecycle_and_lifetime_together()
     let mut second = browser.fetch("data:text/html,<p>second</p>").await.unwrap();
     let second_renderer = RendererPageResidenceIdentity::from_page(&second);
     let second_artifacts = second.take_page_creation_artifacts().unwrap();
-    let navigation = moved.start_document_navigation("second-loader".into());
-    let reserved_id = moved.pending_document_id().unwrap();
-    assert!(moved.bind_pending_document_navigation_renderer_page(&navigation, second_renderer));
-    let previous_page = moved.replace_loaded_page(Some(second)).unwrap();
-    assert_eq!(moved.document_id(), Some(reserved_id));
+    let navigation = moved.begin_target_document_navigation(TARGET, "second-loader".into());
+    let reserved_id = moved.target_pending_document_id(TARGET).unwrap();
+    assert!(
+        moved.bind_pending_document_navigation_renderer_page_for_target(
+            TARGET,
+            &navigation,
+            second_renderer
+        )
+    );
+    let previous_page = moved
+        .replace_loaded_page_for_target(TARGET, Some(second))
+        .unwrap();
+    assert_eq!(moved.target_document_id(TARGET), Some(reserved_id));
     assert_ne!(first_id, reserved_id);
     assert_eq!(
         RendererPageResidenceIdentity::from_page(&previous_page),
         first_renderer
     );
-    assert!(!moved.routes_renderer_page(first_renderer));
-    assert!(moved.routes_renderer_page(second_renderer));
+    assert!(!moved.routes_renderer_page_for_target(TARGET, first_renderer));
+    assert!(moved.routes_renderer_page_for_target(TARGET, second_renderer));
     assert_eq!(
         first_wait.await,
         moli_core::browser::DocumentRetirement::Superseded
@@ -548,45 +639,64 @@ async fn replacement_retires_document_identity_lifecycle_and_lifetime_together()
     );
     assert!(
         moved
-            .renderer_document_lifecycle_authoritative_snapshot()
+            .renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET)
             .is_none(),
         "the replacement must not retain the previous Document's lifecycle"
     );
     assert!(
         moved
+            .page_slot_for_target(TARGET)
+            .unwrap()
             .renderer_document_lifecycle_visible_snapshot()
             .is_none()
     );
-    assert!(moved.renderer_document_lifecycle_binding().is_none());
+    assert!(
+        moved
+            .renderer_document_lifecycle_binding_for_target(TARGET)
+            .is_none()
+    );
 
-    assert!(moved.commit_pending_document_navigation_if_matches(&navigation));
-    moved.bind_renderer_document_lifecycle(
+    assert!(moved.commit_pending_document_navigation_if_matches_for_target(TARGET, &navigation));
+    moved.bind_renderer_document_lifecycle_for_target(
+        TARGET,
         second_artifacts,
         Some(navigation),
         "frame".into(),
         "second-loader".into(),
     );
-    let second_snapshot = moved.renderer_document_lifecycle_authoritative_snapshot();
+    let second_snapshot =
+        moved.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET);
     assert!(second_snapshot.is_some());
     assert!(
         moved
-            .ingest_renderer_document_lifecycle_events(first_artifacts.initial_lifecycle_events)
+            .ingest_renderer_document_lifecycle_events_for_target(
+                TARGET,
+                first_artifacts.initial_lifecycle_events
+            )
             .is_empty()
     );
     assert_eq!(
-        moved.renderer_document_lifecycle_authoritative_snapshot(),
+        moved.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET),
         second_snapshot
     );
-    let second_observer = moved.document_lifetime_observer().unwrap();
+    let second_observer = moved.document_lifetime_observer_for_target(TARGET).unwrap();
     let second_page = moved
-        .replace_loaded_page_with_reason(None, TargetPageAbsenceReason::TargetClosed)
+        .replace_loaded_page_with_reason_for_target(
+            TARGET,
+            None,
+            TargetPageAbsenceReason::TargetClosed,
+        )
         .unwrap();
-    assert!(!moved.has_loaded_page());
-    assert_eq!(moved.document_id(), None);
-    assert!(moved.document_lifetime_observer().is_none());
+    assert!(!moved.target_has_loaded_page(TARGET));
+    assert_eq!(moved.target_document_id(TARGET), None);
     assert!(
         moved
-            .renderer_document_lifecycle_authoritative_snapshot()
+            .document_lifetime_observer_for_target(TARGET)
+            .is_none()
+    );
+    assert!(
+        moved
+            .renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET)
             .is_none()
     );
     assert_eq!(
@@ -602,31 +712,37 @@ async fn rejected_reservation_preserves_current_document_until_owner_loss() {
     let browser = Browser::new(BrowserConfig::default()).unwrap();
     let first = browser.fetch("data:text/html,<p>first</p>").await.unwrap();
     let first_renderer = RendererPageResidenceIdentity::from_page(&first);
-    let mut slot = TargetPageSlot::with_loaded_page_for_test(first);
-    let first_id = slot.document_id();
-    let observer = slot.document_lifetime_observer().unwrap();
+    let mut owner = context_with_document(first);
+    let first_id = owner.target_document_id(TARGET);
+    let observer = owner.document_lifetime_observer_for_target(TARGET).unwrap();
     let candidate = browser
         .fetch("data:text/html,<p>candidate</p>")
         .await
         .unwrap();
-    let navigation = slot.start_document_navigation("candidate-loader".into());
-    assert!(slot.bind_pending_document_navigation_renderer_page(&navigation, first_renderer));
+    let navigation = owner.begin_target_document_navigation(TARGET, "candidate-loader".into());
+    assert!(
+        owner.bind_pending_document_navigation_renderer_page_for_target(
+            TARGET,
+            &navigation,
+            first_renderer
+        )
+    );
     assert!(
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            slot.replace_loaded_page(Some(candidate));
+            owner.replace_loaded_page_for_target(TARGET, Some(candidate));
         }))
         .is_err()
     );
-    assert_eq!(slot.document_id(), first_id);
+    assert_eq!(owner.target_document_id(TARGET), first_id);
     assert_eq!(
-        RendererPageResidenceIdentity::from_page(slot.loaded_page().unwrap()),
+        RendererPageResidenceIdentity::from_page(owner.loaded_page_for_target(TARGET).unwrap()),
         first_renderer
     );
-    assert!(slot.accepts_pending_document_navigation_event(&navigation));
+    assert!(owner.accepts_pending_document_navigation_event_for_target(TARGET, &navigation));
     let mut wait = Box::pin(observer.wait());
     let mut context = Context::from_waker(Waker::noop());
     assert_eq!(wait.as_mut().poll(&mut context), Poll::Pending);
-    drop(slot);
+    drop(owner);
     assert_eq!(
         wait.await,
         moli_core::browser::DocumentRetirement::Unavailable

@@ -163,8 +163,8 @@ impl CdpConnection {
             None => Ok(()),
         };
         if !self
-            .runtime_session_owner_slot(Some(session_id))
-            .is_ok_and(|slot| slot.has_loaded_page())
+            .browser_context_by_id(&browser_context_id)
+            .is_some_and(|context| context.target_has_loaded_page(&target_id))
         {
             return policy_result;
         }

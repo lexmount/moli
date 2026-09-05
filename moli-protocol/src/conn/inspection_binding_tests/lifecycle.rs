@@ -19,18 +19,9 @@ async fn session_detach_reaches_renderer_without_protocol_document() {
         ctx.expect_result(id, json!({}), Some(session));
     }
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let mut document = ctx
-        .conn
-        // Move after a child-session access as well: Browser-owned work must
-        // not inherit that frontend and resurrect its V8 session after detach.
-        .runtime_session_owner_slot_mut(Some("SID-detached-inspection"))
-        .unwrap()
-        .page_slot_mut()
-        .contents
-        .main_frame
-        .current_document
-        .take()
-        .unwrap();
+    // Both child sessions have already used the binding. Browser-owned work
+    // must not inherit either frontend or resurrect its V8 session on detach.
+    let mut document = take_inspection_document(&mut ctx.conn, &owner);
     let before = document
         .page
         .runtime_heap_usage_async()
@@ -75,11 +66,6 @@ async fn session_detach_reaches_renderer_without_protocol_document() {
     .await;
     let surviving = ctx.take_response_by_id(4);
     assert_eq!(surviving["result"]["result"]["value"], json!("value"));
-    assert!(
-        !ctx.conn
-            .runtime_session_owner_slot_for_owner(&owner)
-            .unwrap()
-            .has_loaded_page()
-    );
+    assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
     drop(document);
 }

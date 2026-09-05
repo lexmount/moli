@@ -195,7 +195,7 @@ mod tests {
     use serde_json::json;
 
     use crate::{
-        conn::{BrowserContext, CdpCommandTaskStep, PageTargetHost},
+        conn::{BrowserContext, CdpCommandTaskStep},
         domains::page::LOADER_ID,
         testing::{TestContext, wait_until_renderer_document_load, wait_until_scheduler_message},
     };
@@ -1019,17 +1019,15 @@ mod tests {
             .await
             .expect("background page should load");
 
-        let mut background = PageTargetHost::with_url(
+        let mut bc = BrowserContext::new("BID-DS-BG".to_owned());
+        bc.set_active_target_id("TID-active".to_owned());
+        bc.attach_active_session("SID-active".to_owned());
+        bc.register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             page.final_url().as_str().to_owned(),
         );
-        background.replace_loaded_page(Some(page));
-
-        let mut bc = BrowserContext::new("BID-DS-BG".to_owned());
-        bc.set_active_target_id("TID-active".to_owned());
-        bc.attach_active_session("SID-active".to_owned());
-        bc.insert_page_target_host(background);
+        bc.replace_target_page_for_test("TID-background", Some(page));
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
         ctx.process_async(json!({
@@ -1184,13 +1182,10 @@ mod tests {
                 .any(|name| name == "#document")
         );
         assert!(
-            ctx.conn
-                .browser_context
-                .as_ref()
-                .expect("browser context")
-                .active_page_target()
-                .runtime_slot
-                .has_loaded_page(),
+            {
+                let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+                context.target_has_loaded_page(context.active_target_id().unwrap())
+            },
             "Target.createTarget should install the initial about:blank page before DOMSnapshot"
         );
     }

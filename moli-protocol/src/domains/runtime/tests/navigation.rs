@@ -77,13 +77,14 @@ async fn enable_uses_fresh_initial_document_without_adapter() {
         "Runtime.enable should replay the existing about:blank default context: {messages:?}"
     );
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context should exist")
-            .active_page_target()
-            .runtime_slot
-            .has_loaded_page(),
+        {
+            let context = &ctx
+                .conn
+                .browser_context
+                .as_ref()
+                .expect("browser context should exist");
+            context.target_has_loaded_page(context.active_target_id().unwrap())
+        },
         "Runtime.enable should observe the already-installed about:blank page"
     );
 }

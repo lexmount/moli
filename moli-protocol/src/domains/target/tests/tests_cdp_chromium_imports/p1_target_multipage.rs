@@ -549,7 +549,11 @@ async fn rust_cdp_chromium_target_second_create_target_activates_new_target_by_d
     assert_eq!(browser_context.active_target_id(), Some(target_id.as_str()));
     assert_eq!(browser_context.background_target_count(), 1);
     assert_eq!(
-        browser_context.background_target_at(0).unwrap().target_id(),
+        browser_context
+            .background_targets()
+            .next()
+            .unwrap()
+            .target_id(),
         "TID-000000000A"
     );
 
@@ -710,20 +714,18 @@ async fn rust_cdp_chromium_target_window_open_auto_attached_popup_materializes_i
             ctx.wait_until_scheduler_state("auto-attached popup navigation commit", |conn| {
                 conn.browser_context_by_id("BID-popup-auto-load")
                     .and_then(|browser_context| {
-                        loaded_page_for_target(browser_context, popup_target_id)
+                        browser_context.target_document_url(popup_target_id)
                     })
-                    .is_some_and(|page| page.final_url().as_str() == popup_url)
+                    .is_some_and(|page| page.as_str() == popup_url)
             })
             .await;
             let popup_page = ctx
                 .conn
                 .browser_context
                 .as_ref()
-                .and_then(|browser_context| {
-                    loaded_page_for_target(browser_context, popup_target_id)
-                })
+                .and_then(|browser_context| browser_context.target_document_url(popup_target_id))
                 .expect("window.open lifecycle should have loaded the popup document");
-            assert_eq!(popup_page.final_url().as_str(), popup_url);
+            assert_eq!(popup_page.as_str(), popup_url);
 
             ctx.process_async(json!({
                 "id": 260_212,
@@ -838,10 +840,8 @@ async fn run_waiting_popup_initial_document_after_resume(
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|browser_context| {
-                loaded_page_for_target(browser_context, popup_target_id)
-            })
-            .is_some_and(|page| page.final_url().as_str() == "about:blank"),
+            .and_then(|browser_context| { browser_context.target_document_url(popup_target_id) })
+            .is_some_and(|page| page.as_str() == "about:blank"),
         "popup target lifecycle should already expose the initial about:blank document"
     );
     assert!(

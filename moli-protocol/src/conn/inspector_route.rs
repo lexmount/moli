@@ -156,9 +156,17 @@ impl CdpConnection {
         renderer_page: RendererPageResidenceIdentity,
     ) -> Result<CommittedRendererAgentAttachment, String> {
         self.validate_navigation_target_owner_for_scope(owner, candidate.navigation())?;
+        let (context_id, target_id) = self
+            .resolved_page_owner_identity_for_owner(owner)
+            .ok_or("NoDocumentLoaded")?;
         let transaction = self
-            .runtime_session_owner_slot_mut_for_owner(owner)?
-            .commit_renderer_agent_candidate_transaction(candidate, renderer_page)
+            .browser_context_by_id_mut(&context_id)
+            .ok_or("NoDocumentLoaded")?
+            .commit_renderer_agent_candidate_transaction_for_target(
+                &target_id,
+                candidate,
+                renderer_page,
+            )
             .map_err(|error| error.to_string())?;
         let page_owner = self
             .pending_target_page_residence_identity_for_owner(owner)
@@ -254,7 +262,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::conn::{BrowserContext, PageTargetHost};
+    use crate::conn::BrowserContext;
     use crate::testing::TestContext;
 
     #[test]
@@ -312,12 +320,13 @@ mod tests {
         assert!(!conn.accepts_pending_document_navigation_for_owner(&owner, &navigation));
         let target = conn.browser_context.as_ref().unwrap().active_page_target();
         assert!(
-            !target
-                .runtime_slot
-                .page_slot()
-                .contents
-                .navigation
-                .initial_empty_document_pending_cross_document_navigation(),
+            !conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .target_initial_empty_document_has_pending_cross_document_navigation(
+                    target.target_id()
+                ),
             "rollback must retire the initial document's pending state with its navigation"
         );
         assert!(target.owner_state.page_resource_store.is_empty());
@@ -373,12 +382,12 @@ mod tests {
         assert!(conn.accepts_pending_document_navigation_for_owner(&owner, &second));
         let target = conn.browser_context.as_ref().unwrap().active_page_target();
         assert!(
-            target
-                .runtime_slot
-                .page_slot()
-                .contents
-                .navigation
-                .initial_empty_document_pending_cross_document_navigation()
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .target_initial_empty_document_has_pending_cross_document_navigation(
+                    target.target_id()
+                )
         );
         assert_eq!(
             target.owner_state.page_resource_store.retained_body_bytes(),
@@ -390,12 +399,13 @@ mod tests {
         assert!(!conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &second));
         let target = conn.browser_context.as_ref().unwrap().active_page_target();
         assert!(
-            !target
-                .runtime_slot
-                .page_slot()
-                .contents
-                .navigation
-                .initial_empty_document_pending_cross_document_navigation()
+            !conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .target_initial_empty_document_has_pending_cross_document_navigation(
+                    target.target_id()
+                )
         );
         assert!(target.owner_state.page_resource_store.is_empty());
 
@@ -432,7 +442,10 @@ mod tests {
         assert!(!conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &committed));
         let target = conn.browser_context.as_ref().unwrap().active_page_target();
         assert_eq!(
-            target.runtime_slot.current_document_loader_id(),
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .current_document_loader_id_for_target(target.target_id()),
             Some("LOADER-reused")
         );
         assert_eq!(
@@ -445,11 +458,11 @@ mod tests {
     fn navigation_identity_cannot_authorize_a_different_target_with_the_same_loader() {
         let mut context = BrowserContext::new("BID-navigation-route".to_owned());
         context.set_active_target_id("TID-first");
-        context.insert_page_target_host(PageTargetHost::with_url(
+        context.register_page_target_url_fixture(
             "TID-second".to_owned(),
             None,
             "about:blank".to_owned(),
-        ));
+        );
         let first = context
             .start_document_navigation_for_target("TID-first", "LOADER-shared".to_owned())
             .unwrap();
@@ -505,11 +518,11 @@ mod tests {
         let mut browser_context = BrowserContext::new("BID-route".to_owned());
         browser_context.set_active_target_id("TID-active".to_owned());
         browser_context.attach_active_session("SID-active-primary".to_owned());
-        browser_context.insert_page_target_host(PageTargetHost::with_url(
+        browser_context.register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background-primary".to_owned()),
             "about:blank#background".to_owned(),
-        ));
+        );
         assert!(
             browser_context
                 .assign_attached_session_to_target("TID-active", "SID-active-attached".to_owned(),)

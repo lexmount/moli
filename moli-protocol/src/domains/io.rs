@@ -216,10 +216,11 @@ fn start_read_blob_command(
     size: Option<usize>,
 ) -> IoCommandTaskStep {
     let pending = conn
-        .loaded_page_mut_for_protocol_access(cmd.session_id)
-        .and_then(|page| {
-            page.start_blob_bytes_for_uuid(uuid.to_owned())
-                .map_err(|error| error.to_string())
+        .resolve_document_command_owner(&CommandOwnerScope::capture(conn, cmd.session_id))
+        .and_then(|(context_id, target_id)| {
+            conn.browser_context_by_id(&context_id)
+                .ok_or("NoDocumentLoaded")?
+                .start_target_blob_read(&target_id, uuid.to_owned())
         });
     match pending {
         Ok(pending) => IoCommandTaskStep::Pending(Box::new(PendingIoCommandDispatch {
@@ -263,10 +264,11 @@ fn complete_read_blob_command(
 ) -> CommandOutputPlan {
     let bytes = completed
         .and_then(|completed| {
-            conn.loaded_page_mut_for_protocol_access(session_id)
-                .and_then(|page| {
-                    page.finish_blob_bytes_for_uuid(completed)
-                        .map_err(|error| error.to_string())
+            conn.resolve_document_command_owner(&CommandOwnerScope::capture(conn, session_id))
+                .and_then(|(context_id, target_id)| {
+                    conn.browser_context_by_id_mut(&context_id)
+                        .ok_or("NoDocumentLoaded")?
+                        .finish_target_blob_read(&target_id, completed)
                 })
         })
         .ok()
@@ -383,7 +385,7 @@ mod tests {
 
     use super::{DEFAULT_IO_READ_SIZE, read_io_stream_state};
     use crate::{
-        conn::{BrowserContext, CdpCommandTaskStep, IoStreamState, PageTargetHost},
+        conn::{BrowserContext, CdpCommandTaskStep, IoStreamState},
         testing::TestContext,
     };
 
@@ -549,11 +551,11 @@ mod tests {
         let mut bc = BrowserContext::new("BID-io-owner".to_owned());
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
-        bc.insert_page_target_host(PageTargetHost::with_url(
+        bc.register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             "about:blank#background".to_owned(),
-        ));
+        );
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
         let handle = ctx

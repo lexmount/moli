@@ -915,9 +915,7 @@ async fn get_navigation_history_completes_through_command_dispatch() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     let raw = json!({
         "id": 1209,
@@ -980,9 +978,7 @@ async fn reset_navigation_history_prunes_browser_and_renderer_history() {
         .browser_context
         .as_mut()
         .expect("browser context")
-        .active_page_target_mut()
-        .runtime_slot
-        .set_loaded_page_for_test(page);
+        .replace_active_page_for_test(Some(page));
 
     ctx.process_async(json!({
         "id": 1210,
@@ -1219,7 +1215,7 @@ async fn navigation_history_is_preserved_per_background_target() {
 
     {
         let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-        browser_context.insert_page_target_host(PageTargetHost::new(
+        browser_context.register_page_target_fixture(
             "TID-B".to_owned(),
             Some("SID-B".to_owned()),
             crate::conn::TargetIdentityState::new(
@@ -1228,7 +1224,7 @@ async fn navigation_history_is_preserved_per_background_target() {
                 "Secure".to_owned(),
             ),
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
-        ));
+        );
     }
     assert!(
         ctx.conn
@@ -1294,17 +1290,16 @@ async fn navigation_history_is_preserved_per_background_target() {
 async fn get_navigation_history_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let background_url = "data:text/html,<title>Background History</title><main>background</main>";
-    let background = PageTargetHost::with_url(
-        "TID-background".to_owned(),
-        Some("SID-background".to_owned()),
-        "about:blank".to_owned(),
-    );
 
     let mut bc = BrowserContext::new("BID-1".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
-    bc.insert_page_target_host(background);
+    bc.register_page_target_url_fixture(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        "about:blank".to_owned(),
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(background_url, Some("SID-background"))
         .await;
@@ -1339,18 +1334,16 @@ async fn reset_navigation_history_targets_loaded_background_owner_without_activa
     let mut ctx = TestContext::new();
     let background_url =
         "data:text/html,<title>Background Reset History</title><main>background</main>";
-    let background = PageTargetHost::with_url(
-        "TID-background-reset".to_owned(),
-        Some("SID-background-reset".to_owned()),
-        "about:blank".to_owned(),
-    );
-
     let mut browser_context = BrowserContext::new("BID-reset-background".to_owned());
     browser_context.set_active_target_id("TID-active".to_owned());
     browser_context.attach_active_session("SID-active".to_owned());
     browser_context
         .set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
-    browser_context.insert_page_target_host(background);
+    browser_context.register_page_target_url_fixture(
+        "TID-background-reset".to_owned(),
+        Some("SID-background-reset".to_owned()),
+        "about:blank".to_owned(),
+    );
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
     ctx.install_navigation_fixture_for_session_owner(background_url, Some("SID-background-reset"))
@@ -1400,11 +1393,11 @@ async fn navigate_to_history_entry_targets_background_owner_without_activation()
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
-    bc.insert_page_target_host(PageTargetHost::with_url(
+    bc.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
-    ));
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
     let first_url = "data:text/html,<title>Background A</title><main>a</main>";
     let second_url = "data:text/html,<title>Background B</title><main>b</main>";
@@ -1485,10 +1478,7 @@ async fn get_navigation_history_targets_inactive_loaded_owner_without_activation
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
     inactive.set_target_url(page.final_url().as_str().to_owned());
-    inactive
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    inactive.replace_active_page_for_test(Some(page));
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);
 
@@ -1586,11 +1576,11 @@ async fn navigate_targets_background_owner_without_activation() {
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<body>active</body>".to_owned());
-    bc.insert_page_target_host(PageTargetHost::with_url(
+    bc.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
-    ));
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
     let background_url = "data:text/html,<title>Background</title><main>background</main>";
@@ -1619,7 +1609,7 @@ async fn navigate_targets_background_owner_without_activation() {
     let background = browser_context
         .background_target("TID-background")
         .expect("background target should remain background");
-    assert!(background.has_loaded_page());
+    assert!(browser_context.target_has_loaded_page(background.target_id()));
     assert_eq!(background.target_url(), background_url);
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -6049,17 +6039,16 @@ async fn reload_targets_background_owner_without_activation() {
 
     let mut ctx = TestContext::new();
     let page_url = format!("http://{addr}/page");
-    let background = PageTargetHost::with_url(
-        "TID-background".to_owned(),
-        Some("SID-background".to_owned()),
-        page_url.clone(),
-    );
 
     let mut bc = BrowserContext::new("BID-1".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
-    bc.insert_page_target_host(background);
+    bc.register_page_target_url_fixture(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        page_url.clone(),
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-background"))
         .await;
@@ -6067,13 +6056,8 @@ async fn reload_targets_background_owner_without_activation() {
         .conn
         .browser_context
         .as_mut()
-        .and_then(|browser_context| {
-            browser_context
-                .background_target_mut("TID-background")
-                .and_then(PageTargetHost::loaded_page_mut)
-        })
-        .expect("loaded background page")
-        .serialize_html_async()
+        .expect("browser context")
+        .serialize_target_html_for_test("TID-background")
         .await
         .expect("background page should serialize HTML");
     assert!(
@@ -6098,13 +6082,14 @@ async fn reload_targets_background_owner_without_activation() {
         Some("TID-active"),
         "background Page.reload should not activate the target"
     );
-    let background = browser_context
-        .background_target_mut("TID-background")
-        .expect("background target should remain background");
-    let reloaded_html = background
-        .loaded_page_mut()
-        .expect("loaded background page after reload")
-        .serialize_html_async()
+    assert!(
+        browser_context
+            .background_target("TID-background")
+            .is_some(),
+        "background target should remain background"
+    );
+    let reloaded_html = browser_context
+        .serialize_target_html_for_test("TID-background")
         .await
         .expect("background page should serialize HTML");
     assert!(
@@ -6384,7 +6369,13 @@ async fn reload_after_crash_emits_target_reloaded_after_crash() {
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .record_inspector_target_crashed();
-    bc.active_page_target_mut().mark_crashed();
+    {
+        let context = &mut *bc;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.set_target_crash_state(&target_id, true)
+    };
 
     ctx.process_async(json!({
         "id": 248,
@@ -6404,14 +6395,10 @@ async fn reload_after_crash_emits_target_reloaded_after_crash() {
             .iter()
             .any(|message| message["method"] == json!("Page.frameNavigated"))
     );
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .is_crashed()
-    );
+    assert!(!{
+        let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+        context.target_is_crashed(context.active_target_id().unwrap())
+    });
 }
 #[tokio::test(flavor = "multi_thread")]
 async fn navigate_after_crash_emits_target_reloaded_after_crash() {
@@ -6427,7 +6414,13 @@ async fn navigate_after_crash_emits_target_reloaded_after_crash() {
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
         .runtime_session_state
         .record_inspector_target_crashed();
-    bc.active_page_target_mut().mark_crashed();
+    {
+        let context = &mut *bc;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.set_target_crash_state(&target_id, true)
+    };
 
     ctx.process_async(json!({
         "id": 249,
@@ -6450,14 +6443,10 @@ async fn navigate_after_crash_emits_target_reloaded_after_crash() {
             .iter()
             .any(|message| message["method"] == json!("Page.frameNavigated"))
     );
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .is_crashed()
-    );
+    assert!(!{
+        let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+        context.target_is_crashed(context.active_target_id().unwrap())
+    });
     assert_eq!(
         loaded_page_html_for_test(&mut ctx).await,
         "<html><head></head><body>after-crash</body></html>"
@@ -6473,12 +6462,13 @@ async fn navigate_after_crash_without_inspector_enabled_clears_crash_without_eve
         "SID-1",
         "data:text/html,<body>before-crash</body>",
     );
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .active_page_target_mut()
-        .mark_crashed();
+    {
+        let context = &mut ctx.conn.browser_context.as_mut().unwrap();
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.set_target_crash_state(&target_id, true)
+    };
 
     ctx.process_async(json!({
         "id": 250,
@@ -6502,14 +6492,10 @@ async fn navigate_after_crash_without_inspector_enabled_clears_crash_without_eve
             .iter()
             .any(|message| message["method"] == json!("Page.frameNavigated"))
     );
-    assert!(
-        !ctx.conn
-            .browser_context
-            .as_ref()
-            .expect("browser context")
-            .active_page_target()
-            .is_crashed()
-    );
+    assert!(!{
+        let context = &ctx.conn.browser_context.as_ref().expect("browser context");
+        context.target_is_crashed(context.active_target_id().unwrap())
+    });
 }
 
 #[tokio::test(flavor = "multi_thread")]

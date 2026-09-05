@@ -627,9 +627,8 @@ impl CdpConnection {
             .map(|target_id| browser_context.effective_extra_headers_for_target(target_id))
             .unwrap_or_else(|| browser_context.effective_extra_headers());
         let initiator_url = self
-            .runtime_session_owner_slot_for_owner(owner)
-            .ok()
-            .and_then(|slot| slot.loaded_page().map(|page| page.final_url().clone()));
+            .resolved_page_owner_identity_for_owner(owner)
+            .and_then(|(_, target_id)| browser_context.target_document_url(&target_id).cloned());
         Some(PendingDownloadOwnerContext {
             browser_context_id,
             frame_id,
@@ -1490,10 +1489,7 @@ mod tests {
     use moli_fetch::FetchCancelHandle;
 
     use crate::{
-        conn::{
-            BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope,
-            PageTargetHost,
-        },
+        conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope},
         devtools_runtime::AutomationEvent,
     };
 
@@ -1540,13 +1536,15 @@ mod tests {
         browser_context.global_extra_headers =
             vec![("X-Context-Global".to_owned(), "global".to_owned())];
 
-        let mut background = PageTargetHost::with_url(
+        assert!(browser_context.register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             "https://background.test/".to_owned(),
+        ));
+        browser_context.set_base_extra_headers_for_target(
+            "TID-background",
+            vec![("X-Target".to_owned(), "target".to_owned())],
         );
-        background.set_base_extra_headers(vec![("X-Target".to_owned(), "target".to_owned())]);
-        assert!(browser_context.insert_page_target_host(background));
         connection.install_browser_context_fixture_for_test(browser_context);
 
         let owner = connection

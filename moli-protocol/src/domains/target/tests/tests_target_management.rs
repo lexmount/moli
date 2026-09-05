@@ -50,8 +50,13 @@ async fn close_target_success() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    bc.active_page_target_mut()
-        .mutate_devtools_network_session_state(
+    {
+        let context = &mut *bc;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.mutate_devtools_network_session_state_for_target(
+            &target_id,
             &moli_page_types::DevToolsSessionKey::Primary,
             |network| {
                 network.network_enabled = true;
@@ -59,7 +64,8 @@ async fn close_target_success() {
                 network.bypass_service_worker = true;
                 network.extra_headers = vec![("X-Test".into(), "1".into())];
             },
-        );
+        )
+    };
     bc.active_page_target_mut().css_enabled = true;
     bc.active_page_target_mut().fetch_owner.configure(
         None,
@@ -78,7 +84,13 @@ async fn close_target_success() {
     bc.active_page_target_mut()
         .runtime_slot
         .set_next_subresource_fetch_request_id_for_test(5);
-    bc.active_page_target_mut().mark_crashed();
+    {
+        let context = &mut *bc;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.set_target_crash_state(&target_id, true)
+    };
     bc.record_captured_response_body("REQ-old".into(), "body".into(), [None]);
     bc.insert_io_stream("STREAM-old".into(), b"body".to_vec(), 0);
     ctx.process_async(json!({"id": 11, "method": "Target.closeTarget",
@@ -374,12 +386,11 @@ async fn close_target_invalidates_runtime_context_and_object_without_active_page
     let mut bc = BrowserContext::new("BID-runtime-close".into());
     bc.set_active_target_id("TID-active");
     bc.attach_active_session("SID-active");
-    let background_target = crate::conn::PageTargetHost::with_url(
+    bc.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "about:blank".to_owned(),
     );
-    bc.insert_page_target_host(background_target);
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<html><body><script>globalThis.__lm_closed_target_marker = 'active-clean';</script>active</body></html>",
@@ -558,7 +569,7 @@ async fn close_background_target_emits_detached_events_and_clears_attached_sessi
     assert!(bc.attached_target_id_for_session("SID-attached").is_none());
     assert!(
         bc.background_target("TID-000000000B")
-            .filter(|target| target.has_non_default_session_state())
+            .filter(|target| bc.has_non_default_session_state_for_target(target.target_id()))
             .is_none()
     );
 }
@@ -1174,7 +1185,7 @@ async fn activate_target_selects_background_target_as_active() {
     assert_eq!(bc.active_target_id(), Some("TID-000000000B"));
     assert_eq!(bc.background_target_count(), 1);
     assert_eq!(
-        bc.background_target_at(0).unwrap().target_id(),
+        bc.background_targets().next().unwrap().target_id(),
         "TID-000000000A"
     );
 }

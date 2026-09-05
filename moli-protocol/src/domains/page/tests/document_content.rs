@@ -31,10 +31,7 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
                 Some(renderer_agent_candidate),
             )
             .expect("document-content test renderer candidate should commit");
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_loaded_page_for_test(navigation.page);
+        browser_context.replace_active_page_for_test(Some(navigation.page));
         assert!(
             browser_context
                 .active_page_target_mut()

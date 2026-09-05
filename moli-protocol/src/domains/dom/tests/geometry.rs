@@ -40,16 +40,15 @@ async fn renderer_backend_node_id_for_live_expression(
 async fn dom_resolve_geometry_and_mutation_target_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let background_url = url::Url::parse("https://background.test/owned").unwrap();
-    let background = PageTargetHost::with_url(
-        "TID-background".to_owned(),
-        Some("SID-background".to_owned()),
-        background_url.as_str().to_owned(),
-    );
 
     let mut bc = BrowserContext::new("BID-A".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
-    bc.insert_page_target_host(background);
+    bc.register_page_target_url_fixture(
+        "TID-background".to_owned(),
+        Some("SID-background".to_owned()),
+        background_url.as_str().to_owned(),
+    );
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_buffered_navigation_fixture_for_session_owner(
         background_url,

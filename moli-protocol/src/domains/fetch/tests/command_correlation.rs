@@ -17,10 +17,7 @@ async fn context_with_loaded_fetch_page() -> TestContext {
         .await
         .expect("fetch correlation page should load");
     let mut browser_context = attached_browser_context();
-    browser_context
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(page));
+    browser_context.replace_active_page_for_test(Some(page));
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
     ctx
@@ -50,11 +47,16 @@ fn pending_request(
 async fn fetch_interception_update_rejects_a_replaced_page() {
     let mut ctx = context_with_loaded_fetch_page().await;
     let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+    let (context_id, target_id) = ctx
+        .conn
+        .loaded_document_owner_identity_for_owner(&owner)
+        .unwrap();
     let completion = ctx
         .conn
-        .loaded_page_mut_for_target_configuration_for_owner(&owner)
+        .browser_context_by_id(&context_id)
         .unwrap()
-        .start_set_fetch_subresource_interception(false, None)
+        .start_target_fetch_interception_update(&target_id, false, None)
+        .unwrap()
         .unwrap()
         .wait()
         .await
@@ -68,26 +70,26 @@ async fn fetch_interception_update_rejects_a_replaced_page() {
         .browser_context
         .as_mut()
         .unwrap()
-        .active_page_target_mut()
-        .runtime_slot
-        .replace_loaded_page(Some(replacement));
+        .replace_active_page_for_test(Some(replacement));
     assert_eq!(
         super::super::finish_fetch_interception_update(&mut ctx.conn, &owner, completion),
         Err("Renderer Page changed".to_owned())
     );
     assert_eq!(
         ctx.conn
-            .loaded_page_mut_for_target_configuration_for_owner(&owner)
+            .browser_context_by_id(&context_id)
             .unwrap()
-            .document_title(),
+            .target_document_title(&target_id)
+            .unwrap(),
         "replacement"
     );
 
     let completion = ctx
         .conn
-        .loaded_page_mut_for_target_configuration_for_owner(&owner)
+        .browser_context_by_id(&context_id)
         .unwrap()
-        .start_set_fetch_subresource_interception(false, None)
+        .start_target_fetch_interception_update(&target_id, false, None)
+        .unwrap()
         .unwrap()
         .wait()
         .await
@@ -212,11 +214,11 @@ async fn deferred_fetch_command_keeps_its_exact_page_for_implicit_work() {
     let mut browser_context = BrowserContext::new("BID-1".to_owned());
     browser_context.set_active_target_id("TID-active".to_owned());
     browser_context.attach_active_session("SID-active".to_owned());
-    browser_context.insert_page_target_host(PageTargetHost::with_url(
+    browser_context.register_page_target_url_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         "https://example.test/background".to_owned(),
-    ));
+    );
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
 
@@ -242,11 +244,11 @@ async fn deferred_sessionless_fetch_command_freezes_the_active_page_at_admission
     let mut ctx = TestContext::new();
     let mut browser_context = BrowserContext::new("BID-sessionless".to_owned());
     browser_context.set_active_target_id("TID-original".to_owned());
-    browser_context.insert_page_target_host(PageTargetHost::with_url(
+    browser_context.register_page_target_url_fixture(
         "TID-next".to_owned(),
         None,
         "https://example.test/next".to_owned(),
-    ));
+    );
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
 
@@ -323,9 +325,10 @@ async fn pending_fetch_command_state_is_bound_to_page_attachment() {
     );
 
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("runtime owner should remain addressable")
-        .replace_document_id_for_test();
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &ctx.conn,
+            Some("SID-1"),
+        ));
     assert!(
         ctx.conn
             .take_pending_subresource_fetch_request_for_owner(
@@ -417,9 +420,10 @@ async fn completed_continue_atomically_claims_a_pause_still_pending_publication(
     );
 
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("runtime owner should remain addressable")
-        .replace_document_id_for_test();
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &ctx.conn,
+            Some("SID-1"),
+        ));
     let replacement_owner = ctx
         .conn
         .target_page_residence_identity_for_session(Some("SID-1"))
@@ -481,9 +485,10 @@ async fn continuation_claim_preserves_state_owned_by_a_different_page_residence(
     );
 
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("runtime owner should remain addressable")
-        .replace_document_id_for_test();
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &ctx.conn,
+            Some("SID-1"),
+        ));
     let replacement_owner = ctx
         .conn
         .target_page_residence_identity_for_session(Some("SID-1"))
@@ -512,10 +517,15 @@ async fn continuation_claim_preserves_state_owned_by_a_different_page_residence(
         "a replacement completion must not claim pending state from the retired Page"
     );
 
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+    let (context_id, target_id) = ctx
+        .conn
+        .resolved_page_owner_identity_for_owner(&owner)
+        .unwrap();
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("runtime owner should remain addressable")
-        .install_document_id_for_test(retired_owner.document_id());
+        .browser_context_by_id_mut(&context_id)
+        .unwrap()
+        .install_document_id_for_test_for_target(&target_id, retired_owner.document_id());
     let ClaimedSubresourceContinueRequest::InFlight(in_flight) = ctx
         .conn
         .claim_subresource_continue_request_for_owner(
@@ -565,9 +575,10 @@ async fn pending_fetch_auth_state_is_bound_to_page_attachment() {
     );
 
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("runtime owner should remain addressable")
-        .replace_document_id_for_test();
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &ctx.conn,
+            Some("SID-1"),
+        ));
     assert!(
         ctx.conn
             .take_pending_subresource_fetch_auth_request_for_owner(
@@ -623,9 +634,10 @@ async fn pending_fetch_response_state_is_bound_to_page_attachment() {
     );
 
     ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .expect("runtime owner should remain addressable")
-        .replace_document_id_for_test();
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &ctx.conn,
+            Some("SID-1"),
+        ));
     assert!(
         ctx.conn
             .take_pending_subresource_fetch_response_request_for_owner(

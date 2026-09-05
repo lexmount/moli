@@ -1,6 +1,6 @@
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandDispatchContext, CommandOwnerScope,
-    TargetPageResidenceIdentity,
+    PageInputCommand, TargetPageResidenceIdentity,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
@@ -13,8 +13,8 @@ use crate::devtools_runtime::{
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::browser::{DocumentLifetimeObserver, DocumentRetirement};
 use moli_core::page::{
-    CompletedPageCommand, Page, PageInputExt, PendingPageCommand, RendererCommandTurnCompletion,
-    RendererDragData, RendererDragDataItem, RendererDraggedFile, RendererInputDispatchOutcome,
+    CompletedPageCommand, PendingPageCommand, RendererCommandTurnCompletion, RendererDragData,
+    RendererDragDataItem, RendererDraggedFile, RendererInputDispatchOutcome,
     RendererPendingDownloadActivation, RendererPendingFileChooserActivation,
     RendererPointerEventProperties, RendererTouchPoint, decode_input_dispatch_outcome_completion,
     decode_insert_text_completion,
@@ -621,7 +621,7 @@ fn start_pending_input_command(
                 cmd.id,
                 &owner,
                 PendingInputCommandKind::InsertText,
-                |page| page.start_insert_text_into_active_control(&text),
+                PageInputCommand::InsertText(&text),
             )
         }
         InputAction::CancelDragging
@@ -984,16 +984,14 @@ fn start_devtools_dispatch_key_event_command(
         command_id,
         owner,
         PendingInputCommandKind::DispatchKeyEvent,
-        |page| {
-            page.start_dispatch_key_event_with_outcome(
-                key::devtools_key_event_dom_event_name(command.event_type),
-                &command.key,
-                &command.code,
-                &command.text,
-                command.modifiers,
-                command.auto_repeat,
-                command.should_insert_text,
-            )
+        PageInputCommand::Key {
+            event_name: key::devtools_key_event_dom_event_name(command.event_type),
+            key: &command.key,
+            code: &command.code,
+            text: &command.text,
+            modifiers: command.modifiers,
+            auto_repeat: command.auto_repeat,
+            should_insert_text: command.should_insert_text,
         },
     )
 }
@@ -1003,7 +1001,7 @@ fn start_page_input_command(
     command_id: Option<u64>,
     command_owner: &CommandOwnerScope,
     kind: PendingInputCommandKind,
-    start: impl FnOnce(&Page) -> anyhow::Result<PendingPageCommand>,
+    command: PageInputCommand<'_>,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
     let page_owner = conn
         .target_page_residence_identity_for_owner(command_owner)
@@ -1016,11 +1014,20 @@ fn start_page_input_command(
     } else {
         None
     };
-    let page = conn
-        .loaded_page_mut_for_protocol_access_for_owner(command_owner)
-        .ok()
+    conn.ensure_document_accessible_for_owner(command_owner)
+        .map_err(|_| PendingInputCommandStartError::no_document_loaded())?;
+    let target_id = page_owner
+        .target_id()
         .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
-    let pending = start(page).map_err(PendingInputCommandStartError::renderer_error)?;
+    let context = conn
+        .browser_context_by_id(page_owner.browser_context_id())
+        .ok_or_else(PendingInputCommandStartError::no_document_loaded)?;
+    if !context.target_has_loaded_page(target_id) {
+        return Err(PendingInputCommandStartError::no_document_loaded());
+    }
+    let pending = context
+        .start_target_input_command(target_id, command)
+        .map_err(PendingInputCommandStartError::renderer_error)?;
     Ok(Some(PendingInputCommandDispatch {
         command_id,
         session_id: command_owner.session_id().map(str::to_owned),
@@ -1083,19 +1090,17 @@ fn start_devtools_dispatch_mouse_event_command(
         command_id,
         owner,
         PendingInputCommandKind::DispatchMouseEvent,
-        |page| {
-            page.start_dispatch_mouse_event_at_point_with_pointer_outcome(
-                command.x,
-                command.y,
-                event_name,
-                command.button,
-                command.buttons,
-                command.click_count,
-                command.delta_x,
-                command.delta_y,
-                pointer,
-                command.modifiers,
-            )
+        PageInputCommand::Mouse {
+            x: command.x,
+            y: command.y,
+            event_name,
+            button: command.button,
+            buttons: command.buttons,
+            click_count: command.click_count,
+            delta_x: command.delta_x,
+            delta_y: command.delta_y,
+            pointer,
+            modifiers: command.modifiers,
         },
     )
 }
@@ -1121,7 +1126,11 @@ fn start_devtools_dispatch_touch_event_command(
         command_id,
         owner,
         PendingInputCommandKind::DispatchTouchEvent,
-        |page| page.start_dispatch_touch_event_at_points_with_outcome(points, event_name, false),
+        PageInputCommand::Touch {
+            points,
+            event_name,
+            activate: false,
+        },
     )
 }
 
@@ -1201,14 +1210,12 @@ fn start_devtools_dispatch_drag_event_command(
         command_id,
         owner,
         PendingInputCommandKind::DispatchDragEvent,
-        |page| {
-            page.start_dispatch_drag_event_at_point_with_outcome(
-                command.x,
-                command.y,
-                event_name,
-                data,
-                command.modifiers,
-            )
+        PageInputCommand::Drag {
+            x: command.x,
+            y: command.y,
+            event_name,
+            data,
+            modifiers: command.modifiers,
         },
     )
 }
@@ -1224,10 +1231,14 @@ fn start_devtools_synthesize_tap_gesture_command(
         command_id,
         owner,
         PendingInputCommandKind::SynthesizeTapGesture,
-        |page| {
-            page.start_dispatch_touch_event_at_point_with_outcome(
-                command.x, command.y, "touchend", true,
-            )
+        PageInputCommand::Touch {
+            points: vec![RendererTouchPoint {
+                id: 0,
+                x: command.x,
+                y: command.y,
+            }],
+            event_name: "touchend",
+            activate: true,
         },
     )
 }
@@ -1324,13 +1335,8 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let completion = settle_completed_input_page_command(
-                conn,
-                session_id,
-                &owner,
-                result,
-                command_context,
-            );
+            let completion =
+                settle_completed_input_page_command(conn, &owner, result, command_context);
             let operation = match kind {
                 PendingInputCommandKind::DispatchMouseEvent => "mouse event page command",
                 PendingInputCommandKind::DispatchTouchEvent
@@ -1378,13 +1384,8 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let completion = settle_completed_input_page_command(
-                conn,
-                session_id,
-                &owner,
-                result,
-                command_context,
-            );
+            let completion =
+                settle_completed_input_page_command(conn, &owner, result, command_context);
             let outcome =
                 decode_input_dispatch_outcome_completion(completion, "key event page command");
             match outcome {
@@ -1424,13 +1425,8 @@ async fn complete_pending_input_command(
                     };
                 }
             };
-            let completion = settle_completed_input_page_command(
-                conn,
-                session_id,
-                &owner,
-                result,
-                command_context,
-            );
+            let completion =
+                settle_completed_input_page_command(conn, &owner, result, command_context);
             let result = decode_insert_text_completion(completion);
             match result {
                 Ok(_) => Ok(DevToolsCommandResult::Empty),
@@ -1451,12 +1447,11 @@ async fn complete_pending_input_command(
 
 fn settle_completed_input_page_command(
     conn: &mut CdpConnection,
-    session_id: Option<&str>,
     owner: &TargetPageResidenceIdentity,
     completion: CompletedPageCommand,
     command_context: &mut CommandDispatchContext,
 ) -> RendererCommandTurnCompletion {
-    let output = conn.settle_page_command_turn_for_owner(session_id, owner, completion);
+    let output = conn.settle_page_command_turn_for_owner(owner, completion);
     command_context.consume_renderer_command_turn_output(output)
 }
 
@@ -1985,11 +1980,9 @@ mod producer_tests {
         frame_id: &str,
         identity: RendererDocumentLifecycleIdentity,
     ) {
-        let runtime_slot = conn
-            .runtime_session_owner_slot_mut(Some(session_id))
-            .expect("test target should expose a runtime owner slot");
-        if runtime_slot.document_id().is_none() {
-            runtime_slot.set_document_id_for_test(identity.document.page_id.as_u64());
+        let owner = crate::conn::CommandOwnerScope::capture(conn, Some(session_id));
+        if conn.current_document_id_for_owner(&owner).is_none() {
+            conn.set_document_fixture_for_owner_test(&owner, identity.document.page_id.as_u64());
         }
         let lifecycle_snapshot = RendererDocumentLifecycleSnapshot {
             frame: identity.frame,
@@ -2344,9 +2337,10 @@ mod producer_tests {
             renderer_file_chooser_for_test(source_document, None, 43, false),
         )
         .expect("source file chooser should prepare");
-        conn.runtime_session_owner_slot_mut(Some("SID-page-replacement"))
-            .expect("test runtime slot should exist")
-            .replace_document_id_for_test();
+        conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
+            &conn,
+            Some("SID-page-replacement"),
+        ));
         let replacement_document = renderer_document_identity_for_test(2, 2);
         bind_renderer_document_for_test(
             &mut conn,

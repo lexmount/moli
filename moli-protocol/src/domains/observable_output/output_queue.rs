@@ -323,8 +323,8 @@ impl ObservableSessionAuditsPreparedRange {
         conn: &CdpConnection,
     ) -> Option<Self> {
         let session_id = self.session_id();
-        let runtime_slot = conn.runtime_session_owner_slot(session_id).ok()?;
-        let document_binding = runtime_slot.committed_renderer_document_binding()?;
+        let owner = crate::conn::CommandOwnerScope::capture(conn, session_id);
+        let document_binding = conn.committed_renderer_document_binding_for_owner(&owner)?;
         let owner_state = conn.target_owner_state_for_session(session_id)?;
         let session_state = conn.target_page_session_state_for_session(session_id)?;
         if document_binding.renderer_document_identity() != self.source_document
@@ -371,12 +371,8 @@ impl ObservableSessionRuntimePreparedItems {
         }
         let session_id = self.attachment.session_id().map(str::to_owned);
         let url = conn.runtime_session_owner_target_url(session_id.as_deref())?;
-        let runtime_slot = conn
-            .runtime_session_owner_slot(session_id.as_deref())
-            .ok()?;
-        runtime_slot
-            .document_id()
-            .is_some_and(|attachment_id| self.items.matches_source_identity(&url, attachment_id))
+        self.items
+            .matches_source_identity(&url, self.attachment.page_owner().document_id())
             .then_some((session_id, self.items))
     }
 }
@@ -509,11 +505,11 @@ impl ObservableConsoleLogPreparedRange {
         conn: &mut CdpConnection,
         session_id: Option<&str>,
     ) -> Option<Self> {
-        let runtime_slot = conn.runtime_session_owner_slot(session_id).ok()?;
+        let owner = crate::conn::CommandOwnerScope::capture(conn, session_id);
         let url = conn.runtime_session_owner_target_url(session_id)?;
         if !self.domain.enabled_for_session(conn, session_id)?
             || url != self.url()
-            || runtime_slot.document_id() != Some(self.document_id())
+            || conn.current_document_id_for_owner(&owner) != Some(self.document_id())
         {
             return None;
         }
@@ -639,17 +635,20 @@ impl TargetObservableOutputQueue {
         }
     }
 
-    pub(super) fn from_log_storage(runtime_slot: &TargetRuntimeSlot) -> Option<Self> {
+    pub(super) fn from_log_storage(
+        runtime_slot: &TargetRuntimeSlot,
+        network_entries: &[TargetNetworkLogEntry],
+    ) -> Self {
         let observable_output_items = runtime_slot
             .observable_output_latest_source_tail()
             .map(|source| source.observable_output_items())
             .unwrap_or_default();
-        Some(Self {
+        Self {
             observable_output_items,
-            network_log_entries: runtime_slot.network_log_entries()?.to_vec(),
+            network_log_entries: network_entries.to_vec(),
             #[cfg(test)]
             runtime_source_output: None,
-        })
+        }
     }
 
     #[cfg(test)]
@@ -665,9 +664,15 @@ impl TargetObservableOutputQueue {
     }
 
     #[cfg(test)]
-    pub(super) fn from_runtime_slot(runtime_slot: &TargetRuntimeSlot) -> Option<Self> {
-        let snapshot = runtime_slot.observable_output_queue_snapshot()?;
-        let network_log_entries = runtime_slot.network_log_entries()?.to_vec();
+    pub(super) fn from_target(
+        context: &crate::conn::BrowserContext,
+        target_id: &str,
+    ) -> Option<Self> {
+        let snapshot = context
+            .page_target(target_id)?
+            .runtime_slot
+            .observable_output_queue_snapshot()?;
+        let network_log_entries = context.network_log_entries_for_target(target_id)?.to_vec();
         Some(Self::from_runtime_snapshot(snapshot, network_log_entries))
     }
 
@@ -677,13 +682,16 @@ impl TargetObservableOutputQueue {
     }
 
     #[cfg(test)]
-    pub(in crate::domains::observable_output) fn from_runtime_slot_source_snapshot(
-        runtime_slot: &mut TargetRuntimeSlot,
+    pub(in crate::domains::observable_output) fn from_target_source_snapshot(
+        context: &mut crate::conn::BrowserContext,
+        target_id: &str,
         url: String,
         snapshot: &RendererPageDiagnosticsSnapshot,
     ) -> Self {
         Self::from_runtime_source_output(
-            runtime_slot.sync_observable_output_source_from_renderer_snapshot(url, snapshot),
+            context.sync_observable_output_source_from_renderer_snapshot_for_target(
+                target_id, url, snapshot,
+            ),
         )
     }
 
@@ -1018,7 +1026,7 @@ mod tests {
     };
     use crate::conn::{
         BrowserContext, DocumentId, TargetPageProtocolAttachmentIdentity,
-        TargetPageResidenceIdentity, TargetRuntimeSlot,
+        TargetPageResidenceIdentity,
     };
     use crate::domains::log_output_state::TargetLogOutputCursor;
 
@@ -1048,8 +1056,8 @@ mod tests {
 
     #[test]
     fn observable_source_queue_captures_runtime_observable_output() {
-        let mut runtime_slot = TargetRuntimeSlot::default();
-        runtime_slot.set_document_id_for_test(42);
+        let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
+        source_context.set_active_document_fixture_for_test(42);
         let source_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(5),
@@ -1062,8 +1070,9 @@ mod tests {
                 vec!["source lifecycle".to_owned()],
             ),
         );
-        let queue = TargetObservableOutputQueue::from_runtime_slot_source_snapshot(
-            &mut runtime_slot,
+        let queue = TargetObservableOutputQueue::from_target_source_snapshot(
+            &mut source_context,
+            "TID-queue",
             "http://example.test/source-output".to_owned(),
             &source_snapshot,
         );
@@ -1103,8 +1112,8 @@ mod tests {
     #[test]
     fn observable_source_queue_materializes_runtime_items_from_owner_cursor() {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-        let mut runtime_slot = TargetRuntimeSlot::default();
-        runtime_slot.set_document_id_for_test(43);
+        let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
+        source_context.set_active_document_fixture_for_test(43);
         let source_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(5),
@@ -1117,8 +1126,9 @@ mod tests {
                 vec!["queue owned lifecycle".to_owned()],
             ),
         );
-        let queue = TargetObservableOutputQueue::from_runtime_slot_source_snapshot(
-            &mut runtime_slot,
+        let queue = TargetObservableOutputQueue::from_target_source_snapshot(
+            &mut source_context,
+            "TID-queue",
             "http://example.test/source-items".to_owned(),
             &source_snapshot,
         );
@@ -1184,8 +1194,8 @@ mod tests {
     #[test]
     fn observable_source_queue_advances_contextless_lifecycle_source_items() {
         let bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-        let mut runtime_slot = TargetRuntimeSlot::default();
-        runtime_slot.set_document_id_for_test(44);
+        let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
+        source_context.set_active_document_fixture_for_test(44);
         let source_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 None,
@@ -1193,8 +1203,9 @@ mod tests {
                 vec!["contextless lifecycle".to_owned()],
             ),
         );
-        let queue = TargetObservableOutputQueue::from_runtime_slot_source_snapshot(
-            &mut runtime_slot,
+        let queue = TargetObservableOutputQueue::from_target_source_snapshot(
+            &mut source_context,
+            "TID-queue",
             "http://example.test/contextless-lifecycle".to_owned(),
             &source_snapshot,
         );
@@ -1224,8 +1235,8 @@ mod tests {
     #[test]
     fn observable_source_queue_materializes_renderer_producer_source_items() {
         let bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-        let mut runtime_slot = TargetRuntimeSlot::default();
-        runtime_slot.set_document_id_for_test(46);
+        let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
+        source_context.set_active_document_fixture_for_test(46);
         let source = RendererRuntimeObservableSourceSummary::from_source_items(
             Some(7),
             vec![RendererRuntimeObservableSourceItem::LifecycleError {
@@ -1235,8 +1246,9 @@ mod tests {
             }],
         );
         let source_snapshot = renderer_source_snapshot(source);
-        let queue = TargetObservableOutputQueue::from_runtime_slot_source_snapshot(
-            &mut runtime_slot,
+        let queue = TargetObservableOutputQueue::from_target_source_snapshot(
+            &mut source_context,
+            "TID-queue",
             "http://example.test/renderer-source-item".to_owned(),
             &source_snapshot,
         );
@@ -1268,8 +1280,8 @@ mod tests {
     #[test]
     fn observable_source_queue_materializes_latest_appended_runtime_source_item() {
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-        let mut runtime_slot = TargetRuntimeSlot::default();
-        runtime_slot.set_document_id_for_test(47);
+        let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
+        source_context.set_active_document_fixture_for_test(47);
         let first_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(5),
@@ -1303,13 +1315,15 @@ mod tests {
             ),
         );
 
-        let _ = TargetObservableOutputQueue::from_runtime_slot_source_snapshot(
-            &mut runtime_slot,
+        let _ = TargetObservableOutputQueue::from_target_source_snapshot(
+            &mut source_context,
+            "TID-queue",
             "http://example.test/source-items".to_owned(),
             &first_snapshot,
         );
-        let queue = TargetObservableOutputQueue::from_runtime_slot_source_snapshot(
-            &mut runtime_slot,
+        let queue = TargetObservableOutputQueue::from_target_source_snapshot(
+            &mut source_context,
+            "TID-queue",
             "http://example.test/source-items".to_owned(),
             &second_snapshot,
         );
@@ -1358,9 +1372,9 @@ mod tests {
             .await
             .expect("test page should load");
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-        let mut runtime_slot = TargetRuntimeSlot::default();
-        runtime_slot.set_loaded_page_for_test(page);
-        runtime_slot.set_document_id_for_test(45);
+        let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
+        source_context.replace_active_page_for_test(Some(page));
+        source_context.set_active_document_fixture_for_test(45);
         let source_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(5),
@@ -1373,13 +1387,16 @@ mod tests {
                 Vec::new(),
             ),
         );
-        let _ = TargetObservableOutputQueue::from_runtime_slot_source_snapshot(
-            &mut runtime_slot,
+        let _ = TargetObservableOutputQueue::from_target_source_snapshot(
+            &mut source_context,
+            "TID-queue",
             "http://example.test/stored-source".to_owned(),
             &source_snapshot,
         );
 
-        let queue = TargetObservableOutputQueue::from_runtime_slot_source_outputs(&runtime_slot);
+        let queue = TargetObservableOutputQueue::from_runtime_slot_source_outputs(
+            &source_context.active_page_target().runtime_slot,
+        );
         let prepared = queue
             .runtime_source_prepared_items(true, true, &bc.active_page_target().owner_state)
             .expect("stored queue source should materialize RuntimeObservable items");
@@ -1752,10 +1769,12 @@ mod tests {
             )
             .await
             .expect("test page should load");
-        let mut runtime_slot = TargetRuntimeSlot::default();
-        runtime_slot.set_loaded_page_for_test(page);
+        let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
+        source_context.replace_active_page_for_test(Some(page));
 
-        let snapshot = runtime_slot
+        let snapshot = source_context
+            .active_page_target()
+            .runtime_slot
             .observable_output_queue_snapshot()
             .expect("runtime slot should expose an observable source snapshot");
 
@@ -1778,7 +1797,7 @@ mod tests {
             "runtime slot DTO should capture loaded-page lifecycle output"
         );
 
-        let queue = TargetObservableOutputQueue::from_runtime_slot(&runtime_slot)
+        let queue = TargetObservableOutputQueue::from_target(&source_context, "TID-queue")
             .expect("observable queue should be built from the runtime slot snapshot");
         assert_eq!(
             queue.console_message_count(),
@@ -1804,11 +1823,13 @@ mod tests {
             )
             .await
             .expect("second test page should load");
-        let mut runtime_slot = TargetRuntimeSlot::default();
+        let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
 
-        let _ = runtime_slot.replace_loaded_page(Some(first_page));
+        let _ = source_context.replace_active_page_for_test(Some(first_page));
         assert_eq!(
-            runtime_slot
+            source_context
+                .active_page_target()
+                .runtime_slot
                 .observable_output_queue_snapshot()
                 .expect("first page should seed observable snapshot")
                 .observable_output_items
@@ -1823,9 +1844,11 @@ mod tests {
             "runtime slot observable snapshot should track the current loaded page"
         );
 
-        let _ = runtime_slot.replace_loaded_page(Some(second_page));
+        let _ = source_context.replace_active_page_for_test(Some(second_page));
         assert_eq!(
-            runtime_slot
+            source_context
+                .active_page_target()
+                .runtime_slot
                 .observable_output_queue_snapshot()
                 .expect("second page should refresh observable snapshot")
                 .observable_output_items
@@ -1840,9 +1863,17 @@ mod tests {
             "runtime slot observable snapshot should not retain the previous page output"
         );
 
-        let _ = runtime_slot.clear_loaded_page_for_test_fixture();
         assert!(
-            runtime_slot.observable_output_queue_snapshot().is_none(),
+            source_context
+                .clear_target_page_for_test("TID-queue")
+                .is_some()
+        );
+        assert!(
+            source_context
+                .active_page_target()
+                .runtime_slot
+                .observable_output_queue_snapshot()
+                .is_none(),
             "clearing the loaded page should clear the runtime slot observable snapshot"
         );
     }

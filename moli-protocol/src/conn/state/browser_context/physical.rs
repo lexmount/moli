@@ -1,8 +1,9 @@
 use std::path::PathBuf;
 
+use indexmap::IndexMap;
 use moli_browser_profile::BrowserIdentityProfile;
 use moli_core::{
-    browser::BrowserContextId,
+    browser::{BrowserContextId, WebContentsId},
     runtime::{
         NavigationEngine, NavigationRuntimeConfig, RendererBrowserContextRuntime,
         RendererBrowserContextRuntimeOwner, RendererBrowserContextRuntimeOwnerAccess,
@@ -12,22 +13,25 @@ use moli_core::{
 use super::super::emulation::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedNetworkConditions,
 };
+use super::super::web_contents::{ClosingWebContents, WebContents};
 use super::{
     BrowserContextStoragePartitionHandles,
     storage_partition::{StoragePartition, StoragePartitionKind},
 };
 
 /// Physical context ownership, embedded in the migration wrapper until Commit 24b.
-/// The page collection/selection joins this owner at Commit 7b. No projection
-/// identity, output transport or session state belongs here.
+/// No projection identity, output transport or session state belongs here.
 pub(super) struct BrowserContext {
     pub(super) id: BrowserContextId,
     pub(super) page_navigation_runtime_config: Option<NavigationRuntimeConfig>,
     pub(super) network_policy: ContextNetworkPolicy,
     pub(super) emulation_defaults: ContextEmulationDefaults,
     pub(super) browser_identity_override: Option<BrowserIdentityProfile>,
-    // The wrapper drops its page/engine residents first. Keep the stores alive
-    // while the remaining runtime root stops producers and joins its network.
+    // The Browser collection and its only selector have the same lifetime.
+    // Keep insertion order when choosing a replacement foreground page.
+    pub(super) web_contents: IndexMap<WebContentsId, WebContents>,
+    selected_web_contents: Option<WebContentsId>,
+    // Drop Documents/engines before the runtime root and its storage handles.
     renderer_runtime_owner: Option<RendererBrowserContextRuntimeOwner>,
     pub(super) storage_partition: StoragePartition,
 }
@@ -45,6 +49,8 @@ impl BrowserContext {
             network_policy: ContextNetworkPolicy::default(),
             emulation_defaults: ContextEmulationDefaults::default(),
             browser_identity_override: None,
+            web_contents: IndexMap::new(),
+            selected_web_contents: None,
             renderer_runtime_owner: Some(RendererBrowserContextRuntime::new()),
             storage_partition: StoragePartition::new(
                 handles,
@@ -53,6 +59,43 @@ impl BrowserContext {
                 http_cache_max_bytes,
             ),
         }
+    }
+
+    pub(super) fn selected_web_contents_id(&self) -> Option<WebContentsId> {
+        self.selected_web_contents
+    }
+
+    pub(super) fn select_web_contents(&mut self, id: WebContentsId) -> bool {
+        if !self.web_contents.contains_key(&id) {
+            return false;
+        }
+        self.selected_web_contents = Some(id);
+        true
+    }
+
+    pub(super) fn close_web_contents(&mut self, id: WebContentsId) -> Option<ClosingWebContents> {
+        let removed = self.web_contents.shift_remove(&id)?;
+        if self.selected_web_contents == Some(id) {
+            self.selected_web_contents = None;
+        }
+        for contents in self.web_contents.values_mut() {
+            if contents
+                .window
+                .opener
+                .is_some_and(|opener| opener.web_contents_id == id)
+            {
+                contents.window.opener = None;
+            }
+        }
+        Some(removed.begin_close())
+    }
+
+    pub(super) fn close_all_web_contents(&mut self) -> Vec<ClosingWebContents> {
+        self.selected_web_contents = None;
+        std::mem::take(&mut self.web_contents)
+            .into_values()
+            .map(WebContents::begin_close)
+            .collect()
     }
 
     pub(super) fn new_page_navigation_engine(

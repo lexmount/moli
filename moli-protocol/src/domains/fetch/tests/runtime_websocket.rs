@@ -117,14 +117,16 @@ async fn open_auto_attached_popup_from_session(
         .as_str()
         .expect("popup session id")
         .to_owned();
-    let popup_runtime = ctx
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some(&popup_session_id));
+    let (context_id, owner_target_id) = ctx
         .conn
-        .runtime_session_owner_slot(Some(&popup_session_id))
-        .expect("auto-attached popup runtime slot");
+        .resolved_page_owner_identity_for_owner(&owner)
+        .unwrap();
+    let context = ctx.conn.browser_context_by_id(&context_id).unwrap();
     assert!(
-        popup_runtime.has_loaded_page(),
+        context.target_has_loaded_page(&owner_target_id),
         "window.open completion must leave a command-addressable popup Document; diagnostics={}",
-        popup_runtime.moli_memory_diagnostics()
+        context.runtime_slot_diagnostics_for_target(&owner_target_id)
     );
     (target_id, popup_session_id)
 }

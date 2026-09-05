@@ -591,7 +591,7 @@ mod tests {
     use url::Url;
 
     use crate::conn::{
-        BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope, PageTargetHost,
+        BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope,
         PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
     };
     use crate::devtools_runtime::{AutomationEvent, DevToolsNetworkResourceType};
@@ -696,10 +696,7 @@ mod tests {
     fn prepared_subresource_fetch_pause_pairs_emit_network_then_fetch_per_item() {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_document_id_for_test(1);
+        browser_context.set_active_document_fixture_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
             .target_page_residence_identity_for_session(None)
@@ -775,10 +772,7 @@ mod tests {
     fn fetch_pause_does_not_synthesize_cookie_extra_info() {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_document_id_for_test(1);
+        browser_context.set_active_document_fixture_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
             .target_page_residence_identity_for_session(None)
@@ -820,20 +814,21 @@ mod tests {
     fn prepared_subresource_fetch_pause_does_not_emit_after_page_replacement() {
         let mut conn = CdpConnection::default();
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .set_document_id_for_test(1);
+        browser_context.set_active_document_fixture_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
             .target_page_residence_identity_for_session(None)
             .expect("active test target should expose a Page residence identity");
-        conn.browser_context
-            .as_mut()
-            .expect("browser context should remain installed")
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_document_id_for_test();
+        {
+            let context = &mut conn
+                .browser_context
+                .as_mut()
+                .expect("browser context should remain installed");
+            let target_id = context
+                .active_target_id_owned()
+                .expect("active fixture target");
+            context.replace_document_id_for_test_for_target(&target_id)
+        };
         let owner = CommandOwnerScope::capture(&conn, None);
 
         let mut events = Vec::new();
@@ -870,16 +865,16 @@ mod tests {
     fn prepared_subresource_fetch_pause_can_emit_for_background_owner() {
         let mut conn = CdpConnection::default();
         let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
-        let target = PageTargetHost::with_url(
+        bc.register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
             "https://example.test/background".to_owned(),
         );
-        bc.insert_page_target_host(target);
         conn.install_browser_context_fixture_for_test(bc);
-        conn.runtime_session_owner_slot_mut(Some("SID-background"))
-            .expect("background test target runtime slot")
-            .set_document_id_for_test(1);
+        conn.set_document_fixture_for_owner_test(
+            &crate::conn::CommandOwnerScope::capture(&conn, Some("SID-background")),
+            1,
+        );
         let page_owner = conn
             .target_page_residence_identity_for_session(Some("SID-background"))
             .expect("background test target should expose a Page residence identity");

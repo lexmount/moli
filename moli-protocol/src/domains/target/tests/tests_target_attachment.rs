@@ -665,9 +665,7 @@ async fn attach_to_target_ensures_pending_background_initial_document_before_att
             "attachToTarget must complete initial document before emitting attachedToTarget"
         );
         assert!(
-            bc.background_target("TID-background-pending")
-                .expect("background target")
-                .has_loaded_page(),
+            bc.target_has_loaded_page("TID-background-pending"),
             "attached background target should expose a current Page immediately"
         );
     }
@@ -773,11 +771,11 @@ async fn attach_to_target_keeps_background_target_background() {
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
     assert_eq!(bc.background_target_count(), 1);
     assert_eq!(
-        bc.background_target_at(0).unwrap().target_id(),
+        bc.background_targets().next().unwrap().target_id(),
         "TID-000000000B"
     );
     assert_eq!(
-        bc.background_target_at(0).unwrap().session_id(),
+        bc.background_targets().next().unwrap().session_id(),
         Some("SID-1")
     );
 }
@@ -1294,12 +1292,12 @@ async fn session_route_finds_committed_browser_page_and_worker_sessions() {
     let mut inactive = BrowserContext::new("BID-B".to_owned());
     inactive.set_active_target_id("TID-000000000C".to_owned());
     inactive.attach_active_session("SID-inactive");
-    inactive.insert_page_target_host(crate::conn::PageTargetHost::new(
+    inactive.register_page_target_fixture(
         "TID-000000000D".to_owned(),
         Some("SID-inactive-background".to_owned()),
         crate::conn::TargetIdentityState::about_blank(),
         crate::conn::TargetPageSlot::empty_for_test_fixture(),
-    ));
+    );
     assert!(inactive.assign_attached_session_to_target(
         "TID-000000000D",
         "SID-inactive-attached-background".to_owned()
@@ -1598,8 +1596,13 @@ async fn detach_from_target() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    bc.active_page_target_mut()
-        .mutate_devtools_network_session_state(
+    {
+        let context = &mut *bc;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.mutate_devtools_network_session_state_for_target(
+            &target_id,
             &moli_page_types::DevToolsSessionKey::Primary,
             |network| {
                 network.network_enabled = true;
@@ -1607,7 +1610,8 @@ async fn detach_from_target() {
                 network.bypass_service_worker = true;
                 network.extra_headers = vec![("X-Test".into(), "1".into())];
             },
-        );
+        )
+    };
     bc.active_page_target_mut().css_enabled = true;
     bc.active_page_target_mut().input_intercept_drags_enabled = true;
     bc.active_page_target_mut().input_drag_intercepted = true;
@@ -1647,10 +1651,12 @@ async fn detach_from_target() {
             .runtime_slot
             .primary_network_events_enabled()
     );
-    assert!(!bc.active_page_target().effective_policy().cache_disabled());
     assert!(
-        !bc.active_page_target()
-            .effective_policy()
+        !bc.effective_policy_for_target(bc.active_target_id().unwrap())
+            .cache_disabled()
+    );
+    assert!(
+        !bc.effective_policy_for_target(bc.active_target_id().unwrap())
             .bypass_service_worker()
     );
     assert!(!bc.active_page_target().css_enabled);
@@ -1666,8 +1672,7 @@ async fn detach_from_target() {
             .is_empty()
     );
     assert!(
-        bc.active_page_target()
-            .effective_policy()
+        bc.effective_policy_for_target(bc.active_target_id().unwrap())
             .extra_headers()
             .is_empty()
     );
@@ -1874,7 +1879,8 @@ async fn detach_from_target_drops_only_selected_page_renderer_inspector_session(
         "detaching primary must preserve the attached session binding"
     );
     assert!(
-        bc.active_page_target().effective_policy().cache_disabled(),
+        bc.effective_policy_for_target(bc.active_target_id().unwrap())
+            .cache_disabled(),
         "detaching primary must preserve the attached Network handler state"
     );
 
@@ -2027,13 +2033,11 @@ async fn detach_attached_page_session_removes_its_network_policy_contribution() 
     .await;
     ctx.expect_result(120_055, json!({}), Some("SID-detach-network-attached"));
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .extra_headers(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .extra_headers(),
         &[
             ("X-Primary".to_owned(), "primary".to_owned()),
             ("X-Attached".to_owned(), "attached".to_owned()),
@@ -2099,13 +2103,11 @@ async fn detach_attached_page_session_removes_its_network_policy_contribution() 
     );
 
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target()
-            .effective_policy()
-            .extra_headers(),
+        {
+            let context = &ctx.conn.browser_context.as_ref().unwrap();
+            context.effective_policy_for_target(context.active_target_id().unwrap())
+        }
+        .extra_headers(),
         &[("X-Primary".to_owned(), "primary".to_owned())]
     );
     assert_eq!(
@@ -2420,17 +2422,13 @@ async fn session_cleanup_exception_keeps_peer_alive(primary: bool) {
     )
     .await;
     let response = take_response_by_id(&mut ctx, 7);
-    let target = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target();
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    let target = context.active_page_target();
     assert!(
-        !target.is_crashed(),
+        !context.target_is_crashed(target.target_id()),
         "a cleanup exception is not a renderer crash: {response}"
     );
-    assert!(target.loaded_page().is_some());
+    assert!(context.target_has_loaded_page(target.target_id()));
     assert!(
         response["error"]["message"]
             .as_str()
@@ -2445,7 +2443,10 @@ async fn session_cleanup_exception_keeps_peer_alive(primary: bool) {
     assert!(!target.fetch_owner.is_enabled());
     assert!(target.owner_state.document_start_scripts.is_empty());
     assert!(
-        target.effective_policy().extra_headers().is_empty(),
+        context
+            .effective_policy_for_target(target.target_id())
+            .extra_headers()
+            .is_empty(),
         "Network cleanup must still run after Emulation failed"
     );
     assert!(
@@ -2587,12 +2588,9 @@ async fn closed_renderer_session_cleanup(method: &str, params: Value) {
     // did. A cleanup error still is not authority to retire the Browser Page.
     ctx.conn
         .browser_context
-        .as_ref()
+        .as_mut()
         .unwrap()
-        .active_page_target()
-        .loaded_page()
-        .unwrap()
-        .crash_devtools_target_from_io();
+        .crash_target_renderer_from_io("TID-closed-cleanup");
     ctx.process_async(
         json!({"id": 2, "method": "Target.detachFromTarget", "params": {
             "targetId": "TID-closed-cleanup", "sessionId": "SID-closed-cleanup",
@@ -2601,14 +2599,10 @@ async fn closed_renderer_session_cleanup(method: &str, params: Value) {
     .await;
     let response = take_response_by_id(&mut ctx, 2);
     assert!(response.get("error").is_some(), "{response}");
-    let target = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target();
-    assert!(!target.is_crashed());
-    assert!(target.loaded_page().is_some());
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    let target = context.active_page_target();
+    assert!(!context.target_is_crashed(target.target_id()));
+    assert!(context.target_has_loaded_page(target.target_id()));
     assert!(!target.fetch_owner.is_enabled());
     assert!(ctx.conn.session_route(Some("SID-closed-cleanup")).is_some());
     assert!(
@@ -2625,14 +2619,10 @@ async fn closed_renderer_session_cleanup(method: &str, params: Value) {
     ctx.process_async(json!({"id": 3, "sessionId": "SID-closed-peer", "method": "Page.crash"}))
         .await;
     ctx.expect_result(3, json!({}), Some("SID-closed-peer"));
-    let target = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target();
-    assert!(target.is_crashed());
-    assert!(target.loaded_page().is_none());
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    let target = context.active_page_target();
+    assert!(context.target_is_crashed(target.target_id()));
+    assert!(!context.target_has_loaded_page(target.target_id()));
     assert!(
         ctx.sent
             .iter()
@@ -2660,16 +2650,12 @@ async fn closed_renderer_session_cleanup(method: &str, params: Value) {
 }
 
 async fn page_renderer_inspector_session_count(ctx: &mut TestContext, stage: &str) -> u64 {
-    let page = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .and_then(|bc| bc.active_page_target_mut().runtime_slot.loaded_page_mut())
-        .expect("active target should still have a loaded page");
+    let context = ctx.conn.browser_context.as_mut().unwrap();
+    let target_id = context.active_target_id_owned().unwrap();
     // Browser diagnostics have no frontend session and must not re-create a
     // detached Inspector session merely by observing renderer accounting.
-    let response = page
-        .runtime_heap_usage_async()
+    let response = context
+        .target_runtime_heap_usage_for_test(&target_id)
         .await
         .unwrap_or_else(|error| {
             panic!("runtime heap usage diagnostics should be available {stage}: {error}")
@@ -2977,8 +2963,13 @@ async fn set_auto_attach_false_detaches_existing_target() {
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
-    bc.active_page_target_mut()
-        .mutate_devtools_network_session_state(
+    {
+        let context = &mut *bc;
+        let target_id = context
+            .active_target_id_owned()
+            .expect("active fixture target");
+        context.mutate_devtools_network_session_state_for_target(
+            &target_id,
             &moli_page_types::DevToolsSessionKey::Primary,
             |network| {
                 network.network_enabled = true;
@@ -2986,7 +2977,8 @@ async fn set_auto_attach_false_detaches_existing_target() {
                 network.bypass_service_worker = true;
                 network.extra_headers = vec![("X-Test".into(), "1".into())];
             },
-        );
+        )
+    };
     bc.active_page_target_mut().css_enabled = true;
     bc.active_page_target_mut().fetch_owner.configure(
         Some("SID-1".to_owned()),
@@ -3064,10 +3056,12 @@ async fn set_auto_attach_false_detaches_existing_target() {
             .runtime_slot
             .primary_network_events_enabled()
     );
-    assert!(!bc.active_page_target().effective_policy().cache_disabled());
     assert!(
-        !bc.active_page_target()
-            .effective_policy()
+        !bc.effective_policy_for_target(bc.active_target_id().unwrap())
+            .cache_disabled()
+    );
+    assert!(
+        !bc.effective_policy_for_target(bc.active_target_id().unwrap())
             .bypass_service_worker()
     );
     assert!(!bc.active_page_target().css_enabled);
@@ -3081,8 +3075,7 @@ async fn set_auto_attach_false_detaches_existing_target() {
             .is_empty()
     );
     assert!(
-        bc.active_page_target()
-            .effective_policy()
+        bc.effective_policy_for_target(bc.active_target_id().unwrap())
             .extra_headers()
             .is_empty()
     );
@@ -3750,10 +3743,10 @@ async fn non_browser_auto_attach_owners_do_not_replay_existing_shared_worker_tar
         .expect("page session binding");
     ctx.conn
         .register_session_route_for_test("SID-page", page_route);
-    ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-page"))
-        .expect("page owner runtime slot")
-        .set_document_id_for_test(1);
+    ctx.conn.set_document_fixture_for_owner_test(
+        &crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-page")),
+        1,
+    );
     let owner_page = ctx
         .conn
         .target_page_residence_identity_for_session(Some("SID-page"))

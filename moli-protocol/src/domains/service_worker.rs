@@ -564,16 +564,11 @@ fn page_target_ids_for_controlled_client_ids(
     }
 
     let mut target_ids = BTreeSet::new();
-    if let (Some(target_id), Some(page)) = (context.active_target_id(), context.loaded_page())
-        && controlled_client_ids.contains(&page.service_worker_client_id())
-    {
-        target_ids.insert(target_id.to_owned());
-    }
-    for target in context.background_targets() {
-        let Some(page) = target.loaded_page() else {
-            continue;
-        };
-        if controlled_client_ids.contains(&page.service_worker_client_id()) {
+    for target in context.page_targets.iter() {
+        if context
+            .target_service_worker_client_id(target.target_id())
+            .is_some_and(|id| controlled_client_ids.contains(&id))
+        {
             target_ids.insert(target.target_id().to_owned());
         }
     }
@@ -600,7 +595,7 @@ mod tests {
     use serde_json::json;
 
     use crate::{
-        conn::{BrowserContext, PageTargetHost, ServiceWorkerTargetState},
+        conn::{BrowserContext, ServiceWorkerTargetState},
         testing::TestContext,
     };
 
@@ -642,13 +637,12 @@ mod tests {
         context.set_target_url("data:text/html,<title>same-url</title>".to_owned());
         let _ = context.replace_loaded_page(Some(active_page));
 
-        let mut background = PageTargetHost::with_url(
+        context.register_page_target_url_fixture(
             "TID-background".to_owned(),
             None,
             "data:text/html,<title>same-url</title>".to_owned(),
         );
-        let _ = background.replace_loaded_page(Some(background_page));
-        context.insert_page_target_host(background);
+        let _ = context.replace_target_page_for_test("TID-background", Some(background_page));
 
         assert_eq!(
             super::page_target_ids_for_controlled_client_ids(&context, &[background_client_id]),

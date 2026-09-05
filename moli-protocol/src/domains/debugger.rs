@@ -48,9 +48,7 @@ mod tests {
             .browser_context
             .as_mut()
             .expect("browser context")
-            .active_page_target_mut()
-            .runtime_slot
-            .replace_loaded_page(Some(page));
+            .replace_active_page_for_test(Some(page));
     }
 
     async fn command(ctx: &mut TestContext, message: Value, command_id: u64) -> Value {
@@ -601,17 +599,24 @@ true
         .await
         .expect("detaching a paused Debugger session must wake the renderer owner");
         assert_eq!(detach["result"], json!({}), "{detach:?}");
-        let target = ctx
-            .conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .active_page_target();
-        assert!(!target.is_crashed());
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        let target = context.active_page_target();
+        assert!(!context.target_is_crashed(target.target_id()));
         assert!(!target.fetch_owner.is_enabled());
         assert!(target.owner_state.document_start_scripts.is_empty());
-        assert!(target.emulation_policy().emulated_device_metrics.is_none());
-        assert!(target.effective_policy().extra_headers().is_empty());
+        assert!(
+            context
+                .target_emulation_policy(target.target_id())
+                .unwrap()
+                .emulated_device_metrics
+                .is_none()
+        );
+        assert!(
+            context
+                .effective_policy_for_target(target.target_id())
+                .extra_headers()
+                .is_empty()
+        );
 
         let continued = command(
             &mut ctx,

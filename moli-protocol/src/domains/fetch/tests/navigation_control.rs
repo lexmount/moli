@@ -1031,14 +1031,11 @@ async fn disable_failure_still_settles_the_drained_navigation() {
             .fetch_owner
             .has_pending_fetch_state_for_test()
     );
-    ctx.conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target()
-        .loaded_page()
-        .unwrap()
-        .crash_devtools_target_from_io();
+    {
+        let context = ctx.conn.browser_context.as_mut().unwrap();
+        let target_id = context.active_target_id_owned().unwrap();
+        context.crash_target_renderer_from_io(&target_id);
+    }
 
     ctx.process_async(json!({"id": 3, "sessionId": "SID-1", "method": "Fetch.disable"}))
         .await;
@@ -1072,16 +1069,12 @@ async fn disable_failure_still_settles_the_drained_navigation() {
             .count(),
         1
     );
-    let target = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_page_target();
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    let target = context.active_page_target();
     assert!(!target.fetch_owner.is_enabled());
     assert!(!target.fetch_owner.has_pending_fetch_state_for_test());
     assert!(
-        !target.is_crashed(),
+        !context.target_is_crashed(target.target_id()),
         "Fetch failure has no Browser termination authority"
     );
 }

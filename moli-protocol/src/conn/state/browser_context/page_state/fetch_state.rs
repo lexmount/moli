@@ -1,6 +1,6 @@
-use super::super::{BrowserContext, ConnectionNetworkRequestIdAllocator, PageTargetHost};
+use crate::conn::{BrowserContext, ConnectionNetworkRequestIdAllocator, PageTargetHost};
 #[cfg(test)]
-use super::super::{
+use crate::conn::{
     DocumentBodySource, NavigationDispatchState, NavigationId, PendingSubresourceFetchRequest,
 };
 
@@ -23,6 +23,7 @@ impl BrowserContext {
             .flatten()
     }
 
+    #[cfg(test)]
     pub(crate) fn background_target_mut(&mut self, target_id: &str) -> Option<&mut PageTargetHost> {
         if self.is_active_target(target_id) {
             return None;
@@ -31,43 +32,18 @@ impl BrowserContext {
     }
 
     pub(crate) fn background_targets(&self) -> impl DoubleEndedIterator<Item = &PageTargetHost> {
-        self.page_targets.background()
-    }
-
-    pub(crate) fn background_targets_mut(
-        &mut self,
-    ) -> impl DoubleEndedIterator<Item = &mut PageTargetHost> {
-        self.page_targets.background_mut()
-    }
-
-    pub(crate) fn background_target_at(&self, index: usize) -> Option<&PageTargetHost> {
-        self.page_targets.background_at(index)
-    }
-
-    pub(crate) fn background_target_at_mut(&mut self, index: usize) -> Option<&mut PageTargetHost> {
-        self.page_targets.background_at_mut(index)
+        self.page_targets
+            .background(self.physical.selected_web_contents_id())
     }
 
     pub(crate) fn background_target_count(&self) -> usize {
-        self.page_targets.background_len()
+        self.page_targets
+            .background_len(self.physical.selected_web_contents_id())
     }
 
     pub(crate) fn has_no_background_targets(&self) -> bool {
-        self.page_targets.background_is_empty()
-    }
-
-    pub(crate) fn insert_page_target_host(&mut self, mut host: PageTargetHost) -> bool {
-        #[cfg(test)]
-        if self.page_targets.is_empty() {
-            host.document_cookie_manager_surface =
-                self.default_document_cookie_manager_surface.clone();
-        }
-        host.set_base_cache_disabled(self.global_cache_disabled);
-        if let Some(config) = self.page_navigation_runtime_config() {
-            let engine = self.new_page_navigation_engine(config);
-            host.install_navigation_engine(engine);
-        }
-        self.page_targets.insert(host)
+        self.page_targets
+            .background_is_empty(self.physical.selected_web_contents_id())
     }
 
     #[cfg(test)]
@@ -81,7 +57,7 @@ impl BrowserContext {
             .allocate_io_stream_handle();
         let active_target = &mut self
             .page_targets
-            .active_mut()
+            .active_mut(self.physical.selected_web_contents_id())
             .expect("cannot open a response stream without an active page target");
         active_target
             .fetch_owner
