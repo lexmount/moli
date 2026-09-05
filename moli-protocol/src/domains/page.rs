@@ -3433,8 +3433,15 @@ mod producer_tests {
     async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
         let mut conn = CdpConnection::default();
         conn.set_root_target_discovery_enabled(true);
-        conn.download_behavior
-            .set_global("deny".to_owned(), None, true);
+        conn.configure_download_policy(
+            None,
+            moli_core::browser::DownloadPolicy {
+                behavior: moli_core::browser::DownloadBehavior::Deny,
+                download_path: None,
+            },
+            Some(true),
+        )
+        .unwrap();
         let mut bc = BrowserContext::new("BID-activity-order".into());
         bc.set_active_target_id("TID-activity-order");
         bc.set_target_url("https://example.test/page".to_owned());
@@ -5962,9 +5969,9 @@ fn page_set_download_behavior_command_output_plan(
         }
     };
 
-    if !crate::domains::browser::is_valid_download_behavior(params.behavior.as_str()) {
+    let Some(behavior) = crate::conn::parse_download_behavior(&params.behavior) else {
         return CommandOutputPlan::error(-32602, "InvalidParams");
-    }
+    };
 
     let session_id = cmd.session_id;
     let Some((browser_context_id, _)) = conn.target_owner_identity_for_session(session_id) else {
@@ -5974,11 +5981,15 @@ fn page_set_download_behavior_command_output_plan(
         return CommandOutputPlan::error(-32000, "Could not fetch browser context");
     }
 
-    conn.download_behavior.set_browser_context_policy(
-        browser_context_id,
-        params.behavior,
-        params.download_path,
-    );
+    conn.configure_download_policy(
+        Some(&browser_context_id),
+        moli_core::browser::DownloadPolicy {
+            behavior,
+            download_path: params.download_path,
+        },
+        None,
+    )
+    .expect("validated BrowserContext remains available");
     CommandOutputPlan::success()
 }
 

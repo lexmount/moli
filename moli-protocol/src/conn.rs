@@ -46,7 +46,11 @@ mod cookie_policy_surface;
 mod cookie_store_boundary;
 mod devtools_command;
 mod dispatch;
+mod download_policy;
 mod downloads;
+pub(crate) use download_policy::parse_download_behavior;
+#[cfg(test)]
+mod download_policy_tests;
 mod fetch_support;
 #[cfg(test)]
 mod inspection_binding_tests;
@@ -1190,7 +1194,8 @@ pub struct CdpConnection {
 
     // Browser profile, permissions, download and global IO state.
     pub window_bounds: BrowserWindowBounds,
-    pub download_behavior: BrowserDownloadBehavior,
+    download_policy: moli_core::browser::DownloadPolicy,
+    download_subscriptions: download_policy::DownloadSubscriptions,
     // Browser defaults remain embedded until the Browser aggregate cutover.
     // Each physical Context owns its scoped rules; no wire-id registry lives here.
     permission_defaults: moli_core::browser::PermissionDefaults,
@@ -1355,11 +1360,11 @@ impl CdpConnection {
     }
 
     pub fn enable_webdriver_bidi_download_events(&mut self) -> bool {
-        self.download_behavior.enable_webdriver_bidi_events()
+        self.download_subscriptions.enable_webdriver_bidi_events()
     }
 
     pub fn disable_webdriver_bidi_download_events(&mut self) -> bool {
-        self.download_behavior.disable_webdriver_bidi_events()
+        self.download_subscriptions.disable_webdriver_bidi_events()
     }
 
     pub fn new_with_initial_storage_partition(
@@ -1484,7 +1489,8 @@ impl CdpConnection {
             dedicated_worker_pause_on_start_owner_sessions: HashSet::new(),
             install_default_target_on_auto_attach: false,
             window_bounds: BrowserWindowBounds::default(),
-            download_behavior: BrowserDownloadBehavior::default(),
+            download_policy: moli_core::browser::DownloadPolicy::default(),
+            download_subscriptions: download_policy::DownloadSubscriptions::default(),
             permission_defaults: moli_core::browser::PermissionDefaults::default(),
             next_bc_id: 0,
             next_global_io_stream_id: 0,
@@ -3975,203 +3981,6 @@ impl CdpConnection {
             self.notify_target_host_lifecycle(CdpTargetHostLifecycleDelta::Activated {
                 target_id: tab_target_id.to_owned(),
             });
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BrowserDownloadBehavior {
-    pub behavior: String,
-    pub download_path: Option<String>,
-    pub automation_events_enabled: bool,
-    pub webdriver_bidi_events_enabled: bool,
-    pub browser_context_id: Option<String>,
-    pub browser_context_overrides: HashMap<String, BrowserDownloadBehaviorSettings>,
-    browser_event_subscription_generations: HashMap<Option<String>, u64>,
-    next_browser_event_subscription_generation: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BrowserDownloadBehaviorSettings {
-    pub behavior: String,
-    pub download_path: Option<String>,
-    pub automation_events_enabled: bool,
-}
-
-impl Default for BrowserDownloadBehaviorSettings {
-    fn default() -> Self {
-        Self {
-            behavior: "default".to_owned(),
-            download_path: None,
-            automation_events_enabled: false,
-        }
-    }
-}
-
-impl Default for BrowserDownloadBehavior {
-    fn default() -> Self {
-        let default_settings = BrowserDownloadBehaviorSettings::default();
-        Self {
-            behavior: default_settings.behavior,
-            download_path: default_settings.download_path,
-            automation_events_enabled: default_settings.automation_events_enabled,
-            webdriver_bidi_events_enabled: false,
-            browser_context_id: None,
-            browser_context_overrides: HashMap::new(),
-            browser_event_subscription_generations: HashMap::new(),
-            next_browser_event_subscription_generation: 0,
-        }
-    }
-}
-
-impl BrowserDownloadBehavior {
-    pub(crate) fn set_global(
-        &mut self,
-        behavior: String,
-        download_path: Option<String>,
-        automation_events_enabled: bool,
-    ) {
-        self.behavior = behavior;
-        self.download_path = download_path;
-        self.automation_events_enabled = automation_events_enabled;
-        self.browser_context_id = None;
-    }
-
-    pub(crate) fn set_global_policy(&mut self, behavior: String, download_path: Option<String>) {
-        self.behavior = behavior;
-        self.download_path = download_path;
-        self.browser_context_id = None;
-    }
-
-    pub(crate) fn set_browser_context(
-        &mut self,
-        browser_context_id: String,
-        behavior: String,
-        download_path: Option<String>,
-        automation_events_enabled: bool,
-    ) {
-        self.browser_context_overrides.insert(
-            browser_context_id.clone(),
-            BrowserDownloadBehaviorSettings {
-                behavior: behavior.clone(),
-                download_path: download_path.clone(),
-                automation_events_enabled,
-            },
-        );
-        self.browser_context_id = Some(browser_context_id);
-    }
-
-    pub(crate) fn set_browser_context_policy(
-        &mut self,
-        browser_context_id: String,
-        behavior: String,
-        download_path: Option<String>,
-    ) {
-        let automation_events_enabled = self
-            .browser_context_overrides
-            .get(&browser_context_id)
-            .is_some_and(|settings| settings.automation_events_enabled);
-        self.browser_context_overrides.insert(
-            browser_context_id.clone(),
-            BrowserDownloadBehaviorSettings {
-                behavior,
-                download_path,
-                automation_events_enabled,
-            },
-        );
-        self.browser_context_id = Some(browser_context_id);
-    }
-
-    pub(crate) fn reset_global(&mut self) {
-        let default = BrowserDownloadBehaviorSettings::default();
-        self.behavior = default.behavior;
-        self.download_path = default.download_path;
-        self.automation_events_enabled = default.automation_events_enabled;
-        self.browser_context_id = None;
-    }
-
-    pub(crate) fn reset_browser_context(&mut self, browser_context_id: &str) {
-        self.browser_context_overrides.remove(browser_context_id);
-        if self.browser_context_id.as_deref() == Some(browser_context_id) {
-            self.browser_context_id = None;
-        }
-    }
-
-    pub(crate) fn enable_webdriver_bidi_events(&mut self) -> bool {
-        let changed = !self.webdriver_bidi_events_enabled;
-        self.webdriver_bidi_events_enabled = true;
-        changed
-    }
-
-    pub(crate) fn disable_webdriver_bidi_events(&mut self) -> bool {
-        let changed = self.webdriver_bidi_events_enabled;
-        self.webdriver_bidi_events_enabled = false;
-        changed
-    }
-
-    pub(crate) fn clear_browser_context(&mut self, browser_context_id: &str) {
-        self.reset_browser_context(browser_context_id);
-    }
-
-    pub(crate) fn set_browser_events_enabled_for_session(
-        &mut self,
-        session_id: Option<&str>,
-        enabled: bool,
-    ) {
-        self.next_browser_event_subscription_generation = self
-            .next_browser_event_subscription_generation
-            .wrapping_add(1);
-        let session_id = session_id.map(str::to_owned);
-        if enabled {
-            self.browser_event_subscription_generations
-                .insert(session_id, self.next_browser_event_subscription_generation);
-        } else {
-            self.browser_event_subscription_generations
-                .remove(&session_id);
-        }
-    }
-
-    pub(crate) fn browser_event_observers(&self) -> Vec<(Option<String>, u64)> {
-        let mut observers = self
-            .browser_event_subscription_generations
-            .iter()
-            .map(|(session_id, generation)| (session_id.clone(), *generation))
-            .collect::<Vec<_>>();
-        observers.sort_by(|left, right| left.0.cmp(&right.0));
-        observers
-    }
-
-    #[cfg(test)]
-    pub(crate) fn browser_event_session_ids(&self) -> Vec<Option<String>> {
-        self.browser_event_observers()
-            .into_iter()
-            .map(|(session_id, _)| session_id)
-            .collect()
-    }
-
-    pub(crate) fn browser_event_subscription_is_current(
-        &self,
-        session_id: Option<&str>,
-        generation: u64,
-    ) -> bool {
-        self.browser_event_subscription_generations
-            .get(&session_id.map(str::to_owned))
-            .is_some_and(|current| *current == generation)
-    }
-
-    pub(crate) fn effective_for_browser_context(
-        &self,
-        browser_context_id: Option<&str>,
-    ) -> BrowserDownloadBehaviorSettings {
-        if let Some(browser_context_id) = browser_context_id
-            && let Some(settings) = self.browser_context_overrides.get(browser_context_id)
-        {
-            return settings.clone();
-        }
-        BrowserDownloadBehaviorSettings {
-            behavior: self.behavior.clone(),
-            download_path: self.download_path.clone(),
-            automation_events_enabled: self.automation_events_enabled,
         }
     }
 }

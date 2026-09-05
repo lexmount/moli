@@ -7137,10 +7137,11 @@ fn command_dispatch_completes_additional_page_sync_commands_without_legacy_fallb
         complete_messages(step),
         vec![json!({ "id": 411, "result": {} })]
     );
-    let settings = conn
-        .download_behavior
-        .effective_for_browser_context(Some("BID-page-sync"));
-    assert_eq!(settings.behavior, "allow");
+    let settings = conn.download_policy_for_browser_context(Some("BID-page-sync"));
+    assert_eq!(
+        settings.behavior,
+        moli_core::browser::DownloadBehavior::Allow
+    );
 
     let metrics_raw = serde_json::to_string(&json!({
         "id": 412,

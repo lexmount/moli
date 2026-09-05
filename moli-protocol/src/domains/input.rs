@@ -2386,8 +2386,15 @@ mod producer_tests {
         bc.set_active_target_id("FRAME-download");
         bc.attach_active_session("SID-download");
         conn.install_browser_context_fixture_for_test(bc);
-        conn.download_behavior
-            .set_global("deny".to_owned(), None, true);
+        conn.configure_download_policy(
+            None,
+            moli_core::browser::DownloadPolicy {
+                behavior: moli_core::browser::DownloadBehavior::Deny,
+                download_path: None,
+            },
+            Some(true),
+        )
+        .unwrap();
         let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
         let mut command_context = CommandDispatchContext::default();
         let mut prepared =

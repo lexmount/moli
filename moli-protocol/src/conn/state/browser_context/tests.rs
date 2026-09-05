@@ -2,6 +2,32 @@ use super::*;
 use std::sync::Arc;
 
 #[test]
+fn context_download_policy_outlives_the_devtools_projection() {
+    use moli_core::browser::{DownloadBehavior, DownloadPolicy};
+    let policy = DownloadPolicy {
+        behavior: DownloadBehavior::AllowAndName,
+        download_path: Some("/browser-owned".into()),
+    };
+    let physical = {
+        let mut projection = BrowserContext::new_with_page_for_test("CTX-download", "TID-download");
+        projection.attach_active_session("SID-download");
+        projection.automation_download_events_enabled = Some(true);
+        projection.set_download_policy(Some(policy.clone()));
+        projection.physical
+    };
+    assert_eq!(physical.download_policy.as_ref(), Some(&policy));
+    assert!(
+        physical
+            .download_policy
+            .as_ref()
+            .unwrap()
+            .behavior
+            .allows_download()
+    );
+    assert_eq!(physical.web_contents.len(), 1);
+}
+
+#[test]
 fn context_header_defaults_preserve_layer_order_and_clear_fallback() {
     let header = |name: &str, value: &str| (name.to_owned(), value.to_owned());
     let mut context = BrowserContext::new("CTX-headers".into());
