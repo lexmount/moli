@@ -11,6 +11,7 @@ use anyhow::anyhow;
 use tokio::sync::oneshot;
 
 mod inspection_endpoint;
+pub use inspection_endpoint::RendererDomInspection;
 
 fn remove_page(token: RendererPageToken) {
     remove_page_on_bound_owner_local_store(token)

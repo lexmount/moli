@@ -47,9 +47,10 @@ pub(crate) enum RendererPublicationRoute {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPublicationProjection {
     CurrentOwner,
-    // Inspector replies need a live AgentHost binding, not a Protocol-owned
-    // Browser Document. This grants no Browser lifecycle/action projection.
-    SessionResponsesOnly,
+    // DOM-agent output and terminal Inspector replies need the exact live
+    // binding, not a Protocol-owned Browser Document. This grants no Browser
+    // lifecycle/actions or new Runtime execution-context projection.
+    InspectionOnly,
     RetiringNetworkOnly,
 }
 
@@ -162,7 +163,7 @@ impl RendererPublicationOwner {
                             .current_renderer_inspection_binding()
                             .is_some_and(|binding| binding.routes_output_stream(stream))
                         {
-                            Some(RendererPublicationProjection::SessionResponsesOnly)
+                            Some(RendererPublicationProjection::InspectionOnly)
                         } else if runtime_slot.routes_retiring_renderer_page_owner(
                             *renderer_page,
                             page_owner.document_id(),

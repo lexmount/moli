@@ -483,13 +483,13 @@ fn start_pending_dom_node_reference_command(
         return Err(PendingAccessibilityCommandStartError::no_document_loaded());
     };
     let resolved_frame_id = frame_id.unwrap_or(top_frame_id.as_str()).to_owned();
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    let Some(page) = helpers::loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let Some(inspection) = crate::domains::dom::dom_inspection_for_owner(conn, &owner) else {
         return Err(PendingAccessibilityCommandStartError::no_document_loaded());
     };
-    let pending = page
-        .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
+    let pending = inspection
+        .start_document_frontend_node_binding(frontend_node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingAccessibilityCommandStartError::renderer_error)?;
     Ok(Some(PendingAccessibilityCommandDispatch::from_command(
         conn,
@@ -677,6 +677,11 @@ pub(crate) async fn complete_pending_accessibility_command(
     } = completed;
     let CompletedAccessibilityCommandWork::Page(completed) = completed;
     let completed = *completed;
+    if let Ok(completion) = &completed
+        && let Err(error) = conn.observe_renderer_inspection_completion(&owner_scope, completion)
+    {
+        return AccessibilityCommandDispatchStep::Complete(CommandOutputPlan::error(-32000, error));
+    }
 
     if let Err(message) = conn.ensure_document_accessible_for_owner(&owner_scope) {
         return AccessibilityCommandDispatchStep::Complete(CommandOutputPlan::error(
@@ -765,7 +770,7 @@ pub(crate) async fn complete_pending_accessibility_command(
             top_frame_id,
             operation,
         } => {
-            let backend_node_id = match page.finish_document_frontend_node_binding(completion) {
+            let backend_node_id = match completion.finish_document_frontend_node_binding() {
                 Ok(RendererDomFrontendNodeBindingResolution::BackendNodeId(backend_node_id)) => {
                     backend_node_id
                 }

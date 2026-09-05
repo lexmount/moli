@@ -1,3 +1,5 @@
+use moli_renderer_v8::RendererDomInspection;
+
 use std::{
     fs,
     path::Path,
@@ -6,13 +8,12 @@ use std::{
 
 use serde::Deserialize;
 
-use super::loaded_page_mut_for_owner;
+use super::dom_inspection_for_owner;
 use super::node_references::{NodeReferenceParams, devtools_node_reference_from_ids};
 use super::resolve::{
     DevToolsDomCommandTaskStep, DomCommandOutput, DomCommandTaskStep, PendingDomCommandDispatch,
-    PendingDomCommandKind, PendingDomCommandStartError, PendingDomCommandWork,
-    devtools_dom_command_task_complete, dom_object_reference_id_for_owner,
-    start_document_node_snapshot_for_reference,
+    PendingDomCommandKind, PendingDomCommandStartError, devtools_dom_command_task_complete,
+    dom_object_reference_id_for_owner, start_document_node_snapshot_for_reference,
 };
 use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
 use crate::devtools_runtime::{
@@ -20,8 +21,7 @@ use crate::devtools_runtime::{
     DevToolsSetFileInputFilesCommand, is_webdriver_bidi_node_shared_id,
 };
 use moli_core::page::{
-    CompletedPageCommand, Page, PendingPageCommand, RendererDomBidiNodeBindingResolution,
-    SelectedFile,
+    CompletedPageCommand, PendingPageCommand, RendererDomBidiNodeBindingResolution, SelectedFile,
 };
 
 #[derive(Deserialize)]
@@ -80,10 +80,10 @@ pub(super) fn start_cdp_set_file_input_files_by_node_reference(
             false,
         );
     }
-    let page = loaded_page_mut_for_owner(conn, &owner)
+    let inspection = dom_inspection_for_owner(conn, &owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     start_set_file_input_files_preflight_dispatch(
-        page,
+        &inspection,
         cmd.id,
         &owner,
         reference,
@@ -101,15 +101,11 @@ pub(super) fn start_devtools_set_file_input_files_command(
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let is_shared_node_id = is_webdriver_bidi_node_shared_id(command.object_id.as_str());
     if is_shared_node_id {
-        let renderer_inspector_session_id =
-            conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let page = loaded_page_mut_for_owner(conn, owner)
+        let inspection = dom_inspection_for_owner(conn, owner)
             .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-        let pending = page
-            .start_document_bidi_node_binding(
-                renderer_inspector_session_id,
-                command.object_id.as_str().to_owned(),
-            )
+        let pending = inspection
+            .start_document_bidi_node_binding(command.object_id.as_str().to_owned())
+            .map(PendingPageCommand::from_inspector_main_route)
             .map_err(PendingDomCommandStartError::renderer_error)?;
         return Ok(Some(PendingDomCommandDispatch {
             command_id,
@@ -119,7 +115,7 @@ pub(super) fn start_devtools_set_file_input_files_command(
                 files: command.files,
                 append: command.append,
             },
-            pending: PendingDomCommandWork::Page(pending),
+            pending,
         }));
     }
     start_set_file_input_files_for_remote_reference(
@@ -134,7 +130,7 @@ pub(super) fn start_devtools_set_file_input_files_command(
 }
 
 pub(super) fn complete_preflight(
-    page: &mut Page,
+    inspection: &RendererDomInspection<'_>,
     command_id: Option<u64>,
     owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
@@ -147,7 +143,7 @@ pub(super) fn complete_preflight(
         out.push_error(-32000, "Could not find node with given id");
         return DomCommandTaskStep::Complete;
     };
-    let preflight = page.finish_document_node_snapshot_for_backend_node_id(completion);
+    let preflight = completion.finish_document_node_snapshot_for_backend_node_id();
     match preflight {
         Ok(Some(_)) => {}
         Ok(None) => {
@@ -170,7 +166,7 @@ pub(super) fn complete_preflight(
         }
     };
     match start_set_file_input_files_for_reference_dispatch(
-        page, command_id, owner, reference, files, append,
+        inspection, command_id, owner, reference, files, append,
     ) {
         Ok(dispatch) => DomCommandTaskStep::Pending(Box::new(dispatch)),
         Err(error) => {
@@ -269,11 +265,10 @@ pub(super) fn complete_frontend_node_binding_for_set_file_input_files_result(
 }
 
 pub(super) fn complete_set_file_input_files(
-    page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page.finish_set_file_input_files(completion) {
+    match completion.finish_set_file_input_files() {
         Ok(Some(true)) => out.push_success(),
         Ok(Some(false)) => out.push_error(-32000, "UnableToSetFileInput"),
         Ok(None) => out.push_error(-32000, "Could not find node with given id"),
@@ -283,11 +278,10 @@ pub(super) fn complete_set_file_input_files(
 }
 
 pub(super) fn complete_set_file_input_files_object_reference(
-    page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page.finish_set_file_input_files_for_object_id(completion) {
+    match completion.finish_set_file_input_files_for_object_id() {
         Ok(Some(true)) => out.push_success(),
         Ok(Some(false)) => out.push_error(-32000, "UnableToSetFileInput"),
         Ok(None) => out.push_error(-32000, "Could not find node with given id"),
@@ -297,10 +291,9 @@ pub(super) fn complete_set_file_input_files_object_reference(
 }
 
 pub(super) fn complete_set_file_input_files_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
 ) -> Result<(), DevToolsError> {
-    match page.finish_set_file_input_files(completion) {
+    match completion.finish_set_file_input_files() {
         Ok(Some(true)) => Ok(()),
         Ok(Some(false)) => Err(DevToolsError::new(
             DevToolsErrorKind::UnableToSetFileInput,
@@ -318,10 +311,9 @@ pub(super) fn complete_set_file_input_files_result(
 }
 
 pub(super) fn complete_set_file_input_files_object_reference_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
 ) -> Result<(), DevToolsError> {
-    match page.finish_set_file_input_files_for_object_id(completion) {
+    match completion.finish_set_file_input_files_for_object_id() {
         Ok(Some(true)) => Ok(()),
         Ok(Some(false)) => Err(DevToolsError::new(
             DevToolsErrorKind::UnableToSetFileInput,
@@ -347,12 +339,12 @@ fn start_set_file_input_files_after_bidi_binding_resolution(
     files: Vec<SelectedFile>,
     append: bool,
 ) -> Result<PendingDomCommandDispatch, PendingDomCommandStartError> {
-    match finish_renderer_bidi_node_binding(conn, owner, completion)? {
+    match finish_renderer_bidi_node_binding(completion)? {
         RendererDomBidiNodeBindingResolution::BackendNodeId(backend_node_id) => {
-            let page = loaded_page_mut_for_owner(conn, owner)
+            let inspection = dom_inspection_for_owner(conn, owner)
                 .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
             start_set_file_input_files_for_reference_dispatch(
-                page,
+                &inspection,
                 command_id,
                 owner,
                 DevToolsDomNodeReference::BackendNodeId(backend_node_id),
@@ -377,23 +369,24 @@ fn start_set_file_input_files_after_frontend_binding_resolution(
     file_paths: Vec<String>,
     append: bool,
 ) -> Result<PendingDomCommandDispatch, PendingDomCommandStartError> {
-    let reference =
-        finish_renderer_frontend_node_binding(conn, owner, completion, frontend_node_id)?;
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let reference = finish_renderer_frontend_node_binding(completion, frontend_node_id)?;
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     start_set_file_input_files_preflight_dispatch(
-        page, command_id, owner, reference, file_paths, append,
+        &inspection,
+        command_id,
+        owner,
+        reference,
+        file_paths,
+        append,
     )
 }
 
 fn finish_renderer_bidi_node_binding(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
 ) -> Result<RendererDomBidiNodeBindingResolution, PendingDomCommandStartError> {
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    page.finish_document_bidi_node_binding(completion)
+    completion
+        .finish_document_bidi_node_binding()
         .map_err(|error| {
             PendingDomCommandStartError::renderer_error(format!(
                 "Could not resolve BiDi node binding: {error}"
@@ -402,14 +395,10 @@ fn finish_renderer_bidi_node_binding(
 }
 
 fn finish_renderer_frontend_node_binding(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
     _frontend_node_id: u32,
 ) -> Result<DevToolsDomNodeReference, PendingDomCommandStartError> {
-    let page = loaded_page_mut_for_owner(conn, owner)
-        .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    super::frontend_binding::finish_reference(page, completion)
+    super::frontend_binding::finish_reference(completion)
         .map_err(PendingDomCommandStartError::renderer_error)
 }
 
@@ -421,12 +410,11 @@ fn start_set_file_input_files_frontend_node_binding(
     file_paths: Vec<String>,
     append: bool,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
+    let pending = inspection
+        .start_document_frontend_node_binding(frontend_node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
@@ -436,7 +424,7 @@ fn start_set_file_input_files_frontend_node_binding(
             file_paths,
             append,
         },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -449,16 +437,13 @@ fn start_set_file_input_files_for_remote_reference(
     append: bool,
 ) -> Result<PendingDomCommandDispatch, PendingDomCommandStartError> {
     let reference = dom_object_reference_id_for_owner(conn, owner, &object_id);
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let object_id = reference;
     start_set_file_input_files_for_runtime_object(
-        page,
+        &inspection,
         command_id,
         owner,
-        renderer_inspector_session_id,
         object_id,
         files,
         append,
@@ -466,7 +451,7 @@ fn start_set_file_input_files_for_remote_reference(
 }
 
 fn start_set_file_input_files_preflight_dispatch(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     command_id: Option<u64>,
     owner: &CommandOwnerScope,
     reference: DevToolsDomNodeReference,
@@ -476,7 +461,8 @@ fn start_set_file_input_files_preflight_dispatch(
     let DevToolsDomNodeReference::BackendNodeId(_) = reference else {
         return Err(PendingDomCommandStartError::node_not_found());
     };
-    let pending = start_document_node_snapshot_for_reference(page, reference.clone(), 0, false)?;
+    let pending =
+        start_document_node_snapshot_for_reference(inspection, reference.clone(), 0, false)?;
     Ok(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
@@ -485,29 +471,29 @@ fn start_set_file_input_files_preflight_dispatch(
             file_paths,
             append,
         },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     })
 }
 
 fn start_set_file_input_files_for_reference_dispatch(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     command_id: Option<u64>,
     owner: &CommandOwnerScope,
     reference: DevToolsDomNodeReference,
     files: Vec<SelectedFile>,
     append: bool,
 ) -> Result<PendingDomCommandDispatch, PendingDomCommandStartError> {
-    let pending = start_set_file_input_files_for_reference(page, reference, files, append)?;
+    let pending = start_set_file_input_files_for_reference(inspection, reference, files, append)?;
     Ok(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::SetFileInputFiles,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     })
 }
 
 fn start_set_file_input_files_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
     files: Vec<SelectedFile>,
     append: bool,
@@ -516,34 +502,30 @@ fn start_set_file_input_files_for_reference(
         DevToolsDomNodeReference::FrontendNodeId(_) => {
             Err(PendingDomCommandStartError::node_not_found())
         }
-        DevToolsDomNodeReference::BackendNodeId(backend_node_id) => page
+        DevToolsDomNodeReference::BackendNodeId(backend_node_id) => inspection
             .start_set_file_input_files_for_backend_node_id(backend_node_id, files, append)
+            .map(PendingPageCommand::from_inspector_main_route)
             .map_err(PendingDomCommandStartError::renderer_error),
     }
 }
 
 fn start_set_file_input_files_for_runtime_object(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     command_id: Option<u64>,
     owner: &CommandOwnerScope,
-    renderer_inspector_session_id: Option<String>,
     object_id: String,
     files: Vec<SelectedFile>,
     append: bool,
 ) -> Result<PendingDomCommandDispatch, PendingDomCommandStartError> {
-    let pending = page
-        .start_set_file_input_files_for_object_id_in_inspector_session(
-            renderer_inspector_session_id,
-            &object_id,
-            files,
-            append,
-        )
+    let pending = inspection
+        .start_set_file_input_files_for_object_id_in_inspector_session(&object_id, files, append)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::SetFileInputFilesObjectReference,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     })
 }
 

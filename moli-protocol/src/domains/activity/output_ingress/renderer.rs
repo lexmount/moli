@@ -172,19 +172,21 @@ async fn project_renderer_output_records_for_owner(
 ) {
     for record in records {
         let (renderer_cause, mut item) = record.into_parts();
-        if projection == RendererPublicationProjection::SessionResponsesOnly {
-            let RendererOutputItem::Observation(
-                moli_core::RendererProtocolObservation::RuntimeInspector(batch),
-            ) = &mut item
-            else {
-                continue;
-            };
-            batch.messages.retain(|message| {
-                matches!(message,
-                    moli_core::page::RendererRuntimeInspectorMessage::Protocol(message)
-                        if message.renderer_call_id().is_some()
-                )
-            });
+        if projection == RendererPublicationProjection::InspectionOnly {
+            match &mut item {
+                RendererOutputItem::Observation(
+                    moli_core::RendererProtocolObservation::DomMutations(_),
+                ) => {}
+                RendererOutputItem::Observation(
+                    moli_core::RendererProtocolObservation::RuntimeInspector(batch),
+                ) => batch.messages.retain(|message| {
+                    matches!(message,
+                        moli_core::page::RendererRuntimeInspectorMessage::Protocol(message)
+                            if message.renderer_call_id().is_some()
+                    )
+                }),
+                _ => continue,
+            }
         }
         if projection == RendererPublicationProjection::RetiringNetworkOnly
             && !matches!(

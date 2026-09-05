@@ -1,5 +1,8 @@
 use super::*;
 
+mod dom;
+pub use dom::RendererDomInspection;
+
 impl RendererInspectionEndpoint {
     pub fn agent_token(&self) -> RendererDevToolsAgentToken {
         self.devtools_agent_token
@@ -174,6 +177,96 @@ mod tests {
             endpoint.enqueue_performance_get_metrics(ticket(), serde_json::Value::Null, None),
             endpoint.enqueue_set_script_execution_disabled(ticket(), true, None),
         ]
+    }
+
+    #[test]
+    fn dom_binding_preserves_main_fifo_and_native_vs_v8_nested_boundaries() {
+        use crate::devtools::command::RendererDevToolsMainNestedDispatch;
+
+        let endpoint = endpoint();
+        let attachment = RendererAgentAttachmentId::allocate();
+        let dom = endpoint.dom_inspection(attachment, Some("dom-session".to_owned()));
+        let native = dom
+            .start_document_node_snapshot_for_document(true, 1, false)
+            .unwrap();
+        let v8 = dom
+            .start_resolve_runtime_object_for_backend_node_id_in_inspector_session(1, None, None)
+            .unwrap();
+        for route in [&native, &v8] {
+            assert_eq!(route.ticket().attachment(), Some(attachment));
+            assert_eq!(
+                route.ticket().session().wire_session_id(),
+                Some("dom-session")
+            );
+        }
+
+        let main = endpoint.devtools_target.main_ref();
+        let mut native = main
+            .claim_for_pause()
+            .expect("native DOM retains its Page-agent boundary");
+        assert_eq!(
+            native.nested_dispatch(),
+            RendererDevToolsMainNestedDispatch::PageAgent
+        );
+        let handoff = main.first_dispatch_guard(&mut native);
+        assert!(
+            main.claim_for_owner().is_none(),
+            "one session keeps its first-dispatch FIFO"
+        );
+        drop(handoff);
+        assert!(
+            main.claim_for_pause().is_none(),
+            "typed V8 resolution remains owner-only"
+        );
+        let v8 = main.claim_for_owner().unwrap();
+        assert_eq!(
+            v8.nested_dispatch(),
+            RendererDevToolsMainNestedDispatch::OwnerOnly
+        );
+        assert_eq!(v8.ticket().attachment(), Some(attachment));
+    }
+
+    #[test]
+    fn dom_binding_retirement_and_context_shutdown_settle_queued_and_late_commands() {
+        for context_shutdown in [false, true] {
+            let endpoint = endpoint();
+            let registry = RendererDevToolsTargetShutdownRegistry::default();
+            let _registration = registry.register(endpoint.devtools_target.clone()).unwrap();
+            let dom = endpoint.dom_inspection(RendererAgentAttachmentId::allocate(), None);
+            let native = dom
+                .start_document_node_snapshot_for_document(true, 1, false)
+                .unwrap();
+            let v8 = dom
+                .start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
+                    1, None, None,
+                )
+                .unwrap();
+            if context_shutdown {
+                registry.terminate_all();
+            } else {
+                endpoint.retire_page();
+            }
+            assert_main_canceled(native);
+            assert_main_canceled(v8);
+            for route in [
+                dom.start_document_node_snapshot_for_document(true, 1, false),
+                dom.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
+                    1, None, None,
+                ),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                assert_main_canceled(route);
+            }
+            assert!(
+                endpoint
+                    .devtools_target
+                    .main_ref()
+                    .claim_for_owner()
+                    .is_none()
+            );
+        }
     }
 
     #[test]

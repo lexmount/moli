@@ -1,22 +1,22 @@
 use super::{
     InlineStyleQueryKind, PendingCssCommandDispatch, PendingCssCommandKind,
-    PendingCssCommandStartError, loaded_page_mut_for_session,
+    PendingCssCommandStartError,
 };
-use crate::conn::{CdpConnection, Cmd};
-use moli_core::page::RendererDomFrontendNodeBindingResolution;
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
+use moli_core::page::{PendingPageCommand, RendererDomFrontendNodeBindingResolution};
 
 pub(super) fn start_frontend_node_binding_for_computed_style(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
     frontend_node_id: u32,
 ) -> Result<PendingCssCommandDispatch, PendingCssCommandStartError> {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let Some(page) = crate::domains::dom::dom_inspection_for_owner(conn, &owner) else {
         return Err(PendingCssCommandStartError::no_document_loaded());
     };
     let pending = page
-        .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
+        .start_document_frontend_node_binding(frontend_node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingCssCommandStartError::renderer_error)?;
     Ok(PendingCssCommandDispatch::from_command(
         conn,
@@ -32,13 +32,13 @@ pub(super) fn start_frontend_node_binding_for_inline_style(
     frontend_node_id: u32,
     kind: InlineStyleQueryKind,
 ) -> Result<Option<PendingCssCommandDispatch>, PendingCssCommandStartError> {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_session(cmd.session_id);
-    let Some(page) = loaded_page_mut_for_session(conn, cmd.session_id) else {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let Some(page) = crate::domains::dom::dom_inspection_for_owner(conn, &owner) else {
         return Err(PendingCssCommandStartError::no_document_loaded());
     };
     let pending = page
-        .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
+        .start_document_frontend_node_binding(frontend_node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingCssCommandStartError::renderer_error)?;
     Ok(Some(PendingCssCommandDispatch::from_command(
         conn,

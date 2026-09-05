@@ -2135,6 +2135,29 @@ impl CdpConnection {
         Some(owner.session_key.wire_session_id().map(str::to_owned))
     }
 
+    pub(crate) fn observe_renderer_inspection_completion(
+        &mut self,
+        owner: &CommandOwnerScope,
+        completion: &moli_core::page::CompletedPageCommand,
+    ) -> Result<(), String> {
+        let slot = self
+            .target_session_owner_mut_for_owner(owner)
+            .map(|owner| owner.into_runtime_slot_mut())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
+        let Some(attachment) = completion.renderer_agent_attachment_id() else {
+            return Err("Renderer attachment changed".to_owned());
+        };
+        if slot
+            .current_renderer_inspection_binding()
+            .map(|binding| binding.attachment().id())
+            != Some(attachment)
+        {
+            return Err("Renderer attachment changed".to_owned());
+        }
+        slot.observe_renderer_page_state(completion.page_state());
+        Ok(())
+    }
+
     pub(crate) fn runtime_session_owner_slot_mut(
         &mut self,
         session_id: Option<&str>,

@@ -1,3 +1,5 @@
+use moli_renderer_v8::RendererDomInspection;
+
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -108,14 +110,14 @@ pub(crate) struct PendingDomCommandDispatch {
     pub(super) command_id: Option<u64>,
     pub(super) owner_scope: CommandOwnerScope,
     pub(super) kind: PendingDomCommandKind,
-    pub(super) pending: PendingDomCommandWork,
+    pub(super) pending: PendingPageCommand,
 }
 
 pub(crate) struct CompletedDomCommandDispatch {
     command_id: Option<u64>,
     owner_scope: CommandOwnerScope,
     kind: PendingDomCommandKind,
-    completed: Result<CompletedDomCommandWork, String>,
+    completed: Result<Box<CompletedPageCommand>, String>,
 }
 
 impl CompletedDomCommandDispatch {
@@ -129,9 +131,7 @@ impl CompletedDomCommandDispatch {
 
     pub(crate) fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
         match &self.completed {
-            Ok(CompletedDomCommandWork::Page(completion)) => {
-                completion.renderer_output_predecessor()
-            }
+            Ok(completion) => completion.renderer_output_predecessor(),
             Err(_) => None,
         }
     }
@@ -318,28 +318,19 @@ pub(super) fn start_disable_dom_agent_command(
     cmd: &Cmd<'_>,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
-    let Some(page) = loaded_page_mut_for_owner(conn, &owner) else {
+    let Some(inspection) = dom_inspection_for_owner(conn, &owner) else {
         return Ok(None);
     };
-    let pending = page
-        .start_discard_dom_agent_frontend_bindings(renderer_inspector_session_id)
+    let pending = inspection
+        .start_discard_dom_agent_frontend_bindings()
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id: cmd.id,
         owner_scope: owner,
         kind: PendingDomCommandKind::DiscardDomAgentFrontendBindings,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
-}
-
-pub(super) enum PendingDomCommandWork {
-    Page(PendingPageCommand),
-}
-
-enum CompletedDomCommandWork {
-    Page(Box<CompletedPageCommand>),
 }
 
 #[derive(Clone)]
@@ -390,12 +381,10 @@ pub(super) enum PendingSetChildNodesAfter {
 
 impl PendingDomCommandDispatch {
     pub(crate) async fn wait(self) -> CompletedDomCommandDispatch {
-        let completed = match self.pending {
-            PendingDomCommandWork::Page(pending) => Box::pin(pending.wait())
-                .await
-                .map(|completed| CompletedDomCommandWork::Page(Box::new(completed)))
-                .map_err(|error| error.to_string()),
-        };
+        let completed = Box::pin(self.pending.wait())
+            .await
+            .map(Box::new)
+            .map_err(|error| error.to_string());
         CompletedDomCommandDispatch {
             command_id: self.command_id,
             owner_scope: self.owner_scope,
@@ -489,71 +478,80 @@ fn required_backend_node_id_for_reference(
 }
 
 fn start_document_node_attributes_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
 ) -> Result<PendingPageCommand, PendingDomCommandStartError> {
     let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    page.start_document_node_attributes_for_backend_node_id(backend_node_id)
+    inspection
+        .start_document_node_attributes_for_backend_node_id(backend_node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)
 }
 
 fn start_document_node_text_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
 ) -> Result<PendingPageCommand, PendingDomCommandStartError> {
     let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    page.start_document_node_text_for_backend_node_id(backend_node_id)
+    inspection
+        .start_document_node_text_for_backend_node_id(backend_node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)
 }
 
 fn start_document_node_property_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
     name: &str,
 ) -> Result<PendingPageCommand, PendingDomCommandStartError> {
     let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    page.start_document_node_property_for_backend_node_id(backend_node_id, name)
+    inspection
+        .start_document_node_property_for_backend_node_id(backend_node_id, name)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)
 }
 
 pub(super) fn start_document_node_snapshot_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
     depth: i32,
     pierce: bool,
 ) -> Result<PendingPageCommand, PendingDomCommandStartError> {
     let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    page.start_document_node_snapshot_for_backend_node_id(backend_node_id, depth, pierce)
+    inspection
+        .start_document_node_snapshot_for_backend_node_id(backend_node_id, depth, pierce)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)
 }
 
 fn start_inspector_document_node_snapshot_for_reference(
-    page: &Page,
-    renderer_inspector_session_id: Option<String>,
+    inspection: &RendererDomInspection<'_>,
     include_whitespace: bool,
     reference: DevToolsDomNodeReference,
     depth: i32,
     pierce: bool,
 ) -> Result<PendingPageCommand, PendingDomCommandStartError> {
     let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    page.start_document_node_snapshot_for_backend_node_id_in_inspector_session(
-        renderer_inspector_session_id,
-        include_whitespace,
-        backend_node_id,
-        depth,
-        pierce,
-    )
-    .map_err(PendingDomCommandStartError::renderer_error)
+    inspection
+        .start_document_node_snapshot_for_backend_node_id_in_inspector_session(
+            include_whitespace,
+            backend_node_id,
+            depth,
+            pierce,
+        )
+        .map(PendingPageCommand::from_inspector_main_route)
+        .map_err(PendingDomCommandStartError::renderer_error)
 }
 
 fn start_outer_html_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
     include_shadow_dom: bool,
 ) -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError> {
     let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    let pending = page
+    let pending = inspection
         .start_outer_html_for_backend_node_id(backend_node_id, include_shadow_dom)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok((
         pending,
@@ -562,13 +560,14 @@ fn start_outer_html_for_reference(
 }
 
 fn start_client_rect_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
     operation: DevToolsDomGeometryOperation,
 ) -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError> {
     let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    let pending = page
+    let pending = inspection
         .start_document_geometry_for_backend_node_id(backend_node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok((
         pending,
@@ -577,13 +576,14 @@ fn start_client_rect_for_reference(
 }
 
 fn start_scroll_into_view_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
     rect: Option<DomScrollIntoViewRect>,
 ) -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError> {
     let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    let pending = page
+    let pending = inspection
         .start_scroll_backend_node_into_view_if_needed(backend_node_id, rect)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok((
         pending,
@@ -592,8 +592,7 @@ fn start_scroll_into_view_for_reference(
 }
 
 fn start_query_selector_with_child_node_snapshot_events_for_reference(
-    page: &Page,
-    renderer_inspector_session_id: Option<String>,
+    inspection: &RendererDomInspection<'_>,
     include_whitespace: bool,
     reference: DevToolsDomNodeReference,
     selector: String,
@@ -601,14 +600,14 @@ fn start_query_selector_with_child_node_snapshot_events_for_reference(
     top_frame_id: Option<String>,
 ) -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError> {
     let root_backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    let pending = page
+    let pending = inspection
         .start_document_query_selector_with_child_node_snapshot_events_for_backend_node_id(
-            renderer_inspector_session_id,
             include_whitespace,
             root_backend_node_id,
             selector,
             multiple,
         )
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok((
         pending,
@@ -620,22 +619,21 @@ fn start_query_selector_with_child_node_snapshot_events_for_reference(
 }
 
 fn start_query_selector_for_reference(
-    page: &Page,
-    renderer_inspector_session_id: Option<String>,
+    inspection: &RendererDomInspection<'_>,
     include_whitespace: bool,
     reference: DevToolsDomNodeReference,
     selector: String,
     multiple: bool,
 ) -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError> {
     let root_backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    let pending = page
+    let pending = inspection
         .start_document_query_selector_for_backend_node_id_in_inspector_session(
-            renderer_inspector_session_id,
             include_whitespace,
             root_backend_node_id,
             selector,
             multiple,
         )
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok((
         pending,
@@ -1175,29 +1173,30 @@ fn start_cdp_dom_focus_command(
         )?
         .ok_or_else(PendingDomCommandStartError::node_not_found);
     }
-    let page = loaded_page_mut_for_owner(conn, &owner)
+    let inspection = dom_inspection_for_owner(conn, &owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_focus_document_node_for_reference(page, reference)?;
+    let pending = start_focus_document_node_for_reference(&inspection, reference)?;
     Ok(PendingDomCommandDispatch {
         command_id: cmd.id,
         owner_scope: owner,
         kind: PendingDomCommandKind::Focus {
             missing_node_message: "No node found for given backend id",
         },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     })
 }
 
 fn start_focus_document_node_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
 ) -> Result<PendingPageCommand, PendingDomCommandStartError> {
     match reference {
         DevToolsDomNodeReference::FrontendNodeId(_) => {
             Err(PendingDomCommandStartError::node_not_found())
         }
-        DevToolsDomNodeReference::BackendNodeId(backend_node_id) => page
+        DevToolsDomNodeReference::BackendNodeId(backend_node_id) => inspection
             .start_focus_document_backend_node_id(backend_node_id)
+            .map(PendingPageCommand::from_inspector_main_route)
             .map_err(PendingDomCommandStartError::renderer_error),
     }
 }
@@ -1258,23 +1257,22 @@ fn start_cdp_dom_edit_command(
 ) -> Result<PendingDomCommandDispatch, PendingDomCommandStartError> {
     let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let edit = super::edit::renderer_dom_edit_from_cdp(cmd, action)?;
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
-    let page = loaded_page_mut_for_owner(conn, &owner)
+    let inspection = dom_inspection_for_owner(conn, &owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_edit_document_node(renderer_inspector_session_id, edit)
+    let pending = inspection
+        .start_edit_document_node(edit)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(PendingDomCommandDispatch {
         command_id: cmd.id,
         owner_scope: owner,
         kind: PendingDomCommandKind::EditDocumentNode,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     })
 }
 
 fn start_mutate_document_node_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
     mutation: RendererDomAttributeMutation,
 ) -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError> {
@@ -1282,23 +1280,25 @@ fn start_mutate_document_node_for_reference(
         DevToolsDomNodeReference::FrontendNodeId(_) => {
             Err(PendingDomCommandStartError::node_not_found())
         }
-        DevToolsDomNodeReference::BackendNodeId(backend_node_id) => page
+        DevToolsDomNodeReference::BackendNodeId(backend_node_id) => inspection
             .start_mutate_document_backend_node_attribute(backend_node_id, mutation)
+            .map(PendingPageCommand::from_inspector_main_route)
             .map(|pending| (pending, PendingDomCommandKind::MutateAttribute))
             .map_err(PendingDomCommandStartError::renderer_error),
     }
 }
 
 fn start_remove_document_node_for_reference(
-    page: &Page,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
 ) -> Result<PendingPageCommand, PendingDomCommandStartError> {
     match reference {
         DevToolsDomNodeReference::FrontendNodeId(_) => {
             Err(PendingDomCommandStartError::node_not_found())
         }
-        DevToolsDomNodeReference::BackendNodeId(backend_node_id) => page
+        DevToolsDomNodeReference::BackendNodeId(backend_node_id) => inspection
             .start_remove_document_backend_node_id(backend_node_id)
+            .map(PendingPageCommand::from_inspector_main_route)
             .map_err(PendingDomCommandStartError::renderer_error),
     }
 }
@@ -1341,14 +1341,14 @@ fn start_devtools_remove_node_command(
             PendingDomCommandKind::ResolveFrontendNodeForRemoveNode { frontend_node_id },
         );
     }
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_remove_document_node_for_reference(page, command.reference)?;
+    let pending = start_remove_document_node_for_reference(&inspection, command.reference)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::RemoveNode,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -1396,14 +1396,15 @@ fn start_devtools_dom_geometry_command(
         );
     }
     let reference = command.reference;
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let (pending, kind) = start_client_rect_for_reference(page, reference, command.operation)?;
+    let (pending, kind) =
+        start_client_rect_for_reference(&inspection, reference, command.operation)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -1458,14 +1459,11 @@ fn start_devtools_describe_node_command(
             },
         );
     }
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let pending = start_inspector_document_node_snapshot_for_reference(
-        page,
-        renderer_inspector_session_id,
+        &inspection,
         include_whitespace,
         reference,
         command.depth,
@@ -1478,7 +1476,7 @@ fn start_devtools_describe_node_command(
             cached_object_node: None,
             top_frame_id,
         },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -1522,8 +1520,6 @@ fn start_devtools_request_child_nodes_command(
     command: DevToolsRequestChildNodesCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let top_frame_id = top_frame_id_for_owner(conn, owner);
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     let next_depth = if command.depth > 0 {
         command.depth - 1
@@ -1545,11 +1541,10 @@ fn start_devtools_request_child_nodes_command(
             )
         }
         DevToolsDomNodeReference::BackendNodeId(backend_node_id) => {
-            let page = loaded_page_mut_for_owner(conn, owner)
+            let inspection = dom_inspection_for_owner(conn, owner)
                 .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
             let (pending, kind) = start_request_child_nodes_for_reference(
-                page,
-                renderer_inspector_session_id,
+                &inspection,
                 include_whitespace,
                 DevToolsDomNodeReference::BackendNodeId(backend_node_id),
                 next_depth,
@@ -1560,15 +1555,14 @@ fn start_devtools_request_child_nodes_command(
                 command_id,
                 owner_scope: owner.clone(),
                 kind,
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
     }
 }
 
 fn start_request_child_nodes_for_reference(
-    page: &Page,
-    renderer_inspector_session_id: Option<String>,
+    inspection: &RendererDomInspection<'_>,
     include_whitespace: bool,
     reference: DevToolsDomNodeReference,
     depth: i32,
@@ -1581,14 +1575,14 @@ fn start_request_child_nodes_for_reference(
             message: "InvalidNode".to_owned(),
         });
     };
-    let pending = page
+    let pending = inspection
         .start_document_child_node_snapshot_events_for_backend_node_id(
-            renderer_inspector_session_id,
             include_whitespace,
             backend_node_id,
             depth,
             pierce,
         )
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok((
         pending,
@@ -1654,22 +1648,20 @@ fn start_devtools_query_selector_command(
     command: DevToolsQuerySelectorCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let top_frame_id = top_frame_id_for_owner(conn, owner);
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     let Some(reference) = command.root else {
-        let page =
-            loaded_page_mut_for_owner(conn, owner).ok_or_else(|| PendingDomCommandStartError {
+        let inspection =
+            dom_inspection_for_owner(conn, owner).ok_or_else(|| PendingDomCommandStartError {
                 code: -32000,
                 message: "Could not find node with given id".to_owned(),
             })?;
-        let pending = page
+        let pending = inspection
             .start_document_query_selector_for_document_in_inspector_session(
-                renderer_inspector_session_id,
                 include_whitespace,
                 command.selector,
                 command.multiple,
             )
+            .map(PendingPageCommand::from_inspector_main_route)
             .map_err(PendingDomCommandStartError::renderer_error)?;
         return Ok(Some(PendingDomCommandDispatch {
             command_id,
@@ -1677,13 +1669,13 @@ fn start_devtools_query_selector_command(
             kind: PendingDomCommandKind::QuerySelectorLive {
                 multiple: command.multiple,
             },
-            pending: PendingDomCommandWork::Page(pending),
+            pending,
         }));
     };
 
     match reference {
         DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) => {
-            if loaded_page_mut_for_owner(conn, owner).is_none() {
+            if dom_inspection_for_owner(conn, owner).is_none() {
                 return Err(PendingDomCommandStartError {
                     code: -32000,
                     message: "Could not find node with given id".to_owned(),
@@ -1702,20 +1694,20 @@ fn start_devtools_query_selector_command(
             )
         }
         DevToolsDomNodeReference::BackendNodeId(root_backend_node_id) => {
-            let page = loaded_page_mut_for_owner(conn, owner).ok_or_else(|| {
+            let inspection = dom_inspection_for_owner(conn, owner).ok_or_else(|| {
                 PendingDomCommandStartError {
                     code: -32000,
                     message: "Could not find node with given id".to_owned(),
                 }
             })?;
-            let pending = page
+            let pending = inspection
                 .start_document_query_selector_for_backend_node_id_in_inspector_session(
-                    renderer_inspector_session_id,
                     include_whitespace,
                     root_backend_node_id,
                     command.selector,
                     command.multiple,
                 )
+                .map(PendingPageCommand::from_inspector_main_route)
                 .map_err(PendingDomCommandStartError::renderer_error)?;
             Ok(Some(PendingDomCommandDispatch {
                 command_id,
@@ -1723,7 +1715,7 @@ fn start_devtools_query_selector_command(
                 kind: PendingDomCommandKind::QuerySelectorLive {
                     multiple: command.multiple,
                 },
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
     }
@@ -1882,22 +1874,16 @@ fn start_devtools_get_document_command(
         PendingDomDocumentSnapshotOperation::GetDocument
     };
     let top_frame_id = top_frame_id_for_owner(conn, owner);
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let depth = match operation {
         PendingDomDocumentSnapshotOperation::GetDocument => command.depth.unwrap_or(2),
         PendingDomDocumentSnapshotOperation::GetFlattenedDocument => command.depth.unwrap_or(-1),
     };
-    let pending = page
-        .start_document_node_snapshot_for_document(
-            renderer_inspector_session_id,
-            include_whitespace,
-            depth,
-            command.pierce,
-        )
+    let pending = inspection
+        .start_document_node_snapshot_for_document(include_whitespace, depth, command.pierce)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
@@ -1906,7 +1892,7 @@ fn start_devtools_get_document_command(
             operation,
             top_frame_id,
         },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -1934,22 +1920,21 @@ fn start_devtools_get_frame_owner_command(
     owner: &CommandOwnerScope,
     command: DevToolsGetFrameOwnerCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let page =
-        loaded_page_mut_for_owner(conn, owner).ok_or_else(|| PendingDomCommandStartError {
+    let inspection =
+        dom_inspection_for_owner(conn, owner).ok_or_else(|| PendingDomCommandStartError {
             code: -32000,
             message: "Frame with the given id does not belong to the target.".to_owned(),
         })?;
     let frame_id = command.frame_id.into_string();
-    let pending = page
-        .start_child_frame_owner_node_reference(&frame_id, renderer_inspector_session_id)
+    let pending = inspection
+        .start_child_frame_owner_node_reference(&frame_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::GetFrameOwner { frame_id },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -1994,23 +1979,22 @@ fn start_devtools_get_node_for_location_command(
         .target_session_owner_frame_tree_identity_for_owner(owner)
         .map(|identity| identity.0)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let inspector_session_id = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
+    let pending = inspection
         .start_document_hit_test(
-            inspector_session_id,
             command.x,
             command.y,
             command.include_user_agent_shadow_dom,
             command.ignore_pointer_events_none,
         )
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::GetNodeForLocation { top_frame_id },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -2056,21 +2040,20 @@ struct PendingResolveRuntimeObjectForReference {
 }
 
 fn start_resolve_runtime_object_for_reference(
-    page: &Page,
-    renderer_inspector_session_id: Option<String>,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
     execution_context_id: Option<i64>,
     object_group: Option<&str>,
     top_frame_id: Option<String>,
 ) -> Result<PendingResolveRuntimeObjectForReference, PendingDomCommandStartError> {
     let backend_node_id = required_backend_node_id_for_reference(&reference)?;
-    let pending = page
+    let pending = inspection
         .start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
-            renderer_inspector_session_id,
             backend_node_id,
             execution_context_id,
             object_group,
         )
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(PendingResolveRuntimeObjectForReference {
         pending,
@@ -2086,8 +2069,6 @@ fn start_devtools_resolve_node_command(
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let reference = command.reference;
     let top_frame_id = top_frame_id_for_owner(conn, owner);
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     if let DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) = reference {
         return start_document_frontend_node_binding_command(
             conn,
@@ -2102,11 +2083,12 @@ fn start_devtools_resolve_node_command(
             },
         );
     }
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     if let Some(execution_context_id) = command.execution_context_id {
-        let pending = page
+        let pending = inspection
             .start_child_frame_id_for_default_execution_context_id(execution_context_id)
+            .map(PendingPageCommand::from_inspector_main_route)
             .map_err(PendingDomCommandStartError::renderer_error)?;
         return Ok(Some(PendingDomCommandDispatch {
             command_id,
@@ -2117,13 +2099,12 @@ fn start_devtools_resolve_node_command(
                 object_group: command.object_group,
                 top_frame_id,
             },
-            pending: PendingDomCommandWork::Page(pending),
+            pending,
         }));
     }
     let object_group = command.object_group;
     let resolution = start_resolve_runtime_object_for_reference(
-        page,
-        renderer_inspector_session_id,
+        &inspection,
         reference,
         None,
         object_group.as_deref(),
@@ -2137,7 +2118,7 @@ fn start_devtools_resolve_node_command(
             object_group,
             cache_top_frame_id: resolution.cache_top_frame_id,
         },
-        pending: PendingDomCommandWork::Page(resolution.pending),
+        pending: resolution.pending,
     }))
 }
 
@@ -2254,33 +2235,32 @@ fn start_dom_object_reference_operation(
     operation: PendingDomObjectReferenceOperation,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let reference = dom_object_reference_id_for_owner(conn, owner, &object_id);
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let object_id = reference;
     match operation {
         PendingDomObjectReferenceOperation::RequestNode => {
-            let pending = page
+            let pending = inspection
                 .start_document_node_snapshot_for_object_id_in_inspector_session(
-                    renderer_inspector_session_id,
                     include_whitespace,
                     &object_id,
                     0,
                     false,
                 )
+                .map(PendingPageCommand::from_inspector_main_route)
                 .map_err(PendingDomCommandStartError::renderer_error)?;
             Ok(Some(PendingDomCommandDispatch {
                 command_id,
                 owner_scope: owner.clone(),
                 kind: PendingDomCommandKind::RequestNodeObjectReference,
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
         PendingDomObjectReferenceOperation::Focus => {
-            let pending = page
-                .start_focus_document_node_for_object_id(renderer_inspector_session_id, object_id)
+            let pending = inspection
+                .start_focus_document_node_for_object_id(object_id)
+                .map(PendingPageCommand::from_inspector_main_route)
                 .map_err(PendingDomCommandStartError::renderer_error)?;
             Ok(Some(PendingDomCommandDispatch {
                 command_id,
@@ -2288,22 +2268,19 @@ fn start_dom_object_reference_operation(
                 kind: PendingDomCommandKind::Focus {
                     missing_node_message: "Could not find node with given id",
                 },
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
         PendingDomObjectReferenceOperation::GetOuterHtml { include_shadow_dom } => {
-            let pending = page
-                .start_outer_html_for_object_id_in_inspector_session(
-                    renderer_inspector_session_id,
-                    &object_id,
-                    include_shadow_dom,
-                )
+            let pending = inspection
+                .start_outer_html_for_object_id_in_inspector_session(&object_id, include_shadow_dom)
+                .map(PendingPageCommand::from_inspector_main_route)
                 .map_err(PendingDomCommandStartError::renderer_error)?;
             Ok(Some(PendingDomCommandDispatch {
                 command_id,
                 owner_scope: owner.clone(),
                 kind: PendingDomCommandKind::GetOuterHtmlObjectReference,
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
         PendingDomObjectReferenceOperation::DescribeNode {
@@ -2312,14 +2289,14 @@ fn start_dom_object_reference_operation(
             cached_object_node,
             top_frame_id,
         } => {
-            let pending = page
+            let pending = inspection
                 .start_document_node_snapshot_for_object_id_in_inspector_session(
-                    renderer_inspector_session_id,
                     include_whitespace,
                     &object_id,
                     depth,
                     pierce,
                 )
+                .map(PendingPageCommand::from_inspector_main_route)
                 .map_err(PendingDomCommandStartError::renderer_error)?;
             Ok(Some(PendingDomCommandDispatch {
                 command_id,
@@ -2328,37 +2305,34 @@ fn start_dom_object_reference_operation(
                     cached_object_node,
                     top_frame_id,
                 },
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
         PendingDomObjectReferenceOperation::GetBoxModel
         | PendingDomObjectReferenceOperation::GetContentQuads => {
-            let pending = page
-                .start_document_geometry_for_object_id_in_inspector_session(
-                    renderer_inspector_session_id,
-                    &object_id,
-                )
+            let pending = inspection
+                .start_document_geometry_for_object_id_in_inspector_session(&object_id)
+                .map(PendingPageCommand::from_inspector_main_route)
                 .map_err(PendingDomCommandStartError::renderer_error)?;
             Ok(Some(PendingDomCommandDispatch {
                 command_id,
                 owner_scope: owner.clone(),
                 kind: PendingDomCommandKind::ObjectReferenceLiveClientRect { operation },
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
         PendingDomObjectReferenceOperation::ScrollIntoViewIfNeeded { rect } => {
-            let pending = page
+            let pending = inspection
                 .start_scroll_node_into_view_if_needed_for_object_id_in_inspector_session(
-                    renderer_inspector_session_id,
-                    &object_id,
-                    rect,
+                    &object_id, rect,
                 )
+                .map(PendingPageCommand::from_inspector_main_route)
                 .map_err(PendingDomCommandStartError::renderer_error)?;
             Ok(Some(PendingDomCommandDispatch {
                 command_id,
                 owner_scope: owner.clone(),
                 kind: PendingDomCommandKind::ScrollIntoViewIfNeededObjectReference,
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
     }
@@ -2370,19 +2344,15 @@ fn start_devtools_push_nodes_by_backend_ids_command(
     owner: &CommandOwnerScope,
     command: DevToolsPushNodesByBackendIdsCommand,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_runtime_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
     let renderer_backend_positions = (0..command.backend_node_ids.len()).collect::<Vec<_>>();
     let node_ids = vec![0; command.backend_node_ids.len()];
     let backend_node_ids = command.backend_node_ids.clone();
 
-    let pending = page
-        .start_document_frontend_node_ids_for_backend_node_ids(
-            renderer_runtime_inspector_session_id,
-            command.backend_node_ids,
-        )
+    let pending = inspection
+        .start_document_frontend_node_ids_for_backend_node_ids(command.backend_node_ids)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
@@ -2392,7 +2362,7 @@ fn start_devtools_push_nodes_by_backend_ids_command(
             node_ids,
             renderer_backend_positions,
         },
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -2404,16 +2374,17 @@ fn start_devtools_get_outer_html_command(
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
     let include_shadow_dom = command.include_shadow_dom;
     let Some(reference) = command.reference else {
-        let page = loaded_page_mut_for_owner(conn, owner)
+        let inspection = dom_inspection_for_owner(conn, owner)
             .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-        let pending = page
+        let pending = inspection
             .start_outer_html_for_document(include_shadow_dom)
+            .map(PendingPageCommand::from_inspector_main_route)
             .map_err(PendingDomCommandStartError::renderer_error)?;
         return Ok(Some(PendingDomCommandDispatch {
             command_id,
             owner_scope: owner.clone(),
             kind: PendingDomCommandKind::GetOuterHtmlDocument,
-            pending: PendingDomCommandWork::Page(pending),
+            pending,
         }));
     };
     if let DevToolsDomNodeReference::FrontendNodeId(frontend_node_id) = reference {
@@ -2428,14 +2399,15 @@ fn start_devtools_get_outer_html_command(
             },
         );
     }
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let (pending, kind) = start_outer_html_for_reference(page, reference, include_shadow_dom)?;
+    let (pending, kind) =
+        start_outer_html_for_reference(&inspection, reference, include_shadow_dom)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -2454,42 +2426,28 @@ fn complete_pending_dom_command(
             return DomCommandTaskStep::Complete;
         }
     };
-    let CompletedDomCommandWork::Page(completion) = completed_work;
-    let completion = *completion;
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner_scope);
+    let completion = *completed_work;
+    if let Err(error) = conn.observe_renderer_inspection_completion(&owner_scope, &completion) {
+        out.push_error(-32000, error);
+        return DomCommandTaskStep::Complete;
+    }
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, &owner_scope);
 
     let kind = match completed.kind {
         PendingDomCommandKind::PerformSearchLive => {
-            return search::complete_perform_search_live(conn, &owner_scope, completion, out);
+            return search::complete_perform_search_live(completion, out);
         }
         PendingDomCommandKind::GetSearchResultsLive => {
-            return search::complete_get_search_results_live(conn, &owner_scope, completion, out);
+            return search::complete_get_search_results_live(completion, out);
         }
         PendingDomCommandKind::DiscardSearchResultsLive => {
-            return search::complete_discard_search_results_live(
-                conn,
-                &owner_scope,
-                completion,
-                out,
-            );
+            return search::complete_discard_search_results_live(completion, out);
         }
         PendingDomCommandKind::SetNodeStackTracesEnabled => {
-            return stack_traces::complete_set_node_stack_traces_enabled_command(
-                conn,
-                &owner_scope,
-                completion,
-                out,
-            );
+            return stack_traces::complete_set_node_stack_traces_enabled_command(completion, out);
         }
         PendingDomCommandKind::GetNodeStackTraces => {
-            return stack_traces::complete_get_node_stack_traces_command(
-                conn,
-                &owner_scope,
-                completion,
-                out,
-            );
+            return stack_traces::complete_get_node_stack_traces_command(completion, out);
         }
         PendingDomCommandKind::ResolveFrontendNodeForGetAttributes { frontend_node_id } => {
             return complete_frontend_node_binding_for_get_attributes(
@@ -2699,21 +2657,21 @@ fn complete_pending_dom_command(
         }
         kind => kind,
     };
-    let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
+    let Some(inspection) = dom_inspection_for_owner(conn, &owner_scope) else {
         out.push_error(-32000, "NoDocumentLoaded");
         return DomCommandTaskStep::Complete;
     };
 
     match kind {
         PendingDomCommandKind::DiscardDomAgentFrontendBindings => {
-            match page.finish_discard_dom_agent_frontend_bindings(completion) {
+            match completion.finish_discard_dom_agent_frontend_bindings() {
                 Ok(()) => out.push_success(),
                 Err(error) => {
                     out.push_error(-32000, format!("Could not disable DOM agent: {error}"));
                 }
             }
         }
-        PendingDomCommandKind::RemoveNode => match page.finish_remove_document_node(completion) {
+        PendingDomCommandKind::RemoveNode => match completion.finish_remove_document_node() {
             Ok(true) => out.push_success(),
             Ok(false) => out.push_error(-32000, "Could not remove node"),
             Err(error) => out.push_error(-32000, format!("Could not remove node: {error}")),
@@ -2724,7 +2682,7 @@ fn complete_pending_dom_command(
             append,
         } => {
             return set_file_input::complete_preflight(
-                page,
+                &inspection,
                 command_id,
                 &owner_scope,
                 completion,
@@ -2736,7 +2694,7 @@ fn complete_pending_dom_command(
         }
         PendingDomCommandKind::Focus {
             missing_node_message,
-        } => match page.finish_focus_document_node_id(completion) {
+        } => match completion.finish_focus_document_node_id() {
             Ok(RendererDomFocusOutcome::Focused) => out.push_success(),
             Ok(RendererDomFocusOutcome::NodeNotFound) => {
                 out.push_error(-32000, missing_node_message);
@@ -2750,7 +2708,7 @@ fn complete_pending_dom_command(
             Err(error) => out.push_error(-32000, format!("Could not focus node: {error}")),
         },
         PendingDomCommandKind::MutateAttribute => {
-            match page.finish_mutate_document_node_attribute(completion) {
+            match completion.finish_mutate_document_node_attribute() {
                 Ok(RendererDomAttributeMutationOutcome::Applied { .. }) => out.push_success(),
                 Ok(RendererDomAttributeMutationOutcome::NodeNotFound) => {
                     out.push_error(-32000, "Could not find node with given id");
@@ -2769,69 +2727,63 @@ fn complete_pending_dom_command(
                 }
             }
         }
-        PendingDomCommandKind::EditDocumentNode => {
-            match page.finish_edit_document_node(completion) {
-                Ok(RendererDomEditOutcome::Applied {
-                    result_frontend_node_id: None,
-                }) => out.push_success(),
-                Ok(RendererDomEditOutcome::Applied {
-                    result_frontend_node_id: Some(node_id),
-                }) => out.push_result(json!({ "nodeId": node_id })),
-                Ok(RendererDomEditOutcome::NodeNotFound) => {
-                    out.push_error(-32000, "Could not find node with given id");
-                }
-                Ok(RendererDomEditOutcome::NodeNotElement) => {
-                    out.push_error(-32000, "Node is not an Element");
-                }
-                Ok(RendererDomEditOutcome::NodeValueUnsupported) => out.push_error(
-                    -32000,
-                    "Can only set value of text nodes or processing instructions",
-                ),
-                Ok(RendererDomEditOutcome::MoveIntoSelfOrDescendant) => {
-                    out.push_error(-32000, "Unable to move node into self or descendant");
-                }
-                Ok(RendererDomEditOutcome::AnchorNotChildOfTarget) => {
-                    out.push_error(-32000, "Anchor node must be child of the target element")
-                }
-                Ok(RendererDomEditOutcome::DetachedNode) => {
-                    out.push_error(-32000, "Cannot edit detached node");
-                }
-                Ok(RendererDomEditOutcome::InvalidName { name }) => out.push_error(
-                    -32000,
-                    format!("InvalidCharacterError '{name}' is not a valid node name."),
-                ),
-                Ok(RendererDomEditOutcome::CouldNotParseAttributes) => {
-                    out.push_error(-32000, "Could not parse value as attributes");
-                }
-                Ok(RendererDomEditOutcome::MutationFailed) => {
-                    out.push_error(-32000, "Could not edit node");
-                }
-                Err(error) => {
-                    out.push_error(-32000, format!("Could not edit node: {error}"));
-                }
+        PendingDomCommandKind::EditDocumentNode => match completion.finish_edit_document_node() {
+            Ok(RendererDomEditOutcome::Applied {
+                result_frontend_node_id: None,
+            }) => out.push_success(),
+            Ok(RendererDomEditOutcome::Applied {
+                result_frontend_node_id: Some(node_id),
+            }) => out.push_result(json!({ "nodeId": node_id })),
+            Ok(RendererDomEditOutcome::NodeNotFound) => {
+                out.push_error(-32000, "Could not find node with given id");
             }
-        }
+            Ok(RendererDomEditOutcome::NodeNotElement) => {
+                out.push_error(-32000, "Node is not an Element");
+            }
+            Ok(RendererDomEditOutcome::NodeValueUnsupported) => out.push_error(
+                -32000,
+                "Can only set value of text nodes or processing instructions",
+            ),
+            Ok(RendererDomEditOutcome::MoveIntoSelfOrDescendant) => {
+                out.push_error(-32000, "Unable to move node into self or descendant");
+            }
+            Ok(RendererDomEditOutcome::AnchorNotChildOfTarget) => {
+                out.push_error(-32000, "Anchor node must be child of the target element")
+            }
+            Ok(RendererDomEditOutcome::DetachedNode) => {
+                out.push_error(-32000, "Cannot edit detached node");
+            }
+            Ok(RendererDomEditOutcome::InvalidName { name }) => out.push_error(
+                -32000,
+                format!("InvalidCharacterError '{name}' is not a valid node name."),
+            ),
+            Ok(RendererDomEditOutcome::CouldNotParseAttributes) => {
+                out.push_error(-32000, "Could not parse value as attributes");
+            }
+            Ok(RendererDomEditOutcome::MutationFailed) => {
+                out.push_error(-32000, "Could not edit node");
+            }
+            Err(error) => {
+                out.push_error(-32000, format!("Could not edit node: {error}"));
+            }
+        },
         PendingDomCommandKind::SetFileInputFiles => {
-            return set_file_input::complete_set_file_input_files(page, completion, out);
+            return set_file_input::complete_set_file_input_files(completion, out);
         }
         PendingDomCommandKind::SetFileInputFilesObjectReference => {
-            return set_file_input::complete_set_file_input_files_object_reference(
-                page, completion, out,
-            );
+            return set_file_input::complete_set_file_input_files_object_reference(completion, out);
         }
         PendingDomCommandKind::RendererBackendNodeClientRect { operation } => {
-            return complete_renderer_backend_node_client_rect(operation, page, completion, out);
+            return complete_renderer_backend_node_client_rect(operation, completion, out);
         }
         PendingDomCommandKind::GetNodeForLocation { top_frame_id } => {
-            match finish_document_hit_test(page, completion, top_frame_id) {
+            match finish_document_hit_test(completion, top_frame_id) {
                 Ok(result) => out.push_result(get_node_for_location_result_value(&result)),
                 Err(error) => out.push_error(-32000, error.message),
             }
         }
         PendingDomCommandKind::RendererBackendNodeScrollIntoViewIfNeeded => {
-            return complete_renderer_backend_node_scroll_into_view_if_needed(
-                page, completion, out,
-            );
+            return complete_renderer_backend_node_scroll_into_view_if_needed(completion, out);
         }
         PendingDomCommandKind::PushNodesByBackendIdsToFrontend {
             backend_node_ids,
@@ -2839,7 +2791,6 @@ fn complete_pending_dom_command(
             renderer_backend_positions,
         } => {
             return complete_push_nodes_by_backend_ids_to_frontend(
-                page,
                 completion,
                 session_id,
                 backend_node_ids,
@@ -2849,7 +2800,7 @@ fn complete_pending_dom_command(
             );
         }
         PendingDomCommandKind::GetFrameOwner { frame_id } => {
-            match page.finish_document_node_reference(completion) {
+            match completion.finish_document_node_reference() {
                 Ok(Some(reference)) => {
                     let result = get_frame_owner_result_from_node_reference(reference);
                     out.push_result(get_frame_owner_result_value(&result));
@@ -2865,38 +2816,37 @@ fn complete_pending_dom_command(
             }
         }
         PendingDomCommandKind::QuerySelectorLive { multiple } => {
-            return complete_query_selector_live(page, completion, multiple, out);
+            return complete_query_selector_live(completion, multiple, out);
         }
         PendingDomCommandKind::GetAttributesLive => {
-            return complete_get_attributes_live(page, completion, out);
+            return complete_get_attributes_live(completion, out);
         }
         PendingDomCommandKind::GetTextLive => {
-            return complete_get_text_live(page, completion, out);
+            return complete_get_text_live(completion, out);
         }
         PendingDomCommandKind::GetPropertyLive => {
-            return complete_get_property_live(page, completion, out);
+            return complete_get_property_live(completion, out);
         }
         PendingDomCommandKind::RequestNodeObjectReference => {
-            return complete_request_node_object_reference(session_id, page, completion, out);
+            return complete_request_node_object_reference(session_id, completion, out);
         }
         PendingDomCommandKind::GetOuterHtmlDocument => {
-            return complete_get_outer_html_document(page, completion, out);
+            return complete_get_outer_html_document(completion, out);
         }
         PendingDomCommandKind::GetOuterHtmlObjectReference => {
-            return complete_get_outer_html_object_reference(page, completion, out);
+            return complete_get_outer_html_object_reference(completion, out);
         }
         PendingDomCommandKind::GetOuterHtmlBackendNodeReference => {
-            return complete_get_outer_html_backend_node_reference(page, completion, out);
+            return complete_get_outer_html_backend_node_reference(completion, out);
         }
         PendingDomCommandKind::ScrollIntoViewIfNeededObjectReference => {
-            return complete_scroll_into_view_if_needed_object_reference(page, completion, out);
+            return complete_scroll_into_view_if_needed_object_reference(completion, out);
         }
         PendingDomCommandKind::DescribeNodeObjectReference {
             cached_object_node,
             top_frame_id,
         } => {
             return complete_describe_node_object_reference(
-                page,
                 completion,
                 cached_object_node,
                 top_frame_id,
@@ -2904,13 +2854,13 @@ fn complete_pending_dom_command(
             );
         }
         PendingDomCommandKind::ObjectReferenceLiveClientRect { operation } => {
-            return complete_object_reference_live_client_rect(operation, page, completion, out);
+            return complete_object_reference_live_client_rect(operation, completion, out);
         }
         PendingDomCommandKind::DocumentSnapshot {
             operation,
             top_frame_id,
         } => {
-            return complete_document_snapshot(operation, page, completion, top_frame_id, out);
+            return complete_document_snapshot(operation, completion, top_frame_id, out);
         }
         PendingDomCommandKind::SetChildNodesSnapshotForBackendNode {
             after,
@@ -2919,7 +2869,6 @@ fn complete_pending_dom_command(
         } => {
             return complete_set_child_nodes_snapshot_for_backend_node(
                 session_id,
-                page,
                 completion,
                 after,
                 top_frame_id,
@@ -2933,7 +2882,6 @@ fn complete_pending_dom_command(
         } => {
             return complete_query_selector_set_child_nodes_live(
                 session_id,
-                page,
                 completion,
                 multiple,
                 top_frame_id,
@@ -2944,7 +2892,7 @@ fn complete_pending_dom_command(
             object_group,
             cache_top_frame_id,
         } => {
-            let resolution = page.finish_resolve_runtime_object_for_backend_node_id(completion);
+            let resolution = completion.finish_resolve_runtime_object_for_backend_node_id();
             let remote_object = match resolution {
                 Ok(DocumentNodeRuntimeObjectResolution::Found(remote_object)) => remote_object,
                 Ok(DocumentNodeRuntimeObjectResolution::MissingContext) => {
@@ -2970,13 +2918,15 @@ fn complete_pending_dom_command(
                     .and_then(Value::as_str)
                     .map(str::to_owned)
             {
-                return match page.start_document_node_snapshot_for_object_id_in_inspector_session(
-                    renderer_inspector_session_id.clone(),
-                    include_whitespace,
-                    &cache_object_id,
-                    0,
-                    false,
-                ) {
+                return match inspection
+                    .start_document_node_snapshot_for_object_id_in_inspector_session(
+                        include_whitespace,
+                        &cache_object_id,
+                        0,
+                        false,
+                    )
+                    .map(PendingPageCommand::from_inspector_main_route)
+                {
                     Ok(pending) => {
                         DomCommandTaskStep::Pending(Box::new(PendingDomCommandDispatch {
                             command_id,
@@ -2987,7 +2937,7 @@ fn complete_pending_dom_command(
                                 cache_object_id,
                                 top_frame_id,
                             },
-                            pending: PendingDomCommandWork::Page(pending),
+                            pending,
                         }))
                     }
                     Err(error) => {
@@ -3007,7 +2957,7 @@ fn complete_pending_dom_command(
             cache_object_id,
             top_frame_id,
         } => {
-            match page.finish_document_node_snapshot_for_object_id(completion) {
+            match completion.finish_document_node_snapshot_for_object_id() {
                 Ok(Some(snapshot)) => cache_resolved_node_snapshot(
                     conn,
                     &owner_scope,
@@ -3030,7 +2980,7 @@ fn complete_pending_dom_command(
             top_frame_id,
         } => {
             let child_frame_id =
-                match page.finish_child_frame_id_for_default_execution_context_id(completion) {
+                match completion.finish_child_frame_id_for_default_execution_context_id() {
                     Ok(frame_id) => frame_id,
                     Err(error) => {
                         out.push_error(
@@ -3044,13 +2994,14 @@ fn complete_pending_dom_command(
                 if let DevToolsDomNodeReference::BackendNodeId(backend_node_id) = reference
                     && is_renderer_backend_node_id(backend_node_id)
                 {
-                    return match page
+                    return match inspection
                         .start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
-                            renderer_inspector_session_id.clone(),
                             backend_node_id,
                             Some(execution_context_id),
                             object_group.as_deref(),
-                        ) {
+                        )
+                        .map(PendingPageCommand::from_inspector_main_route)
+                    {
                         Ok(pending) => {
                             DomCommandTaskStep::Pending(Box::new(PendingDomCommandDispatch {
                                 command_id,
@@ -3059,7 +3010,7 @@ fn complete_pending_dom_command(
                                     object_group,
                                     cache_top_frame_id: None,
                                 },
-                                pending: PendingDomCommandWork::Page(pending),
+                                pending,
                             }))
                         }
                         Err(error) => {
@@ -3075,8 +3026,7 @@ fn complete_pending_dom_command(
                 return DomCommandTaskStep::Complete;
             }
             return match start_resolve_runtime_object_for_reference(
-                page,
-                renderer_inspector_session_id.clone(),
+                &inspection,
                 reference,
                 Some(execution_context_id),
                 object_group.as_deref(),
@@ -3090,7 +3040,7 @@ fn complete_pending_dom_command(
                             object_group,
                             cache_top_frame_id: resolution.cache_top_frame_id,
                         },
-                        pending: PendingDomCommandWork::Page(resolution.pending),
+                        pending: resolution.pending,
                     }))
                 }
                 Err(error) => {
@@ -3120,7 +3070,7 @@ fn complete_pending_dom_command(
         | PendingDomCommandKind::ResolveBidiNodeForSetFileInputFiles { .. }
         | PendingDomCommandKind::ResolveFrontendNodeForSetFileInputFiles { .. } => {
             unreachable!(
-                "DOM search/frontend/shared-node lookup pending commands are completed before borrowing page"
+                "DOM search/frontend/shared-node lookups are completed before dispatching follow-up work"
             )
         }
     }
@@ -3150,8 +3100,6 @@ fn complete_pending_dom_command_result(
     completed: CompletedDomCommandDispatch,
 ) -> DevToolsDomCommandTaskStep {
     let owner_scope = completed.owner_scope.clone();
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner_scope);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, &owner_scope);
     let completed_work = match completed.completed {
         Ok(completion) => completion,
@@ -3162,8 +3110,14 @@ fn complete_pending_dom_command_result(
             )));
         }
     };
-    let CompletedDomCommandWork::Page(completion) = completed_work;
-    let completion = *completion;
+    let completion = *completed_work;
+
+    if let Err(error) = conn.observe_renderer_inspection_completion(&owner_scope, &completion) {
+        return devtools_dom_command_task_complete(Err(DevToolsError::new(
+            DevToolsErrorKind::Internal,
+            error,
+        )));
+    }
 
     let result = match completed.kind {
         PendingDomCommandKind::ResolveFrontendNodeForGetAttributes { frontend_node_id } => {
@@ -3337,57 +3291,27 @@ fn complete_pending_dom_command_result(
             );
         }
         PendingDomCommandKind::SetFileInputFiles => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            set_file_input::complete_set_file_input_files_result(page, completion)
+            set_file_input::complete_set_file_input_files_result(completion)
                 .map(|()| DevToolsCommandResult::Empty)
         }
         PendingDomCommandKind::SetFileInputFilesObjectReference => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            set_file_input::complete_set_file_input_files_object_reference_result(page, completion)
+            set_file_input::complete_set_file_input_files_object_reference_result(completion)
                 .map(|()| DevToolsCommandResult::Empty)
         }
         PendingDomCommandKind::GetNodeForLocation { top_frame_id } => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            finish_document_hit_test(page, completion, top_frame_id)
+            finish_document_hit_test(completion, top_frame_id)
                 .map(DevToolsCommandResult::GetNodeForLocation)
         }
         PendingDomCommandKind::RendererBackendNodeClientRect { operation } => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
             complete_document_node_geometry_result(
-                page.finish_document_geometry_for_backend_node_id(completion),
+                completion.finish_document_geometry_for_backend_node_id(),
                 operation,
                 "Could not resolve node geometry",
             )
             .map(DevToolsCommandResult::DomGeometry)
         }
         PendingDomCommandKind::RendererBackendNodeScrollIntoViewIfNeeded => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            complete_renderer_backend_node_scroll_into_view_if_needed_result(page, completion)
+            complete_renderer_backend_node_scroll_into_view_if_needed_result(completion)
                 .map(|()| DevToolsCommandResult::Empty)
         }
         PendingDomCommandKind::PushNodesByBackendIdsToFrontend {
@@ -3395,14 +3319,7 @@ fn complete_pending_dom_command_result(
             node_ids,
             renderer_backend_positions,
         } => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
             match complete_push_nodes_by_backend_ids_to_frontend_result(
-                page,
                 completion,
                 backend_node_ids,
                 node_ids,
@@ -3413,76 +3330,31 @@ fn complete_pending_dom_command_result(
             }
         }
         PendingDomCommandKind::GetFrameOwner { frame_id } => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            complete_get_frame_owner_result(page, completion, &frame_id)
+            complete_get_frame_owner_result(completion, &frame_id)
                 .map(DevToolsCommandResult::GetFrameOwner)
         }
         PendingDomCommandKind::QuerySelectorLive { multiple } => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            complete_query_selector_live_result(page, completion, multiple)
+            complete_query_selector_live_result(completion, multiple)
                 .map(DevToolsCommandResult::QuerySelector)
         }
         PendingDomCommandKind::QuerySelectorSetChildNodesLive { multiple, .. } => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            complete_query_selector_set_child_nodes_live_result(page, completion, multiple)
+            complete_query_selector_set_child_nodes_live_result(completion, multiple)
                 .map(DevToolsCommandResult::QuerySelector)
         }
-        PendingDomCommandKind::GetAttributesLive => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            complete_get_attributes_live_result(page, completion)
-                .map(DevToolsCommandResult::GetAttributes)
-        }
+        PendingDomCommandKind::GetAttributesLive => complete_get_attributes_live_result(completion)
+            .map(DevToolsCommandResult::GetAttributes),
         PendingDomCommandKind::GetTextLive => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            complete_get_text_live_result(page, completion).map(DevToolsCommandResult::GetText)
+            complete_get_text_live_result(completion).map(DevToolsCommandResult::GetText)
         }
         PendingDomCommandKind::GetPropertyLive => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            complete_get_property_live_result(page, completion)
-                .map(DevToolsCommandResult::GetProperty)
+            complete_get_property_live_result(completion).map(DevToolsCommandResult::GetProperty)
         }
         PendingDomCommandKind::ResolveNode {
             object_group,
             cache_top_frame_id,
         } => {
             let remote_object = {
-                let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                    return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                        DevToolsErrorKind::Internal,
-                        "NoDocumentLoaded",
-                    )));
-                };
-                match complete_resolve_node_page_result(page, completion) {
+                match complete_resolve_node_page_result(completion) {
                     Ok(result) => result,
                     Err(error) => return devtools_dom_command_task_complete(Err(error)),
                 }
@@ -3493,19 +3365,21 @@ fn complete_pending_dom_command_result(
                     .and_then(Value::as_str)
                     .map(str::to_owned)
             {
-                let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
+                let Some(inspection) = dom_inspection_for_owner(conn, &owner_scope) else {
                     return devtools_dom_command_task_complete(Err(DevToolsError::new(
                         DevToolsErrorKind::Internal,
                         "NoDocumentLoaded",
                     )));
                 };
-                return match page.start_document_node_snapshot_for_object_id_in_inspector_session(
-                    renderer_inspector_session_id.clone(),
-                    include_whitespace,
-                    &cache_object_id,
-                    0,
-                    false,
-                ) {
+                return match inspection
+                    .start_document_node_snapshot_for_object_id_in_inspector_session(
+                        include_whitespace,
+                        &cache_object_id,
+                        0,
+                        false,
+                    )
+                    .map(PendingPageCommand::from_inspector_main_route)
+                {
                     Ok(pending) => {
                         DevToolsDomCommandTaskStep::Pending(Box::new(PendingDomCommandDispatch {
                             command_id: None,
@@ -3516,7 +3390,7 @@ fn complete_pending_dom_command_result(
                                 cache_object_id,
                                 top_frame_id,
                             },
-                            pending: PendingDomCommandWork::Page(pending),
+                            pending,
                         }))
                     }
                     Err(error) => devtools_dom_command_task_complete(Err(DevToolsError::new(
@@ -3536,13 +3410,7 @@ fn complete_pending_dom_command_result(
             top_frame_id,
         } => {
             {
-                let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                    return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                        DevToolsErrorKind::Internal,
-                        "NoDocumentLoaded",
-                    )));
-                };
-                match page.finish_document_node_snapshot_for_object_id(completion) {
+                match completion.finish_document_node_snapshot_for_object_id() {
                     Ok(Some(snapshot)) => cache_resolved_node_snapshot(
                         conn,
                         &owner_scope,
@@ -3569,7 +3437,7 @@ fn complete_pending_dom_command_result(
             object_group,
             top_frame_id,
         } => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
+            let Some(inspection) = dom_inspection_for_owner(conn, &owner_scope) else {
                 return devtools_dom_command_task_complete(Err(DevToolsError::new(
                     DevToolsErrorKind::Internal,
                     "NoDocumentLoaded",
@@ -3577,8 +3445,7 @@ fn complete_pending_dom_command_result(
             };
             return complete_resolve_node_execution_context_frame_result(
                 &owner_scope,
-                renderer_inspector_session_id.clone(),
-                page,
+                &inspection,
                 completion,
                 reference,
                 execution_context_id,
@@ -3591,73 +3458,34 @@ fn complete_pending_dom_command_result(
             "UnsupportedDevToolsCommand",
         )),
         PendingDomCommandKind::ObjectReferenceLiveClientRect { operation } => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            complete_object_reference_live_client_rect_result(page, completion, operation)
+            complete_object_reference_live_client_rect_result(completion, operation)
                 .map(DevToolsCommandResult::DomGeometry)
         }
         PendingDomCommandKind::GetOuterHtmlObjectReference => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            complete_get_outer_html_object_reference_result(page, completion)
+            complete_get_outer_html_object_reference_result(completion)
                 .map(DevToolsCommandResult::GetOuterHtml)
         }
         PendingDomCommandKind::GetOuterHtmlDocument => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            complete_get_outer_html_document_result(page, completion)
+            complete_get_outer_html_document_result(completion)
                 .map(DevToolsCommandResult::GetOuterHtml)
         }
         PendingDomCommandKind::GetOuterHtmlBackendNodeReference => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            complete_get_outer_html_backend_node_reference_result(page, completion)
+            complete_get_outer_html_backend_node_reference_result(completion)
                 .map(DevToolsCommandResult::GetOuterHtml)
         }
         PendingDomCommandKind::ScrollIntoViewIfNeededObjectReference => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            complete_scroll_into_view_if_needed_object_reference_result(page, completion)
+            complete_scroll_into_view_if_needed_object_reference_result(completion)
                 .map(|()| DevToolsCommandResult::Empty)
         }
         PendingDomCommandKind::DescribeNodeObjectReference {
             cached_object_node,
             top_frame_id,
-        } => {
-            let Some(page) = loaded_page_mut_for_owner(conn, &owner_scope) else {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    "NoDocumentLoaded",
-                )));
-            };
-            complete_describe_node_object_reference_result(
-                page,
-                completion,
-                cached_object_node,
-                top_frame_id,
-            )
-            .map(DevToolsCommandResult::DescribeNode)
-        }
+        } => complete_describe_node_object_reference_result(
+            completion,
+            cached_object_node,
+            top_frame_id,
+        )
+        .map(DevToolsCommandResult::DescribeNode),
         _ => Err(DevToolsError::new(
             DevToolsErrorKind::Unsupported,
             "UnsupportedDevToolsDomPendingCommand",
@@ -3703,11 +3531,10 @@ fn complete_document_node_geometry_result(
 }
 
 fn finish_document_hit_test(
-    page: &mut Page,
     completion: CompletedPageCommand,
     top_frame_id: String,
 ) -> Result<DevToolsGetNodeForLocationResult, DevToolsError> {
-    match page.finish_document_hit_test(completion) {
+    match completion.finish_document_hit_test() {
         Ok(Some(hit)) => Ok(DevToolsGetNodeForLocationResult {
             backend_node_id: hit.node.backend_node_id,
             frame_id: DevToolsFrameId::from(hit.frame_id.unwrap_or(top_frame_id)),
@@ -3736,11 +3563,10 @@ fn get_node_for_location_result_value(result: &DevToolsGetNodeForLocationResult)
 }
 
 fn complete_get_frame_owner_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
     frame_id: &str,
 ) -> Result<DevToolsGetFrameOwnerResult, DevToolsError> {
-    match page.finish_document_node_reference(completion) {
+    match completion.finish_document_node_reference() {
         Ok(Some(reference)) => Ok(get_frame_owner_result_from_node_reference(reference)),
         Ok(None) => Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
@@ -3842,13 +3668,12 @@ pub(super) fn query_selector_result_from_renderer_resolution(
 }
 
 fn complete_query_selector_live(
-    page: &mut Page,
     completion: CompletedPageCommand,
     multiple: bool,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page
-        .finish_document_query_selector(completion)
+    match completion
+        .finish_document_query_selector()
         .map_err(PendingDomCommandStartError::renderer_error)
         .and_then(|resolution| query_selector_result_from_renderer_resolution(resolution, multiple))
     {
@@ -3864,11 +3689,11 @@ fn complete_query_selector_live(
 }
 
 fn complete_query_selector_live_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
     multiple: bool,
 ) -> Result<DevToolsQuerySelectorResult, DevToolsError> {
-    page.finish_document_query_selector(completion)
+    completion
+        .finish_document_query_selector()
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))
         .and_then(|resolution| {
             query_selector_result_from_renderer_resolution(resolution, multiple)
@@ -3877,11 +3702,11 @@ fn complete_query_selector_live_result(
 }
 
 fn complete_query_selector_set_child_nodes_live_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
     multiple: bool,
 ) -> Result<DevToolsQuerySelectorResult, DevToolsError> {
-    page.finish_document_query_selector_with_child_node_snapshot_events(completion)
+    completion
+        .finish_document_query_selector_with_child_node_snapshot_events()
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))
         .and_then(|result| {
             query_selector_set_child_nodes_result_from_renderer_resolution(
@@ -3893,16 +3718,10 @@ fn complete_query_selector_set_child_nodes_live_result(
 }
 
 fn complete_frontend_node_binding_reference(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> Result<DevToolsDomNodeReference, DomCommandTaskStep> {
-    let Some(page) = loaded_page_mut_for_owner(conn, owner) else {
-        out.push_error(-32000, "NoDocumentLoaded");
-        return Err(DomCommandTaskStep::Complete);
-    };
-    match super::frontend_binding::finish_reference(page, completion) {
+    match super::frontend_binding::finish_reference(completion) {
         Ok(reference) => Ok(reference),
         Err(message) => {
             out.push_error(-32000, message);
@@ -3912,17 +3731,9 @@ fn complete_frontend_node_binding_reference(
 }
 
 fn complete_frontend_node_binding_reference_result(
-    conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
     completion: CompletedPageCommand,
 ) -> Result<DevToolsDomNodeReference, DevToolsDomCommandTaskStep> {
-    let Some(page) = loaded_page_mut_for_owner(conn, owner) else {
-        return Err(devtools_dom_command_task_complete(Err(DevToolsError::new(
-            DevToolsErrorKind::Internal,
-            "NoDocumentLoaded",
-        ))));
-    };
-    super::frontend_binding::finish_reference(page, completion).map_err(|message| {
+    super::frontend_binding::finish_reference(completion).map_err(|message| {
         let kind = if message == "Could not find node with given id" {
             DevToolsErrorKind::NoSuchNode
         } else {
@@ -3942,25 +3753,25 @@ fn complete_frontend_node_binding_followup<F>(
 ) -> DomCommandTaskStep
 where
     F: FnOnce(
-        &Page,
+        &RendererDomInspection<'_>,
         DevToolsDomNodeReference,
     )
         -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError>,
 {
-    let reference = match complete_frontend_node_binding_reference(conn, owner, completion, out) {
+    let reference = match complete_frontend_node_binding_reference(completion, out) {
         Ok(reference) => reference,
         Err(step) => return step,
     };
-    let Some(page) = loaded_page_mut_for_owner(conn, owner) else {
+    let Some(inspection) = dom_inspection_for_owner(conn, owner) else {
         out.push_error(-32000, "NoDocumentLoaded");
         return DomCommandTaskStep::Complete;
     };
-    match start(page, reference) {
+    match start(&inspection, reference) {
         Ok((pending, kind)) => DomCommandTaskStep::Pending(Box::new(PendingDomCommandDispatch {
             command_id,
             owner_scope: owner.clone(),
             kind,
-            pending: PendingDomCommandWork::Page(pending),
+            pending,
         })),
         Err(error) => {
             out.push_error(error.code, error.message);
@@ -3978,28 +3789,28 @@ fn complete_frontend_node_binding_followup_result<F>(
 ) -> DevToolsDomCommandTaskStep
 where
     F: FnOnce(
-        &Page,
+        &RendererDomInspection<'_>,
         DevToolsDomNodeReference,
     )
         -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError>,
 {
-    let reference = match complete_frontend_node_binding_reference_result(conn, owner, completion) {
+    let reference = match complete_frontend_node_binding_reference_result(completion) {
         Ok(reference) => reference,
         Err(step) => return step,
     };
-    let Some(page) = loaded_page_mut_for_owner(conn, owner) else {
+    let Some(inspection) = dom_inspection_for_owner(conn, owner) else {
         return devtools_dom_command_task_complete(Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
             "NoDocumentLoaded",
         )));
     };
-    match start(page, reference) {
+    match start(&inspection, reference) {
         Ok((pending, kind)) => {
             DevToolsDomCommandTaskStep::Pending(Box::new(PendingDomCommandDispatch {
                 command_id,
                 owner_scope: owner.clone(),
                 kind,
-                pending: PendingDomCommandWork::Page(pending),
+                pending,
             }))
         }
         Err(error) => devtools_dom_command_task_complete(Err(DevToolsError::new(
@@ -4023,8 +3834,8 @@ fn complete_frontend_node_binding_for_get_attributes(
         owner,
         completion,
         out,
-        |page, reference| {
-            start_document_node_attributes_for_reference(page, reference)
+        |inspection, reference| {
+            start_document_node_attributes_for_reference(inspection, reference)
                 .map(|pending| (pending, PendingDomCommandKind::GetAttributesLive))
         },
     )
@@ -4042,8 +3853,8 @@ fn complete_frontend_node_binding_for_get_attributes_result(
         command_id,
         owner,
         completion,
-        |page, reference| {
-            start_document_node_attributes_for_reference(page, reference)
+        |inspection, reference| {
+            start_document_node_attributes_for_reference(inspection, reference)
                 .map(|pending| (pending, PendingDomCommandKind::GetAttributesLive))
         },
     )
@@ -4063,8 +3874,8 @@ fn complete_frontend_node_binding_for_remove_node(
         owner,
         completion,
         out,
-        |page, reference| {
-            start_remove_document_node_for_reference(page, reference)
+        |inspection, reference| {
+            start_remove_document_node_for_reference(inspection, reference)
                 .map(|pending| (pending, PendingDomCommandKind::RemoveNode))
         },
     )
@@ -4082,8 +3893,8 @@ fn complete_frontend_node_binding_for_remove_node_result(
         command_id,
         owner,
         completion,
-        |page, reference| {
-            start_remove_document_node_for_reference(page, reference)
+        |inspection, reference| {
+            start_remove_document_node_for_reference(inspection, reference)
                 .map(|pending| (pending, PendingDomCommandKind::RemoveNode))
         },
     )
@@ -4103,8 +3914,8 @@ fn complete_frontend_node_binding_for_focus(
         owner,
         completion,
         out,
-        |page, reference| {
-            start_focus_document_node_for_reference(page, reference).map(|pending| {
+        |inspection, reference| {
+            start_focus_document_node_for_reference(inspection, reference).map(|pending| {
                 (
                     pending,
                     PendingDomCommandKind::Focus {
@@ -4130,7 +3941,9 @@ fn complete_frontend_node_binding_for_mutate_attribute(
         owner,
         completion,
         out,
-        move |page, reference| start_mutate_document_node_for_reference(page, reference, mutation),
+        move |inspection, reference| {
+            start_mutate_document_node_for_reference(inspection, reference, mutation)
+        },
     )
 }
 
@@ -4148,8 +3961,8 @@ fn complete_frontend_node_binding_for_get_text(
         owner,
         completion,
         out,
-        |page, reference| {
-            start_document_node_text_for_reference(page, reference)
+        |inspection, reference| {
+            start_document_node_text_for_reference(inspection, reference)
                 .map(|pending| (pending, PendingDomCommandKind::GetTextLive))
         },
     )
@@ -4167,8 +3980,8 @@ fn complete_frontend_node_binding_for_get_text_result(
         command_id,
         owner,
         completion,
-        |page, reference| {
-            start_document_node_text_for_reference(page, reference)
+        |inspection, reference| {
+            start_document_node_text_for_reference(inspection, reference)
                 .map(|pending| (pending, PendingDomCommandKind::GetTextLive))
         },
     )
@@ -4189,8 +4002,8 @@ fn complete_frontend_node_binding_for_get_property(
         owner,
         completion,
         out,
-        |page, reference| {
-            start_document_node_property_for_reference(page, reference, &name)
+        |inspection, reference| {
+            start_document_node_property_for_reference(inspection, reference, &name)
                 .map(|pending| (pending, PendingDomCommandKind::GetPropertyLive))
         },
     )
@@ -4209,8 +4022,8 @@ fn complete_frontend_node_binding_for_get_property_result(
         command_id,
         owner,
         completion,
-        |page, reference| {
-            start_document_node_property_for_reference(page, reference, &name)
+        |inspection, reference| {
+            start_document_node_property_for_reference(inspection, reference, &name)
                 .map(|pending| (pending, PendingDomCommandKind::GetPropertyLive))
         },
     )
@@ -4231,7 +4044,7 @@ fn complete_frontend_node_binding_for_dom_geometry(
         owner,
         completion,
         out,
-        |page, reference| start_client_rect_for_reference(page, reference, operation),
+        |inspection, reference| start_client_rect_for_reference(inspection, reference, operation),
     )
 }
 
@@ -4248,7 +4061,7 @@ fn complete_frontend_node_binding_for_dom_geometry_result(
         command_id,
         owner,
         completion,
-        |page, reference| start_client_rect_for_reference(page, reference, operation),
+        |inspection, reference| start_client_rect_for_reference(inspection, reference, operation),
     )
 }
 
@@ -4263,8 +4076,6 @@ fn complete_frontend_node_binding_for_describe_node(
     top_frame_id: Option<String>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     complete_frontend_node_binding_followup(
         conn,
@@ -4272,10 +4083,9 @@ fn complete_frontend_node_binding_for_describe_node(
         owner,
         completion,
         out,
-        |page, reference| {
+        |inspection, reference| {
             start_inspector_document_node_snapshot_for_reference(
-                page,
-                renderer_inspector_session_id,
+                inspection,
                 include_whitespace,
                 reference,
                 depth,
@@ -4304,18 +4114,15 @@ fn complete_frontend_node_binding_for_describe_node_result(
     pierce: bool,
     top_frame_id: Option<String>,
 ) -> DevToolsDomCommandTaskStep {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     complete_frontend_node_binding_followup_result(
         conn,
         command_id,
         owner,
         completion,
-        |page, reference| {
+        |inspection, reference| {
             start_inspector_document_node_snapshot_for_reference(
-                page,
-                renderer_inspector_session_id,
+                inspection,
                 include_whitespace,
                 reference,
                 depth,
@@ -4345,8 +4152,6 @@ fn complete_frontend_node_binding_for_request_child_nodes(
     top_frame_id: Option<String>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     complete_frontend_node_binding_followup(
         conn,
@@ -4354,10 +4159,9 @@ fn complete_frontend_node_binding_for_request_child_nodes(
         owner,
         completion,
         out,
-        |page, reference| {
+        |inspection, reference| {
             start_request_child_nodes_for_reference(
-                page,
-                renderer_inspector_session_id,
+                inspection,
                 include_whitespace,
                 reference,
                 depth,
@@ -4377,18 +4181,15 @@ fn complete_frontend_node_binding_for_request_child_nodes_result(
     pierce: bool,
     top_frame_id: Option<String>,
 ) -> DevToolsDomCommandTaskStep {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     complete_frontend_node_binding_followup_result(
         conn,
         command_id,
         owner,
         completion,
-        |page, reference| {
+        |inspection, reference| {
             start_request_child_nodes_for_reference(
-                page,
-                renderer_inspector_session_id,
+                inspection,
                 include_whitespace,
                 reference,
                 depth,
@@ -4410,8 +4211,6 @@ fn complete_frontend_node_binding_for_query_selector(
     top_frame_id: Option<String>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     complete_frontend_node_binding_followup(
         conn,
@@ -4419,10 +4218,9 @@ fn complete_frontend_node_binding_for_query_selector(
         owner,
         completion,
         out,
-        |page, reference| {
+        |inspection, reference| {
             start_query_selector_with_child_node_snapshot_events_for_reference(
-                page,
-                renderer_inspector_session_id,
+                inspection,
                 include_whitespace,
                 reference,
                 selector,
@@ -4442,18 +4240,15 @@ fn complete_frontend_node_binding_for_query_selector_result(
     selector: String,
     multiple: bool,
 ) -> DevToolsDomCommandTaskStep {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let include_whitespace = dom_agent_includes_whitespace_for_owner(conn, owner);
     complete_frontend_node_binding_followup_result(
         conn,
         command_id,
         owner,
         completion,
-        |page, reference| {
+        |inspection, reference| {
             start_query_selector_for_reference(
-                page,
-                renderer_inspector_session_id,
+                inspection,
                 include_whitespace,
                 reference,
                 selector,
@@ -4464,16 +4259,14 @@ fn complete_frontend_node_binding_for_query_selector_result(
 }
 
 fn start_resolve_node_for_bound_reference(
-    page: &Page,
-    renderer_inspector_session_id: Option<String>,
+    inspection: &RendererDomInspection<'_>,
     reference: DevToolsDomNodeReference,
     requested_execution_context_id: Option<i64>,
     object_group: Option<String>,
     top_frame_id: Option<String>,
 ) -> Result<(PendingPageCommand, PendingDomCommandKind), PendingDomCommandStartError> {
     let resolution = start_resolve_runtime_object_for_reference(
-        page,
-        renderer_inspector_session_id,
+        inspection,
         reference,
         requested_execution_context_id,
         object_group.as_deref(),
@@ -4500,18 +4293,15 @@ fn complete_frontend_node_binding_for_resolve_node(
     top_frame_id: Option<String>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     complete_frontend_node_binding_followup(
         conn,
         command_id,
         owner,
         completion,
         out,
-        |page, reference| {
+        |inspection, reference| {
             start_resolve_node_for_bound_reference(
-                page,
-                renderer_inspector_session_id,
+                inspection,
                 reference,
                 requested_execution_context_id,
                 object_group,
@@ -4532,17 +4322,14 @@ fn complete_frontend_node_binding_for_resolve_node_result(
     object_group: Option<String>,
     top_frame_id: Option<String>,
 ) -> DevToolsDomCommandTaskStep {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     complete_frontend_node_binding_followup_result(
         conn,
         command_id,
         owner,
         completion,
-        |page, reference| {
+        |inspection, reference| {
             start_resolve_node_for_bound_reference(
-                page,
-                renderer_inspector_session_id,
+                inspection,
                 reference,
                 requested_execution_context_id,
                 object_group,
@@ -4567,7 +4354,9 @@ fn complete_frontend_node_binding_for_get_outer_html(
         owner,
         completion,
         out,
-        |page, reference| start_outer_html_for_reference(page, reference, include_shadow_dom),
+        |inspection, reference| {
+            start_outer_html_for_reference(inspection, reference, include_shadow_dom)
+        },
     )
 }
 
@@ -4584,7 +4373,9 @@ fn complete_frontend_node_binding_for_get_outer_html_result(
         command_id,
         owner,
         completion,
-        |page, reference| start_outer_html_for_reference(page, reference, include_shadow_dom),
+        |inspection, reference| {
+            start_outer_html_for_reference(inspection, reference, include_shadow_dom)
+        },
     )
 }
 
@@ -4603,7 +4394,7 @@ fn complete_frontend_node_binding_for_scroll_into_view_if_needed(
         owner,
         completion,
         out,
-        |page, reference| start_scroll_into_view_for_reference(page, reference, rect),
+        |inspection, reference| start_scroll_into_view_for_reference(inspection, reference, rect),
     )
 }
 
@@ -4620,17 +4411,16 @@ fn complete_frontend_node_binding_for_scroll_into_view_if_needed_result(
         command_id,
         owner,
         completion,
-        |page, reference| start_scroll_into_view_for_reference(page, reference, rect),
+        |inspection, reference| start_scroll_into_view_for_reference(inspection, reference, rect),
     )
 }
 
 fn complete_get_attributes_live(
-    page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page
-        .finish_document_node_attributes(completion)
+    match completion
+        .finish_document_node_attributes()
         .map_err(PendingDomCommandStartError::renderer_error)
         .and_then(attributes_result_from_renderer_resolution)
     {
@@ -4643,12 +4433,11 @@ fn complete_get_attributes_live(
 }
 
 fn complete_get_text_live(
-    page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page
-        .finish_document_node_text(completion)
+    match completion
+        .finish_document_node_text()
         .map_err(PendingDomCommandStartError::renderer_error)
         .and_then(text_result_from_renderer_resolution)
     {
@@ -4659,12 +4448,11 @@ fn complete_get_text_live(
 }
 
 fn complete_get_property_live(
-    page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page
-        .finish_document_node_property(completion)
+    match completion
+        .finish_document_node_property()
         .map_err(PendingDomCommandStartError::renderer_error)
         .and_then(property_result_from_renderer_resolution)
     {
@@ -4675,10 +4463,10 @@ fn complete_get_property_live(
 }
 
 fn complete_get_attributes_live_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
 ) -> Result<DevToolsGetAttributesResult, DevToolsError> {
-    page.finish_document_node_attributes(completion)
+    completion
+        .finish_document_node_attributes()
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))
         .and_then(|resolution| {
             attributes_result_from_renderer_resolution(resolution).map_err(DevToolsError::from)
@@ -4686,10 +4474,10 @@ fn complete_get_attributes_live_result(
 }
 
 fn complete_get_text_live_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
 ) -> Result<DevToolsGetTextResult, DevToolsError> {
-    page.finish_document_node_text(completion)
+    completion
+        .finish_document_node_text()
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))
         .and_then(|resolution| {
             text_result_from_renderer_resolution(resolution).map_err(DevToolsError::from)
@@ -4697,10 +4485,10 @@ fn complete_get_text_live_result(
 }
 
 fn complete_get_property_live_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
 ) -> Result<DevToolsGetPropertyResult, DevToolsError> {
-    page.finish_document_node_property(completion)
+    completion
+        .finish_document_node_property()
         .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))
         .and_then(|resolution| {
             property_result_from_renderer_resolution(resolution).map_err(DevToolsError::from)
@@ -4708,10 +4496,9 @@ fn complete_get_property_live_result(
 }
 
 fn complete_resolve_node_page_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
 ) -> Result<Value, DevToolsError> {
-    let resolution = page.finish_resolve_runtime_object_for_backend_node_id(completion);
+    let resolution = completion.finish_resolve_runtime_object_for_backend_node_id();
     let remote_object = match resolution {
         Ok(DocumentNodeRuntimeObjectResolution::Found(remote_object)) => remote_object,
         Ok(DocumentNodeRuntimeObjectResolution::MissingContext) => {
@@ -4735,34 +4522,34 @@ fn complete_resolve_node_page_result(
 
 fn complete_resolve_node_execution_context_frame_result(
     owner: &CommandOwnerScope,
-    renderer_inspector_session_id: Option<String>,
-    page: &mut Page,
+    inspection: &RendererDomInspection<'_>,
     completion: CompletedPageCommand,
     reference: DevToolsDomNodeReference,
     execution_context_id: i64,
     object_group: Option<String>,
     top_frame_id: Option<String>,
 ) -> DevToolsDomCommandTaskStep {
-    let child_frame_id =
-        match page.finish_child_frame_id_for_default_execution_context_id(completion) {
-            Ok(frame_id) => frame_id,
-            Err(error) => {
-                return devtools_dom_command_task_complete(Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    format!("Could not resolve execution context frame: {error}"),
-                )));
-            }
-        };
+    let child_frame_id = match completion.finish_child_frame_id_for_default_execution_context_id() {
+        Ok(frame_id) => frame_id,
+        Err(error) => {
+            return devtools_dom_command_task_complete(Err(DevToolsError::new(
+                DevToolsErrorKind::Internal,
+                format!("Could not resolve execution context frame: {error}"),
+            )));
+        }
+    };
     if child_frame_id.is_some() {
         if let DevToolsDomNodeReference::BackendNodeId(backend_node_id) = reference
             && is_renderer_backend_node_id(backend_node_id)
         {
-            return match page.start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
-                renderer_inspector_session_id,
-                backend_node_id,
-                Some(execution_context_id),
-                object_group.as_deref(),
-            ) {
+            return match inspection
+                .start_resolve_runtime_object_for_backend_node_id_in_inspector_session(
+                    backend_node_id,
+                    Some(execution_context_id),
+                    object_group.as_deref(),
+                )
+                .map(PendingPageCommand::from_inspector_main_route)
+            {
                 Ok(pending) => {
                     DevToolsDomCommandTaskStep::Pending(Box::new(PendingDomCommandDispatch {
                         command_id: None,
@@ -4771,7 +4558,7 @@ fn complete_resolve_node_execution_context_frame_result(
                             object_group,
                             cache_top_frame_id: None,
                         },
-                        pending: PendingDomCommandWork::Page(pending),
+                        pending,
                     }))
                 }
                 Err(error) => devtools_dom_command_task_complete(Err(DevToolsError::new(
@@ -4783,8 +4570,7 @@ fn complete_resolve_node_execution_context_frame_result(
         return devtools_dom_command_task_complete(Err(devtools_dom_node_not_found_error()));
     }
     match start_resolve_runtime_object_for_reference(
-        page,
-        renderer_inspector_session_id,
+        inspection,
         reference,
         Some(execution_context_id),
         object_group.as_deref(),
@@ -4798,7 +4584,7 @@ fn complete_resolve_node_execution_context_frame_result(
                     object_group,
                     cache_top_frame_id: resolution.cache_top_frame_id,
                 },
-                pending: PendingDomCommandWork::Page(resolution.pending),
+                pending: resolution.pending,
             }))
         }
         Err(error) => devtools_dom_command_task_complete(Err(DevToolsError::from(error))),
@@ -4806,7 +4592,6 @@ fn complete_resolve_node_execution_context_frame_result(
 }
 
 fn complete_object_reference_live_client_rect_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
     operation: PendingDomObjectReferenceOperation,
 ) -> Result<DevToolsDomGeometryResult, DevToolsError> {
@@ -4824,7 +4609,7 @@ fn complete_object_reference_live_client_rect_result(
             ));
         }
     };
-    match page.finish_document_geometry_for_object_id(completion) {
+    match completion.finish_document_geometry_for_object_id() {
         Ok(Some(geometry)) => devtools_dom_geometry_result_from_renderer(operation, geometry),
         Ok(None) => Err(devtools_dom_node_not_found_error()),
         Err(error) => Err(DevToolsError::new(
@@ -4875,14 +4660,13 @@ fn register_resolve_node_result(
 
 fn complete_set_child_nodes_snapshot_for_backend_node(
     session_id: Option<&str>,
-    page: &mut Page,
     completion: CompletedPageCommand,
     after: PendingSetChildNodesAfter,
     top_frame_id: Option<String>,
     missing_node_message: &'static str,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let snapshot_events = match page.finish_document_child_node_snapshot_events(completion) {
+    let snapshot_events = match completion.finish_document_child_node_snapshot_events() {
         Ok(Some(events)) => events,
         Ok(None) => {
             out.push_error(-32000, missing_node_message);
@@ -4913,23 +4697,21 @@ fn complete_set_child_nodes_snapshot_for_backend_node(
 
 fn complete_query_selector_set_child_nodes_live(
     session_id: Option<&str>,
-    page: &mut Page,
     completion: CompletedPageCommand,
     multiple: bool,
     top_frame_id: Option<String>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let result =
-        match page.finish_document_query_selector_with_child_node_snapshot_events(completion) {
-            Ok(result) => result,
-            Err(error) => {
-                out.push_error(
-                    -32000,
-                    format!("Could not capture query selector child node snapshots: {error}"),
-                );
-                return DomCommandTaskStep::Complete;
-            }
-        };
+    let result = match completion.finish_document_query_selector_with_child_node_snapshot_events() {
+        Ok(result) => result,
+        Err(error) => {
+            out.push_error(
+                -32000,
+                format!("Could not capture query selector child node snapshots: {error}"),
+            );
+            return DomCommandTaskStep::Complete;
+        }
+    };
     let after = PendingSetChildNodesAfter::QuerySelectorLive {
         resolution: result.query_selector_resolution,
         multiple,
@@ -5081,11 +4863,10 @@ fn top_snapshot_node_id_for_live_object_snapshot(
 
 fn complete_request_node_object_reference(
     _session_id: Option<&str>,
-    page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page.finish_document_node_snapshot_for_object_id(completion) {
+    match completion.finish_document_node_snapshot_for_object_id() {
         Ok(Some(object_snapshot)) => {
             let Some(frontend_node_id) =
                 super::frontend_node_id_for_snapshot(&object_snapshot.snapshot)
@@ -5106,11 +4887,10 @@ fn complete_request_node_object_reference(
 }
 
 fn complete_get_outer_html_object_reference(
-    page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page.finish_outer_html_for_object_id(completion) {
+    match completion.finish_outer_html_for_object_id() {
         Ok(Some(outer_html)) => out.push_result(json!({ "outerHTML": outer_html })),
         Ok(None) => out.push_error(-32000, "Could not find node with given id"),
         Err(error) => {
@@ -5124,10 +4904,9 @@ fn complete_get_outer_html_object_reference(
 }
 
 fn complete_get_outer_html_object_reference_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
 ) -> Result<DevToolsGetOuterHtmlResult, DevToolsError> {
-    match page.finish_outer_html_for_object_id(completion) {
+    match completion.finish_outer_html_for_object_id() {
         Ok(Some(outer_html)) => Ok(DevToolsGetOuterHtmlResult { outer_html }),
         Ok(None) => Err(devtools_dom_node_not_found_error()),
         Err(error) => Err(DevToolsError::new(
@@ -5138,11 +4917,10 @@ fn complete_get_outer_html_object_reference_result(
 }
 
 fn complete_get_outer_html_document(
-    page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page.finish_outer_html_for_document(completion) {
+    match completion.finish_outer_html_for_document() {
         Ok(outer_html) => out.push_result(json!({ "outerHTML": outer_html })),
         Err(error) => out.push_error(
             -32000,
@@ -5153,10 +4931,9 @@ fn complete_get_outer_html_document(
 }
 
 fn complete_get_outer_html_document_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
 ) -> Result<DevToolsGetOuterHtmlResult, DevToolsError> {
-    match page.finish_outer_html_for_document(completion) {
+    match completion.finish_outer_html_for_document() {
         Ok(outer_html) => Ok(DevToolsGetOuterHtmlResult { outer_html }),
         Err(error) => Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
@@ -5166,11 +4943,10 @@ fn complete_get_outer_html_document_result(
 }
 
 fn complete_get_outer_html_backend_node_reference(
-    page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page.finish_outer_html_for_backend_node_id(completion) {
+    match completion.finish_outer_html_for_backend_node_id() {
         Ok(Some(outer_html)) => out.push_result(json!({ "outerHTML": outer_html })),
         Ok(None) => out.push_error(-32000, "Could not find node with given id"),
         Err(error) => out.push_error(-32000, format!("Could not get outerHTML for node: {error}")),
@@ -5179,10 +4955,9 @@ fn complete_get_outer_html_backend_node_reference(
 }
 
 fn complete_get_outer_html_backend_node_reference_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
 ) -> Result<DevToolsGetOuterHtmlResult, DevToolsError> {
-    match page.finish_outer_html_for_backend_node_id(completion) {
+    match completion.finish_outer_html_for_backend_node_id() {
         Ok(Some(outer_html)) => Ok(DevToolsGetOuterHtmlResult { outer_html }),
         Ok(None) => Err(devtools_dom_node_not_found_error()),
         Err(error) => Err(DevToolsError::new(
@@ -5193,11 +4968,10 @@ fn complete_get_outer_html_backend_node_reference_result(
 }
 
 fn complete_scroll_into_view_if_needed_object_reference(
-    page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page.finish_scroll_node_into_view_if_needed(completion) {
+    match completion.finish_scroll_node_into_view_if_needed() {
         Ok(RendererScrollIntoViewResult::ScrolledOrAlreadyVisible) => out.push_success(),
         Ok(RendererScrollIntoViewResult::NodeNotFound) => {
             out.push_error(-32000, "Could not find node with given id")
@@ -5214,18 +4988,16 @@ fn complete_scroll_into_view_if_needed_object_reference(
 }
 
 fn complete_scroll_into_view_if_needed_object_reference_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
 ) -> Result<(), DevToolsError> {
-    complete_scroll_into_view_result(page.finish_scroll_node_into_view_if_needed(completion))
+    complete_scroll_into_view_result(completion.finish_scroll_node_into_view_if_needed())
 }
 
 fn complete_renderer_backend_node_scroll_into_view_if_needed(
-    page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page.finish_scroll_node_into_view_if_needed(completion) {
+    match completion.finish_scroll_node_into_view_if_needed() {
         Ok(RendererScrollIntoViewResult::ScrolledOrAlreadyVisible) => out.push_success(),
         Ok(RendererScrollIntoViewResult::NodeNotFound) => {
             out.push_error(-32000, "Could not find node with given id")
@@ -5242,10 +5014,9 @@ fn complete_renderer_backend_node_scroll_into_view_if_needed(
 }
 
 fn complete_renderer_backend_node_scroll_into_view_if_needed_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
 ) -> Result<(), DevToolsError> {
-    complete_scroll_into_view_result(page.finish_scroll_node_into_view_if_needed(completion))
+    complete_scroll_into_view_result(completion.finish_scroll_node_into_view_if_needed())
 }
 
 fn fill_pushed_frontend_node_ids(
@@ -5264,7 +5035,6 @@ fn fill_pushed_frontend_node_ids(
 }
 
 fn complete_push_nodes_by_backend_ids_to_frontend(
-    page: &mut Page,
     completion: CompletedPageCommand,
     _session_id: Option<&str>,
     _backend_node_ids: Vec<u32>,
@@ -5272,7 +5042,7 @@ fn complete_push_nodes_by_backend_ids_to_frontend(
     renderer_backend_positions: Vec<usize>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page.finish_document_frontend_node_ids_for_backend_node_ids(completion) {
+    match completion.finish_document_frontend_node_ids_for_backend_node_ids() {
         Ok(RendererDocumentFrontendNodeIdsResolution::Found(renderer_frontend_node_ids)) => {
             fill_pushed_frontend_node_ids(
                 &mut node_ids,
@@ -5293,13 +5063,12 @@ fn complete_push_nodes_by_backend_ids_to_frontend(
 }
 
 fn complete_push_nodes_by_backend_ids_to_frontend_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
     _backend_node_ids: Vec<u32>,
     mut node_ids: Vec<u32>,
     renderer_backend_positions: Vec<usize>,
 ) -> Result<DevToolsPushNodesByBackendIdsResult, DevToolsError> {
-    match page.finish_document_frontend_node_ids_for_backend_node_ids(completion) {
+    match completion.finish_document_frontend_node_ids_for_backend_node_ids() {
         Ok(RendererDocumentFrontendNodeIdsResolution::Found(renderer_frontend_node_ids)) => {
             fill_pushed_frontend_node_ids(
                 &mut node_ids,
@@ -5344,13 +5113,12 @@ fn node_for_describe_node_object_snapshot(
 }
 
 fn complete_describe_node_object_reference(
-    page: &mut Page,
     completion: CompletedPageCommand,
     cached_object_node: Option<Value>,
     top_frame_id: Option<String>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let object_snapshot = match page.finish_document_node_snapshot_for_object_id(completion) {
+    let object_snapshot = match completion.finish_document_node_snapshot_for_object_id() {
         Ok(Some(snapshot)) => snapshot,
         Ok(None) => {
             if let Some(node) = cached_object_node {
@@ -5379,12 +5147,11 @@ fn complete_describe_node_object_reference(
 }
 
 fn complete_describe_node_object_reference_result(
-    page: &mut Page,
     completion: CompletedPageCommand,
     cached_object_node: Option<Value>,
     top_frame_id: Option<String>,
 ) -> Result<DevToolsDescribeNodeResult, DevToolsError> {
-    let object_snapshot = match page.finish_document_node_snapshot_for_object_id(completion) {
+    let object_snapshot = match completion.finish_document_node_snapshot_for_object_id() {
         Ok(Some(snapshot)) => snapshot,
         Ok(None) => {
             if let Some(node) = cached_object_node {
@@ -5411,12 +5178,11 @@ fn complete_describe_node_object_reference_result(
 
 fn complete_document_snapshot(
     operation: PendingDomDocumentSnapshotOperation,
-    page: &mut Page,
     completion: CompletedPageCommand,
     top_frame_id: Option<String>,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    let snapshot = match page.finish_document_node_snapshot_for_document(completion) {
+    let snapshot = match completion.finish_document_node_snapshot_for_document() {
         Ok(Some(object_snapshot)) => object_snapshot.snapshot,
         Ok(None) => {
             out.push_error(-32000, "NoDocumentLoaded");
@@ -5459,11 +5225,10 @@ fn complete_document_snapshot(
 
 fn complete_object_reference_live_client_rect(
     operation: PendingDomObjectReferenceOperation,
-    page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page.finish_document_geometry_for_object_id(completion) {
+    match completion.finish_document_geometry_for_object_id() {
         Ok(Some(geometry)) => {
             let geometry_operation = match dom_geometry_operation_for_object_reference(&operation) {
                 Ok(operation) => operation,
@@ -5485,11 +5250,10 @@ fn complete_object_reference_live_client_rect(
 
 fn complete_renderer_backend_node_client_rect(
     operation: DevToolsDomGeometryOperation,
-    page: &mut Page,
     completion: CompletedPageCommand,
     out: &mut DomCommandOutput,
 ) -> DomCommandTaskStep {
-    match page.finish_document_geometry_for_backend_node_id(completion) {
+    match completion.finish_document_geometry_for_backend_node_id() {
         Ok(Some(geometry)) => {
             match devtools_dom_geometry_result_from_renderer(operation, geometry) {
                 Ok(result) => push_devtools_dom_geometry_result(&result, out),
@@ -5633,14 +5397,14 @@ fn start_devtools_get_attributes_command(
         );
     }
     let reference = command.reference;
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_document_node_attributes_for_reference(page, reference)?;
+    let pending = start_document_node_attributes_for_reference(&inspection, reference)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::GetAttributesLive,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -5660,18 +5424,17 @@ fn start_document_frontend_node_binding_command(
     frontend_node_id: u32,
     kind: PendingDomCommandKind,
 ) -> Result<Option<PendingDomCommandDispatch>, PendingDomCommandStartError> {
-    let renderer_inspector_session_id =
-        conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = page
-        .start_document_frontend_node_binding(renderer_inspector_session_id, frontend_node_id)
+    let pending = inspection
+        .start_document_frontend_node_binding(frontend_node_id)
+        .map(PendingPageCommand::from_inspector_main_route)
         .map_err(PendingDomCommandStartError::renderer_error)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -5691,14 +5454,14 @@ fn start_devtools_get_text_command(
         );
     }
     let reference = command.reference;
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_document_node_text_for_reference(page, reference)?;
+    let pending = start_document_node_text_for_reference(&inspection, reference)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::GetTextLive,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -5721,14 +5484,15 @@ fn start_devtools_get_property_command(
         );
     }
     let reference = command.reference;
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let pending = start_document_node_property_for_reference(page, reference, &command.name)?;
+    let pending =
+        start_document_node_property_for_reference(&inspection, reference, &command.name)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind: PendingDomCommandKind::GetPropertyLive,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 
@@ -6163,14 +5927,15 @@ fn start_devtools_scroll_into_view_if_needed_command(
             },
         );
     }
-    let page = loaded_page_mut_for_owner(conn, owner)
+    let inspection = dom_inspection_for_owner(conn, owner)
         .ok_or_else(PendingDomCommandStartError::no_document_loaded)?;
-    let (pending, kind) = start_scroll_into_view_for_reference(page, reference, command.rect)?;
+    let (pending, kind) =
+        start_scroll_into_view_for_reference(&inspection, reference, command.rect)?;
     Ok(Some(PendingDomCommandDispatch {
         command_id,
         owner_scope: owner.clone(),
         kind,
-        pending: PendingDomCommandWork::Page(pending),
+        pending,
     }))
 }
 

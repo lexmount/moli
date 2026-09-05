@@ -48,6 +48,8 @@ mod devtools_command;
 mod dispatch;
 mod downloads;
 mod fetch_support;
+#[cfg(test)]
+mod inspection_binding_tests;
 mod inspector_route;
 mod output;
 mod page_state;
