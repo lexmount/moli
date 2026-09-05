@@ -6929,6 +6929,60 @@ mod tests {
         .unwrap()
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn retired_inspection_endpoint_discards_prepared_renderer_calls() {
+        let mut ctx = TestContext::new();
+        let mut context = BrowserContext::new("BID-inspection-retired".into());
+        context.set_active_target_id("TID-inspection-retired");
+        ctx.conn.install_browser_context_fixture_for_test(context);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<title>live</title>",
+            None,
+        )
+        .await;
+        let owner = CommandOwnerScope::capture(&ctx.conn, None);
+        let mut root = ctx
+            .conn
+            .browser_context_by_id_mut("BID-inspection-retired")
+            .unwrap()
+            .take_renderer_runtime_owner_for_teardown()
+            .unwrap();
+        root.shutdown_and_join();
+
+        for (lane, action) in [
+            (RendererInspectorCommandRoute::MainThread, None),
+            (RendererInspectorCommandRoute::Io, None),
+            (RendererInspectorCommandRoute::MainThread, Some("evaluate")),
+        ] {
+            let (method, params) = match lane {
+                RendererInspectorCommandRoute::MainThread => {
+                    ("Runtime.evaluate", json!({"expression": "41"}))
+                }
+                RendererInspectorCommandRoute::Io => ("Debugger.pause", json!({})),
+            };
+            let descriptor = RendererCommandDescriptor::from_synthesized_payload(
+                json!({"id": 41, "method": method, "params": params}).to_string(),
+            )
+            .unwrap();
+            let result = if let Some(action) = action {
+                ctx.conn.start_runtime_protocol_message_with_context_resolution_for_owner_with_deferred_response(
+                    &owner, action, descriptor, 41,
+                )
+            } else {
+                ctx.conn
+                    .start_runtime_protocol_message_for_owner_with_deferred_response_and_access(
+                        &owner, descriptor, 41, lane,
+                    )
+            };
+            assert!(matches!(result, Err(error) if error.contains("Inspector Page is retired")));
+            assert_eq!(
+                ctx.conn
+                    .take_renderer_call_for_frontend_for_owner(&owner, 41),
+                None
+            );
+        }
+    }
+
     fn devtools_session_renderer_command_descriptor_for_test(
         command_id: u64,
     ) -> RendererCommandDescriptor {
