@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::{collections::HashSet, sync::Arc};
 
 pub(super) mod adopted;
 pub(super) mod imports;
@@ -160,21 +160,31 @@ impl MoliStyleEngine {
             .tracks_document(document)
     }
 
+    #[cfg(test)]
     pub(crate) fn set_owner_style_sheet_text_with_host(
         &mut self,
         host: &DomHost,
         owner: DomHandle,
         css_text: String,
     ) {
+        self.set_owner_style_sheet_text_backing_with_host(host, owner, css_text.into());
+    }
+
+    fn set_owner_style_sheet_text_backing_with_host(
+        &mut self,
+        host: &DomHost,
+        owner: DomHandle,
+        css_text: Arc<str>,
+    ) {
         let parser_base = stylesheet_source_base_url(host, owner);
         self.set_owner_style_sheet_source_with_parser_base(host, owner, css_text, parser_base);
     }
 
-    pub(crate) fn sync_owner_style_sheet_text_with_host(
+    pub(crate) fn sync_owner_style_sheet_text_backing_with_host(
         &mut self,
         host: &DomHost,
         owner: DomHandle,
-        css_text: String,
+        css_text: Arc<str>,
     ) {
         if self.owner_document_world(host, owner).is_some_and(|world| {
             world
@@ -184,14 +194,14 @@ impl MoliStyleEngine {
         }) {
             return;
         }
-        self.set_owner_style_sheet_text_with_host(host, owner, css_text);
+        self.set_owner_style_sheet_text_backing_with_host(host, owner, css_text);
     }
 
     fn process_owner_style_sheet_text_with_host(
         &mut self,
         host: &DomHost,
         owner: DomHandle,
-        css_text: String,
+        css_text: Arc<str>,
     ) {
         let Some(document) = owner_document_for_source_owner(host, owner) else {
             return;
@@ -214,7 +224,7 @@ impl MoliStyleEngine {
         &mut self,
         host: &DomHost,
         owner: DomHandle,
-        css_text: String,
+        css_text: Arc<str>,
         parser_base: url::Url,
     ) {
         let Some(document) = owner_document_for_source_owner(host, owner) else {
@@ -518,7 +528,8 @@ impl MoliStyleEngine {
                     self.process_owner_style_sheet_text_with_host(
                         host,
                         owner,
-                        host.text_content(owner).unwrap_or_default(),
+                        host.shared_text_content(owner)
+                            .unwrap_or_else(|| Arc::from("")),
                     );
                 } else if matches!(
                     change.kind(),
