@@ -4160,6 +4160,7 @@ impl CdpConnection {
         }
     }
 
+    #[cfg(test)]
     pub async fn evaluate_runtime_expression_with_await_async(
         &mut self,
         expression: &str,
@@ -4185,6 +4186,7 @@ impl CdpConnection {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn evaluate_runtime_expression_with_await_for_session_owner_async(
         &mut self,
         session_id: Option<&str>,
@@ -4199,6 +4201,7 @@ impl CdpConnection {
         .await
     }
 
+    #[cfg(test)]
     async fn evaluate_runtime_expression_for_session_owner_once_async(
         &mut self,
         session_id: Option<&str>,
@@ -4214,7 +4217,8 @@ impl CdpConnection {
             .await
             .map_err(|error| format!("runtime evaluation failed: {error}"))?
         };
-        self.ingest_runtime_session_owner_output_updates(session_id);
+        let owner = CommandOwnerScope::capture(self, session_id);
+        self.ingest_runtime_session_owner_output_updates_for_owner(&owner);
         Ok(payload)
     }
 
@@ -4301,13 +4305,6 @@ impl CdpConnection {
         self.loaded_page_mut_for_protocol_access(session_id)
     }
 
-    fn runtime_session_owner_page_mut_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Result<&mut Page, String> {
-        self.loaded_page_mut_for_protocol_access_for_owner(owner)
-    }
-
     pub(crate) fn renderer_inspection_binding_for_owner(
         &self,
         owner: &CommandOwnerScope,
@@ -4321,6 +4318,15 @@ impl CdpConnection {
         self.runtime_session_owner_slot_for_owner(owner)?
             .current_renderer_inspection_binding()
             .ok_or_else(|| "NoDocumentLoaded".to_owned())
+    }
+
+    pub(crate) fn runtime_inspection_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Result<moli_renderer_v8::RendererRuntimeInspection<'_>, String> {
+        let session = self.target_renderer_runtime_inspector_session_id_for_owner(owner);
+        self.renderer_inspection_binding_for_owner(owner, RendererInspectorCommandRoute::MainThread)
+            .map(|binding| binding.runtime_inspection(session))
     }
 
     fn runtime_protocol_message_page_route_for_session_owner(
@@ -4956,11 +4962,6 @@ impl CdpConnection {
         diagnostics["isolateScope"]["estimatedLiveV8IsolateCount"] =
             json!(estimated_live_v8_isolate_count);
         diagnostics
-    }
-
-    pub(crate) fn ingest_runtime_session_owner_output_updates(&mut self, session_id: Option<&str>) {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.ingest_runtime_session_owner_output_updates_for_owner(&owner)
     }
 
     pub(crate) fn ingest_runtime_session_owner_output_updates_for_owner(
@@ -6095,6 +6096,23 @@ impl CdpConnection {
         }
     }
 
+    async fn complete_runtime_inspection_query(
+        &mut self,
+        owner: &CommandOwnerScope,
+        pending: anyhow::Result<moli_renderer_v8::RendererRuntimeInspectorMainCommandRoute>,
+        operation: &str,
+    ) -> Result<moli_core::page::CompletedPageCommand, String> {
+        let pending = pending
+            .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
+            .map_err(|error| format!("{operation} failed: {error}"))?;
+        let completion = pending
+            .wait()
+            .await
+            .map_err(|error| format!("{operation} failed: {error}"))?;
+        self.observe_renderer_inspection_completion(owner, &completion)?;
+        Ok(completion)
+    }
+
     pub(crate) async fn runtime_realm_inventory_for_owner_async(
         &mut self,
         owner: &CommandOwnerScope,
@@ -6102,13 +6120,17 @@ impl CdpConnection {
         let target_id = self
             .target_owner_identity_for_owner(owner)
             .and_then(|(_, target_id)| target_id);
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
+        let pending = self
+            .runtime_inspection_for_owner(owner)?
+            .start_runtime_realm_inventory();
+        let completion = self
+            .complete_runtime_inspection_query(owner, pending, "runtime realm inventory")
+            .await?;
+        let realms = completion
+            .finish_runtime_realm_inventory()
+            .map_err(|error| format!("runtime realm inventory failed: {error}"))?;
         let target_id = target_id.as_deref();
         let devtools_target_id = target_id.map(DevToolsTargetId::from);
-        let realms = page
-            .runtime_realm_inventory_async()
-            .await
-            .map_err(|error| format!("runtime realm inventory failed: {error}"))?;
         realms
             .into_iter()
             .map(|realm| {
@@ -6132,9 +6154,19 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
     ) -> Result<Option<i64>, String> {
-        let page = self.runtime_session_owner_page_mut(session_id)?;
-        page.default_execution_context_id_async()
-            .await
+        let owner = CommandOwnerScope::capture(self, session_id);
+        let pending = self
+            .runtime_inspection_for_owner(&owner)?
+            .start_default_execution_context_id();
+        let completion = self
+            .complete_runtime_inspection_query(
+                &owner,
+                pending,
+                "runtime default execution context lookup",
+            )
+            .await?;
+        completion
+            .finish_runtime_optional_execution_context_id()
             .map_err(|error| format!("runtime default execution context lookup failed: {error}"))
     }
 
@@ -6142,12 +6174,24 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
     ) -> Result<Option<i64>, String> {
-        let page = self
-            .runtime_session_owner_slot_mut_for_owner(owner)?
-            .loaded_page_mut()
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
-        page.default_or_initial_execution_context_id_async()
-            .await
+        // Initial-document discovery intentionally precedes the Main navigation gate.
+        // It still addresses the exact live renderer, without borrowing its Page.
+        let session = self.target_renderer_runtime_inspector_session_id_for_owner(owner);
+        let inspection = self
+            .runtime_session_owner_slot_for_owner(owner)?
+            .current_renderer_inspection_binding()
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .runtime_inspection(session);
+        let pending = inspection.start_default_or_initial_execution_context_id();
+        let completion = self
+            .complete_runtime_inspection_query(
+                owner,
+                pending,
+                "runtime default execution context lookup",
+            )
+            .await?;
+        completion
+            .finish_runtime_optional_execution_context_id()
             .map_err(|error| format!("runtime default execution context lookup failed: {error}"))
     }
 
@@ -6160,16 +6204,17 @@ impl CdpConnection {
         let owner_target_id = self
             .target_owner_identity_for_owner(owner)
             .and_then(|(_, target_id)| target_id);
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        let result = if let Some(frame_id) = frame_id
-            && owner_target_id.as_deref() != Some(frame_id)
-        {
-            page.create_isolated_world_for_frame_async(frame_id, world_name, false)
-                .await
-        } else {
-            page.create_isolated_world_async(world_name, false).await
-        };
-        result.map_err(|error| format!("runtime isolated world creation failed: {error}"))
+        let frame_id = frame_id.filter(|frame_id| owner_target_id.as_deref() != Some(*frame_id));
+        let pending = self
+            .runtime_inspection_for_owner(owner)?
+            .start_create_isolated_world(world_name, false, frame_id);
+        let completion = self
+            .complete_runtime_inspection_query(owner, pending, "runtime isolated world creation")
+            .await?;
+        completion
+            .finish_create_isolated_world_command_turn()
+            .map(|(id, _)| id)
+            .map_err(|error| format!("runtime isolated world creation failed: {error}"))
     }
 
     pub async fn has_isolated_execution_context_id_async(
@@ -6185,9 +6230,15 @@ impl CdpConnection {
         session_id: Option<&str>,
         execution_context_id: i64,
     ) -> Result<bool, String> {
-        let page = self.runtime_session_owner_page_mut(session_id)?;
-        page.has_isolated_execution_context_id_async(execution_context_id)
-            .await
+        let owner = CommandOwnerScope::capture(self, session_id);
+        let pending = self
+            .runtime_inspection_for_owner(&owner)?
+            .start_has_isolated_execution_context_id(execution_context_id);
+        let completion = self
+            .complete_runtime_inspection_query(&owner, pending, "runtime isolated context lookup")
+            .await?;
+        completion
+            .finish_has_isolated_execution_context_id()
             .map_err(|error| format!("runtime isolated context lookup failed: {error}"))
     }
 
@@ -6196,11 +6247,11 @@ impl CdpConnection {
         session_id: Option<&str>,
         execution_context_id: i64,
     ) -> Result<bool, String> {
-        let page = self.runtime_session_owner_page_mut(session_id)?;
-        page.child_frame_id_for_default_execution_context_id_async(execution_context_id)
-            .await
-            .map(|frame_id| frame_id.is_some())
-            .map_err(|error| format!("runtime child default context lookup failed: {error}"))
+        let owner = CommandOwnerScope::capture(self, session_id);
+        let pending = self
+            .start_child_default_execution_context_lookup_for_owner(&owner, execution_context_id)?;
+        let completed = pending.wait().await?;
+        self.complete_child_default_execution_context_lookup(completed)
     }
 
     pub async fn child_default_execution_context_id_for_frame_id_for_session_owner_async(
@@ -6218,9 +6269,18 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         frame_id: &str,
     ) -> Result<Option<i64>, String> {
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        page.child_default_execution_context_id_for_frame_id_async(frame_id)
-            .await
+        let pending = self
+            .runtime_inspection_for_owner(owner)?
+            .start_child_default_execution_context_id_for_frame_id(frame_id);
+        let completion = self
+            .complete_runtime_inspection_query(
+                owner,
+                pending,
+                "runtime child default context lookup",
+            )
+            .await?;
+        completion
+            .finish_runtime_optional_execution_context_id()
             .map_err(|error| format!("runtime child default context lookup failed: {error}"))
     }
 
@@ -6269,14 +6329,32 @@ impl CdpConnection {
         session_id: Option<&str>,
         execution_context_id: i64,
     ) -> Result<Option<i64>, String> {
-        let page = self.runtime_session_owner_page_mut(session_id)?;
-        page.ensure_isolated_worlds_attached_to_inspector_async()
-            .await
-            .map_err(|error| {
-                format!("runtime isolated inspector context attachment failed: {error}")
-            })?;
-        page.inspector_execution_context_id_for_isolated_context_async(execution_context_id)
-            .await
+        let owner = CommandOwnerScope::capture(self, session_id);
+        let pending = self
+            .runtime_inspection_for_owner(&owner)?
+            .start_ensure_isolated_worlds_attached_to_inspector();
+        let completion = self
+            .complete_runtime_inspection_query(
+                &owner,
+                pending,
+                "runtime isolated inspector context attachment",
+            )
+            .await?;
+        completion
+            .finish_unit_runtime_page_command("runtime isolated inspector context attachment")
+            .map_err(|error| error.to_string())?;
+        let pending = self
+            .runtime_inspection_for_owner(&owner)?
+            .start_inspector_execution_context_id_for_isolated_context(execution_context_id);
+        let completion = self
+            .complete_runtime_inspection_query(
+                &owner,
+                pending,
+                "runtime isolated inspector context lookup",
+            )
+            .await?;
+        completion
+            .finish_runtime_optional_execution_context_id()
             .map_err(|error| format!("runtime isolated inspector context lookup failed: {error}"))
     }
 
@@ -6296,69 +6374,35 @@ impl CdpConnection {
         session_id: Option<&str>,
         execution_context_id: i64,
     ) -> Result<Option<i64>, String> {
-        let page = self.runtime_session_owner_page_mut(session_id)?;
-        page.ensure_isolated_worlds_attached_to_inspector_async()
-            .await
-            .map_err(|error| {
-                format!("runtime isolated compatibility context attachment failed: {error}")
-            })?;
-        page.isolated_execution_context_id_for_inspector_context_async(execution_context_id)
-            .await
+        let owner = CommandOwnerScope::capture(self, session_id);
+        let pending = self
+            .runtime_inspection_for_owner(&owner)?
+            .start_ensure_isolated_worlds_attached_to_inspector();
+        let completion = self
+            .complete_runtime_inspection_query(
+                &owner,
+                pending,
+                "runtime isolated compatibility context attachment",
+            )
+            .await?;
+        completion
+            .finish_unit_runtime_page_command("runtime isolated compatibility context attachment")
+            .map_err(|error| error.to_string())?;
+        let pending = self
+            .runtime_inspection_for_owner(&owner)?
+            .start_isolated_execution_context_id_for_inspector_context(execution_context_id);
+        let completion = self
+            .complete_runtime_inspection_query(
+                &owner,
+                pending,
+                "runtime isolated compatibility context lookup",
+            )
+            .await?;
+        completion
+            .finish_runtime_optional_execution_context_id()
             .map_err(|error| {
                 format!("runtime isolated compatibility context lookup failed: {error}")
             })
-    }
-
-    pub async fn evaluate_runtime_expression_in_execution_context_with_await_async(
-        &mut self,
-        execution_context_id: i64,
-        expression: &str,
-        await_promise: bool,
-    ) -> Result<Value, String> {
-        self.evaluate_runtime_expression_in_execution_context_for_session_owner_async(
-            None,
-            execution_context_id,
-            expression,
-            await_promise,
-        )
-        .await
-    }
-
-    pub async fn evaluate_runtime_expression_in_execution_context_for_session_owner_async(
-        &mut self,
-        session_id: Option<&str>,
-        execution_context_id: i64,
-        expression: &str,
-        await_promise: bool,
-    ) -> Result<Value, String> {
-        self.evaluate_runtime_expression_in_execution_context_for_session_owner_once_async(
-            session_id,
-            execution_context_id,
-            expression,
-            await_promise,
-        )
-        .await
-    }
-
-    async fn evaluate_runtime_expression_in_execution_context_for_session_owner_once_async(
-        &mut self,
-        session_id: Option<&str>,
-        execution_context_id: i64,
-        expression: &str,
-        await_promise: bool,
-    ) -> Result<Value, String> {
-        let payload = {
-            let page = self.runtime_session_owner_page_mut(session_id)?;
-            page.evaluate_runtime_expression_in_execution_context_without_navigation_follow_with_await_async(
-                execution_context_id,
-                expression,
-                await_promise,
-            )
-            .await
-            .map_err(|error| format!("runtime evaluation failed: {error}"))?
-        };
-        self.ingest_runtime_session_owner_output_updates(session_id);
-        Ok(payload)
     }
 
     pub async fn install_runtime_binding_async(
@@ -6383,10 +6427,14 @@ impl CdpConnection {
         execution_context_name: Option<&str>,
         execution_context_id: Option<i64>,
     ) -> Result<(), String> {
-        let page = self.runtime_session_owner_page_mut(session_id)?;
-        page.install_runtime_binding_async(name, execution_context_name, execution_context_id)
-            .await
-            .map_err(|error| format!("runtime binding install failed: {error}"))
+        let owner = CommandOwnerScope::capture(self, session_id);
+        let pending = self.start_install_runtime_binding_for_owner(
+            &owner,
+            name,
+            execution_context_name,
+            execution_context_id,
+        )?;
+        self.complete_runtime_binding_page_command(pending.wait().await?)
     }
 
     pub(crate) fn start_install_runtime_binding_for_owner(
@@ -6396,9 +6444,10 @@ impl CdpConnection {
         execution_context_name: Option<&str>,
         execution_context_id: Option<i64>,
     ) -> Result<PendingRuntimeBindingPageCommandDispatch, String> {
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        let pending = page
+        let pending = self
+            .runtime_inspection_for_owner(owner)?
             .start_install_runtime_binding(name, execution_context_name, execution_context_id)
+            .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
             .map_err(|error| format!("runtime binding install failed: {error}"))?;
         Ok(PendingRuntimeBindingPageCommandDispatch {
             owner: owner.clone(),
@@ -6414,15 +6463,10 @@ impl CdpConnection {
         let stored_runtime_bindings = self.target_runtime_bindings_for_renderer_owner(owner);
         let session_runtime_bindings =
             self.target_runtime_bindings_for_current_inspector_owner(owner);
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        let pending = page
-            .start_set_runtime_binding_state(
-                inspector_session_id,
-                &stored_runtime_bindings,
-                &session_runtime_bindings,
-            )
+        let pending = self
+            .runtime_inspection_for_owner(owner)?
+            .start_set_runtime_binding_state(&stored_runtime_bindings, &session_runtime_bindings)
+            .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
             .map_err(|error| format!("runtime binding state update failed: {error}"))?;
         Ok(PendingRuntimeBindingPageCommandDispatch {
             owner: owner.clone(),
@@ -6435,19 +6479,8 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
     ) -> Result<(), String> {
-        let stored_runtime_bindings = self.target_runtime_bindings_for_renderer_owner(owner);
-        let session_runtime_bindings =
-            self.target_runtime_bindings_for_current_inspector_owner(owner);
-        let inspector_session_id =
-            self.target_renderer_runtime_inspector_session_id_for_owner(owner);
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        page.set_runtime_binding_state_async(
-            inspector_session_id,
-            &stored_runtime_bindings,
-            &session_runtime_bindings,
-        )
-        .await
-        .map_err(|error| format!("runtime binding state update failed: {error}"))
+        let pending = self.start_apply_stored_runtime_bindings_for_owner(owner)?;
+        self.complete_runtime_binding_page_command(pending.wait().await?)
     }
 
     pub async fn remove_runtime_binding_async(&mut self, name: &str) -> Result<(), String> {
@@ -6460,10 +6493,9 @@ impl CdpConnection {
         session_id: Option<&str>,
         name: &str,
     ) -> Result<(), String> {
-        let page = self.runtime_session_owner_page_mut(session_id)?;
-        page.remove_runtime_binding_async(name)
-            .await
-            .map_err(|error| format!("runtime binding removal failed: {error}"))
+        let owner = CommandOwnerScope::capture(self, session_id);
+        let pending = self.start_remove_runtime_binding_for_owner(&owner, name)?;
+        self.complete_runtime_binding_page_command(pending.wait().await?)
     }
 
     pub(crate) fn start_remove_runtime_binding_for_owner(
@@ -6471,9 +6503,10 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         name: &str,
     ) -> Result<PendingRuntimeBindingPageCommandDispatch, String> {
-        let page = self.runtime_session_owner_page_mut_for_owner(owner)?;
-        let pending = page
+        let pending = self
+            .runtime_inspection_for_owner(owner)?
             .start_remove_runtime_binding(name)
+            .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
             .map_err(|error| format!("runtime binding removal failed: {error}"))?;
         Ok(PendingRuntimeBindingPageCommandDispatch {
             owner: owner.clone(),
@@ -6486,8 +6519,10 @@ impl CdpConnection {
         &mut self,
         completed: CompletedRuntimeBindingPageCommandDispatch,
     ) -> Result<(), String> {
-        let page = self.runtime_session_owner_page_mut_for_owner(&completed.owner)?;
-        page.finish_unit_runtime_page_command(completed.completion, completed.operation)
+        self.observe_renderer_inspection_completion(&completed.owner, &completed.completion)?;
+        completed
+            .completion
+            .finish_unit_runtime_page_command(completed.operation)
             .map_err(|error| format!("{} failed: {error}", completed.operation))
     }
 
@@ -6501,10 +6536,16 @@ impl CdpConnection {
         session_id: Option<&str>,
         name: &str,
     ) -> Result<(), String> {
-        let page = self.runtime_session_owner_page_mut(session_id)?;
-        page.remove_default_runtime_binding_async(name)
-            .await
-            .map_err(|error| format!("runtime default binding removal failed: {error}"))
+        let owner = CommandOwnerScope::capture(self, session_id);
+        let pending = self
+            .runtime_inspection_for_owner(&owner)?
+            .start_remove_default_runtime_binding(name);
+        let completion = self
+            .complete_runtime_inspection_query(&owner, pending, "runtime default binding removal")
+            .await?;
+        completion
+            .finish_unit_runtime_page_command("runtime default binding removal")
+            .map_err(|error| error.to_string())
     }
 
     pub(crate) async fn detach_runtime_inspector_session_for_session_owner_async(

@@ -4,6 +4,7 @@ use super::{BrowserContext, CdpCommandTaskStep, CommandOwnerScope};
 use crate::testing::TestContext;
 
 mod document_agents;
+mod runtime_agents;
 
 #[tokio::test(flavor = "multi_thread")]
 async fn dom_inspection_starts_without_protocol_document_ownership() {

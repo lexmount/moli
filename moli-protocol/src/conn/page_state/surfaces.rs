@@ -430,11 +430,12 @@ impl CdpConnection {
                 owner_state.document_start_script_registry_keys_for_session(&devtools_session)
             })
             .unwrap_or_default();
-        let has_loaded_page = self
-            .runtime_session_owner_slot_mut(Some(session_id))
+        let owner = crate::conn::CommandOwnerScope::capture(self, Some(session_id));
+        let has_renderer = self
+            .runtime_session_owner_slot_for_owner(&owner)
             .ok()
-            .is_some_and(|slot| slot.loaded_page().is_some());
-        if !has_loaded_page {
+            .is_some_and(|slot| slot.current_renderer_inspection_binding().is_some());
+        if !has_renderer {
             let _ = self.with_target_owner_state_for_session_mut(Some(session_id), |owner_state| {
                 owner_state.remove_document_start_scripts_for_session(&devtools_session)
             });
@@ -445,15 +446,17 @@ impl CdpConnection {
         for registry_key in registry_keys {
             let result: anyhow::Result<()> = async {
                 let pending = self
-                    .runtime_session_owner_slot_mut(Some(session_id))
+                    .runtime_session_owner_slot_for_owner(&owner)
                     .ok()
-                    .and_then(|slot| slot.loaded_page_mut())
+                    .and_then(|slot| slot.current_renderer_inspection_binding())
                     .ok_or_else(|| {
                         anyhow::anyhow!(
-                            "page disappeared while removing detached-session document-start scripts"
+                            "renderer binding disappeared while removing detached-session document-start scripts"
                         )
                     })?
+                    .runtime_inspection(renderer_inspector_session_id.clone())
                     .start_remove_document_start_script_by_registry_key(&registry_key)
+                    .map(moli_core::page::PendingPageCommand::from_inspector_main_route)
                     .map_err(|error| {
                         anyhow::anyhow!(
                             "failed to start detached-session document-start script cleanup: {error}"
@@ -464,17 +467,8 @@ impl CdpConnection {
                         "detached-session document-start script cleanup was canceled: {error}"
                     )
                 })?;
-                let page = self
-                    .runtime_session_owner_slot_mut(Some(session_id))
-                    .ok()
-                    .and_then(|slot| slot.loaded_page_mut())
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                            "page disappeared while finishing detached-session document-start script cleanup"
-                        )
-                    })?;
-                page.finish_unit_runtime_page_command(
-                    completion,
+                self.observe_renderer_inspection_completion(&owner, &completion).map_err(anyhow::Error::msg)?;
+                completion.finish_unit_runtime_page_command(
                     "remove detached-session document-start script",
                 )
                 .map_err(|error| {
@@ -482,8 +476,8 @@ impl CdpConnection {
                         "failed to finish detached-session document-start script cleanup: {error}"
                     )
                 })?;
-                self.with_target_owner_state_for_session_mut(
-                    Some(session_id),
+                self.with_target_owner_state_for_owner_mut(
+                    &owner,
                     |owner_state| {
                         owner_state.remove_document_start_script_registry_key_for_session(
                             &devtools_session,

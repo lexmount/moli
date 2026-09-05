@@ -12,7 +12,8 @@ use tokio::sync::oneshot;
 
 mod inspection_endpoint;
 pub use inspection_endpoint::{
-    RendererAccessibilityInspection, RendererCssInspection, RendererDomInspection,
+    RendererAccessibilityInspection, RendererCssInspection, RendererDomDebuggerInspection,
+    RendererDomInspection, RendererRuntimeInspection,
 };
 
 fn remove_page(token: RendererPageToken) {

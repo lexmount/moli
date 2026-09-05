@@ -286,9 +286,9 @@ pub use self::owner::{
 };
 pub use self::owner_local::RendererPageTestingHandle;
 pub use self::owner_local::{
-    RendererAccessibilityInspection, RendererCssInspection, RendererDomInspection,
-    RendererInspectionEndpoint, RendererPageCommandPending, RendererPageHandle,
-    RendererRuntimeInspectorSessionDetachGuard,
+    RendererAccessibilityInspection, RendererCssInspection, RendererDomDebuggerInspection,
+    RendererDomInspection, RendererInspectionEndpoint, RendererPageCommandPending,
+    RendererPageHandle, RendererRuntimeInspection, RendererRuntimeInspectorSessionDetachGuard,
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
 pub use self::page::{JsRuntime, JsRuntimeOwner, PendingHtmlPage, PreparedRendererDocument};

@@ -7411,19 +7411,12 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let completed_script = {
-                let Some(page) = conn
-                    .runtime_session_owner_slot_mut_for_owner(&owner_scope)
-                    .ok()
-                    .and_then(|slot| slot.loaded_page_mut())
-                else {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        "NoDocumentLoaded",
-                    ));
-                };
-                page.finish_document_start_script_result_command_turn(completion)
-            };
+            if let Err(message) =
+                conn.observe_renderer_inspection_completion(&owner_scope, &completion)
+            {
+                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+            }
+            let completed_script = completion.finish_document_start_script_result_command_turn();
             let (_, output) = match completed_script {
                 Ok(completed_script) => completed_script,
                 Err(error) => {
@@ -7445,18 +7438,13 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let Some(page) = conn
-                .runtime_session_owner_slot_mut_for_owner(&owner_scope)
-                .ok()
-                .and_then(|slot| slot.loaded_page_mut())
-            else {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "NoDocumentLoaded",
-                ));
-            };
+            if let Err(message) =
+                conn.observe_renderer_inspection_completion(&owner_scope, &completion)
+            {
+                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+            }
             if let Err(error) =
-                page.finish_unit_runtime_page_command(completion, "remove document-start script")
+                completion.finish_unit_runtime_page_command("remove document-start script")
             {
                 return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                     -32000,

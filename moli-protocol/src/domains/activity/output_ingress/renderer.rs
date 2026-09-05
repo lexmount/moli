@@ -175,7 +175,8 @@ async fn project_renderer_output_records_for_owner(
         if projection == RendererPublicationProjection::InspectionOnly {
             match &mut item {
                 RendererOutputItem::Observation(
-                    moli_core::RendererProtocolObservation::DomMutations(_),
+                    moli_core::RendererProtocolObservation::DomMutations(_)
+                    | moli_core::RendererProtocolObservation::RuntimeBinding(_),
                 ) => {}
                 RendererOutputItem::Observation(
                     moli_core::RendererProtocolObservation::RuntimeInspector(batch),
@@ -183,6 +184,7 @@ async fn project_renderer_output_records_for_owner(
                     matches!(message,
                         moli_core::page::RendererRuntimeInspectorMessage::Protocol(message)
                             if message.renderer_call_id().is_some()
+                                || message.value().get("method").and_then(serde_json::Value::as_str) == Some("Runtime.bindingCalled")
                     )
                 }),
                 _ => continue,
