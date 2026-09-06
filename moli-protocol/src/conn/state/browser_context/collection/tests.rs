@@ -81,9 +81,23 @@ async fn projection_drop_preserves_the_contexts_page_engine_selection_and_docume
         .document_lifetime_observer_for_target("TID-physical-owner")
         .unwrap();
 
+    let history = context
+        .target_navigation_history_snapshot("TID-physical-owner")
+        .unwrap();
+    assert_eq!(history.1.len(), 1);
+    assert_eq!(history.1[0].title, "Browser owned");
+    let target = context.page_targets.get_mut("TID-physical-owner").unwrap();
+    target.set_target_url("https://projection.invalid/wrong".into());
+    target.owner_state.committed_document_title = Some("stale projection".into());
+    assert_eq!(
+        context.target_navigation_history_snapshot("TID-physical-owner"),
+        Some(history.clone())
+    );
+
     drop(context.page_targets.remove("TID-physical-owner").unwrap());
     assert_eq!(context.selected_web_contents_id(), Some(id));
     let contents = context.physical.web_contents.get(&id).unwrap();
+    assert_eq!(contents.navigation_history_snapshot(), history);
     assert_eq!(
         contents.navigation_engine_for_test().unwrap() as *const NavigationEngine,
         engine

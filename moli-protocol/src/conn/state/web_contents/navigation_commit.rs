@@ -499,7 +499,7 @@ mod tests {
             retired.as_mut().poll(&mut context),
             Poll::Ready(DocumentRetirement::Superseded)
         );
-        let (index, history) = contents.navigation.navigation_history_snapshot(None);
+        let (index, history) = contents.navigation.navigation_history_snapshot();
         assert_eq!(index, 1);
         assert_eq!(
             history
@@ -567,7 +567,7 @@ mod tests {
                 contents.main_frame.current_document.as_ref().unwrap().id,
                 old_document
             );
-            let (index, history) = contents.navigation.navigation_history_snapshot(None);
+            let (index, history) = contents.navigation.navigation_history_snapshot();
             assert_eq!(index, 0);
             assert_eq!(history.len(), 1);
             assert_eq!(history[0].title, "first");
@@ -645,14 +645,7 @@ mod tests {
                 contents.navigation.pending_document().unwrap().0,
                 navigation
             );
-            assert_eq!(
-                contents
-                    .navigation
-                    .navigation_history_snapshot(None)
-                    .1
-                    .len(),
-                1
-            );
+            assert_eq!(contents.navigation.navigation_history_snapshot().1.len(), 1);
             assert_eq!(
                 lifetime
                     .as_mut()
@@ -721,14 +714,7 @@ mod tests {
                     contents.main_frame.current_document.as_ref().unwrap().id,
                     first.document
                 );
-                assert_eq!(
-                    contents
-                        .navigation
-                        .navigation_history_snapshot(None)
-                        .1
-                        .len(),
-                    1
-                );
+                assert_eq!(contents.navigation.navigation_history_snapshot().1.len(), 1);
             }
             first.retirement.close().await;
         }
@@ -758,7 +744,7 @@ mod tests {
             assert!(
                 contents
                     .navigation
-                    .navigation_history_snapshot(None)
+                    .navigation_history_snapshot()
                     .1
                     .is_empty()
             );

@@ -4,7 +4,12 @@ use moli_core::{
     runtime::NavigationEngine,
 };
 
-use super::navigation_controller::NavigationController;
+mod navigation_controller;
+use navigation_controller::NavigationController;
+pub use navigation_controller::PageNavigationHistoryEntry;
+pub(crate) use navigation_controller::{
+    HistoryTraversalDestination, InitialDocument, InitialDocumentCreator, ResolvedHistoryTraversal,
+};
 
 mod document_host;
 mod document_policy;
@@ -19,7 +24,9 @@ pub(crate) use initial_document::{
 };
 mod navigation_commit;
 pub(in crate::conn) use navigation_commit::AdmittedDocumentMaterialization;
+mod navigation_history;
 mod navigation_load;
+pub(crate) use navigation_history::SameDocumentNavigationCommitted;
 pub(in crate::conn) use navigation_load::{AdmittedNavigationLoad, PreparedNavigationResponse};
 mod network_request_policy;
 pub(crate) use navigation_commit::{
@@ -55,7 +62,7 @@ pub(crate) use window::{WindowSurface, WindowSurfaceState};
 #[derive(Debug)]
 pub(in crate::conn) struct WebContents {
     id: WebContentsId,
-    pub(in crate::conn) navigation: NavigationController,
+    navigation: NavigationController,
     // Dismiss modal renderer work before Document/Page teardown.
     pub(in crate::conn) javascript_dialogs: JavaScriptDialogs,
     pub(in crate::conn) main_frame: MainFrameSlot,
@@ -198,6 +205,12 @@ impl WebContents {
     pub(in crate::conn) fn replace_document(&mut self, next: Option<DocumentHost>) -> Option<Page> {
         self.navigation.cancel_initial_document_build();
         self.javascript_dialogs.clear();
+        if let Some(document) = &next {
+            self.navigation.seed_document_history((
+                document.page.final_url().to_string(),
+                document.page.document_title(),
+            ));
+        }
         self.main_frame.replace_document(next)
     }
 

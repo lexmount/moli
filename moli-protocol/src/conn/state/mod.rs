@@ -10,7 +10,6 @@ mod fetch;
 mod identity;
 mod inspector;
 pub(in crate::conn) use browser_context::javascript_dialog;
-mod navigation_controller;
 mod navigation_outcome;
 mod page_resource;
 pub(in crate::conn) use browser_context::page_slot;
@@ -112,6 +111,7 @@ pub(crate) use shared_worker_attachment::{
 pub(crate) use shared_worker_target::SharedWorkerTargetState;
 #[cfg(test)]
 pub(crate) use web_contents::JavaScriptDialogKey;
+pub(crate) use web_contents::SameDocumentNavigationCommitted;
 pub(crate) use web_contents::{
     CommittedDocumentLifecycle, DocumentLifecycleEvent, DocumentNavigationDestination,
     PreparedDocumentNavigation,
@@ -139,8 +139,10 @@ pub(crate) use browser_context::{
     LoadedNavigationPageCommit, NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind,
 };
 
-pub(crate) use navigation_controller::{InitialDocument, InitialDocumentCreator};
-pub use navigation_controller::{PageNavigationHistoryEntry, PendingNavigationHistoryUpdate};
+pub use web_contents::PageNavigationHistoryEntry;
+pub(crate) use web_contents::{
+    HistoryTraversalDestination, InitialDocument, InitialDocumentCreator, ResolvedHistoryTraversal,
+};
 
 pub use emulation::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,

@@ -494,6 +494,18 @@ fn renderer_runtime_inspector_session_id(session_key: &DevToolsSessionKey) -> Op
 }
 
 impl<'a> TargetSessionOwnerRef<'a> {
+    pub(super) fn navigation_history_snapshot(
+        &self,
+    ) -> Option<(usize, Vec<PageNavigationHistoryEntry>)> {
+        self.browser_context
+            .target_navigation_history_snapshot(&self.target_id)
+    }
+
+    pub(super) fn navigation_history_entry_url(&self, entry_id: i32) -> Option<String> {
+        self.browser_context
+            .target_navigation_history_entry_url(&self.target_id, entry_id)
+    }
+
     fn target(&self) -> &'a crate::conn::PageTargetHost {
         self.browser_context
             .page_target(&self.target_id)
@@ -806,33 +818,12 @@ impl<'a> TargetSessionOwnerMut<'a> {
         &mut self.into_target_mut().runtime_slot
     }
 
-    pub(super) fn navigation_history_snapshot(
+    pub(super) fn apply_renderer_document_title(
         &mut self,
-    ) -> Option<(usize, Vec<PageNavigationHistoryEntry>)> {
+        change: &moli_core::RendererDocumentTitleChanged,
+    ) -> Option<bool> {
         self.browser_context
-            .target_navigation_history_snapshot(&self.target_id)
-    }
-
-    pub(super) fn apply_renderer_document_title(&mut self, title: String) -> Option<bool> {
-        Some(
-            self.browser_context
-                .commit_target_document_title(&self.target_id, title),
-        )
-    }
-
-    pub(super) fn navigation_history_entry_url(&mut self, entry_id: i32) -> Option<String> {
-        self.browser_context
-            .target_navigation_history_entry_url(&self.target_id, entry_id)
-    }
-
-    pub(super) fn reset_navigation_history(&mut self) -> Option<bool> {
-        self.browser_context
-            .reset_target_navigation_history(&self.target_id)
-    }
-
-    pub(super) fn can_reset_navigation_history(&mut self) -> Option<bool> {
-        self.browser_context
-            .can_reset_target_navigation_history(&self.target_id)
+            .commit_target_document_title(&self.target_id, change)
     }
 
     pub(super) fn mark_next_navigation_history_replace_current(&mut self) -> Option<()> {
@@ -846,18 +837,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
     ) -> Option<()> {
         self.browser_context
             .mark_target_next_navigation_history_traverse_to_entry(&self.target_id, entry_id)
-    }
-
-    pub(super) fn record_same_document_navigation(
-        &mut self,
-        url: &Url,
-        history_update: moli_core::page::SameDocumentHistoryUpdate,
-    ) -> Option<String> {
-        self.browser_context.record_target_same_document_navigation(
-            &self.target_id,
-            url,
-            history_update,
-        )
     }
 
     pub(super) fn prepare_navigation_request(
@@ -2300,7 +2279,7 @@ impl CdpConnection {
     }
 
     pub(crate) fn target_session_owner_navigation_history_snapshot(
-        &mut self,
+        &self,
         session_id: Option<&str>,
     ) -> Option<(usize, Vec<PageNavigationHistoryEntry>)> {
         let owner = CommandOwnerScope::capture(self, session_id);
@@ -2308,11 +2287,22 @@ impl CdpConnection {
     }
 
     pub(crate) fn target_session_owner_navigation_history_snapshot_for_owner(
-        &mut self,
+        &self,
         owner: &CommandOwnerScope,
     ) -> Option<(usize, Vec<PageNavigationHistoryEntry>)> {
-        self.target_session_owner_mut_for_owner(owner)?
+        self.target_session_owner_ref_for_owner(owner)?
             .navigation_history_snapshot()
+    }
+
+    pub(crate) fn resolve_history_traversal_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        destination: crate::conn::HistoryTraversalDestination,
+    ) -> Option<Result<crate::conn::ResolvedHistoryTraversal, &'static str>> {
+        let owner = self.target_session_owner_ref_for_owner(owner)?;
+        owner
+            .browser_context
+            .resolve_target_history_traversal(&owner.target_id, destination)
     }
 
     pub(crate) fn apply_renderer_document_title_for_owner(
@@ -2320,37 +2310,17 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         change: &moli_core::RendererDocumentTitleChanged,
     ) -> Option<bool> {
-        self.target_root_document_protocol_attachment_identity_for_owner(
-            owner,
-            change.source_document,
-        )?;
         self.target_session_owner_mut_for_owner(owner)?
-            .apply_renderer_document_title(change.title.clone())
+            .apply_renderer_document_title(change)
     }
 
     pub(crate) fn target_session_owner_navigation_history_entry_url(
-        &mut self,
+        &self,
         session_id: Option<&str>,
         entry_id: i32,
     ) -> Option<String> {
-        self.target_session_owner_mut(session_id)?
+        self.target_session_owner_ref_for_owner(&CommandOwnerScope::capture(self, session_id))?
             .navigation_history_entry_url(entry_id)
-    }
-
-    pub(crate) fn reset_navigation_history_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Option<bool> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .reset_navigation_history()
-    }
-
-    pub(crate) fn can_reset_navigation_history_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Option<bool> {
-        self.target_session_owner_mut(session_id)?
-            .can_reset_navigation_history()
     }
 
     pub(crate) fn mark_next_navigation_history_replace_current_for_owner(
@@ -2370,14 +2340,22 @@ impl CdpConnection {
             .mark_next_navigation_history_traverse_to_entry(entry_id)
     }
 
-    pub(crate) fn record_same_document_navigation_for_owner(
+    pub(crate) fn commit_same_document_navigation_for_page(
         &mut self,
-        owner: &CommandOwnerScope,
-        url: &Url,
+        page: &TargetPageResidenceIdentity,
+        url: Url,
         history_update: moli_core::page::SameDocumentHistoryUpdate,
-    ) -> Option<String> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .record_same_document_navigation(url, history_update)
+    ) -> Option<(String, crate::conn::state::SameDocumentNavigationCommitted)> {
+        let target_id = page.target_id()?;
+        let committed = self
+            .browser_context_by_id_mut(page.browser_context_id())?
+            .commit_target_same_document_navigation(
+                target_id,
+                page.document_id(),
+                url,
+                history_update,
+            )?;
+        Some((target_id.to_owned(), committed))
     }
 
     pub(super) fn target_session_owner_mut(
@@ -2761,17 +2739,16 @@ mod tests {
     }
 
     #[test]
-    fn target_session_owner_mut_snapshots_active_and_background_navigation_history() {
+    fn target_session_owner_ref_snapshots_active_and_background_navigation_history() {
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         active.record_target_navigation_history_for_test(
             "TID-active",
             ("https://active.example/".to_owned(), "active".to_owned()),
         );
         {
-            let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut active,
+            let owner = TargetSessionOwnerRef {
+                browser_context: &active,
                 target_id: "TID-active".to_owned(),
-                command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
             let (current_index, entries) = owner
@@ -2791,10 +2768,9 @@ mod tests {
             ),
         );
         {
-            let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut background,
+            let owner = TargetSessionOwnerRef {
+                browser_context: &background,
                 target_id: "TID-background".to_owned(),
-                command_session_id: None,
                 session_key: DevToolsSessionKey::Primary,
             };
             let (current_index, entries) = owner

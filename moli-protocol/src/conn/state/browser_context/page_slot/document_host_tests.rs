@@ -61,7 +61,7 @@ async fn loaded_navigation_commit_settles_document_history_and_navigation_togeth
     let expected_document = owner
         .web_contents_for_target(TARGET)
         .unwrap()
-        .navigation
+        .navigation()
         .pending_document()
         .unwrap()
         .1;
@@ -112,7 +112,7 @@ async fn disappearing_agent_host_cannot_cancel_an_admitted_browser_commit() {
     let navigation = owner.begin_target_document_navigation(TARGET, "LOADER-native".into());
     let contents_id = owner.page_targets.get(TARGET).unwrap().web_contents_id();
     let expected_document = owner.physical.web_contents[&contents_id]
-        .navigation
+        .navigation()
         .pending_document()
         .unwrap()
         .1;
@@ -139,12 +139,12 @@ async fn disappearing_agent_host_cannot_cancel_an_admitted_browser_commit() {
         contents.main_frame.current_document.as_ref().unwrap().id,
         expected_document
     );
-    assert_eq!(contents.navigation.pending_document(), None);
+    assert_eq!(contents.navigation().pending_document(), None);
     assert_eq!(
-        contents.navigation.committed_document_navigation(),
+        contents.navigation().committed_document_navigation(),
         Some(navigation)
     );
-    let (_, history) = contents.navigation.navigation_history_snapshot(None);
+    let (_, history) = contents.navigation().navigation_history_snapshot();
     assert_eq!(history.last().unwrap().url, url.as_str());
     assert_eq!(history.last().unwrap().title, "native");
     assert_eq!(
@@ -341,7 +341,7 @@ async fn failed_inspection_projection_cannot_veto_browser_document_commit() {
     let expected_document = owner
         .web_contents_for_target(TARGET)
         .unwrap()
-        .navigation
+        .navigation()
         .pending_document()
         .unwrap()
         .1;
@@ -527,7 +527,7 @@ async fn rejected_browser_candidate_cannot_rotate_inspection_or_document_project
         owner
             .web_contents_for_target(TARGET)
             .unwrap()
-            .navigation
+            .navigation()
             .pending_document()
             .unwrap()
             .0,
@@ -736,12 +736,8 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
     let document = contents.main_frame.current_document.as_ref().unwrap();
     let id = document.id;
     let snapshot = document.lifecycle.snapshot().unwrap();
-    contents
-        .navigation
-        .begin_initial_empty_document("about:blank".into(), None, None);
-    contents
-        .navigation
-        .mark_initial_empty_document_materialized();
+    contents.begin_initial_empty_document("about:blank".into(), None, None);
+    contents.mark_initial_empty_document_materialized();
     assert!(!contents.javascript_dialogs.is_empty());
     let terminated = RendererDocumentLifecycleEvent {
         frame: snapshot.frame,
@@ -787,7 +783,7 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
         id
     );
     assert_eq!(
-        contents.navigation.is_on_initial_empty_document(),
+        contents.navigation().is_on_initial_empty_document(),
         Some(false)
     );
 }
@@ -865,7 +861,10 @@ async fn dialog_disable_and_exact_detach_dismiss_only_their_browser_dialogs() {
 #[tokio::test]
 async fn document_replacement_preserves_stable_page_engine_history_and_storage() {
     let browser = Browser::new(BrowserConfig::default()).unwrap();
-    let first = browser.fetch("data:text/html,<p>first</p>").await.unwrap();
+    let first = browser
+        .fetch("data:text/html,<title>first</title>")
+        .await
+        .unwrap();
     let mut owner = context_with_document(first);
     let mut config = moli_fetch::FetchConfig::default();
     config.set_user_agent("stable-engine");
@@ -942,14 +941,6 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
             .lock()
             .set_item("https://example.test", "key", "value")
     );
-    owner
-        .web_contents_for_target_mut(TARGET)
-        .unwrap()
-        .navigation
-        .record_loaded_page_navigation_history((
-            "https://example.test/first".into(),
-            "first".into(),
-        ));
     let observer = owner.document_lifetime_observer_for_target(TARGET).unwrap();
 
     let navigation = owner.begin_target_document_navigation(TARGET, "second-loader".into());
@@ -965,8 +956,7 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
     owner
         .web_contents_for_target_mut(TARGET)
         .unwrap()
-        .navigation
-        .record_loaded_page_navigation_history((
+        .record_navigation_history_for_test((
             "https://example.test/second".into(),
             "second".into(),
         ));
@@ -1018,8 +1008,8 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
     let (index, history) = owner
         .web_contents_for_target_mut(TARGET)
         .unwrap()
-        .navigation
-        .navigation_history_snapshot(None);
+        .navigation()
+        .navigation_history_snapshot();
     assert_eq!(index, 1);
     assert_eq!(history.len(), 2);
     assert_eq!(history[0].title, "first");
@@ -1076,7 +1066,7 @@ async fn web_contents_owns_live_document_and_navigation_after_protocol_residence
     assert_eq!(current.lifecycle.snapshot(), Some(snapshot));
     assert!(
         contents
-            .navigation
+            .navigation()
             .accepts_pending_document_navigation_event(&navigation)
     );
     assert!(!cancellation.is_cancelled());

@@ -485,7 +485,7 @@ impl BrowserContext {
             return None;
         }
         if contents
-            .navigation
+            .navigation()
             .initial_document_build()
             .is_some_and(|build| build.completion.pending())
         {
@@ -770,7 +770,6 @@ impl BrowserContext {
             {
                 self.web_contents_for_target_mut(target_id)
                     .unwrap()
-                    .navigation
                     .mark_initial_empty_document_exited();
             }
             return accepted;
@@ -818,7 +817,7 @@ impl BrowserContext {
             .or_else(|| {
                 self.web_contents_for_target(target_id)
                     .expect("registered Target must reference live WebContents")
-                    .navigation
+                    .navigation()
                     .pending_document()
                     .map(|(_, document)| document)
             })
@@ -850,7 +849,7 @@ impl BrowserContext {
         if let Some((navigation, document_id)) = self
             .web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
+            .navigation()
             .pending_document()
         {
             self.page_slot_for_target_mut(target_id)
@@ -970,7 +969,6 @@ impl BrowserContext {
         let token = self
             .web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
             .start_document_navigation();
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
@@ -996,7 +994,7 @@ impl BrowserContext {
     ) -> Option<moli_fetch::FetchCancelHandle> {
         self.web_contents_for_target(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
+            .navigation()
             .document_navigation_cancellation_handle(token)
     }
 
@@ -1009,7 +1007,6 @@ impl BrowserContext {
     ) -> bool {
         self.web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
             .arm_background_navigation_completion(token, additional_cancellation)
     }
 
@@ -1021,13 +1018,12 @@ impl BrowserContext {
     ) -> bool {
         self.web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
             .settle_background_navigation_completion(token)
     }
 
     pub(crate) fn has_inflight_background_navigation_for_target(&self, target_id: &str) -> bool {
         self.web_contents_for_target(target_id)
-            .is_some_and(|contents| contents.navigation.has_inflight_background_navigation())
+            .is_some_and(|contents| contents.navigation().has_inflight_background_navigation())
     }
 
     #[cfg(test)]
@@ -1040,7 +1036,7 @@ impl BrowserContext {
         let Some((navigation, document_id)) = self
             .web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
+            .navigation()
             .pending_document()
             .filter(|(navigation, _)| navigation == token)
         else {
@@ -1095,7 +1091,7 @@ impl BrowserContext {
     ) -> bool {
         self.web_contents_for_target(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
+            .navigation()
             .accepts_pending_document_navigation_event(token)
     }
 
@@ -1106,13 +1102,13 @@ impl BrowserContext {
     ) -> bool {
         self.web_contents_for_target(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
+            .navigation()
             .accepts_document_body_completion_event(token)
     }
 
     pub(crate) fn has_pending_document_navigation_for_target(&self, target_id: &str) -> bool {
         self.web_contents_for_target(target_id)
-            .is_some_and(|contents| contents.navigation.has_pending_document_navigation())
+            .is_some_and(|contents| contents.navigation().has_pending_document_navigation())
     }
 
     pub(in crate::conn) fn pending_navigation_id_for_loader(
@@ -1120,7 +1116,7 @@ impl BrowserContext {
         target_id: &str,
         loader_id: &str,
     ) -> Option<NavigationId> {
-        let controller = &self.web_contents_for_target(target_id)?.navigation;
+        let controller = self.web_contents_for_target(target_id)?.navigation();
         self.page_slot_for_target(target_id)?
             .cdp_navigation_loaders
             .iter()
@@ -1141,7 +1137,7 @@ impl BrowserContext {
             .ok_or("navigation WebContents unavailable")?;
         if contents.id() != load.web_contents_id()
             || !contents
-                .navigation
+                .navigation()
                 .accepts_document_preparation(load.navigation_id(), load.renderer_page())
         {
             return Err("stale navigation document candidate".to_owned());
@@ -1162,7 +1158,7 @@ impl BrowserContext {
             .loader_id_for_navigation(
                 self.web_contents_for_target(target_id)
                     .expect("registered Target must reference live WebContents")
-                    .navigation
+                    .navigation()
                     .current_document_navigation()?,
             )
     }
@@ -1173,7 +1169,7 @@ impl BrowserContext {
             .loader_id_for_navigation(
                 self.web_contents_for_target(target_id)
                     .expect("registered Target must reference live WebContents")
-                    .navigation
+                    .navigation()
                     .committed_document_navigation()?,
             )
     }
@@ -1192,7 +1188,7 @@ impl BrowserContext {
             .runtime_slot
             .page_slot_mut()
             .cdp_navigation_loaders
-            .retain(|(id, _)| contents.navigation.retains_navigation(*id));
+            .retain(|(id, _)| contents.navigation().retains_navigation(*id));
     }
 
     #[cfg(test)]
@@ -1204,7 +1200,6 @@ impl BrowserContext {
         if !self
             .web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
             .commit_pending_document_navigation_if_matches(token)
         {
             return false;
@@ -1221,7 +1216,6 @@ impl BrowserContext {
         if self
             .web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
             .clear_pending_document_navigation_if_matches(navigation)
         {
             if matches!(
@@ -1254,7 +1248,6 @@ impl BrowserContext {
             );
         self.web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
             .clear_document_navigation_state();
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
@@ -1416,7 +1409,7 @@ impl BrowserContext {
                     && binding.navigation.as_ref().is_none_or(|navigation| {
                         self.web_contents_for_target(target_id)
                             .expect("registered Target must reference live WebContents")
-                            .navigation
+                            .navigation()
                             .committed_document_navigation()
                             .as_ref()
                             == Some(navigation)
@@ -1575,7 +1568,7 @@ impl BrowserContext {
                     && binding.navigation.as_ref().is_none_or(|navigation| {
                         self.web_contents_for_target(target_id)
                             .expect("registered Target must reference live WebContents")
-                            .navigation
+                            .navigation()
                             .committed_document_navigation()
                             .as_ref()
                             == Some(navigation)
