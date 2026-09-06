@@ -9271,6 +9271,16 @@ async fn nested_worker_unhandled_error_routes_through_parent_worker_onerror() {
 #[tokio::test]
 async fn nested_worker_script_load_failure_is_async_error_event() {
     ensure_v8();
+    // Exercise an asynchronous load failure without depending on external DNS
+    // to reject example.test before the test's event deadline.
+    let (base_url, server) = spawn_path_response_http_server(vec![(
+        "/missing-child.js",
+        "HTTP/1.1 404 Not Found",
+        "text/javascript",
+        String::new(),
+        Duration::ZERO,
+    )])
+    .await;
     let mut handle = spawn_worker(
         r#"
         let result = "not-run";
@@ -9293,7 +9303,7 @@ async fn nested_worker_script_load_failure_is_async_error_event() {
         }
         "#
         .into(),
-        "http://example.test/parent.js".into(),
+        format!("{base_url}/parent.js"),
     );
 
     let msg = timeout(TIMEOUT, handle.recv())
@@ -9301,9 +9311,18 @@ async fn nested_worker_script_load_failure_is_async_error_event() {
         .expect("timed out")
         .expect("channel closed");
     assert_eq!(
-        expect_post_json(msg),
-        r#"{"constructed":true,"type":"error","messageIsNonEmpty":true,"filename":"http://example.test/missing-child.js"}"#
+        serde_json::from_str::<serde_json::Value>(&expect_post_json(msg)).unwrap(),
+        serde_json::json!({
+            "constructed": true,
+            "type": "error",
+            "messageIsNonEmpty": true,
+            "filename": format!("{base_url}/missing-child.js"),
+        })
     );
+    timeout(TIMEOUT, server)
+        .await
+        .expect("worker script request must reach the local fixture")
+        .expect("worker script fixture must complete");
 }
 
 #[tokio::test]
