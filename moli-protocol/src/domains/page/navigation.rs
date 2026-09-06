@@ -3195,25 +3195,14 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             }
         }
         network::MaterializedNavigationLoadOutcome::Download(navigation) => {
-            let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);
             commit_download_navigation_async(conn, out, state, navigation, command_context).await;
         }
         network::MaterializedNavigationLoadOutcome::Failed(navigation) => {
-            let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);
             let network::MaterializedFailedDocumentProgress {
                 error_text,
-                document_policy,
                 response_mode,
                 progress_gate,
             } = navigation;
-            if document_policy.invalidates_committed_document() {
-                let _ = conn
-                    .discard_loaded_page_after_failed_navigation_for_owner_async(
-                        &state.owner,
-                        &state.requested_url,
-                    )
-                    .await;
-            }
             activity::MainDocumentFailedNavigationActivity::new(
                 state,
                 progress_gate,

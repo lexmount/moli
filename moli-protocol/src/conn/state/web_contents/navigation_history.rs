@@ -22,8 +22,7 @@ impl WebContents {
         &mut self,
         snapshot: (String, String),
     ) {
-        self.navigation
-            .record_loaded_page_navigation_history(snapshot);
+        self.navigation.record_navigation_history_for_test(snapshot);
     }
 
     pub(in crate::conn::state) fn mark_renderer_crashed(&mut self) {

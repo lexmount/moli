@@ -2,6 +2,126 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
 use super::*;
 
+async fn assert_stale_fetch_completion_preserves_winning_navigation(method: &str) {
+    for loaded in [true, false] {
+        let mut ctx = TestContext::new();
+        if loaded {
+            with_loaded_http_document(
+                &mut ctx,
+                "https://navigation.example/committed",
+                "SID-1",
+                "TID-1",
+            )
+            .await;
+        } else {
+            ctx.conn
+                .install_browser_context_fixture_for_test(attached_browser_context());
+        }
+        ctx.enable_page_events_for_test(Some("SID-1"));
+        ctx.process_async(json!({
+            "id": 100, "sessionId": "SID-1", "method": "Fetch.enable",
+            "params": { "patterns": [{ "urlPattern": "*", "resourceType": "Document" }] }
+        }))
+        .await;
+        ctx.expect_result(100, json!({}), Some("SID-1"));
+
+        let mut requests = Vec::new();
+        for (id, path) in [(101, "superseded"), (102, "winner")] {
+            ctx.process_async(json!({
+                "id": id, "sessionId": "SID-1", "method": "Page.navigate",
+                "params": { "url": format!("https://navigation.example/{path}") }
+            }))
+            .await;
+            let expected_url = format!("https://navigation.example/{path}");
+            let pause = ctx
+                .wait_for_scheduler_message("exact held navigation request", |message| {
+                    message["method"] == "Fetch.requestPaused"
+                        && message["sessionId"] == "SID-1"
+                        && message["params"]["resourceType"] == "Document"
+                        && message["params"]["request"]["url"] == expected_url
+                })
+                .await;
+            assert_eq!(
+                pause["params"]["request"]["url"],
+                format!("https://navigation.example/{path}")
+            );
+            requests.push(pause["params"]["requestId"].clone());
+        }
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        let committed = context.target_document_id("TID-1");
+        let history = context.target_navigation_history_snapshot("TID-1");
+        assert_eq!(committed.is_some(), loaded);
+        assert!(context.has_pending_document_navigation_for_target("TID-1"));
+
+        let params = match method {
+            "Fetch.continueRequest" => json!({ "requestId": requests[0] }),
+            "Fetch.failRequest" => json!({
+                "requestId": requests[0], "errorReason": "Aborted"
+            }),
+            "Fetch.fulfillRequest" => json!({
+                "requestId": requests[0], "responseCode": 200,
+                "responseHeaders": [{ "name": "content-type", "value": "text/html" }],
+                "body": BASE64_STANDARD.encode("<title>superseded</title>")
+            }),
+            _ => unreachable!(),
+        };
+        ctx.process_async(json!({
+            "id": 103, "sessionId": "SID-1", "method": method, "params": params
+        }))
+        .await;
+        ctx.expect_result(103, json!({}), Some("SID-1"));
+        assert_eq!(take_response_by_id(&mut ctx, 101)["error"]["code"], -32000);
+
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        assert_eq!(
+            context.target_document_id("TID-1"),
+            committed,
+            "a stale {method} cannot retire the committed Browser Document"
+        );
+        assert_eq!(context.target_navigation_history_snapshot("TID-1"), history);
+        assert!(
+            context.has_pending_document_navigation_for_target("TID-1"),
+            "a stale {method} cannot cancel the winning Browser navigation"
+        );
+
+        ctx.process_async(json!({
+            "id": 104, "sessionId": "SID-1", "method": "Fetch.fulfillRequest",
+            "params": {
+                "requestId": requests[1], "responseCode": 200,
+                "responseHeaders": [{ "name": "content-type", "value": "text/html" }],
+                "body": BASE64_STANDARD.encode("<title>winner</title>")
+            }
+        }))
+        .await;
+        ctx.expect_result(104, json!({}), Some("SID-1"));
+        let response = take_response_by_id(&mut ctx, 102);
+        assert!(response.get("error").is_none(), "{response}");
+        assert_eq!(response["result"]["frameId"], "TID-1");
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        assert_ne!(context.target_document_id("TID-1"), committed);
+        assert_eq!(
+            context.loaded_page().unwrap().final_url().as_str(),
+            "https://navigation.example/winner"
+        );
+        assert!(!context.has_pending_document_navigation_for_target("TID-1"));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_fetch_continue_preserves_current_document_and_winning_navigation() {
+    assert_stale_fetch_completion_preserves_winning_navigation("Fetch.continueRequest").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_fetch_fail_preserves_current_document_and_winning_navigation() {
+    assert_stale_fetch_completion_preserves_winning_navigation("Fetch.failRequest").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_fetch_fulfill_preserves_current_document_and_winning_navigation() {
+    assert_stale_fetch_completion_preserves_winning_navigation("Fetch.fulfillRequest").await;
+}
+
 #[test]
 fn parse_binary_response_headers_decodes_nul_separated_header_block() {
     let headers =

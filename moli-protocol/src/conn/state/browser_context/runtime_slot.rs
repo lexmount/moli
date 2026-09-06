@@ -327,8 +327,7 @@ impl TargetRuntimeSlot {
                     .devtools_renderer_channel
                     .close(RendererAgentDetachReason::TargetCrashed);
             }
-            TargetPageAbsenceReason::NavigationFailed
-            | TargetPageAbsenceReason::NoTarget
+            TargetPageAbsenceReason::NoTarget
             | TargetPageAbsenceReason::InitialDocumentPageBuildPending
             | TargetPageAbsenceReason::InitialDocumentPageBuildInProgress => {
                 let _ = self
@@ -874,7 +873,6 @@ impl BrowserContext {
             TargetPageAbsenceReason::InitialDocumentPageBuildPending
             | TargetPageAbsenceReason::InitialDocumentPageBuildInProgress => None,
             TargetPageAbsenceReason::NoTarget
-            | TargetPageAbsenceReason::NavigationFailed
             | TargetPageAbsenceReason::TargetClosed
             | TargetPageAbsenceReason::TargetCrashed => None,
             #[cfg(test)]

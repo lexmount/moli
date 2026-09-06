@@ -156,15 +156,6 @@ impl BrowserContext {
         Some(committed)
     }
 
-    pub(crate) fn clear_target_pending_navigation_history_update(
-        &mut self,
-        target_id: &str,
-    ) -> Option<()> {
-        self.web_contents_for_target_mut(target_id)?
-            .clear_pending_navigation_history_update();
-        Some(())
-    }
-
     pub(super) fn clear_target_loaded_document_session_state(&mut self, target_id: &str) {
         if let Some(target) = self.page_targets.get_mut(target_id) {
             for session in target.devtools_sessions.states_mut() {
@@ -191,34 +182,6 @@ impl BrowserContext {
         let runtime = &mut self.page_targets.get_mut(target_id)?.runtime_slot;
         runtime.reset_subresource_cursor();
         runtime.reset_all_target_scoped_network_artifacts();
-        if let Some(page) = previous {
-            let _ = page.close_async().await;
-        }
-        Some(())
-    }
-
-    pub(crate) async fn discard_target_loaded_page_after_failed_navigation_async(
-        &mut self,
-        target_id: &str,
-        final_url: &Url,
-    ) -> Option<()> {
-        self.web_contents_for_target_mut(target_id)?
-            .mark_initial_empty_document_exited();
-        let target = self.page_targets.get_mut(target_id)?;
-        target.set_target_url(final_url.to_string());
-        target.set_target_security_origin(final_url.origin().ascii_serialization());
-        target
-            .owner_state
-            .clear_committed_document_navigation_state();
-        self.clear_target_loaded_document_session_state(target_id);
-        self.clear_document_navigation_state_for_target(target_id);
-        let previous = self.clear_loaded_page_with_reason_for_target(
-            target_id,
-            TargetPageAbsenceReason::NavigationFailed,
-        );
-        let runtime = &mut self.page_targets.get_mut(target_id)?.runtime_slot;
-        runtime.reset_subresource_cursor();
-        runtime.clear_websocket_artifacts();
         if let Some(page) = previous {
             let _ = page.close_async().await;
         }

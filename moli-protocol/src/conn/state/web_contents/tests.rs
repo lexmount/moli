@@ -19,6 +19,14 @@ pub(super) struct BrowserFixture {
 impl BrowserFixture {
     pub(super) async fn navigate(&mut self, title: &str) -> moli_core::browser::DocumentId {
         let navigation = self.contents.navigation.start_document_navigation();
+        self.complete_navigation(navigation, title).await
+    }
+
+    pub(super) async fn complete_navigation(
+        &mut self,
+        navigation: NavigationId,
+        title: &str,
+    ) -> moli_core::browser::DocumentId {
         let response = prepare(&mut self.start(navigation).unwrap(), title)
             .await
             .unwrap();

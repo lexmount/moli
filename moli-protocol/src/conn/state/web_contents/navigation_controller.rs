@@ -4,9 +4,9 @@
 use moli_core::browser::{DocumentId, NavigationId, WebContentsId};
 
 mod history;
-use history::NavigationHistoryState;
 pub use history::PageNavigationHistoryEntry;
 pub(crate) use history::{HistoryTraversalDestination, ResolvedHistoryTraversal};
+use history::{NavigationHistoryState, PendingNavigationHistoryUpdate};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InitialDocumentCreator {
@@ -109,6 +109,7 @@ impl InitialDocument {
 struct PendingNavigationRequest {
     navigation_id: NavigationId,
     document_id: DocumentId,
+    history_update: Option<PendingNavigationHistoryUpdate>,
     document_preparation: Option<(
         moli_core::browser::RendererPageResidenceIdentity,
         moli_fetch::FetchCancelHandle,
@@ -119,10 +120,14 @@ struct PendingNavigationRequest {
 }
 
 impl PendingNavigationRequest {
-    fn new(navigation_id: NavigationId) -> Self {
+    fn new(
+        navigation_id: NavigationId,
+        history_update: Option<PendingNavigationHistoryUpdate>,
+    ) -> Self {
         Self {
             navigation_id,
             document_id: DocumentId::allocate(),
+            history_update,
             document_preparation: None,
             cancellation_handles: vec![moli_fetch::FetchCancelHandle::new()],
             background_completion_pending: false,
@@ -259,7 +264,13 @@ impl NavigationController {
     pub(super) fn start_document_navigation(&mut self) -> NavigationId {
         self.cancel_initial_document_build();
         let navigation = NavigationId::allocate();
-        self.pending_navigation_request = Some(PendingNavigationRequest::new(navigation));
+        // The preflight intent moves into this request at Start. Supersession
+        // and cancellation drop only that request's intent; a late completion
+        // cannot clear or inherit a newer navigation's reload/traversal.
+        self.pending_navigation_request = Some(PendingNavigationRequest::new(
+            navigation,
+            self.history.take_pending_update(),
+        ));
         navigation
     }
 
@@ -299,6 +310,7 @@ impl NavigationController {
         self.cancel_initial_document_build();
         self.pending_navigation_request = None;
         self.committed_document_navigation = None;
+        self.history.clear_pending_update();
     }
 
     pub(crate) fn initial_empty_document_pending_cross_document_navigation(&self) -> bool {
@@ -550,10 +562,6 @@ impl NavigationController {
         self.history.mark_traverse_to_entry(entry_id);
     }
 
-    pub(super) fn clear_pending_navigation_history_update(&mut self) {
-        self.history.clear_pending_update();
-    }
-
     pub(crate) fn navigation_history_entry_url(&self, entry_id: i32) -> Option<String> {
         self.history.entry_url(entry_id)
     }
@@ -563,11 +571,16 @@ impl NavigationController {
     }
 
     pub(super) fn reset_navigation_history(&mut self) -> bool {
-        self.history.prune_all_but_current()
+        self.can_reset_navigation_history() && self.history.prune_all_but_current()
     }
 
     pub(super) fn can_reset_navigation_history(&self) -> bool {
-        self.history.can_prune_all_but_current()
+        !matches!(
+            self.pending_navigation_request
+                .as_ref()
+                .and_then(|request| request.history_update),
+            Some(PendingNavigationHistoryUpdate::TraverseToEntry(_))
+        ) && self.history.can_prune_all_but_current()
     }
 
     pub(super) fn record_loaded_page_navigation_history(
@@ -575,7 +588,20 @@ impl NavigationController {
         page_snapshot: (String, String),
     ) {
         let entry = self.navigation_history_entry_for_page_snapshot(page_snapshot);
-        self.history.record_loaded_entry(entry);
+        let update = self
+            .pending_navigation_request
+            .as_mut()
+            .expect("admitted navigation owns the history commit")
+            .history_update
+            .take();
+        self.history.record_loaded_entry(entry, update);
+    }
+
+    #[cfg(test)]
+    pub(super) fn record_navigation_history_for_test(&mut self, snapshot: (String, String)) {
+        let entry = self.navigation_history_entry_for_page_snapshot(snapshot);
+        let update = self.history.take_pending_update();
+        self.history.record_loaded_entry(entry, update);
     }
 
     pub(super) fn record_same_document_navigation_history(
@@ -651,6 +677,7 @@ impl super::WebContents {
         self.navigation.mark_initial_empty_document_materialized()
     }
 
+    #[cfg(test)]
     pub(in crate::conn::state) fn mark_initial_empty_document_exited(&mut self) {
         self.navigation.mark_initial_empty_document_exited()
     }
@@ -673,10 +700,6 @@ impl super::WebContents {
     ) {
         self.navigation
             .mark_next_navigation_history_traverse_to_entry(entry_id)
-    }
-
-    pub(in crate::conn::state) fn clear_pending_navigation_history_update(&mut self) {
-        self.navigation.clear_pending_navigation_history_update()
     }
 }
 
@@ -708,14 +731,18 @@ mod tests {
         });
 
         let reloaded_id = history.allocate_entry_id();
-        history.record_loaded_entry(PageNavigationHistoryEntry {
-            id: reloaded_id,
-            url: "https://example.test/reloaded".to_owned(),
-            user_typed_url: "https://example.test/reloaded".to_owned(),
-            title: "reloaded".to_owned(),
-            transition_type: "typed".to_owned(),
-            document_sequence_number: None,
-        });
+        let update = history.take_pending_update();
+        history.record_loaded_entry(
+            PageNavigationHistoryEntry {
+                id: reloaded_id,
+                url: "https://example.test/reloaded".to_owned(),
+                user_typed_url: "https://example.test/reloaded".to_owned(),
+                title: "reloaded".to_owned(),
+                transition_type: "typed".to_owned(),
+                document_sequence_number: None,
+            },
+            update,
+        );
 
         let (current_index, entries) = history.snapshot();
         assert_eq!(current_index, 0);
@@ -745,6 +772,7 @@ mod tests {
 
         owner.begin_initial_empty_document("about:blank".to_owned(), None, None);
         owner.mark_next_navigation_history_replace_initial_empty_document();
+        owner.start_document_navigation();
         owner.record_loaded_page_navigation_history((
             "https://example.test/direct".to_owned(),
             "direct".to_owned(),
