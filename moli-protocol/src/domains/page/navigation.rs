@@ -3264,52 +3264,78 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     let navigation_session_id = navigation_owner.session_id().map(str::to_owned);
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
-            let navigation = *navigation;
-            let inputs = if conn.accepts_pending_document_navigation_for_owner(&state.owner, &token)
-            {
-                conn.prepared_document_build_inputs_for_owner(&state.owner, navigation.final_url())
-            } else {
-                // Preserve the CDP supersession error without publishing an attachment.
-                Err("renderer channel navigation was superseded by a newer navigation".to_owned())
-            };
-            match inputs {
+            match conn.start_response_document_materialization_for_owner(
+                &state.owner,
+                token,
+                *navigation,
+            ) {
                 Err(error) => push_navigation_commit_error(out, &state, error),
-                Ok((policy, inspection)) => {
-                    // The renderer reservation already has its exact pending Document output
-                    // owner. Building it must not replace the current inspection binding:
-                    // failure or cancellation leaves the outgoing Document inspectable.
-                    match navigation.materialize(policy, inspection).await {
-                        Ok(navigation) => {
-                            let navigation = network::materialize_loaded_navigation_progress(
+                Ok(materialization) => match materialization.await {
+                    Ok(navigation) => {
+                        let (prepared, navigation) =
+                            network::materialize_loaded_navigation_progress(
                                 conn, &state, navigation,
                             );
-                            commit_loaded_navigation_async(
-                                conn,
-                                out,
-                                &token,
-                                state,
-                                navigation,
-                                true,
-                                command_context,
-                            )
-                            .await;
-                        }
-                        Err(error) => push_navigation_commit_error(out, &state, error),
+                        commit_loaded_navigation_async(
+                            conn,
+                            out,
+                            &token,
+                            state,
+                            prepared,
+                            navigation,
+                            None,
+                            command_context,
+                        )
+                        .await;
                     }
-                }
+                    Err(error) => push_navigation_commit_error(out, &state, error),
+                },
             }
         }
-        network::MaterializedNavigationLoadOutcome::Loaded(navigation) => {
-            commit_loaded_navigation_async(
-                conn,
-                out,
-                &token,
-                state,
-                *navigation,
-                false,
-                command_context,
-            )
-            .await;
+        network::MaterializedNavigationLoadOutcome::Loaded(page, navigation) => 'loaded: {
+            let Some(commit) = navigation.main_document_commit.as_ref() else {
+                push_navigation_commit_error(
+                    out,
+                    &state,
+                    "loaded navigation is missing its frozen main Document commit identity",
+                );
+                break 'loaded;
+            };
+            let destination = crate::conn::DocumentNavigationDestination {
+                url: navigation
+                    .network_error_page
+                    .as_ref()
+                    .map(|error| error.unreachable_url().clone())
+                    .unwrap_or_else(|| navigation.final_url.clone()),
+                security_origin: commit.security_origin.clone(),
+                secure_context_type: commit.secure_context_type.clone(),
+            };
+            let inspection_restore = conn.navigation_inspection_restore_for_owner(&state.owner);
+            match conn.start_loaded_document_navigation_for_owner(
+                &state.owner,
+                token,
+                page,
+                destination,
+                &navigation.page_creation_artifacts,
+            ) {
+                Err(error) => push_navigation_commit_error(out, &state, error),
+                Ok(preparation) => match preparation.await {
+                    Err(error) => push_navigation_commit_error(out, &state, format!("{error:#}")),
+                    Ok(prepared) => {
+                        commit_loaded_navigation_async(
+                            conn,
+                            out,
+                            &token,
+                            state,
+                            prepared,
+                            *navigation,
+                            inspection_restore,
+                            command_context,
+                        )
+                        .await
+                    }
+                },
+            }
         }
         network::MaterializedNavigationLoadOutcome::Download(navigation) => {
             let _ = conn.clear_pending_navigation_history_update_for_owner(&state.owner);

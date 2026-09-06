@@ -18,17 +18,24 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
     let committed = {
         let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
         let identity = navigation.main_document_commit.as_ref().unwrap();
-        let prepared = crate::conn::PreparedDocumentNavigation::new(
-            committed_document,
-            navigation.page,
-            navigation.final_url,
-            identity.security_origin.clone(),
-            identity.secure_context_type.clone(),
-            &artifacts,
-        )
-        .unwrap();
+        let prepared = browser_context
+            .start_loaded_document_navigation_for_target(
+                "TID-1",
+                committed_document,
+                navigation.page,
+                crate::conn::DocumentNavigationDestination {
+                    url: navigation.final_url,
+                    security_origin: identity.security_origin.clone(),
+                    secure_context_type: identity.secure_context_type.clone(),
+                },
+                &artifacts,
+                &Default::default(),
+            )
+            .unwrap()
+            .await
+            .unwrap();
         let committed = browser_context
-            .commit_loaded_navigation_for_target("TID-1", prepared)
+            .commit_loaded_navigation(prepared)
             .expect("document-content test Document should commit");
         assert!(committed.inspection_projection.is_ok());
         assert!(

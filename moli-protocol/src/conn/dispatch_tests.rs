@@ -2373,18 +2373,23 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         .await
         .expect("real navigation page should build");
     let artifacts = loaded.page_creation_artifacts;
-    let prepared = crate::conn::PreparedDocumentNavigation::new(
-        token,
-        loaded.page,
-        parsed_real_page_url.clone(),
-        "null".into(),
-        "InsecureScheme".into(),
-        &artifacts,
-    )
-    .unwrap();
+    let prepared = conn
+        .start_loaded_document_navigation_for_owner(
+            &owner,
+            token,
+            loaded.page,
+            crate::conn::DocumentNavigationDestination {
+                url: parsed_real_page_url.clone(),
+                security_origin: "null".into(),
+                secure_context_type: "InsecureScheme".into(),
+            },
+            &artifacts,
+        )
+        .unwrap()
+        .await
+        .unwrap();
     let committed = conn
-        .commit_loaded_navigation_for_owner(&owner, prepared)
-        .expect("real navigation page owner should exist")
+        .commit_loaded_navigation(prepared)
         .expect("real Browser Document should commit");
     assert!(committed.inspection_projection.is_ok());
     committed.previous_document_retirement.close().await;

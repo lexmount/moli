@@ -73,7 +73,7 @@ async fn commit_navigation_outcome_for_session_test(
 }
 
 #[tokio::test]
-async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
+async fn buffered_navigation_commits_to_admitted_inactive_owner_after_session_detach() {
     let mut conn = CdpConnection::new();
     let ambient_context = conn.new_browser_context("BID-ambient".to_owned());
     conn.insert_browser_context(ambient_context);
@@ -86,7 +86,7 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
     target_context.set_active_target_id("TID-target");
     target_context.attach_active_session("SID-target");
     target_context.begin_active_target_initial_empty_document("about:blank".to_owned());
-    target_context
+    let token = target_context
         .start_document_navigation_for_active_target("LOADER-target".to_owned())
         .expect("target should accept its synthetic navigation");
     conn.push_inactive_browser_context_fixture_for_test(target_context);
@@ -132,8 +132,34 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
         )
         .await
         .expect("buffered target navigation should prepare");
-    let loaded =
-        commit_navigation_outcome_for_session_test(&mut conn, outcome, Some("SID-target")).await;
+    let NavigationLoadOutcome::ResponseCommitReady(response) = outcome else {
+        panic!("buffered HTML must retain an unmaterialized renderer candidate");
+    };
+    let materialization = conn
+        .start_response_document_materialization_for_owner(&navigation.owner, token, *response)
+        .unwrap();
+    let context = conn.browser_context_by_id_mut("BID-target").unwrap();
+    assert!(context.dispose_devtools_session_for_target(
+        "TID-target",
+        "SID-target",
+        &moli_page_types::DevToolsSessionKey::Primary,
+    ));
+    context.set_active_target_id("TID-peer");
+    // Complete both halves of DevTools disposal: domain state and the service
+    // route. Resetting the primary domain slot alone does not detach its wire id.
+    conn.detach_known_session_event_plan("TID-target", "SID-target", None, None);
+    assert!(conn.session_route(Some("SID-target")).is_none());
+    assert!(
+        conn.target_runtime_session_state_for_owner(&navigation.owner)
+            .is_none()
+    );
+    let loaded = materialization.await.unwrap();
+    let commit = conn.commit_loaded_navigation(loaded.page).unwrap();
+    assert!(commit.inspection_projection.is_ok());
+    if let Some(continuation) = commit.committed_document_post_response_continuation {
+        continuation.release();
+    }
+    commit.previous_document_retirement.close().await;
     let target_engine = conn
         .browser_context_by_id("BID-target")
         .and_then(|context| context.page_navigation_engine("TID-target"))
@@ -148,13 +174,32 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
         "navigation completion must not replace the target's resident engine policy"
     );
     assert_eq!(
-        loaded.page.renderer_owner_local_host_id().as_u64(),
+        conn.browser_context_by_id("BID-target")
+            .unwrap()
+            .target_renderer_page_residence_identity("TID-target")
+            .unwrap()
+            .owner_local_host_id()
+            .as_u64(),
         target_renderer_owner,
         "the loaded Page and the engine handed to its target must share one renderer owner"
     );
     assert_ne!(
         target_renderer_owner, ambient_renderer_owner,
         "a browser-level Fetch action must not build an inactive target on the ambient context engine"
+    );
+    let context = conn.browser_context_by_id_mut("BID-target").unwrap();
+    assert_eq!(context.active_target_id(), Some("TID-peer"));
+    assert!(!context.target_has_loaded_page("TID-peer"));
+    assert!(!context.has_pending_document_navigation_for_target("TID-target"));
+    assert_eq!(
+        context
+            .target_navigation_history_snapshot("TID-target")
+            .unwrap()
+            .1
+            .last()
+            .unwrap()
+            .url,
+        "https://target.example/fulfilled"
     );
 }
 

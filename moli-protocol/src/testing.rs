@@ -330,19 +330,25 @@ impl TestContext {
         let main_document_commit = navigation
             .main_document_commit
             .expect("navigation fixture must retain its frozen Document commit identity");
-        let prepared = crate::conn::PreparedDocumentNavigation::new(
-            token,
-            navigation.page,
-            final_url,
-            main_document_commit.security_origin.clone(),
-            main_document_commit.secure_context_type.clone(),
-            &page_creation_artifacts,
-        )
-        .expect("navigation fixture must have matching Page creation artifacts");
+        let prepared = self
+            .conn
+            .start_loaded_document_navigation_for_owner(
+                &owner,
+                token,
+                navigation.page,
+                crate::conn::DocumentNavigationDestination {
+                    url: final_url,
+                    security_origin: main_document_commit.security_origin.clone(),
+                    secure_context_type: main_document_commit.secure_context_type.clone(),
+                },
+                &page_creation_artifacts,
+            )
+            .expect("navigation fixture must be admitted with matching Page creation artifacts")
+            .await
+            .expect("navigation fixture policy must apply");
         let page_commit = self
             .conn
-            .commit_loaded_navigation_for_owner(&owner, prepared)
-            .expect("navigation fixture target must remain installed")
+            .commit_loaded_navigation(prepared)
             .expect("navigation fixture Page commit must succeed");
         assert!(page_commit.inspection_projection.is_ok());
         assert!(

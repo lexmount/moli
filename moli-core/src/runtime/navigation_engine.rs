@@ -179,8 +179,8 @@ impl NavigationPageStorageHandles {
     }
 }
 
-pub struct BuiltDocumentPage {
-    pub page: Page,
+pub struct BuiltDocumentPage<P = Page> {
+    pub page: P,
     pub page_creation_diagnostics: RendererPageCreationDiagnostics,
     pub page_creation_artifacts: RendererPageCreationArtifacts,
     pub pending_download: Option<RendererPendingDownloadActivation>,

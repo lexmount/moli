@@ -4,6 +4,7 @@ use moli_core::{
         RendererPageResidenceIdentity, WebContentsId,
     },
     page::{Page, RendererPageCommandPostResponseContinuation, RendererPageCreationArtifacts},
+    runtime::{BuiltDocumentPage, PreparedDocumentPage, PreparedDocumentPagePolicy},
 };
 use url::Url;
 
@@ -11,13 +12,75 @@ use super::{DocumentHost, WebContents};
 
 /// Browser-only commit participant in the private migration residence (20/24b).
 /// No frontend identity, renderer attachment, arbitrary callback or Page lease.
+#[derive(Debug)]
 pub(crate) struct PreparedDocumentNavigation {
-    navigation: NavigationId,
+    identity: DocumentNavigationIdentity,
     page: Page,
     lifecycle: DocumentLifecycle,
     info: CommittedDocumentInfo,
 }
 
+/// Admission freezes the Browser objects before the move-owned work can await.
+/// Only WebContents can create this identity; Protocol cannot retarget a result.
+#[derive(Debug)]
+struct DocumentNavigationIdentity {
+    web_contents: WebContentsId,
+    frame_slot: MainFrameSlotId,
+    navigation: NavigationId,
+    document: DocumentId,
+    cancellation: moli_fetch::FetchCancelHandle,
+}
+
+pub(crate) struct DocumentNavigationDestination {
+    pub(crate) url: Url,
+    pub(crate) security_origin: String,
+    pub(crate) secure_context_type: String,
+}
+
+/// An admitted operation owns the candidate, not a reusable permission to
+/// configure or commit a different renderer reservation.
+pub(in crate::conn) struct AdmittedDocumentMaterialization {
+    identity: DocumentNavigationIdentity,
+    page: PreparedDocumentPage,
+    destination: DocumentNavigationDestination,
+}
+
+impl AdmittedDocumentMaterialization {
+    pub(in crate::conn) async fn materialize(
+        self,
+        policy: PreparedDocumentPagePolicy,
+    ) -> anyhow::Result<BuiltDocumentPage<PreparedDocumentNavigation>> {
+        anyhow::ensure!(
+            !self.identity.cancellation.is_cancelled(),
+            "canceled navigation document candidate"
+        );
+        let BuiltDocumentPage {
+            page,
+            page_creation_diagnostics,
+            page_creation_artifacts,
+            pending_download,
+        } = self.page.materialize(Some(policy)).await?;
+        anyhow::ensure!(
+            !self.identity.cancellation.is_cancelled(),
+            "canceled navigation document candidate"
+        );
+        let page = PreparedDocumentNavigation::new(
+            self.identity,
+            page,
+            self.destination,
+            &page_creation_artifacts,
+        )
+        .map_err(anyhow::Error::msg)?;
+        Ok(BuiltDocumentPage {
+            page,
+            page_creation_diagnostics,
+            page_creation_artifacts,
+            pending_download,
+        })
+    }
+}
+
+#[derive(Debug)]
 pub(in crate::conn) struct CommittedDocumentInfo {
     pub(in crate::conn) url: Url,
     pub(in crate::conn) title: String,
@@ -28,7 +91,7 @@ pub(in crate::conn) struct CommittedDocumentInfo {
 impl PreparedDocumentNavigation {
     /// Configure the move-owned Browser participant without borrowing its owner.
     /// These are effective values, never frontend registration/session identities.
-    pub(crate) async fn apply_document_policy(
+    async fn apply_document_policy(
         mut self,
         interception: (bool, Option<moli_core::page::SubresourceResourceType>),
         permissions: &[moli_core::page::PermissionOverrideRegistration],
@@ -50,15 +113,17 @@ impl PreparedDocumentNavigation {
     }
 
     pub(in crate::conn) fn navigation(&self) -> NavigationId {
-        self.navigation
+        self.identity.navigation
     }
 
-    pub(crate) fn new(
-        navigation: NavigationId,
+    pub(in crate::conn) fn web_contents_id(&self) -> WebContentsId {
+        self.identity.web_contents
+    }
+
+    fn new(
+        identity: DocumentNavigationIdentity,
         page: Page,
-        url: Url,
-        security_origin: String,
-        secure_context_type: String,
+        destination: DocumentNavigationDestination,
         artifacts: &RendererPageCreationArtifacts,
     ) -> Result<Self, &'static str> {
         if artifacts.lifecycle_snapshot.frame.page_id != page.renderer_page_id() {
@@ -68,14 +133,14 @@ impl PreparedDocumentNavigation {
             .ok_or("inconsistent navigation document lifecycle")?;
         let title = page.document_title();
         Ok(Self {
-            navigation,
+            identity,
             page,
             lifecycle,
             info: CommittedDocumentInfo {
-                url,
+                url: destination.url,
                 title,
-                security_origin,
-                secure_context_type,
+                security_origin: destination.security_origin,
+                secure_context_type: destination.secure_context_type,
             },
         })
     }
@@ -108,14 +173,91 @@ impl RetiringDocument {
 }
 
 impl WebContents {
+    fn document_navigation_identity(
+        &self,
+        navigation: NavigationId,
+    ) -> Result<DocumentNavigationIdentity, &'static str> {
+        let (_, document) = self
+            .navigation
+            .pending_document()
+            .filter(|(pending, _)| *pending == navigation)
+            .ok_or("stale navigation document candidate")?;
+        let cancellation = self
+            .navigation
+            .document_navigation_cancellation_handle(&navigation)
+            .ok_or("stale navigation document candidate")?;
+        if cancellation.is_cancelled() {
+            return Err("canceled navigation document candidate");
+        }
+        Ok(DocumentNavigationIdentity {
+            web_contents: self.id(),
+            frame_slot: self.main_frame.id(),
+            navigation,
+            document,
+            cancellation,
+        })
+    }
+
+    /// Start/configure/complete stays inside the Browser participant. The
+    /// returned future owns its Page and policy, never a Browser registry borrow.
+    pub(in crate::conn) fn start_loaded_document_navigation(
+        &self,
+        navigation: NavigationId,
+        page: Page,
+        destination: DocumentNavigationDestination,
+        artifacts: &RendererPageCreationArtifacts,
+        interception: (bool, Option<moli_core::page::SubresourceResourceType>),
+        permissions: Vec<moli_core::page::PermissionOverrideRegistration>,
+    ) -> Result<
+        impl std::future::Future<Output = anyhow::Result<PreparedDocumentNavigation>> + use<>,
+        &'static str,
+    > {
+        let identity = self.document_navigation_identity(navigation)?;
+        let prepared = PreparedDocumentNavigation::new(identity, page, destination, artifacts)?;
+        Ok(async move {
+            anyhow::ensure!(
+                !prepared.identity.cancellation.is_cancelled(),
+                "canceled navigation document candidate"
+            );
+            let prepared = prepared
+                .apply_document_policy(interception, &permissions)
+                .await?;
+            anyhow::ensure!(
+                !prepared.identity.cancellation.is_cancelled(),
+                "canceled navigation document candidate"
+            );
+            Ok(prepared)
+        })
+    }
+
+    pub(in crate::conn) fn start_document_materialization(
+        &self,
+        navigation: NavigationId,
+        page: PreparedDocumentPage,
+        destination: DocumentNavigationDestination,
+    ) -> Result<AdmittedDocumentMaterialization, &'static str> {
+        let identity = self.document_navigation_identity(navigation)?;
+        Ok(AdmittedDocumentMaterialization {
+            identity,
+            page,
+            destination,
+        })
+    }
+
     pub(in crate::conn) fn commit_document_navigation(
         &mut self,
         mut prepared: PreparedDocumentNavigation,
     ) -> Result<CommittedDocumentNavigation, &'static str> {
-        let Some((navigation, document_id)) = self
-            .navigation
-            .pending_document()
-            .filter(|(navigation, _)| *navigation == prepared.navigation)
+        let Some((navigation, document_id)) =
+            self.navigation
+                .pending_document()
+                .filter(|(navigation, document)| {
+                    *navigation == prepared.identity.navigation
+                        && *document == prepared.identity.document
+                        && self.id() == prepared.identity.web_contents
+                        && self.main_frame.id() == prepared.identity.frame_slot
+                        && !prepared.identity.cancellation.is_cancelled()
+                })
         else {
             return Err("stale navigation document candidate");
         };
@@ -174,6 +316,7 @@ mod tests {
     };
 
     async fn prepare(
+        contents: &WebContents,
         browser: &Browser,
         navigation: NavigationId,
         title: &str,
@@ -184,15 +327,22 @@ mod tests {
             .unwrap();
         let artifacts = page.take_page_creation_artifacts().unwrap();
         let url = page.final_url().clone();
-        PreparedDocumentNavigation::new(
-            navigation,
-            page,
-            url,
-            "null".into(),
-            "InsecureScheme".into(),
-            &artifacts,
-        )
-        .unwrap()
+        contents
+            .start_loaded_document_navigation(
+                navigation,
+                page,
+                DocumentNavigationDestination {
+                    url,
+                    security_origin: "null".into(),
+                    secure_context_type: "InsecureScheme".into(),
+                },
+                &artifacts,
+                (false, None),
+                Vec::new(),
+            )
+            .unwrap()
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -202,7 +352,7 @@ mod tests {
         let stable_owner = (contents.id(), contents.main_frame.id());
         let navigation = contents.navigation.start_document_navigation();
         let first = contents
-            .commit_document_navigation(prepare(&browser, navigation, "first").await)
+            .commit_document_navigation(prepare(&contents, &browser, navigation, "first").await)
             .unwrap();
         assert!(first.previous_document.is_none());
         first.retirement.close().await;
@@ -225,7 +375,7 @@ mod tests {
         let navigation = contents.navigation.start_document_navigation();
         let expected_document = contents.navigation.pending_document().unwrap().1;
         let committed = contents
-            .commit_document_navigation(prepare(&browser, navigation, "second").await)
+            .commit_document_navigation(prepare(&contents, &browser, navigation, "second").await)
             .unwrap();
 
         assert_eq!((committed.web_contents, committed.frame_slot), stable_owner);
@@ -273,7 +423,7 @@ mod tests {
         let mut contents = WebContents::default();
         let first = contents.navigation.start_document_navigation();
         let first = contents
-            .commit_document_navigation(prepare(&browser, first, "first").await)
+            .commit_document_navigation(prepare(&contents, &browser, first, "first").await)
             .unwrap();
         let old_document = first.document;
         let mut old_lifetime = Box::pin(
@@ -287,12 +437,12 @@ mod tests {
                 .wait(),
         );
         let stale = contents.navigation.start_document_navigation();
-        let stale = prepare(&browser, stale, "stale").await;
+        let stale = prepare(&contents, &browser, stale, "stale").await;
         let current = contents.navigation.start_document_navigation();
         let pending = contents.navigation.pending_document();
         let mut foreign = WebContents::default();
         let foreign_navigation = foreign.navigation.start_document_navigation();
-        let foreign_candidate = prepare(&browser, foreign_navigation, "foreign").await;
+        let foreign_candidate = prepare(&foreign, &browser, foreign_navigation, "foreign").await;
 
         for rejected in [stale, foreign_candidate] {
             assert_eq!(
@@ -332,7 +482,7 @@ mod tests {
         let mut contents = WebContents::default();
         let navigation = contents.navigation.start_document_navigation();
         let first = contents
-            .commit_document_navigation(prepare(&browser, navigation, "first").await)
+            .commit_document_navigation(prepare(&contents, &browser, navigation, "first").await)
             .unwrap();
         let mut lifetime = Box::pin(
             contents
@@ -358,16 +508,30 @@ mod tests {
         ] {
             let navigation = contents.navigation.start_document_navigation();
             let candidate_browser = Browser::new(BrowserConfig::default()).unwrap();
-            let prepared = prepare(&candidate_browser, navigation, "candidate").await;
+            let mut page = candidate_browser
+                .fetch("data:text/html,candidate")
+                .await
+                .unwrap();
+            let artifacts = page.take_page_creation_artifacts().unwrap();
+            let url = page.final_url().clone();
+            let preparation = contents
+                .start_loaded_document_navigation(
+                    navigation,
+                    page,
+                    DocumentNavigationDestination {
+                        url,
+                        security_origin: "null".into(),
+                        secure_context_type: "InsecureScheme".into(),
+                    },
+                    &artifacts,
+                    interception,
+                    permissions,
+                )
+                .unwrap();
             // Retire the candidate's independent renderer owner synchronously.
             // DevTools Page.crash is not a native-command admission fence.
             drop(candidate_browser);
-            assert!(
-                prepared
-                    .apply_document_policy(interception, &permissions)
-                    .await
-                    .is_err()
-            );
+            assert!(preparation.await.is_err());
             assert_eq!(
                 contents.main_frame.current_document.as_ref().unwrap().id,
                 first.document
@@ -406,38 +570,141 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn owned_preparation_observes_supersession_and_browser_retirement_without_a_borrow() {
+        let browser = Browser::new(BrowserConfig::default()).unwrap();
+        for retire in [false, true] {
+            let mut contents = WebContents::default();
+            let first = contents.navigation.start_document_navigation();
+            let first = contents
+                .commit_document_navigation(prepare(&contents, &browser, first, "first").await)
+                .unwrap();
+            let navigation = contents.navigation.start_document_navigation();
+            let mut page = browser.fetch("data:text/html,candidate").await.unwrap();
+            let artifacts = page.take_page_creation_artifacts().unwrap();
+            let destination = DocumentNavigationDestination {
+                url: page.final_url().clone(),
+                security_origin: "null".into(),
+                secure_context_type: "InsecureScheme".into(),
+            };
+            let pending = contents
+                .start_loaded_document_navigation(
+                    navigation,
+                    page,
+                    destination,
+                    &artifacts,
+                    (false, None),
+                    Vec::new(),
+                )
+                .unwrap();
+            if retire {
+                let closing = contents.begin_close();
+                assert_eq!(
+                    pending.await.unwrap_err().to_string(),
+                    "canceled navigation document candidate"
+                );
+                closing.close_async().await;
+            } else {
+                let replacement = contents.navigation.start_document_navigation();
+                assert_eq!(
+                    pending.await.unwrap_err().to_string(),
+                    "canceled navigation document candidate"
+                );
+                assert_eq!(
+                    contents.navigation.pending_document().unwrap().0,
+                    replacement
+                );
+                assert_eq!(
+                    contents.main_frame.current_document.as_ref().unwrap().id,
+                    first.document
+                );
+                assert_eq!(
+                    contents
+                        .navigation
+                        .navigation_history_snapshot(None)
+                        .1
+                        .len(),
+                    1
+                );
+            }
+            first.retirement.close().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn completion_validates_every_identity_captured_at_admission() {
+        let browser = Browser::new(BrowserConfig::default()).unwrap();
+        let mut contents = WebContents::default();
+        let navigation = contents.navigation.start_document_navigation();
+        let pending = contents.navigation.pending_document();
+        for mismatch in 0..3 {
+            let mut prepared = prepare(&contents, &browser, navigation, "candidate").await;
+            // Fault injection inside the native module: production callers
+            // cannot forge or rewrite any of these opaque participant fields.
+            match mismatch {
+                0 => prepared.identity.web_contents = WebContentsId::allocate(),
+                1 => prepared.identity.frame_slot = MainFrameSlotId::allocate(),
+                _ => prepared.identity.document = DocumentId::allocate(),
+            }
+            assert_eq!(
+                contents.commit_document_navigation(prepared).err(),
+                Some("stale navigation document candidate")
+            );
+            assert_eq!(contents.navigation.pending_document(), pending);
+            assert!(contents.main_frame.current_document.is_none());
+            assert!(
+                contents
+                    .navigation
+                    .navigation_history_snapshot(None)
+                    .1
+                    .is_empty()
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn candidate_requires_its_own_consistent_renderer_lifecycle() {
         let browser = Browser::new(BrowserConfig::default()).unwrap();
         let mut first = browser.fetch("data:text/html,first").await.unwrap();
         let artifacts = first.take_page_creation_artifacts().unwrap();
         let second = browser.fetch("data:text/html,second").await.unwrap();
-        let navigation = NavigationId::allocate();
+        let mut contents = WebContents::default();
+        let navigation = contents.navigation.start_document_navigation();
         let url = second.final_url().clone();
         assert_eq!(
-            PreparedDocumentNavigation::new(
-                navigation,
-                second,
-                url,
-                "null".into(),
-                "InsecureScheme".into(),
-                &artifacts
-            )
-            .err(),
+            contents
+                .start_loaded_document_navigation(
+                    navigation,
+                    second,
+                    DocumentNavigationDestination {
+                        url,
+                        security_origin: "null".into(),
+                        secure_context_type: "InsecureScheme".into(),
+                    },
+                    &artifacts,
+                    (false, None),
+                    Vec::new(),
+                )
+                .err(),
             Some("navigation lifecycle belongs to another renderer Page")
         );
         let mut inconsistent = artifacts;
         inconsistent.active_epoch.0 += 1;
         let url = first.final_url().clone();
         assert_eq!(
-            PreparedDocumentNavigation::new(
-                navigation,
-                first,
-                url,
-                "null".into(),
-                "InsecureScheme".into(),
-                &inconsistent
-            )
-            .err(),
+            contents
+                .start_loaded_document_navigation(
+                    navigation,
+                    first,
+                    DocumentNavigationDestination {
+                        url,
+                        security_origin: "null".into(),
+                        secure_context_type: "InsecureScheme".into(),
+                    },
+                    &inconsistent,
+                    (false, None),
+                    Vec::new(),
+                )
+                .err(),
             Some("inconsistent navigation document lifecycle")
         );
     }

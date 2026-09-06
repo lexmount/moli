@@ -30,8 +30,8 @@ use gate::{
     MainDocumentProgressPhase, MainDocumentProgressQueueHandle, MainDocumentProgressSource,
 };
 
+/// Protocol progress accompanies, but never owns or modifies, a Browser candidate.
 pub(crate) struct MaterializedLoadedDocumentProgress {
-    pub(crate) page: Page,
     pub(crate) pending_download: Option<RendererPendingDownloadActivation>,
     pub(crate) page_creation_artifacts: RendererPageCreationArtifacts,
     pub(crate) final_url: Url,
@@ -78,7 +78,7 @@ impl FailedNavigationDocumentPolicy {
 
 pub(crate) enum MaterializedNavigationLoadOutcome {
     ResponseCommitReady(Box<ResponseCommitReady>),
-    Loaded(Box<MaterializedLoadedDocumentProgress>),
+    Loaded(Page, Box<MaterializedLoadedDocumentProgress>),
     Download(MaterializedDownloadDocumentProgress),
     Failed(MaterializedFailedDocumentProgress),
 }
@@ -292,11 +292,11 @@ fn materialize_failed_navigation_progress(
     }
 }
 
-pub(crate) fn materialize_loaded_navigation_progress(
+pub(crate) fn materialize_loaded_navigation_progress<P>(
     conn: &mut CdpConnection,
     state: &NavigationDispatchState,
-    navigation: LoadedNavigation,
-) -> MaterializedLoadedDocumentProgress {
+    navigation: LoadedNavigation<P>,
+) -> (P, MaterializedLoadedDocumentProgress) {
     let LoadedNavigation {
         page,
         pending_download,
@@ -316,20 +316,22 @@ pub(crate) fn materialize_loaded_navigation_progress(
         Some(error_page) => network_error_page_progress_gate(conn, state, error_page.error_text()),
         None => document_progress_transfer.into_progress_gate(conn, state, &final_url),
     };
-    MaterializedLoadedDocumentProgress {
+    (
         page,
-        pending_download,
-        page_creation_artifacts,
-        final_url,
-        response_headers,
-        response_from_cache,
-        main_document_body,
-        initial_runtime_realms,
-        renderer_output_predecessor,
-        main_document_commit,
-        progress_gate,
-        network_error_page,
-    }
+        MaterializedLoadedDocumentProgress {
+            pending_download,
+            page_creation_artifacts,
+            final_url,
+            response_headers,
+            response_from_cache,
+            main_document_body,
+            initial_runtime_realms,
+            renderer_output_predecessor,
+            main_document_commit,
+            progress_gate,
+            network_error_page,
+        },
+    )
 }
 
 fn materialize_navigation_load_outcome(
@@ -342,9 +344,8 @@ fn materialize_navigation_load_outcome(
             MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation)
         }
         NavigationLoadOutcome::Loaded(navigation) => {
-            MaterializedNavigationLoadOutcome::Loaded(Box::new(
-                materialize_loaded_navigation_progress(conn, state, *navigation),
-            ))
+            let (page, progress) = materialize_loaded_navigation_progress(conn, state, *navigation);
+            MaterializedNavigationLoadOutcome::Loaded(page, Box::new(progress))
         }
         NavigationLoadOutcome::Download(navigation) => MaterializedNavigationLoadOutcome::Download(
             materialize_download_navigation_progress(conn, state, *navigation),

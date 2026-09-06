@@ -86,8 +86,9 @@ pub(crate) use bidi_channel_work::{
 };
 pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter};
 pub(crate) use browser_context::{
-    PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
-    SessionOwnerRuntimeFrontendEnableResult, TargetNavigationLoadInputs,
+    NavigationInspectionRestore, PageLifecycleEventsEnableResult,
+    SessionOwnerInspectorEnableResult, SessionOwnerRuntimeFrontendEnableResult,
+    TargetNavigationLoadInputs,
 };
 pub(crate) use command_owner_scope::CommandOwnerScope;
 pub use command_view::Cmd;
@@ -588,7 +589,9 @@ pub(crate) use state::{
     TargetJavaScriptDialog, TargetJavaScriptDialogScopeObserver, TargetPageSlot,
     TargetRuntimeSessionState,
 };
-pub(crate) use state::{LoadedNavigationPageCommit, PreparedDocumentNavigation};
+pub(crate) use state::{
+    DocumentNavigationDestination, LoadedNavigationPageCommit, PreparedDocumentNavigation,
+};
 pub(crate) use target::{
     PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,
     SessionDisposalTarget, TargetAttachSessionCommit, TargetClosureCleanupPlan, TargetEventPlan,

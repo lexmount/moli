@@ -1,5 +1,3 @@
-use url::Url;
-
 use crate::conn::{CdpConnection, CommandDispatchContext, NavigationDispatchState, NavigationId};
 use crate::domains::activity::{
     MainDocumentDownloadNavigationActivity, MainDocumentNavigationActivity,
@@ -9,7 +7,7 @@ use crate::domains::network::{
     MaterializedDownloadDocumentProgress, MaterializedLoadedDocumentProgress,
 };
 use moli_core::page::{
-    Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
+    RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
     RendererDocumentLifecycleMilestone, RendererPageCreationArtifacts, RendererRuntimeRealmInfo,
 };
 
@@ -18,12 +16,12 @@ pub(super) async fn commit_loaded_navigation_async(
     out: &mut CommandOutputBuffer,
     token: &NavigationId,
     state: NavigationDispatchState,
+    prepared: crate::conn::PreparedDocumentNavigation,
     navigation: MaterializedLoadedDocumentProgress,
-    configuration_applied_at_creation: bool,
+    inspection_restore: Option<crate::conn::NavigationInspectionRestore>,
     command_context: &mut CommandDispatchContext,
 ) {
     let MaterializedLoadedDocumentProgress {
-        page,
         pending_download,
         page_creation_artifacts,
         final_url,
@@ -32,27 +30,10 @@ pub(super) async fn commit_loaded_navigation_async(
         main_document_body,
         initial_runtime_realms,
         renderer_output_predecessor,
-        main_document_commit,
+        main_document_commit: _,
         progress_gate,
         network_error_page,
     } = navigation;
-    let target_url = network_error_page
-        .as_ref()
-        .map(|error_page| error_page.unreachable_url().clone())
-        .unwrap_or_else(|| final_url.clone());
-    let Some(main_document_commit) = main_document_commit else {
-        let error = "loaded navigation is missing its frozen main Document commit identity";
-        if state.navigate_id.is_some() {
-            out.push_error_after_messages(-32000, error);
-        } else {
-            tracing::warn!(
-                session_id = state.owner.session_id(),
-                loader_id = state.loader_id,
-                "{error} after early Page.navigate result"
-            );
-        }
-        return;
-    };
     let is_network_error_page = network_error_page.is_some();
     let (page_creation_artifacts, mut deferred_initial_renderer_document_lifecycle_events) =
         split_renderer_page_creation_lifecycle_at_load_boundary(page_creation_artifacts);
@@ -65,14 +46,10 @@ pub(super) async fn commit_loaded_navigation_async(
     let Some(()) = commit_and_project_loaded_navigation_async(
         conn,
         out,
-        token,
         navigation_activity.state(),
-        page,
-        &target_url,
-        &main_document_commit,
-        &page_creation_artifacts,
+        prepared,
         initial_runtime_realms,
-        configuration_applied_at_creation,
+        inspection_restore,
         command_context,
     )
     .await
@@ -216,49 +193,13 @@ pub(super) async fn commit_download_navigation_async(
 async fn commit_and_project_loaded_navigation_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
-    token: &NavigationId,
     state: &NavigationDispatchState,
-    page: Page,
-    target_url: &Url,
-    main_document_commit: &moli_core::page::RendererMainDocumentCommit,
-    page_creation_artifacts: &RendererPageCreationArtifacts,
+    prepared: crate::conn::PreparedDocumentNavigation,
     initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
-    configuration_applied_at_creation: bool,
+    inspection_restore: Option<crate::conn::NavigationInspectionRestore>,
     command_context: &mut CommandDispatchContext,
 ) -> Option<()> {
-    let commit_state = conn.prepare_loaded_navigation_commit_for_owner(&state.owner)?;
-    let prepared = match crate::conn::PreparedDocumentNavigation::new(
-        *token,
-        page,
-        target_url.clone(),
-        main_document_commit.security_origin.clone(),
-        main_document_commit.secure_context_type.clone(),
-        page_creation_artifacts,
-    ) {
-        Ok(prepared) => prepared,
-        Err(error) => {
-            super::navigation::push_navigation_commit_error(out, state, error);
-            return None;
-        }
-    };
-    let prepared = if configuration_applied_at_creation {
-        prepared
-    } else {
-        let permissions = conn.effective_permission_overrides_for_browser_context_id(
-            &commit_state.browser_context_id,
-        );
-        match prepared
-            .apply_document_policy(commit_state.fetch_subresource_config, &permissions)
-            .await
-        {
-            Ok(prepared) => prepared,
-            Err(error) => {
-                super::navigation::push_navigation_commit_error(out, state, format!("{error:#}"));
-                return None;
-            }
-        }
-    };
-    let commit = match conn.commit_loaded_navigation_for_owner(&state.owner, prepared)? {
+    let commit = match conn.commit_loaded_navigation(prepared) {
         Ok(commit) => commit,
         Err(error) => {
             super::navigation::push_navigation_commit_error(out, state, error.to_string());
@@ -272,9 +213,9 @@ async fn commit_and_project_loaded_navigation_async(
         .inspection_projection
         .map_err(anyhow::Error::from)
         .and_then(|()| {
-            if configuration_applied_at_creation {
+            let Some(commit_state) = inspection_restore else {
                 return Ok(None);
-            }
+            };
             let pending = conn
                 .runtime_session_owner_slot_for_owner(&state.owner)
                 .map_err(anyhow::Error::msg)?
@@ -350,7 +291,11 @@ async fn commit_and_project_loaded_navigation_async(
             .response_flush()
             .defer_until_response_flush(move || continuation.release());
     }
-    if inspection_available && commit_state.runtime_frontend_enabled {
+    if inspection_available
+        && conn
+            .target_runtime_session_state_for_owner(&state.owner)
+            .is_some_and(|state| state.runtime_frontend_enabled)
+    {
         let _ = conn
             .set_renderer_runtime_agent_owns_page_console_api_events_for_owner(&state.owner, true);
     }
