@@ -830,6 +830,103 @@ async fn cache_bypass_replaces_script_text_memory_entry() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn transport_replacement_preserves_cache_hits_and_revalidates_request_variants() -> Result<()>
+{
+    async fn fetch_variant(
+        client: &ResourceRequestClient,
+        url: &str,
+        script: bool,
+    ) -> Result<(String, bool)> {
+        let request = Request::get(url)?.with_page_network_policy();
+        if script {
+            let response = client
+                .fetch_cacheable_script_text_stream(
+                    request.with_script_fetch_metadata(ScriptFetchRequestMetadata::default()),
+                )
+                .await?;
+            Ok((response.body_text().to_owned(), response.from_cache))
+        } else {
+            let response = client
+                .fetch_raw_stream_with_cancel(
+                    request.with_resource_type(RequestResourceType::CssStyleSheet),
+                    FetchCancelHandle::new(),
+                )
+                .await?
+                .into_materialized_raw_response()
+                .await?;
+            Ok((
+                String::from_utf8(response.body_bytes().to_vec())?,
+                response.from_cache,
+            ))
+        }
+    }
+
+    for script in [true, false] {
+        let listener = TcpListener::bind("127.0.0.1:0").await?;
+        let addr = listener.local_addr()?;
+        let server = tokio::spawn(async move {
+            for body in ["first", "second"] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                read_http_request_head(&mut stream).await.unwrap();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nCache-Control: max-age=60\r\nVary: User-Agent\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len(),
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let url = format!("http://{addr}/variant");
+        let cookie_store = new_shared_browser_cookie_store();
+        let mut config = FetchConfig::default();
+        config.set_user_agent("Moli/First");
+        let (root, binding) = BrowserResourceRuntimeOwnerRoot::new(
+            BrowserResourceRuntimeOwner::new(&config, cookie_store.clone()),
+        );
+        let first = ResourceRequestClient::from_browser_resource_runtime(binding.current());
+        assert_eq!(
+            fetch_variant(&first, &url, script).await?,
+            ("first".to_owned(), false)
+        );
+
+        // A new backend with identical request defaults must keep the hit. No
+        // disk cache is configured, so an HTTP-cache fallback cannot mask this.
+        let same_variant =
+            ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
+                root.registrar()
+                    .replace_owned(BrowserResourceRuntimeOwner::new(
+                        &config,
+                        cookie_store.clone(),
+                    ))
+                    .unwrap(),
+                first.page_network_policy(),
+            );
+        assert_eq!(
+            fetch_variant(&same_variant, &url, script).await?,
+            ("first".to_owned(), true)
+        );
+
+        config.set_user_agent("Moli/Second");
+        let second = ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
+            root.registrar()
+                .replace_owned(BrowserResourceRuntimeOwner::new(&config, cookie_store))
+                .unwrap(),
+            first.page_network_policy(),
+        );
+        assert_eq!(
+            fetch_variant(&second, &url, script).await?,
+            ("second".to_owned(), false)
+        );
+        assert_eq!(
+            fetch_variant(&second, &url, script).await?,
+            ("second".to_owned(), true)
+        );
+        assert_eq!(second.memory_cache_diagnostics().entry_count, 1);
+        server.await?;
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn unique_script_text_fetches_stay_within_one_loader_memory_budget() -> Result<()> {
     const SCRIPT_COUNT: usize = 40;
     const SCRIPT_BYTES: usize = 256 * 1024;

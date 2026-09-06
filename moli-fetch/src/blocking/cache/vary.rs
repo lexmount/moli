@@ -31,7 +31,7 @@ const SUPPORTED_CACHE_REQUEST_HEADERS: &[&str] = &[
     "user-agent",
 ];
 
-pub(super) fn vary_headers_for_response(
+pub(crate) fn vary_headers_for_response(
     config: &FetchConfig,
     request: &Request,
     request_url: &Url,
@@ -50,7 +50,7 @@ pub(super) fn vary_headers_for_response(
     Some(out)
 }
 
-pub(super) fn vary_headers_match(
+pub(crate) fn vary_headers_match(
     config: &FetchConfig,
     request: &Request,
     request_url: &Url,

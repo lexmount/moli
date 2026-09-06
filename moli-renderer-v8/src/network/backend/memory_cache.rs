@@ -1,16 +1,16 @@
-//! Browser-resource-runtime scoped renderer memory cache.
+//! Browser-context scoped renderer memory cache.
 //!
-//! The cache deliberately outlives individual Document and Worker loaders. Its
-//! retained-byte budget is shared by every consumer of one browser resource
-//! runtime and must never be multiplied per execution context. Entries retain
-//! the owning Page cache partition, so a DevTools cache bypass can replace one
-//! Page's retained resource without rewriting a live peer Page's resource.
+//! The cache outlives individual Document/Worker loaders and transport rebuilds
+//! under the same Context owner root and storage. Its retained-byte budget must
+//! not be multiplied per execution context or backend replacement. Entries
+//! retain the owning Page cache partition, so a DevTools cache bypass can replace
+//! one Page's resource without rewriting a live peer Page's resource.
 
 use std::sync::{Arc, Weak};
 
 use indexmap::IndexMap;
 use moli_fetch::{BrowserRequestMetadata, RawResponse, Request, RequestResourceType, Response};
-use moli_http_cache::{cacheable_response_parts_policy, unix_now_ms};
+use moli_http_cache::{HttpCacheVaryHeader, cacheable_response_parts_policy, unix_now_ms};
 use parking_lot::Mutex;
 use tokio::sync::Notify;
 use url::Url;
@@ -89,11 +89,13 @@ enum MemoryCacheEntry {
     ScriptText {
         load: SharedScriptTextLoad,
         expires_at_unix_ms: Option<u64>,
+        vary_headers: Vec<HttpCacheVaryHeader>,
         retained_bytes: usize,
     },
     RawSubresource {
         response: Box<RawResponse>,
         expires_at_unix_ms: u64,
+        vary_headers: Vec<HttpCacheVaryHeader>,
         retained_bytes: usize,
     },
 }
@@ -313,19 +315,23 @@ impl SharedMemoryResourceCache {
     pub(in crate::network) fn lookup_script_text(
         &mut self,
         key: ScriptTextCacheKey,
+        matches_vary: impl FnOnce(&[HttpCacheVaryHeader]) -> bool,
     ) -> ScriptTextCacheLookup {
         let cache_key = MemoryCacheKey::ScriptText(key);
         if let Some(entry) = self.remove_entry(&cache_key) {
             let MemoryCacheEntry::ScriptText {
                 load,
                 expires_at_unix_ms,
+                vary_headers,
                 retained_bytes,
             } = entry
             else {
                 unreachable!("script cache key must map to a script cache entry");
             };
 
-            if expires_at_unix_ms.is_some_and(|expires_at| expires_at <= unix_now_ms()) {
+            if expires_at_unix_ms.is_some_and(|expires_at| expires_at <= unix_now_ms())
+                || !matches_vary(&vary_headers)
+            {
                 return self.insert_pending_script(cache_key);
             }
 
@@ -335,6 +341,7 @@ impl SharedMemoryResourceCache {
                 MemoryCacheEntry::ScriptText {
                     load: Arc::clone(&load),
                     expires_at_unix_ms,
+                    vary_headers,
                     retained_bytes,
                 },
             );
@@ -363,6 +370,7 @@ impl SharedMemoryResourceCache {
             MemoryCacheEntry::ScriptText {
                 load: Arc::clone(&load),
                 expires_at_unix_ms: None,
+                vary_headers: Vec::new(),
                 retained_bytes: 0,
             },
         );
@@ -379,6 +387,7 @@ impl SharedMemoryResourceCache {
         load: &SharedScriptTextLoad,
         request: &Request,
         result: &ScriptTextLoadResult,
+        vary_headers: Option<Vec<HttpCacheVaryHeader>>,
     ) {
         let cache_key = MemoryCacheKey::ScriptText(key.clone());
         let Some(entry) = self.remove_entry(&cache_key) else {
@@ -387,6 +396,7 @@ impl SharedMemoryResourceCache {
         let MemoryCacheEntry::ScriptText {
             load: cached_load,
             expires_at_unix_ms,
+            vary_headers: cached_vary_headers,
             retained_bytes,
         } = entry
         else {
@@ -398,6 +408,7 @@ impl SharedMemoryResourceCache {
                 MemoryCacheEntry::ScriptText {
                     load: cached_load,
                     expires_at_unix_ms,
+                    vary_headers: cached_vary_headers,
                     retained_bytes,
                 },
             );
@@ -410,13 +421,17 @@ impl SharedMemoryResourceCache {
         let Some(expires_at_unix_ms) = script_text_memory_cache_expiry(request, response) else {
             return;
         };
+        let Some(vary_headers) = vary_headers else {
+            return;
+        };
         if response.body_text().len() > self.resource_body_bytes_limit
             || response.body_bytes().len() > self.resource_body_bytes_limit
         {
             return;
         }
 
-        let retained_bytes = script_text_retained_bytes(key, response);
+        let retained_bytes = script_text_retained_bytes(key, response)
+            .saturating_add(vary_headers_retained_bytes(&vary_headers));
         if retained_bytes > self.retained_bytes_limit {
             return;
         }
@@ -425,6 +440,7 @@ impl SharedMemoryResourceCache {
             MemoryCacheEntry::ScriptText {
                 load: cached_load,
                 expires_at_unix_ms: Some(expires_at_unix_ms),
+                vary_headers,
                 retained_bytes,
             },
         );
@@ -434,18 +450,20 @@ impl SharedMemoryResourceCache {
     pub(in crate::network) fn lookup_raw_subresource(
         &mut self,
         key: &RawSubresourceCacheKey,
+        matches_vary: impl FnOnce(&[HttpCacheVaryHeader]) -> bool,
     ) -> Option<RawResponse> {
         let cache_key = MemoryCacheKey::RawSubresource(key.clone());
         let entry = self.remove_entry(&cache_key)?;
         let MemoryCacheEntry::RawSubresource {
             response,
             expires_at_unix_ms,
+            vary_headers,
             retained_bytes,
         } = entry
         else {
             unreachable!("raw cache key must map to a raw cache entry");
         };
-        if expires_at_unix_ms <= unix_now_ms() {
+        if expires_at_unix_ms <= unix_now_ms() || !matches_vary(&vary_headers) {
             return None;
         }
         let hit = response.as_ref().clone();
@@ -454,6 +472,7 @@ impl SharedMemoryResourceCache {
             MemoryCacheEntry::RawSubresource {
                 response,
                 expires_at_unix_ms,
+                vary_headers,
                 retained_bytes,
             },
         );
@@ -465,11 +484,13 @@ impl SharedMemoryResourceCache {
         key: RawSubresourceCacheKey,
         response: RawResponse,
         expires_at_unix_ms: u64,
+        vary_headers: Vec<HttpCacheVaryHeader>,
     ) {
         if response.body_bytes().len() > self.resource_body_bytes_limit {
             return;
         }
-        let retained_bytes = raw_subresource_retained_bytes(&key, &response);
+        let retained_bytes = raw_subresource_retained_bytes(&key, &response)
+            .saturating_add(vary_headers_retained_bytes(&vary_headers));
         if retained_bytes > self.retained_bytes_limit {
             return;
         }
@@ -481,6 +502,7 @@ impl SharedMemoryResourceCache {
             MemoryCacheEntry::RawSubresource {
                 response: Box::new(response),
                 expires_at_unix_ms,
+                vary_headers,
                 retained_bytes,
             },
         );
@@ -730,6 +752,14 @@ fn script_text_memory_cache_expiry(request: &Request, response: &Response) -> Op
     (expires_at > unix_now_ms()).then_some(expires_at)
 }
 
+fn vary_headers_retained_bytes(headers: &[HttpCacheVaryHeader]) -> usize {
+    headers.iter().fold(0usize, |bytes, header| {
+        bytes
+            .saturating_add(header.name.len())
+            .saturating_add(header.value.as_ref().map_or(0, String::len))
+    })
+}
+
 fn script_text_retained_bytes(key: &ScriptTextCacheKey, response: &Response) -> usize {
     script_text_key_retained_bytes(key)
         .saturating_add(response_head_retained_bytes(
@@ -833,17 +863,71 @@ mod tests {
         )
     }
 
+    #[test]
+    fn stale_completion_preserves_variant_metadata_and_its_retained_byte_budget() {
+        let request = script_request("https://cache.test/variant.js");
+        let key = script_text_cache_key(&request);
+        let mut cache = SharedMemoryResourceCache::default();
+        let ScriptTextCacheLookup::Owner(stale) =
+            cache.lookup_script_text(key.clone(), |vary| vary.is_empty())
+        else {
+            panic!("first script load");
+        };
+        let ScriptTextCacheLookup::Owner(winner) = cache.replace_script_text(key.clone()) else {
+            panic!("replacement script load");
+        };
+        let winner_vary = vec![HttpCacheVaryHeader {
+            name: "user-agent".to_owned(),
+            value: Some("Moli/Winner".to_owned()),
+        }];
+        let mut response = response(request.url.as_str(), "winner");
+        response
+            .headers
+            .push(("vary".to_owned(), "User-Agent".to_owned()));
+        let retained =
+            script_text_retained_bytes(&key, &response) + vary_headers_retained_bytes(&winner_vary);
+        let result = Ok(response);
+        cache.complete_script_text(&key, &winner, &request, &result, Some(winner_vary.clone()));
+        winner.finish(result.clone());
+        assert_eq!(cache.diagnostics().retained_bytes, retained);
+
+        cache.complete_script_text(
+            &key,
+            &stale,
+            &request,
+            &result,
+            Some(vec![HttpCacheVaryHeader {
+                name: "user-agent".to_owned(),
+                value: Some("Moli/Stale".to_owned()),
+            }]),
+        );
+        let ScriptTextCacheLookup::CompletedHit(hit) =
+            cache.lookup_script_text(key.clone(), |vary| vary == winner_vary)
+        else {
+            panic!("stale completion must not replace the winning variant");
+        };
+        assert_eq!(hit.unwrap().body_text(), "winner");
+        assert_eq!(cache.diagnostics().retained_bytes, retained);
+        assert!(matches!(
+            cache.lookup_script_text(key, |vary| vary.is_empty()),
+            ScriptTextCacheLookup::Owner(_)
+        ));
+        assert_eq!(cache.diagnostics().retained_bytes, 0);
+    }
+
     fn insert_script(
         cache: &mut SharedMemoryResourceCache,
         request: &Request,
         response: Response,
     ) -> SharedScriptTextLoad {
         let key = script_text_cache_key(request);
-        let ScriptTextCacheLookup::Owner(load) = cache.lookup_script_text(key.clone()) else {
+        let ScriptTextCacheLookup::Owner(load) =
+            cache.lookup_script_text(key.clone(), |vary| vary.is_empty())
+        else {
             panic!("new script key should own its load");
         };
         let result = Ok(response);
-        cache.complete_script_text(&key, &load, request, &result);
+        cache.complete_script_text(&key, &load, request, &result, Some(Vec::new()));
         load.finish(result);
         load
     }
@@ -944,7 +1028,7 @@ mod tests {
         insert_script(&mut cache, &requests[0], responses[0].clone());
         insert_script(&mut cache, &requests[1], responses[1].clone());
         assert!(matches!(
-            cache.lookup_script_text(keys[0].clone()),
+            cache.lookup_script_text(keys[0].clone(), |vary| vary.is_empty()),
             ScriptTextCacheLookup::CompletedHit(_)
         ));
         insert_script(&mut cache, &requests[2], responses[2].clone());
@@ -959,12 +1043,14 @@ mod tests {
         let request = script_request("https://cache.test/large.js");
         let key = script_text_cache_key(&request);
         let mut cache = SharedMemoryResourceCache::with_limits(1024, 32);
-        let ScriptTextCacheLookup::Owner(load) = cache.lookup_script_text(key.clone()) else {
+        let ScriptTextCacheLookup::Owner(load) =
+            cache.lookup_script_text(key.clone(), |vary| vary.is_empty())
+        else {
             panic!("new script key should own its load");
         };
         let result = Ok(response(request.url.as_str(), &"x".repeat(64)));
 
-        cache.complete_script_text(&key, &load, &request, &result);
+        cache.complete_script_text(&key, &load, &request, &result, Some(Vec::new()));
         load.finish(result);
 
         assert!(!cache.contains_script_text(&key));
@@ -976,7 +1062,9 @@ mod tests {
         let request = script_request("https://cache.test/expanded.js");
         let key = script_text_cache_key(&request);
         let mut cache = SharedMemoryResourceCache::with_limits(1024, 32);
-        let ScriptTextCacheLookup::Owner(load) = cache.lookup_script_text(key.clone()) else {
+        let ScriptTextCacheLookup::Owner(load) =
+            cache.lookup_script_text(key.clone(), |vary| vary.is_empty())
+        else {
             panic!("new script key should own its load");
         };
         let response = Response::from_head_and_body(
@@ -996,7 +1084,7 @@ mod tests {
         );
         let result = Ok(response);
 
-        cache.complete_script_text(&key, &load, &request, &result);
+        cache.complete_script_text(&key, &load, &request, &result, Some(Vec::new()));
         load.finish(result);
 
         assert!(!cache.contains_script_text(&key));
@@ -1021,7 +1109,7 @@ mod tests {
             SharedMemoryResourceCache::with_limits(script_weight.max(raw_weight), usize::MAX);
 
         insert_script(&mut cache, &script_request, script_response);
-        cache.insert_raw_subresource(raw_key.clone(), raw_response, u64::MAX);
+        cache.insert_raw_subresource(raw_key.clone(), raw_response, u64::MAX, Vec::new());
 
         assert!(!cache.contains_script_text(&script_key));
         assert!(cache.contains_raw_subresource(&raw_key));
@@ -1033,7 +1121,9 @@ mod tests {
         let request = script_request("https://cache.test/expired.js");
         let key = script_text_cache_key(&request);
         let mut cache = SharedMemoryResourceCache::with_limits(usize::MAX, usize::MAX);
-        let ScriptTextCacheLookup::Owner(load) = cache.lookup_script_text(key.clone()) else {
+        let ScriptTextCacheLookup::Owner(load) =
+            cache.lookup_script_text(key.clone(), |vary| vary.is_empty())
+        else {
             panic!("new script key should own its load");
         };
         let result = Ok(response(request.url.as_str(), "expired"));
@@ -1043,13 +1133,14 @@ mod tests {
             MemoryCacheEntry::ScriptText {
                 load: Arc::clone(&load),
                 expires_at_unix_ms: Some(0),
+                vary_headers: Vec::new(),
                 retained_bytes: 0,
             },
         );
         load.finish(result);
 
         assert!(matches!(
-            cache.lookup_script_text(key),
+            cache.lookup_script_text(key, |vary| vary.is_empty()),
             ScriptTextCacheLookup::Owner(_)
         ));
     }
@@ -1068,7 +1159,7 @@ mod tests {
         let mut cache = SharedMemoryResourceCache::with_limits(1024 * 1024, 4096);
 
         insert_script(&mut cache, &script_request, script_response);
-        cache.insert_raw_subresource(raw_key, raw_response, u64::MAX);
+        cache.insert_raw_subresource(raw_key, raw_response, u64::MAX, Vec::new());
 
         let diagnostics = cache.diagnostics();
         assert_eq!(diagnostics.entry_count, 2);
@@ -1089,7 +1180,7 @@ mod tests {
         let mut cache = SharedMemoryResourceCache::with_limits(usize::MAX, usize::MAX);
 
         let ScriptTextCacheLookup::Owner(expired_load) =
-            cache.lookup_script_text(expired_key.clone())
+            cache.lookup_script_text(expired_key.clone(), |vary| vary.is_empty())
         else {
             panic!("new expired script key should own its load");
         };
@@ -1099,6 +1190,7 @@ mod tests {
             MemoryCacheEntry::ScriptText {
                 load: expired_load,
                 expires_at_unix_ms: Some(0),
+                vary_headers: Vec::new(),
                 retained_bytes: 128,
             },
         );
