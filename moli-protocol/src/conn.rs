@@ -106,7 +106,6 @@ pub(crate) use cookie_owner::{
 pub use devtools_command::DevToolsCommandDispatchOutcome;
 pub(crate) use devtools_command::DevToolsCommandExecutionOutput;
 pub use dispatch::{CdpCommandTaskStep, CompletedCdpCommandDispatch, PendingCdpCommandDispatch};
-pub(crate) use downloads::SharedDownloadRegistry;
 pub(crate) use fetch_support::PendingStreamingDocumentResponseNavigation;
 pub(crate) use fetch_support::{
     ClaimedSubresourceContinueRequest, CompletedFetchResponseBodyStreamReadDispatch,
@@ -335,10 +334,6 @@ impl CommandResponseFlushContext {
         }
     }
 
-    pub(crate) fn is_active(&self) -> bool {
-        self.receiver.is_some()
-    }
-
     pub(crate) fn receiver(&self) -> Option<tokio::sync::watch::Receiver<bool>> {
         self.receiver.clone()
     }
@@ -563,8 +558,8 @@ pub use state::{
 pub(crate) use state::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles,
     BrowserContextStoragePartitionHandles, CommittedRendererAgentAttachment,
-    CommittedRendererDocumentBinding, CompletedDownloadBody, CompletedDownloadBodyArtifact,
-    ContextNetworkPolicy, DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot,
+    CommittedRendererDocumentBinding, CompletedDownloadBodyArtifact, ContextNetworkPolicy,
+    DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot,
     DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
     DevToolsLogViolationThreshold, DocumentId, DuplicatePendingRendererCommand,
     EmulatedNetworkConditions, EmulatedViewportSurface, EmulationPolicyChange,
@@ -1213,7 +1208,6 @@ pub struct CdpConnection {
     initial_storage_partition: CdpInitialStoragePartitionOwner,
     pub(crate) global_io_streams: HashMap<String, IoStreamState>,
     pub(crate) tracing_state: crate::domains::tracing::TracingState,
-    download_registry: SharedDownloadRegistry,
 
     // Transport/scheduler integration hooks. These are channels out of the
     // renderer/browser owner into the outer CDP scheduler; they should not grow
@@ -1517,7 +1511,6 @@ impl CdpConnection {
             initial_storage_partition,
             global_io_streams: HashMap::new(),
             tracing_state: crate::domains::tracing::TracingState::default(),
-            download_registry: SharedDownloadRegistry::default(),
             scheduler_hooks: CdpSchedulerHooks::default(),
             target_host_lifecycle_observer: None,
             scheduler_state: CdpConnectionSchedulerState::default(),
