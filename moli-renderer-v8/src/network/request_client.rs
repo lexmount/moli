@@ -333,7 +333,11 @@ impl ResourceRequestClient {
         let lookup = {
             let mut cache = self.resource_runtime.memory_cache().lock();
             if request.cache_mode().allows_memory_cache_lookup() {
-                cache.lookup_script_text(key.clone())
+                cache.lookup_script_text(key.clone(), |vary| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers_match(&request, vary)
+                })
             } else {
                 cache.replace_script_text(key.clone())
             }
@@ -419,7 +423,17 @@ impl ResourceRequestClient {
         self.resource_runtime
             .memory_cache()
             .lock()
-            .complete_script_text(&key, &load, &cache_request, &result);
+            .complete_script_text(
+                &key,
+                &load,
+                &cache_request,
+                &result,
+                result.as_ref().ok().and_then(|response| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers(&cache_request, &response.headers)
+                }),
+            );
         load.finish(result.clone());
         result.map_err(anyhow::Error::msg)
     }
@@ -513,7 +527,11 @@ impl ResourceRequestClient {
         let lookup = {
             let mut cache = self.resource_runtime.memory_cache().lock();
             if request.cache_mode().allows_memory_cache_lookup() {
-                cache.lookup_script_text(key.clone())
+                cache.lookup_script_text(key.clone(), |vary| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers_match(&request, vary)
+                })
             } else {
                 cache.replace_script_text(key.clone())
             }
@@ -615,6 +633,12 @@ impl ResourceRequestClient {
                         &owner_load,
                         &callback_cache_request,
                         &result,
+                        result.as_ref().ok().and_then(|response| {
+                            request_client
+                                .resource_runtime
+                                .client()
+                                .cache_vary_headers(&callback_cache_request, &response.headers)
+                        }),
                     );
                 owner_load.finish(result.clone());
             },
@@ -623,7 +647,7 @@ impl ResourceRequestClient {
             self.resource_runtime
                 .memory_cache()
                 .lock()
-                .complete_script_text(&key, &load, &cache_request, &result);
+                .complete_script_text(&key, &load, &cache_request, &result, None);
             load.finish(result);
         }
         Ok(())
@@ -689,7 +713,11 @@ impl ResourceRequestClient {
                 .resource_runtime
                 .memory_cache()
                 .lock()
-                .lookup_raw_subresource(cache_key)
+                .lookup_raw_subresource(cache_key, |vary| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers_match(&request, vary)
+                })
         {
             return streaming_raw_response_from_cached_subresource(cached);
         }
@@ -727,7 +755,11 @@ impl ResourceRequestClient {
                 .resource_runtime
                 .memory_cache()
                 .lock()
-                .lookup_raw_subresource(cache_key)
+                .lookup_raw_subresource(cache_key, |vary| {
+                    self.resource_runtime
+                        .client()
+                        .cache_vary_headers_match(&request, vary)
+                })
         {
             return Ok(NetworkFetchResult::without_request_observation(
                 streaming_raw_response_from_cached_subresource(cached)?,
@@ -821,11 +853,19 @@ impl ResourceRequestClient {
                 let materialized = RawResponse::from_head_and_body(response.head(), body);
                 if let Some(expires_at_unix_ms) =
                     raw_subresource_memory_cache_expiry(&request, &materialized)
+                    && let Some(vary_headers) = resource_runtime
+                        .client()
+                        .cache_vary_headers(&request, &materialized.headers)
                 {
                     resource_runtime
                         .memory_cache()
                         .lock()
-                        .insert_raw_subresource(cache_key, materialized, expires_at_unix_ms);
+                        .insert_raw_subresource(
+                            cache_key,
+                            materialized,
+                            expires_at_unix_ms,
+                            vary_headers,
+                        );
                 }
             }
 

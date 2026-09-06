@@ -195,6 +195,29 @@ impl FetchClientHandle {
         Arc::clone(&self.cookie_store)
     }
 
+    /// Captures effective request values for a cacheable response's Vary fields.
+    /// Memory and HTTP caches use the same supported-header and config rules.
+    pub fn cache_vary_headers(
+        &self,
+        request: &Request,
+        response_headers: &[(String, String)],
+    ) -> Option<Vec<moli_http_cache::HttpCacheVaryHeader>> {
+        crate::blocking::vary_headers_for_response(
+            &self.config,
+            request,
+            &request.url,
+            response_headers,
+        )
+    }
+
+    pub fn cache_vary_headers_match(
+        &self,
+        request: &Request,
+        vary_headers: &[moli_http_cache::HttpCacheVaryHeader],
+    ) -> bool {
+        crate::blocking::vary_headers_match(&self.config, request, &request.url, vary_headers)
+    }
+
     /// Idempotently asks the semantic owner to stop without joining it.
     /// Structured owner roots use this when the last external runtime lease is
     /// released; only [`FetchClient`] may subsequently join.

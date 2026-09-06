@@ -25,11 +25,12 @@ use crate::network::loads::{
 static NEXT_BROWSER_RESOURCE_RUNTIME_ID: AtomicU64 = AtomicU64::new(0);
 static NEXT_BROWSER_RESOURCE_OWNER_ROOT_ID: AtomicU64 = AtomicU64::new(0);
 
-/// Long-lived transport and renderer memory-cache state for one browser context.
+/// Request-side transport lease and Context-owned renderer memory cache.
 ///
-/// Clones intentionally share the libcurl/HTTP runtime, cookie store, and one
-/// bounded renderer memory cache. It must not acquire mutable Page, Document,
-/// Worker, or request-delivery state.
+/// Clones share the exact libcurl/HTTP runtime and cookie store. Transport
+/// replacements under the same owner root and storage retain one bounded
+/// memory cache, including live peer Pages' resource partitions. This handle
+/// must not acquire mutable Page, Document, Worker, or request-delivery state.
 #[derive(Clone)]
 pub struct BrowserResourceRuntime {
     inner: Arc<BrowserResourceRuntimeInner>,
@@ -54,8 +55,7 @@ pub struct BrowserResourceRuntimeOwner {
 /// semantic thread.
 #[derive(Debug)]
 pub struct BrowserResourceRuntimeOwnerRegistration {
-    runtime: BrowserResourceRuntime,
-    owner: BrowserResourceRuntimeOwner,
+    fetch_owner: FetchClient,
     _thread_affine: PhantomData<Rc<()>>,
 }
 
@@ -124,9 +124,9 @@ impl BrowserResourceRuntimeBinding {
 
 struct BrowserResourceRuntimeInner {
     id: u64,
-    owner_root_id: AtomicU64,
+    owner_root_id: u64,
     client: FetchClientHandle,
-    memory_cache: Mutex<SharedMemoryResourceCache>,
+    memory_cache: Arc<Mutex<SharedMemoryResourceCache>>,
     detached_keepalive_loads: DetachedKeepaliveLoadRegistry,
 }
 
@@ -138,49 +138,16 @@ impl BrowserResourceRuntimeOwner {
         config: &FetchConfig,
         cookie_store: SharedBrowserCookieStore,
     ) -> BrowserResourceRuntimeOwnerRegistration {
-        let fetch_owner = FetchClient::new(config, cookie_store);
-        let runtime_id = NEXT_BROWSER_RESOURCE_RUNTIME_ID
-            .fetch_add(1, Ordering::Relaxed)
-            .saturating_add(1);
-        let runtime = BrowserResourceRuntime {
-            inner: Arc::new(BrowserResourceRuntimeInner {
-                id: runtime_id,
-                owner_root_id: AtomicU64::new(0),
-                client: fetch_owner.handle(),
-                memory_cache: Mutex::new(SharedMemoryResourceCache::default()),
-                detached_keepalive_loads: DetachedKeepaliveLoadRegistry::default(),
-            }),
-        };
-        let owner = Self {
-            runtime_id,
-            runtime: Arc::downgrade(&runtime.inner),
-            fetch_owner,
-            _thread_affine: PhantomData,
-        };
         BrowserResourceRuntimeOwnerRegistration {
-            runtime,
-            owner,
+            fetch_owner: FetchClient::new(config, cookie_store),
             _thread_affine: PhantomData,
         }
     }
 }
 
 impl BrowserResourceRuntime {
-    fn bind_owner_root(&self, root_id: u64) -> Result<(), &'static str> {
-        match self.inner.owner_root_id.compare_exchange(
-            0,
-            root_id,
-            Ordering::AcqRel,
-            Ordering::Acquire,
-        ) {
-            Ok(_) => Ok(()),
-            Err(existing) if existing == root_id => Ok(()),
-            Err(_) => Err("browser resource runtime belongs to another owner root"),
-        }
-    }
-
     fn owner_root_id(&self) -> u64 {
-        self.inner.owner_root_id.load(Ordering::Acquire)
+        self.inner.owner_root_id
     }
 
     pub fn cookie_store(&self) -> SharedBrowserCookieStore {
@@ -269,8 +236,32 @@ impl BrowserResourceRuntimeOwner {
 }
 
 impl BrowserResourceRuntimeOwnerRegistration {
-    fn into_parts(self) -> (BrowserResourceRuntime, BrowserResourceRuntimeOwner) {
-        (self.runtime, self.owner)
+    fn into_parts(
+        self,
+        owner_root_id: u64,
+        memory_cache: Arc<Mutex<SharedMemoryResourceCache>>,
+    ) -> (BrowserResourceRuntime, BrowserResourceRuntimeOwner) {
+        // No runtime handle exists before registration. Root identity and cache
+        // residence are immutable from construction, not a later mutable bind.
+        let runtime_id = NEXT_BROWSER_RESOURCE_RUNTIME_ID
+            .fetch_add(1, Ordering::Relaxed)
+            .saturating_add(1);
+        let runtime = BrowserResourceRuntime {
+            inner: Arc::new(BrowserResourceRuntimeInner {
+                id: runtime_id,
+                owner_root_id,
+                client: self.fetch_owner.handle(),
+                memory_cache,
+                detached_keepalive_loads: DetachedKeepaliveLoadRegistry::default(),
+            }),
+        };
+        let owner = BrowserResourceRuntimeOwner {
+            runtime_id,
+            runtime: Arc::downgrade(&runtime.inner),
+            fetch_owner: self.fetch_owner,
+            _thread_affine: PhantomData,
+        };
+        (runtime, owner)
     }
 }
 
@@ -306,8 +297,18 @@ impl BrowserResourceRuntimeOwnerSet {
         if self.terminal {
             return Err("browser resource runtime owner root is shut down");
         }
-        let (runtime, owner) = registration.into_parts();
-        runtime.bind_owner_root(self.root_id)?;
+        let memory_cache = {
+            let current = self.binding.current();
+            if Arc::ptr_eq(
+                &current.cookie_store(),
+                &registration.fetch_owner.cookie_store(),
+            ) {
+                Arc::clone(&current.inner.memory_cache)
+            } else {
+                Arc::default()
+            }
+        };
+        let (runtime, owner) = registration.into_parts(self.root_id, memory_cache);
         debug_assert_eq!(owner.runtime_id, runtime.runtime_id_for_diagnostics());
 
         // This is one closed operation over a root-bound binding: no arbitrary
@@ -414,10 +415,7 @@ impl BrowserResourceRuntimeOwnerRoot {
         let root_id = NEXT_BROWSER_RESOURCE_OWNER_ROOT_ID
             .fetch_add(1, Ordering::Relaxed)
             .saturating_add(1);
-        let (runtime, owner) = initial.into_parts();
-        runtime
-            .bind_owner_root(root_id)
-            .expect("initial browser resource runtime must be unregistered");
+        let (runtime, owner) = initial.into_parts(root_id, Arc::default());
         let binding = BrowserResourceRuntimeBinding::new(root_id, runtime);
         let owners = BrowserResourceRuntimeOwnerSet::new(root_id, binding.clone(), owner);
         (
@@ -580,7 +578,7 @@ mod tests {
 
     use anyhow::Result;
     use moli_cookie_jar::new_shared_browser_cookie_store;
-    use moli_fetch::{FetchCancelHandle, Request};
+    use moli_fetch::{FetchCancelHandle, RawResponse, Request, RequestResourceType, ResponseHead};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -589,10 +587,138 @@ mod tests {
     };
 
     use super::*;
-    use crate::network::ResourceRequestClient;
+    use crate::network::{
+        ResourceRequestClient,
+        backend::{RawSubresourceCacheKey, raw_subresource_memory_cache_key},
+    };
 
     fn registration() -> BrowserResourceRuntimeOwnerRegistration {
         BrowserResourceRuntimeOwner::new(&FetchConfig::default(), new_shared_browser_cookie_store())
+    }
+
+    fn cache_stylesheet(runtime: &BrowserResourceRuntime) -> RawSubresourceCacheKey {
+        let request = Request::get("https://cache.test/retained.css")
+            .unwrap()
+            .with_page_network_policy()
+            .with_resource_type(RequestResourceType::CssStyleSheet);
+        let key = raw_subresource_memory_cache_key(&request).unwrap();
+        let response = RawResponse::from_head_and_body(
+            ResponseHead {
+                final_url: request.url,
+                status: 200,
+                headers: vec![("cache-control".to_owned(), "max-age=60".to_owned())],
+                request_cookie_report: None,
+                cookie_set_reports: Vec::new(),
+                redirected: false,
+                redirect_chain: Vec::new(),
+                from_cache: false,
+                negotiated_http_version: None,
+            },
+            b"body { color: red }".to_vec(),
+        );
+        runtime.memory_cache().lock().insert_raw_subresource(
+            key.clone(),
+            response,
+            u64::MAX,
+            Vec::new(),
+        );
+        key
+    }
+
+    #[test]
+    fn transport_replacement_retains_context_cache_without_retaining_old_owner() {
+        let cookie_store = new_shared_browser_cookie_store();
+        let mut config = FetchConfig::default();
+        let (root, binding) = BrowserResourceRuntimeOwnerRoot::new(
+            BrowserResourceRuntimeOwner::new(&config, cookie_store.clone()),
+        );
+        let original = binding.current();
+        let key = cache_stylesheet(&original);
+        let diagnostics = original.memory_cache_diagnostics();
+
+        // A new transport/config must not recreate the Context's cache or
+        // multiply its budget. The entry has no Vary dependency on this UA.
+        config.set_user_agent("Moli/Replaced-Transport");
+        let replacement = root
+            .registrar()
+            .replace_owned(BrowserResourceRuntimeOwner::new(&config, cookie_store))
+            .unwrap();
+        assert!(!original.shares_state_with(&replacement));
+        assert!(replacement.matches_fetch_config(&config));
+        assert!(binding.current().shares_state_with(&replacement));
+        assert!(std::ptr::eq(
+            original.memory_cache(),
+            replacement.memory_cache(),
+        ));
+        assert_eq!(replacement.memory_cache_diagnostics(), diagnostics);
+        assert_eq!(root.owner_count_for_testing(), 2);
+
+        drop(original);
+        let retired = root.reap_retired();
+        assert_eq!(retired.len(), 1);
+        assert!(retired[0].is_clean());
+        assert_eq!(root.owner_count_for_testing(), 1);
+        assert_eq!(
+            replacement
+                .memory_cache()
+                .lock()
+                .lookup_raw_subresource(&key, |vary| vary.is_empty())
+                .unwrap()
+                .body_bytes(),
+            b"body { color: red }",
+        );
+    }
+
+    #[test]
+    fn transport_replacement_with_different_storage_does_not_share_cache() {
+        let (root, binding) = BrowserResourceRuntimeOwnerRoot::new(registration());
+        let original = binding.current();
+        let key = cache_stylesheet(&original);
+        let replacement = root.registrar().replace_owned(registration()).unwrap();
+
+        assert!(!std::ptr::eq(
+            original.memory_cache(),
+            replacement.memory_cache(),
+        ));
+        assert_eq!(replacement.memory_cache_diagnostics().entry_count, 0);
+        assert!(
+            replacement
+                .memory_cache()
+                .lock()
+                .lookup_raw_subresource(&key, |vary| vary.is_empty())
+                .is_none()
+        );
+        assert!(
+            original
+                .memory_cache()
+                .lock()
+                .lookup_raw_subresource(&key, |vary| vary.is_empty())
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn separate_owner_roots_do_not_share_cache_even_with_same_cookie_store() {
+        let cookie_store = new_shared_browser_cookie_store();
+        let (_left_root, left) = BrowserResourceRuntimeOwnerRoot::new(
+            BrowserResourceRuntimeOwner::new(&FetchConfig::default(), cookie_store.clone()),
+        );
+        let (_right_root, right) = BrowserResourceRuntimeOwnerRoot::new(
+            BrowserResourceRuntimeOwner::new(&FetchConfig::default(), cookie_store),
+        );
+        let left = left.current();
+        let right = right.current();
+        let key = cache_stylesheet(&left);
+
+        assert!(!std::ptr::eq(left.memory_cache(), right.memory_cache()));
+        assert_eq!(right.memory_cache_diagnostics().entry_count, 0);
+        assert!(
+            right
+                .memory_cache()
+                .lock()
+                .lookup_raw_subresource(&key, |vary| vary.is_empty())
+                .is_none()
+        );
     }
 
     #[test]
