@@ -1479,6 +1479,7 @@ async fn streaming_unstyled_xml_converts_live_document_before_domcontentloaded()
         .inspection_configuration_endpoint()
         .start_configure(RendererPreparedDocumentInspectionConfiguration {
             root_frame_projection_id: None,
+            main_document_commit: None,
             document_start_scripts: vec![crate::DocumentStartScript {
                 registry_key: None,
                 devtools_session: None,
@@ -1586,6 +1587,7 @@ async fn prepared_streaming_xml_document_waits_for_materialization_and_inspectio
         .inspection_configuration_endpoint()
         .start_configure(RendererPreparedDocumentInspectionConfiguration {
             root_frame_projection_id: None,
+            main_document_commit: None,
             document_start_scripts: vec![
                 crate::DocumentStartScript {
                     registry_key: None,
@@ -2527,6 +2529,145 @@ localStorage.getItem("prepared-commit")
         .expect("author side-effect server should finish");
 }
 
+#[tokio::test]
+async fn prepared_response_inspection_projects_commit_before_execution_contexts() {
+    assert_prepared_response_inspection_order(false).await;
+}
+
+#[tokio::test]
+async fn prepared_response_inspection_reattaches_reset_before_commit_and_contexts() {
+    assert_prepared_response_inspection_order(true).await;
+}
+
+async fn assert_prepared_response_inspection_order(reattach: bool) {
+    let runtime = JsRuntime::initialize();
+    let loader = ResourceRequestClient::new(&Default::default()).unwrap();
+    let v8_attach = if reattach {
+        let mut previous = create_test_html_page(
+            &runtime,
+            &loader,
+            url::Url::parse("https://example.test/previous").unwrap(),
+            "<!doctype html>",
+        )
+        .await;
+        let (messages, output) = dispatch_runtime_protocol_with_output_for_test(
+            &previous,
+            serde_json::json!({"id": 1, "method": "Runtime.enable"}),
+        )
+        .await
+        .unwrap();
+        assert!(
+            runtime_protocol_response_by_id(&messages, 1)
+                .is_some_and(|message| message.get("error").is_none())
+        );
+        let state = output
+            .v8_state_update()
+            .cloned()
+            .expect("enabled V8 session state");
+        previous.close_async().await.unwrap();
+        moli_page_types::V8InspectorSessionAttach::Reattach(state)
+    } else {
+        moli_page_types::V8InspectorSessionAttach::FirstAttach
+    };
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let url = url::Url::parse("https://example.test/projected-response").unwrap();
+    let prepared = runtime
+        .reserve_document_response(
+            runtime.reserve_page_for_creation(),
+            url.clone(),
+            url.clone(),
+            None,
+            false,
+            0,
+            200,
+            vec![("content-type".into(), "text/html".into())],
+            ExternalRawDocumentBodyStream::from_bytes(b"<!doctype html>".to_vec()),
+            &loader,
+            Default::default(),
+            None,
+            None,
+            None,
+            PageVmInitStage::Load,
+            RendererReplyBoundary::Stage,
+            None,
+        )
+        .await_ready()
+        .await
+        .unwrap();
+    let commit = super::RendererMainDocumentCommit {
+        frame_id: "FRAME-projected-response".into(),
+        loader_id: "LOADER-projected-response".into(),
+        url: url.as_str().into(),
+        unreachable_url: None,
+        security_origin: "https://example.test".into(),
+        secure_context_type: "Secure".into(),
+        timestamp: 1.0,
+    };
+    let configured = prepared
+        .inspection_configuration_endpoint()
+        .start_configure(RendererPreparedDocumentInspectionConfiguration {
+            root_frame_projection_id: Some(commit.frame_id.clone()),
+            main_document_commit: Some(commit.clone()),
+            runtime_inspector_session_restore_snapshots: vec![
+                RendererInspectorSessionRestoreSnapshot {
+                    v8_attach,
+                    protocol_configuration: RendererInspectorProtocolConfiguration {
+                        runtime_frontend_enabled: true,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+    // The Browser work is not blocked on the service's acknowledgement.
+    let (mut page, _, _, _, _) = prepared.materialize(None).await.unwrap();
+    configured.await.unwrap();
+    let mut ordered = Vec::new();
+    for record in output_rx
+        .drain()
+        .into_iter()
+        .filter(|publication| publication_is_for_page(publication, &page))
+        .flat_map(RendererOutputPublication::into_records)
+    {
+        match record.into_parts().1 {
+            RendererOutputItem::Observation(RendererProtocolObservation::MainDocumentCommit(
+                observed,
+            )) => {
+                assert_eq!(observed, commit);
+                ordered.push("commit");
+            }
+            RendererOutputItem::Observation(RendererProtocolObservation::RuntimeInspector(
+                batch,
+            )) => {
+                for message in batch.messages {
+                    let message = runtime_inspector_message_protocol_message_for_test(message);
+                    match message["method"].as_str() {
+                        Some("Runtime.executionContextsCleared") => ordered.push("reset"),
+                        Some("Runtime.executionContextCreated") => {
+                            assert_eq!(
+                                message["params"]["context"]["auxData"]["frameId"],
+                                commit.frame_id
+                            );
+                            ordered.push("context");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    let expected = if reattach {
+        vec!["reset", "commit", "context"]
+    } else {
+        vec!["commit", "context"]
+    };
+    assert_eq!(ordered, expected);
+    page.close_async().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn prepared_document_applies_policy_and_admitted_inspection_before_author_script() {
     let runtime = JsRuntime::initialize();
@@ -2562,6 +2703,7 @@ globalThis.__preparedCommitObserved = JSON.stringify([
         .inspection_configuration_endpoint()
         .start_configure(RendererPreparedDocumentInspectionConfiguration {
             root_frame_projection_id: None,
+            main_document_commit: None,
             document_start_scripts: vec![
                 crate::DocumentStartScript {
                     registry_key: None,
@@ -2750,6 +2892,7 @@ async fn prepared_document_inspection_rejects_retired_and_foreign_residences_wit
     let retired_result = retired_endpoint
         .start_configure(RendererPreparedDocumentInspectionConfiguration {
             root_frame_projection_id: None,
+            main_document_commit: None,
             document_start_scripts: vec![crate::DocumentStartScript {
                 registry_key: None,
                 devtools_session: None,
@@ -3047,13 +3190,23 @@ async fn initial_document_reservation_does_not_open_stream_before_preparation() 
     runtime.set_renderer_output_transport_sender(output_tx);
     let loader = ResourceRequestClient::new(&Default::default()).unwrap();
     let token = runtime.reserve_page_for_creation();
-    let reserved = runtime.reserve_initial_document(
+    let reserved = runtime.reserve_document_response(
         token,
         url::Url::parse("about:blank").unwrap(),
+        url::Url::parse("about:blank").unwrap(),
+        None,
+        false,
+        0,
+        200,
+        vec![("content-type".into(), "text/html".into())],
+        ExternalRawDocumentBodyStream::from_bytes(b"<!doctype html>".to_vec()),
         &loader,
         Default::default(),
         None,
         None,
+        None,
+        PageVmInitStage::Load,
+        crate::RendererReplyBoundary::Stage,
         None,
     );
     assert!(matches!(
@@ -3083,13 +3236,23 @@ async fn dropping_started_initial_preparation_closes_only_its_reserved_stream() 
     runtime.set_renderer_output_transport_sender(output_tx);
     let loader = ResourceRequestClient::new(&Default::default()).unwrap();
     let token = runtime.reserve_page_for_creation();
-    let mut reserved = runtime.reserve_initial_document(
+    let mut reserved = runtime.reserve_document_response(
         token,
         url::Url::parse("about:blank").unwrap(),
+        url::Url::parse("about:blank").unwrap(),
+        None,
+        false,
+        0,
+        200,
+        vec![("content-type".into(), "text/html".into())],
+        ExternalRawDocumentBodyStream::from_bytes(b"<!doctype html>".to_vec()),
         &loader,
         Default::default(),
         None,
         None,
+        None,
+        PageVmInitStage::Load,
+        crate::RendererReplyBoundary::Stage,
         None,
     );
     reserved.start_preparation().unwrap();

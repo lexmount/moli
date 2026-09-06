@@ -95,6 +95,7 @@ impl Default for WebContents {
 }
 
 impl WebContents {
+    #[cfg(test)]
     pub(in crate::conn::state) fn fetch_subresource_interception(
         &self,
     ) -> (bool, Option<moli_core::page::SubresourceResourceType>) {

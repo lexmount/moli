@@ -302,7 +302,7 @@ impl ResponseCommitReady {
     pub(crate) async fn materialize(
         mut self,
         policy: Option<PreparedDocumentPagePolicy>,
-        inspection: moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration,
+        mut inspection: moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration,
     ) -> Result<LoadedNavigation, String> {
         let prepared_page = self
             .prepared_page
@@ -310,6 +310,7 @@ impl ResponseCommitReady {
             .expect("response commit-ready value must retain its prepared Page");
         // Admit the service-owned bootstrap update without waiting on it to
         // authorize the Browser operation. Both use this exact renderer owner.
+        inspection.main_document_commit = self.main_document_commit.as_deref().cloned();
         let inspection_ack = prepared_page
             .inspection_configuration_endpoint()
             .start_configure(inspection);
@@ -1201,8 +1202,6 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
         }));
     }
 
-    let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
-        load_inputs.fetch_subresource_interception;
     body_progress_source.emit_response_metadata(
         &request_method,
         &request_headers,
@@ -1282,7 +1281,7 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
             .main_document_commit_for_final_url(&final_url, None)
             .map(Arc::new);
         let prepared_page = engine
-            .prepare_document_page_from_response_with_storage_and_inspector_session_restores_async(
+            .prepare_document_response_async(
                 page_reservation,
                 page_storage.into_navigation_storage(),
                 requested_url.clone(),
@@ -1292,27 +1291,13 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
                 redirect_chain.len(),
                 response_status,
                 response_headers.clone(),
-                response_text,
-                load_inputs.document_start_scripts.clone(),
-                load_inputs.runtime_bindings.clone(),
-                load_inputs
-                    .runtime_inspector_session_restore_snapshots
-                    .clone(),
-                load_inputs.extra_http_headers.clone(),
-                load_inputs.locale_override.clone(),
-                load_inputs.timezone_override.clone(),
-                load_inputs.script_execution_disabled,
-                load_inputs.bypass_content_security_policy,
-                load_inputs.cpu_throttling_rate,
-                load_inputs.emulated_media.clone(),
-                load_inputs.viewport_surface,
-                load_inputs.network_offline,
-                load_inputs.blocked_url_patterns.clone(),
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-                load_inputs.root_frame_id.clone(),
+                moli_core::runtime::ExternalRawDocumentBodyStream::from_bytes(
+                    response_text.into_bytes(),
+                ),
+                PageVmInitStage::DomContentLoaded,
+                RendererReplyBoundary::Stage,
                 resource_source,
-                main_document_commit.as_deref().cloned(),
+                None,
             )
             .await
             .map_err(|error| format!("failed to prepare XML page `{}`: {error}", requested_url))?;
@@ -1353,42 +1338,22 @@ async fn build_navigation_from_streaming_raw_response_with_engine_async(
     let main_document_commit = load_inputs
         .main_document_commit_for_final_url(&final_url, None)
         .map(Arc::new);
-    let prepared_future = engine
-        .prepare_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
-            page_reservation,
-            page_storage.into_navigation_storage(),
-            requested_url.clone(),
-            final_url.clone(),
-            load_inputs.navigation_initiator_url.clone(),
-            response.redirected,
-            redirect_chain.len(),
-            response_status,
-            response_headers.clone(),
-            raw_body,
-            load_inputs.document_start_scripts.clone(),
-            load_inputs.runtime_bindings.clone(),
-            load_inputs
-                .runtime_inspector_session_restore_snapshots
-                .clone(),
-            load_inputs.extra_http_headers.clone(),
-            load_inputs.locale_override.clone(),
-            load_inputs.timezone_override.clone(),
-            load_inputs.script_execution_disabled,
-            load_inputs.bypass_content_security_policy,
-            load_inputs.cpu_throttling_rate,
-            load_inputs.emulated_media.clone(),
-            load_inputs.viewport_surface,
-            load_inputs.network_offline,
-            load_inputs.blocked_url_patterns.clone(),
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            PageVmInitStage::DomContentLoaded,
-            reply_boundary,
-            load_inputs.root_frame_id.clone(),
-            resource_source,
-            reserved_service_worker_client,
-            main_document_commit.as_deref().cloned(),
-        );
+    let prepared_future = engine.prepare_document_response_async(
+        page_reservation,
+        page_storage.into_navigation_storage(),
+        requested_url.clone(),
+        final_url.clone(),
+        load_inputs.navigation_initiator_url.clone(),
+        response.redirected,
+        redirect_chain.len(),
+        response_status,
+        response_headers.clone(),
+        raw_body,
+        PageVmInitStage::DomContentLoaded,
+        reply_boundary,
+        resource_source,
+        reserved_service_worker_client,
+    );
     let prepared_future = async {
         prepared_future
             .await
@@ -1547,7 +1512,8 @@ impl CdpConnection {
             })?;
         // Native admission precedes any renderer/runtime policy mutation.
         // The owned operation is tied to this reservation and cannot be retargeted.
-        let inspection = self.prepared_document_inspection_for_owner(owner);
+        let mut inspection = self.prepared_document_inspection_for_owner(owner);
+        inspection.main_document_commit = response.main_document_commit.as_deref().cloned();
         let inspection_ack = endpoint.start_configure(inspection);
         Ok(async move {
             let built = materialization.materialize().await;
@@ -1623,8 +1589,6 @@ impl CdpConnection {
                 .adopt_registered_resource_runtime(resource_runtime)
                 .map_err(|error| error.to_string())?;
         }
-        let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
-            load_inputs.fetch_subresource_interception;
         let page_storage = load_inputs.page_storage_handles();
         let main_document_commit = load_inputs
             .main_document_commit_for_final_url(&final_url, None)
@@ -1632,7 +1596,7 @@ impl CdpConnection {
         let page_reservation =
             self.reserve_renderer_page_for_owner(&navigation.owner, &load_inputs, &engine);
         let prepared_page = engine
-            .prepare_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
+            .prepare_document_response_async(
                 page_reservation,
                 page_storage.into_navigation_storage(),
                 requested_url.clone(),
@@ -1643,29 +1607,10 @@ impl CdpConnection {
                 response_status,
                 response_headers.clone(),
                 raw_body,
-                load_inputs.document_start_scripts.clone(),
-                load_inputs.runtime_bindings.clone(),
-                load_inputs
-                    .runtime_inspector_session_restore_snapshots
-                    .clone(),
-                load_inputs.extra_http_headers.clone(),
-                load_inputs.locale_override.clone(),
-                load_inputs.timezone_override.clone(),
-                load_inputs.script_execution_disabled,
-                load_inputs.bypass_content_security_policy,
-                load_inputs.cpu_throttling_rate,
-                load_inputs.emulated_media.clone(),
-                load_inputs.viewport_surface,
-                load_inputs.network_offline,
-                load_inputs.blocked_url_patterns.clone(),
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
                 PageVmInitStage::DomContentLoaded,
                 RendererReplyBoundary::DocumentCommit,
-                load_inputs.root_frame_id.clone(),
                 CommittedDocumentResourceSource::Synthetic,
                 None,
-                main_document_commit.as_deref().cloned(),
             )
             .await
             .map_err(|error| {
@@ -2476,6 +2421,7 @@ impl CdpConnection {
     /// initial document page build and test/setup helpers. It still uses the
     /// phase-one HTML parser; it is not the old NativeDom static builder and
     /// should not be used for real network document streaming.
+    #[cfg(test)]
     pub async fn build_loaded_navigation_from_buffered_response_async(
         &mut self,
         requested_url: Url,
@@ -2660,6 +2606,7 @@ impl CdpConnection {
         .await
     }
 
+    #[cfg(test)]
     async fn build_loaded_navigation_from_buffered_response_with_request_cookie_report_async(
         &mut self,
         load_inputs: &TargetNavigationLoadInputs,
@@ -2722,12 +2669,7 @@ impl CdpConnection {
             })?;
         let diagnostics = loaded_page_creation_diagnostics_parts(built.page_creation_diagnostics);
         let mut page = built.page;
-        apply_navigation_load_input_overrides_async(
-            &mut page,
-            load_inputs,
-            NavigationLoadInputOverrideMode::FreshlyBuiltPage,
-        )
-        .await?;
+        apply_fixture_permission_overrides(&mut page, &load_inputs.permission_overrides).await?;
         let redirect_chain = Vec::new();
         let network_progress = MainDocumentBodyNetworkProgress::CompletedBody(Box::new(
             CompletedMainDocumentNetworkEvents::new(
@@ -2923,6 +2865,7 @@ impl CdpConnection {
             .map_err(|error| format!("failed to fetch page `{raw_url}`: {error}"))
     }
 
+    #[cfg(test)]
     pub async fn build_navigation_from_network_response_async(
         &mut self,
         requested_url: Url,
@@ -2940,6 +2883,7 @@ impl CdpConnection {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn build_navigation_from_network_response_for_session_owner_async(
         &mut self,
         session_id: Option<&str>,
@@ -3016,12 +2960,7 @@ impl CdpConnection {
             })?;
         let diagnostics = loaded_page_creation_diagnostics_parts(built.page_creation_diagnostics);
         let mut page = built.page;
-        apply_navigation_load_input_overrides_async(
-            &mut page,
-            &load_inputs,
-            NavigationLoadInputOverrideMode::FreshlyBuiltPage,
-        )
-        .await?;
+        apply_fixture_permission_overrides(&mut page, &load_inputs.permission_overrides).await?;
         let network_progress = MainDocumentBodyNetworkProgress::CompletedBody(Box::new(
             CompletedMainDocumentNetworkEvents::new(
                 request_method.clone(),
@@ -3570,8 +3509,6 @@ async fn prepare_captured_document_response_with_engine_async(
         head.from_cache,
         head.negotiated_http_version,
     );
-    let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
-        load_inputs.fetch_subresource_interception;
     let response_from_cache = head.from_cache;
     let negotiated_http_version = head.negotiated_http_version;
     let final_url = head.final_url;
@@ -3609,42 +3546,22 @@ async fn prepare_captured_document_response_with_engine_async(
     let main_document_commit = load_inputs
         .main_document_commit_for_final_url(&final_url, network_error_page.as_ref())
         .map(Arc::new);
-    let prepared_future = engine
-        .prepare_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
-            page_reservation,
-            page_storage.into_navigation_storage(),
-            requested_url.clone(),
-            final_url.clone(),
-            load_inputs.navigation_initiator_url.clone(),
-            redirected,
-            redirect_chain.len(),
-            response_status,
-            response_headers.clone(),
-            raw_body,
-            load_inputs.document_start_scripts.clone(),
-            load_inputs.runtime_bindings.clone(),
-            load_inputs
-                .runtime_inspector_session_restore_snapshots
-                .clone(),
-            load_inputs.extra_http_headers.clone(),
-            load_inputs.locale_override.clone(),
-            load_inputs.timezone_override.clone(),
-            load_inputs.script_execution_disabled,
-            load_inputs.bypass_content_security_policy,
-            load_inputs.cpu_throttling_rate,
-            load_inputs.emulated_media.clone(),
-            load_inputs.viewport_surface,
-            load_inputs.network_offline,
-            load_inputs.blocked_url_patterns.clone(),
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            PageVmInitStage::DomContentLoaded,
-            reply_boundary,
-            load_inputs.root_frame_id.clone(),
-            CommittedDocumentResourceSource::Synthetic,
-            None,
-            main_document_commit.as_deref().cloned(),
-        );
+    let prepared_future = engine.prepare_document_response_async(
+        page_reservation,
+        page_storage.into_navigation_storage(),
+        requested_url.clone(),
+        final_url.clone(),
+        load_inputs.navigation_initiator_url.clone(),
+        redirected,
+        redirect_chain.len(),
+        response_status,
+        response_headers.clone(),
+        raw_body,
+        PageVmInitStage::DomContentLoaded,
+        reply_boundary,
+        CommittedDocumentResourceSource::Synthetic,
+        None,
+    );
     let body_capture_task = spawn_captured_body_replay(body, body_tx, completion_tx);
     let prepared_page = match prepared_future.await {
         Ok(prepared_page) => prepared_page,
@@ -3692,49 +3609,14 @@ fn ensure_url_not_blocked_for_load_inputs(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum NavigationLoadInputOverrideMode {
-    FreshlyBuiltPage,
-    ExistingPage,
-}
-
-async fn apply_navigation_load_input_overrides_async(
+#[cfg(test)]
+async fn apply_fixture_permission_overrides(
     page: &mut moli_core::page::Page,
-    load_inputs: &TargetNavigationLoadInputs,
-    mode: NavigationLoadInputOverrideMode,
+    permissions: &[moli_core::page::PermissionOverrideRegistration],
 ) -> Result<(), String> {
-    if !load_inputs.permission_overrides.is_empty()
-        || mode == NavigationLoadInputOverrideMode::ExistingPage
-    {
-        page.set_permission_overrides_async(&load_inputs.permission_overrides)
-            .await
-            .map_err(|error| format!("failed to apply page permission overrides: {error}"))?;
-    }
-    if mode == NavigationLoadInputOverrideMode::FreshlyBuiltPage {
-        return Ok(());
-    }
-    page.set_locale_override_async(load_inputs.locale_override.as_deref())
+    page.set_permission_overrides_async(permissions)
         .await
-        .map_err(|error| format!("failed to apply page locale override: {error}"))?;
-    page.set_timezone_override_async(load_inputs.timezone_override.as_deref())
-        .await
-        .map_err(|error| format!("failed to apply page timezone override: {error}"))?;
-    page.set_script_execution_disabled_async(load_inputs.script_execution_disabled)
-        .await
-        .map_err(|error| format!("failed to apply page script execution override: {error}"))?;
-    page.set_bypass_content_security_policy_async(load_inputs.bypass_content_security_policy)
-        .await
-        .map_err(|error| format!("failed to apply page CSP bypass override: {error}"))?;
-    page.set_cpu_throttling_rate_async(load_inputs.cpu_throttling_rate)
-        .await
-        .map_err(|error| format!("failed to apply page CPU throttling rate: {error}"))?;
-    page.set_emulated_media_async(&load_inputs.emulated_media)
-        .await
-        .map_err(|error| format!("failed to apply page emulated media: {error}"))?;
-    page.set_viewport_surface_async(load_inputs.viewport_surface)
-        .await
-        .map_err(|error| format!("failed to apply page viewport surface: {error}"))?;
-    Ok(())
+        .map_err(|error| format!("failed to apply page permission overrides: {error}"))
 }
 
 #[cfg(test)]

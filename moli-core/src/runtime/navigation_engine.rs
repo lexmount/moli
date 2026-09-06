@@ -1474,14 +1474,26 @@ impl NavigationEngine {
         let (cookies, web_storage, indexed_db_manager, storage_bucket_store) = storage.into_parts();
         let loader = self.ensure_resource_request_client(cookies)?;
         let reservation = self.reserve_page_for_creation();
-        let pending = self.js_runtime.reserve_initial_document(
+        let pending = self.js_runtime.reserve_document_response(
             reservation,
+            url.clone(),
             url,
+            None,
+            false,
+            0,
+            200,
+            vec![("content-type".into(), "text/html; charset=utf-8".into())],
+            ExternalRawDocumentBodyStream::from_bytes(
+                b"<!doctype html><html><head></head><body></body></html>".to_vec(),
+            ),
             &loader,
             web_storage,
             indexed_db_manager,
             storage_bucket_store,
             top_level_storage_key,
+            PageVmInitStage::Load,
+            moli_renderer_v8::RendererReplyBoundary::Stage,
+            None,
         );
         Ok(PendingPreparedDocumentPage { pending })
     }
@@ -1999,7 +2011,7 @@ impl NavigationEngine {
     }
 
     #[allow(clippy::too_many_arguments)]
-    pub async fn prepare_streaming_raw_page_from_external_body_with_storage_and_inspector_session_restores_async(
+    pub async fn prepare_document_response_async(
         &mut self,
         page_reservation: moli_renderer_v8::RendererPageReservationToken,
         storage: NavigationPageStorageHandles,
@@ -2011,67 +2023,46 @@ impl NavigationEngine {
         response_status: u16,
         response_headers: Vec<(String, String)>,
         raw_body: ExternalRawDocumentBodyStream,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        extra_http_headers: Vec<(String, String)>,
-        locale_override: Option<String>,
-        timezone_override: Option<String>,
-        script_execution_disabled: bool,
-        bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
         stage: PageVmInitStage,
         reply_boundary: moli_renderer_v8::RendererReplyBoundary,
-        root_frame_id: Option<String>,
         resource_source: CommittedDocumentResourceSource,
         reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
-        main_document_commit: Option<RendererMainDocumentCommit>,
     ) -> Result<PreparedDocumentPage> {
         let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
             storage.into_parts();
-        self.prepare_streaming_raw_page_from_external_body_async(
-            page_reservation,
+        let loader = self.resource_request_client_for_committed_document(
             cookie_store,
-            web_storage,
-            indexed_db_manager,
-            storage_bucket_store,
-            requested_url,
-            final_url,
-            navigation_initiator_url,
-            redirected,
-            redirect_count,
-            response_status,
-            response_headers,
-            raw_body,
-            document_start_scripts,
-            runtime_bindings,
-            runtime_inspector_session_restore_snapshots,
-            extra_http_headers,
-            locale_override,
-            timezone_override,
-            script_execution_disabled,
-            bypass_content_security_policy,
-            cpu_throttling_rate,
-            emulated_media,
-            viewport_surface,
-            network_offline,
-            blocked_url_patterns,
-            fetch_subresource_interception_enabled,
-            fetch_subresource_interception_resource_type,
-            stage,
-            reply_boundary,
-            root_frame_id,
+            &final_url,
             resource_source,
-            reserved_service_worker_client,
-            main_document_commit,
-        )
-        .await
+        )?;
+        // Preparation carries response/storage only. In particular, do not
+        // replay a Protocol snapshot into the shared resource client's policy.
+        // Browser admission supplies policy when consuming the prepared Page;
+        // DevTools bootstrap uses the separate inspection endpoint.
+        let prepared = self
+            .js_runtime
+            .reserve_document_response(
+                page_reservation,
+                requested_url,
+                final_url,
+                navigation_initiator_url,
+                redirected,
+                redirect_count,
+                response_status,
+                response_headers,
+                raw_body,
+                &loader,
+                web_storage,
+                indexed_db_manager,
+                storage_bucket_store,
+                None,
+                stage,
+                reply_boundary,
+                reserved_service_worker_client,
+            )
+            .await_ready()
+            .await?;
+        Ok(PreparedDocumentPage { prepared })
     }
 
     async fn build_html_page_from_response_options_async(
@@ -2211,79 +2202,6 @@ impl NavigationEngine {
             )
             .await?;
         prepared.materialize(None).await
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub async fn prepare_document_page_from_response_with_storage_and_inspector_session_restores_async(
-        &mut self,
-        page_reservation: moli_renderer_v8::RendererPageReservationToken,
-        storage: NavigationPageStorageHandles,
-        requested_url: Url,
-        final_url: Url,
-        navigation_initiator_url: Option<Url>,
-        redirected: bool,
-        redirect_count: usize,
-        response_status: u16,
-        response_headers: Vec<(String, String)>,
-        response_body: String,
-        document_start_scripts: Vec<DocumentStartScript>,
-        runtime_bindings: Vec<crate::page::RuntimeBindingRegistration>,
-        runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-        extra_http_headers: Vec<(String, String)>,
-        locale_override: Option<String>,
-        timezone_override: Option<String>,
-        script_execution_disabled: bool,
-        bypass_content_security_policy: bool,
-        cpu_throttling_rate: f64,
-        emulated_media: EmulatedMediaOverrides,
-        viewport_surface: Option<ViewportSurface>,
-        network_offline: bool,
-        blocked_url_patterns: Vec<String>,
-        fetch_subresource_interception_enabled: bool,
-        fetch_subresource_interception_resource_type: Option<SubresourceResourceType>,
-        root_frame_id: Option<String>,
-        resource_source: CommittedDocumentResourceSource,
-        main_document_commit: Option<RendererMainDocumentCommit>,
-    ) -> Result<PreparedDocumentPage> {
-        let (cookie_store, web_storage, indexed_db_manager, storage_bucket_store) =
-            storage.into_parts();
-        self.prepare_document_page_from_response_options_best_effort_async(
-            page_reservation,
-            cookie_store,
-            web_storage,
-            indexed_db_manager,
-            storage_bucket_store,
-            DocumentPageLoadOptions {
-                resource_source,
-                root_frame_id,
-                main_document_commit,
-                requested_url,
-                final_url,
-                navigation_initiator_url,
-                redirected,
-                redirect_count,
-                response_status,
-                response_headers,
-                response_body,
-                document_start_scripts,
-                runtime_bindings,
-                runtime_inspector_session_restore_snapshots,
-                extra_http_headers,
-                locale_override,
-                timezone_override,
-                script_execution_disabled,
-                bypass_content_security_policy,
-                cpu_throttling_rate,
-                emulated_media,
-                viewport_surface,
-                network_offline,
-                blocked_url_patterns,
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-            },
-            PageVmInitStage::DomContentLoaded,
-        )
-        .await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2473,6 +2391,58 @@ mod tests {
         moli_renderer_v8::RendererBrowserContextRuntimeOwnerAccess: Send,
         Sync
     );
+
+    #[tokio::test]
+    async fn response_preparation_does_not_reconfigure_shared_request_policy() {
+        let mut engine = NavigationEngine::new();
+        let cookies = new_shared_browser_cookie_store();
+        let client = engine
+            .ensure_resource_request_client(cookies.clone())
+            .unwrap();
+        client.set_extra_http_headers(&[("x-current-policy".into(), "retained".into())]);
+        client.set_network_offline(true);
+        client.set_blocked_url_patterns(&["*blocked.example*".into()]);
+        let policy = client.page_network_policy();
+        let revision = policy.snapshot().revision();
+        let url = Url::parse("https://example.test/response").unwrap();
+        let prepared = engine
+            .prepare_document_response_async(
+                engine.reserve_page_for_creation(),
+                super::NavigationPageStorageHandles::new(
+                    cookies,
+                    Default::default(),
+                    Default::default(),
+                    None,
+                    None,
+                ),
+                url.clone(),
+                url,
+                None,
+                false,
+                0,
+                200,
+                vec![("content-type".into(), "text/html".into())],
+                super::ExternalRawDocumentBodyStream::from_bytes(b"<!doctype html>".to_vec()),
+                super::PageVmInitStage::DomContentLoaded,
+                moli_renderer_v8::RendererReplyBoundary::DocumentCommit,
+                CommittedDocumentResourceSource::Synthetic,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            policy.snapshot().revision(),
+            revision,
+            "response preparation must not write policy before Browser admission"
+        );
+        assert!(policy.snapshot().network_offline());
+        prepared.cancel().await.unwrap();
+        assert_eq!(
+            policy.snapshot().revision(),
+            revision,
+            "canceling an unadmitted response must not reset shared policy either"
+        );
+    }
 
     #[test]
     fn navigation_engine_can_share_browser_context_runtime() {

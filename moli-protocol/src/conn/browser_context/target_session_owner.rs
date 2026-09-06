@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(test)]
+use crate::conn::DocumentStartScript;
 use crate::conn::state::{
     BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles, DevToolsSessionState,
     PageNavigationHistoryEntry, PageTargetHost, RendererMainDocumentCommitSeed, TargetFetchConfig,
@@ -7,14 +9,16 @@ use crate::conn::state::{
 };
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
-    DocumentStartScript, EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage,
-    LoadedNavigationPageCommit, NETWORK_ERROR_PAGE_URL, NetworkErrorPageNavigation,
-    PausedDocumentTransfer, PendingFetchAuthNavigation, PendingFetchNavigation,
-    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
-    PendingSubresourceFetchResponseRequest, RuntimeBindingDefinition,
+    EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage, LoadedNavigationPageCommit,
+    NETWORK_ERROR_PAGE_URL, NetworkErrorPageNavigation, PausedDocumentTransfer,
+    PendingFetchAuthNavigation, PendingFetchNavigation, PendingSubresourceFetchAuthRequest,
+    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
+    RuntimeBindingDefinition,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
-use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
+#[cfg(test)]
+use moli_cookie_jar::StoredCookieQueryReport;
+use moli_cookie_jar::StoredCookieSetReport;
 #[cfg(test)]
 use moli_core::page::RendererServiceWorkerVersionStatus;
 use moli_core::page::{
@@ -151,14 +155,19 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) navigation_initiator_url: Option<Url>,
     pub(crate) browser_navigation_kind: BrowserNavigationRequestKind,
     pub(crate) infer_navigation_referrer: bool,
+    #[cfg(test)]
     pub(crate) document_start_scripts: Vec<DocumentStartScript>,
+    #[cfg(test)]
     pub(crate) runtime_bindings: Vec<RuntimeBindingDefinition>,
+    #[cfg(test)]
     pub(crate) runtime_inspector_session_restore_snapshots:
         Vec<RendererInspectorSessionRestoreSnapshot>,
     pub(crate) extra_http_headers: Vec<(String, String)>,
+    #[cfg(test)]
     pub(crate) locale_override: Option<String>,
     pub(crate) timezone_override: Option<String>,
     pub(crate) script_execution_disabled: bool,
+    #[cfg(test)]
     pub(crate) bypass_content_security_policy: bool,
     pub(crate) cpu_throttling_rate: f64,
     pub(crate) emulated_media: moli_core::page::EmulatedMediaOverrides,
@@ -167,8 +176,10 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) bypass_service_worker: bool,
     pub(crate) cache_disabled: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
+    #[cfg(test)]
     pub(crate) fetch_subresource_interception:
         (bool, Option<moli_core::page::SubresourceResourceType>),
+    #[cfg(test)]
     pub(crate) permission_overrides: Vec<moli_core::page::PermissionOverrideRegistration>,
     main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
 }
@@ -198,6 +209,7 @@ fn prepared_document_inspection(
     ));
     moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
         root_frame_projection_id: Some(target_id.to_owned()),
+        main_document_commit: None,
         document_start_scripts,
         runtime_bindings: target.devtools_sessions.runtime_bindings_for_renderer(),
         runtime_inspector_session_restore_snapshots: target
@@ -245,6 +257,7 @@ impl TargetNavigationLoadInputs {
         cookie_store.store_response_headers_with_reports(response_url, response_headers)
     }
 
+    #[cfg(test)]
     pub(crate) fn request_cookie_report_for_navigation(
         &self,
         requested_url: &Url,
@@ -268,6 +281,7 @@ impl TargetNavigationLoadInputs {
     }
 
     fn from_browser_context_target(browser_context: &BrowserContext, target_id: &str) -> Self {
+        #[cfg(test)]
         let inspection = prepared_document_inspection(browser_context, target_id);
 
         let effective_network_conditions = browser_context
@@ -305,12 +319,16 @@ impl TargetNavigationLoadInputs {
             navigation_initiator_url: browser_context.target_navigation_initiator_url(target_id),
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_navigation_referrer: true,
+            #[cfg(test)]
             document_start_scripts: inspection.document_start_scripts,
+            #[cfg(test)]
             runtime_bindings: inspection.runtime_bindings,
+            #[cfg(test)]
             runtime_inspector_session_restore_snapshots: inspection
                 .runtime_inspector_session_restore_snapshots,
             extra_http_headers: browser_context
                 .merged_extra_headers_for_target_policy(effective_policy.extra_headers()),
+            #[cfg(test)]
             locale_override: effective_policy
                 .locale_override()
                 .map(str::to_owned)
@@ -323,6 +341,7 @@ impl TargetNavigationLoadInputs {
                 .target_emulation_policy(target_id)
                 .expect("live WebContents")
                 .script_execution_disabled,
+            #[cfg(test)]
             bypass_content_security_policy: browser_context
                 .bypass_content_security_policy_for_target(target_id),
             cpu_throttling_rate: browser_context
@@ -343,9 +362,11 @@ impl TargetNavigationLoadInputs {
             bypass_service_worker: effective_policy.bypass_service_worker(),
             cache_disabled: effective_policy.cache_disabled(),
             blocked_url_patterns: effective_policy.blocked_url_patterns().to_vec(),
+            #[cfg(test)]
             fetch_subresource_interception: browser_context
                 .target_fetch_interception_policy(target_id)
                 .expect("live WebContents"),
+            #[cfg(test)]
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
         }
@@ -363,9 +384,13 @@ impl TargetNavigationLoadInputs {
         inputs.http_no_proxy_override = browser_context.network_policy().http_no_proxy.clone();
         inputs.tls_verify_host_override =
             browser_context.effective_active_tls_verify_host_override();
-        inputs.document_start_scripts = browser_context.default_document_start_script_descriptors();
+        #[cfg(test)]
+        {
+            inputs.document_start_scripts =
+                browser_context.default_document_start_script_descriptors();
+            inputs.locale_override = browser_context.effective_active_locale_override_owned();
+        }
         inputs.extra_http_headers = browser_context.effective_extra_headers();
-        inputs.locale_override = browser_context.effective_active_locale_override_owned();
         inputs.timezone_override = browser_context.effective_active_timezone_override_owned();
         inputs.viewport_surface = browser_context
             .emulation_defaults()
@@ -392,13 +417,18 @@ impl TargetNavigationLoadInputs {
             navigation_initiator_url: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_navigation_referrer: true,
+            #[cfg(test)]
             document_start_scripts: Vec::new(),
+            #[cfg(test)]
             runtime_bindings: Vec::new(),
+            #[cfg(test)]
             runtime_inspector_session_restore_snapshots: Vec::new(),
             extra_http_headers: Vec::new(),
+            #[cfg(test)]
             locale_override: None,
             timezone_override: None,
             script_execution_disabled: false,
+            #[cfg(test)]
             bypass_content_security_policy: false,
             cpu_throttling_rate: 1.0,
             emulated_media: Default::default(),
@@ -407,7 +437,9 @@ impl TargetNavigationLoadInputs {
             bypass_service_worker: false,
             cache_disabled: false,
             blocked_url_patterns: Vec::new(),
+            #[cfg(test)]
             fetch_subresource_interception: (false, None),
+            #[cfg(test)]
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
         }
@@ -983,7 +1015,7 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
     ) -> TargetNavigationLoadInputs {
-        let mut inputs = match self.target_session_owner_ref_for_owner(owner) {
+        let inputs = match self.target_session_owner_ref_for_owner(owner) {
             None => self
                 .browser_context
                 .as_ref()
@@ -998,10 +1030,15 @@ impl CdpConnection {
                 }),
             Some(owner) => owner.navigation_load_inputs(),
         };
-        if let Some(browser_context_id) = inputs.browser_context_id.as_deref() {
-            inputs.permission_overrides =
-                self.effective_permission_overrides_for_browser_context_id(browser_context_id);
-        }
+        #[cfg(test)]
+        let inputs = {
+            let mut inputs = inputs;
+            if let Some(browser_context_id) = inputs.browser_context_id.as_deref() {
+                inputs.permission_overrides =
+                    self.effective_permission_overrides_for_browser_context_id(browser_context_id);
+            }
+            inputs
+        };
         inputs
     }
 
