@@ -59,68 +59,6 @@ impl RendererAgentBinding {
         self.endpoint.detach_session(inspector_session_id).await
     }
 
-    pub(crate) fn start_runtime_state_restore(
-        &self,
-        inspector_session_id: Option<String>,
-        session_restore_snapshots: &[moli_core::page::RendererInspectorSessionRestoreSnapshot],
-        stored_runtime_bindings: &[moli_core::page::RuntimeBindingRegistration],
-        session_runtime_bindings: &[moli_core::page::RuntimeBindingRegistration],
-        runtime_enabled: bool,
-    ) -> impl std::future::Future<
-        Output = anyhow::Result<(
-            std::sync::Arc<moli_renderer_v8::RendererPageState>,
-            Option<moli_core::RendererOutputFence>,
-        )>,
-    > + use<> {
-        let binding = Self {
-            attachment: self.attachment,
-            endpoint: self.endpoint.clone(),
-        };
-        let pending = self
-            .runtime_inspection(inspector_session_id.clone())
-            .start_apply_runtime_protocol_state(
-                session_restore_snapshots,
-                &[],
-                stored_runtime_bindings,
-                session_runtime_bindings,
-            );
-        async move {
-            let pending = pending?;
-            let output = PendingPageCommand::from_inspector_main_route(pending)
-                .wait()
-                .await?
-                .into_unit_page_command_turn()?;
-            // Release the first Main handoff before admitting Runtime.enable. Its
-            // frozen snapshot/fence remain valid without borrowing the committed Page.
-            let (completion, mut predecessor) = output.into_completion_and_predecessor();
-            let (_, mut snapshot, _) = completion.into_parts();
-            if runtime_enabled {
-                let enabled = async {
-                    binding
-                        .start_runtime_enable_events(inspector_session_id)?
-                        .wait()
-                        .await?
-                        .into_runtime_protocol_message_command_turn()
-                }
-                .await;
-                // Runtime enable replay retains the existing best-effort contract;
-                // applying the stored configuration above is the required phase.
-                if let Ok(output) = enabled {
-                    let (completion, tail) = output.into_completion_and_predecessor();
-                    let (_, enabled_snapshot, _) = completion.into_parts();
-                    snapshot = enabled_snapshot;
-                    if let Some(tail) = tail {
-                        predecessor = Some(match predecessor {
-                            Some(head) => head.latest_in_same_stream(tail),
-                            None => tail,
-                        });
-                    }
-                }
-            }
-            Ok((snapshot, predecessor))
-        }
-    }
-
     pub(crate) fn runtime_inspection(
         &self,
         inspector_session_id: Option<String>,
@@ -642,7 +580,7 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn committed_binding_restore_owns_ingress_without_borrowing_page_or_channel() {
+    async fn committed_binding_runtime_configuration_owns_ingress_without_page_or_channel_borrow() {
         let (browser, mut outgoing) = inspection_page().await;
         let mut committed_page = browser
             .fetch("data:text/html,<title>committed</title>")
@@ -670,18 +608,45 @@ mod tests {
         let pending = channel
             .current_binding()
             .unwrap()
-            .start_runtime_state_restore(
-                None,
+            .runtime_inspection(None)
+            .start_apply_runtime_protocol_state(
+                &[],
                 &[],
                 std::slice::from_ref(&registration),
                 std::slice::from_ref(&registration),
-                true,
-            );
-        // A started restore owns an exact endpoint, not a borrow of channel or Page.
+            )
+            .unwrap();
+        let enable = channel
+            .current_binding()
+            .unwrap()
+            .start_runtime_enable_events(None)
+            .unwrap();
+        // Admitted commands own an exact endpoint, not a borrow of channel or Page.
         // Dropping a binding does not retire its Browser Page; admitted inspection
         // work still follows the renderer/session lifetime, not a channel borrow.
         drop(channel);
-        let (snapshot, predecessor) = pending.await.unwrap();
+        let restored = PendingPageCommand::from_inspector_main_route(pending)
+            .wait()
+            .await
+            .unwrap()
+            .into_unit_page_command_turn()
+            .unwrap();
+        let (completion, predecessor) = restored.into_completion_and_predecessor();
+        let (_, snapshot, _) = completion.into_parts();
+        assert_eq!(
+            predecessor.unwrap().cursor().stream().renderer_agent(),
+            attachment.agent_token()
+        );
+        assert!(committed_page.observe_renderer_page_state(&snapshot));
+        assert!(!outgoing.observe_renderer_page_state(&snapshot));
+        let enabled = enable
+            .wait()
+            .await
+            .unwrap()
+            .into_runtime_protocol_message_command_turn()
+            .unwrap();
+        let (completion, predecessor) = enabled.into_completion_and_predecessor();
+        let (_, snapshot, _) = completion.into_parts();
         assert_eq!(
             predecessor.unwrap().cursor().stream().renderer_agent(),
             attachment.agent_token()
@@ -697,7 +662,7 @@ mod tests {
                     .await
                     .unwrap()["value"],
                 json!(expected),
-                "restore must only configure the committed endpoint"
+                "runtime commands must only configure the committed endpoint"
             );
         }
     }

@@ -431,7 +431,7 @@ async fn committed_occurrence_retains_the_previous_document_output_projection() 
 }
 
 #[tokio::test]
-async fn inspection_restore_failure_cannot_roll_back_a_committed_browser_document() {
+async fn inspection_configuration_failure_cannot_roll_back_a_committed_browser_document() {
     let browser = Browser::new(BrowserConfig::default()).unwrap();
     let first = browser
         .fetch("data:text/html,<title>first</title>")
@@ -451,22 +451,26 @@ async fn inspection_restore_failure_cannot_roll_back_a_committed_browser_documen
         name: "protectedBinding".into(),
         execution_context_name: None,
     };
-    let restore = owner
+    let pending = owner
         .page_targets
         .get(TARGET)
         .unwrap()
         .runtime_slot
         .current_renderer_inspection_binding()
         .unwrap()
-        .start_runtime_state_restore(
-            None,
+        .runtime_inspection(None)
+        .start_apply_runtime_protocol_state(
+            &[],
             &[],
             std::slice::from_ref(&registration),
             std::slice::from_ref(&registration),
-            false,
-        );
-    let error = restore
+        )
+        .unwrap();
+    let error = moli_core::page::PendingPageCommand::from_inspector_main_route(pending)
+        .wait()
         .await
+        .and_then(|completion| completion.into_unit_page_command_turn())
+        .map(|_| ())
         .expect_err("a non-configurable global must reject binding installation");
     assert!(error.to_string().contains("runtime binding"), "{error:#}");
     assert_eq!(owner.target_document_id(TARGET), document);

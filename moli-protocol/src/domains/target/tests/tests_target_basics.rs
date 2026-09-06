@@ -1910,22 +1910,26 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         .runtime_frontend_enabled = true;
     let target_a_replay_url =
         "data:text/html,<title>target-a-replay</title><div id='ok'>target a replay</div>";
-    let target_a_commit = ctx
-        .conn
-        .navigation_inspection_restore_for_owner(&crate::conn::CommandOwnerScope::for_session(
-            "SID-active",
-        ))
-        .expect("target A commit state should be available before navigation");
+    let target_a_inspection = ctx.conn.prepared_document_inspection_for_owner(
+        &crate::conn::CommandOwnerScope::for_session("SID-active"),
+    );
+    let target_a_primary = target_a_inspection
+        .runtime_inspector_session_restore_snapshots
+        .iter()
+        .find(|session| session.inspector_session_id.is_none())
+        .expect(
+            "target A primary session should use the target default renderer inspector session",
+        );
     assert!(
-        target_a_commit.runtime_frontend_enabled,
-        "target A commit state should keep Runtime enabled"
+        target_a_primary
+            .protocol_configuration
+            .runtime_frontend_enabled,
+        "target A prepared inspection should keep Runtime enabled"
     );
     assert_eq!(
-        target_a_commit
-            .renderer_runtime_inspector_session_id
-            .as_deref(),
-        None,
-        "target A primary session should use the target default renderer inspector session"
+        target_a_inspection.root_frame_projection_id.as_deref(),
+        Some("TID-000000000A"),
+        "prepared inspection must not inherit the other target's frame identity"
     );
 
     ctx.process_async(json!({

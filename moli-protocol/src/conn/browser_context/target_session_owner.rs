@@ -19,11 +19,13 @@ use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourc
 #[cfg(test)]
 use moli_cookie_jar::StoredCookieQueryReport;
 use moli_cookie_jar::StoredCookieSetReport;
-#[cfg(test)]
-use moli_core::page::RendererServiceWorkerVersionStatus;
 use moli_core::page::{
-    BidiPreloadChannelHandoff, Page, RendererInspectorSessionRestoreSnapshot,
-    RendererMainDocumentCommit, RendererPageCreationArtifacts, SubresourceResourceType,
+    BidiPreloadChannelHandoff, RendererMainDocumentCommit, SubresourceResourceType,
+};
+#[cfg(test)]
+use moli_core::page::{
+    Page, RendererInspectorSessionRestoreSnapshot, RendererPageCreationArtifacts,
+    RendererServiceWorkerVersionStatus,
 };
 use moli_core::runtime::RendererBrowserContextRuntimeOwnerAccess;
 use moli_fetch::BrowserNavigationRequestKind;
@@ -91,15 +93,6 @@ impl ClosedPageTarget {
 
 pub(super) struct TargetSessionStateMut<'a> {
     pub(super) devtools_session_state: &'a mut DevToolsSessionState,
-}
-
-pub(crate) struct NavigationInspectionRestore {
-    pub(crate) runtime_frontend_enabled: bool,
-    pub(crate) renderer_runtime_inspector_session_id: Option<String>,
-    pub(crate) runtime_inspector_session_restore_snapshots:
-        Vec<RendererInspectorSessionRestoreSnapshot>,
-    pub(crate) stored_runtime_bindings: Vec<RuntimeBindingDefinition>,
-    pub(crate) session_runtime_bindings: Vec<RuntimeBindingDefinition>,
 }
 
 pub(crate) struct TargetNavigationRequestPreflight {
@@ -963,31 +956,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
         }
     }
 
-    pub(super) fn navigation_inspection_restore(&mut self) -> Option<NavigationInspectionRestore> {
-        {
-            let target = self.target();
-            let page_state = target;
-            let devtools_session_state = page_state.devtools_sessions.session(&self.session_key);
-            Some(NavigationInspectionRestore {
-                runtime_frontend_enabled: devtools_session_state
-                    .map(|state| state.runtime_session_state.runtime_frontend_enabled)
-                    .unwrap_or_default(),
-                renderer_runtime_inspector_session_id: renderer_runtime_inspector_session_id(
-                    &self.session_key,
-                ),
-                runtime_inspector_session_restore_snapshots: page_state
-                    .devtools_sessions
-                    .runtime_inspector_restore_snapshots(),
-                stored_runtime_bindings: page_state
-                    .devtools_sessions
-                    .runtime_bindings_for_renderer(),
-                session_runtime_bindings: devtools_session_state
-                    .map(|state| state.runtime_bindings.clone())
-                    .unwrap_or_default(),
-            })
-        }
-    }
-
     pub(super) fn clear_pending_navigation_history_update(&mut self) -> Option<()> {
         self.browser_context
             .clear_target_pending_navigation_history_update(&self.target_id)
@@ -1104,14 +1072,7 @@ impl CdpConnection {
             .register_pending_fetch_navigation_request(pending)
     }
 
-    pub(crate) fn navigation_inspection_restore_for_owner(
-        &mut self,
-        owner: &crate::conn::CommandOwnerScope,
-    ) -> Option<NavigationInspectionRestore> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .navigation_inspection_restore()
-    }
-
+    #[cfg(test)]
     pub(crate) fn start_loaded_document_navigation_for_owner(
         &self,
         owner: &CommandOwnerScope,
@@ -3278,7 +3239,7 @@ mod tests {
     }
 
     #[test]
-    fn target_session_owner_snapshots_only_background_inspection_restore() {
+    fn prepared_document_inspection_snapshots_only_its_background_target() {
         let mut background = BrowserContext::new("BID-background".to_owned());
         background.register_page_target_url_fixture(
             "TID-background".to_owned(),
@@ -3306,26 +3267,35 @@ mod tests {
             );
         }
 
-        let commit_state = {
-            let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut background,
-                target_id: "TID-background".to_owned(),
-                command_session_id: None,
-                session_key: DevToolsSessionKey::Primary,
-            };
-            owner
-                .navigation_inspection_restore()
-                .expect("background navigation commit state should prepare")
-        };
-
-        assert!(commit_state.runtime_frontend_enabled);
+        background.register_page_target_url_fixture(
+            "TID-peer".to_owned(),
+            Some("SID-peer".to_owned()),
+            "https://peer.example/".to_owned(),
+        );
+        background.set_active_target_id("TID-peer");
+        let inspection = prepared_document_inspection(&background, "TID-background");
+        assert_eq!(
+            inspection.root_frame_projection_id.as_deref(),
+            Some("TID-background")
+        );
+        let sessions = inspection.runtime_inspector_session_restore_snapshots;
+        assert_eq!(sessions.len(), 1);
+        assert!(sessions[0].protocol_configuration.runtime_frontend_enabled);
+        assert_eq!(background.active_target_id(), Some("TID-peer"));
+        assert!(
+            prepared_document_inspection(&background, "TID-peer")
+                .runtime_inspector_session_restore_snapshots
+                .iter()
+                .all(|session| !session.protocol_configuration.runtime_frontend_enabled),
+            "capturing background inspection must neither read nor configure its selected peer"
+        );
         assert_eq!(
             background
                 .background_target("TID-background")
                 .expect("background target")
                 .target_url(),
             "about:blank",
-            "preparing commit state should not mutate target identity"
+            "preparing inspection must not mutate target identity"
         );
     }
 

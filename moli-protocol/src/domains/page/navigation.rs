@@ -3283,57 +3283,11 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                             state,
                             prepared,
                             navigation,
-                            None,
                             command_context,
                         )
                         .await;
                     }
                     Err(error) => push_navigation_commit_error(out, &state, error),
-                },
-            }
-        }
-        network::MaterializedNavigationLoadOutcome::Loaded(page, navigation) => 'loaded: {
-            let Some(commit) = navigation.main_document_commit.as_ref() else {
-                push_navigation_commit_error(
-                    out,
-                    &state,
-                    "loaded navigation is missing its frozen main Document commit identity",
-                );
-                break 'loaded;
-            };
-            let destination = crate::conn::DocumentNavigationDestination {
-                url: navigation
-                    .network_error_page
-                    .as_ref()
-                    .map(|error| error.unreachable_url().clone())
-                    .unwrap_or_else(|| navigation.final_url.clone()),
-                security_origin: commit.security_origin.clone(),
-                secure_context_type: commit.secure_context_type.clone(),
-            };
-            let inspection_restore = conn.navigation_inspection_restore_for_owner(&state.owner);
-            match conn.start_loaded_document_navigation_for_owner(
-                &state.owner,
-                token,
-                page,
-                destination,
-                &navigation.page_creation_artifacts,
-            ) {
-                Err(error) => push_navigation_commit_error(out, &state, error),
-                Ok(preparation) => match preparation.await {
-                    Err(error) => push_navigation_commit_error(out, &state, format!("{error:#}")),
-                    Ok(prepared) => {
-                        commit_loaded_navigation_async(
-                            conn,
-                            out,
-                            &token,
-                            state,
-                            prepared,
-                            *navigation,
-                            inspection_restore,
-                            command_context,
-                        )
-                        .await
-                    }
                 },
             }
         }

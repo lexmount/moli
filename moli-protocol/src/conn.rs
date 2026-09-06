@@ -86,9 +86,8 @@ pub(crate) use bidi_channel_work::{
 };
 pub(crate) use body_spool::{CapturedBody, CapturedBodyWriter};
 pub(crate) use browser_context::{
-    NavigationInspectionRestore, PageLifecycleEventsEnableResult,
-    SessionOwnerInspectorEnableResult, SessionOwnerRuntimeFrontendEnableResult,
-    TargetNavigationLoadInputs,
+    PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
+    SessionOwnerRuntimeFrontendEnableResult, TargetNavigationLoadInputs,
 };
 pub(crate) use command_owner_scope::CommandOwnerScope;
 pub use command_view::Cmd;

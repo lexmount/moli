@@ -238,6 +238,7 @@ impl BrowserContext {
         self.physical.web_contents.contains_key(&id)
     }
 
+    #[cfg(test)]
     pub(crate) fn start_loaded_document_navigation_for_target(
         &self,
         target_id: &str,

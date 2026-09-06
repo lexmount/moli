@@ -6,14 +6,13 @@ mod tests;
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
 use moli_core::RendererOutputFence;
 use moli_core::page::{
-    NavigationRedirect, Page, RendererMainDocumentCommit, RendererPageCreationArtifacts,
-    RendererPendingDownloadActivation, RendererRuntimeRealmInfo, SubresourceRequestInitiatorType,
+    NavigationRedirect, RendererPendingDownloadActivation, RendererRuntimeRealmInfo,
+    SubresourceRequestInitiatorType,
 };
 use moli_fetch::{
     NegotiatedHttpVersion, NetworkExchangeObservation, NetworkObservationJournal, RedirectInfo,
     StreamingRawResponse,
 };
-use std::sync::Arc;
 use url::Url;
 
 use crate::conn::{
@@ -33,14 +32,12 @@ use gate::{
 /// Protocol progress accompanies, but never owns or modifies, a Browser candidate.
 pub(crate) struct MaterializedLoadedDocumentProgress {
     pub(crate) pending_download: Option<RendererPendingDownloadActivation>,
-    pub(crate) page_creation_artifacts: RendererPageCreationArtifacts,
     pub(crate) final_url: Url,
     pub(crate) response_headers: Vec<(String, String)>,
     pub(crate) response_from_cache: bool,
     pub(crate) main_document_body: Option<CapturedBody>,
     pub(crate) initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
     pub(crate) renderer_output_predecessor: Option<RendererOutputFence>,
-    pub(crate) main_document_commit: Option<Arc<RendererMainDocumentCommit>>,
     pub(crate) progress_gate: MainDocumentProgressGate,
     pub(crate) network_error_page: Option<crate::conn::NetworkErrorPageNavigation>,
 }
@@ -78,7 +75,6 @@ impl FailedNavigationDocumentPolicy {
 
 pub(crate) enum MaterializedNavigationLoadOutcome {
     ResponseCommitReady(Box<ResponseCommitReady>),
-    Loaded(Page, Box<MaterializedLoadedDocumentProgress>),
     Download(MaterializedDownloadDocumentProgress),
     Failed(MaterializedFailedDocumentProgress),
 }
@@ -300,13 +296,11 @@ pub(crate) fn materialize_loaded_navigation_progress<P>(
     let LoadedNavigation {
         page,
         pending_download,
-        page_creation_artifacts,
         final_url,
         response_headers,
         response_from_cache,
         initial_runtime_realms,
         renderer_output_predecessor,
-        main_document_commit,
         document_progress_transfer,
         network_error_page,
         ..
@@ -320,14 +314,12 @@ pub(crate) fn materialize_loaded_navigation_progress<P>(
         page,
         MaterializedLoadedDocumentProgress {
             pending_download,
-            page_creation_artifacts,
             final_url,
             response_headers,
             response_from_cache,
             main_document_body,
             initial_runtime_realms,
             renderer_output_predecessor,
-            main_document_commit,
             progress_gate,
             network_error_page,
         },
@@ -342,10 +334,6 @@ fn materialize_navigation_load_outcome(
     match navigation {
         NavigationLoadOutcome::ResponseCommitReady(navigation) => {
             MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation)
-        }
-        NavigationLoadOutcome::Loaded(navigation) => {
-            let (page, progress) = materialize_loaded_navigation_progress(conn, state, *navigation);
-            MaterializedNavigationLoadOutcome::Loaded(page, Box::new(progress))
         }
         NavigationLoadOutcome::Download(navigation) => MaterializedNavigationLoadOutcome::Download(
             materialize_download_navigation_progress(conn, state, *navigation),
