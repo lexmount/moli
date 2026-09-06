@@ -38,9 +38,10 @@ impl InitialDocumentCreator {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug)]
 enum InitialDocumentLifecycle {
     Unmaterialized,
+    Building(super::web_contents::InitialDocumentBuildState),
     Materialized,
     Exited,
 }
@@ -77,14 +78,15 @@ impl InitialDocument {
         self.storage_key.as_ref()
     }
     pub(crate) fn materialized(&self) -> bool {
-        self.lifecycle == InitialDocumentLifecycle::Materialized
+        matches!(self.lifecycle, InitialDocumentLifecycle::Materialized)
     }
     pub(crate) fn exited(&self) -> bool {
-        self.lifecycle == InitialDocumentLifecycle::Exited
+        matches!(self.lifecycle, InitialDocumentLifecycle::Exited)
     }
     pub(crate) fn is_on_initial_empty_document(&self) -> bool {
         !self.exited()
     }
+    #[cfg(test)]
     fn mark_materialized(&mut self) {
         if !self.exited() {
             self.lifecycle = InitialDocumentLifecycle::Materialized;
@@ -169,6 +171,50 @@ pub(in crate::conn) struct NavigationController {
 }
 
 impl NavigationController {
+    pub(in crate::conn::state) fn initial_document_build(
+        &self,
+    ) -> Option<&super::web_contents::InitialDocumentBuildState> {
+        match &self.initial_empty_document.as_ref()?.lifecycle {
+            InitialDocumentLifecycle::Building(build) => Some(build),
+            _ => None,
+        }
+    }
+
+    pub(in crate::conn::state) fn admit_initial_document_build(
+        &mut self,
+        url: &str,
+        build: super::web_contents::InitialDocumentBuildState,
+    ) {
+        let initial = self
+            .initial_empty_document
+            .get_or_insert_with(|| InitialDocument::new(url.to_owned(), None, None));
+        initial.lifecycle = InitialDocumentLifecycle::Building(build);
+    }
+
+    pub(in crate::conn::state) fn cancel_initial_document_build(&mut self) {
+        if let Some(initial) = self.initial_empty_document.as_mut()
+            && matches!(initial.lifecycle, InitialDocumentLifecycle::Building(_))
+        {
+            initial.lifecycle = InitialDocumentLifecycle::Unmaterialized;
+        }
+    }
+
+    pub(in crate::conn::state) fn take_initial_document_build_for_commit(
+        &mut self,
+    ) -> super::web_contents::InitialDocumentBuildState {
+        let initial = self
+            .initial_empty_document
+            .as_mut()
+            .expect("admitted initial document");
+        let InitialDocumentLifecycle::Building(build) = std::mem::replace(
+            &mut initial.lifecycle,
+            InitialDocumentLifecycle::Materialized,
+        ) else {
+            unreachable!("validated initial document build");
+        };
+        build
+    }
+
     pub(super) fn pending_document(&self) -> Option<(NavigationId, DocumentId)> {
         self.pending_navigation_request
             .as_ref()
@@ -194,6 +240,7 @@ impl NavigationController {
     }
 
     pub(crate) fn start_document_navigation(&mut self) -> NavigationId {
+        self.cancel_initial_document_build();
         let navigation = NavigationId::allocate();
         self.pending_navigation_request = Some(PendingNavigationRequest::new(navigation));
         navigation
@@ -232,6 +279,7 @@ impl NavigationController {
     }
 
     pub(crate) fn clear_document_navigation_state(&mut self) {
+        self.cancel_initial_document_build();
         self.pending_navigation_request = None;
         self.committed_document_navigation = None;
     }
@@ -343,6 +391,7 @@ impl NavigationController {
         self.initial_empty_document = Some(InitialDocument::new(initial_url, creator, storage_key));
     }
 
+    #[cfg(test)]
     pub(crate) fn mark_initial_empty_document_materialized(&mut self) {
         if let Some(state) = self.initial_empty_document.as_mut() {
             state.mark_materialized();
@@ -385,6 +434,7 @@ impl NavigationController {
                 .is_none_or(InitialDocument::is_on_initial_empty_document)
     }
 
+    #[cfg(test)]
     pub(crate) fn has_materialized_current_initial_empty_document(&self) -> bool {
         self.initial_empty_document_state()
             .is_some_and(|state| state.is_on_initial_empty_document() && state.materialized())

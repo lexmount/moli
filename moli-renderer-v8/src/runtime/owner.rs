@@ -100,6 +100,8 @@ use self::lifecycle_decision::PendingLifecycleNavigation;
 
 #[derive(Debug, Clone, Default)]
 pub struct RendererPreparedDocumentInspectionConfiguration {
+    /// AgentHost's root-frame wire label; never a Browser object identity.
+    pub root_frame_projection_id: Option<String>,
     pub document_start_scripts: Vec<DocumentStartScript>,
     pub runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     pub runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
@@ -191,6 +193,7 @@ pub struct RendererCreateHtmlPageRequest {
 pub struct RendererCreateStreamingRawPageRequest {
     pub root_frame_id: Option<String>,
     pub main_document_commit: Option<RendererMainDocumentCommit>,
+    pub top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
     pub requested_url: Url,
     pub final_url: Url,
     pub navigation_initiator_url: Option<Url>,
@@ -1933,7 +1936,10 @@ impl RendererOwnerHandle {
     /// observes `Opened` before this release on success, while an early failure
     /// produces only the release. Never move this to the navigation completion
     /// channel: that independent channel cannot order against stream opening.
-    fn release_page_output_reservation(&self, reservation: RendererPageReservationToken) {
+    pub(super) fn release_page_output_reservation(
+        &self,
+        reservation: RendererPageReservationToken,
+    ) {
         if let Some(sender) = self
             .state
             .browser_context_runtime
@@ -2208,6 +2214,7 @@ impl RendererOwnerHandle {
         RendererCreateStreamingRawPageRequest {
             root_frame_id: None,
             main_document_commit: None,
+            top_level_storage_key: None,
             requested_url,
             final_url,
             navigation_initiator_url,
@@ -7111,6 +7118,7 @@ impl RendererOwnerHandle {
         let RendererCreateStreamingRawPageRequest {
             root_frame_id,
             main_document_commit,
+            top_level_storage_key,
             requested_url,
             final_url,
             navigation_initiator_url,
@@ -7227,7 +7235,7 @@ impl RendererOwnerHandle {
                     wpt_extensions_enabled,
                     root_frame_id,
                     main_document_commit,
-                    top_level_storage_key: None,
+                    top_level_storage_key,
                     navigation_bootstrap_entry: None,
                     reserved_service_worker_client_id: reserved_service_worker_client
                         .map(RendererReservedServiceWorkerClient::release),

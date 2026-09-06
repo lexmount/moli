@@ -544,8 +544,7 @@ async fn create_target_for_inactive_browser_context_keeps_previously_active_cont
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
     ctx.conn
-        .inactive_browser_contexts
-        .push(BrowserContext::new("BID-B".into()));
+        .push_inactive_browser_context_fixture_for_test(BrowserContext::new("BID-B".into()));
 
     ctx.process_async(json!({
         "id": 1010,

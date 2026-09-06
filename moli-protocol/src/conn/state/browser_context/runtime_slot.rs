@@ -26,9 +26,7 @@ use crate::{
 use crate::conn::state::devtools_renderer_channel::{
     DevToolsRendererChannel, RendererAgentBinding, RendererAgentDetachReason,
 };
-use crate::conn::state::page_slot::{
-    InitialDocumentPageBuildWaiter, TargetPageAbsenceReason, TargetPageSlot,
-};
+use crate::conn::state::page_slot::{TargetPageAbsenceReason, TargetPageSlot};
 use crate::conn::state::{
     CommittedRendererDocumentBinding, DevToolsRendererChannelError, DocumentId, NavigationId,
     PreparedRendererCallReplacements, RendererAgentAttachment, RendererPageResidenceIdentity,
@@ -121,20 +119,6 @@ impl TargetRuntimeSlot {
         &mut self.page_slot
     }
 
-    pub(crate) fn initial_document_page_build_waiter(
-        &self,
-    ) -> Option<InitialDocumentPageBuildWaiter> {
-        self.page_slot.initial_document_page_build_waiter()
-    }
-
-    pub(crate) fn complete_initial_document_page_build(&mut self) {
-        self.page_slot.complete_initial_document_page_build();
-    }
-
-    pub(crate) fn fail_initial_document_page_build(&mut self, message: String) {
-        self.page_slot.fail_initial_document_page_build(message);
-    }
-
     /// Browser retirement has already invalidated the Document. Stop this
     /// projection's producers and waiters before awaiting renderer teardown.
     pub(super) fn retire_for_target_close(&mut self) {
@@ -192,6 +176,15 @@ impl TargetRuntimeSlot {
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
         self.devtools_renderer_channel
             .document_committed(navigation, endpoint)
+    }
+
+    pub(in crate::conn::state) fn project_initial_document_inspection(
+        &mut self,
+        endpoint: moli_renderer_v8::RendererInspectionEndpoint,
+    ) -> Result<(), DevToolsRendererChannelError> {
+        self.devtools_renderer_channel
+            .attach_current(endpoint)
+            .map(|_| ())
     }
 
     pub(crate) fn route_current_renderer_inspector_output(
@@ -351,6 +344,7 @@ impl TargetRuntimeSlot {
         }
     }
 
+    #[cfg(test)]
     fn ensure_renderer_attachment_for_replacement(&mut self, page: Option<&mut Page>) {
         let Some(page) = page else {
             return;
@@ -871,13 +865,6 @@ impl BrowserContext {
             )
         )
     }
-    pub(crate) fn target_has_initial_document_page_build_in_progress(
-        &self,
-        target_id: &str,
-    ) -> bool {
-        self.loaded_page_absence_reason_for_target(target_id)
-            == Some(TargetPageAbsenceReason::InitialDocumentPageBuildInProgress)
-    }
     pub(crate) fn target_transient_no_page_reason_for_protocol_output(
         &self,
         target_id: &str,
@@ -894,6 +881,7 @@ impl BrowserContext {
             TargetPageAbsenceReason::TestFixture => None,
         }
     }
+    #[cfg(test)]
     pub(super) fn replace_loaded_page_for_target(
         &mut self,
         target_id: &str,

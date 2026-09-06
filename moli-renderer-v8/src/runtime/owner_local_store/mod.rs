@@ -889,6 +889,9 @@ impl RendererOwnerLocalStore {
             )
         })?;
         let request = &mut residence.request;
+        if let Some(frame_id) = configuration.root_frame_projection_id {
+            request.root_frame_id = Some(frame_id);
+        }
         request.document_start_scripts = configuration.document_start_scripts;
         request.runtime_bindings = configuration.runtime_bindings;
         request.runtime_inspector_session_restore_snapshots =

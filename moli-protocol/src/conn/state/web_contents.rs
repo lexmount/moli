@@ -10,7 +10,13 @@ mod document_host;
 mod document_policy;
 pub(in crate::conn::state) use document_policy::InheritedDocumentPolicy;
 mod emulation_policy;
+mod initial_document;
 mod javascript_dialog;
+pub(in crate::conn) use initial_document::InitialDocumentAdmission;
+pub(in crate::conn::state) use initial_document::InitialDocumentBuildState;
+pub(crate) use initial_document::{
+    BuiltInitialDocument, InitialDocumentBuildKey, InitialDocumentPageBuildWaiter,
+};
 mod navigation_commit;
 pub(in crate::conn) use navigation_commit::AdmittedDocumentMaterialization;
 mod network_request_policy;
@@ -184,6 +190,7 @@ impl WebContents {
     }
 
     pub(in crate::conn) fn replace_document(&mut self, next: Option<DocumentHost>) -> Option<Page> {
+        self.navigation.cancel_initial_document_build();
         self.javascript_dialogs.clear();
         self.main_frame.replace_document(next)
     }

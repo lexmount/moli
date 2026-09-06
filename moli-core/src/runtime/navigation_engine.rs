@@ -194,6 +194,42 @@ pub struct PreparedDocumentPage {
 
 pub use moli_renderer_v8::RendererPreparedDocumentPolicy as PreparedDocumentPagePolicy;
 
+/// A reservation admitted synchronously, with no parser/author-script work yet.
+/// Its inspection endpoint is service-owned; materialization consumes native
+/// Browser policy and the one reservation together.
+pub struct PendingPreparedDocumentPage {
+    pending: moli_renderer_v8::PendingPreparedRendererDocument,
+}
+
+impl PendingPreparedDocumentPage {
+    pub fn start_preparation(&mut self) -> Result<()> {
+        self.pending.start_preparation()
+    }
+    pub fn renderer_residence(&self) -> crate::browser::RendererPageResidenceIdentity {
+        let token = self.pending.token();
+        crate::browser::RendererPageResidenceIdentity::from_parts(
+            token.local_host_id(),
+            token.page_id(),
+        )
+    }
+
+    pub fn inspection_configuration_endpoint(
+        &self,
+    ) -> moli_renderer_v8::RendererPreparedDocumentInspectionEndpoint {
+        self.pending.inspection_configuration_endpoint()
+    }
+
+    pub async fn materialize(
+        self,
+        policy: PreparedDocumentPagePolicy,
+    ) -> Result<BuiltDocumentPage> {
+        let prepared = self.pending.await_ready().await?;
+        PreparedDocumentPage { prepared }
+            .materialize(Some(policy))
+            .await
+    }
+}
+
 impl std::fmt::Debug for PreparedDocumentPage {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -1426,13 +1462,32 @@ impl NavigationEngine {
         .await
     }
 
-    /// Fire-and-defer variant of
-    /// [`Self::build_html_page_from_response_with_inspector_session_restores_async`].
-    ///
-    /// Performs the synchronous loader setup and enqueues the renderer command,
-    /// returning a [`PendingBuiltDocumentPage`] without awaiting the renderer
-    /// reply. Use this to overlap renderer-side V8/parse work with subsequent
-    /// conn-side bookkeeping.
+    /// Reserve an initial empty document without running parser/author code.
+    /// Browser policy is supplied when the owned preparation is materialized;
+    /// inspection bootstrap can be configured independently before that point.
+    pub fn reserve_initial_document(
+        &mut self,
+        storage: NavigationPageStorageHandles,
+        url: Url,
+        top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
+    ) -> Result<PendingPreparedDocumentPage> {
+        let (cookies, web_storage, indexed_db_manager, storage_bucket_store) = storage.into_parts();
+        let loader = self.ensure_resource_request_client(cookies)?;
+        let reservation = self.reserve_page_for_creation();
+        let pending = self.js_runtime.reserve_initial_document(
+            reservation,
+            url,
+            &loader,
+            web_storage,
+            indexed_db_manager,
+            storage_bucket_store,
+            top_level_storage_key,
+        );
+        Ok(PendingPreparedDocumentPage { pending })
+    }
+
+    /// Fire-and-defer variant of HTML page construction. The renderer begins
+    /// parsing immediately; the caller later awaits the resulting owned Page.
     #[allow(clippy::too_many_arguments)]
     fn start_build_html_page_from_response(
         &mut self,

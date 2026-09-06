@@ -1479,6 +1479,7 @@ async fn streaming_unstyled_xml_converts_live_document_before_domcontentloaded()
     let inspection_ack = prepared
         .inspection_configuration_endpoint()
         .start_configure(RendererPreparedDocumentInspectionConfiguration {
+            root_frame_projection_id: None,
             document_start_scripts: vec![crate::DocumentStartScript {
                 registry_key: None,
                 devtools_session: None,
@@ -1585,6 +1586,7 @@ async fn prepared_streaming_xml_document_waits_for_materialization_and_inspectio
     let inspection_ack = prepared
         .inspection_configuration_endpoint()
         .start_configure(RendererPreparedDocumentInspectionConfiguration {
+            root_frame_projection_id: None,
             document_start_scripts: vec![
                 crate::DocumentStartScript {
                     registry_key: None,
@@ -2562,6 +2564,7 @@ globalThis.__preparedCommitObserved = JSON.stringify([
     let inspection_ack = prepared
         .inspection_configuration_endpoint()
         .start_configure(RendererPreparedDocumentInspectionConfiguration {
+            root_frame_projection_id: None,
             document_start_scripts: vec![
                 crate::DocumentStartScript {
                     registry_key: None,
@@ -2756,6 +2759,7 @@ async fn prepared_document_inspection_rejects_retired_and_foreign_residences_wit
         .expect("second prepared document should retire");
     let retired_result = retired_endpoint
         .start_configure(RendererPreparedDocumentInspectionConfiguration {
+            root_frame_projection_id: None,
             document_start_scripts: vec![crate::DocumentStartScript {
                 registry_key: None,
                 devtools_session: None,
@@ -3043,6 +3047,85 @@ async fn canceled_prepared_document_closes_its_ordered_output_stream() {
             },
         ) if stream == opened_stream
     ));
+}
+
+#[tokio::test]
+async fn initial_document_reservation_does_not_open_stream_before_preparation() {
+    let runtime = JsRuntime::initialize();
+    let baseline = runtime.document_isolate_accounting_for_diagnostics();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&Default::default()).unwrap();
+    let token = runtime.reserve_page_for_creation();
+    let reserved = runtime.reserve_initial_document(
+        token,
+        url::Url::parse("about:blank").unwrap(),
+        &loader,
+        Default::default(),
+        None,
+        None,
+        None,
+    );
+    assert!(matches!(
+        output_rx.0.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    drop(reserved);
+    assert!(matches!(output_rx.recv_message().await,
+        RendererOutputTransportMessage::PageReservationReleased { owner_local_host_id, page_id }
+        if owner_local_host_id == token.local_host_id() && page_id == token.page_id()));
+    assert!(matches!(
+        output_rx.0.try_recv(),
+        Err(mpsc::error::TryRecvError::Empty)
+    ));
+    assert_eq!(
+        runtime
+            .document_isolate_accounting_for_diagnostics()
+            .created,
+        baseline.created
+    );
+}
+
+#[tokio::test]
+async fn dropping_started_initial_preparation_closes_only_its_reserved_stream() {
+    let runtime = JsRuntime::initialize();
+    let (output_tx, mut output_rx) = renderer_external_activity_test_channel();
+    runtime.set_renderer_output_transport_sender(output_tx);
+    let loader = ResourceRequestClient::new(&Default::default()).unwrap();
+    let token = runtime.reserve_page_for_creation();
+    let mut reserved = runtime.reserve_initial_document(
+        token,
+        url::Url::parse("about:blank").unwrap(),
+        &loader,
+        Default::default(),
+        None,
+        None,
+        None,
+    );
+    reserved.start_preparation().unwrap();
+    drop(reserved); // No acknowledgement has been awaited.
+    let stream = match output_rx.recv_message().await {
+        RendererOutputTransportMessage::StreamControl(
+            super::RendererOutputStreamControl::Opened { stream },
+        ) => stream,
+        other => {
+            panic!("preparation must open its stream before releasing the reservation: {other:?}")
+        }
+    };
+    assert_eq!(
+        stream.residence(),
+        RendererOutputResidenceIdentity::Page {
+            owner_local_host_id: token.local_host_id(),
+            page_id: token.page_id(),
+        }
+    );
+    assert!(matches!(output_rx.recv_message().await,
+        RendererOutputTransportMessage::PageReservationReleased { owner_local_host_id, page_id }
+        if owner_local_host_id == token.local_host_id() && page_id == token.page_id()));
+    assert!(matches!(output_rx.recv_message().await,
+        RendererOutputTransportMessage::StreamControl(super::RendererOutputStreamControl::Closed {
+            stream: closed, reason: super::RendererOutputStreamCloseReason::ResidenceRetired, ..
+        }) if closed == stream));
 }
 
 #[tokio::test(flavor = "multi_thread")]
