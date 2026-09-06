@@ -45,6 +45,7 @@ mod downloads;
 pub(in crate::conn) mod javascript_dialog;
 mod navigation;
 mod page_runtime;
+mod resource_runtime;
 pub(crate) use page_runtime::{NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind};
 pub(in crate::conn) mod page_slot;
 mod page_state;
@@ -474,7 +475,7 @@ impl BrowserContext {
         let sender = self.renderer_output_transport_sender.clone();
         let runtime = self.physical.renderer_runtime_owner_access();
         for contents in self.physical.web_contents.values_mut() {
-            if contents.navigation_engine.is_some() {
+            if contents.has_navigation_engine() {
                 continue;
             }
             let engine = NavigationEngine::new_with_runtime_config_and_browser_context_access(
@@ -495,25 +496,23 @@ impl BrowserContext {
     ) {
         self.renderer_output_transport_sender = Some(sender.clone());
         for contents in self.physical.web_contents.values() {
-            if let Some(engine) = contents.navigation_engine.as_ref() {
-                engine.set_renderer_output_transport_sender(sender.clone());
-            }
+            contents.set_renderer_output_transport_sender(sender.clone());
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn page_navigation_engine(&self, target_id: &str) -> Option<&NavigationEngine> {
         self.web_contents_for_target(target_id)?
-            .navigation_engine
-            .as_ref()
+            .navigation_engine_for_test()
     }
 
+    #[cfg(test)]
     pub(crate) fn page_navigation_engine_mut(
         &mut self,
         target_id: &str,
     ) -> Option<&mut NavigationEngine> {
         self.web_contents_for_target_mut(target_id)?
-            .navigation_engine
-            .as_mut()
+            .navigation_engine_for_test_mut()
     }
 
     pub(crate) fn is_profile_backed_storage_partition(&self) -> bool {
@@ -531,6 +530,7 @@ impl BrowserContext {
         self.physical.storage_partition.kind_label()
     }
 
+    #[cfg(test)]
     pub(crate) fn resource_storage_handles(&self) -> BrowserContextResourceStorageHandles {
         let session_storage_store = self
             .physical

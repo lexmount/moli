@@ -59,7 +59,6 @@ impl CdpConnection {
             | CdpSessionRoute::DedicatedWorkerTarget { .. }
             | CdpSessionRoute::ServiceWorkerTarget { .. } => return None,
         };
-        self.ensure_page_navigation_engine_for_target(&browser_context_id, &target_id)?;
         Some((browser_context_id, target_id))
     }
 
@@ -68,20 +67,13 @@ impl CdpConnection {
         owner: CommandOwnerScope,
         timeout: std::time::Duration,
     ) -> Result<PendingChildFrameLifecycleWork, String> {
-        let storage = self
-            .navigation_load_inputs_for_owner(&owner)
-            .resource_storage_handles();
         let (context_id, target_id) = self
             .activity_source_page_route_for_owner(&owner)
             .ok_or("NoDocumentLoaded")?;
         let pending = self
             .browser_context_by_id_mut(&context_id)
             .ok_or("NoDocumentLoaded")?
-            .start_target_child_frame_lifecycle_work(
-                &target_id,
-                storage.into_navigation_storage(),
-                timeout,
-            )?;
+            .start_target_child_frame_lifecycle_work(&target_id, timeout)?;
         Ok(PendingChildFrameLifecycleWork { owner, pending })
     }
 

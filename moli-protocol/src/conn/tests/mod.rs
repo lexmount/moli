@@ -168,8 +168,8 @@ async fn creating_a_target_preserves_the_published_default_as_a_placeholder() {
 
     assert_ne!(created_target_id, conn.default_target_id());
     assert!(
-        conn.standalone_navigation_engine.is_materialized(),
-        "creating a real Page target is the first operation that needs the renderer runtime"
+        !conn.standalone_navigation_engine.is_materialized(),
+        "creating a WebContents must not materialize the standalone placeholder engine"
     );
     assert!(
         conn.browser_context

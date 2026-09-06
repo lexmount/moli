@@ -1,11 +1,12 @@
 use super::*;
 #[cfg(test)]
 use crate::conn::DocumentStartScript;
+#[cfg(test)]
+use crate::conn::state::BrowserContextResourceStorageHandles;
 use crate::conn::state::{
-    BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles, DevToolsSessionState,
-    PageNavigationHistoryEntry, PageTargetHost, RendererMainDocumentCommitSeed, TargetFetchConfig,
-    TargetOwnerState, TargetPageResidenceIdentity, TargetRuntimeSessionState, TargetRuntimeSlot,
-    WindowSurfaceState,
+    BrowserContextPageStorageHandles, DevToolsSessionState, PageNavigationHistoryEntry,
+    PageTargetHost, RendererMainDocumentCommitSeed, TargetFetchConfig, TargetOwnerState,
+    TargetPageResidenceIdentity, TargetRuntimeSessionState, TargetRuntimeSlot, WindowSurfaceState,
 };
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
@@ -121,6 +122,7 @@ impl TargetNavigationStorageHandles {
         Self { page_handles }
     }
 
+    #[cfg(test)]
     fn resource_storage_handles(&self) -> BrowserContextResourceStorageHandles {
         BrowserContextResourceStorageHandles {
             cookie_store: self.page_handles.cookie_store.clone(),
@@ -139,6 +141,7 @@ impl TargetNavigationStorageHandles {
 pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) browser_context_id: Option<String>,
     storage_handles: TargetNavigationStorageHandles,
+    #[cfg(test)]
     pub(crate) root_frame_id: Option<String>,
     pub(crate) renderer_runtime: RendererBrowserContextRuntimeOwnerAccess,
     /// One identity for navigation request headers and the Document's Navigator.
@@ -168,8 +171,11 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) emulated_media: moli_core::page::EmulatedMediaOverrides,
     pub(crate) viewport_surface: Option<moli_core::page::ViewportSurface>,
     pub(crate) network_offline: bool,
+    #[cfg(test)]
     pub(crate) bypass_service_worker: bool,
+    #[cfg(test)]
     pub(crate) cache_disabled: bool,
+    #[cfg(test)]
     pub(crate) blocked_url_patterns: Vec<String>,
     #[cfg(test)]
     pub(crate) fetch_subresource_interception:
@@ -240,6 +246,7 @@ impl TargetNavigationLoadInputs {
         self.storage_handles.page_storage_handles()
     }
 
+    #[cfg(test)]
     pub(crate) fn resource_storage_handles(&self) -> BrowserContextResourceStorageHandles {
         self.storage_handles.resource_storage_handles()
     }
@@ -301,6 +308,7 @@ impl TargetNavigationLoadInputs {
                     .page_storage_handles_for_target(target_id)
                     .expect("resolved Page target must own session storage"),
             ),
+            #[cfg(test)]
             root_frame_id: Some(target_id.to_owned()),
             renderer_runtime: browser_context.renderer_runtime_owner_access(),
             browser_identity_override: effective_policy
@@ -356,8 +364,11 @@ impl TargetNavigationLoadInputs {
             network_offline: browser_context.network_offline_for_target(target_id)
                 || effective_network_conditions
                     .is_some_and(|conditions| !conditions.navigator_online()),
+            #[cfg(test)]
             bypass_service_worker: effective_policy.bypass_service_worker(),
+            #[cfg(test)]
             cache_disabled: effective_policy.cache_disabled(),
+            #[cfg(test)]
             blocked_url_patterns: effective_policy.blocked_url_patterns().to_vec(),
             #[cfg(test)]
             fetch_subresource_interception: browser_context
@@ -405,6 +416,7 @@ impl TargetNavigationLoadInputs {
         Self {
             browser_context_id: None,
             storage_handles: TargetNavigationStorageHandles::from_page_handles(page_handles),
+            #[cfg(test)]
             root_frame_id: None,
             renderer_runtime,
             browser_identity_override: None,
@@ -432,8 +444,11 @@ impl TargetNavigationLoadInputs {
             emulated_media: Default::default(),
             viewport_surface: None,
             network_offline: false,
+            #[cfg(test)]
             bypass_service_worker: false,
+            #[cfg(test)]
             cache_disabled: false,
+            #[cfg(test)]
             blocked_url_patterns: Vec::new(),
             #[cfg(test)]
             fetch_subresource_interception: (false, None),
@@ -1237,7 +1252,7 @@ impl CdpConnection {
         } else {
             None
         };
-        self.refresh_active_browser_context_loader_async().await;
+        self.refresh_active_browser_context_loader();
         if let Some(selected_target_id) = selected_target_id {
             self.notify_target_host_activated(&selected_target_id);
             out.extend(

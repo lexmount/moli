@@ -321,6 +321,18 @@ impl PendingBuiltDocumentPage {
     }
 }
 
+/// An on-demand value snapshot, not a handle to engine or renderer authority.
+pub struct NavigationEngineDiagnostics {
+    pub renderer_owner_id: u64,
+    pub document_isolate_model: &'static str,
+    pub document_isolate_accounting: crate::page::RendererDocumentIsolateAccountingDiagnostics,
+    pub image_fetch_enabled: bool,
+    pub optional_resource_fetch_mask: OptionalResourceFetchMask,
+    pub subframe_loading_enabled: bool,
+    pub resource_runtime: Option<moli_renderer_v8::network::BrowserResourceRuntimeDiagnostics>,
+    pub browser_context_runtime: serde_json::Value,
+}
+
 /// Configuration copied into each Page-owned or standalone NavigationEngine.
 #[derive(Debug, Clone)]
 pub struct NavigationRuntimeConfig {
@@ -638,6 +650,21 @@ impl NavigationEngine {
 
     pub fn renderer_owner_id_for_diagnostics(&self) -> u64 {
         self.js_runtime.renderer_owner_id_for_diagnostics()
+    }
+
+    pub fn diagnostics(&self) -> NavigationEngineDiagnostics {
+        NavigationEngineDiagnostics {
+            renderer_owner_id: self.renderer_owner_id_for_diagnostics(),
+            document_isolate_model: self.document_isolate_model_for_diagnostics(),
+            document_isolate_accounting: self.document_isolate_accounting_for_diagnostics(),
+            image_fetch_enabled: self.image_fetch_enabled(),
+            optional_resource_fetch_mask: self.optional_resource_fetch_mask(),
+            subframe_loading_enabled: self.subframe_loading_enabled(),
+            resource_runtime: self
+                .resource_request_client()
+                .map(|client| client.resource_runtime_diagnostics()),
+            browser_context_runtime: self.browser_context_runtime().moli_memory_diagnostics(),
+        }
     }
 
     pub fn shares_renderer_owner_with(&self, other: &Self) -> bool {
@@ -2313,36 +2340,6 @@ impl NavigationEngine {
     pub fn reset_resource_runtime_without_loaded_page(&mut self) {
         self.resource_runtime = None;
         self.browser_context_access.reap_retired_resource_runtimes();
-    }
-
-    async fn rebuild_resource_runtime_for_page_async(
-        &mut self,
-        cookie_store: SharedBrowserCookieStore,
-        loaded_page: Option<&mut Page>,
-    ) -> Result<()> {
-        let resource_runtime = self
-            .rebuild_resource_request_client(cookie_store)?
-            .browser_resource_runtime();
-        if let Some(page) = loaded_page {
-            let replacement = page
-                .replace_browser_resource_runtime_async(&resource_runtime)
-                .await;
-            // The Page drops its old document authority at the completion
-            // boundary. Reap after either terminal outcome; a still-live old
-            // authority simply keeps its owner registered.
-            self.browser_context_access.reap_retired_resource_runtimes();
-            replacement?;
-        }
-        Ok(())
-    }
-
-    pub async fn rebuild_resource_runtime_for_page_with_storage_async(
-        &mut self,
-        storage: NavigationResourceStorageHandles,
-        loaded_page: Option<&mut Page>,
-    ) -> Result<()> {
-        self.rebuild_resource_runtime_for_page_async(storage.into_cookie_store(), loaded_page)
-            .await
     }
 
     pub fn set_tls_verify_host(&mut self, enabled: bool) {

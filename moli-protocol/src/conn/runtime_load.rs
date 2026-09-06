@@ -1410,7 +1410,7 @@ impl CdpConnection {
         .with_main_document_commit_seed(RendererMainDocumentCommitSeed::from_navigation(navigation))
     }
 
-    fn document_fetch_defaults(&self) -> FetchConfig {
+    pub(super) fn document_fetch_defaults(&self) -> FetchConfig {
         let mut config = FetchConfig::default();
         config.set_browser_identity(
             self.global_browser_identity_override

@@ -29,6 +29,31 @@ impl WebContents {
         ),
         String,
     > {
+        let policy = self.configure_navigation_engine_policy(inherited)?;
+        self.navigation_engine
+            .as_mut()
+            .expect("configured engine")
+            .ensure_resource_runtime_ready_for_navigation_storage(
+                inherited
+                    .storage
+                    .resource_storage_handles(self.session_storage.store().clone())
+                    .into_navigation_storage(),
+            )
+            .map_err(|error| format!("failed to initialize resource runtime: {error}"))?;
+        Ok(policy)
+    }
+
+    pub(in crate::conn::state) fn configure_navigation_engine_policy(
+        &mut self,
+        inherited: &InheritedDocumentPolicy,
+    ) -> Result<
+        (
+            moli_browser_profile::BrowserIdentityProfile,
+            Vec<(String, String)>,
+            bool,
+        ),
+        String,
+    > {
         let navigator_identity = self
             .browser_identity_override
             .clone()
@@ -60,14 +85,6 @@ impl WebContents {
         engine.set_blocked_url_patterns(&self.network_request_policy.blocked_url_patterns);
         engine.set_bypass_service_worker(self.network_request_policy.bypass_service_worker);
         engine.set_cache_disabled(self.network_request_policy.cache_disabled);
-        engine
-            .ensure_resource_runtime_ready_for_navigation_storage(
-                inherited
-                    .storage
-                    .resource_storage_handles(self.session_storage.store().clone())
-                    .into_navigation_storage(),
-            )
-            .map_err(|error| format!("failed to initialize resource runtime: {error}"))?;
         Ok((navigator_identity, extra_http_headers, network_offline))
     }
 

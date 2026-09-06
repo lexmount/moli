@@ -1,5 +1,4 @@
 use super::BrowserContext;
-use moli_core::network::BrowserResourceRuntime;
 use moli_core::page::{
     CompletedPageCommand, EmulatedIdleOverride, EmulatedMediaOverrides, PendingPageCommand,
     ViewportSurface,
@@ -14,7 +13,6 @@ pub(crate) enum PagePolicyUpdateKind {
     SetTimezoneOverride,
     SetEmulatedMedia,
     SetViewportSurface,
-    ReplaceBrowserResourceRuntime,
 }
 
 impl BrowserContext {
@@ -143,17 +141,6 @@ impl BrowserContext {
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_replace_browser_resource_runtime_for_target(
-        &self,
-        target_id: &str,
-        resource_runtime: &BrowserResourceRuntime,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_replace_browser_resource_runtime(resource_runtime)
-            .map_err(|error| error.to_string())
-    }
-
     pub(crate) fn finish_target_page_policy_update(
         &mut self,
         target_id: &str,
@@ -185,9 +172,6 @@ impl BrowserContext {
                 }
                 PagePolicyUpdateKind::SetViewportSurface => {
                     page.finish_set_viewport_surface(completion)
-                }
-                PagePolicyUpdateKind::ReplaceBrowserResourceRuntime => {
-                    page.finish_replace_browser_resource_runtime(completion)
                 }
             }
             .map_err(|error| error.to_string());

@@ -27,7 +27,10 @@ pub(crate) use navigation_commit::{
     RetiringDocument,
 };
 mod page_surface;
+mod resource_runtime;
 mod session_storage;
+#[cfg(test)]
+mod tests;
 mod window;
 pub(in crate::conn) use document_host::DocumentHost;
 pub(crate) use document_host::DocumentLifecycleEvent;
@@ -56,7 +59,7 @@ pub(in crate::conn) struct WebContents {
     // Dismiss modal renderer work before Document/Page teardown.
     pub(in crate::conn) javascript_dialogs: JavaScriptDialogs,
     pub(in crate::conn) main_frame: MainFrameSlot,
-    pub(in crate::conn) navigation_engine: Option<NavigationEngine>,
+    navigation_engine: Option<NavigationEngine>,
     pub(in crate::conn) session_storage: SessionStorageNamespace,
     pub(in crate::conn) window: Window,
     pub(in crate::conn) crashed: bool,
@@ -203,6 +206,9 @@ impl WebContents {
     }
 
     pub(in crate::conn) fn set_network_request_policy(&mut self, policy: NetworkRequestPolicy) {
+        if let Some(engine) = self.navigation_engine.as_mut() {
+            engine.set_cache_disabled(policy.cache_disabled);
+        }
         self.network_request_policy = policy;
     }
 

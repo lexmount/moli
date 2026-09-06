@@ -109,7 +109,7 @@ impl CdpConnection {
         if !selected {
             return Ok(None);
         }
-        self.refresh_active_browser_context_loader_async().await;
+        self.refresh_active_browser_context_loader();
         self.notify_target_host_activated(target_id);
 
         let mut protocol_events = Vec::new();
