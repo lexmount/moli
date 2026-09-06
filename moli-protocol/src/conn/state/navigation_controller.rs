@@ -99,9 +99,9 @@ impl InitialDocument {
 ///
 /// The exact token remains here from navigation admission until the request
 /// either commits or fails. Background navigation additionally keeps this
-/// owner alive until its lifecycle completion is drained; transport
-/// cancellation is therefore retired by the same exact-token transition as
-/// the protocol gate instead of by a scheduler-side mirror.
+/// owner alive until its completion is drained. A background result can arrive
+/// before Browser materialization/commit; neither transition alone retires the
+/// cancellation authority of an operation that is still pending.
 #[derive(Debug)]
 struct PendingNavigationRequest {
     navigation_id: NavigationId,
@@ -141,11 +141,6 @@ impl PendingNavigationRequest {
             self.cancellation_handles.push(cancellation);
         }
         self.background_completion_pending = true;
-    }
-
-    fn settle_background_completion(&mut self) {
-        self.background_completion_pending = false;
-        self.cancellation_handles.clear();
     }
 
     fn retire_without_cancellation(&mut self) {
@@ -291,8 +286,9 @@ impl NavigationController {
         else {
             return false;
         };
-        request.settle_background_completion();
+        request.background_completion_pending = false;
         if request.committed {
+            request.retire_without_cancellation();
             self.pending_navigation_request = None;
         }
         true
@@ -505,4 +501,54 @@ fn is_initial_empty_document_url(raw_url: &str) -> bool {
         .ok()
         .as_ref()
         .is_some_and(moli_url::is_about_blank)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn background_result_keeps_cancellation_until_browser_commit_or_retirement() {
+        for commit in [false, true] {
+            let mut controller = NavigationController::default();
+            let navigation = controller.start_document_navigation();
+            let cancellation = controller
+                .document_navigation_cancellation_handle(&navigation)
+                .unwrap();
+            assert!(controller.arm_background_navigation_completion(&navigation, None));
+            assert!(controller.settle_background_navigation_completion(&navigation));
+            let admitted = controller
+                .document_navigation_cancellation_handle(&navigation)
+                .unwrap();
+            assert!(!admitted.is_cancelled());
+            assert!(controller.pending_document().is_some());
+            if commit {
+                assert!(controller.commit_pending_document_navigation_if_matches(&navigation));
+            } else {
+                assert!(controller.clear_pending_document_navigation_if_matches(&navigation));
+            }
+            assert_eq!(admitted.is_cancelled(), !commit);
+            assert_eq!(cancellation.is_cancelled(), !commit);
+            assert!(controller.pending_document().is_none());
+            assert!(!controller.has_inflight_background_navigation());
+        }
+    }
+
+    #[test]
+    fn browser_commit_keeps_background_transport_live_until_its_completion() {
+        let mut controller = NavigationController::default();
+        let navigation = controller.start_document_navigation();
+        let cancellation = controller
+            .document_navigation_cancellation_handle(&navigation)
+            .unwrap();
+        assert!(controller.arm_background_navigation_completion(&navigation, None));
+        assert!(controller.commit_pending_document_navigation_if_matches(&navigation));
+        assert!(!cancellation.is_cancelled());
+        assert!(controller.has_inflight_background_navigation());
+        assert!(controller.settle_background_navigation_completion(&navigation));
+        assert!(!cancellation.is_cancelled());
+        assert!(!controller.has_inflight_background_navigation());
+        drop(controller);
+        assert!(!cancellation.is_cancelled());
+    }
 }
