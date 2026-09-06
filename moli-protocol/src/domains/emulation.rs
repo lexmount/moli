@@ -111,7 +111,7 @@ pub(crate) enum EmulationCommandTaskStep {
 
 enum PendingEmulationPageOperation {
     Policy(PagePolicyUpdateKind),
-    SetUserAgentLoader,
+    RebuildResourceRuntime,
 }
 
 impl PendingEmulationPageOperation {
@@ -921,7 +921,7 @@ fn start_user_agent_override_command(
             pending: PendingEmulationRendererDispatch::Pages(vec![PendingEmulationPageCommand {
                 source: EmulationPageCommandSource::browser_for_owner(conn, &owner_scope),
                 target: PendingEmulationPageTarget::SessionOwner { owner_scope },
-                operation: PendingEmulationPageOperation::SetUserAgentLoader,
+                operation: PendingEmulationPageOperation::RebuildResourceRuntime,
                 pending,
             }]),
         }),
@@ -1750,17 +1750,12 @@ fn start_user_agent_override_for_current_route(
     let pending = conn
         .start_set_base_user_agent_override_for_owner(&owner, user_agent)
         .map_err(devtools_emulation_owner_error)?;
-    if let Some(pending) = pending {
-        return Ok(Some(PendingEmulationPageCommand {
-            source: EmulationPageCommandSource::browser_for_owner(conn, &owner),
-            target,
-            operation: PendingEmulationPageOperation::Policy(
-                PagePolicyUpdateKind::ReplaceBrowserResourceRuntime,
-            ),
-            pending,
-        }));
-    }
-    start_user_agent_loader_update_for_current_route(conn, route)
+    Ok(pending.map(|pending| PendingEmulationPageCommand {
+        source: EmulationPageCommandSource::browser_for_owner(conn, &owner),
+        target,
+        operation: PendingEmulationPageOperation::RebuildResourceRuntime,
+        pending,
+    }))
 }
 
 fn start_user_agent_loader_update_for_current_route(
@@ -1769,26 +1764,13 @@ fn start_user_agent_loader_update_for_current_route(
 ) -> Result<Option<PendingEmulationPageCommand>, DevToolsError> {
     let target = pending_emulation_target_for_route(conn, route)?;
     let owner = CommandOwnerScope::for_route(route.clone());
-    let load_inputs = conn.navigation_load_inputs_for_owner(&owner);
-    let resource_runtime = conn
-        .build_registered_browser_resource_runtime_for_navigation_load_inputs(&load_inputs)
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
-    let Some((context_id, target_id)) = page_configuration_owner(conn, &owner) else {
-        return Ok(None);
-    };
-
-    let context = conn
-        .browser_context_by_id(&context_id)
-        .expect("resolved context remains registered");
-    let pending = context
-        .start_replace_browser_resource_runtime_for_target(&target_id, &resource_runtime)
-        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error.to_string()))?;
-    Ok(Some(PendingEmulationPageCommand {
-        source: EmulationPageCommandSource::browser(context, &target_id),
+    let pending = conn
+        .start_rebuild_resource_runtime_for_owner(&owner)
+        .map_err(devtools_emulation_owner_error)?;
+    Ok(pending.map(|pending| PendingEmulationPageCommand {
+        source: EmulationPageCommandSource::browser_for_owner(conn, &owner),
         target,
-        operation: PendingEmulationPageOperation::Policy(
-            PagePolicyUpdateKind::ReplaceBrowserResourceRuntime,
-        ),
+        operation: PendingEmulationPageOperation::RebuildResourceRuntime,
         pending,
     }))
 }
@@ -2473,6 +2455,12 @@ pub(crate) async fn dispose_page_session_async(
     conn: &mut CdpConnection,
     session_id: &str,
 ) -> anyhow::Result<()> {
+    if conn.emulation_disposal_is_effectively_noop_for_session_owner(session_id)
+        && conn.disable_emulation_session_handler_for_session_owner(session_id)
+    {
+        return Ok(());
+    }
+    conn.set_emulation_renderer_cleanup_pending_for_session_owner(session_id, true);
     let mut first_error = conn
         .clear_devtools_emulation_session_policy_async(session_id)
         .await
@@ -2503,7 +2491,11 @@ pub(crate) async fn dispose_page_session_async(
         "page surfaces",
         apply_session_surface_state_async(conn, session_id).await,
     );
-    first_error.map_or(Ok(()), Err)
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    conn.set_emulation_renderer_cleanup_pending_for_session_owner(session_id, false);
+    Ok(())
 }
 
 async fn apply_session_surface_state_async(
@@ -2770,11 +2762,16 @@ fn finish_pending_emulation_page_command(
     completion: CompletedPageCommand,
 ) -> Result<(), String> {
     match operation {
-        PendingEmulationPageOperation::SetUserAgentLoader => {
-            let PendingEmulationPageTarget::SessionOwner { owner_scope } = target else {
-                unreachable!("user agent loader rebuild finishes through the session owner");
-            };
-            conn.finish_rebuild_resource_runtime_for_owner(&owner_scope, completion)
+        PendingEmulationPageOperation::RebuildResourceRuntime => {
+            if let PendingEmulationPageTarget::SessionOwner { owner_scope } = target {
+                return conn.finish_rebuild_resource_runtime_for_owner(&owner_scope, completion);
+            }
+            if let Some((context_id, target_id)) = target.resolve(conn)
+                && let Some(context) = conn.browser_context_by_id_mut(&context_id)
+            {
+                return context.finish_target_resource_runtime_update(&target_id, completion);
+            }
+            BrowserContext::finish_unobserved_resource_runtime_update(completion)
         }
         PendingEmulationPageOperation::Policy(kind) => {
             if let Some((context_id, target_id)) = target.resolve(conn)

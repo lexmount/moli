@@ -123,11 +123,12 @@ async fn network_configuration_commands_succeed_while_the_target_is_changing_doc
     );
     let configuration = ctx
         .conn
-        .prepared_document_commit_configuration_for_owner(
+        .capture_document_policy_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-navigation"),
             &url::Url::parse("data:text/html,committed").unwrap(),
         )
-        .expect("commit configuration should resolve the target resource runtime");
+        .expect("commit configuration should resolve the target resource runtime")
+        .expect("live WebContents policy");
     assert!(configuration.cache_disabled);
     assert!(configuration.bypass_service_worker);
     assert!(configuration.network_offline);
@@ -237,11 +238,12 @@ async fn commit_configuration_resolves_the_exact_target_network_runtime() {
     ] {
         let configuration = ctx
             .conn
-            .prepared_document_commit_configuration_for_owner(
+            .capture_document_policy_for_owner(
                 &crate::conn::CommandOwnerScope::for_session(session_id),
                 &url::Url::parse("about:blank").unwrap(),
             )
-            .expect("the target-specific resource runtime should resolve");
+            .expect("the target-specific resource runtime should resolve")
+            .expect("live WebContents policy");
         let request_client =
             moli_core::network::ResourceRequestClient::from_browser_resource_runtime(
                 configuration.browser_resource_runtime,

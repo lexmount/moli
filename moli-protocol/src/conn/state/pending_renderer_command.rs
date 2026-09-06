@@ -330,6 +330,11 @@ impl<T> Default for PendingRendererCommandRegistry<T> {
 }
 
 impl<T> PendingRendererCommandRegistry<T> {
+    #[cfg(test)]
+    pub(crate) fn leave_one_renderer_call_id_for_test(&mut self) {
+        self.next_renderer_call_id = NonZeroI32::new(i32::MAX);
+    }
+
     pub(crate) fn try_insert(
         &mut self,
         frontend_command_id: FrontendCommandId,

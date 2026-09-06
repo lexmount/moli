@@ -62,20 +62,6 @@ impl Page {
         ))
     }
 
-    pub(crate) async fn replace_browser_resource_runtime_async(
-        &mut self,
-        resource_runtime: &BrowserResourceRuntime,
-    ) -> Result<()> {
-        self.dispatch_unit_page_command_async(
-            RendererPageCommand::ReplaceBrowserResourceRuntime {
-                resource_runtime: resource_runtime.clone(),
-                navigator_identity: resource_runtime.browser_identity().clone(),
-            },
-            "replace browser resource runtime",
-        )
-        .await
-    }
-
     pub fn start_replace_browser_resource_runtime(
         &self,
         resource_runtime: &BrowserResourceRuntime,

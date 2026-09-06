@@ -3,4 +3,4 @@ mod loaded;
 mod page_targets;
 mod surfaces;
 
-pub(crate) use loaded::{LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit};
+pub(crate) use loaded::LoadedNavigationPageCommit;

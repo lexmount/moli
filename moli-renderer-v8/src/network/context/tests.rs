@@ -18,6 +18,8 @@ use super::{
     DocumentResourceLoaderState,
 };
 
+mod script_cache;
+
 fn owner(document_id: u64) -> FrameDocumentTaskOwner {
     FrameDocumentTaskOwner::new(
         FrameSchedulerLaneId(7),

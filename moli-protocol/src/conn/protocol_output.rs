@@ -6,6 +6,36 @@ use crate::domains::activity::{
 use moli_core::RendererOutputTransportMessage;
 
 impl CdpConnection {
+    /// Native admission uses physical renderer residence, never a frontend
+    /// route or a lifecycle visibility barrier.
+    pub(crate) fn apply_renderer_document_lifecycle(
+        &mut self,
+        renderer_page: super::RendererPageResidenceIdentity,
+        event: moli_core::page::RendererDocumentLifecycleEvent,
+    ) -> Option<super::DocumentLifecycleEvent> {
+        self.browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .find_map(|context| context.apply_renderer_document_lifecycle(renderer_page, event))
+    }
+
+    pub(crate) fn project_document_lifecycle_events_for_owner(
+        &mut self,
+        owner: &super::CommandOwnerScope,
+        events: Vec<super::DocumentLifecycleEvent>,
+    ) -> (
+        Option<super::CommittedRendererDocumentBinding>,
+        Vec<moli_core::page::RendererDocumentLifecycleEvent>,
+    ) {
+        let current = self.current_document_id_for_owner(owner);
+        let events = events
+            .into_iter()
+            .filter(|event| Some(event.document()) == current)
+            .map(|event| event.event())
+            .collect();
+        self.project_renderer_document_lifecycle_events_for_owner(owner, events)
+    }
+
     pub(crate) fn apply_renderer_output_stream_control(
         &mut self,
         control: moli_core::RendererOutputStreamControl,

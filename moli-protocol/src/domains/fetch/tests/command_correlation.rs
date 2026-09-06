@@ -53,7 +53,7 @@ async fn fetch_interception_update_rejects_a_replaced_page() {
         .unwrap();
     let completion = ctx
         .conn
-        .browser_context_by_id(&context_id)
+        .browser_context_by_id_mut(&context_id)
         .unwrap()
         .start_target_fetch_interception_update(&target_id, false, None)
         .unwrap()
@@ -86,7 +86,7 @@ async fn fetch_interception_update_rejects_a_replaced_page() {
 
     let completion = ctx
         .conn
-        .browser_context_by_id(&context_id)
+        .browser_context_by_id_mut(&context_id)
         .unwrap()
         .start_target_fetch_interception_update(&target_id, false, None)
         .unwrap()

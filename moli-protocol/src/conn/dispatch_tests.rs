@@ -713,7 +713,7 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
         PendingFetchNavigation {
             fetch_request_id: "FETCH-background".to_owned(),
             interception_session_id: Some("bidi-session-1".to_owned()),
-            document_navigation_token: None,
+            navigation_permit: PendingFetchNavigation::test_navigation_permit(),
             navigation: NavigationDispatchState {
                 redirect_chain: Vec::new(),
                 redirect_headers: None,
@@ -873,11 +873,6 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
         created_context.network_policy().http_no_proxy.as_deref(),
         Some("localhost,127.0.0.1")
     );
-    let client = conn.ensure_resource_request_client().unwrap();
-    assert_eq!(client.http_proxy(), Some("127.0.0.1:80"));
-    assert_eq!(client.http_no_proxy(), Some("localhost,127.0.0.1"));
-    assert!(!client.tls_verify_host());
-
     let (get_contexts_result, _) = conn
         .execute_devtools_command(DevToolsCommand::GetBrowserContexts(
             DevToolsGetBrowserContextsCommand {
@@ -912,6 +907,14 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
     else {
         panic!("expected create target result");
     };
+
+    // A Context owns policy defaults; its WebContents owns the request engine.
+    // Do not test inheritance through the unrelated standalone fixture engine.
+    let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
+    let client = conn.resource_request_client_for_owner(&owner).unwrap();
+    assert_eq!(client.http_proxy(), Some("127.0.0.1:80"));
+    assert_eq!(client.http_no_proxy(), Some("localhost,127.0.0.1"));
+    assert!(!client.tls_verify_host());
 
     let (remove_result, _, remove_events) = conn
         .execute_devtools_command_with_protocol_events(DevToolsCommand::RemoveBrowserContext(
@@ -969,7 +972,7 @@ async fn devtools_browser_context_create_installs_socks_proxy_for_requests() {
     let (create_result, create_events) = conn
         .execute_devtools_command(DevToolsCommand::CreateBrowserContext(
             DevToolsCreateBrowserContextCommand {
-                context,
+                context: context.clone(),
                 browser_context_id: None,
                 accept_insecure_certs: None,
                 proxy_server: Some("socks5://[::1]:1080".to_owned()),
@@ -996,7 +999,18 @@ async fn devtools_browser_context_create_installs_socks_proxy_for_requests() {
     );
     // The actual request policy comes from proxy_server, not an inert copy of
     // PAC/SOCKS metadata. Frontend parsing keeps validating those input fields.
-    let client = conn.ensure_resource_request_client().unwrap();
+    let (result, _) = conn
+        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+            context,
+            url: "about:blank".to_owned(),
+            browser_context_id: Some(create_result.browser_context_id),
+            activate: true,
+        }))
+        .await
+        .into_parts();
+    assert!(matches!(result, Ok(DevToolsCommandResult::CreateTarget(_))));
+    let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
+    let client = conn.resource_request_client_for_owner(&owner).unwrap();
     assert_eq!(client.http_proxy(), Some("socks5://[::1]:1080"));
     assert!(client.tls_verify_host());
 }
@@ -2372,47 +2386,46 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         .expect("target lifecycle ensure should start active initial page")
         .expect("fresh initial target should pend active initial document page build");
     let real_page_url = "data:text/html,<title>real-page</title>";
+    let completed = pending
+        .wait()
+        .await
+        .expect("build candidate before replacement");
     let parsed_real_page_url = url::Url::parse(real_page_url).expect("data URL should parse");
     let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
-    let real_page = conn
-        .load_page_via_runtime_async(real_page_url)
+    let token = conn
+        .start_document_navigation_for_owner(&owner, "LOADER-real-page".into())
+        .unwrap();
+    let loaded = conn
+        .load_navigation_via_runtime_async(real_page_url)
         .await
         .expect("real navigation page should build");
-    conn.commit_loaded_navigation_page_for_owner_async(
-        &owner,
-        real_page,
-        crate::conn::LoadedNavigationRendererAttachmentCommit::Prepare(None),
-        &parsed_real_page_url,
-    )
-    .await
-    .expect("real navigation page owner should exist")
-    .expect("real navigation page Inspector binding should activate");
-    let real_page_commit = moli_core::page::RendererMainDocumentCommit {
-        frame_id: "TID-1".to_owned(),
-        loader_id: "LOADER-real-page".to_owned(),
-        url: parsed_real_page_url.to_string(),
-        unreachable_url: None,
-        security_origin: "null".to_owned(),
-        secure_context_type: "InsecureScheme".to_owned(),
-        timestamp: 0.0,
-        session_history_position: None,
-    };
-    conn.commit_loaded_navigation_target_identity_for_owner(
-        &owner,
-        &real_page_commit,
-        &parsed_real_page_url,
-    )
-    .expect("real navigation identity should commit");
+    let artifacts = loaded.page_creation_artifacts;
+    let prepared = conn
+        .start_loaded_document_navigation_for_owner(
+            &owner,
+            token,
+            loaded.page,
+            crate::conn::DocumentNavigationDestination {
+                url: parsed_real_page_url.clone(),
+                security_origin: "null".into(),
+                secure_context_type: "InsecureScheme".into(),
+            },
+            &artifacts,
+        )
+        .unwrap()
+        .await
+        .unwrap();
+    let committed = conn
+        .commit_loaded_navigation(prepared)
+        .expect("real Browser Document should commit");
+    assert!(committed.inspection_projection.is_ok());
+    committed.previous_document_retirement.close().await;
     let attachment_after_real_page = conn
         .browser_context
         .as_ref()
         .expect("browser context")
         .document_id();
 
-    let completed = pending
-        .wait()
-        .await
-        .expect("stale initial document page build should complete");
     conn.complete_initial_document_page_build_for_owner(completed)
         .await
         .expect("stale initial document page build should be discarded");

@@ -1,90 +1,118 @@
 use crate::conn::TargetPageResidenceIdentity;
-#[cfg(test)]
 use crate::conn::state::TargetPageAbsenceReason;
-use crate::conn::state::{
-    CommittedRendererAgentAttachment, DocumentId, PreparedRendererAgentAttachment,
+use crate::conn::state::web_contents::{
+    DocumentNavigationDestination, PreparedDocumentNavigation, RetiringDocument,
 };
+use crate::conn::state::{DevToolsRendererChannelError, DocumentId};
 use crate::conn::{BrowserContext, PageTargetHost, TargetRuntimeSlot};
 use moli_core::page::{Page, RendererPageCommandPostResponseContinuation};
-use url::Url;
 
 pub(crate) struct LoadedNavigationPageCommit {
+    pub(crate) lifecycle: crate::conn::state::web_contents::CommittedDocumentLifecycle,
+    pub(crate) inspection_projection: Result<(), DevToolsRendererChannelError>,
     pub(crate) replaced_page_owner: Option<TargetPageResidenceIdentity>,
+    pub(crate) previous_document_retirement: RetiringDocument,
     pub(crate) committed_document_post_response_continuation:
         Option<RendererPageCommandPostResponseContinuation>,
 }
 
-pub(crate) enum LoadedNavigationRendererAttachmentCommit {
-    Prepare(Option<PreparedRendererAgentAttachment>),
-    AlreadyCommitted(CommittedRendererAgentAttachment),
-}
-
 impl BrowserContext {
-    pub(crate) fn fail_target_initial_document_page_build(
-        &mut self,
+    pub(in crate::conn::state::browser_context) fn inherited_document_policy_for_target(
+        &self,
         target_id: &str,
-        message: String,
-    ) {
-        let Some(target) = self.page_targets.get_mut(target_id) else {
-            return;
-        };
-        target
-            .runtime_slot
-            .fail_initial_document_page_build(message);
-        self.mark_loaded_page_absent_for_target(
-            target_id,
-            crate::conn::state::TargetPageAbsenceReason::InitialDocumentPageBuildPending,
+        fetch_defaults: moli_fetch::FetchConfig,
+        permissions: &moli_core::browser::PermissionDefaults,
+    ) -> crate::conn::state::web_contents::InheritedDocumentPolicy {
+        let mut inherited = self.physical.inherited_document_policy(
+            fetch_defaults,
+            permissions,
+            &self.global_extra_headers,
+            self.global_network_conditions,
+            self.global_geolocation_override.as_ref(),
         );
+        if let Some(target) = self.page_target(target_id) {
+            inherited.navigator_queries = target.devtools_sessions.navigator_emulation.effective();
+        }
+        inherited
     }
 
-    pub(crate) async fn install_target_initial_loaded_page_async(
+    pub(in crate::conn) fn start_initial_document_for_target(
         &mut self,
         target_id: &str,
-        page: Page,
-        artifacts: moli_core::page::RendererPageCreationArtifacts,
-    ) -> Result<crate::conn::InitialDocumentPageInstallResult, String> {
-        use crate::conn::InitialDocumentPageInstallResult;
-        if !self.can_install_current_initial_empty_document_page(target_id) {
-            Self::close_page_best_effort(page).await;
-            return Ok(InitialDocumentPageInstallResult::Stale);
-        }
-        let loader_id = self.target_initial_empty_document_loader_id_if_current(target_id);
+        fetch_defaults: moli_fetch::FetchConfig,
+        permissions: &moli_core::browser::PermissionDefaults,
+    ) -> Result<crate::conn::state::web_contents::InitialDocumentAdmission, String> {
+        let inherited =
+            self.inherited_document_policy_for_target(target_id, fetch_defaults, permissions);
         self.web_contents_for_target_mut(target_id)
-            .expect("validated initial document owner")
-            .navigation
-            .mark_initial_empty_document_materialized();
-        self.page_targets
+            .ok_or("initial WebContents unavailable")?
+            .start_initial_document_build(inherited)
+    }
+
+    pub(in crate::conn) fn commit_initial_document(
+        &mut self,
+        built: crate::conn::state::web_contents::BuiltInitialDocument,
+    ) -> Result<
+        moli_core::page::RendererPageCreationDiagnostics,
+        Box<crate::conn::state::web_contents::BuiltInitialDocument>,
+    > {
+        let Some(contents) = self
+            .physical
+            .web_contents
+            .get_mut(&built.key().web_contents())
+        else {
+            return Err(Box::new(built));
+        };
+        let commit = contents.commit_initial_document(built)?;
+        // Native completion is final. A missing or retired AgentHost cannot
+        // veto the Browser document or fail other Browser waiters.
+        let Some(target_id) = self
+            .page_targets
+            .get_for_web_contents(commit.key.web_contents())
+            .map(|target| target.target_id().to_owned())
+        else {
+            return Ok(commit.diagnostics);
+        };
+        let target_id = target_id.as_str();
+        let loader_id = self.target_initial_empty_document_loader_id_if_current(target_id);
+        let retiring = self.begin_document_projection_replacement_for_target(target_id, None);
+        let target = self
+            .page_targets
             .get_mut(target_id)
-            .expect("validated initial document projection")
+            .expect("resolved projection");
+        if let Err(error) = target
+            .runtime_slot
+            .project_initial_document_inspection(commit.inspection_endpoint)
+        {
+            tracing::warn!(%error, "initial document inspection projection failed");
+        }
+        target
             .owner_state
             .clear_committed_document_navigation_state();
         self.clear_target_loaded_document_session_state(target_id);
-        let previous = self.replace_loaded_page_for_target(target_id, Some(page));
+        self.reset_document_projection_for_target(
+            target_id,
+            true,
+            TargetPageAbsenceReason::NoTarget,
+        );
+        self.finish_document_projection_replacement_for_target(target_id, retiring);
         let runtime = &mut self
             .page_targets
             .get_mut(target_id)
-            .expect("validated initial document projection")
+            .expect("resolved projection")
             .runtime_slot;
         runtime.reset_subresource_cursor();
         runtime.clear_websocket_artifacts();
         if let Some(loader_id) = loader_id {
-            let _ = self.bind_renderer_document_lifecycle_for_target(
+            let _ = self.project_committed_document_lifecycle_for_target(
                 target_id,
-                artifacts,
+                commit.lifecycle,
                 None,
                 target_id.to_owned(),
                 loader_id,
             );
         }
-        self.assert_target_materialized_initial_empty_document_has_page(target_id)?;
-        if let Some(page) = previous {
-            Self::close_page_best_effort(page).await;
-        }
-        Ok(InitialDocumentPageInstallResult::Installed)
-    }
-
-    async fn close_page_best_effort(page: Page) {
-        let _ = page.close_async().await;
+        Ok(commit.diagnostics)
     }
 
     pub(crate) fn loaded_page(&self) -> Option<&Page> {
@@ -221,138 +249,184 @@ impl BrowserContext {
 }
 
 impl BrowserContext {
-    pub(crate) async fn commit_loaded_navigation_page_for_target_async(
+    pub(crate) fn owns_web_contents(&self, id: moli_core::browser::WebContentsId) -> bool {
+        self.physical.web_contents.contains_key(&id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_loaded_document_navigation_for_target(
+        &self,
+        target_id: &str,
+        navigation: moli_core::browser::NavigationId,
+        page: Page,
+        destination: DocumentNavigationDestination,
+        artifacts: &moli_core::page::RendererPageCreationArtifacts,
+        defaults: &moli_core::browser::PermissionDefaults,
+    ) -> Result<
+        impl std::future::Future<Output = anyhow::Result<PreparedDocumentNavigation>> + use<>,
+        &'static str,
+    > {
+        let contents = self
+            .web_contents_for_target(target_id)
+            .ok_or("navigation WebContents unavailable")?;
+        contents.start_loaded_document_navigation(
+            navigation,
+            page,
+            destination,
+            artifacts,
+            self.physical.permission_overrides.snapshot(defaults),
+        )
+    }
+
+    pub(in crate::conn) fn start_document_materialization_for_target(
         &mut self,
         target_id: &str,
-        mut page: Page,
-        renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
-        history_url: &Url,
+        navigation: moli_core::browser::NavigationId,
+        page: crate::conn::state::web_contents::PreparedNavigationResponse,
+        destination: DocumentNavigationDestination,
+        fetch_defaults: moli_fetch::FetchConfig,
+        permissions: &moli_core::browser::PermissionDefaults,
+    ) -> Result<crate::conn::state::web_contents::AdmittedDocumentMaterialization, String> {
+        let inherited =
+            self.inherited_document_policy_for_target(target_id, fetch_defaults, permissions);
+        self.web_contents_for_target_mut(target_id)
+            .ok_or("navigation WebContents unavailable")?
+            .start_document_materialization(navigation, page, destination, inherited)
+    }
+
+    pub(in crate::conn) fn start_navigation_load_for_target(
+        &mut self,
+        target_id: &str,
+        navigation: moli_core::browser::NavigationId,
+        policy: moli_core::browser::NavigationRequestLoadPolicy,
+        fetch_defaults: moli_fetch::FetchConfig,
+        permissions: &moli_core::browser::PermissionDefaults,
+    ) -> Result<crate::conn::state::web_contents::AdmittedNavigationLoad, String> {
+        let inherited =
+            self.inherited_document_policy_for_target(target_id, fetch_defaults, permissions);
+        self.web_contents_for_target_mut(target_id)
+            .ok_or("navigation WebContents unavailable")?
+            .start_navigation_load(navigation, policy, inherited)
+    }
+
+    #[cfg(test)]
+    pub(in crate::conn) fn capture_document_policy_for_target(
+        &mut self,
+        target_id: &str,
+        final_url: &url::Url,
+        fetch_defaults: moli_fetch::FetchConfig,
+        permissions: &moli_core::browser::PermissionDefaults,
+    ) -> Result<moli_core::runtime::PreparedDocumentPagePolicy, String> {
+        let inherited =
+            self.inherited_document_policy_for_target(target_id, fetch_defaults, permissions);
+        self.web_contents_for_target_mut(target_id)
+            .ok_or("navigation WebContents unavailable")?
+            .capture_document_policy(inherited, final_url)
+    }
+
+    pub(crate) fn commit_loaded_navigation(
+        &mut self,
+        prepared: PreparedDocumentNavigation,
     ) -> anyhow::Result<LoadedNavigationPageCommit> {
-        let committed_document_post_response_continuation =
-            page.take_committed_document_post_response_continuation();
-        let previous_page_owner = self.target_document_id(target_id).map(|document_id| {
+        let navigation = prepared.navigation();
+        let commit = self
+            .physical
+            .web_contents
+            .get_mut(&prepared.web_contents_id())
+            .ok_or_else(|| anyhow::anyhow!("navigation WebContents unavailable"))?
+            .commit_document_navigation(prepared)
+            .map_err(anyhow::Error::msg)?;
+        debug_assert_eq!(commit.navigation, navigation);
+        let Some(target_id) = self
+            .page_targets
+            .get_for_web_contents(commit.web_contents)
+            .map(|target| target.target_id().to_owned())
+        else {
+            return Ok(LoadedNavigationPageCommit {
+                lifecycle: commit.lifecycle,
+                inspection_projection: Err(DevToolsRendererChannelError::Closed),
+                replaced_page_owner: None,
+                previous_document_retirement: commit.retirement,
+                committed_document_post_response_continuation: commit.post_response_continuation,
+            });
+        };
+        let target_id = target_id.as_str();
+        debug_assert_eq!(self.target_document_id(target_id), Some(commit.document));
+        debug_assert_eq!(
+            self.web_contents_for_target(target_id)
+                .map(|contents| (contents.id(), contents.main_frame.id())),
+            Some((commit.web_contents, commit.frame_slot)),
+        );
+
+        // Consume the completed Browser occurrence. No DevTools operation below
+        // can veto it, restore its pending navigation or roll back the Document.
+        let retiring_projection = self.begin_document_projection_replacement_for_target(
+            target_id,
+            commit.previous_document.zip(commit.previous_renderer),
+        );
+        let target = self
+            .page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection");
+        let inspection_projection = target
+            .runtime_slot
+            .project_committed_document_inspection(commit.navigation, commit.inspection_endpoint)
+            .map(|previous| {
+                if let Some(previous) = previous {
+                    let new_attachment = target
+                        .runtime_slot
+                        .current_renderer_attachment()
+                        .expect("successful inspection rebind");
+                    let primary_session_id = target.session_id().map(str::to_owned);
+                    let replacements = target.devtools_sessions.prepare_renderer_call_replacements(
+                        primary_session_id.as_deref(),
+                        previous.id(),
+                        new_attachment.id(),
+                    );
+                    target
+                        .runtime_slot
+                        .install_pending_renderer_call_replacements(replacements);
+                }
+            });
+        self.reset_document_projection_for_target(
+            target_id,
+            true,
+            TargetPageAbsenceReason::NoTarget,
+        );
+        let target = self
+            .page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection");
+        target
+            .owner_state
+            .clear_committed_document_navigation_state();
+        target.owner_state.committed_document_title = Some(commit.info.title);
+        target.set_target_url(commit.info.url.to_string());
+        target.set_target_security_origin(commit.info.security_origin);
+        target.set_target_secure_context_type(commit.info.secure_context_type);
+        self.clear_target_loaded_document_session_state(target_id);
+        self.retain_navigation_projections_for_target(target_id);
+        self.finish_document_projection_replacement_for_target(target_id, retiring_projection);
+        let runtime = &mut self
+            .page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection")
+            .runtime_slot;
+        runtime.reset_subresource_cursor();
+        runtime.clear_websocket_artifacts();
+        let replaced_page_owner = commit.previous_document.map(|document_id| {
             TargetPageResidenceIdentity::new(
                 self.id.clone(),
                 Some(target_id.to_owned()),
                 document_id,
             )
         });
-        let primary_session_id = self
-            .page_targets
-            .get(target_id)
-            .expect("resolved target projection")
-            .session_id()
-            .map(str::to_owned);
-        let previous_title = self
-            .page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection")
-            .owner_state
-            .committed_document_title()
-            .map(str::to_owned)
-            .or_else(|| {
-                self.loaded_page_for_target(target_id)
-                    .map(Page::document_title)
-            });
-        let previous_attachment = match renderer_attachment_commit {
-            LoadedNavigationRendererAttachmentCommit::Prepare(renderer_agent_candidate) => self
-                .page_targets
-                .get_mut(target_id)
-                .expect("resolved target projection")
-                .runtime_slot
-                .commit_loaded_navigation_renderer_attachment(&page, renderer_agent_candidate)?,
-            LoadedNavigationRendererAttachmentCommit::AlreadyCommitted(transaction) => {
-                self.page_targets
-                    .get_mut(target_id)
-                    .expect("resolved target projection")
-                    .runtime_slot
-                    .bind_page_to_committed_renderer_agent_candidate(&page, &transaction)?;
-                transaction.previous()
-            }
-        };
-        let new_attachment_id = self
-            .page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection")
-            .runtime_slot
-            .current_renderer_attachment()
-            .expect("committed navigation must have a renderer attachment")
-            .id();
-        if let Some(previous_attachment) = previous_attachment
-            && previous_attachment.id() != new_attachment_id
-        {
-            let replacements = self
-                .page_targets
-                .get_mut(target_id)
-                .expect("resolved target projection")
-                .devtools_sessions
-                .prepare_renderer_call_replacements(
-                    primary_session_id.as_deref(),
-                    previous_attachment.id(),
-                    new_attachment_id,
-                )?;
-            self.page_targets
-                .get_mut(target_id)
-                .expect("resolved target projection")
-                .runtime_slot
-                .install_pending_renderer_call_replacements(replacements);
-        }
-
-        self.web_contents_for_target_mut(target_id)
-            .expect("resolved WebContents")
-            .navigation
-            .mark_initial_empty_document_exited();
-        if let Some(previous_title) = previous_title {
-            self.web_contents_for_target_mut(target_id)
-                .expect("resolved WebContents")
-                .navigation
-                .refresh_current_navigation_history_title(previous_title);
-        }
-        let committed_document_title = page.document_title();
-        self.web_contents_for_target_mut(target_id)
-            .expect("resolved WebContents")
-            .navigation
-            .record_loaded_page_navigation_history((
-                history_url.to_string(),
-                committed_document_title.clone(),
-            ));
-        self.page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection")
-            .owner_state
-            .clear_committed_document_navigation_state();
-        self.commit_target_document_title(target_id, committed_document_title);
-        for session in self
-            .page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection")
-            .devtools_sessions
-            .states_mut()
-        {
-            session.clear_runtime_remote_object_tracking();
-            session
-                .page_session_state
-                .clear_loaded_document_context_state();
-        }
-
-        let previous = self.replace_loaded_page_for_target(target_id, Some(page));
-        self.page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection")
-            .runtime_slot
-            .reset_subresource_cursor();
-        self.page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection")
-            .runtime_slot
-            .clear_websocket_artifacts();
-        let replaced_page_owner = previous.as_ref().and(previous_page_owner);
-        if let Some(page) = previous {
-            BrowserContext::close_page_best_effort(page).await;
-        }
         Ok(LoadedNavigationPageCommit {
+            lifecycle: commit.lifecycle,
+            inspection_projection,
             replaced_page_owner,
-            committed_document_post_response_continuation,
+            previous_document_retirement: commit.retirement,
+            committed_document_post_response_continuation: commit.post_response_continuation,
         })
     }
 }

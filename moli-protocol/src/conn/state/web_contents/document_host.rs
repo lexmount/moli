@@ -1,7 +1,30 @@
 use moli_core::{
     browser::{DocumentId, DocumentLifecycle, DocumentLifetime},
-    page::Page,
+    page::{Page, RendererDocumentLifecycleEvent},
 };
+
+/// Exact native occurrence carried to a possibly delayed DevTools projection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DocumentLifecycleEvent {
+    document: DocumentId,
+    event: RendererDocumentLifecycleEvent,
+}
+
+impl DocumentLifecycleEvent {
+    pub(in crate::conn::state) fn new(
+        document: DocumentId,
+        event: RendererDocumentLifecycleEvent,
+    ) -> Self {
+        Self { document, event }
+    }
+
+    pub(crate) fn document(&self) -> DocumentId {
+        self.document
+    }
+    pub(crate) fn event(&self) -> RendererDocumentLifecycleEvent {
+        self.event
+    }
+}
 
 /// One browser Document incarnation, including its concrete renderer Page.
 ///

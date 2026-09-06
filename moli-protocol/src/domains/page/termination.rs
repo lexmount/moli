@@ -97,7 +97,7 @@ pub(crate) fn take_pending_fetch_state(
 ) -> (
     Vec<PendingFetchNavigation>,
     Vec<crate::conn::PendingFetchAuthNavigation>,
-    Vec<crate::conn::PausedDocumentTransfer>,
+    Vec<crate::conn::PendingFetchResponseNavigation>,
     Vec<(String, PendingSubresourceFetchRequest)>,
     Vec<(String, crate::conn::PendingSubresourceFetchAuthRequest)>,
     Vec<(String, crate::conn::PendingSubresourceFetchResponseRequest)>,
@@ -112,7 +112,7 @@ fn take_pending_fetch_state_for_owner(
 ) -> (
     Vec<PendingFetchNavigation>,
     Vec<crate::conn::PendingFetchAuthNavigation>,
-    Vec<crate::conn::PausedDocumentTransfer>,
+    Vec<crate::conn::PendingFetchResponseNavigation>,
     Vec<(String, PendingSubresourceFetchRequest)>,
     Vec<(String, crate::conn::PendingSubresourceFetchAuthRequest)>,
     Vec<(String, crate::conn::PendingSubresourceFetchResponseRequest)>,
@@ -138,7 +138,7 @@ pub(crate) async fn fail_pending_fetch_state_background_events_async(
     subresource_error_text: &str,
     pending_navigations: Vec<PendingFetchNavigation>,
     pending_auth_navigations: Vec<crate::conn::PendingFetchAuthNavigation>,
-    pending_response_navigations: Vec<crate::conn::PausedDocumentTransfer>,
+    pending_response_navigations: Vec<crate::conn::PendingFetchResponseNavigation>,
     pending_subresource_fetches: Vec<(String, PendingSubresourceFetchRequest)>,
     pending_subresource_auths: Vec<(String, crate::conn::PendingSubresourceFetchAuthRequest)>,
     pending_subresource_responses: Vec<(
@@ -171,7 +171,7 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
     subresource_error_text: &str,
     pending_navigations: Vec<PendingFetchNavigation>,
     pending_auth_navigations: Vec<crate::conn::PendingFetchAuthNavigation>,
-    pending_response_navigations: Vec<crate::conn::PausedDocumentTransfer>,
+    pending_response_navigations: Vec<crate::conn::PendingFetchResponseNavigation>,
     pending_subresource_fetches: Vec<(String, PendingSubresourceFetchRequest)>,
     pending_subresource_auths: Vec<(String, crate::conn::PendingSubresourceFetchAuthRequest)>,
     pending_subresource_responses: Vec<(
@@ -185,12 +185,12 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
     // Moli's pending navigation reply remains "Navigation stopped".
     let mut renderer_output_predecessor = None;
     for pending in pending_navigations {
-        let token = pending.document_navigation_token;
+        let token = Some(pending.navigation_permit.navigation());
         let navigation_state = pending.navigation;
-        let navigation = network::materialize_navigation_failure_preserving_committed_document(
+        let navigation = network::materialize_navigation_load_result(
             conn,
             &navigation_state,
-            navigation_error_text.to_owned(),
+            Err(anyhow::anyhow!(navigation_error_text.to_owned())),
         );
         let predecessor = complete_tokened_materialized_navigation_background_events_async(
             conn,
@@ -203,12 +203,13 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
         merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
     }
     for pending in pending_auth_navigations {
-        let token = pending.document_navigation_token;
+        drop(conn.take_navigation_auth(pending.auth_permit));
+        let token = Some(pending.auth_permit.navigation());
         let navigation_state = pending.navigation;
-        let navigation = network::materialize_navigation_failure_preserving_committed_document(
+        let navigation = network::materialize_navigation_load_result(
             conn,
             &navigation_state,
-            navigation_error_text.to_owned(),
+            Err(anyhow::anyhow!(navigation_error_text.to_owned())),
         );
         let predecessor = complete_tokened_materialized_navigation_background_events_async(
             conn,
@@ -221,11 +222,13 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
         merge_renderer_output_predecessor(&mut renderer_output_predecessor, predecessor);
     }
     for pending in pending_response_navigations {
-        let (token, navigation, _) = pending.fail(navigation_error_text.to_owned());
-        let result = network::materialize_navigation_failure_preserving_committed_document(
+        drop(conn.take_navigation_response(pending.permit));
+        let token = Some(pending.permit.navigation());
+        let navigation = pending.navigation;
+        let result = network::materialize_navigation_load_result(
             conn,
             &navigation,
-            navigation_error_text.to_owned(),
+            Err(anyhow::anyhow!(navigation_error_text.to_owned())),
         );
         let predecessor = complete_tokened_materialized_navigation_background_events_async(
             conn, out, token, navigation, result,

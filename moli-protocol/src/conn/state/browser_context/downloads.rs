@@ -1,8 +1,5 @@
-use moli_core::{
-    browser::{DownloadAccessError, DownloadBody, DownloadObservation, DownloadPolicy},
-    network::ResourceRequestClient,
-};
-use moli_fetch::Request;
+use moli_core::browser::{DownloadAccessError, DownloadBody, DownloadObservation, DownloadPolicy};
+use moli_fetch::{FetchConfig, Request};
 use url::Url;
 
 use super::BrowserContext;
@@ -12,11 +9,13 @@ impl BrowserContext {
     // Context. Removed with the wrapper at the typed Browser API cutover (24b/30).
     pub(in crate::conn) fn start_download_request(
         &mut self,
+        target: &str,
+        fetch_defaults: FetchConfig,
         default_policy: &DownloadPolicy,
-        client: ResourceRequestClient,
         request: Request,
         suggested_filename: Option<String>,
     ) -> Result<Option<DownloadObservation>, String> {
+        let client = self.ensure_target_resource_request_client(target, fetch_defaults)?;
         let policy = self
             .physical
             .download_policy

@@ -78,20 +78,19 @@ async fn fetch_body_materialization_preserves_error_type_and_request_identity() 
 async fn fetch_body_stream_read_preserves_error_type_and_paused_transfer() {
     let (_ctx, navigation) = navigation_fixture();
     let body = failing_streamed_document(&navigation);
-    let transfer = crate::conn::PausedDocumentTransfer::pending(
-        "fetch-typed-error".to_owned(),
-        None,
-        navigation,
-        body,
-    )
-    .open_body_stream("stream-typed-error".to_owned())
-    .expect("streamed response should open")
-    .transfer;
+    let transfer =
+        crate::conn::PausedDocumentTransfer::pending(navigation.request_load_policy, body)
+            .open_body_stream("stream-typed-error".to_owned())
+            .expect("streamed response should open")
+            .transfer;
     let (transfer, error) = transfer
         .read_body_stream_async(None)
         .await
         .expect_err("partial transport failure must fail the stream read");
-    assert_eq!(transfer.fetch_request_id(), "fetch-typed-error");
+    assert!(
+        transfer.body_stream_offset().is_some(),
+        "failure must retain the paused stream"
+    );
     assert_eq!(
         error
             .downcast_ref::<std::io::Error>()
@@ -159,34 +158,29 @@ async fn offline_navigation_loaders_preserve_typed_error_causes_through_context(
     let url = navigation.requested_url.as_str();
     let method = &navigation.request_method;
     let headers = &navigation.request_headers;
+    let mut load = ctx.conn.admit_navigation_load(&navigation).unwrap();
     let errors = [
-        ctx.conn
-            .load_navigation_request_via_runtime_with_network_events_for_navigation_async(
-                &navigation,
-                Default::default(),
-            )
+        load.fetch_navigation(method, url, None, headers.clone())
             .await
-            .expect_err("offline document load must fail"),
-        ctx.conn
-            .fetch_navigation_response_async(method, url, None, headers.clone(), None)
-            .await
-            .expect_err("offline response fetch must fail"),
-        ctx.conn
-            .fetch_navigation_streaming_raw_response_async(method, url, None, headers.clone(), None)
+            .err()
+            .expect("offline document load must fail"),
+        load.fetch_intercepted_response(method, url, None, headers.clone(), None)
             .await
             .expect_err("offline streaming response fetch must fail"),
-        ctx.conn
-            .fetch_navigation_auth_raw_response_for_navigation_async(
-                &navigation,
-                SubresourceAuthCredentials {
-                    target: SubresourceAuthTarget::Server,
-                    scheme: SubresourceAuthScheme::Basic,
-                    username: "test-user".to_owned(),
-                    password: "test-password".to_owned(),
-                },
-            )
-            .await
-            .expect_err("offline authenticated response fetch must fail"),
+        load.fetch_intercepted_auth_response(
+            method,
+            url,
+            None,
+            headers.clone(),
+            SubresourceAuthCredentials {
+                target: SubresourceAuthTarget::Server,
+                scheme: SubresourceAuthScheme::Basic,
+                username: "test-user".to_owned(),
+                password: "test-password".to_owned(),
+            },
+        )
+        .await
+        .expect_err("offline authenticated response fetch must fail"),
     ];
     for error in errors {
         let error = error
@@ -228,12 +222,13 @@ async fn navigation_error_document_uses_typed_failure_request_after_context() {
         .prepare_navigation_load_error_for_navigation_async(&navigation, error)
         .await
         .expect("typed network failure should prepare an error document");
-    let NavigationLoadOutcome::ResponseCommitReady(prepared) = outcome else {
-        panic!("network failure must prepare an error document commit");
-    };
-    let permit = prepared.issue_commit_permit();
-    let loaded = prepared
-        .commit(permit)
+    assert!(
+        matches!(outcome, NavigationLoadOutcome::ResponseCommitReady(_)),
+        "network failure must prepare an error document commit"
+    );
+    let loaded = ctx
+        .conn
+        .commit_navigation_load_outcome_for_owner_async(&navigation.owner, outcome)
         .await
         .expect("error document should commit");
     assert_eq!(loaded.requested_url, unreachable_url);

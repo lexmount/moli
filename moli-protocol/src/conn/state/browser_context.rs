@@ -45,6 +45,7 @@ mod downloads;
 pub(in crate::conn) mod javascript_dialog;
 mod navigation;
 mod page_runtime;
+mod resource_runtime;
 pub(crate) use page_runtime::{NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind};
 pub(in crate::conn) mod page_slot;
 mod page_state;
@@ -56,7 +57,7 @@ pub(in crate::conn) mod session;
 mod storage_partition;
 #[cfg(test)]
 mod tests;
-pub(crate) use page_state::{LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit};
+pub(crate) use page_state::LoadedNavigationPageCommit;
 use physical::BrowserContext as PhysicalBrowserContext;
 pub(crate) use physical::{ContextEmulationDefaults, ContextNetworkPolicy};
 use storage_partition::StoragePartitionKind;
@@ -474,7 +475,7 @@ impl BrowserContext {
         let sender = self.renderer_output_transport_sender.clone();
         let runtime = self.physical.renderer_runtime_owner_access();
         for contents in self.physical.web_contents.values_mut() {
-            if contents.navigation_engine.is_some() {
+            if contents.has_navigation_engine() {
                 continue;
             }
             let engine = NavigationEngine::new_with_runtime_config_and_browser_context_access(
@@ -495,25 +496,23 @@ impl BrowserContext {
     ) {
         self.renderer_output_transport_sender = Some(sender.clone());
         for contents in self.physical.web_contents.values() {
-            if let Some(engine) = contents.navigation_engine.as_ref() {
-                engine.set_renderer_output_transport_sender(sender.clone());
-            }
+            contents.set_renderer_output_transport_sender(sender.clone());
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn page_navigation_engine(&self, target_id: &str) -> Option<&NavigationEngine> {
         self.web_contents_for_target(target_id)?
-            .navigation_engine
-            .as_ref()
+            .navigation_engine_for_test()
     }
 
+    #[cfg(test)]
     pub(crate) fn page_navigation_engine_mut(
         &mut self,
         target_id: &str,
     ) -> Option<&mut NavigationEngine> {
         self.web_contents_for_target_mut(target_id)?
-            .navigation_engine
-            .as_mut()
+            .navigation_engine_for_test_mut()
     }
 
     pub(crate) fn is_profile_backed_storage_partition(&self) -> bool {
@@ -531,6 +530,7 @@ impl BrowserContext {
         self.physical.storage_partition.kind_label()
     }
 
+    #[cfg(test)]
     pub(crate) fn resource_storage_handles(&self) -> BrowserContextResourceStorageHandles {
         let session_storage_store = self
             .physical
@@ -821,10 +821,10 @@ impl BrowserContext {
     }
 
     fn target_owner_diagnostics(&self, target: &PageTargetHost) -> Value {
-        let navigation = &self
+        let navigation = self
             .web_contents_for_target(target.target_id())
             .expect("live WebContents")
-            .navigation;
+            .navigation();
         let initial = navigation.initial_empty_document_state().map(|document| {
             let creator = document.creator().map(|creator| json!({
                 "targetId": self.page_targets.iter()
@@ -881,6 +881,7 @@ impl BrowserContext {
             .count()
     }
 
+    #[cfg(test)]
     pub(crate) fn assert_target_materialized_initial_empty_document_has_page(
         &self,
         target_id: &str,
@@ -889,7 +890,7 @@ impl BrowserContext {
             return Ok(());
         };
         if contents
-            .navigation
+            .navigation()
             .has_materialized_current_initial_empty_document()
             && contents.main_frame.current_document.is_none()
         {
@@ -900,6 +901,7 @@ impl BrowserContext {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn can_install_current_initial_empty_document_page(&self, target_id: &str) -> bool {
         let Some(target) = self.page_target(target_id) else {
             return false;
@@ -909,7 +911,7 @@ impl BrowserContext {
                 .web_contents_for_target(target_id)
                 .is_some_and(|contents| {
                     contents
-                        .navigation
+                        .navigation()
                         .can_install_current_initial_empty_document_page()
                 })
     }
@@ -927,7 +929,7 @@ impl BrowserContext {
         let navigation = &self
             .web_contents_for_target(target.target_id())
             .expect("live WebContents")
-            .navigation;
+            .navigation();
         let Some(initial_url) = navigation.initial_empty_document_url_if_current() else {
             return false;
         };
@@ -1065,18 +1067,19 @@ impl BrowserContext {
     pub(crate) fn accepts_pending_document_navigation_event(&self, token: &NavigationId) -> bool {
         self.physical.web_contents.values().any(|contents| {
             contents
-                .navigation
+                .navigation()
                 .accepts_pending_document_navigation_event(token)
         })
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn document_navigation_cancellation_handle(
         &self,
         token: &NavigationId,
     ) -> Option<moli_fetch::FetchCancelHandle> {
         self.physical.web_contents.values().find_map(|contents| {
             contents
-                .navigation
+                .navigation()
                 .document_navigation_cancellation_handle(token)
         })
     }
@@ -1088,7 +1091,7 @@ impl BrowserContext {
     ) -> bool {
         let Some(contents) = self.physical.web_contents.values_mut().find(|contents| {
             contents
-                .navigation
+                .navigation()
                 .accepts_pending_document_navigation_event(token)
         }) else {
             if let Some(cancellation) = additional_cancellation {
@@ -1096,31 +1099,28 @@ impl BrowserContext {
             }
             return false;
         };
-        contents
-            .navigation
-            .arm_background_navigation_completion(token, additional_cancellation)
+        contents.arm_background_navigation_completion(token, additional_cancellation)
     }
 
     pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
-        self.physical.web_contents.values_mut().any(|contents| {
-            contents
-                .navigation
-                .settle_background_navigation_completion(token)
-        })
+        self.physical
+            .web_contents
+            .values_mut()
+            .any(|contents| contents.settle_background_navigation_completion(token))
     }
 
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
         self.physical
             .web_contents
             .values()
-            .any(|contents| contents.navigation.has_inflight_background_navigation())
+            .any(|contents| contents.navigation().has_inflight_background_navigation())
     }
 
     #[cfg(test)]
     pub(crate) fn accepts_document_body_completion_event(&self, token: &NavigationId) -> bool {
         self.physical.web_contents.values().any(|contents| {
             contents
-                .navigation
+                .navigation()
                 .accepts_document_body_completion_event(token)
         })
     }
@@ -1152,6 +1152,7 @@ impl BrowserContext {
         self.clear_pending_document_navigation_if_matches_for_target(target_id, navigation)
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_document_navigation_if_matches(&mut self, token: &NavigationId) {
         let target_id = self
             .page_targets

@@ -43,6 +43,58 @@ pub(super) struct BrowserContext {
 }
 
 impl BrowserContext {
+    pub(super) fn inherited_document_policy(
+        &self,
+        fetch_config: moli_fetch::FetchConfig,
+        defaults: &moli_core::browser::PermissionDefaults,
+        global_headers: &moli_fetch::RequestHeaders,
+        global_network_conditions: Option<EmulatedNetworkConditions>,
+        global_geolocation_override: Option<&EmulatedGeolocationOverrideState>,
+    ) -> super::super::web_contents::InheritedDocumentPolicy {
+        let mut policy =
+            self.inherited_resource_policy(fetch_config, global_headers, global_network_conditions);
+        policy.permissions = self.permission_overrides.snapshot(defaults);
+        policy.emulation.geolocation = policy
+            .emulation
+            .geolocation
+            .or_else(|| global_geolocation_override.cloned());
+        policy
+    }
+
+    pub(super) fn inherited_resource_policy(
+        &self,
+        mut fetch_config: moli_fetch::FetchConfig,
+        global_headers: &moli_fetch::RequestHeaders,
+        global_network_conditions: Option<EmulatedNetworkConditions>,
+    ) -> super::super::web_contents::InheritedDocumentPolicy {
+        if let Some(identity) = &self.browser_identity_override {
+            fetch_config.set_browser_identity(identity.clone());
+        }
+        if let Some(proxy) = &self.network_policy.http_proxy {
+            fetch_config.set_http_proxy(Some(proxy.clone()));
+        }
+        if let Some(no_proxy) = &self.network_policy.http_no_proxy {
+            fetch_config.set_http_no_proxy(Some(no_proxy.clone()));
+        }
+        if let Some(verify) = self.network_policy.tls_verify_host {
+            fetch_config.set_tls_verify_host(verify);
+        }
+        let mut emulation = self.emulation_defaults.clone();
+        emulation.network_conditions = emulation.network_conditions.or(global_network_conditions);
+        super::super::web_contents::InheritedDocumentPolicy {
+            fetch_config,
+            extra_headers: super::super::web_contents::merge_extra_header_layers(&[
+                global_headers,
+                &self.network_policy.extra_headers,
+            ]),
+            emulation,
+            permissions: Vec::new(),
+            selected_web_contents: self.selected_web_contents_id(),
+            navigator_queries: Default::default(),
+            storage: self.storage_partition.handles.clone(),
+        }
+    }
+
     pub(super) fn new(
         handles: BrowserContextStoragePartitionHandles,
         kind: StoragePartitionKind,
@@ -156,4 +208,192 @@ pub(crate) struct ContextEmulationDefaults {
     pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
     pub(crate) geolocation: Option<EmulatedGeolocationOverrideState>,
     pub(crate) device_metrics: Option<EmulatedDeviceMetrics>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn resource_maintenance_never_adopts_a_peers_transport_or_policy() {
+        let mut context = BrowserContext::new(
+            BrowserContextStoragePartitionHandles::memory(),
+            StoragePartitionKind::Ephemeral,
+            None,
+            None,
+        );
+        let mut ids = Vec::new();
+        for (agent, verify) in [("Native/first", false), ("Native/peer", true)] {
+            let mut contents = WebContents::default();
+            contents.install_navigation_engine(
+                context.new_page_navigation_engine(NavigationRuntimeConfig::default()),
+            );
+            contents.browser_identity_override = Some(BrowserIdentityProfile::new(agent, "en"));
+            contents.tls_verify_host_override = Some(verify);
+            ids.push(contents.id());
+            context.web_contents.insert(contents.id(), contents);
+        }
+        let inherited = context.inherited_resource_policy(
+            moli_fetch::FetchConfig::default(),
+            &Default::default(),
+            None,
+        );
+        let first = context
+            .web_contents
+            .get_mut(&ids[0])
+            .unwrap()
+            .ensure_resource_request_client(&inherited)
+            .unwrap();
+        let peer = context
+            .web_contents
+            .get_mut(&ids[1])
+            .unwrap()
+            .ensure_resource_request_client(&inherited)
+            .unwrap();
+        assert!(!first.shares_resource_runtime_with(&peer));
+        assert!(std::sync::Arc::ptr_eq(
+            &first.cookie_store(),
+            &peer.cookie_store()
+        ));
+        let contents = context.web_contents.get_mut(&ids[0]).unwrap();
+        contents.invalidate_resource_runtime();
+        assert!(
+            contents
+                .start_resource_runtime_rebuild(&inherited)
+                .unwrap()
+                .is_none()
+        );
+        let rebuilt = contents.ensure_resource_request_client(&inherited).unwrap();
+        assert!(!rebuilt.shares_resource_runtime_with(&peer));
+        assert!(rebuilt.shares_page_network_policy_with(&first));
+        assert!(
+            rebuilt
+                .browser_resource_runtime()
+                .matches_fetch_config(contents.navigation_fetch_config().unwrap())
+        );
+        assert!(
+            !contents
+                .navigation_fetch_config()
+                .unwrap()
+                .tls_verify_host()
+        );
+        assert_eq!(
+            rebuilt
+                .browser_resource_runtime()
+                .browser_identity()
+                .user_agent(),
+            "Native/first"
+        );
+        let contents = context.web_contents.get(&ids[1]).unwrap();
+        assert!(
+            contents
+                .navigation_fetch_config()
+                .unwrap()
+                .tls_verify_host()
+        );
+        assert_eq!(
+            peer.browser_resource_runtime()
+                .browser_identity()
+                .user_agent(),
+            "Native/peer"
+        );
+        assert!(
+            peer.browser_resource_runtime()
+                .matches_fetch_config(contents.navigation_fetch_config().unwrap())
+        );
+    }
+
+    #[tokio::test]
+    async fn document_policy_capture_needs_no_projection_or_current_document() {
+        let mut context = BrowserContext::new(
+            BrowserContextStoragePartitionHandles::memory(),
+            StoragePartitionKind::Ephemeral,
+            None,
+            None,
+        );
+        context.network_policy.extra_headers = vec![("X-Policy".into(), "context".into())].into();
+        context.network_policy.tls_verify_host = Some(false);
+        context.environment_owner.set_locale(Some("fr-FR")).unwrap();
+        let mut contents = WebContents::default();
+        contents.install_navigation_engine(
+            context.new_page_navigation_engine(NavigationRuntimeConfig::default()),
+        );
+        contents.network_request_policy.extra_headers =
+            vec![("X-Policy".into(), "page".into())].into();
+        contents.emulation_policy.script_execution_disabled = true;
+        contents.emulation_policy.max_touch_points = 4;
+        assert!(
+            contents
+                .start_fetch_interception_update(true, None)
+                .unwrap()
+                .is_none()
+        );
+        let id = contents.id();
+        context.web_contents.insert(id, contents);
+        let geolocation =
+            EmulatedGeolocationOverrideState::Position(crate::conn::EmulatedGeolocationOverride {
+                latitude: 48.85837,
+                longitude: 2.294481,
+                accuracy: 7.0,
+                altitude: None,
+                altitude_accuracy: None,
+                heading: None,
+                speed: None,
+            });
+        let inherited = context.inherited_document_policy(
+            moli_fetch::FetchConfig::default(),
+            &moli_core::browser::PermissionDefaults::default(),
+            &vec![
+                ("X-Global".into(), "global".into()),
+                ("X-Policy".into(), "global".into()),
+            ]
+            .into(),
+            Some(EmulatedNetworkConditions::offline()),
+            Some(&geolocation),
+        );
+        let contents = context.web_contents.get_mut(&id).unwrap();
+        let policy = contents
+            .capture_document_policy(inherited, &url::Url::parse("about:blank").unwrap())
+            .unwrap();
+        assert_eq!(
+            policy.extra_http_headers.to_byte_strings(),
+            [
+                ("X-Global".into(), "global".into()),
+                ("X-Policy".into(), "page".into())
+            ]
+        );
+        assert_eq!(context.environment_owner.locale().as_deref(), Some("fr-FR"));
+        assert!(policy.network_offline);
+        assert_eq!(policy.navigator_overrides.online, Some(false));
+        assert_eq!(policy.navigator_overrides.max_touch_points, 4);
+        assert_eq!(
+            policy
+                .navigator_overrides
+                .geolocation
+                .as_ref()
+                .map(|position| position.latitude),
+            Some(48.85837),
+        );
+        assert!(policy.script_execution_disabled);
+        assert!(policy.fetch_subresource_interception_enabled);
+        assert!(
+            !contents
+                .navigation_engine_for_test()
+                .unwrap()
+                .fetch_config()
+                .tls_verify_host()
+        );
+        assert!(contents.main_frame.current_document.is_none());
+        assert!(
+            contents
+                .start_fetch_interception_update(false, None)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(contents.fetch_subresource_interception(), (false, None));
+        assert!(
+            policy.fetch_subresource_interception_enabled,
+            "capture is a value, not a live registration view"
+        );
+    }
 }

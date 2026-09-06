@@ -105,8 +105,14 @@ impl CdpConnection {
     #[cfg(test)]
     pub(crate) fn install_browser_context_fixture_for_test(
         &mut self,
-        browser_context: BrowserContext,
+        mut browser_context: BrowserContext,
     ) {
+        // Mirror production Context insertion. Document admission must never
+        // fall back to a connection/another WebContents' navigation engine.
+        browser_context.bind_page_navigation_engines(
+            self.standalone_navigation_engine.runtime_config(),
+            self.scheduler_hooks.renderer_publication_sender(),
+        );
         self.browser_context = Some(browser_context);
         self.commit_declared_session_fixtures_for_test();
     }
@@ -114,8 +120,12 @@ impl CdpConnection {
     #[cfg(test)]
     pub(crate) fn push_inactive_browser_context_fixture_for_test(
         &mut self,
-        browser_context: BrowserContext,
+        mut browser_context: BrowserContext,
     ) {
+        browser_context.bind_page_navigation_engines(
+            self.standalone_navigation_engine.runtime_config(),
+            self.scheduler_hooks.renderer_publication_sender(),
+        );
         self.inactive_browser_contexts.push(browser_context);
         self.commit_declared_session_fixtures_for_test();
     }

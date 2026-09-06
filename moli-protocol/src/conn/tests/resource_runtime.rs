@@ -13,6 +13,125 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
+#[tokio::test]
+async fn resource_defaults_without_a_page_do_not_materialize_a_fallback_engine() {
+    let mut conn = CdpConnection::new_with_deferred_navigation_runtime(
+        CdpInitialStoragePartition::memory(),
+        Default::default(),
+    );
+    assert!(conn.standalone_navigation_engine.engine.get().is_none());
+    conn.set_user_agent_override_async("Lazy/1").await;
+    conn.set_tls_verify_host_async(false).await;
+    assert_eq!(
+        conn.fetch_config().browser_identity().user_agent(),
+        "Lazy/1"
+    );
+    assert!(!conn.fetch_config().tls_verify_host());
+    assert!(conn.browser_context.is_none());
+    assert!(conn.standalone_navigation_engine.engine.get().is_none());
+
+    let context = conn.new_browser_context("BID-empty".into());
+    conn.insert_browser_context(context);
+    let owner = CommandOwnerScope::capture(&conn, None);
+    assert!(
+        conn.start_rebuild_resource_runtime_for_owner(&owner)
+            .unwrap()
+            .is_none()
+    );
+    assert!(conn.resource_request_client_for_owner(&owner).is_err());
+    assert!(
+        conn.browser_context
+            .as_ref()
+            .unwrap()
+            .active_target_id()
+            .is_none()
+    );
+    assert!(conn.standalone_navigation_engine.engine.get().is_none());
+}
+
+#[tokio::test]
+async fn resource_maintenance_rejects_stale_routes_without_touching_the_selected_peer() {
+    let mut conn = CdpConnection::new();
+    let mut context = conn.new_browser_context("BID-live".into());
+    context.set_active_target_id("TID-peer");
+    conn.insert_browser_context(context);
+    let peer = CommandOwnerScope::capture(&conn, None);
+    let client = conn.resource_request_client_for_owner(&peer).unwrap();
+    let scopes = [
+        CommandOwnerScope::for_session("SID-missing"),
+        CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: "BID-live".into(),
+            target_id: "TID-missing".into(),
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
+        }),
+        CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::BrowserContext {
+            browser_context_id: "BID-missing".into(),
+        }),
+    ];
+    for scope in scopes {
+        assert!(
+            matches!(conn.start_rebuild_resource_runtime_for_owner(&scope), Err(error) if error == "NoDocumentLoaded")
+        );
+        assert!(
+            matches!(conn.resource_request_client_for_owner(&scope), Err(error) if error == "NoDocumentLoaded")
+        );
+    }
+    let current = conn.resource_request_client_for_owner(&peer).unwrap();
+    assert!(client.shares_resource_runtime_with(&current));
+    assert!(client.shares_page_network_policy_with(&current));
+    assert!(
+        !conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .target_has_loaded_page("TID-peer")
+    );
+}
+
+#[tokio::test]
+async fn detached_session_cannot_rebuild_but_its_live_browser_owner_keeps_its_client() {
+    let mut conn = CdpConnection::new();
+    let mut context = conn.new_browser_context("BID-live".into());
+    context.set_active_target_id("TID-owner");
+    context.attach_active_session("SID-owner");
+    let route = crate::conn::CdpSessionRoute::PageTarget {
+        browser_context_id: "BID-live".into(),
+        target_id: "TID-owner".into(),
+        session_key: moli_page_types::DevToolsSessionKey::Primary,
+    };
+    conn.install_browser_context_fixture_for_test(context);
+    let session = CommandOwnerScope::for_session("SID-owner");
+    let client = conn.resource_request_client_for_owner(&session).unwrap();
+    let context = conn.browser_context.as_mut().unwrap();
+    assert!(context.dispose_devtools_session_for_target(
+        "TID-owner",
+        "SID-owner",
+        &moli_page_types::DevToolsSessionKey::Primary
+    ));
+    context.set_active_target_id("TID-peer");
+    conn.detach_known_session_event_plan("TID-owner", "SID-owner", None, None);
+    assert!(
+        matches!(conn.start_rebuild_resource_runtime_for_owner(&session), Err(error) if error == "NoDocumentLoaded")
+    );
+    assert!(conn.resource_request_client_for_owner(&session).is_err());
+    let owner = CommandOwnerScope::for_route(route);
+    let retained = conn.resource_request_client_for_owner(&owner).unwrap();
+    assert!(client.shares_page_network_policy_with(&retained));
+    assert!(std::sync::Arc::ptr_eq(
+        &client.cookie_store(),
+        &retained.cookie_store()
+    ));
+    assert!(
+        conn.start_rebuild_resource_runtime_for_owner(&owner)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        conn.browser_context.as_ref().unwrap().active_target_id(),
+        Some("TID-peer")
+    );
+}
+
 fn stored_cookie(name: &str, value: &str) -> moli_cookie_jar::StoredCookie {
     moli_cookie_jar::StoredCookie {
         name: name.to_owned(),
@@ -48,26 +167,19 @@ async fn commit_navigation_outcome_for_session_test(
     match outcome {
         NavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
-            let configuration = conn
-                .prepared_document_commit_configuration_for_owner(
-                    &match session_id {
-                        Some(session_id) => CommandOwnerScope::for_session(session_id),
-                        None => CommandOwnerScope::capture(conn, None),
-                    },
-                    navigation.final_url(),
-                )
+            let owner = match session_id {
+                Some(session_id) => CommandOwnerScope::for_session(session_id),
+                None => CommandOwnerScope::capture(conn, None),
+            };
+            let policy = conn
+                .capture_document_policy_for_owner(&owner, navigation.final_url())
                 .expect("test navigation commit configuration should resolve");
+            let inspection = conn.prepared_document_inspection_for_owner(&owner);
             navigation
-                .update_commit_configuration(configuration)
-                .await
-                .expect("test navigation commit configuration should apply");
-            let permit = navigation.issue_commit_permit();
-            navigation
-                .commit(permit)
+                .materialize(policy, inspection)
                 .await
                 .expect("test navigation should commit")
         }
-        NavigationLoadOutcome::Loaded(navigation) => *navigation,
         NavigationLoadOutcome::Download(_) => {
             panic!("test navigation should not resolve to a download")
         }
@@ -78,7 +190,21 @@ async fn commit_navigation_outcome_for_session_test(
 }
 
 #[tokio::test]
-async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
+async fn buffered_navigation_commits_to_admitted_inactive_owner_after_session_detach() {
+    buffered_navigation_policy_checkpoint(None).await;
+}
+
+#[tokio::test]
+async fn stale_document_materialization_does_not_mutate_engine_policy() {
+    buffered_navigation_policy_checkpoint(Some(false)).await;
+}
+
+#[tokio::test]
+async fn canceled_document_materialization_does_not_mutate_engine_policy() {
+    buffered_navigation_policy_checkpoint(Some(true)).await;
+}
+
+async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
     let mut conn = CdpConnection::new();
     let ambient_context = conn.new_browser_context("BID-ambient".to_owned());
     conn.insert_browser_context(ambient_context);
@@ -91,7 +217,7 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
     target_context.set_active_target_id("TID-target");
     target_context.attach_active_session("SID-target");
     target_context.begin_active_target_initial_empty_document("about:blank".to_owned());
-    target_context
+    let token = target_context
         .start_document_navigation_for_active_target("LOADER-target".to_owned())
         .expect("target should accept its synthetic navigation");
     conn.push_inactive_browser_context_fixture_for_test(target_context);
@@ -132,15 +258,89 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
             requested_url,
             200,
             vec![("content-type".to_owned(), b"text/html".to_vec())],
-            crate::conn::CapturedBody::from_string("<main>target</main>".to_owned()),
+            crate::conn::CapturedBody::from_string(
+                "<script>document.title = String(navigator.maxTouchPoints)</script>".to_owned(),
+            ),
             None,
             moli_fetch::NetworkObservationJournal::default(),
             crate::domains::network::MainDocumentBodyProgressSource::default(),
         )
         .await
         .expect("buffered target navigation should prepare");
-    let loaded =
-        commit_navigation_outcome_for_session_test(&mut conn, outcome, Some("SID-target")).await;
+    let NavigationLoadOutcome::ResponseCommitReady(response) = outcome else {
+        panic!("buffered HTML must retain an unmaterialized renderer candidate");
+    };
+    let context = conn.browser_context_by_id_mut("BID-target").unwrap();
+    context.apply_target_emulation_policy_change(
+        "TID-target",
+        crate::conn::state::EmulationPolicyChange::MaxTouchPoints(4),
+    );
+    if let Some(canceled) = reject_canceled {
+        assert!(
+            context
+                .page_navigation_engine("TID-target")
+                .unwrap()
+                .fetch_config()
+                .tls_verify_host()
+        );
+        context.set_tls_verify_host_override_for_target("TID-target", Some(false));
+        let admission = if canceled {
+            context
+                .document_navigation_cancellation_handle_for_target("TID-target", &token)
+                .unwrap()
+                .cancel();
+            token
+        } else {
+            moli_core::browser::NavigationId::allocate()
+        };
+        let result = conn.start_response_document_materialization_for_owner(
+            &navigation.owner,
+            admission,
+            *response,
+        );
+        assert!(
+            matches!(result, Err(ref message) if message == "renderer channel navigation was superseded by a newer navigation")
+        );
+        assert!(
+            conn.browser_context_by_id("BID-target")
+                .unwrap()
+                .page_navigation_engine("TID-target")
+                .unwrap()
+                .fetch_config()
+                .tls_verify_host(),
+            "rejected admission must not install the new native TLS policy on the engine"
+        );
+        return;
+    }
+    let materialization = conn
+        .start_response_document_materialization_for_owner(&navigation.owner, token, *response)
+        .unwrap();
+    let context = conn.browser_context_by_id_mut("BID-target").unwrap();
+    context.apply_target_emulation_policy_change(
+        "TID-target",
+        crate::conn::state::EmulationPolicyChange::MaxTouchPoints(8),
+    );
+    assert!(context.dispose_devtools_session_for_target(
+        "TID-target",
+        "SID-target",
+        &moli_page_types::DevToolsSessionKey::Primary,
+    ));
+    context.set_active_target_id("TID-peer");
+    // Complete both halves of DevTools disposal: domain state and the service
+    // route. Resetting the primary domain slot alone does not detach its wire id.
+    conn.detach_known_session_event_plan("TID-target", "SID-target", None, None);
+    assert!(conn.session_route(Some("SID-target")).is_none());
+    assert!(
+        conn.target_runtime_session_state_for_owner(&navigation.owner)
+            .is_none()
+    );
+    let loaded = materialization.await.unwrap();
+    let commit = conn.commit_loaded_navigation(loaded.page).unwrap();
+    assert!(commit.inspection_projection.is_ok());
+    if let Some(continuation) = commit.committed_document_post_response_continuation {
+        continuation.release();
+    }
+    commit.previous_document_retirement.close().await;
     let target_engine = conn
         .browser_context_by_id("BID-target")
         .and_then(|context| context.page_navigation_engine("TID-target"))
@@ -155,13 +355,37 @@ async fn buffered_navigation_for_inactive_session_retains_its_target_engine() {
         "navigation completion must not replace the target's resident engine policy"
     );
     assert_eq!(
-        loaded.page.renderer_owner_local_host_id().as_u64(),
+        conn.browser_context_by_id("BID-target")
+            .unwrap()
+            .target_renderer_page_residence_identity("TID-target")
+            .unwrap()
+            .owner_local_host_id()
+            .as_u64(),
         target_renderer_owner,
         "the loaded Page and the engine handed to its target must share one renderer owner"
     );
     assert_ne!(
         target_renderer_owner, ambient_renderer_owner,
         "a browser-level Fetch action must not build an inactive target on the ambient context engine"
+    );
+    let context = conn.browser_context_by_id_mut("BID-target").unwrap();
+    assert_eq!(context.active_target_id(), Some("TID-peer"));
+    assert!(!context.target_has_loaded_page("TID-peer"));
+    assert!(!context.has_pending_document_navigation_for_target("TID-target"));
+    assert_eq!(
+        context.target_document_title("TID-target").unwrap(),
+        "4",
+        "creation must use policy captured by Browser admission, before detach or later policy changes"
+    );
+    assert_eq!(
+        context
+            .target_navigation_history_snapshot("TID-target")
+            .unwrap()
+            .1
+            .last()
+            .unwrap()
+            .url,
+        "https://target.example/fulfilled"
     );
 }
 

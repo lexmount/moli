@@ -399,6 +399,20 @@ impl DevToolsSessionRegistry {
         }
     }
 
+    pub(in crate::conn) fn emulation_disposal_is_effectively_noop(
+        &self,
+        key: &DevToolsSessionKey,
+        effective: &super::EmulationPolicy,
+    ) -> bool {
+        !self.environment_owners.contains_key(key)
+            && self.navigator_emulation.is_empty()
+            && self.session(key).is_some_and(|session| {
+                session
+                    .emulation_session_state
+                    .disposal_is_effectively_noop(effective)
+            })
+    }
+
     pub(crate) fn clear_emulation_policy_state(&mut self, session_key: &DevToolsSessionKey) {
         self.environment_owners.remove(session_key);
         if let Some(state) = self.states.get_mut(session_key) {
@@ -437,31 +451,11 @@ impl DevToolsSessionRegistry {
         primary_session_id: Option<&str>,
         old_attachment_id: moli_page_types::RendererAgentAttachmentId,
         new_attachment_id: moli_page_types::RendererAgentAttachmentId,
-    ) -> Result<PreparedRendererCallReplacements, RendererCallIdExhausted> {
-        let terminations = self.prepare_renderer_call_terminations(
-            primary_session_id,
-            old_attachment_id,
-            new_attachment_id,
-        )?;
-        let replays = self.prepare_renderer_call_replays(
-            primary_session_id,
-            old_attachment_id,
-            new_attachment_id,
-        )?;
-        Ok(PreparedRendererCallReplacements::new(
-            new_attachment_id,
-            terminations,
-            replays,
-        ))
-    }
-
-    fn prepare_renderer_call_replays(
-        &mut self,
-        primary_session_id: Option<&str>,
-        old_attachment_id: moli_page_types::RendererAgentAttachmentId,
-        new_attachment_id: moli_page_types::RendererAgentAttachmentId,
-    ) -> Result<Vec<SessionRendererCallReplay>, RendererCallIdExhausted> {
-        let mut replays = Vec::new();
+    ) -> PreparedRendererCallReplacements {
+        let mut replacements = PreparedRendererCallReplacements {
+            new_attachment_id: Some(new_attachment_id),
+            ..Default::default()
+        };
         for (key, state) in &mut self.states {
             let (frontend_session_id, renderer_inspector_session_id) = match key {
                 DevToolsSessionKey::Primary => (primary_session_id.map(str::to_owned), None),
@@ -469,43 +463,39 @@ impl DevToolsSessionRegistry {
                     (Some(session_id.clone()), Some(session_id.clone()))
                 }
             };
-            replays.extend(
-                state
-                    .prepare_renderer_call_replays(old_attachment_id, new_attachment_id)?
-                    .into_iter()
-                    .map(|replay| SessionRendererCallReplay {
-                        frontend_session_id: frontend_session_id.clone(),
-                        renderer_inspector_session_id: renderer_inspector_session_id.clone(),
-                        replay,
-                    }),
-            );
-        }
-        Ok(replays)
-    }
-
-    fn prepare_renderer_call_terminations(
-        &mut self,
-        primary_session_id: Option<&str>,
-        old_attachment_id: moli_page_types::RendererAgentAttachmentId,
-        terminal_attachment_id: moli_page_types::RendererAgentAttachmentId,
-    ) -> Result<Vec<SessionRendererCallTermination>, RendererCallIdExhausted> {
-        let mut terminations = Vec::new();
-        for (key, state) in &mut self.states {
-            let frontend_session_id = match key {
-                DevToolsSessionKey::Primary => primary_session_id.map(str::to_owned),
-                DevToolsSessionKey::Attached(session_id) => Some(session_id.clone()),
+            // An allocation failure may follow an already rotated response lease.
+            // Settle the whole affected session; preserve every other session's work.
+            let prepared = state
+                .prepare_renderer_call_terminations(old_attachment_id, new_attachment_id)
+                .and_then(|terminations| {
+                    state
+                        .prepare_renderer_call_replays(old_attachment_id, new_attachment_id)
+                        .map(|replays| (terminations, replays))
+                });
+            let (terminations, replays) = match prepared {
+                Ok(prepared) => prepared,
+                Err(_) => {
+                    replacements.failed_session_ids.push(frontend_session_id);
+                    continue;
+                }
             };
-            terminations.extend(
-                state
-                    .prepare_renderer_call_terminations(old_attachment_id, terminal_attachment_id)?
-                    .into_iter()
-                    .map(|termination| SessionRendererCallTermination {
+            replacements
+                .terminations
+                .extend(terminations.into_iter().map(|termination| {
+                    SessionRendererCallTermination {
                         frontend_session_id: frontend_session_id.clone(),
                         termination,
-                    }),
-            );
+                    }
+                }));
+            replacements
+                .replays
+                .extend(replays.into_iter().map(|replay| SessionRendererCallReplay {
+                    frontend_session_id: frontend_session_id.clone(),
+                    renderer_inspector_session_id: renderer_inspector_session_id.clone(),
+                    replay,
+                }));
         }
-        Ok(terminations)
+        replacements
     }
 
     pub(crate) fn runtime_bindings_for_renderer(&self) -> Vec<RuntimeBindingDefinition> {
@@ -604,23 +594,14 @@ pub(crate) struct PreparedRendererCallReplacements {
     new_attachment_id: Option<moli_page_types::RendererAgentAttachmentId>,
     terminations: Vec<SessionRendererCallTermination>,
     replays: Vec<SessionRendererCallReplay>,
+    failed_session_ids: Vec<Option<String>>,
 }
 
 impl PreparedRendererCallReplacements {
-    fn new(
-        new_attachment_id: moli_page_types::RendererAgentAttachmentId,
-        terminations: Vec<SessionRendererCallTermination>,
-        replays: Vec<SessionRendererCallReplay>,
-    ) -> Self {
-        Self {
-            new_attachment_id: Some(new_attachment_id),
-            terminations,
-            replays,
-        }
-    }
-
     pub(crate) fn is_empty(&self) -> bool {
-        self.terminations.is_empty() && self.replays.is_empty()
+        self.terminations.is_empty()
+            && self.replays.is_empty()
+            && self.failed_session_ids.is_empty()
     }
 
     pub(crate) fn into_parts(
@@ -629,12 +610,14 @@ impl PreparedRendererCallReplacements {
         moli_page_types::RendererAgentAttachmentId,
         Vec<SessionRendererCallTermination>,
         Vec<SessionRendererCallReplay>,
+        Vec<Option<String>>,
     ) {
         (
             self.new_attachment_id
                 .expect("prepared renderer replacements must have an attachment"),
             self.terminations,
             self.replays,
+            self.failed_session_ids,
         )
     }
 }
@@ -681,6 +664,7 @@ pub(crate) struct DevToolsEmulationSessionState {
     // Consumed on handler disable. Retrying failed renderer cleanup must not
     // reset policy subsequently installed by another session.
     pub(crate) overrides: Option<super::EmulationPolicy>,
+    renderer_cleanup_pending: bool,
 }
 
 impl Default for DevToolsEmulationSessionState {
@@ -688,11 +672,41 @@ impl Default for DevToolsEmulationSessionState {
         Self {
             browser_identity_override: None,
             overrides: Some(super::EmulationPolicy::default()),
+            renderer_cleanup_pending: false,
         }
     }
 }
 
 impl DevToolsEmulationSessionState {
+    pub(in crate::conn) fn disposal_is_effectively_noop(
+        &self,
+        effective: &super::EmulationPolicy,
+    ) -> bool {
+        if self.renderer_cleanup_pending {
+            return false;
+        }
+        if self.browser_identity_override.is_some() {
+            return false;
+        }
+        let Some(raw) = self.overrides.as_ref() else {
+            return true;
+        };
+        effective.emulated_media == super::EmulatedMediaOverrides::default()
+            && !effective.script_execution_disabled
+            && (raw.network_conditions.is_none() || effective.network_conditions.is_none())
+            && (raw.geolocation_override.is_none() || effective.geolocation_override.is_none())
+            && (raw.emulated_device_metrics.is_none()
+                || effective.emulated_device_metrics.is_none())
+            && effective.default_background_color.is_none()
+            && (raw.max_touch_points == 0 || effective.max_touch_points == 0)
+            && (!raw.emit_touch_events_for_mouse || !effective.emit_touch_events_for_mouse)
+            && (!raw.focus_emulation_enabled || !effective.focus_emulation_enabled)
+    }
+
+    pub(in crate::conn) fn set_renderer_cleanup_pending(&mut self, pending: bool) {
+        self.renderer_cleanup_pending = pending;
+    }
+
     /// Handler-disable semantics belong to DevTools. Browser receives only
     /// source-free changes, without learning which session caused a reset or
     /// requiring a read-modify-write round trip through Browser state.

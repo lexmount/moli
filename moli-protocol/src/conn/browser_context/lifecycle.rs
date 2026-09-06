@@ -76,7 +76,7 @@ impl CdpConnection {
             if self.browser_context.is_none() && !self.inactive_browser_contexts.is_empty() {
                 self.select_inactive_browser_context_as_active(0);
             }
-            self.invalidate_resource_runtime_async().await;
+            self.invalidate_resource_runtime();
             self.restore_preferred_browser_context_async(
                 restore_browser_context_id,
                 browser_context_id,
@@ -103,9 +103,9 @@ impl CdpConnection {
         }
     }
 
-    pub(crate) async fn refresh_active_browser_context_loader_async(&mut self) {
+    pub(crate) fn refresh_active_browser_context_loader(&mut self) {
         self.apply_active_engine_fetch_overrides();
-        self.invalidate_resource_runtime_async().await;
+        self.invalidate_resource_runtime();
     }
 
     fn select_inactive_browser_context_as_active(&mut self, index: usize) {

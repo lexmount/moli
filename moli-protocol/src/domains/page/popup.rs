@@ -229,6 +229,7 @@ mod tests {
         let mut context = BrowserContext::new(browser_context_id.to_owned());
         context.set_active_target_id(target_id);
         context.attach_active_session(session_id);
+        context.bind_page_navigation_engines(Default::default(), None);
         context
     }
 

@@ -5,7 +5,8 @@ use moli_shared_worker::SharedWorkerInstanceId;
 // Helper: quickly set up a browser context with a given id, optional
 // target_id, optional session_id, and optional url.
 pub(super) fn load_bc(ctx: &mut TestContext, bc_id: &str) {
-    ctx.conn.browser_context = Some(BrowserContext::new(bc_id.into()));
+    ctx.conn
+        .install_browser_context_fixture_for_test(BrowserContext::new(bc_id.into()));
 }
 
 pub(super) fn load_bc_with_target(ctx: &mut TestContext, bc_id: &str, target_id: &str) {

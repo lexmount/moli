@@ -2,8 +2,8 @@ use super::BrowserContext;
 use moli_core::page::{
     CompletedPageCommand, PendingPageCommand, RendererCaptureScreencastFrameReply,
     RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
-    RendererCaptureScreenshotRequest, RendererCommandTurnOutput, RendererLayoutMetrics,
-    RendererResourceTextSearchOutcome, RendererSetDocumentContentResult, SubresourceNetworkRecord,
+    RendererCaptureScreenshotRequest, RendererCommandTurnOutput, RendererResourceTextSearchOutcome,
+    RendererSetDocumentContentResult, SubresourceNetworkRecord,
 };
 
 impl BrowserContext {
@@ -167,27 +167,6 @@ impl BrowserContext {
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_layout_metrics_for_target(
-        &self,
-        target_id: &str,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_layout_metrics()
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn finish_layout_metrics_for_target(
-        &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererLayoutMetrics, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_layout_metrics(completion)
-            .map_err(|error| error.to_string())
-    }
-
     pub(crate) fn start_capture_screenshot_with_request_for_target(
         &self,
         target_id: &str,
@@ -236,10 +215,9 @@ impl BrowserContext {
         &self,
         target_id: &str,
     ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
+        self.web_contents_for_target(target_id)
             .ok_or("NoDocumentLoaded")?
             .start_reset_navigation_history()
-            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn finish_reset_navigation_history_for_target(
@@ -247,10 +225,9 @@ impl BrowserContext {
         target_id: &str,
         completion: CompletedPageCommand,
     ) -> Result<bool, String> {
-        self.loaded_page_for_target_mut(target_id)
+        self.web_contents_for_target_mut(target_id)
             .ok_or("NoDocumentLoaded")?
             .finish_reset_navigation_history(completion)
-            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn start_child_frame_navigation_to_url_for_target(

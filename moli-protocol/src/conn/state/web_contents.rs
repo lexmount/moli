@@ -1,28 +1,58 @@
 use moli_core::{
-    browser::{DocumentLifecycle, MainFrameSlotId, WebContentsId},
-    page::{
-        Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
-        RendererDocumentLifecycleSnapshot,
-    },
+    browser::{MainFrameSlotId, WebContentsId},
+    page::{Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind},
     runtime::NavigationEngine,
 };
 
-use super::navigation_controller::NavigationController;
+mod navigation_controller;
+use navigation_controller::NavigationController;
+pub use navigation_controller::PageNavigationHistoryEntry;
+pub(crate) use navigation_controller::{
+    HistoryTraversalDestination, InitialDocument, InitialDocumentCreator, ResolvedHistoryTraversal,
+};
 
 mod document_host;
+mod document_policy;
+pub(in crate::conn::state) use document_policy::InheritedDocumentPolicy;
 mod emulation_policy;
+mod initial_document;
 mod javascript_dialog;
+pub(in crate::conn) use initial_document::InitialDocumentAdmission;
+pub(in crate::conn::state) use initial_document::InitialDocumentBuildState;
+pub(crate) use initial_document::{
+    BuiltInitialDocument, InitialDocumentBuildKey, InitialDocumentPageBuildWaiter,
+};
+mod navigation_commit;
+pub(in crate::conn) use navigation_commit::AdmittedDocumentMaterialization;
+mod navigation_history;
+mod navigation_interception;
+pub(crate) use navigation_interception::{
+    ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
+    NavigationInterceptionPermit, NavigationRequestInterception,
+};
+mod navigation_load;
+pub(crate) use navigation_history::SameDocumentNavigationCommitted;
+pub(in crate::conn) use navigation_load::{AdmittedNavigationLoad, PreparedNavigationResponse};
 mod network_request_policy;
+pub(crate) use navigation_commit::{
+    CommittedDocumentLifecycle, DocumentNavigationDestination, PreparedDocumentNavigation,
+    RetiringDocument,
+};
 mod page_surface;
+mod resource_runtime;
 mod session_storage;
+#[cfg(test)]
+mod tests;
 mod window;
 pub(in crate::conn) use document_host::DocumentHost;
+pub(crate) use document_host::DocumentLifecycleEvent;
 pub(crate) use emulation_policy::{EmulationPolicy, EmulationPolicyChange};
 use javascript_dialog::JavaScriptDialogs;
 pub(crate) use javascript_dialog::{
     JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogKey, JavaScriptDialogSnapshot,
 };
 pub(in crate::conn) use network_request_policy::NetworkRequestPolicy;
+pub(in crate::conn) use network_request_policy::merge_extra_header_layers;
 pub(in crate::conn) use page_surface::PageSurface;
 pub(crate) use session_storage::SessionStorageNamespace;
 pub(in crate::conn) use window::{Window, WindowOpener};
@@ -37,16 +67,17 @@ pub(crate) use window::{WindowSurface, WindowSurfaceState};
 #[derive(Debug)]
 pub(in crate::conn) struct WebContents {
     id: WebContentsId,
-    pub(in crate::conn) navigation: NavigationController,
+    navigation: NavigationController,
     // Dismiss modal renderer work before Document/Page teardown.
     pub(in crate::conn) javascript_dialogs: JavaScriptDialogs,
     pub(in crate::conn) main_frame: MainFrameSlot,
-    pub(in crate::conn) navigation_engine: Option<NavigationEngine>,
+    navigation_engine: Option<NavigationEngine>,
     pub(in crate::conn) session_storage: SessionStorageNamespace,
     pub(in crate::conn) window: Window,
     pub(in crate::conn) crashed: bool,
     pub(in crate::conn) emulation_policy: EmulationPolicy,
     pub(in crate::conn) network_request_policy: NetworkRequestPolicy,
+    fetch_subresource_interception: (bool, Option<moli_core::page::SubresourceResourceType>),
     pub(in crate::conn) network_offline: bool,
     pub(in crate::conn) tls_verify_host_override: Option<bool>,
     pub(in crate::conn) bypass_content_security_policy: bool,
@@ -68,6 +99,7 @@ impl Default for WebContents {
             crashed: false,
             emulation_policy: EmulationPolicy::default(),
             network_request_policy: NetworkRequestPolicy::default(),
+            fetch_subresource_interception: (false, None),
             network_offline: false,
             tls_verify_host_override: None,
             bypass_content_security_policy: false,
@@ -78,6 +110,41 @@ impl Default for WebContents {
 }
 
 impl WebContents {
+    #[cfg(test)]
+    pub(in crate::conn::state) fn fetch_subresource_interception(
+        &self,
+    ) -> (bool, Option<moli_core::page::SubresourceResourceType>) {
+        self.fetch_subresource_interception
+    }
+
+    pub(in crate::conn::state) fn start_fetch_interception_update(
+        &mut self,
+        enabled: bool,
+        resource_type: Option<moli_core::page::SubresourceResourceType>,
+    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+        // Install effective Browser policy even before the first Document, and
+        // retain it if the outgoing renderer has already stopped accepting work.
+        self.install_fetch_interception_policy(enabled, resource_type);
+        self.main_frame
+            .current_document
+            .as_ref()
+            .map(|document| {
+                document
+                    .page
+                    .start_set_fetch_subresource_interception(enabled, resource_type)
+            })
+            .transpose()
+            .map_err(|error| error.to_string())
+    }
+
+    pub(in crate::conn::state) fn install_fetch_interception_policy(
+        &mut self,
+        enabled: bool,
+        resource_type: Option<moli_core::page::SubresourceResourceType>,
+    ) {
+        self.fetch_subresource_interception = (enabled, resource_type);
+    }
+
     /// Retire Browser authority synchronously, then close the renderer without
     /// retaining any Context/registry borrow across await.
     pub(in crate::conn) fn begin_close(mut self) -> ClosingWebContents {
@@ -114,39 +181,17 @@ impl WebContents {
             .is_some_and(|document| document.page.observe_renderer_page_state(snapshot))
     }
 
-    pub(in crate::conn) fn bind_document_lifecycle(
-        &mut self,
-        snapshot: RendererDocumentLifecycleSnapshot,
-    ) -> bool {
-        let Some(document) = self.main_frame.current_document.as_mut() else {
-            return false;
-        };
-        let previous = document
-            .lifecycle
-            .snapshot()
-            .map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch));
-        document.lifecycle = DocumentLifecycle::from_snapshot(snapshot);
-        if previous != Some((snapshot.frame, snapshot.document, snapshot.epoch))
-            || snapshot.terminated.is_some()
-        {
-            self.javascript_dialogs.clear();
-        }
-        true
-    }
-
-    pub(in crate::conn) fn observe_document_lifecycle(
+    pub(in crate::conn) fn apply_document_lifecycle(
         &mut self,
         event: RendererDocumentLifecycleEvent,
-    ) -> bool {
-        let Some(document) = self.main_frame.current_document.as_mut() else {
-            return false;
-        };
+    ) -> Option<DocumentLifecycleEvent> {
+        let document = self.main_frame.current_document.as_mut()?;
         let restarts = document
             .lifecycle
             .snapshot()
             .is_some_and(|snapshot| snapshot.epoch != event.epoch);
         if !document.lifecycle.observe(event) {
-            return false;
+            return None;
         }
         if restarts
             || matches!(
@@ -156,11 +201,27 @@ impl WebContents {
         {
             self.javascript_dialogs.clear();
         }
-        true
+        if matches!(
+            event.kind,
+            RendererDocumentLifecycleEventKind::Started {
+                reason: moli_core::page::RendererLifecycleStartReason::ExplicitDocumentOpen
+                    | moli_core::page::RendererLifecycleStartReason::JavascriptDocumentReplacement
+            }
+        ) {
+            self.navigation.mark_initial_empty_document_exited();
+        }
+        Some(DocumentLifecycleEvent::new(document.id, event))
     }
 
     pub(in crate::conn) fn replace_document(&mut self, next: Option<DocumentHost>) -> Option<Page> {
+        self.navigation.cancel_initial_document_build();
         self.javascript_dialogs.clear();
+        if let Some(document) = &next {
+            self.navigation.seed_document_history((
+                document.page.final_url().to_string(),
+                document.page.document_title(),
+            ));
+        }
         self.main_frame.replace_document(next)
     }
 
@@ -169,6 +230,9 @@ impl WebContents {
     }
 
     pub(in crate::conn) fn set_network_request_policy(&mut self, policy: NetworkRequestPolicy) {
+        if let Some(engine) = self.navigation_engine.as_mut() {
+            engine.set_cache_disabled(policy.cache_disabled);
+        }
         self.network_request_policy = policy;
     }
 

@@ -3,37 +3,23 @@ use crate::conn::{EmulatedGeolocationOverrideState, EmulatedNetworkConditions};
 
 impl CdpConnection {
     pub(crate) fn apply_active_engine_fetch_overrides(&mut self) {
-        let browser_identity = self
+        #[cfg(test)]
+        if let Some((context_id, target_id)) = self
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.effective_active_browser_identity_override_owned())
-            .or_else(|| self.global_browser_identity_override.clone())
-            .unwrap_or_else(|| self.base_browser_identity.clone());
-        let http_proxy = self
-            .browser_context
-            .as_ref()
-            .and_then(|bc| bc.network_policy().http_proxy.clone())
-            .or_else(|| self.base_http_proxy.clone());
-        let http_no_proxy = self
-            .browser_context
-            .as_ref()
-            .and_then(|bc| bc.network_policy().http_no_proxy.clone())
-            .or_else(|| self.base_http_no_proxy.clone());
-        let tls_verify_host = self
-            .browser_context
-            .as_ref()
-            .and_then(|bc| bc.effective_active_tls_verify_host_override())
-            .unwrap_or(self.base_tls_verify_host);
-        let bypass_service_worker = self.browser_context.as_ref().is_some_and(|bc| {
-            bc.active_target_id()
-                .is_some_and(|id| bc.effective_policy_for_target(id).bypass_service_worker())
-        });
-        let engine = self.active_navigation_engine_mut();
-        engine.set_browser_identity_override(browser_identity);
-        engine.set_http_proxy_override(http_proxy);
-        engine.set_http_no_proxy_override(http_no_proxy);
-        engine.set_tls_verify_host(tls_verify_host);
-        engine.set_bypass_service_worker(bypass_service_worker);
+            .and_then(|context| Some((context.id.clone(), context.active_target_id()?.to_owned())))
+        {
+            self.ensure_page_navigation_engine_for_target(&context_id, &target_id);
+        }
+        let defaults = self.document_fetch_defaults();
+        if let Some(context) = self.browser_context.as_mut() {
+            if let Err(error) = context.configure_selected_navigation_policy(defaults) {
+                tracing::warn!(%error, "Browser navigation policy configuration failed");
+            }
+        } else {
+            self.standalone_navigation_engine
+                .apply_fetch_defaults(defaults);
+        }
     }
 
     pub async fn set_tls_verify_host_async(&mut self, enabled: bool) {
@@ -160,8 +146,7 @@ impl CdpConnection {
     pub(crate) fn fetch_config(&self) -> &moli_fetch::FetchConfig {
         self.browser_context
             .as_ref()
-            .and_then(|context| context.page_navigation_engine(context.active_target_id()?))
-            .map(moli_core::runtime::NavigationEngine::fetch_config)
+            .and_then(|context| context.page_navigation_fetch_config(context.active_target_id()?))
             .unwrap_or_else(|| self.standalone_navigation_engine.fetch_config())
     }
 

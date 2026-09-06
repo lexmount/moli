@@ -7,3 +7,15 @@ pub(in crate::conn) struct NetworkRequestPolicy {
     pub(in crate::conn) blocked_url_patterns: Vec<String>,
     pub(in crate::conn) extra_headers: moli_fetch::RequestHeaders,
 }
+pub(in crate::conn) fn merge_extra_header_layers(
+    layers: &[&moli_fetch::RequestHeaders],
+) -> moli_fetch::RequestHeaders {
+    let mut headers = moli_fetch::RequestHeaders::default();
+    for layer in layers {
+        for (name, value) in *layer {
+            headers.retain(|(existing, _)| !existing.eq_ignore_ascii_case(name));
+            headers.push((name.clone(), value.clone()));
+        }
+    }
+    headers
+}

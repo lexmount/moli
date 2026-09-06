@@ -87,12 +87,9 @@ impl PreparedProtocolOutputs {
                 )
                 .append_to_document_title_output_sink(&mut prepared);
             }
-            RendererProtocolObservation::DocumentLifecycle(event) => {
-                crate::domains::page::PagePreparedOutputs::from_renderer_document_lifecycle_event(
-                    *event,
-                )
-                .append_to_document_lifecycle_output_sink(&mut prepared);
-            }
+            RendererProtocolObservation::DocumentLifecycle(_) => unreachable!(
+                "renderer lifecycle must be admitted by the Browser before preparing projection"
+            ),
             RendererProtocolObservation::Network { .. } => unreachable!(
                 "renderer Network facts require the ingress-bound live projection constructor"
             ),
@@ -185,6 +182,15 @@ impl PreparedProtocolOutputs {
                 .append_to_output_sink(&mut prepared);
             }
         }
+        prepared
+    }
+
+    pub(in crate::domains::activity) fn from_browser_document_lifecycle_event(
+        event: crate::conn::DocumentLifecycleEvent,
+    ) -> Self {
+        let mut prepared = Self::empty();
+        crate::domains::page::PagePreparedOutputs::from_browser_document_lifecycle_event(event)
+            .append_to_document_lifecycle_output_sink(&mut prepared);
         prepared
     }
 

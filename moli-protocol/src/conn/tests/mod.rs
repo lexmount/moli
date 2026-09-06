@@ -16,9 +16,8 @@ use crate::devtools_runtime::{
     DevToolsTargetId, NavigationFrameEvent, NavigationFrameEventKind,
 };
 use crate::domains::network::{
-    FailedNavigationDocumentPolicy, FailedNavigationResponseMode,
-    MaterializedFailedDocumentProgress, MaterializedNavigationLoadOutcome,
-    empty_main_document_progress_gate_for_test,
+    FailedNavigationResponseMode, MaterializedFailedDocumentProgress,
+    MaterializedNavigationLoadOutcome, empty_main_document_progress_gate_for_test,
 };
 use crate::domains::page::MaterializedNavigationCompletion;
 use crate::testing::TestContext;
@@ -169,8 +168,8 @@ async fn creating_a_target_preserves_the_published_default_as_a_placeholder() {
 
     assert_ne!(created_target_id, conn.default_target_id());
     assert!(
-        conn.standalone_navigation_engine.is_materialized(),
-        "creating a real Page target is the first operation that needs the renderer runtime"
+        !conn.standalone_navigation_engine.is_materialized(),
+        "creating a WebContents must not materialize the standalone placeholder engine"
     );
     assert!(
         conn.browser_context
@@ -1559,7 +1558,6 @@ async fn materialized_navigation_completion_drops_stale_token() {
     let navigation =
         MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
             error_text: "stale navigation should not emit".to_owned(),
-            document_policy: FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
             response_mode: FailedNavigationResponseMode::ProtocolError,
             progress_gate: empty_main_document_progress_gate_for_test(),
         });
@@ -1611,7 +1609,6 @@ async fn materialized_navigation_completion_drops_stale_token_without_navigate_i
     let navigation =
         MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
             error_text: "stale navigation should not emit without a navigate id".to_owned(),
-            document_policy: FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
             response_mode: FailedNavigationResponseMode::ProtocolError,
             progress_gate: empty_main_document_progress_gate_for_test(),
         });
@@ -1645,7 +1642,6 @@ async fn materialized_navigation_completion_drains_current_token() {
     let navigation =
         MaterializedNavigationLoadOutcome::Failed(MaterializedFailedDocumentProgress {
             error_text: "current navigation should emit".to_owned(),
-            document_policy: FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
             response_mode: FailedNavigationResponseMode::ProtocolError,
             progress_gate: empty_main_document_progress_gate_for_test(),
         });

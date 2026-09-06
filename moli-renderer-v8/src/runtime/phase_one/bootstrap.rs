@@ -124,7 +124,7 @@ impl ConcurrentParseTimeRuntime {
         // That makes the control flow easier to evolve than leaving the parser stream, ready
         // queue drain, and DOM resynchronization as three unrelated helper calls in `from_html`.
         finish_phase_one_creation_on_execution_context(
-            Self::new_parser_owner(loader.clone(), stage, state, page_vm),
+            Self::new_parser_owner(stage, state, page_vm),
             started,
         )
         .await
@@ -199,7 +199,7 @@ impl ConcurrentParseTimeRuntime {
             return Ok(ParseTimePageVmCreationOutcome::TriggeredNavigation { page_vm, stage });
         }
         finish_phase_one_creation_on_execution_context(
-            Self::new_parser_owner(loader.clone(), stage, state, page_vm),
+            Self::new_parser_owner(stage, state, page_vm),
             started,
         )
         .await

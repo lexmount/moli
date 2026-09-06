@@ -4750,9 +4750,6 @@ pub(crate) enum RendererInspectorPageCommand {
         stored_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
         session_runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     },
-    DetachRuntimeInspectorSession {
-        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
-    },
     AddRuntimeBinding {
         name: String,
         execution_context_name: Option<String>,
@@ -5444,16 +5441,6 @@ impl RendererPageCommand {
                 stored_runtime_bindings,
                 session_runtime_bindings,
             },
-        )
-    }
-
-    pub fn detach_runtime_inspector_session(
-        inspector_session_id: Option<String>,
-        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
-    ) -> Self {
-        Self::inspector_command(
-            inspector_session_id,
-            RendererInspectorPageCommand::DetachRuntimeInspectorSession { pause_guard },
         )
     }
 

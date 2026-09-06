@@ -204,12 +204,23 @@ impl CdpConnection {
             None,
             "Inspector detached",
         );
-        let _ = self
+        let renderer_policy_reconciled = match self
             .detach_runtime_inspector_session_for_session_owner(None)
-            .await;
-        if let Err(error) =
-            super::fetch::dispose_owner_async(self, side_effects.background_events_mut(), None)
-                .await
+            .await
+        {
+            Ok(()) => true,
+            Err(error) => {
+                tracing::warn!(%error, "failed to detach root renderer Inspector session");
+                false
+            }
+        };
+        if let Err(error) = super::fetch::dispose_owner_async(
+            self,
+            side_effects.background_events_mut(),
+            None,
+            renderer_policy_reconciled,
+        )
+        .await
         {
             tracing::warn!(%error, "failed to dispose root Fetch handler");
         }

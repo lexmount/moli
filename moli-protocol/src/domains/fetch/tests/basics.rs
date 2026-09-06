@@ -237,6 +237,110 @@ async fn enable_and_disable_are_session_local_for_same_target() {
             .subresource_interception_config(),
         (true, Some(moli_core::page::SubresourceResourceType::Xhr))
     );
+    assert!(!bc.target_has_loaded_page("TID-session-fetch"));
+    let owner = crate::conn::CommandOwnerScope::for_session("SID-attached");
+    let policy = ctx
+        .conn
+        .capture_document_policy_for_owner(&owner, &Url::parse("about:blank").unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(policy.fetch_subresource_interception_enabled);
+    assert_eq!(
+        policy.fetch_subresource_interception_resource_type,
+        Some(SubresourceResourceType::Xhr)
+    );
+    ctx.process_async(json!({
+        "id": 213, "method": "Fetch.disable", "sessionId": "SID-attached"
+    }))
+    .await;
+    ctx.expect_result(213, json!({}), Some("SID-attached"));
+    let policy = ctx
+        .conn
+        .capture_document_policy_for_owner(&owner, &Url::parse("about:blank").unwrap())
+        .unwrap()
+        .unwrap();
+    assert!(!policy.fetch_subresource_interception_enabled);
+    assert_eq!(policy.fetch_subresource_interception_resource_type, None);
+}
+
+#[tokio::test]
+async fn global_intercept_removal_updates_background_document_policy() {
+    for loaded in [false, true] {
+        let mut ctx = TestContext::new();
+        let mut context = BrowserContext::new("BID-interception".into());
+        context.set_active_target_id("TID-active");
+        context.attach_active_session("SID-active");
+        context.register_page_target_url_fixture(
+            "TID-background".into(),
+            Some("SID-background".into()),
+            "about:blank".into(),
+        );
+        ctx.conn.install_browser_context_fixture_for_test(context);
+        if loaded {
+            ctx.install_navigation_fixture_for_session_owner(
+                "data:text/html,<title>background</title>",
+                Some("SID-background"),
+            )
+            .await;
+        }
+        let background = crate::conn::CommandOwnerScope::for_session("SID-background");
+        let active = crate::conn::CommandOwnerScope::for_session("SID-active");
+        let pending = ctx
+            .conn
+            .start_add_network_intercept_for_owner(
+                &background,
+                Some("SID-background".into()),
+                "intercept-background".into(),
+                false,
+                Vec::new(),
+                vec![FetchInterceptionPattern {
+                    url_pattern: "*".into(),
+                    resource_type_filter: None,
+                    request_stage: FetchRequestStage::Request,
+                }],
+            )
+            .unwrap();
+        assert_eq!(pending.is_some(), loaded);
+        if let Some(pending) = pending {
+            super::super::finish_fetch_interception_update(
+                &mut ctx.conn,
+                &background,
+                pending.wait().await.unwrap(),
+            )
+            .unwrap();
+        }
+        assert!(
+            ctx.conn
+                .capture_document_policy_for_owner(&background, &Url::parse("about:blank").unwrap())
+                .unwrap()
+                .unwrap()
+                .fetch_subresource_interception_enabled
+        );
+        let pending = ctx
+            .conn
+            .start_remove_network_intercept_for_owner(&active, "intercept-background", true)
+            .unwrap();
+        assert_eq!(
+            pending.is_some(),
+            loaded,
+            "global removal must update a loaded background renderer too"
+        );
+        if let Some(pending) = pending {
+            ctx.conn
+                .finish_removed_network_interception(pending.wait().await.unwrap())
+                .unwrap();
+        }
+        let policy = ctx
+            .conn
+            .capture_document_policy_for_owner(&background, &Url::parse("about:blank").unwrap())
+            .unwrap()
+            .unwrap();
+        assert!(!policy.fetch_subresource_interception_enabled);
+        assert_eq!(policy.fetch_subresource_interception_resource_type, None);
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        assert_eq!(context.active_target_id(), Some("TID-active"));
+        assert!(!context.active_page_target().fetch_owner.is_enabled());
+    }
 }
 
 #[tokio::test]
@@ -1057,7 +1161,7 @@ async fn disable_clears_fetch_state() {
         .register_pending_fetch_navigation_request(PendingFetchNavigation {
             fetch_request_id: "INT-1".to_owned(),
             interception_session_id: Some("SID-1".to_owned()),
-            document_navigation_token: None,
+            navigation_permit: PendingFetchNavigation::test_navigation_permit(),
             navigation: crate::conn::NavigationDispatchState {
                 redirect_chain: Vec::new(),
                 redirect_headers: None,
@@ -1099,7 +1203,6 @@ async fn disable_clears_fetch_state() {
                 owner_kind: crate::conn::PendingSubresourceFetchOwnerKind::Fetch,
                 fetch_request_id: "INT-1".to_owned(),
                 response_stage_request_id: "INT-1".to_owned(),
-                document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
                     redirect_chain: Vec::new(),
                     redirect_headers: None,
@@ -1132,9 +1235,7 @@ async fn disable_clears_fetch_state() {
                     realm: "test-area".to_owned(),
                 },
                 request_cookie_report: None,
-                auth_response: PendingFetchAuthNavigation::test_auth_response(
-                    Url::parse("http://example.test/auth").unwrap(),
-                ),
+                auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
                 intercept_response: false,
                 response_stage_url_match_policy:
                     crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -1327,7 +1428,6 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                 owner_kind: crate::conn::PendingSubresourceFetchOwnerKind::Fetch,
                 fetch_request_id: "INT-8".to_owned(),
                 response_stage_request_id: "INT-8".to_owned(),
-                document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
                     redirect_chain: Vec::new(),
                     redirect_headers: None,
@@ -1358,9 +1458,7 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                     realm: "test-area".to_owned(),
                 },
                 request_cookie_report: None,
-                auth_response: PendingFetchAuthNavigation::test_auth_response(
-                    Url::parse("http://example.test/auth").unwrap(),
-                ),
+                auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
                 intercept_response: false,
                 response_stage_url_match_policy:
                     crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -1404,7 +1502,6 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                 owner_kind: crate::conn::PendingSubresourceFetchOwnerKind::Fetch,
                 fetch_request_id: "INT-9".to_owned(),
                 response_stage_request_id: "INT-9".to_owned(),
-                document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
                     redirect_chain: Vec::new(),
                     redirect_headers: None,
@@ -1435,9 +1532,7 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                     realm: "token-area".to_owned(),
                 },
                 request_cookie_report: None,
-                auth_response: PendingFetchAuthNavigation::test_auth_response(
-                    Url::parse("http://example.test/auth").unwrap(),
-                ),
+                auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
                 intercept_response: false,
                 response_stage_url_match_policy:
                     crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -1578,7 +1673,7 @@ fn emit_auth_required_preserves_request_headers_and_post_data_shape() {
     let pending = PendingFetchNavigation {
         fetch_request_id: "INT-11".to_owned(),
         interception_session_id: Some("SID-1".to_owned()),
-        document_navigation_token: None,
+        navigation_permit: PendingFetchNavigation::test_navigation_permit(),
         navigation: crate::conn::NavigationDispatchState {
             redirect_chain: Vec::new(),
             redirect_headers: None,

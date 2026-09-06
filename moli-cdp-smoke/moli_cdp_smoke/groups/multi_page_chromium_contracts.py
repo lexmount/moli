@@ -10,6 +10,7 @@ from .multi_page_support import (
     MultiPageCase,
     close_context,
     expect_protocol_error,
+    read_fixture_json,
     runtime_value,
 )
 
@@ -21,6 +22,7 @@ def multi_page_chromium_contract_cases() -> tuple[MultiPageCase, ...]:
         _navigation_history_entries_are_target_local,
         _blocked_urls_aggregate_across_target_sessions,
         _cache_disabled_aggregates_without_crossing_targets,
+        _loading_script_does_not_cross_document,
     )
 
 
@@ -638,6 +640,56 @@ async def _cache_disabled_aggregates_without_crossing_targets(
             *(session.detach() for session in sessions),
             return_exceptions=True,
         )
+        await close_context(context)
+
+
+async def _loading_script_does_not_cross_document(
+    browser: Any,
+    fixture: str,
+    results: list[dict[str, Any]],
+) -> None:
+    context = await browser.new_context()
+    try:
+        await asyncio.to_thread(read_fixture_json, f"{fixture}/loading-cache/reset")
+        page = await context.new_page()
+        session = await context.new_cdp_session(page)
+        await session.send("Network.setUserAgentOverride", {"userAgent": "FirstAgent"})
+        await page.goto(f"{fixture}/plain", wait_until="load")
+        await page.evaluate("""() => {
+            const script = document.createElement('script');
+            script.src = '/loading-cache.js';
+            document.head.appendChild(script);
+        }""")
+
+        async def first_request_seen() -> bool:
+            status = await asyncio.to_thread(read_fixture_json, f"{fixture}/loading-cache/status")
+            return status["requestSeen"]
+
+        await wait_until(first_request_seen, "outgoing Document's pending script", timeout_ms=5_000)
+        await session.send("Network.setUserAgentOverride", {"userAgent": "SecondAgent"})
+        # The outgoing response remains gated until cleanup. The replacement
+        # must perform its own request and load without that response.
+        await page.goto(f"{fixture}/loading-cache-page", wait_until="load", timeout=5_000)
+        assert_equal(
+            await page.evaluate("loadingCacheAgent"),
+            "SecondAgent",
+            "new Document's script variant",
+        )
+        status = await asyncio.to_thread(read_fixture_json, f"{fixture}/loading-cache/status")
+        assert_equal(status["requestCount"], 2, "foreign pending script is not coalesced")
+        record_contract(
+            results,
+            "multi_page_loading_script_document_boundary",
+            contract=(
+                "A new Document cannot join an outgoing Document's in-flight script, "
+                "including across a User-Agent transport replacement."
+            ),
+            source="Debian Chromium 145.0.7632.116 executable CDP oracle",
+            commands=["Network.setUserAgentOverride x2", "Runtime.evaluate", "Page.navigate"],
+            observed={"requestCount": status["requestCount"], "replacementAgent": "SecondAgent"},
+        )
+    finally:
+        await asyncio.to_thread(read_fixture_json, f"{fixture}/loading-cache/release")
         await close_context(context)
 
 

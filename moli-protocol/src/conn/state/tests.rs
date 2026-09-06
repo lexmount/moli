@@ -1,6 +1,6 @@
 use crate::devtools_runtime::DevToolsNetworkResourceType;
 use moli_cookie_jar::new_shared_browser_cookie_store;
-use moli_core::page::{SessionHistoryUpdateKind, SubresourceResourceType};
+use moli_core::page::SubresourceResourceType;
 
 use super::super::fetch_support::{
     FetchAuthChallenge, PendingFetchAuthNavigation, PendingFetchNavigation,
@@ -11,9 +11,6 @@ use super::devtools_session::DevToolsSessionState;
 use super::fetch::{
     FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter, TargetFetchOwner,
     TargetFetchState,
-};
-use super::navigation_controller::{
-    NavigationController, NavigationHistoryState, PageNavigationHistoryEntry,
 };
 use super::navigation_outcome::{NavigationDispatchState, NavigationResultProjection};
 use super::page_slot::DocumentStartScript;
@@ -808,7 +805,7 @@ fn pending_navigation_rejects_generic_request_action_without_consuming_id() {
     state.register_pending_fetch_navigation_request(PendingFetchNavigation {
         fetch_request_id: "FETCH-NAV".to_owned(),
         interception_session_id: Some("SID-fetch".to_owned()),
-        document_navigation_token: None,
+        navigation_permit: PendingFetchNavigation::test_navigation_permit(),
         navigation: test_navigation_dispatch_state("FETCH-NAV"),
         request_cookie_report: None,
         intercept_response: false,
@@ -853,7 +850,6 @@ fn pending_auth_navigation_rejects_generic_request_action_without_consuming_id()
             owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
             fetch_request_id: "FETCH-AUTH".to_owned(),
             response_stage_request_id: "FETCH-AUTH".to_owned(),
-            document_navigation_token: None,
             navigation: test_navigation_dispatch_state("FETCH-AUTH"),
             challenge: FetchAuthChallenge {
                 origin: "https://example.test".to_owned(),
@@ -862,9 +858,7 @@ fn pending_auth_navigation_rejects_generic_request_action_without_consuming_id()
                 realm: "test-area".to_owned(),
             },
             request_cookie_report: None,
-            auth_response: PendingFetchAuthNavigation::test_auth_response(
-                Url::parse("https://example.test/").unwrap(),
-            ),
+            auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
             intercept_response: false,
             response_stage_url_match_policy:
                 crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -903,7 +897,6 @@ fn unscoped_fetch_owned_auth_navigation_allows_routed_action_session() {
             owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
             fetch_request_id: "FETCH-AUTH".to_owned(),
             response_stage_request_id: "FETCH-AUTH".to_owned(),
-            document_navigation_token: None,
             navigation: test_navigation_dispatch_state("FETCH-AUTH"),
             challenge: FetchAuthChallenge {
                 origin: "https://example.test".to_owned(),
@@ -912,9 +905,7 @@ fn unscoped_fetch_owned_auth_navigation_allows_routed_action_session() {
                 realm: "test-area".to_owned(),
             },
             request_cookie_report: None,
-            auth_response: PendingFetchAuthNavigation::test_auth_response(
-                Url::parse("https://example.test/").unwrap(),
-            ),
+            auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
             intercept_response: false,
             response_stage_url_match_policy:
                 crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -937,7 +928,6 @@ fn unscoped_fetch_owned_auth_navigation_allows_routed_action_session() {
             owner_kind: PendingSubresourceFetchOwnerKind::NetworkOrBidi,
             fetch_request_id: "NETWORK-AUTH".to_owned(),
             response_stage_request_id: "NETWORK-AUTH".to_owned(),
-            document_navigation_token: None,
             navigation: test_navigation_dispatch_state("NETWORK-AUTH"),
             challenge: FetchAuthChallenge {
                 origin: "https://example.test".to_owned(),
@@ -946,9 +936,7 @@ fn unscoped_fetch_owned_auth_navigation_allows_routed_action_session() {
                 realm: "test-area".to_owned(),
             },
             request_cookie_report: None,
-            auth_response: PendingFetchAuthNavigation::test_auth_response(
-                Url::parse("https://example.test/").unwrap(),
-            ),
+            auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
             intercept_response: false,
             response_stage_url_match_policy:
                 crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -1045,160 +1033,6 @@ fn background_target_owns_fetch_state() {
             .pending_state()
             .has_pending_fetch_request_id_for_test("FETCH-1")
     );
-}
-
-#[test]
-fn navigation_history_seed_entry_preserves_pending_update() {
-    let mut history = NavigationHistoryState::default();
-    history.mark_replace_current();
-
-    let seed_id = history.allocate_entry_id();
-    history.seed_entry(PageNavigationHistoryEntry {
-        id: seed_id,
-        url: "https://example.test/seed".to_owned(),
-        user_typed_url: "https://example.test/seed".to_owned(),
-        title: "seed".to_owned(),
-        transition_type: "typed".to_owned(),
-        document_sequence_number: None,
-    });
-
-    let reloaded_id = history.allocate_entry_id();
-    history.record_loaded_entry(PageNavigationHistoryEntry {
-        id: reloaded_id,
-        url: "https://example.test/reloaded".to_owned(),
-        user_typed_url: "https://example.test/reloaded".to_owned(),
-        title: "reloaded".to_owned(),
-        transition_type: "typed".to_owned(),
-        document_sequence_number: None,
-    });
-
-    let (current_index, entries) = history.snapshot();
-    assert_eq!(current_index, 0);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].url, "https://example.test/reloaded");
-    assert_eq!(entries[0].user_typed_url, "https://example.test/seed");
-    assert_eq!(entries[0].transition_type, "reload");
-}
-
-#[test]
-fn initial_empty_document_seeds_browser_navigation_history_metadata() {
-    let mut owner = NavigationController::default();
-
-    owner.begin_initial_empty_document("about:blank".to_owned(), None, None);
-
-    let (current_index, entries) = owner.navigation_history_snapshot(None);
-    assert_eq!(current_index, 0);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].url, "about:blank");
-    assert_eq!(entries[0].user_typed_url, "about:blank");
-    assert_eq!(entries[0].transition_type, "auto_toplevel");
-}
-
-#[test]
-fn direct_target_initial_url_replaces_empty_document_history_entry() {
-    let mut owner = NavigationController::default();
-
-    owner.begin_initial_empty_document("about:blank".to_owned(), None, None);
-    owner.mark_next_navigation_history_replace_initial_empty_document();
-    owner.record_loaded_page_navigation_history((
-        "https://example.test/direct".to_owned(),
-        "direct".to_owned(),
-    ));
-
-    let (current_index, entries) = owner.navigation_history_snapshot(None);
-    assert_eq!(current_index, 0);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].url, "https://example.test/direct");
-    assert_eq!(entries[0].user_typed_url, "https://example.test/direct");
-    assert_eq!(entries[0].title, "direct");
-    assert_eq!(entries[0].transition_type, "auto_toplevel");
-}
-
-#[test]
-fn navigation_history_prune_rejects_only_pending_existing_entry_traversal() {
-    let mut history = NavigationHistoryState::default();
-    let initial_id = history.allocate_entry_id();
-    history.seed_entry(PageNavigationHistoryEntry {
-        id: initial_id,
-        url: "https://example.test/initial".to_owned(),
-        user_typed_url: "https://example.test/initial".to_owned(),
-        title: "initial".to_owned(),
-        transition_type: "typed".to_owned(),
-        document_sequence_number: None,
-    });
-    assert!(history.record_session_history_update(
-        "https://example.test/pushed".to_owned(),
-        "pushed".to_owned(),
-        SessionHistoryUpdateKind::Push,
-    ));
-    let pushed_id = history.snapshot().1[1].id;
-
-    history.mark_replace_current();
-    assert!(
-        history.can_prune_all_but_current(),
-        "a new pending reload/replace entry must survive pruning"
-    );
-    assert!(history.prune_all_but_current());
-    let (current_index, entries) = history.snapshot();
-    assert_eq!(current_index, 0);
-    assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0].id, pushed_id);
-
-    history.mark_traverse_to_entry(pushed_id);
-    assert!(
-        !history.can_prune_all_but_current(),
-        "pending traversal to an existing history index cannot be pruned"
-    );
-    assert!(!history.prune_all_but_current());
-}
-
-#[test]
-fn navigation_history_traversal_reuses_same_document_entries() {
-    let mut history = NavigationHistoryState::default();
-    let initial_id = history.allocate_entry_id();
-    history.seed_entry(PageNavigationHistoryEntry {
-        id: initial_id,
-        url: "https://example.test/page".to_owned(),
-        user_typed_url: "https://example.test/page".to_owned(),
-        title: "page".to_owned(),
-        transition_type: "typed".to_owned(),
-        document_sequence_number: None,
-    });
-    assert!(history.record_session_history_update(
-        "https://example.test/page?state=pushed".to_owned(),
-        "page".to_owned(),
-        SessionHistoryUpdateKind::Push,
-    ));
-
-    let (_, entries) = history.snapshot();
-    let pushed_id = entries[1].id;
-    assert_eq!(
-        entries[0].document_sequence_number, entries[1].document_sequence_number,
-        "pushState entries must retain the current document sequence"
-    );
-    assert_eq!(entries[1].user_typed_url, "https://example.test/page");
-    assert_eq!(entries[1].transition_type, "link");
-
-    assert!(history.record_session_history_update(
-        "https://example.test/page".to_owned(),
-        "page".to_owned(),
-        SessionHistoryUpdateKind::Traverse { delta: -1 },
-    ));
-    let (current_index, entries) = history.snapshot();
-    assert_eq!(current_index, 0);
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[0].id, initial_id);
-    assert_eq!(entries[1].id, pushed_id);
-
-    assert!(history.record_session_history_update(
-        "https://example.test/page?state=pushed".to_owned(),
-        "page".to_owned(),
-        SessionHistoryUpdateKind::Traverse { delta: 1 },
-    ));
-    let (current_index, entries) = history.snapshot();
-    assert_eq!(current_index, 1);
-    assert_eq!(entries.len(), 2);
-    assert_eq!(entries[1].id, pushed_id);
 }
 
 #[test]

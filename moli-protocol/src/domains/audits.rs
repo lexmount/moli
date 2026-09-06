@@ -93,6 +93,13 @@ mod tests {
             Some("SID-audits"),
         )
         .await;
+        // The fixture crossed its exact renderer output fence. Separate its
+        // navigation publication from the Audits command's replay/response order.
+        for message in ctx.take_all() {
+            assert_eq!(message["method"], "Page.frameNavigated");
+            assert_eq!(message["sessionId"], "SID-audits");
+            assert_eq!(message["params"]["frame"]["id"], "TID-audits");
+        }
     }
 
     #[tokio::test(flavor = "multi_thread")]

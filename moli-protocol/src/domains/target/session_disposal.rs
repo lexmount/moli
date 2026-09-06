@@ -75,6 +75,7 @@ async fn dispose_live_session_domains_async(
         background_events,
         protocol_events,
         plan,
+        renderer_disposal.is_ok(),
     )
     .await;
     renderer_disposal?;

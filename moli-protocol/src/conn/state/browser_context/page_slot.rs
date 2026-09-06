@@ -1,4 +1,6 @@
 use super::BrowserContext;
+#[cfg(test)]
+use moli_core::page::RendererLifecycleEventStamp;
 use moli_core::{
     browser::{
         DocumentId, DocumentLifecycle, DocumentLifetime, DocumentLifetimeObserver, NavigationId,
@@ -9,11 +11,9 @@ use moli_core::{
         RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
         RendererDocumentLifecycleSnapshot, RendererDocumentLifecycleWaitOutcome,
         RendererDocumentLifecycleWaiter, RendererDocumentToken, RendererFrameToken,
-        RendererLifecycleEpoch, RendererLifecycleEventStamp, RendererLifecycleStartReason,
-        RendererPageCreationArtifacts,
+        RendererLifecycleEpoch, RendererLifecycleStartReason, RendererPageCreationArtifacts,
     },
 };
-use tokio::sync::watch;
 
 use crate::conn::state::document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObservationPublisher,
@@ -31,7 +31,6 @@ pub(crate) enum TargetPageAbsenceReason {
     NoTarget,
     InitialDocumentPageBuildPending,
     InitialDocumentPageBuildInProgress,
-    NavigationFailed,
     TargetClosed,
     TargetCrashed,
     #[cfg(test)]
@@ -44,7 +43,6 @@ impl TargetPageAbsenceReason {
             Self::NoTarget => "no-target",
             Self::InitialDocumentPageBuildPending => "initial-document-page-build-pending",
             Self::InitialDocumentPageBuildInProgress => "initial-document-page-build-in-progress",
-            Self::NavigationFailed => "navigation-failed",
             Self::TargetClosed => "target-closed",
             Self::TargetCrashed => "target-crashed",
             #[cfg(test)]
@@ -144,25 +142,6 @@ pub type IsolatedWorldDefinition = moli_core::page::RuntimeIsolatedWorldDefiniti
 pub type RuntimeBindingDefinition = moli_core::page::RuntimeBindingRegistration;
 pub type DocumentStartScript = moli_core::page::DocumentStartScript;
 
-#[derive(Debug, Clone)]
-pub(crate) struct InitialDocumentPageBuildWaiter {
-    receiver: watch::Receiver<Option<Result<(), String>>>,
-}
-
-impl InitialDocumentPageBuildWaiter {
-    pub(crate) async fn wait(mut self) -> Result<(), String> {
-        loop {
-            if let Some(result) = self.receiver.borrow().clone() {
-                return result;
-            }
-            self.receiver
-                .changed()
-                .await
-                .map_err(|_| "InitialDocumentPageBuildCancelled".to_owned())?;
-        }
-    }
-}
-
 /// Exact renderer Page that is allowed to publish while its protocol target
 /// has not installed the resulting [`Page`] yet.
 ///
@@ -172,6 +151,7 @@ impl InitialDocumentPageBuildWaiter {
 /// because both builds used the same target/session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PendingRendererPageBinding {
+    #[cfg(test)]
     PageBuild {
         renderer_page: RendererPageResidenceIdentity,
         document_id: DocumentId,
@@ -190,16 +170,18 @@ enum PendingRendererPageBinding {
 impl PendingRendererPageBinding {
     fn renderer_page(&self) -> RendererPageResidenceIdentity {
         match self {
-            Self::PageBuild { renderer_page, .. }
-            | Self::InitialDocumentBuild { renderer_page, .. }
+            #[cfg(test)]
+            Self::PageBuild { renderer_page, .. } => *renderer_page,
+            Self::InitialDocumentBuild { renderer_page, .. }
             | Self::DocumentNavigation { renderer_page, .. } => *renderer_page,
         }
     }
 
     fn document_id(&self) -> DocumentId {
         match self {
-            Self::PageBuild { document_id, .. }
-            | Self::InitialDocumentBuild { document_id, .. }
+            #[cfg(test)]
+            Self::PageBuild { document_id, .. } => *document_id,
+            Self::InitialDocumentBuild { document_id, .. }
             | Self::DocumentNavigation { document_id, .. } => *document_id,
         }
     }
@@ -217,7 +199,6 @@ pub(crate) struct TargetPageSlot {
     next_renderer_document_lifecycle_waiter_id: RendererDocumentLifecycleWaiterId,
     renderer_document_lifecycle_waiters: Vec<RegisteredRendererDocumentLifecycleWaiter>,
     root_post_load_observation: Option<RootPostLoadObservation>,
-    initial_document_page_build_completion: Option<watch::Sender<Option<Result<(), String>>>>,
     pending_renderer_page: Option<PendingRendererPageBinding>,
 }
 
@@ -248,45 +229,10 @@ impl TargetPageSlot {
         }
     }
 
-    pub(crate) fn initial_document_page_build_waiter(
-        &self,
-    ) -> Option<InitialDocumentPageBuildWaiter> {
-        self.initial_document_page_build_completion
-            .as_ref()
-            .map(|sender| InitialDocumentPageBuildWaiter {
-                receiver: sender.subscribe(),
-            })
-    }
-
-    pub(crate) fn complete_initial_document_page_build(&mut self) {
-        if matches!(
-            self.pending_renderer_page.as_ref(),
-            Some(PendingRendererPageBinding::InitialDocumentBuild { .. })
-        ) {
-            self.pending_renderer_page = None;
-        }
-        if let Some(sender) = self.initial_document_page_build_completion.take() {
-            let _ = sender.send(Some(Ok(())));
-        }
-    }
-
-    pub(crate) fn fail_initial_document_page_build(&mut self, message: String) {
-        if matches!(
-            self.pending_renderer_page.as_ref(),
-            Some(PendingRendererPageBinding::InitialDocumentBuild { .. })
-        ) {
-            self.pending_renderer_page = None;
-        }
-        if let Some(sender) = self.initial_document_page_build_completion.take() {
-            let _ = sender.send(Some(Err(message)));
-        }
-    }
-
     pub(super) fn retire_for_target_close(&mut self) {
         self.finish_renderer_document_lifecycle_observers(
             RendererDocumentLifecycleObservation::Superseded,
         );
-        self.fail_initial_document_page_build("InitialDocumentPageBuildCancelled".into());
         self.pending_renderer_page = None;
         self.loaded_page_absence_reason = TargetPageAbsenceReason::TargetClosed;
         self.renderer_document_lifecycle = RendererDocumentLifecycleProtocolState::default();
@@ -488,6 +434,22 @@ impl TargetPageSlot {
         };
         self.renderer_document_lifecycle.binding.as_ref() == Some(&observation.binding)
     }
+
+    pub(super) fn retiring_document_lifecycle_binding(
+        &self,
+        document: DocumentId,
+        renderer: RendererPageResidenceIdentity,
+    ) -> Option<&CommittedRendererDocumentBinding> {
+        // The Browser may already contain the successor. Match the occurrence's
+        // retired Document, not the current Browser identity or navigation.
+        self.renderer_document_lifecycle
+            .binding
+            .as_ref()
+            .filter(|binding| {
+                binding.document_id == document
+                    && binding.renderer_frame.page_id == renderer.page_id()
+            })
+    }
 }
 
 impl BrowserContext {
@@ -516,15 +478,22 @@ impl BrowserContext {
         &self,
         target_id: &str,
     ) -> Option<TargetPageAbsenceReason> {
-        self.web_contents_for_target(target_id)?
-            .main_frame
-            .current_document
-            .is_none()
-            .then_some(
-                self.page_slot_for_target(target_id)
-                    .expect("registered Target projection")
-                    .loaded_page_absence_reason,
-            )
+        let contents = self.web_contents_for_target(target_id)?;
+        if contents.main_frame.current_document.is_some() {
+            return None;
+        }
+        if contents
+            .navigation()
+            .initial_document_build()
+            .is_some_and(|build| build.completion.pending())
+        {
+            return Some(TargetPageAbsenceReason::InitialDocumentPageBuildInProgress);
+        }
+        Some(
+            self.page_slot_for_target(target_id)
+                .expect("registered Target projection")
+                .loaded_page_absence_reason,
+        )
     }
 
     pub(super) fn set_target_page_absence_reason(
@@ -532,88 +501,54 @@ impl BrowserContext {
         target_id: &str,
         reason: TargetPageAbsenceReason,
     ) {
-        if self
-            .web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .main_frame
-            .current_document
-            .is_none()
-        {
-            if self
-                .page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .loaded_page_absence_reason
-                == TargetPageAbsenceReason::InitialDocumentPageBuildInProgress
-                && reason != TargetPageAbsenceReason::InitialDocumentPageBuildInProgress
-            {
-                self.page_slot_for_target_mut(target_id)
-                    .expect("registered Target projection")
-                    .fail_initial_document_page_build("InitialDocumentPageBuildCancelled".into());
-            }
+        if !self.target_has_loaded_page(target_id) {
             self.page_slot_for_target_mut(target_id)
                 .expect("registered Target projection")
                 .loaded_page_absence_reason = reason;
         }
     }
 
-    pub(crate) fn start_initial_document_page_build_for_target(&mut self, target_id: &str) {
-        if self
-            .web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .main_frame
-            .current_document
-            .is_none()
-        {
-            self.page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .loaded_page_absence_reason =
-                TargetPageAbsenceReason::InitialDocumentPageBuildInProgress;
-        }
-        self.page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
-            .pending_renderer_page = None;
-        let (sender, _receiver) = watch::channel(None);
-        self.page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
-            .initial_document_page_build_completion = Some(sender);
-    }
-
-    pub(crate) fn bind_initial_document_page_build_renderer_page_for_target(
+    pub(in crate::conn) fn project_initial_document_build(
         &mut self,
         target_id: &str,
-        renderer_page: RendererPageResidenceIdentity,
-    ) -> bool {
-        if self
-            .web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .main_frame
-            .current_document
-            .is_some()
-            || self
-                .page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .loaded_page_absence_reason
-                != TargetPageAbsenceReason::InitialDocumentPageBuildInProgress
-            || self
-                .page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .initial_document_page_build_completion
-                .is_none()
-            || self
-                .page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .pending_renderer_page
-                .is_some()
-        {
-            return false;
-        }
+        key: crate::conn::state::web_contents::InitialDocumentBuildKey,
+    ) {
+        debug_assert_eq!(
+            self.web_contents_for_target(target_id)
+                .map(|contents| contents.id()),
+            Some(key.web_contents())
+        );
         self.page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
+            .expect("resolved projection")
             .pending_renderer_page = Some(PendingRendererPageBinding::InitialDocumentBuild {
-            renderer_page,
-            document_id: DocumentId::allocate(),
+            renderer_page: key.renderer(),
+            document_id: key.document(),
         });
-        true
+    }
+
+    pub(in crate::conn) fn retire_initial_document_projection(
+        &mut self,
+        key: crate::conn::state::web_contents::InitialDocumentBuildKey,
+    ) {
+        let Some(target_id) = self
+            .page_targets
+            .get_for_web_contents(key.web_contents())
+            .map(|target| target.target_id().to_owned())
+        else {
+            return;
+        };
+        let slot = self
+            .page_targets
+            .get_mut(&target_id)
+            .expect("resolved projection")
+            .runtime_slot
+            .page_slot_mut();
+        if matches!(slot.pending_renderer_page.as_ref(), Some(PendingRendererPageBinding::InitialDocumentBuild {
+            renderer_page, document_id,
+        }) if *renderer_page == key.renderer() && *document_id == key.document())
+        {
+            slot.pending_renderer_page = None;
+        }
     }
 
     pub(super) fn replace_loaded_page_with_reason_for_target(
@@ -642,35 +577,36 @@ impl BrowserContext {
             };
             DocumentHost::new(id, page)
         });
-        if self.target_document_id(target_id).is_some() || next_document.is_some() {
+        self.reset_document_projection_for_target(
+            target_id,
+            next_document.is_some(),
+            absence_reason,
+        );
+        self.web_contents_for_target_mut(target_id)
+            .expect("registered Target must reference live WebContents")
+            .replace_document(next_document)
+    }
+
+    pub(super) fn reset_document_projection_for_target(
+        &mut self,
+        target_id: &str,
+        has_document: bool,
+        absence_reason: TargetPageAbsenceReason,
+    ) {
+        if self.target_document_id(target_id).is_some() || has_document {
             self.page_slot_for_target_mut(target_id)
                 .expect("registered Target projection")
                 .finish_renderer_document_lifecycle_observers(
                     RendererDocumentLifecycleObservation::Superseded,
                 );
         }
-        if next_document.is_some() {
-            self.page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .complete_initial_document_page_build();
-            self.page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .loaded_page_absence_reason = TargetPageAbsenceReason::NoTarget;
+        self.page_slot_for_target_mut(target_id)
+            .expect("registered Target projection")
+            .loaded_page_absence_reason = if has_document {
+            TargetPageAbsenceReason::NoTarget
         } else {
-            if self
-                .page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .loaded_page_absence_reason
-                == TargetPageAbsenceReason::InitialDocumentPageBuildInProgress
-            {
-                self.page_slot_for_target_mut(target_id)
-                    .expect("registered Target projection")
-                    .fail_initial_document_page_build("InitialDocumentPageBuildCancelled".into());
-            }
-            self.page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .loaded_page_absence_reason = absence_reason;
-        }
+            absence_reason
+        };
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .pending_renderer_page = None;
@@ -689,11 +625,9 @@ impl BrowserContext {
         {
             fixture.lifetime.supersede();
         }
-        self.web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .replace_document(next_document)
     }
 
+    #[cfg(test)]
     pub(super) fn replace_target_document(
         &mut self,
         target_id: &str,
@@ -751,49 +685,49 @@ impl BrowserContext {
         lifecycle
     }
 
-    pub(super) fn bind_document_lifecycle_for_target(
+    #[cfg(test)]
+    pub(in crate::conn) fn install_document_lifecycle_for_test(
         &mut self,
         target_id: &str,
-        snapshot: RendererDocumentLifecycleSnapshot,
+        lifecycle: DocumentLifecycle,
     ) {
-        if self
+        let snapshot = lifecycle.snapshot().expect("fixture lifecycle");
+        let previous = self
+            .document_lifecycle_for_target(target_id)
+            .and_then(DocumentLifecycle::snapshot)
+            .map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch));
+        if let Some(document) = self
             .web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .bind_document_lifecycle(snapshot)
-        {
-            return;
-        }
-        #[cfg(test)]
-        if let Some(fixture) = self
-            .page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
-            .document_fixture
+            .unwrap()
+            .main_frame
+            .current_document
             .as_mut()
         {
-            let previous = fixture
-                .lifecycle
-                .snapshot()
-                .map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch));
-            fixture.lifecycle = DocumentLifecycle::from_snapshot(snapshot);
-            if previous != Some((snapshot.frame, snapshot.document, snapshot.epoch))
-                || snapshot.terminated.is_some()
-            {
-                self.web_contents_for_target_mut(target_id)
-                    .expect("registered Target must reference live WebContents")
-                    .javascript_dialogs
-                    .clear();
-            }
-            return;
+            document.lifecycle = lifecycle;
+        } else {
+            self.page_slot_for_target_mut(target_id)
+                .unwrap()
+                .document_fixture
+                .as_mut()
+                .expect("current fixture Document")
+                .lifecycle = lifecycle;
         }
-        panic!("current Document must own its lifecycle");
+        if previous != Some((snapshot.frame, snapshot.document, snapshot.epoch))
+            || snapshot.terminated.is_some()
+        {
+            self.web_contents_for_target_mut(target_id)
+                .unwrap()
+                .javascript_dialogs
+                .clear();
+        }
     }
 
-    pub(super) fn observe_document_lifecycle_for_target(
+    #[cfg(test)]
+    pub(in crate::conn) fn observe_document_lifecycle_for_target(
         &mut self,
         target_id: &str,
         event: RendererDocumentLifecycleEvent,
     ) -> bool {
-        #[cfg(test)]
         if self
             .web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
@@ -823,11 +757,25 @@ impl BrowserContext {
                     .javascript_dialogs
                     .clear();
             }
+            if accepted
+                && matches!(
+                    event.kind,
+                    RendererDocumentLifecycleEventKind::Started {
+                        reason: RendererLifecycleStartReason::ExplicitDocumentOpen
+                            | RendererLifecycleStartReason::JavascriptDocumentReplacement
+                    }
+                )
+            {
+                self.web_contents_for_target_mut(target_id)
+                    .unwrap()
+                    .mark_initial_empty_document_exited();
+            }
             return accepted;
         }
         self.web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .observe_document_lifecycle(event)
+            .apply_document_lifecycle(event)
+            .is_some()
     }
 
     pub(super) fn document_lifetime_mut_for_target(
@@ -857,6 +805,7 @@ impl BrowserContext {
             .map(|document| &mut document.lifetime)
     }
 
+    #[cfg(test)]
     pub(crate) fn target_pending_document_id(&self, target_id: &str) -> Option<DocumentId> {
         self.page_slot_for_target(target_id)
             .expect("registered Target projection")
@@ -866,12 +815,13 @@ impl BrowserContext {
             .or_else(|| {
                 self.web_contents_for_target(target_id)
                     .expect("registered Target must reference live WebContents")
-                    .navigation
+                    .navigation()
                     .pending_document()
                     .map(|(_, document)| document)
             })
     }
 
+    #[cfg(test)]
     pub(crate) fn reserve_renderer_document_for_target(
         &mut self,
         target_id: &str,
@@ -897,7 +847,7 @@ impl BrowserContext {
         if let Some((navigation, document_id)) = self
             .web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
+            .navigation()
             .pending_document()
         {
             self.page_slot_for_target_mut(target_id)
@@ -1017,7 +967,6 @@ impl BrowserContext {
         let token = self
             .web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
             .start_document_navigation();
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
@@ -1043,7 +992,7 @@ impl BrowserContext {
     ) -> Option<moli_fetch::FetchCancelHandle> {
         self.web_contents_for_target(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
+            .navigation()
             .document_navigation_cancellation_handle(token)
     }
 
@@ -1056,7 +1005,6 @@ impl BrowserContext {
     ) -> bool {
         self.web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
             .arm_background_navigation_completion(token, additional_cancellation)
     }
 
@@ -1068,15 +1016,15 @@ impl BrowserContext {
     ) -> bool {
         self.web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
             .settle_background_navigation_completion(token)
     }
 
     pub(crate) fn has_inflight_background_navigation_for_target(&self, target_id: &str) -> bool {
         self.web_contents_for_target(target_id)
-            .is_some_and(|contents| contents.navigation.has_inflight_background_navigation())
+            .is_some_and(|contents| contents.navigation().has_inflight_background_navigation())
     }
 
+    #[cfg(test)]
     pub(crate) fn bind_pending_document_navigation_renderer_page_for_target(
         &mut self,
         target_id: &str,
@@ -1086,7 +1034,7 @@ impl BrowserContext {
         let Some((navigation, document_id)) = self
             .web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
+            .navigation()
             .pending_document()
             .filter(|(navigation, _)| navigation == token)
         else {
@@ -1141,7 +1089,7 @@ impl BrowserContext {
     ) -> bool {
         self.web_contents_for_target(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
+            .navigation()
             .accepts_pending_document_navigation_event(token)
     }
 
@@ -1152,13 +1100,54 @@ impl BrowserContext {
     ) -> bool {
         self.web_contents_for_target(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
+            .navigation()
             .accepts_document_body_completion_event(token)
     }
 
     pub(crate) fn has_pending_document_navigation_for_target(&self, target_id: &str) -> bool {
         self.web_contents_for_target(target_id)
-            .is_some_and(|contents| contents.navigation.has_pending_document_navigation())
+            .is_some_and(|contents| contents.navigation().has_pending_document_navigation())
+    }
+
+    pub(in crate::conn) fn pending_navigation_id_for_loader(
+        &self,
+        target_id: &str,
+        loader_id: &str,
+    ) -> Option<NavigationId> {
+        let controller = self.web_contents_for_target(target_id)?.navigation();
+        self.page_slot_for_target(target_id)?
+            .cdp_navigation_loaders
+            .iter()
+            .find_map(|(navigation, loader)| {
+                (loader == loader_id
+                    && controller.accepts_pending_document_navigation_event(navigation))
+                .then_some(*navigation)
+            })
+    }
+
+    pub(in crate::conn) fn project_navigation_load_for_target(
+        &mut self,
+        target_id: &str,
+        load: &crate::conn::state::web_contents::AdmittedNavigationLoad,
+    ) -> Result<(), String> {
+        let contents = self
+            .web_contents_for_target(target_id)
+            .ok_or("navigation WebContents unavailable")?;
+        if contents.id() != load.web_contents_id()
+            || !contents
+                .navigation()
+                .accepts_document_preparation(load.navigation_id(), load.renderer_page())
+        {
+            return Err("stale navigation document candidate".to_owned());
+        }
+        self.page_slot_for_target_mut(target_id)
+            .expect("resolved projection")
+            .pending_renderer_page = Some(PendingRendererPageBinding::DocumentNavigation {
+            navigation: load.navigation_id(),
+            renderer_page: load.renderer_page(),
+            document_id: load.document_id(),
+        });
+        Ok(())
     }
 
     pub(crate) fn current_document_loader_id_for_target(&self, target_id: &str) -> Option<&str> {
@@ -1167,7 +1156,7 @@ impl BrowserContext {
             .loader_id_for_navigation(
                 self.web_contents_for_target(target_id)
                     .expect("registered Target must reference live WebContents")
-                    .navigation
+                    .navigation()
                     .current_document_navigation()?,
             )
     }
@@ -1178,7 +1167,7 @@ impl BrowserContext {
             .loader_id_for_navigation(
                 self.web_contents_for_target(target_id)
                     .expect("registered Target must reference live WebContents")
-                    .navigation
+                    .navigation()
                     .committed_document_navigation()?,
             )
     }
@@ -1197,9 +1186,10 @@ impl BrowserContext {
             .runtime_slot
             .page_slot_mut()
             .cdp_navigation_loaders
-            .retain(|(id, _)| contents.navigation.retains_navigation(*id));
+            .retain(|(id, _)| contents.navigation().retains_navigation(*id));
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_pending_document_navigation_if_matches_for_target(
         &mut self,
         target_id: &str,
@@ -1208,7 +1198,6 @@ impl BrowserContext {
         if !self
             .web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
             .commit_pending_document_navigation_if_matches(token)
         {
             return false;
@@ -1225,7 +1214,6 @@ impl BrowserContext {
         if self
             .web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
             .clear_pending_document_navigation_if_matches(navigation)
         {
             if matches!(
@@ -1258,7 +1246,6 @@ impl BrowserContext {
             );
         self.web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .navigation
             .clear_document_navigation_state();
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
@@ -1275,6 +1262,7 @@ impl BrowserContext {
             .root_post_load_observation = None;
     }
 
+    #[cfg(test)]
     pub(crate) fn bind_renderer_document_lifecycle_for_target(
         &mut self,
         target_id: &str,
@@ -1283,24 +1271,56 @@ impl BrowserContext {
         frame_id: String,
         loader_id: String,
     ) -> Vec<RendererDocumentLifecycleEvent> {
+        let Some(document) = self.target_document_id(target_id) else {
+            return Vec::new();
+        };
+        let Some(lifecycle) = DocumentLifecycle::from_creation_artifacts(&artifacts) else {
+            return Vec::new();
+        };
+        self.install_document_lifecycle_for_test(target_id, lifecycle);
+        self.project_committed_document_lifecycle_for_target(
+            target_id,
+            crate::conn::CommittedDocumentLifecycle {
+                document,
+                artifacts,
+            },
+            navigation,
+            frame_id,
+            loader_id,
+        )
+    }
+
+    pub(crate) fn project_committed_document_lifecycle_for_target(
+        &mut self,
+        target_id: &str,
+        lifecycle: crate::conn::CommittedDocumentLifecycle,
+        navigation: Option<NavigationId>,
+        frame_id: String,
+        loader_id: String,
+    ) -> Vec<RendererDocumentLifecycleEvent> {
+        let crate::conn::CommittedDocumentLifecycle {
+            document,
+            artifacts,
+        } = lifecycle;
+        if self.target_document_id(target_id) != Some(document) {
+            return Vec::new();
+        }
+        let Some(initial_snapshot) = DocumentLifecycle::creation_prefix_snapshot(&artifacts) else {
+            tracing::warn!(
+                active_document = ?artifacts.active_document,
+                active_epoch = ?artifacts.active_epoch,
+                snapshot_document = ?artifacts.lifecycle_snapshot.document,
+                snapshot_epoch = ?artifacts.lifecycle_snapshot.epoch,
+                "rejecting inconsistent renderer page creation lifecycle artifacts"
+            );
+            return Vec::new();
+        };
         let RendererPageCreationArtifacts {
             active_document,
             active_epoch,
             lifecycle_snapshot,
             initial_lifecycle_events,
         } = artifacts;
-        if lifecycle_snapshot.document != active_document
-            || lifecycle_snapshot.epoch != active_epoch
-        {
-            tracing::warn!(
-                ?active_document,
-                ?active_epoch,
-                snapshot_document = ?lifecycle_snapshot.document,
-                snapshot_epoch = ?lifecycle_snapshot.epoch,
-                "rejecting inconsistent renderer page creation lifecycle artifacts"
-            );
-            return Vec::new();
-        }
         let Some(document_id) = self.target_document_id(target_id) else {
             tracing::debug!(
                 ?active_document,
@@ -1309,29 +1329,6 @@ impl BrowserContext {
             );
             return Vec::new();
         };
-        let initial_snapshot = initial_lifecycle_events
-            .iter()
-            .find(|event| {
-                event.frame == lifecycle_snapshot.frame
-                    && event.document == active_document
-                    && matches!(
-                        event.kind,
-                        RendererDocumentLifecycleEventKind::Started { .. }
-                    )
-            })
-            .map(|event| RendererDocumentLifecycleSnapshot {
-                frame: event.frame,
-                document: event.document,
-                epoch: event.epoch,
-                started: RendererLifecycleEventStamp {
-                    sequence: event.sequence,
-                    timestamp_micros: event.timestamp_micros,
-                },
-                dom_content_loaded: None,
-                load: None,
-                terminated: None,
-            })
-            .unwrap_or(lifecycle_snapshot);
         let binding = CommittedRendererDocumentBinding {
             renderer_frame: lifecycle_snapshot.frame,
             renderer_document: active_document,
@@ -1365,7 +1362,6 @@ impl BrowserContext {
             document_id = binding.document_id.get(),
             "bound renderer document lifecycle to committed protocol document"
         );
-        self.bind_document_lifecycle_for_target(target_id, initial_snapshot);
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .renderer_document_lifecycle = RendererDocumentLifecycleProtocolState {
@@ -1376,13 +1372,26 @@ impl BrowserContext {
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .root_post_load_observation = None;
-        self.ingest_renderer_document_lifecycle_events_for_target(
+        self.project_renderer_document_lifecycle_events_for_target(
             target_id,
             initial_lifecycle_events,
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn ingest_renderer_document_lifecycle_events_for_target(
+        &mut self,
+        target_id: &str,
+        events: Vec<RendererDocumentLifecycleEvent>,
+    ) -> Vec<RendererDocumentLifecycleEvent> {
+        let accepted = events
+            .into_iter()
+            .filter(|event| self.observe_document_lifecycle_for_target(target_id, *event))
+            .collect();
+        self.project_renderer_document_lifecycle_events_for_target(target_id, accepted)
+    }
+
+    pub(crate) fn project_renderer_document_lifecycle_events_for_target(
         &mut self,
         target_id: &str,
         events: Vec<RendererDocumentLifecycleEvent>,
@@ -1398,7 +1407,7 @@ impl BrowserContext {
                     && binding.navigation.as_ref().is_none_or(|navigation| {
                         self.web_contents_for_target(target_id)
                             .expect("registered Target must reference live WebContents")
-                            .navigation
+                            .navigation()
                             .committed_document_navigation()
                             .as_ref()
                             == Some(navigation)
@@ -1444,12 +1453,22 @@ impl BrowserContext {
                 .binding
                 .as_ref()
                 .is_some_and(|binding| event.epoch != binding.renderer_epoch);
-            if !self.observe_document_lifecycle_for_target(target_id, event) {
+            if self
+                .page_slot_for_target(target_id)
+                .unwrap()
+                .renderer_document_lifecycle
+                .binding
+                .as_ref()
+                .is_none_or(|binding| {
+                    binding.renderer_frame != event.frame
+                        || binding.renderer_document != event.document
+                })
+            {
                 tracing::debug!(
                     sequence = event.sequence,
                     event_epoch = event.epoch.0,
                     event_document = ?event.document,
-                    "dropping stale or reordered renderer lifecycle event"
+                    "dropping lifecycle occurrence from another renderer Document"
                 );
                 continue;
             }
@@ -1530,19 +1549,6 @@ impl BrowserContext {
                 accepted.push(event);
             }
         }
-        if self
-            .renderer_document_lifecycle_binding_for_target(target_id)
-            .is_some_and(|binding| {
-                binding.document_open_replacement_epoch == Some(binding.renderer_epoch)
-            })
-        {
-            // The admitted document.open transition exits the initial document
-            // at this boundary, before a later renderer snapshot can arrive.
-            self.web_contents_for_target_mut(target_id)
-                .expect("validated lifecycle owner")
-                .navigation
-                .mark_initial_empty_document_exited();
-        }
         accepted
     }
 
@@ -1560,7 +1566,7 @@ impl BrowserContext {
                     && binding.navigation.as_ref().is_none_or(|navigation| {
                         self.web_contents_for_target(target_id)
                             .expect("registered Target must reference live WebContents")
-                            .navigation
+                            .navigation()
                             .committed_document_navigation()
                             .as_ref()
                             == Some(navigation)
@@ -1573,6 +1579,45 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<RendererDocumentLifecycleSnapshot> {
         self.document_lifecycle_for_target(target_id)?.snapshot()
+    }
+
+    pub(crate) fn apply_renderer_document_lifecycle(
+        &mut self,
+        renderer_page: RendererPageResidenceIdentity,
+        event: RendererDocumentLifecycleEvent,
+    ) -> Option<crate::conn::DocumentLifecycleEvent> {
+        if let Some(contents) = self.physical.web_contents.values_mut().find(|contents| {
+            contents
+                .main_frame
+                .current_document
+                .as_ref()
+                .is_some_and(|document| {
+                    RendererPageResidenceIdentity::from_page(&document.page) == renderer_page
+                })
+        }) {
+            return contents.apply_document_lifecycle(event);
+        }
+        #[cfg(test)]
+        {
+            let target_id = self
+                .page_targets
+                .iter()
+                .find(|target| {
+                    self.loaded_page_for_target(target.target_id()).is_none()
+                        && self.routes_renderer_page_for_target(target.target_id(), renderer_page)
+                        && target.runtime_slot.page_slot().document_fixture.is_some()
+                })
+                .map(|target| target.target_id().to_owned());
+            if let Some(target_id) = target_id
+                && self.observe_document_lifecycle_for_target(&target_id, event)
+            {
+                return Some(crate::conn::DocumentLifecycleEvent::new(
+                    self.target_document_id(&target_id).unwrap(),
+                    event,
+                ));
+            }
+        }
+        None
     }
 
     pub(crate) fn register_renderer_document_lifecycle_waiter_for_target(
@@ -1867,6 +1912,41 @@ mod pending_renderer_page_tests {
     use super::*;
 
     #[test]
+    fn load_admission_matches_pending_loader_without_reusing_committed_navigation() {
+        let mut context = context_with_page_slot_for_test(TargetPageSlot::default());
+        let committed = context
+            .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-shared".to_owned());
+        assert!(
+            context.commit_pending_document_navigation_if_matches_for_target(
+                PAGE_SLOT_TEST_TARGET,
+                &committed,
+            )
+        );
+        assert_eq!(
+            context.pending_navigation_id_for_loader(PAGE_SLOT_TEST_TARGET, "LOADER-shared"),
+            None,
+        );
+        let pending = context
+            .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-shared".to_owned());
+        assert_ne!(committed, pending);
+        assert_eq!(
+            context.pending_navigation_id_for_loader(PAGE_SLOT_TEST_TARGET, "LOADER-shared"),
+            Some(pending),
+        );
+        let next = context
+            .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-next".to_owned());
+        assert_eq!(
+            context.pending_navigation_id_for_loader(PAGE_SLOT_TEST_TARGET, "LOADER-shared"),
+            None,
+            "the committed loader must not authorize the newer pending request",
+        );
+        assert_eq!(
+            context.pending_navigation_id_for_loader(PAGE_SLOT_TEST_TARGET, "LOADER-next"),
+            Some(next),
+        );
+    }
+
+    #[test]
     fn loader_projection_follows_navigation_lifetime_without_authorizing_stale_work() {
         let mut browser_context = context_with_page_slot_for_test(TargetPageSlot::default());
         let committed = browser_context
@@ -2012,36 +2092,54 @@ mod pending_renderer_page_tests {
         )
     }
 
-    #[test]
-    fn initial_build_binding_is_exact_and_retires_with_build() {
-        let mut browser_context = context_with_page_slot_for_test(
+    #[tokio::test]
+    async fn initial_build_binding_is_exact_and_late_retirement_preserves_retry() {
+        use crate::conn::state::InitialDocumentAdmission;
+        let mut context = context_with_page_slot_for_test(
             TargetPageSlot::empty_for_initial_document_page_build(),
         );
-        browser_context.start_initial_document_page_build_for_target(PAGE_SLOT_TEST_TARGET);
-        let expected = renderer_page(7, 11);
-        let peer = renderer_page(7, 12);
-
-        assert!(
-            browser_context.bind_initial_document_page_build_renderer_page_for_target(
+        context.bind_page_navigation_engines(Default::default(), None);
+        let InitialDocumentAdmission::Build(first) = context
+            .start_initial_document_for_target(
                 PAGE_SLOT_TEST_TARGET,
-                expected
+                Default::default(),
+                &Default::default(),
             )
-        );
-        assert!(browser_context.routes_renderer_page_for_target(PAGE_SLOT_TEST_TARGET, expected));
-        assert!(!browser_context.routes_renderer_page_for_target(PAGE_SLOT_TEST_TARGET, peer));
-        assert!(
-            !browser_context.bind_initial_document_page_build_renderer_page_for_target(
-                PAGE_SLOT_TEST_TARGET,
-                peer
-            ),
-            "an initial build owns exactly one renderer Page reservation"
-        );
-
-        browser_context
-            .page_slot_for_target_mut(PAGE_SLOT_TEST_TARGET)
             .unwrap()
-            .complete_initial_document_page_build();
-        assert!(!browser_context.routes_renderer_page_for_target(PAGE_SLOT_TEST_TARGET, expected));
+        else {
+            panic!("expected build");
+        };
+        let first_key = first.key();
+        context.project_initial_document_build(PAGE_SLOT_TEST_TARGET, first_key);
+        assert!(
+            context.routes_renderer_page_for_target(PAGE_SLOT_TEST_TARGET, first_key.renderer())
+        );
+        drop(first);
+        let InitialDocumentAdmission::Build(second) = context
+            .start_initial_document_for_target(
+                PAGE_SLOT_TEST_TARGET,
+                Default::default(),
+                &Default::default(),
+            )
+            .unwrap()
+        else {
+            panic!("expected retry");
+        };
+        let second_key = second.key();
+        assert_ne!(first_key.document(), second_key.document());
+        assert_ne!(first_key.renderer(), second_key.renderer());
+        context.project_initial_document_build(PAGE_SLOT_TEST_TARGET, second_key);
+        context.retire_initial_document_projection(first_key);
+        assert!(
+            !context.routes_renderer_page_for_target(PAGE_SLOT_TEST_TARGET, first_key.renderer())
+        );
+        assert!(
+            context.routes_renderer_page_for_target(PAGE_SLOT_TEST_TARGET, second_key.renderer())
+        );
+        context.retire_initial_document_projection(second_key);
+        assert!(
+            !context.routes_renderer_page_for_target(PAGE_SLOT_TEST_TARGET, second_key.renderer())
+        );
     }
 
     #[test]
@@ -2722,7 +2820,10 @@ mod renderer_document_lifecycle_tests {
                             sequence: 1,
                             timestamp_micros: 10,
                         },
-                        dom_content_loaded: None,
+                        dom_content_loaded: Some(RendererLifecycleEventStamp {
+                            sequence: dcl.sequence,
+                            timestamp_micros: dcl.timestamp_micros,
+                        }),
                         load: None,
                         terminated: None,
                     },

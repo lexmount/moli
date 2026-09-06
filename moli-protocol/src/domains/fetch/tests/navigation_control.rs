@@ -2,6 +2,126 @@ use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
 
 use super::*;
 
+async fn assert_stale_fetch_completion_preserves_winning_navigation(method: &str) {
+    for loaded in [true, false] {
+        let mut ctx = TestContext::new();
+        if loaded {
+            with_loaded_http_document(
+                &mut ctx,
+                "https://navigation.example/committed",
+                "SID-1",
+                "TID-1",
+            )
+            .await;
+        } else {
+            ctx.conn
+                .install_browser_context_fixture_for_test(attached_browser_context());
+        }
+        ctx.enable_page_events_for_test(Some("SID-1"));
+        ctx.process_async(json!({
+            "id": 100, "sessionId": "SID-1", "method": "Fetch.enable",
+            "params": { "patterns": [{ "urlPattern": "*", "resourceType": "Document" }] }
+        }))
+        .await;
+        ctx.expect_result(100, json!({}), Some("SID-1"));
+
+        let mut requests = Vec::new();
+        for (id, path) in [(101, "superseded"), (102, "winner")] {
+            ctx.process_async(json!({
+                "id": id, "sessionId": "SID-1", "method": "Page.navigate",
+                "params": { "url": format!("https://navigation.example/{path}") }
+            }))
+            .await;
+            let expected_url = format!("https://navigation.example/{path}");
+            let pause = ctx
+                .wait_for_scheduler_message("exact held navigation request", |message| {
+                    message["method"] == "Fetch.requestPaused"
+                        && message["sessionId"] == "SID-1"
+                        && message["params"]["resourceType"] == "Document"
+                        && message["params"]["request"]["url"] == expected_url
+                })
+                .await;
+            assert_eq!(
+                pause["params"]["request"]["url"],
+                format!("https://navigation.example/{path}")
+            );
+            requests.push(pause["params"]["requestId"].clone());
+        }
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        let committed = context.target_document_id("TID-1");
+        let history = context.target_navigation_history_snapshot("TID-1");
+        assert_eq!(committed.is_some(), loaded);
+        assert!(context.has_pending_document_navigation_for_target("TID-1"));
+
+        let params = match method {
+            "Fetch.continueRequest" => json!({ "requestId": requests[0] }),
+            "Fetch.failRequest" => json!({
+                "requestId": requests[0], "errorReason": "Aborted"
+            }),
+            "Fetch.fulfillRequest" => json!({
+                "requestId": requests[0], "responseCode": 200,
+                "responseHeaders": [{ "name": "content-type", "value": "text/html" }],
+                "body": BASE64_STANDARD.encode("<title>superseded</title>")
+            }),
+            _ => unreachable!(),
+        };
+        ctx.process_async(json!({
+            "id": 103, "sessionId": "SID-1", "method": method, "params": params
+        }))
+        .await;
+        ctx.expect_result(103, json!({}), Some("SID-1"));
+        assert_eq!(take_response_by_id(&mut ctx, 101)["error"]["code"], -32000);
+
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        assert_eq!(
+            context.target_document_id("TID-1"),
+            committed,
+            "a stale {method} cannot retire the committed Browser Document"
+        );
+        assert_eq!(context.target_navigation_history_snapshot("TID-1"), history);
+        assert!(
+            context.has_pending_document_navigation_for_target("TID-1"),
+            "a stale {method} cannot cancel the winning Browser navigation"
+        );
+
+        ctx.process_async(json!({
+            "id": 104, "sessionId": "SID-1", "method": "Fetch.fulfillRequest",
+            "params": {
+                "requestId": requests[1], "responseCode": 200,
+                "responseHeaders": [{ "name": "content-type", "value": "text/html" }],
+                "body": BASE64_STANDARD.encode("<title>winner</title>")
+            }
+        }))
+        .await;
+        ctx.expect_result(104, json!({}), Some("SID-1"));
+        let response = take_response_by_id(&mut ctx, 102);
+        assert!(response.get("error").is_none(), "{response}");
+        assert_eq!(response["result"]["frameId"], "TID-1");
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        assert_ne!(context.target_document_id("TID-1"), committed);
+        assert_eq!(
+            context.loaded_page().unwrap().final_url().as_str(),
+            "https://navigation.example/winner"
+        );
+        assert!(!context.has_pending_document_navigation_for_target("TID-1"));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_fetch_continue_preserves_current_document_and_winning_navigation() {
+    assert_stale_fetch_completion_preserves_winning_navigation("Fetch.continueRequest").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_fetch_fail_preserves_current_document_and_winning_navigation() {
+    assert_stale_fetch_completion_preserves_winning_navigation("Fetch.failRequest").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn stale_fetch_fulfill_preserves_current_document_and_winning_navigation() {
+    assert_stale_fetch_completion_preserves_winning_navigation("Fetch.fulfillRequest").await;
+}
+
 #[test]
 fn parse_binary_response_headers_decodes_nul_separated_header_block() {
     let headers = super::response_headers_from_params(None, Some("eC1iaW46IHllcwB4LXR3bzogMgA="))
@@ -643,6 +763,80 @@ async fn response_stage_document_pattern_pauses_main_document_after_response() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn disable_neutrally_resumes_paused_response_stage_navigation() {
+    async fn handler() -> impl IntoResponse {
+        (
+            [(CONTENT_TYPE.as_str(), "text/html")],
+            "<!doctype html><html><body><main>disable-response-stage</main></body></html>",
+        )
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/page", get(handler)))
+            .await
+            .unwrap();
+    });
+
+    let mut ctx = TestContext::new();
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
+    let url = format!("http://{addr}/page");
+    ctx.process_async(json!({
+        "id": 350,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1",
+        "params": { "patterns": [{
+            "urlPattern": "*",
+            "requestStage": "Response",
+            "resourceType": "Document"
+        }] }
+    }))
+    .await;
+    ctx.expect_result(350, json!({}), Some("SID-1"));
+
+    ctx.process_async(json!({
+        "id": 351,
+        "method": "Page.navigate",
+        "sessionId": "SID-1",
+        "params": { "url": url }
+    }))
+    .await;
+    let paused = ctx
+        .wait_for_scheduler_message("response pause before disable", |message| {
+            message["method"] == json!("Fetch.requestPaused")
+                && message["params"]["responseStatusCode"] == json!(200)
+        })
+        .await;
+    let network_id = paused["params"]["networkId"].clone();
+
+    ctx.process_async(json!({
+        "id": 352,
+        "method": "Fetch.disable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(352, json!({}), Some("SID-1"));
+    assert!(ctx.take_response_by_id(351)["result"].is_object());
+    assert!(!ctx.sent.iter().any(|message| {
+        message["method"] == json!("Network.loadingFailed")
+            && message["params"]["requestId"] == network_id
+    }));
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .target_document_url("TID-1")
+            .map(Url::as_str),
+        Some(url.as_str())
+    );
+
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn document_url_pattern_only_pauses_matching_main_document() {
     async fn plain() -> impl IntoResponse {
         (
@@ -1147,7 +1341,7 @@ async fn intercepted_navigation_start_events_stay_before_network_pause_with_back
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn disable_failure_still_settles_the_drained_navigation() {
+async fn disable_failure_still_neutrally_settles_the_drained_navigation() {
     let mut ctx = TestContext::new();
     with_loaded_http_document(
         &mut ctx,
@@ -1207,20 +1401,20 @@ async fn disable_failure_still_settles_the_drained_navigation() {
         1,
         "the original navigation must receive exactly one terminal reply"
     );
-    assert_eq!(
-        ctx.take_response_by_id(2)["error"]["message"],
-        json!("Fetch interception disabled")
-    );
-    assert_eq!(
-        ctx.sent
-            .iter()
-            .filter(|event| {
-                event["method"] == json!("Network.loadingFailed")
-                    && event["params"]["requestId"] == network_id
-                    && event["params"]["errorText"] == json!("Fetch interception disabled")
-            })
-            .count(),
-        1
+    assert!(ctx.take_response_by_id(2)["result"].is_object());
+    let failures = ctx
+        .sent
+        .iter()
+        .filter(|event| {
+            event["method"] == json!("Network.loadingFailed")
+                && event["params"]["requestId"] == network_id
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(failures.len(), 1);
+    assert_ne!(
+        failures[0]["params"]["errorText"],
+        json!("Fetch interception disabled"),
+        "the renderer failure may fail the resumed load, but Fetch.disable must not author it"
     );
     let context = ctx.conn.browser_context.as_ref().unwrap();
     let target = context.active_page_target();
@@ -1233,7 +1427,7 @@ async fn disable_failure_still_settles_the_drained_navigation() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn disable_aborts_paused_main_document_navigation() {
+async fn disable_neutrally_resumes_paused_main_document_navigation() {
     async fn page() -> impl IntoResponse {
         (
             [(CONTENT_TYPE.as_str(), "text/html")],
@@ -1286,17 +1480,22 @@ async fn disable_aborts_paused_main_document_navigation() {
     .await;
     ctx.expect_result(80, json!({}), Some("SID-1"));
 
-    let failed = ctx.take_one();
-    assert_eq!(failed["method"], "Network.loadingFailed");
-    assert_eq!(failed["params"]["requestId"], network_id);
-    assert_eq!(failed["params"]["errorText"], "Fetch interception disabled");
-
-    let navigate_error = ctx.take_one();
-    assert_eq!(navigate_error["id"], 79);
-    assert_eq!(navigate_error["error"]["code"], -32000);
+    assert!(ctx.take_response_by_id(79)["result"].is_object());
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == json!("Network.loadingFailed")
+                && message["params"]["requestId"] == network_id
+        }),
+        "Fetch.disable must release the Browser request without failing it"
+    );
     assert_eq!(
-        navigate_error["error"]["message"],
-        "Fetch interception disabled"
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .target_document_url("TID-1")
+            .map(Url::as_str),
+        Some(url.as_str())
     );
 
     server.abort();

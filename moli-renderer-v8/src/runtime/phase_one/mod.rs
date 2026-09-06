@@ -2280,7 +2280,7 @@ document.body.setAttribute('data-error-state', [
             .run_until(async {
                 let PhaseOnePageVmHarness {
                     page_vm,
-                    loader,
+                    loader: _,
                     state,
                 } = new_phase_one_page_vm_harness_for_test();
                 let replacement_state = ParseTimeDriverState::new_with_scripting_enabled_for_test(
@@ -2289,7 +2289,6 @@ document.body.setAttribute('data-error-state', [
                 );
                 let state = std::mem::replace(state, replacement_state);
                 let mut runtime = ConcurrentParseTimeRuntime::new_parser_owner(
-                    (*loader).clone(),
                     PageVmInitStage::Load,
                     state,
                     page_vm,
@@ -4562,7 +4561,6 @@ document.body.setAttribute('data-error-state', [
             )
             .expect("page vm");
             let phase_runtime = ConcurrentParseTimeRuntime::new_parser_owner(
-                loader,
                 PageVmInitStage::Load,
                 state,
                 page_vm,
@@ -4690,12 +4688,8 @@ document.body.setAttribute('data-error-state', [
                 Instant::now(),
             )
             .expect("page vm");
-            let runtime = ConcurrentParseTimeRuntime::new_parser_owner(
-                loader.clone(),
-                PageVmInitStage::Load,
-                state,
-                page_vm,
-            );
+            let runtime =
+                ConcurrentParseTimeRuntime::new_parser_owner(PageVmInitStage::Load, state, page_vm);
 
             let creation = Box::pin(async move {
                 super::scaffold::finish_phase_one_creation_on_execution_context(
@@ -4801,7 +4795,6 @@ document.body.setAttribute('data-error-state', [
                 )
                 .expect("async-subresource terminal should enqueue on Networking");
             let runtime = ConcurrentParseTimeRuntime::new_parser_owner(
-                loader.clone(),
                 PageVmInitStage::Load,
                 state,
                 page_vm,
@@ -14641,7 +14634,6 @@ document.body.setAttribute('data-result', [
             )
             .expect("page vm");
             let runtime = ConcurrentParseTimeRuntime::new_parser_owner(
-                loader.clone(),
                 crate::renderer::PageVmInitStage::Load,
                 state,
                 page_vm,

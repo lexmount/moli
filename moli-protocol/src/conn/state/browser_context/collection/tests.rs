@@ -2,7 +2,6 @@ use super::*;
 use crate::conn::state::{DevToolsRendererChannelError, WindowOpener};
 use moli_core::{
     browser::{DocumentRetirement, NavigationId, RendererPageResidenceIdentity},
-    page::RendererDevToolsAgentToken,
     runtime::{Browser, BrowserConfig, NavigationEngine},
 };
 use std::{
@@ -82,11 +81,25 @@ async fn projection_drop_preserves_the_contexts_page_engine_selection_and_docume
         .document_lifetime_observer_for_target("TID-physical-owner")
         .unwrap();
 
+    let history = context
+        .target_navigation_history_snapshot("TID-physical-owner")
+        .unwrap();
+    assert_eq!(history.1.len(), 1);
+    assert_eq!(history.1[0].title, "Browser owned");
+    let target = context.page_targets.get_mut("TID-physical-owner").unwrap();
+    target.set_target_url("https://projection.invalid/wrong".into());
+    target.owner_state.committed_document_title = Some("stale projection".into());
+    assert_eq!(
+        context.target_navigation_history_snapshot("TID-physical-owner"),
+        Some(history.clone())
+    );
+
     drop(context.page_targets.remove("TID-physical-owner").unwrap());
     assert_eq!(context.selected_web_contents_id(), Some(id));
     let contents = context.physical.web_contents.get(&id).unwrap();
+    assert_eq!(contents.navigation_history_snapshot(), history);
     assert_eq!(
-        contents.navigation_engine.as_ref().unwrap() as *const NavigationEngine,
+        contents.navigation_engine_for_test().unwrap() as *const NavigationEngine,
         engine
     );
     let document = contents.main_frame.current_document.as_ref().unwrap();
@@ -149,17 +162,29 @@ fn emulation_policy_survives_projection_drop_and_updates_without_sessions() {
 
 #[tokio::test]
 async fn close_retires_projection_waiters_and_channel_before_the_owned_page_teardown() {
+    use crate::conn::state::InitialDocumentAdmission;
     let mut context = BrowserContext::new("BID-close".into());
+    context.bind_page_navigation_engines(Default::default(), None);
     context.set_active_target_id("TID-close");
     context.attach_active_session("SID-close");
     context.target_popup_ids.insert("TID-close".into(), 7);
-    context.start_initial_document_page_build_for_target("TID-close");
+    let InitialDocumentAdmission::Build(build) = context
+        .start_initial_document_for_target("TID-close", Default::default(), &Default::default())
+        .unwrap()
+    else {
+        panic!("expected build");
+    };
+    let InitialDocumentAdmission::Join(waiter) = context
+        .start_initial_document_for_target("TID-close", Default::default(), &Default::default())
+        .unwrap()
+    else {
+        panic!("expected join");
+    };
     let slot = &context.page_targets.get("TID-close").unwrap().runtime_slot;
-    let waiter = slot.initial_document_page_build_waiter().unwrap();
     let dialog_scope = slot.javascript_dialog_scope_observer();
     let id = context.selected_web_contents_id().unwrap();
 
-    let (projection, closing) = context.take_page_target_for_close("TID-close").unwrap();
+    let (mut projection, closing) = context.take_page_target_for_close("TID-close").unwrap();
     assert!(!context.physical.web_contents.contains_key(&id));
     assert!(context.page_targets.is_empty());
     assert_eq!(context.selected_web_contents_id(), None);
@@ -173,10 +198,7 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     assert!(matches!(
         projection
             .runtime_slot
-            .prepare_renderer_agent_candidate_token(
-                &NavigationId::allocate(),
-                RendererDevToolsAgentToken::allocate(),
-            ),
+            .finish_renderer_document_navigation(&NavigationId::allocate()),
         Err(DevToolsRendererChannelError::Closed)
     ));
     assert_eq!(
@@ -185,14 +207,18 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     );
     // Cancellation of the teardown future must not resurrect either authority.
     drop(closing);
+    assert!(build.materialize().await.is_err());
     assert!(context.take_page_target_for_close("TID-close").is_none());
     drop(projection);
 }
 
 #[tokio::test]
 async fn close_all_retires_background_builds_and_removes_every_projection() {
+    use crate::conn::state::InitialDocumentAdmission;
     let mut context = BrowserContext::new("BID-close-all".into());
+    context.bind_page_navigation_engines(Default::default(), None);
     let mut waiters = Vec::new();
+    let mut builds = Vec::new();
     for id in ["TID-first", "TID-background"] {
         assert!(context.register_page_target_fixture(
             id.into(),
@@ -200,16 +226,20 @@ async fn close_all_retires_background_builds_and_removes_every_projection() {
             TargetIdentityState::about_blank(),
             TargetPageSlot::empty_for_initial_document_page_build(),
         ));
-        context.start_initial_document_page_build_for_target(id);
-        waiters.push(
-            context
-                .page_targets
-                .get(id)
-                .unwrap()
-                .runtime_slot
-                .initial_document_page_build_waiter()
-                .unwrap(),
-        );
+        let InitialDocumentAdmission::Build(build) = context
+            .start_initial_document_for_target(id, Default::default(), &Default::default())
+            .unwrap()
+        else {
+            panic!("expected build");
+        };
+        builds.push(build);
+        let InitialDocumentAdmission::Join(waiter) = context
+            .start_initial_document_for_target(id, Default::default(), &Default::default())
+            .unwrap()
+        else {
+            panic!("expected join");
+        };
+        waiters.push(waiter);
     }
     context.set_active_target_id("TID-first");
     context.close_all_pages_async().await;
@@ -224,4 +254,7 @@ async fn close_all_retires_background_builds_and_removes_every_projection() {
     }
     context.close_all_pages_async().await;
     assert_eq!(context.selected_web_contents_id(), None);
+    for build in builds {
+        assert!(build.materialize().await.is_err());
+    }
 }

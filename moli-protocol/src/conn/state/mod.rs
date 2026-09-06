@@ -10,7 +10,6 @@ mod fetch;
 mod identity;
 mod inspector;
 pub(in crate::conn) use browser_context::javascript_dialog;
-mod navigation_controller;
 mod navigation_outcome;
 mod page_resource;
 pub(in crate::conn) use browser_context::page_slot;
@@ -27,6 +26,15 @@ mod target_state;
 #[cfg(test)]
 mod tests;
 mod web_contents;
+pub(in crate::conn) use web_contents::{AdmittedNavigationLoad, PreparedNavigationResponse};
+pub(in crate::conn) use web_contents::{
+    BuiltInitialDocument, InitialDocumentAdmission, InitialDocumentBuildKey,
+    InitialDocumentPageBuildWaiter,
+};
+pub(crate) use web_contents::{
+    ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
+    NavigationInterceptionPermit, NavigationRequestInterception,
+};
 
 #[cfg(test)]
 pub(in crate::conn) use web_contents::DocumentHost;
@@ -43,8 +51,7 @@ pub(crate) use identity::{
 pub(crate) use moli_core::browser::{DocumentId, NavigationId, RendererPageResidenceIdentity};
 
 pub(crate) use devtools_renderer_channel::{
-    CommittedRendererAgentAttachment, DevToolsRendererChannelError,
-    PreparedRendererAgentAttachment, RendererAgentAttachment, RendererAgentBinding,
+    DevToolsRendererChannelError, RendererAgentAttachment, RendererAgentBinding,
 };
 
 pub(crate) use dedicated_worker_target::{
@@ -67,8 +74,7 @@ pub(crate) use page_resource::MainDocumentResourceSnapshot;
 #[cfg(test)]
 pub(crate) use page_slot::TargetPageSlot;
 pub(crate) use page_slot::{
-    CommittedRendererDocumentBinding, InitialDocumentPageBuildWaiter,
-    RendererDocumentLifecycleWaiterId, TargetPageAbsenceReason,
+    CommittedRendererDocumentBinding, RendererDocumentLifecycleWaiterId, TargetPageAbsenceReason,
 };
 pub use page_slot::{DocumentStartScript, IsolatedWorldDefinition, RuntimeBindingDefinition};
 
@@ -109,6 +115,11 @@ pub(crate) use shared_worker_attachment::{
 pub(crate) use shared_worker_target::SharedWorkerTargetState;
 #[cfg(test)]
 pub(crate) use web_contents::JavaScriptDialogKey;
+pub(crate) use web_contents::SameDocumentNavigationCommitted;
+pub(crate) use web_contents::{
+    CommittedDocumentLifecycle, DocumentLifecycleEvent, DocumentNavigationDestination,
+    PreparedDocumentNavigation,
+};
 pub(crate) use web_contents::{
     EmulationPolicy, EmulationPolicyChange, SessionStorageNamespace, WindowSurface,
     WindowSurfaceState,
@@ -119,20 +130,23 @@ pub(crate) use web_contents::{
 pub(in crate::conn) use web_contents::{PageSurface, WindowOpener};
 
 pub use browser_context::BrowserContext;
+#[cfg(test)]
+pub(crate) use browser_context::BrowserContextResourceStorageHandles;
 pub(crate) use browser_context::{
-    BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles,
-    BrowserContextStoragePartitionHandles, ContextNetworkPolicy, SiteDataClearOptions,
+    BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles, ContextNetworkPolicy,
+    SiteDataClearOptions,
 };
 pub(crate) use browser_context::{
     CompletedContextPermissionUpdate, PendingContextPermissionUpdate,
 };
 pub(crate) use browser_context::{
-    LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit, NetworkPolicyUpdateKind,
-    PageInputCommand, PagePolicyUpdateKind,
+    LoadedNavigationPageCommit, NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind,
 };
 
-pub(crate) use navigation_controller::{InitialDocument, InitialDocumentCreator};
-pub use navigation_controller::{PageNavigationHistoryEntry, PendingNavigationHistoryUpdate};
+pub use web_contents::PageNavigationHistoryEntry;
+pub(crate) use web_contents::{
+    HistoryTraversalDestination, InitialDocument, InitialDocumentCreator, ResolvedHistoryTraversal,
+};
 
 pub use emulation::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,

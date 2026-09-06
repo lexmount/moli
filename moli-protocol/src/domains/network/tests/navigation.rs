@@ -712,6 +712,13 @@ async fn main_document_navigation_redirect_emits_second_request_with_redirect_re
         );
     }
     ctx.conn.install_browser_context_fixture_for_test(bc);
+    // Cookie/referrer provenance comes from the Browser document, not Target URL.
+    ctx.install_buffered_navigation_fixture_for_session_owner(
+        Url::parse(&format!("http://localhost:{}/origin", addr.port())).unwrap(),
+        "<title>source document</title>".to_owned(),
+        Some("SID-1"),
+    )
+    .await;
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.enable_dom_events_for_test(Some("SID-1"));
 
@@ -1160,6 +1167,13 @@ async fn main_document_multi_hop_redirect_preserves_cookie_downgrade_report() {
         );
     }
     ctx.conn.install_browser_context_fixture_for_test(bc);
+    // Cookie/referrer provenance comes from the Browser document, not Target URL.
+    ctx.install_buffered_navigation_fixture_for_session_owner(
+        Url::parse(&format!("http://localhost:{}/origin", addr.port())).unwrap(),
+        "<title>source document</title>".to_owned(),
+        Some("SID-1"),
+    )
+    .await;
 
     ctx.process_async(json!({
         "id": 3_1,

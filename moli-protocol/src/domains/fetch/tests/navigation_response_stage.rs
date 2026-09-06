@@ -77,9 +77,7 @@ async fn response_stage_pause_happens_before_navigation_body_eof() {
         .browser_context
         .as_ref()
         .and_then(|bc| {
-            bc.active_page_target()
-                .fetch_owner
-                .pending_fetch_response_prepared_renderer_agent_for_test(&response_request_id)
+            bc.pending_fetch_response_prepared_renderer_agent_for_test(&response_request_id)
         })
         .expect("final response head should reserve a renderer agent before continueResponse");
     assert!(
@@ -166,9 +164,7 @@ async fn assert_empty_http_error_response_stage(ctx: &mut TestContext, url: &str
             .browser_context
             .as_ref()
             .and_then(|bc| {
-                bc.active_page_target()
-                    .fetch_owner
-                    .pending_fetch_response_prepared_renderer_agent_for_test(&request_id)
+                bc.pending_fetch_response_prepared_renderer_agent_for_test(&request_id)
             })
             .is_none(),
         "an empty HTTP error must be classified from its body after continueResponse"
@@ -918,9 +914,7 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         .browser_context
         .as_ref()
         .and_then(|bc| {
-            bc.active_page_target()
-                .fetch_owner
-                .pending_fetch_response_prepared_renderer_agent_for_test(&first_request_id)
+            bc.pending_fetch_response_prepared_renderer_agent_for_test(&first_request_id)
         })
         .expect("first response head should reserve a renderer agent");
 
@@ -941,9 +935,7 @@ async fn interleaved_response_heads_only_commit_the_current_prepared_document() 
         .browser_context
         .as_ref()
         .and_then(|bc| {
-            bc.active_page_target()
-                .fetch_owner
-                .pending_fetch_response_prepared_renderer_agent_for_test(&second_request_id)
+            bc.pending_fetch_response_prepared_renderer_agent_for_test(&second_request_id)
         })
         .expect("second response head should reserve a renderer agent");
     assert_ne!(first_agent, second_agent);
@@ -1800,9 +1792,7 @@ async fn fail_request_at_response_stage_aborts_navigation() {
             .browser_context
             .as_ref()
             .and_then(|bc| {
-                bc.active_page_target()
-                    .fetch_owner
-                    .pending_fetch_response_prepared_renderer_agent_for_test(&response_request_id)
+                bc.pending_fetch_response_prepared_renderer_agent_for_test(&response_request_id)
             })
             .is_some(),
         "response head should own a prepared candidate before cancellation"
@@ -1889,11 +1879,7 @@ async fn fulfill_request_at_response_stage_replaces_the_network_candidate_once()
         .conn
         .browser_context
         .as_ref()
-        .and_then(|bc| {
-            bc.active_page_target()
-                .fetch_owner
-                .pending_fetch_response_prepared_renderer_agent_for_test(&request_id)
-        })
+        .and_then(|bc| bc.pending_fetch_response_prepared_renderer_agent_for_test(&request_id))
         .expect("network response head should reserve a renderer agent");
 
     ctx.process_async(json!({
@@ -2069,6 +2055,103 @@ async fn take_response_body_as_stream_at_response_stage_returns_stream_and_keeps
     }))
     .await;
     ctx.expect_result(336, json!({}), None);
+
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn disable_drains_active_response_body_stream_and_neutrally_resumes_navigation() {
+    let (tail_tx, tail_rx) = tokio::sync::oneshot::channel::<()>();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut buf = [0u8; 2048];
+        let _ = stream.read(&mut buf).await.unwrap();
+        let head = "<!doctype html><html";
+        let tail = "><body><main>neutral-stream</main></body></html>";
+        let response_head = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+        stream.write_all(response_head.as_bytes()).await.unwrap();
+        stream
+            .write_all(format!("{:X}\r\n{head}\r\n", head.len()).as_bytes())
+            .await
+            .unwrap();
+        let _ = tail_rx.await;
+        stream
+            .write_all(format!("{:X}\r\n{tail}\r\n0\r\n\r\n", tail.len()).as_bytes())
+            .await
+            .unwrap();
+        let _ = stream.shutdown().await;
+    });
+
+    let mut ctx = TestContext::new();
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
+    let url = format!("http://{addr}/page");
+    ctx.process_async(json!({
+        "id": 3290, "method": "Fetch.enable", "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(3290, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 3300, "method": "Page.navigate", "sessionId": "SID-1",
+        "params": { "url": url }
+    }))
+    .await;
+    let paused = take_main_document_request_pause(&mut ctx).await;
+    ctx.process_async(json!({
+        "id": 3310, "method": "Fetch.continueRequest", "sessionId": "SID-1",
+        "params": { "requestId": paused["params"]["requestId"], "interceptResponse": true }
+    }))
+    .await;
+    ctx.expect_result(3310, json!({}), Some("SID-1"));
+    let response_pause = ctx.take_one();
+    assert_eq!(response_pause["method"], "Fetch.requestPaused");
+
+    ctx.process_async(json!({
+        "id": 3320, "method": "Fetch.takeResponseBodyAsStream", "sessionId": "SID-1",
+        "params": { "requestId": response_pause["params"]["requestId"] }
+    }))
+    .await;
+    let stream_handle = ctx.take_response_by_id(3320)["result"]["stream"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    ctx.process_async(json!({
+        "id": 3330, "method": "IO.read",
+        "params": { "handle": stream_handle, "size": 20 }
+    }))
+    .await;
+    assert_eq!(ctx.take_response_by_id(3330)["result"]["eof"], false);
+
+    tail_tx.send(()).unwrap();
+    ctx.process_async(json!({
+        "id": 3340, "method": "Fetch.disable", "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(3340, json!({}), Some("SID-1"));
+    assert!(ctx.take_response_by_id(3300)["result"].is_object());
+    let page = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .and_then(|context| context.loaded_page())
+        .expect("neutral release should commit the streamed response");
+    assert!(
+        page.serialize_html_async()
+            .await
+            .unwrap()
+            .contains("neutral-stream")
+    );
+    assert!(
+        !ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_page_target()
+            .fetch_owner
+            .has_pending_fetch_state_for_test()
+    );
 
     server.abort();
 }

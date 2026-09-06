@@ -567,14 +567,15 @@ async fn pending_idle_override_response_does_not_replay_into_replacement_page() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn renderer_candidate_binding_does_not_retire_outgoing_browser_policy_commands() {
+async fn inspection_reattach_does_not_retire_outgoing_browser_policy_commands() {
     let mut ctx = TestContext::new();
     load_session_page_for_pending_emulation_test(&mut ctx).await;
     let context = ctx.conn.browser_context.as_mut().unwrap();
     let page_source = super::EmulationPageCommandSource::browser(context, "TID-1");
-    let residence = context
-        .target_renderer_page_residence_identity("TID-1")
-        .unwrap();
+    let endpoint = context
+        .loaded_page()
+        .unwrap()
+        .renderer_inspection_endpoint();
     let document_id = context.target_document_id("TID-1");
     let old_attachment = context
         .page_target("TID-1")
@@ -582,18 +583,10 @@ async fn renderer_candidate_binding_does_not_retire_outgoing_browser_policy_comm
         .runtime_slot
         .current_renderer_attachment()
         .unwrap();
-    let agent = old_attachment.agent_token();
-    let navigation =
-        context.begin_target_document_navigation("TID-1", "candidate-rebind".to_owned());
-    let candidate = context
-        .page_target("TID-1")
-        .unwrap()
+    context
+        .active_page_target_mut()
         .runtime_slot
-        .prepare_renderer_agent_candidate_token(&navigation, agent)
-        .unwrap();
-    let transaction = context
-        .commit_renderer_agent_candidate_transaction_for_target("TID-1", candidate, residence)
-        .unwrap();
+        .reattach_inspection_for_test(endpoint);
     assert_ne!(
         context
             .page_target("TID-1")
@@ -617,13 +610,8 @@ async fn renderer_candidate_binding_does_not_retire_outgoing_browser_policy_comm
             ),
             page_source,
         ),
-        "a renderer reservation must not hide a Browser error on the still-current Page"
+        "an inspection reattach must not hide a Browser error on the still-current Page"
     );
-    ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .unwrap()
-        .rollback_committed_renderer_agent_candidate(transaction)
-        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -835,11 +823,12 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
         .expect("cross-Document navigation should enter the pending state");
     let configuration = ctx
         .conn
-        .prepared_document_commit_configuration_for_owner(
+        .capture_document_policy_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
             &url::Url::parse("http://127.0.0.1:65530/same-site-different-origin").unwrap(),
         )
-        .expect("commit configuration should resolve the target resource runtime");
+        .expect("commit configuration should resolve the target resource runtime")
+        .expect("live WebContents policy");
     assert_eq!(
         configuration.idle_override,
         Some(moli_core::page::EmulatedIdleOverride {
@@ -849,11 +838,12 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
     );
     let cross_site_configuration = ctx
         .conn
-        .prepared_document_commit_configuration_for_owner(
+        .capture_document_policy_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
             &url::Url::parse("http://idle-override-cross-site.test/").unwrap(),
         )
-        .expect("cross-site commit configuration should resolve the target resource runtime");
+        .expect("cross-site commit configuration should resolve the target resource runtime")
+        .expect("live WebContents policy");
     assert_eq!(
         cross_site_configuration.idle_override, None,
         "a cross-site renderer replacement must not inherit frame-host idle state",
