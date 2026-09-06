@@ -1,5 +1,6 @@
 mod blit;
 mod encode;
+pub mod path;
 mod pixel;
 mod rect;
 mod text;
@@ -10,6 +11,7 @@ pub use encode::{
     data_image_intrinsic_dimensions, data_image_rgba8_pixels, encode_data_url,
     image_dimensions_from_bytes, image_intrinsic_dimensions_from_bytes,
 };
+pub use path::{CanvasPath, CanvasPathData};
 pub use pixel::{
     copy_rgba8_rect, flip_y_rgba8_in_place, multiply_u8_color, premultiply_rgba8_in_place,
     scale_rgba8, scale_rgba8_bilinear, scale_rgba8_nearest,

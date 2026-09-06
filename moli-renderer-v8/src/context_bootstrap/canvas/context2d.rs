@@ -1080,7 +1080,7 @@ pub(crate) fn canvas_context_fill_callback<'s>(
             return None;
         }
         Some(PaintFragment::Fill {
-            shape: PaintShape::Path(state.paint_path()),
+            shape: PaintShape::Path(super::path::native_paint_path(&state.paint_path())),
             brush: PaintBrush::Solid(context_fill_color(scope, args.this())),
             transform: PaintTransform2D::IDENTITY,
         })
@@ -1110,8 +1110,8 @@ pub(crate) fn canvas_context_stroke_callback<'s>(
         Some(PaintFragment::Stroke(context_stroke(
             scope,
             args.this(),
-            state.stroke_path()?,
-            state.transform(),
+            super::path::native_paint_path(&state.stroke_path()?),
+            super::path::native_transform(state.transform()),
         )))
     });
     if let Some(fragment) = fragment {
@@ -1151,10 +1151,13 @@ pub(crate) fn canvas_context_stroke_rect_callback<'s>(
     let path_state = canvas_path_state(scope, args.this());
     // strokeRect must not alter the current default path.
     let path = with_path_state(&path_state, |state| {
-        let mut rect_path = super::path::Canvas2dPathState::default();
+        let mut rect_path = moli_canvas::path::CanvasPath::default();
         rect_path.rect(x, y, width, height);
         state.inverse_transform()?;
-        Some((rect_path.paint_path(), state.transform()))
+        Some((
+            super::path::native_paint_path(&rect_path.paint_path()),
+            super::path::native_transform(state.transform()),
+        ))
     });
     let Some((path, transform)) = path else {
         return;
@@ -1419,8 +1422,8 @@ fn canvas_context_enum_string_assign<'s>(
 }
 
 fn with_path_state<T>(
-    state: &std::cell::RefCell<super::path::Canvas2dPathState>,
-    update: impl FnOnce(&mut super::path::Canvas2dPathState) -> T,
+    state: &std::cell::RefCell<moli_canvas::path::CanvasPath>,
+    update: impl FnOnce(&mut moli_canvas::path::CanvasPath) -> T,
 ) -> T {
     update(&mut state.borrow_mut())
 }

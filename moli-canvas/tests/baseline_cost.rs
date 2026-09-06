@@ -16,20 +16,15 @@
 use std::time::Instant;
 
 use moli_canvas::{
-    byte_len, copy_rgba8_rect, encode_data_url, premultiply_rgba8_in_place, Rgba8Rect,
+    Rgba8Rect, byte_len, copy_rgba8_rect, encode_data_url, premultiply_rgba8_in_place,
 };
 
 /// The three canvas areas named in the proposal's workload matrix, with the op
 /// counts used for the (arithmetic) byte-cost evidence.
-const SIZES: [(u32, u32, usize); 3] = [
-    (256, 256, 100),
-    (1024, 1024, 1000),
-    (2048, 2048, 1000),
-];
+const SIZES: [(u32, u32, usize); 3] = [(256, 256, 100), (1024, 1024, 1000), (2048, 2048, 1000)];
 
 /// A reduced matrix actually timed, so the test stays quick in debug builds.
-const TIMED: [(u32, u32, usize, usize); 2] =
-    [(256, 256, 100, 1), (1024, 1024, 100, 10)];
+const TIMED: [(u32, u32, usize, usize); 2] = [(256, 256, 100, 1), (1024, 1024, 100, 10)];
 
 fn report(label: impl AsRef<str>, rows: Vec<(String, String)>) {
     eprintln!("--- {} ---", label.as_ref());
@@ -115,8 +110,14 @@ fn baseline_cost_timing_is_reported_for_a_reduced_matrix() {
         report(
             format!("timed {width}x{height} x{ops} (debug)"),
             vec![
-                ("full_copy_total_secs".to_string(), format!("{copy_secs:.6}")),
-                ("convert_pass_total_secs".to_string(), format!("{convert_secs:.6}")),
+                (
+                    "full_copy_total_secs".to_string(),
+                    format!("{copy_secs:.6}"),
+                ),
+                (
+                    "convert_pass_total_secs".to_string(),
+                    format!("{convert_secs:.6}"),
+                ),
                 ("encode_total_secs".to_string(), format!("{encode_secs:.6}")),
             ],
         );

@@ -5,8 +5,8 @@
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use super::path::Canvas2dPathState;
 use crate::util::{get_private_value, set_private_value};
+use moli_canvas::path::CanvasPath;
 
 const PATH_STATE_SLOT: &str = "__moliCanvasPathState";
 type StateStore = Rc<RefCell<CanvasStates>>;
@@ -19,13 +19,13 @@ struct CanvasStates {
 
 struct CanvasStateEntry {
     _context: v8::Weak<v8::Object>,
-    state: Rc<RefCell<Canvas2dPathState>>,
+    state: Rc<RefCell<CanvasPath>>,
 }
 
 pub(super) fn canvas_path_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     context: v8::Local<'s, v8::Object>,
-) -> Rc<RefCell<Canvas2dPathState>> {
+) -> Rc<RefCell<CanvasPath>> {
     let store = if let Some(store) = scope.get_slot::<StateStore>() {
         store.clone()
     } else {
@@ -63,7 +63,7 @@ pub(super) fn canvas_path_state<'s>(
             }
         }),
     );
-    let state = Rc::new(RefCell::new(Canvas2dPathState::default()));
+    let state = Rc::new(RefCell::new(CanvasPath::default()));
     store.borrow_mut().entries.insert(
         id,
         CanvasStateEntry {
@@ -81,7 +81,7 @@ pub(super) fn reset_canvas_path_state<'s>(
     context: v8::Local<'s, v8::Object>,
 ) {
     if get_private_value(scope, context, PATH_STATE_SLOT).is_some() {
-        *canvas_path_state(scope, context).borrow_mut() = Canvas2dPathState::default();
+        *canvas_path_state(scope, context).borrow_mut() = CanvasPath::default();
     }
 }
 
