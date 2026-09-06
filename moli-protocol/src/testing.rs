@@ -341,9 +341,10 @@ impl TestContext {
         .expect("navigation fixture must have matching Page creation artifacts");
         let page_commit = self
             .conn
-            .commit_loaded_navigation_for_owner(&owner, prepared, None)
+            .commit_loaded_navigation_for_owner(&owner, prepared)
             .expect("navigation fixture target must remain installed")
             .expect("navigation fixture Page commit must succeed");
+        assert!(page_commit.inspection_projection.is_ok());
         assert!(
             page_commit
                 .committed_document_post_response_continuation

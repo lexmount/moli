@@ -1,5 +1,8 @@
 use moli_core::{
-    browser::{DocumentId, DocumentLifecycle, MainFrameSlotId, NavigationId, WebContentsId},
+    browser::{
+        DocumentId, DocumentLifecycle, MainFrameSlotId, NavigationId,
+        RendererPageResidenceIdentity, WebContentsId,
+    },
     page::{Page, RendererPageCommandPostResponseContinuation, RendererPageCreationArtifacts},
 };
 use url::Url;
@@ -23,14 +26,31 @@ pub(in crate::conn) struct CommittedDocumentInfo {
 }
 
 impl PreparedDocumentNavigation {
-    pub(in crate::conn) fn navigation(&self) -> NavigationId {
-        self.navigation
+    /// Configure the move-owned Browser participant without borrowing its owner.
+    /// These are effective values, never frontend registration/session identities.
+    pub(crate) async fn apply_document_policy(
+        mut self,
+        interception: (bool, Option<moli_core::page::SubresourceResourceType>),
+        permissions: &[moli_core::page::PermissionOverrideRegistration],
+    ) -> anyhow::Result<Self> {
+        use anyhow::Context;
+        if interception.0 || interception.1.is_some() {
+            self.page
+                .set_fetch_subresource_interception_async(interception.0, interception.1)
+                .await
+                .context("failed to restore page fetch interception state")?;
+        }
+        if !permissions.is_empty() {
+            self.page
+                .set_permission_overrides_async(permissions)
+                .await
+                .context("failed to apply page permission overrides")?;
+        }
+        Ok(self)
     }
 
-    pub(in crate::conn) fn inspection_endpoint(
-        &self,
-    ) -> moli_renderer_v8::RendererInspectionEndpoint {
-        self.page.renderer_inspection_endpoint()
+    pub(in crate::conn) fn navigation(&self) -> NavigationId {
+        self.navigation
     }
 
     pub(crate) fn new(
@@ -68,6 +88,8 @@ pub(in crate::conn) struct CommittedDocumentNavigation {
     pub(in crate::conn) navigation: NavigationId,
     pub(in crate::conn) document: DocumentId,
     pub(in crate::conn) previous_document: Option<DocumentId>,
+    pub(in crate::conn) previous_renderer: Option<RendererPageResidenceIdentity>,
+    pub(in crate::conn) inspection_endpoint: moli_renderer_v8::RendererInspectionEndpoint,
     pub(in crate::conn) info: CommittedDocumentInfo,
     pub(in crate::conn) retirement: RetiringDocument,
     pub(in crate::conn) post_response_continuation:
@@ -102,6 +124,12 @@ impl WebContents {
             .current_document
             .as_ref()
             .map(|document| document.id);
+        let previous_renderer = self
+            .main_frame
+            .current_document
+            .as_ref()
+            .map(|document| RendererPageResidenceIdentity::from_page(&document.page));
+        let inspection_endpoint = prepared.page.renderer_inspection_endpoint();
         // The controller already owns observed history titles. An outgoing
         // Page's cached inventory must not rewind a later title observation.
         self.navigation.record_loaded_page_navigation_history((
@@ -124,6 +152,8 @@ impl WebContents {
             navigation,
             document: document_id,
             previous_document,
+            previous_renderer,
+            inspection_endpoint,
             info: prepared.info,
             retirement,
             post_response_continuation,
@@ -294,6 +324,85 @@ mod tests {
             Some(foreign_navigation)
         );
         assert!(foreign.main_frame.current_document.is_none());
+    }
+
+    #[tokio::test]
+    async fn failed_candidate_policy_never_retires_the_committed_document() {
+        let browser = Browser::new(BrowserConfig::default()).unwrap();
+        let mut contents = WebContents::default();
+        let navigation = contents.navigation.start_document_navigation();
+        let first = contents
+            .commit_document_navigation(prepare(&browser, navigation, "first").await)
+            .unwrap();
+        let mut lifetime = Box::pin(
+            contents
+                .main_frame
+                .current_document
+                .as_mut()
+                .unwrap()
+                .lifetime
+                .observe()
+                .wait(),
+        );
+        for (interception, permissions) in [
+            ((true, None), Vec::new()),
+            (
+                (false, None),
+                vec![moli_core::page::PermissionOverrideRegistration {
+                    permission: serde_json::json!({"name": "geolocation"}),
+                    setting: "granted".into(),
+                    origin: None,
+                    embedded_origin: None,
+                }],
+            ),
+        ] {
+            let navigation = contents.navigation.start_document_navigation();
+            let candidate_browser = Browser::new(BrowserConfig::default()).unwrap();
+            let prepared = prepare(&candidate_browser, navigation, "candidate").await;
+            // Retire the candidate's independent renderer owner synchronously.
+            // DevTools Page.crash is not a native-command admission fence.
+            drop(candidate_browser);
+            assert!(
+                prepared
+                    .apply_document_policy(interception, &permissions)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(
+                contents.main_frame.current_document.as_ref().unwrap().id,
+                first.document
+            );
+            assert_eq!(
+                contents.navigation.pending_document().unwrap().0,
+                navigation
+            );
+            assert_eq!(
+                contents
+                    .navigation
+                    .navigation_history_snapshot(None)
+                    .1
+                    .len(),
+                1
+            );
+            assert_eq!(
+                lifetime
+                    .as_mut()
+                    .poll(&mut Context::from_waker(Waker::noop())),
+                Poll::Pending
+            );
+        }
+        assert_eq!(
+            contents
+                .main_frame
+                .current_document
+                .as_mut()
+                .unwrap()
+                .page
+                .evaluate_runtime_expression_async("40 + 2")
+                .await
+                .unwrap()["value"],
+            42
+        );
     }
 
     #[tokio::test]

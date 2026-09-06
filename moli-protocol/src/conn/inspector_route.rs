@@ -1,11 +1,8 @@
 use moli_core::page::{
-    DevToolsSessionKey, Page, RendererAgentAttachmentId, RendererDevToolsAgentToken,
-    RendererRuntimeInspectorMessageBatch,
+    DevToolsSessionKey, RendererAgentAttachmentId, RendererRuntimeInspectorMessageBatch,
 };
 
-use super::state::{
-    FinishedRendererDocumentNavigation, PreparedRendererAgentAttachment, RendererAgentAttachment,
-};
+use super::state::{FinishedRendererDocumentNavigation, RendererAgentAttachment};
 use super::{CdpConnection, CommandOwnerScope, NavigationId};
 
 impl CdpConnection {
@@ -28,35 +25,6 @@ impl CdpConnection {
             .ok()
             .and_then(|slot| slot.current_renderer_attachment())
             .map(RendererAgentAttachment::id)
-    }
-
-    pub(crate) fn prepare_renderer_agent_candidate_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        token: &NavigationId,
-        page: &Page,
-    ) -> Result<PreparedRendererAgentAttachment, String> {
-        let mut candidate = self.prepare_renderer_agent_candidate_token_for_owner(
-            owner,
-            token,
-            page.renderer_devtools_agent_token(),
-        )?;
-        candidate
-            .bind(page.renderer_inspection_endpoint())
-            .map_err(|error| error.to_string())?;
-        Ok(candidate)
-    }
-
-    pub(crate) fn prepare_renderer_agent_candidate_token_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        token: &NavigationId,
-        agent_token: RendererDevToolsAgentToken,
-    ) -> Result<PreparedRendererAgentAttachment, String> {
-        self.validate_navigation_target_owner_for_scope(owner, token)?;
-        self.runtime_session_owner_slot_mut_for_owner(owner)?
-            .prepare_renderer_agent_candidate_token(token, agent_token)
-            .map_err(|error| error.to_string())
     }
 
     pub(crate) fn route_current_renderer_inspector_output_for_owner(
@@ -254,14 +222,6 @@ mod tests {
             target_id: "TID-rollback".to_owned(),
             session_key: DevToolsSessionKey::Primary,
         });
-        let candidate = conn
-            .prepare_renderer_agent_candidate_token_for_owner(
-                &owner,
-                &navigation,
-                RendererDevToolsAgentToken::allocate(),
-            )
-            .unwrap();
-        drop(candidate);
         conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &navigation);
 
         assert!(cancellation.is_cancelled());
@@ -429,24 +389,12 @@ mod tests {
         assert!(!conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &first));
         assert!(conn.accepts_pending_document_navigation_for_owner(&owner, &second));
         assert!(
-            conn.prepare_renderer_agent_candidate_token_for_owner(
-                &owner,
-                &first,
-                RendererDevToolsAgentToken::allocate()
-            )
-            .is_err()
-        );
-        assert!(
             conn.finish_renderer_document_navigation_for_owner(&owner, &first)
                 .is_none()
         );
         assert!(
-            conn.prepare_renderer_agent_candidate_token_for_owner(
-                &owner,
-                &second,
-                RendererDevToolsAgentToken::allocate()
-            )
-            .is_ok()
+            conn.finish_renderer_document_navigation_for_owner(&owner, &second)
+                .is_some()
         );
     }
 

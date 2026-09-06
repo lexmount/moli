@@ -7711,9 +7711,9 @@ mod tests {
             .unwrap()
             .active_page_target_mut()
             .devtools_sessions
-            .prepare_renderer_call_replacements(None, outgoing, current)
-            .unwrap();
-        let (_, terminations, replays) = replacements.into_parts();
+            .prepare_renderer_call_replacements(None, outgoing, current);
+        let (_, terminations, replays, failed_sessions) = replacements.into_parts();
+        assert!(failed_sessions.is_empty());
         assert!(terminations.is_empty());
         assert_eq!(replays.len(), 1);
         assert!(
@@ -7822,9 +7822,9 @@ mod tests {
             .unwrap()
             .active_page_target_mut()
             .devtools_sessions
-            .prepare_renderer_call_replacements(None, outgoing, current)
-            .unwrap();
-        let (_, terminations, replays) = replacements.into_parts();
+            .prepare_renderer_call_replacements(None, outgoing, current);
+        let (_, terminations, replays, failed_sessions) = replacements.into_parts();
+        assert!(failed_sessions.is_empty());
         assert!(terminations.is_empty());
         assert_eq!(replays.len(), 1);
         let document =
@@ -7932,9 +7932,10 @@ mod tests {
                     old_attachment,
                     terminal_attachment,
                 )
-                .expect("navigation replacement should prepare")
         };
-        let (replacement_attachment, terminations, replays) = replacements.into_parts();
+        let (replacement_attachment, terminations, replays, failed_sessions) =
+            replacements.into_parts();
+        assert!(failed_sessions.is_empty());
         assert_eq!(replacement_attachment, terminal_attachment);
         assert_eq!(terminations.len(), 1);
         assert!(replays.is_empty());
@@ -7980,6 +7981,222 @@ mod tests {
             .is_none(),
             "navigation termination must consume the frontend correlation"
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn navigation_replay_exhaustion_is_session_local_and_settles_each_call_once() {
+        for primary_session in [Some("SID-replay-primary"), None] {
+            let sessions = [primary_session, Some("SID-replay-a"), Some("SID-replay-z")];
+            for failed_session in sessions {
+                let mut ctx = TestContext::new();
+                let mut context = BrowserContext::new("BID-replay-exhaustion".into());
+                context.set_active_target_id("TID-replay-exhaustion");
+                if let Some(session) = primary_session {
+                    context.attach_active_session(session);
+                }
+                for session in sessions[1..].iter().flatten() {
+                    assert!(context.assign_attached_session_to_target(
+                        "TID-replay-exhaustion",
+                        (*session).into()
+                    ));
+                }
+                ctx.conn.install_browser_context_fixture_for_test(context);
+                ctx.install_navigation_fixture_for_session_owner(
+                    "data:text/html,<title>first</title>",
+                    primary_session,
+                )
+                .await;
+                // A pending IO command belongs to a real renderer session, not merely
+                // a Protocol route. Restore those attachments across the navigation.
+                for (index, session) in sessions.iter().enumerate() {
+                    let id = 10 + index;
+                    ctx.process_and_wait_for_response_async(json!({
+                        "id": id, "sessionId": session, "method": "Runtime.enable",
+                    }))
+                    .await;
+                    assert!(ctx.take_response_by_id(id as u64).get("error").is_none());
+                }
+                for (id, method, params) in [
+                    (20, "Page.enable", json!({})),
+                    (
+                        21,
+                        "Page.setLifecycleEventsEnabled",
+                        json!({"enabled": true}),
+                    ),
+                ] {
+                    ctx.process_and_wait_for_response_async(json!({
+                        "id": id, "sessionId": sessions[2], "method": method, "params": params,
+                    }))
+                    .await;
+                    assert!(ctx.take_response_by_id(id).get("error").is_none());
+                }
+                let owner = CommandOwnerScope::capture(&ctx.conn, primary_session);
+                let old_document = ctx
+                    .conn
+                    .browser_context
+                    .as_ref()
+                    .unwrap()
+                    .target_document_id("TID-replay-exhaustion");
+                let outgoing = ctx
+                    .conn
+                    .current_renderer_agent_attachment_id_for_owner(&owner)
+                    .unwrap();
+                let mut old_responses = Vec::new();
+                for session in sessions {
+                    for (id, method, params) in [
+                        (71, "Runtime.evaluate", json!({"expression": "42"})),
+                        (
+                            72,
+                            "Emulation.setScriptExecutionDisabled",
+                            json!({"value": false}),
+                        ),
+                        (
+                            73,
+                            "Emulation.setScriptExecutionDisabled",
+                            json!({"value": false}),
+                        ),
+                    ] {
+                        let payload =
+                            json!({"id": id, "method": method, "params": params}).to_string();
+                        let frontend = ParsedCdpCommand::parse_str(&payload).unwrap();
+                        let descriptor = if id == 71 {
+                            devtools_session_renderer_command_descriptor_for_test(id)
+                        } else {
+                            assert_eq!(
+                                frontend.renderer_access(),
+                                moli_protocol_cdp::CdpRendererCommandAccess::Io
+                            );
+                            RendererCommandDescriptor::set_script_execution_disabled(
+                                payload.clone(),
+                                frontend.renderer_policy(),
+                                false,
+                                RendererInspectorResponseDelivery::SessionSink,
+                            )
+                        };
+                        let prepared = ctx
+                            .conn
+                            .try_register_renderer_call_for_session_owner(
+                                session,
+                                id,
+                                Some(outgoing),
+                                descriptor,
+                            )
+                            .unwrap();
+                        let (correlation, sender, receiver) = prepared.into_parts();
+                        assert!(receiver.is_none());
+                        old_responses.push((correlation, sender));
+                    }
+                }
+                ctx.conn
+                    .with_target_devtools_session_state_for_session_mut(failed_session, |state| {
+                        // Termination revokes its lease, one replay rotates successfully,
+                        // then the next allocation fails. Exercise partial preparation.
+                        state
+                            .pending_inspector_awaits
+                            .leave_one_renderer_call_id_for_test();
+                    })
+                    .unwrap();
+                ctx.process_and_wait_for_response_async(json!({
+                    "id": 2000, "sessionId": sessions[2], "method": "Page.navigate",
+                    "params": {"url": "data:text/html,<title>committed</title>"},
+                }))
+                .await;
+                let response = ctx.take_response_by_id(2000);
+                assert!(response.get("error").is_none());
+                let loader = response["result"]["loaderId"].as_str().unwrap().to_owned();
+                ctx.wait_until_scheduler_state("all session replay responses", |conn| {
+                    sessions.iter().all(|session| {
+                        (71..=73).all(|id| {
+                            conn.renderer_call_for_frontend_for_session_owner(*session, id)
+                                .is_none()
+                        })
+                    })
+                })
+                .await;
+                // Commit/replay can finish before parsing the title. Synchronize with
+                // this navigation's Load occurrence, not merely its fast-ack response.
+                ctx.wait_for_scheduler_message("committed Document load", |message| {
+                    message["sessionId"] == json!(sessions[2])
+                        && message["method"] == "Page.lifecycleEvent"
+                        && message["params"]["name"] == "load"
+                        && message["params"]["loaderId"] == loader
+                })
+                .await;
+                let context = ctx.conn.browser_context.as_mut().unwrap();
+                assert_ne!(
+                    context.target_document_id("TID-replay-exhaustion"),
+                    old_document
+                );
+                assert!(
+                    !context.has_pending_document_navigation_for_target("TID-replay-exhaustion")
+                );
+                assert_eq!(
+                    context
+                        .target_navigation_history_snapshot("TID-replay-exhaustion")
+                        .unwrap()
+                        .1
+                        .last()
+                        .unwrap()
+                        .title,
+                    "committed"
+                );
+                for session in sessions {
+                    for id in 71..=73 {
+                        let replies = ctx
+                            .sent
+                            .iter()
+                            .filter(|reply| {
+                                reply["sessionId"] == json!(session) && reply["id"] == id
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(
+                            replies.len(),
+                            1,
+                            "{session:?}/{id} must settle exactly once: {:?}",
+                            ctx.sent
+                        );
+                        if session == failed_session {
+                            assert!(
+                                replies[0]["error"]["message"]
+                                    .as_str()
+                                    .unwrap()
+                                    .contains("identity exhausted")
+                            );
+                        } else if id == 71 {
+                            assert_eq!(replies[0]["error"]["code"], -32000);
+                        } else {
+                            assert!(
+                                replies[0].get("error").is_none(),
+                                "healthy session must replay: {:?}",
+                                replies[0]
+                            );
+                        }
+                    }
+                }
+                for (correlation, sender) in old_responses {
+                    assert!(
+                        sender
+                            .send(json!({"id": correlation.renderer_call_id().get(), "result": {}}))
+                            .is_err(),
+                        "a retired lease cannot produce a second frontend reply"
+                    );
+                }
+                let healthy_session = sessions
+                    .into_iter()
+                    .find(|session| *session != failed_session)
+                    .unwrap();
+                assert_eq!(
+                    ctx.conn
+                        .evaluate_runtime_expression_for_session_owner_async(
+                            healthy_session,
+                            "40 + 2"
+                        )
+                        .await
+                        .unwrap()["value"],
+                    42
+                );
+            }
+        }
     }
 
     #[test]
@@ -8030,9 +8247,9 @@ mod tests {
                     old_attachment,
                     terminal_attachment,
                 )
-                .expect("navigation replacement should prepare for every session")
         };
-        let (_, terminations, replays) = replacements.into_parts();
+        let (_, terminations, replays, failed_sessions) = replacements.into_parts();
+        assert!(failed_sessions.is_empty());
         assert_eq!(terminations.len(), 2);
         assert!(replays.is_empty());
         for (correlation, sender) in [
@@ -8123,9 +8340,9 @@ mod tests {
             page_state
                 .devtools_sessions
                 .prepare_renderer_call_replacements(None, old_attachment, terminal_attachment)
-                .expect("sessionless navigation replacement should prepare")
         };
-        let (_, terminations, replays) = replacements.into_parts();
+        let (_, terminations, replays, failed_sessions) = replacements.into_parts();
+        assert!(failed_sessions.is_empty());
         assert_eq!(terminations.len(), 1);
         assert!(replays.is_empty());
         drop(old_sender);

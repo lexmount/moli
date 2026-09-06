@@ -962,13 +962,11 @@ impl<'a> TargetSessionOwnerMut<'a> {
     pub(super) fn commit_loaded_navigation(
         &mut self,
         prepared: crate::conn::PreparedDocumentNavigation,
-        renderer_agent_candidate: Option<crate::conn::state::PreparedRendererAgentAttachment>,
     ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
-        Some(self.browser_context.commit_loaded_navigation_for_target(
-            &self.target_id,
-            prepared,
-            renderer_agent_candidate,
-        ))
+        Some(
+            self.browser_context
+                .commit_loaded_navigation_for_target(&self.target_id, prepared),
+        )
     }
 }
 
@@ -1072,10 +1070,9 @@ impl CdpConnection {
         &mut self,
         owner: &crate::conn::CommandOwnerScope,
         prepared: crate::conn::PreparedDocumentNavigation,
-        renderer_agent_candidate: Option<crate::conn::state::PreparedRendererAgentAttachment>,
     ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
         self.target_session_owner_mut_for_owner(owner)?
-            .commit_loaded_navigation(prepared, renderer_agent_candidate)
+            .commit_loaded_navigation(prepared)
     }
 
     pub(crate) fn initial_document_page_owner_for_owner(
@@ -3397,10 +3394,11 @@ mod tests {
                 session_key: DevToolsSessionKey::Primary,
             };
             owner
-                .commit_loaded_navigation(prepared, None)
+                .commit_loaded_navigation(prepared)
                 .expect("background page owner should exist")
-                .expect("background page Inspector binding should activate")
+                .expect("background Browser Document should commit")
         };
+        assert!(committed.inspection_projection.is_ok());
 
         let target = background
             .background_target("TID-background")

@@ -2382,12 +2382,12 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         &artifacts,
     )
     .unwrap();
-    conn.commit_loaded_navigation_for_owner(&owner, prepared, None)
+    let committed = conn
+        .commit_loaded_navigation_for_owner(&owner, prepared)
         .expect("real navigation page owner should exist")
-        .expect("real navigation page Inspector binding should activate")
-        .previous_document_retirement
-        .close()
-        .await;
+        .expect("real Browser Document should commit");
+    assert!(committed.inspection_projection.is_ok());
+    committed.previous_document_retirement.close().await;
     let attachment_after_real_page = conn
         .browser_context
         .as_ref()

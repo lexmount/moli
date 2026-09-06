@@ -3366,7 +3366,16 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
         out.extend_background_events_after_messages(background_events);
     }
     if let Some(renderer_call_replacements) = renderer_call_replacements {
-        let (new_attachment_id, terminations, replays) = renderer_call_replacements.into_parts();
+        let (new_attachment_id, terminations, replays, failed_sessions) =
+            renderer_call_replacements.into_parts();
+        super::navigation_commit::fail_navigation_inspection_sessions(
+            conn,
+            out,
+            command_context,
+            &navigation_owner,
+            failed_sessions,
+            "Inspector call identity exhausted during navigation replay",
+        );
         let termination_events = conn.terminate_prepared_renderer_calls_after_navigation(
             terminations,
             "Inspected target navigated or closed",
@@ -3387,7 +3396,7 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     conn.clear_pending_document_navigation_for_owner_if_matches(&navigation_owner, &token);
 }
 
-fn push_navigation_commit_error(
+pub(super) fn push_navigation_commit_error(
     out: &mut CommandOutputBuffer,
     state: &NavigationDispatchState,
     error: impl Into<String>,

@@ -1,6 +1,6 @@
 use super::BrowserContext;
 use moli_core::page::{
-    Page, RendererAgentAttachmentId, RendererDevToolsAgentToken, RendererDocumentLifecycleIdentity,
+    Page, RendererAgentAttachmentId, RendererDocumentLifecycleIdentity,
     RendererRuntimeInspectorMessageBatch, ScriptNetworkOutputItem, ScriptObservableOutputItem,
     SubresourceNetworkRequestHandle,
 };
@@ -31,9 +31,8 @@ use crate::conn::state::page_slot::{
 };
 use crate::conn::state::{
     CommittedRendererDocumentBinding, DevToolsRendererChannelError, DocumentId, NavigationId,
-    PreparedRendererAgentAttachment, PreparedRendererCallReplacements, RendererAgentAttachment,
-    RendererPageResidenceIdentity, TargetJavaScriptDialogScope,
-    TargetJavaScriptDialogScopeObserver,
+    PreparedRendererCallReplacements, RendererAgentAttachment, RendererPageResidenceIdentity,
+    TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver,
 };
 
 pub(crate) struct FinishedRendererDocumentNavigation {
@@ -186,40 +185,13 @@ impl TargetRuntimeSlot {
             .expect("an open target runtime slot must accept a new document navigation");
     }
 
-    #[cfg(test)]
-    pub(crate) fn prepare_renderer_agent_candidate(
-        &self,
-        token: &NavigationId,
-        page: &Page,
-    ) -> Result<PreparedRendererAgentAttachment, DevToolsRendererChannelError> {
-        let mut candidate = self
-            .prepare_renderer_agent_candidate_token(token, page.renderer_devtools_agent_token())?;
-        candidate.bind(page.renderer_inspection_endpoint())?;
-        Ok(candidate)
-    }
-
-    pub(crate) fn prepare_renderer_agent_candidate_token(
-        &self,
-        token: &NavigationId,
-        agent_token: RendererDevToolsAgentToken,
-    ) -> Result<PreparedRendererAgentAttachment, DevToolsRendererChannelError> {
-        self.devtools_renderer_channel
-            .attach_candidate(token, agent_token)
-    }
-
-    pub(crate) fn commit_loaded_navigation_renderer_attachment(
+    pub(in crate::conn::state) fn project_committed_document_inspection(
         &mut self,
+        navigation: NavigationId,
         endpoint: moli_renderer_v8::RendererInspectionEndpoint,
-        candidate: Option<PreparedRendererAgentAttachment>,
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
-        let Some(candidate) = candidate else {
-            return self.devtools_renderer_channel.attach_current(endpoint);
-        };
-        if endpoint.agent_token() != candidate.agent_token() || candidate.binding().is_none() {
-            return Err(DevToolsRendererChannelError::CandidatePageAttachmentMismatch);
-        }
-        let previous = self.devtools_renderer_channel.commit_candidate(candidate)?;
-        Ok(previous)
+        self.devtools_renderer_channel
+            .document_committed(navigation, endpoint)
     }
 
     pub(crate) fn route_current_renderer_inspector_output(
@@ -263,6 +235,16 @@ impl TargetRuntimeSlot {
 
     pub(crate) fn current_renderer_inspection_binding(&self) -> Option<&RendererAgentBinding> {
         self.devtools_renderer_channel.current_binding()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn reattach_inspection_for_test(
+        &mut self,
+        endpoint: moli_renderer_v8::RendererInspectionEndpoint,
+    ) {
+        self.devtools_renderer_channel
+            .attach_current(endpoint)
+            .unwrap();
     }
 
     pub(crate) fn routes_retiring_renderer_page_owner(
@@ -917,7 +899,12 @@ impl BrowserContext {
         target_id: &str,
         mut page: Option<Page>,
     ) -> Option<Page> {
-        let retiring = self.begin_document_projection_replacement_for_target(target_id);
+        let previous_document = self.target_document_id(target_id).zip(
+            self.loaded_page_for_target(target_id)
+                .map(RendererPageResidenceIdentity::from_page),
+        );
+        let retiring =
+            self.begin_document_projection_replacement_for_target(target_id, previous_document);
         self.page_targets
             .get_mut(target_id)
             .expect("resolved target projection")
@@ -931,36 +918,24 @@ impl BrowserContext {
     pub(super) fn begin_document_projection_replacement_for_target(
         &mut self,
         target_id: &str,
+        previous_document: Option<(DocumentId, RendererPageResidenceIdentity)>,
     ) -> Option<RetiringRendererDocumentOutput> {
-        self.page_targets
+        let runtime = &mut self
+            .page_targets
             .get_mut(target_id)
             .expect("resolved target projection must remain live")
-            .runtime_slot
-            .javascript_dialog_scope
-            .retire();
-        let retiring_document = self
-            .loaded_page_for_target(target_id)
-            .zip(self.renderer_document_lifecycle_binding_for_target(target_id))
-            .map(|(loaded_page, binding)| {
-                (
-                    RendererPageResidenceIdentity::from_page(loaded_page),
-                    binding.document_id,
-                    binding.clone(),
-                )
-            });
-        retiring_document.map(|(renderer_page, document_id, binding)| {
-            RetiringRendererDocumentOutput {
-                renderer_page,
-                document_id,
-                binding,
-                network_agent: self
-                    .page_targets
-                    .get_mut(target_id)
-                    .expect("resolved target projection must remain live")
-                    .runtime_slot
-                    .network_agent
-                    .rotate_document_for_replacement(),
-            }
+            .runtime_slot;
+        runtime.javascript_dialog_scope.retire();
+        let (document_id, renderer_page) = previous_document?;
+        let binding = runtime
+            .page_slot
+            .retiring_document_lifecycle_binding(document_id, renderer_page)?
+            .clone();
+        Some(RetiringRendererDocumentOutput {
+            renderer_page,
+            document_id,
+            binding,
+            network_agent: runtime.network_agent.rotate_document_for_replacement(),
         })
     }
 

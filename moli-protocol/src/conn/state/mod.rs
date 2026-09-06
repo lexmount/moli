@@ -43,8 +43,7 @@ pub(crate) use identity::{
 pub(crate) use moli_core::browser::{DocumentId, NavigationId, RendererPageResidenceIdentity};
 
 pub(crate) use devtools_renderer_channel::{
-    DevToolsRendererChannelError, PreparedRendererAgentAttachment, RendererAgentAttachment,
-    RendererAgentBinding,
+    DevToolsRendererChannelError, RendererAgentAttachment, RendererAgentBinding,
 };
 
 pub(crate) use dedicated_worker_target::{
