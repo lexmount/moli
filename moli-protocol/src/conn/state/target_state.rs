@@ -108,6 +108,11 @@ pub(crate) struct TargetPendingInspectorAwaitRegistry {
 }
 
 impl TargetPendingInspectorAwaitRegistry {
+    #[cfg(test)]
+    pub(crate) fn leave_one_renderer_call_id_for_test(&mut self) {
+        self.entries.leave_one_renderer_call_id_for_test();
+    }
+
     pub(crate) fn try_insert(
         &mut self,
         cdp_request_id: u64,

@@ -2,7 +2,6 @@ use super::*;
 use crate::conn::state::{DevToolsRendererChannelError, WindowOpener};
 use moli_core::{
     browser::{DocumentRetirement, NavigationId, RendererPageResidenceIdentity},
-    page::RendererDevToolsAgentToken,
     runtime::{Browser, BrowserConfig, NavigationEngine},
 };
 use std::{
@@ -162,7 +161,7 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     let dialog_scope = slot.javascript_dialog_scope_observer();
     let id = context.selected_web_contents_id().unwrap();
 
-    let (projection, closing) = context.take_page_target_for_close("TID-close").unwrap();
+    let (mut projection, closing) = context.take_page_target_for_close("TID-close").unwrap();
     assert!(!context.physical.web_contents.contains_key(&id));
     assert!(context.page_targets.is_empty());
     assert_eq!(context.selected_web_contents_id(), None);
@@ -176,10 +175,7 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     assert!(matches!(
         projection
             .runtime_slot
-            .prepare_renderer_agent_candidate_token(
-                &NavigationId::allocate(),
-                RendererDevToolsAgentToken::allocate(),
-            ),
+            .finish_renderer_document_navigation(&NavigationId::allocate()),
         Err(DevToolsRendererChannelError::Closed)
     ));
     assert_eq!(

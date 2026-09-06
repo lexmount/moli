@@ -550,8 +550,7 @@ async fn inspection_reattach_does_not_retire_outgoing_browser_policy_commands() 
     context
         .active_page_target_mut()
         .runtime_slot
-        .commit_loaded_navigation_renderer_attachment(endpoint, None)
-        .unwrap();
+        .reattach_inspection_for_test(endpoint);
     assert_ne!(
         context
             .page_target("TID-1")

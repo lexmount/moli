@@ -489,6 +489,22 @@ impl TargetPageSlot {
         };
         self.renderer_document_lifecycle.binding.as_ref() == Some(&observation.binding)
     }
+
+    pub(super) fn retiring_document_lifecycle_binding(
+        &self,
+        document: DocumentId,
+        renderer: RendererPageResidenceIdentity,
+    ) -> Option<&CommittedRendererDocumentBinding> {
+        // The Browser may already contain the successor. Match the occurrence's
+        // retired Document, not the current Browser identity or navigation.
+        self.renderer_document_lifecycle
+            .binding
+            .as_ref()
+            .filter(|binding| {
+                binding.document_id == document
+                    && binding.renderer_frame.page_id == renderer.page_id()
+            })
+    }
 }
 
 impl BrowserContext {

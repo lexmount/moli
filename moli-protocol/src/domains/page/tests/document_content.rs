@@ -17,11 +17,6 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
     let artifacts = navigation.page_creation_artifacts;
     let committed = {
         let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-        let renderer_agent_candidate = browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .prepare_renderer_agent_candidate(&committed_document, &navigation.page)
-            .expect("document-content test renderer candidate should attach");
         let identity = navigation.main_document_commit.as_ref().unwrap();
         let prepared = crate::conn::PreparedDocumentNavigation::new(
             committed_document,
@@ -33,8 +28,9 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
         )
         .unwrap();
         let committed = browser_context
-            .commit_loaded_navigation_for_target("TID-1", prepared, Some(renderer_agent_candidate))
+            .commit_loaded_navigation_for_target("TID-1", prepared)
             .expect("document-content test Document should commit");
+        assert!(committed.inspection_projection.is_ok());
         assert!(
             browser_context
                 .active_page_target_mut()

@@ -424,31 +424,11 @@ impl DevToolsSessionRegistry {
         primary_session_id: Option<&str>,
         old_attachment_id: moli_page_types::RendererAgentAttachmentId,
         new_attachment_id: moli_page_types::RendererAgentAttachmentId,
-    ) -> Result<PreparedRendererCallReplacements, RendererCallIdExhausted> {
-        let terminations = self.prepare_renderer_call_terminations(
-            primary_session_id,
-            old_attachment_id,
-            new_attachment_id,
-        )?;
-        let replays = self.prepare_renderer_call_replays(
-            primary_session_id,
-            old_attachment_id,
-            new_attachment_id,
-        )?;
-        Ok(PreparedRendererCallReplacements::new(
-            new_attachment_id,
-            terminations,
-            replays,
-        ))
-    }
-
-    fn prepare_renderer_call_replays(
-        &mut self,
-        primary_session_id: Option<&str>,
-        old_attachment_id: moli_page_types::RendererAgentAttachmentId,
-        new_attachment_id: moli_page_types::RendererAgentAttachmentId,
-    ) -> Result<Vec<SessionRendererCallReplay>, RendererCallIdExhausted> {
-        let mut replays = Vec::new();
+    ) -> PreparedRendererCallReplacements {
+        let mut replacements = PreparedRendererCallReplacements {
+            new_attachment_id: Some(new_attachment_id),
+            ..Default::default()
+        };
         for (key, state) in &mut self.states {
             let (frontend_session_id, renderer_inspector_session_id) = match key {
                 DevToolsSessionKey::Primary => (primary_session_id.map(str::to_owned), None),
@@ -456,43 +436,39 @@ impl DevToolsSessionRegistry {
                     (Some(session_id.clone()), Some(session_id.clone()))
                 }
             };
-            replays.extend(
-                state
-                    .prepare_renderer_call_replays(old_attachment_id, new_attachment_id)?
-                    .into_iter()
-                    .map(|replay| SessionRendererCallReplay {
-                        frontend_session_id: frontend_session_id.clone(),
-                        renderer_inspector_session_id: renderer_inspector_session_id.clone(),
-                        replay,
-                    }),
-            );
-        }
-        Ok(replays)
-    }
-
-    fn prepare_renderer_call_terminations(
-        &mut self,
-        primary_session_id: Option<&str>,
-        old_attachment_id: moli_page_types::RendererAgentAttachmentId,
-        terminal_attachment_id: moli_page_types::RendererAgentAttachmentId,
-    ) -> Result<Vec<SessionRendererCallTermination>, RendererCallIdExhausted> {
-        let mut terminations = Vec::new();
-        for (key, state) in &mut self.states {
-            let frontend_session_id = match key {
-                DevToolsSessionKey::Primary => primary_session_id.map(str::to_owned),
-                DevToolsSessionKey::Attached(session_id) => Some(session_id.clone()),
+            // An allocation failure may follow an already rotated response lease.
+            // Settle the whole affected session; preserve every other session's work.
+            let prepared = state
+                .prepare_renderer_call_terminations(old_attachment_id, new_attachment_id)
+                .and_then(|terminations| {
+                    state
+                        .prepare_renderer_call_replays(old_attachment_id, new_attachment_id)
+                        .map(|replays| (terminations, replays))
+                });
+            let (terminations, replays) = match prepared {
+                Ok(prepared) => prepared,
+                Err(_) => {
+                    replacements.failed_session_ids.push(frontend_session_id);
+                    continue;
+                }
             };
-            terminations.extend(
-                state
-                    .prepare_renderer_call_terminations(old_attachment_id, terminal_attachment_id)?
-                    .into_iter()
-                    .map(|termination| SessionRendererCallTermination {
+            replacements
+                .terminations
+                .extend(terminations.into_iter().map(|termination| {
+                    SessionRendererCallTermination {
                         frontend_session_id: frontend_session_id.clone(),
                         termination,
-                    }),
-            );
+                    }
+                }));
+            replacements
+                .replays
+                .extend(replays.into_iter().map(|replay| SessionRendererCallReplay {
+                    frontend_session_id: frontend_session_id.clone(),
+                    renderer_inspector_session_id: renderer_inspector_session_id.clone(),
+                    replay,
+                }));
         }
-        Ok(terminations)
+        replacements
     }
 
     pub(crate) fn runtime_bindings_for_renderer(&self) -> Vec<RuntimeBindingDefinition> {
@@ -591,23 +567,14 @@ pub(crate) struct PreparedRendererCallReplacements {
     new_attachment_id: Option<moli_page_types::RendererAgentAttachmentId>,
     terminations: Vec<SessionRendererCallTermination>,
     replays: Vec<SessionRendererCallReplay>,
+    failed_session_ids: Vec<Option<String>>,
 }
 
 impl PreparedRendererCallReplacements {
-    fn new(
-        new_attachment_id: moli_page_types::RendererAgentAttachmentId,
-        terminations: Vec<SessionRendererCallTermination>,
-        replays: Vec<SessionRendererCallReplay>,
-    ) -> Self {
-        Self {
-            new_attachment_id: Some(new_attachment_id),
-            terminations,
-            replays,
-        }
-    }
-
     pub(crate) fn is_empty(&self) -> bool {
-        self.terminations.is_empty() && self.replays.is_empty()
+        self.terminations.is_empty()
+            && self.replays.is_empty()
+            && self.failed_session_ids.is_empty()
     }
 
     pub(crate) fn into_parts(
@@ -616,12 +583,14 @@ impl PreparedRendererCallReplacements {
         moli_page_types::RendererAgentAttachmentId,
         Vec<SessionRendererCallTermination>,
         Vec<SessionRendererCallReplay>,
+        Vec<Option<String>>,
     ) {
         (
             self.new_attachment_id
                 .expect("prepared renderer replacements must have an attachment"),
             self.terminations,
             self.replays,
+            self.failed_session_ids,
         )
     }
 }
