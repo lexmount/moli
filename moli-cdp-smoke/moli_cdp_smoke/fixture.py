@@ -494,6 +494,7 @@ class FixtureServer:
         self.fetch_runtime_teardown_gate = FixtureResponseGate()
         self.navigation_suspension_gate = FixtureResponseGate()
         self.parser_dom_mutation_script_gate = FixtureResponseGate()
+        self.loading_cache_script_gate = FixtureResponseGate()
         handler = self._handler_class()
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         self.httpd.daemon_threads = True
@@ -512,6 +513,7 @@ class FixtureServer:
         self.fetch_runtime_teardown_gate.release_response.set()
         self.navigation_suspension_gate.release_response.set()
         self.parser_dom_mutation_script_gate.release_response.set()
+        self.loading_cache_script_gate.release_response.set()
         self.httpd.shutdown()
         self.httpd.server_close()
         self.thread.join(timeout=5)
@@ -757,6 +759,45 @@ class FixtureServer:
                         "root.appendChild(frame);"
                         "</script>"
                     )
+                elif route == "/loading-cache-page":
+                    self._send_html(
+                        "<!doctype html><script>globalThis.loadingCacheAgent=null;</script>"
+                        "<script src='/loading-cache.js'></script>"
+                    )
+                elif route == "/loading-cache.js":
+                    count = outer._increment_request_count(route)
+                    gate = outer.loading_cache_script_gate
+                    if count == 1:
+                        gate.request_seen.set()
+                        if not gate.release_response.wait(timeout=10):
+                            self._send_text(
+                                "loading cache gate timed out", status=HTTPStatus.REQUEST_TIMEOUT
+                            )
+                            return
+                    agent = json.dumps(self.headers.get("User-Agent"))
+                    try:
+                        self._send_cacheable(
+                            "application/javascript",
+                            f"globalThis.loadingCacheAgent={agent};".encode(),
+                            max_age=600,
+                            headers={"Vary": "User-Agent"},
+                        )
+                    except (BrokenPipeError, ConnectionResetError):
+                        # Navigation can retire the deliberately held old request.
+                        if count != 1:
+                            raise
+                elif route == "/loading-cache/reset":
+                    outer.loading_cache_script_gate.reset()
+                    outer.reset_request_count("/loading-cache.js")
+                    self._send_json({"ok": True})
+                elif route == "/loading-cache/release":
+                    outer.loading_cache_script_gate.release_response.set()
+                    self._send_json({"ok": True})
+                elif route == "/loading-cache/status":
+                    self._send_json({
+                        "requestSeen": outer.loading_cache_script_gate.request_seen.is_set(),
+                        "requestCount": outer.request_count("/loading-cache.js"),
+                    })
                 elif route == "/semantic-cache-page":
                     self._send_html(
                         "<!doctype html><main>cache page</main>"
@@ -1683,11 +1724,14 @@ class FixtureServer:
                 payload: bytes,
                 *,
                 max_age: int = 3600,
+                headers: dict[str, str] | None = None,
             ) -> None:
                 self.send_response(HTTPStatus.OK)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Cache-Control", f"public, max-age={max_age}")
                 self.send_header("Content-Length", str(len(payload)))
+                for key, value in (headers or {}).items():
+                    self.send_header(key, value)
                 self.end_headers()
                 self.wfile.write(payload)
 

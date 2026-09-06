@@ -200,7 +200,6 @@ impl ConcurrentParseTimeRuntime {
     }
 
     pub(super) fn new_parser_owner(
-        loader: ResourceRequestClient,
         stage: PageVmInitStage,
         state: ParseTimeDriverState,
         mut page_vm: PageVm,
@@ -222,6 +221,12 @@ impl ConcurrentParseTimeRuntime {
             .vm_mut()
             .document_runtime
             .activate_main_parser_continuation(parser_document_owner);
+        // Once the Document exists, parser preloads and document.write must
+        // share its loading context, not the pre-bootstrap transport client.
+        let loader = page_vm
+            .main_document_resource_loader()
+            .request_client()
+            .clone();
         Self {
             loader,
             stage,

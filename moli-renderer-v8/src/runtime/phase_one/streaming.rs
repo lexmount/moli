@@ -438,7 +438,7 @@ impl ConcurrentParseTimeRuntime {
             );
         }
         Ok(ParseTimePageVmStreamingBootstrapOutcome::Runtime(Box::new(
-            Self::new_parser_owner(loader.clone(), stage, state, page_vm),
+            Self::new_parser_owner(stage, state, page_vm),
         )))
     }
 
@@ -1120,7 +1120,6 @@ mod tests {
             );
         TestConcurrentParseTimeRuntime {
             runtime: ConcurrentParseTimeRuntime::new_parser_owner(
-                loader,
                 PageVmInitStage::Load,
                 state,
                 page_vm,
