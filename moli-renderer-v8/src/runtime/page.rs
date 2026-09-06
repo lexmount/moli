@@ -929,6 +929,174 @@ impl JsRuntime {
     }
 }
 
+impl JsRuntime {
+    /// Reserve an empty document without starting its parser or author script.
+    /// Inspection bootstrap can then enter the same FIFO through its own weak
+    /// endpoint, before Browser materialization consumes the reservation.
+    #[allow(clippy::too_many_arguments)]
+    pub fn reserve_initial_document(
+        &self,
+        token: RendererPageReservationToken,
+        url: Url,
+        loader: &ResourceRequestClient,
+        web_storage: crate::RendererWebStorageHandles,
+        indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
+        storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
+        top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
+    ) -> PendingPreparedRendererDocument {
+        let mut request = self
+            .inner
+            .renderer_owner
+            .build_create_streaming_raw_page_request(
+                url.clone(),
+                url,
+                None,
+                false,
+                0,
+                Vec::new(),
+                200,
+                vec![("content-type".into(), "text/html; charset=utf-8".into())],
+                loader,
+                web_storage,
+                ExternalRawDocumentBodyStream::from_bytes(
+                    b"<!doctype html><html><head></head><body></body></html>".to_vec(),
+                ),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                false,
+                false,
+                1.0,
+                Default::default(),
+                None,
+                false,
+                Vec::new(),
+                false,
+                None,
+                PageVmInitStage::Load,
+            );
+        request.indexed_db_manager = indexed_db_manager;
+        request.storage_bucket_store = storage_bucket_store;
+        request.top_level_storage_key = top_level_storage_key;
+        request.top_level_navigation_dispatch =
+            crate::RendererTopLevelNavigationDispatch::DelegateToBrowser;
+        request.navigation_reply_policy =
+            crate::RendererNavigationReplyPolicy::ReturnWithPendingNavigation;
+        PendingPreparedRendererDocument {
+            runtime: self.clone(),
+            token,
+            preparation: RendererDocumentPreparation::Reserved(Box::new(request)),
+        }
+    }
+}
+
+/// Owned preparation, including cancellation before the renderer acknowledges
+/// the reservation. It is not a reusable permission to materialize another Page.
+pub struct PendingPreparedRendererDocument {
+    runtime: JsRuntime,
+    token: RendererPageReservationToken,
+    preparation: RendererDocumentPreparation,
+}
+
+enum RendererDocumentPreparation {
+    Reserved(Box<super::owner::RendererCreateStreamingRawPageRequest>),
+    Preparing(tokio::sync::oneshot::Receiver<Result<RendererOwnerReply>>),
+    Transferred,
+}
+
+impl PendingPreparedRendererDocument {
+    pub fn token(&self) -> RendererPageReservationToken {
+        self.token
+    }
+
+    /// The caller may bind the reserved output residence before this opens its
+    /// stream. Non-inspector callers can simply await readiness/materialize.
+    pub fn start_preparation(&mut self) -> Result<()> {
+        if !matches!(self.preparation, RendererDocumentPreparation::Reserved(_)) {
+            return Ok(());
+        }
+        let RendererDocumentPreparation::Reserved(request) = std::mem::replace(
+            &mut self.preparation,
+            RendererDocumentPreparation::Transferred,
+        ) else {
+            unreachable!()
+        };
+        match self
+            .runtime
+            .inner
+            .renderer_owner
+            .enqueue_command_with_reply(RendererOwnerCommand::PrepareStreamingRawDocument {
+                token: self.token,
+                request: *request,
+            }) {
+            Ok(reply) => {
+                self.preparation = RendererDocumentPreparation::Preparing(reply);
+                Ok(())
+            }
+            Err(error) => {
+                self.runtime
+                    .inner
+                    .renderer_owner
+                    .release_page_output_reservation(self.token);
+                Err(error)
+            }
+        }
+    }
+
+    pub fn inspection_configuration_endpoint(&self) -> RendererPreparedDocumentInspectionEndpoint {
+        RendererPreparedDocumentInspectionEndpoint {
+            render_runtime: self.runtime.inner._render_runtime.handle(),
+            token: self.token,
+        }
+    }
+
+    pub async fn await_ready(mut self) -> Result<PreparedRendererDocument> {
+        self.start_preparation()?;
+        // Keep the receiver present while awaiting: dropping this future must
+        // enqueue exact-token cancellation even before prepare has completed.
+        let RendererDocumentPreparation::Preparing(reply_rx) = &mut self.preparation else {
+            return Err(anyhow!("document preparation was not started"));
+        };
+        let reply = reply_rx
+            .await
+            .context("document preparation acknowledgement was canceled")??;
+        let RendererOwnerReply::PreparedRendererDocumentStored {
+            renderer_devtools_agent_token,
+        } = reply
+        else {
+            return Err(anyhow!("renderer owner returned a non-prepare reply"));
+        };
+        self.preparation = RendererDocumentPreparation::Transferred;
+        Ok(PreparedRendererDocument::new(
+            self.runtime.clone(),
+            self.token,
+            renderer_devtools_agent_token,
+        ))
+    }
+}
+
+impl Drop for PendingPreparedRendererDocument {
+    fn drop(&mut self) {
+        if matches!(self.preparation, RendererDocumentPreparation::Reserved(_)) {
+            self.runtime
+                .inner
+                .renderer_owner
+                .release_page_output_reservation(self.token);
+        } else if matches!(self.preparation, RendererDocumentPreparation::Preparing(_)) {
+            let _ = self
+                .runtime
+                .inner
+                .renderer_owner
+                .enqueue_command_with_reply(RendererOwnerCommand::CancelPreparedRendererDocument {
+                    token: self.token,
+                });
+        }
+    }
+}
+
 impl JsRuntimeOwner {
     pub fn handle(&self) -> JsRuntime {
         self.runtime

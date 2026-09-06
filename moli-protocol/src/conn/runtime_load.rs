@@ -20,7 +20,8 @@ use tokio::sync::{mpsc, oneshot};
 use url::Url;
 
 use super::*;
-use crate::conn::state::{InitialDocumentPageBuildWaiter, RendererPageResidenceIdentity};
+use crate::conn::state::InitialDocumentPageBuildWaiter;
+use crate::conn::state::RendererPageResidenceIdentity;
 use crate::domains::network::{
     CompletedDocumentProgressTransfer, CompletedDownloadProgressTransfer,
     CompletedMainDocumentNetworkEvents, MainDocumentBodyNetworkProgress,
@@ -160,22 +161,20 @@ fn response_headers_indicate_xml_document(headers: &[(String, String)]) -> bool 
         .is_some_and(|mime| moli_web_mime::is_dom_parser_xml_mime(&mime))
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct InitialDocumentPageOwner {
-    pub(crate) browser_context_id: String,
-    pub(crate) target_id: String,
-}
-
 pub(crate) struct PendingInitialDocumentPageBuild {
     kind: PendingInitialDocumentPageBuildKind,
 }
 
 enum PendingInitialDocumentPageBuildKind {
     Build {
-        owner: InitialDocumentPageOwner,
-        load_inputs: Box<TargetNavigationLoadInputs>,
-        override_mode: NavigationLoadInputOverrideMode,
-        pending: moli_core::runtime::PendingBuiltDocumentPage,
+        key: crate::conn::state::InitialDocumentBuildKey,
+        pending: std::pin::Pin<
+            Box<
+                dyn std::future::Future<
+                        Output = anyhow::Result<crate::conn::state::BuiltInitialDocument>,
+                    > + Send,
+            >,
+        >,
     },
     Join {
         waiter: InitialDocumentPageBuildWaiter,
@@ -183,56 +182,19 @@ enum PendingInitialDocumentPageBuildKind {
 }
 
 pub(crate) enum CompletedInitialDocumentPageBuild {
-    Built {
-        owner: InitialDocumentPageOwner,
-        load_inputs: Box<TargetNavigationLoadInputs>,
-        override_mode: NavigationLoadInputOverrideMode,
-        built: Box<moli_core::runtime::BuiltDocumentPage>,
-    },
+    Built(Box<crate::conn::state::BuiltInitialDocument>),
     Joined,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum InitialDocumentPageInstallResult {
-    Installed,
-    Stale,
-}
-
 #[derive(Debug)]
-pub(crate) enum FailedInitialDocumentPageBuild {
-    Build {
-        owner: InitialDocumentPageOwner,
-        message: String,
-    },
-    Joined {
-        message: String,
-    },
-}
-
-impl FailedInitialDocumentPageBuild {
-    fn message(&self) -> &str {
-        match self {
-            Self::Build { message, .. } | Self::Joined { message } => message,
-        }
-    }
-
-    fn into_message(self) -> String {
-        match self {
-            Self::Build { message, .. } | Self::Joined { message } => message,
-        }
-    }
-
-    fn build_owner(&self) -> Option<&InitialDocumentPageOwner> {
-        match self {
-            Self::Build { owner, .. } => Some(owner),
-            Self::Joined { .. } => None,
-        }
-    }
+pub(crate) struct FailedInitialDocumentPageBuild {
+    key: Option<crate::conn::state::InitialDocumentBuildKey>,
+    message: String,
 }
 
 impl std::fmt::Display for FailedInitialDocumentPageBuild {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.message())
+        f.write_str(&self.message)
     }
 }
 
@@ -241,32 +203,18 @@ impl PendingInitialDocumentPageBuild {
         self,
     ) -> Result<CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild> {
         match self.kind {
-            PendingInitialDocumentPageBuildKind::Build {
-                owner,
-                load_inputs,
-                override_mode,
-                pending,
-            } => {
-                let built = match pending.await_ready().await {
-                    Ok(built) => built,
-                    Err(error) => {
-                        return Err(FailedInitialDocumentPageBuild::Build {
-                            owner,
-                            message: format!("initial document page build failed: {error}"),
-                        });
-                    }
-                };
-                Ok(CompletedInitialDocumentPageBuild::Built {
-                    owner,
-                    load_inputs,
-                    override_mode,
-                    built: Box::new(built),
-                })
-            }
-            PendingInitialDocumentPageBuildKind::Join { waiter } => match waiter.wait().await {
-                Ok(()) => Ok(CompletedInitialDocumentPageBuild::Joined),
-                Err(message) => Err(FailedInitialDocumentPageBuild::Joined { message }),
-            },
+            PendingInitialDocumentPageBuildKind::Build { key, pending } => pending
+                .await
+                .map(|built| CompletedInitialDocumentPageBuild::Built(Box::new(built)))
+                .map_err(|error| FailedInitialDocumentPageBuild {
+                    key: Some(key),
+                    message: format!("initial document page build failed: {error}"),
+                }),
+            PendingInitialDocumentPageBuildKind::Join { waiter } => waiter
+                .wait()
+                .await
+                .map(|()| CompletedInitialDocumentPageBuild::Joined)
+                .map_err(|message| FailedInitialDocumentPageBuild { key: None, message }),
         }
     }
 }
@@ -1881,187 +1829,76 @@ impl CdpConnection {
         &mut self,
         owner: &CommandOwnerScope,
     ) -> Result<Option<PendingInitialDocumentPageBuild>, String> {
+        use crate::conn::state::InitialDocumentAdmission;
         let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
         else {
             return Ok(None);
         };
-        let runtime_slot = match self.runtime_session_owner_slot_for_owner(owner) {
-            Ok(slot) => slot,
-            Err(_) => return Ok(None),
-        };
-        if self.has_loaded_page_for_owner(owner) {
-            return Ok(None);
-        }
-        if self
-            .browser_context_by_id(&context_id)
-            .is_some_and(|context| {
-                context.target_has_initial_document_page_build_in_progress(&target_id)
-            })
-        {
-            let waiter = runtime_slot
-                .initial_document_page_build_waiter()
-                .ok_or_else(|| "InitialDocumentPageBuildInProgressWithoutWaiter".to_owned())?;
-            return Ok(Some(PendingInitialDocumentPageBuild {
-                kind: PendingInitialDocumentPageBuildKind::Join { waiter },
-            }));
-        }
-
-        let page_owner = self
-            .initial_document_page_owner_for_owner(owner)
-            .ok_or_else(|| "TargetNotLoaded".to_owned())?;
-        let load_inputs = self.navigation_load_inputs_for_owner(owner);
-        let requested_url = self
-            .runtime_session_owner_initial_empty_document_url_for_owner(owner)
-            .unwrap_or_else(|| Url::parse("about:blank").expect("about:blank should be valid"));
-        let (fetch_subresource_interception_enabled, fetch_subresource_interception_resource_type) =
-            load_inputs.fetch_subresource_interception;
-        let mut engine = self.navigation_engine_handle_for_load_inputs(&load_inputs);
-        let page_storage = load_inputs.page_storage_handles();
-        let top_level_storage_key =
-            self.runtime_session_owner_initial_empty_document_storage_key_for_owner(owner);
-        self.browser_context_by_id_mut(&context_id)
+        let defaults = self.document_fetch_defaults();
+        let admission = self
+            .browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .find(|context| context.id == context_id)
             .ok_or("TargetNotLoaded")?
-            .start_initial_document_page_build_for_target(&target_id);
-        let page_reservation = engine.reserve_page_for_creation();
-        let renderer_page = RendererPageResidenceIdentity::from_parts(
-            page_reservation.local_host_id(),
-            page_reservation.page_id(),
-        );
-        if !self
-            .browser_context_by_id_mut(&context_id)
-            .ok_or("TargetNotLoaded")?
-            .bind_initial_document_page_build_renderer_page_for_target(&target_id, renderer_page)
-        {
-            let message =
-                "initial document Page reservation no longer matches its target build".to_owned();
-            if let Some(context) = self.browser_context_by_id_mut(&context_id) {
-                context.fail_target_initial_document_page_build(&target_id, message.clone());
+            .start_initial_document_for_target(&target_id, defaults, &self.permission_defaults)?;
+        let kind = match admission {
+            InitialDocumentAdmission::Present => return Ok(None),
+            InitialDocumentAdmission::Join(waiter) => {
+                PendingInitialDocumentPageBuildKind::Join { waiter }
             }
-            return Err(message);
-        }
-        // The renderer command below can open the Page output stream and
-        // publish bootstrap observations before this protocol turn regains
-        // control. Bind the reserved Page to its target before enqueueing that
-        // command; binding after `start_*` would leave a real cross-thread race
-        // where the concrete FIFO receives its first publication ownerless.
-        let renderer_page_owner = self
-            .pending_target_page_residence_identity_for_owner(owner)
-            .ok_or_else(|| "initial document Page reservation lost its target owner".to_owned())?;
-        self.bind_renderer_page_output_owner(renderer_page, renderer_page_owner);
-        let pending = engine
-            .start_build_html_page_from_response_with_storage_and_inspector_session_restores(
-                page_reservation,
-                page_storage.into_navigation_storage(),
-                requested_url.clone(),
-                requested_url,
-                load_inputs.navigation_initiator_url.clone(),
-                false,
-                0,
-                200,
-                vec![("content-type".into(), "text/html".into())],
-                ABOUT_BLANK_DOCUMENT_HTML.into(),
-                load_inputs.document_start_scripts.clone(),
-                load_inputs.runtime_bindings.clone(),
-                load_inputs
-                    .runtime_inspector_session_restore_snapshots
-                    .clone(),
-                load_inputs.extra_http_headers.clone(),
-                load_inputs.locale_override.clone(),
-                load_inputs.timezone_override.clone(),
-                load_inputs.script_execution_disabled,
-                load_inputs.bypass_content_security_policy,
-                load_inputs.cpu_throttling_rate,
-                load_inputs.emulated_media.clone(),
-                load_inputs.viewport_surface,
-                load_inputs.network_offline,
-                load_inputs.blocked_url_patterns.clone(),
-                fetch_subresource_interception_enabled,
-                fetch_subresource_interception_resource_type,
-                load_inputs.root_frame_id.clone(),
-                top_level_storage_key,
-                None,
-            )
-            .map_err(|error| {
-                let message = format!("failed to start initial document page build: {error}");
-                if let Some(context) = self.browser_context_by_id_mut(&context_id) {
-                    context.fail_target_initial_document_page_build(&target_id, message.clone());
+            InitialDocumentAdmission::Build(mut build) => {
+                let key = build.key();
+                self.browser_context_by_id_mut(&context_id)
+                    .expect("resolved BrowserContext")
+                    .project_initial_document_build(&target_id, key);
+                // Even preparation opens an output stream. Bind the native
+                // reservation before any renderer command can be enqueued.
+                self.bind_renderer_page_output_owner(
+                    key.renderer(),
+                    TargetPageResidenceIdentity::new(
+                        context_id.clone(),
+                        Some(target_id),
+                        key.document(),
+                    ),
+                );
+                if let Err(error) = build.start_preparation() {
+                    self.browser_context_by_id_mut(&context_id)
+                        .expect("resolved BrowserContext")
+                        .retire_initial_document_projection(key);
+                    return Err(error.to_string());
                 }
-                message
-            })?;
-        Ok(Some(PendingInitialDocumentPageBuild {
-            kind: PendingInitialDocumentPageBuildKind::Build {
-                owner: page_owner,
-                load_inputs: Box::new(load_inputs),
-                override_mode: NavigationLoadInputOverrideMode::FreshlyBuiltPage,
-                pending,
-            },
-        }))
+                let inspection_ack = build
+                    .inspection_endpoint()
+                    .start_configure(self.prepared_document_inspection_for_owner(owner));
+                PendingInitialDocumentPageBuildKind::Build {
+                    key,
+                    pending: Box::pin(async move {
+                        if let Err(error) = inspection_ack.await {
+                            tracing::warn!(%error, "initial document inspection configuration failed");
+                        }
+                        build.materialize().await
+                    }),
+                }
+            }
+        };
+        Ok(Some(PendingInitialDocumentPageBuild { kind }))
     }
 
     pub(crate) fn reset_failed_initial_document_page_build_for_owner(
         &mut self,
         failed: FailedInitialDocumentPageBuild,
     ) -> String {
-        let message = failed.message().to_owned();
-        if let Some(owner) = failed.build_owner() {
-            self.fail_initial_document_page_build_for_owner(owner, message);
+        if let Some(key) = failed.key {
+            for context in self
+                .browser_context
+                .iter_mut()
+                .chain(self.inactive_browser_contexts.iter_mut())
+            {
+                context.retire_initial_document_projection(key);
+            }
         }
-        failed.into_message()
-    }
-
-    fn runtime_session_owner_initial_empty_document_url_for_owner(
-        &self,
-        owner: &CommandOwnerScope,
-    ) -> Option<Url> {
-        if let Some(raw_url) =
-            self.runtime_session_owner_record_initial_empty_document_url_for_owner(owner)
-        {
-            return Url::parse(&raw_url).ok().filter(moli_url::is_about_blank);
-        }
-        self.runtime_session_owner_target_url_for_owner(owner)
-            .as_deref()
-            .and_then(|raw_url| Url::parse(raw_url).ok())
-            .filter(moli_url::is_about_blank)
-    }
-
-    fn complete_initial_document_page_build_for_page_owner(
-        &mut self,
-        owner: &InitialDocumentPageOwner,
-    ) {
-        if let Some(context) = self.browser_context_by_id_mut(&owner.browser_context_id)
-            && let Some(target) = context.page_target_mut(&owner.target_id)
-        {
-            target.runtime_slot.complete_initial_document_page_build();
-        }
-    }
-
-    fn complete_stale_initial_document_page_build_for_page_owner(
-        &mut self,
-        owner: &InitialDocumentPageOwner,
-    ) {
-        self.complete_initial_document_page_build_for_page_owner(owner);
-    }
-
-    fn initial_document_page_owner_can_install_current_page(
-        &self,
-        owner: &InitialDocumentPageOwner,
-    ) -> bool {
-        self.browser_context_by_id(&owner.browser_context_id)
-            .is_some_and(|browser_context| {
-                browser_context.can_install_current_initial_empty_document_page(&owner.target_id)
-            })
-    }
-
-    fn fail_initial_document_page_build_for_owner(
-        &mut self,
-        owner: &InitialDocumentPageOwner,
-        message: String,
-    ) {
-        if let Some(context) = self.browser_context_by_id_mut(&owner.browser_context_id)
-            && context.target_has_initial_document_page_build_in_progress(&owner.target_id)
-        {
-            context.fail_target_initial_document_page_build(&owner.target_id, message);
-        }
+        failed.message
     }
 
     pub(crate) async fn complete_initial_document_page_build_for_owner(
@@ -2077,42 +1914,33 @@ impl CdpConnection {
         &mut self,
         completed: CompletedInitialDocumentPageBuild,
     ) -> Result<LoadedPageCreationDiagnosticsParts, String> {
-        let CompletedInitialDocumentPageBuild::Built {
-            owner,
-            load_inputs,
-            override_mode,
-            built,
-        } = completed
-        else {
+        let CompletedInitialDocumentPageBuild::Built(built) = completed else {
             return Ok(LoadedPageCreationDiagnosticsParts::default());
         };
-        let load_inputs = *load_inputs;
-        let built = *built;
-        let diagnostics = loaded_page_creation_diagnostics_parts(built.page_creation_diagnostics);
-        let page_creation_artifacts = built.page_creation_artifacts;
-        let mut page = built.page;
-        if !self.initial_document_page_owner_can_install_current_page(&owner) {
-            let _ = page.close_async().await;
-            self.complete_stale_initial_document_page_build_for_page_owner(&owner);
-            return Ok(LoadedPageCreationDiagnosticsParts::default());
+        let key = built.key();
+        let context = self
+            .browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .find(|context| context.owns_web_contents(key.web_contents()));
+        let committed = match context {
+            Some(context) => context.commit_initial_document(*built),
+            None => Err(built),
+        };
+        match committed {
+            Ok(diagnostics) => Ok(loaded_page_creation_diagnostics_parts(diagnostics)),
+            Err(stale) => {
+                for context in self
+                    .browser_context
+                    .iter_mut()
+                    .chain(self.inactive_browser_contexts.iter_mut())
+                {
+                    context.retire_initial_document_projection(key);
+                }
+                stale.retire().await;
+                Ok(LoadedPageCreationDiagnosticsParts::default())
+            }
         }
-        apply_navigation_load_input_overrides_async(&mut page, &load_inputs, override_mode)
-            .await
-            .inspect_err(|message| {
-                self.fail_initial_document_page_build_for_owner(&owner, message.clone());
-            })?;
-        let install_result = self
-            .install_initial_loaded_page_for_page_owner_async(&owner, page, page_creation_artifacts)
-            .await
-            .inspect_err(|message| {
-                self.fail_initial_document_page_build_for_owner(&owner, message.clone());
-            })?;
-        if install_result == InitialDocumentPageInstallResult::Stale {
-            self.complete_stale_initial_document_page_build_for_page_owner(&owner);
-            return Ok(LoadedPageCreationDiagnosticsParts::default());
-        }
-        self.complete_initial_document_page_build_for_page_owner(&owner);
-        Ok(diagnostics)
     }
 
     #[cfg(test)]

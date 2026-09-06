@@ -27,6 +27,10 @@ mod target_state;
 #[cfg(test)]
 mod tests;
 mod web_contents;
+pub(in crate::conn) use web_contents::{
+    BuiltInitialDocument, InitialDocumentAdmission, InitialDocumentBuildKey,
+    InitialDocumentPageBuildWaiter,
+};
 
 #[cfg(test)]
 pub(in crate::conn) use web_contents::DocumentHost;
@@ -66,8 +70,7 @@ pub(crate) use page_resource::MainDocumentResourceSnapshot;
 #[cfg(test)]
 pub(crate) use page_slot::TargetPageSlot;
 pub(crate) use page_slot::{
-    CommittedRendererDocumentBinding, InitialDocumentPageBuildWaiter,
-    RendererDocumentLifecycleWaiterId, TargetPageAbsenceReason,
+    CommittedRendererDocumentBinding, RendererDocumentLifecycleWaiterId, TargetPageAbsenceReason,
 };
 pub use page_slot::{DocumentStartScript, IsolatedWorldDefinition, RuntimeBindingDefinition};
 

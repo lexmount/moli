@@ -537,8 +537,7 @@ pub(crate) use runtime_load::decode_data_url_response;
 pub(crate) use runtime_load::{
     BackgroundNavigationBodyCompletionSink, BackgroundNavigationEarlyResult,
     BackgroundNavigationLoadJob, CompletedInitialDocumentPageBuild, FailedInitialDocumentPageBuild,
-    InitialDocumentPageInstallResult, InitialDocumentPageOwner, PausedResponsePreparedDocument,
-    PendingInitialDocumentPageBuild, ResponseCommitReady,
+    PausedResponsePreparedDocument, PendingInitialDocumentPageBuild, ResponseCommitReady,
 };
 use scheduler_hooks::CdpSchedulerHooks;
 use scheduler_state::CdpConnectionSchedulerState;

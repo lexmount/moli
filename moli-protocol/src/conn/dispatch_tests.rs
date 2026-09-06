@@ -2363,6 +2363,10 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         .expect("target lifecycle ensure should start active initial page")
         .expect("fresh initial target should pend active initial document page build");
     let real_page_url = "data:text/html,<title>real-page</title>";
+    let completed = pending
+        .wait()
+        .await
+        .expect("build candidate before replacement");
     let parsed_real_page_url = url::Url::parse(real_page_url).expect("data URL should parse");
     let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
     let token = conn
@@ -2399,10 +2403,6 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
         .expect("browser context")
         .document_id();
 
-    let completed = pending
-        .wait()
-        .await
-        .expect("stale initial document page build should complete");
     conn.complete_initial_document_page_build_for_owner(completed)
         .await
         .expect("stale initial document page build should be discarded");

@@ -17,101 +17,87 @@ pub(crate) struct LoadedNavigationPageCommit {
 }
 
 impl BrowserContext {
-    pub(crate) fn fail_target_initial_document_page_build(
+    pub(in crate::conn) fn start_initial_document_for_target(
         &mut self,
         target_id: &str,
-        message: String,
-    ) {
-        let Some(target) = self.page_targets.get_mut(target_id) else {
-            return;
-        };
-        target
-            .runtime_slot
-            .fail_initial_document_page_build(message);
-        self.mark_loaded_page_absent_for_target(
-            target_id,
-            crate::conn::state::TargetPageAbsenceReason::InitialDocumentPageBuildPending,
+        fetch_defaults: moli_fetch::FetchConfig,
+        permissions: &moli_core::browser::PermissionDefaults,
+    ) -> Result<crate::conn::state::web_contents::InitialDocumentAdmission, String> {
+        let inherited = self.physical.inherited_document_policy(
+            fetch_defaults,
+            permissions,
+            &self.global_extra_headers,
+            self.global_network_conditions,
         );
+        self.web_contents_for_target_mut(target_id)
+            .ok_or("initial WebContents unavailable")?
+            .start_initial_document_build(inherited)
     }
 
-    pub(crate) async fn install_target_initial_loaded_page_async(
+    pub(in crate::conn) fn commit_initial_document(
         &mut self,
-        target_id: &str,
-        page: Page,
-        artifacts: moli_core::page::RendererPageCreationArtifacts,
-    ) -> Result<crate::conn::InitialDocumentPageInstallResult, String> {
-        use crate::conn::InitialDocumentPageInstallResult;
-        if !self.can_install_current_initial_empty_document_page(target_id) {
-            Self::close_page_best_effort(page).await;
-            return Ok(InitialDocumentPageInstallResult::Stale);
-        }
-        if artifacts.lifecycle_snapshot.frame.page_id != page.renderer_page_id() {
-            return Err("initial lifecycle belongs to another renderer Page".into());
-        }
-        let lifecycle = moli_core::browser::DocumentLifecycle::from_creation_artifacts(&artifacts)
-            .ok_or("inconsistent initial document lifecycle")?;
+        built: crate::conn::state::web_contents::BuiltInitialDocument,
+    ) -> Result<
+        moli_core::page::RendererPageCreationDiagnostics,
+        Box<crate::conn::state::web_contents::BuiltInitialDocument>,
+    > {
+        let Some(contents) = self
+            .physical
+            .web_contents
+            .get_mut(&built.key().web_contents())
+        else {
+            return Err(Box::new(built));
+        };
+        let commit = contents.commit_initial_document(built)?;
+        // Native completion is final. A missing or retired AgentHost cannot
+        // veto the Browser document or fail other Browser waiters.
+        let Some(target_id) = self
+            .page_targets
+            .get_for_web_contents(commit.key.web_contents())
+            .map(|target| target.target_id().to_owned())
+        else {
+            return Ok(commit.diagnostics);
+        };
+        let target_id = target_id.as_str();
         let loader_id = self.target_initial_empty_document_loader_id_if_current(target_id);
-        self.web_contents_for_target_mut(target_id)
-            .expect("validated initial document owner")
-            .navigation
-            .mark_initial_empty_document_materialized();
-        self.page_targets
+        let retiring = self.begin_document_projection_replacement_for_target(target_id, None);
+        let target = self
+            .page_targets
             .get_mut(target_id)
-            .expect("validated initial document projection")
+            .expect("resolved projection");
+        if let Err(error) = target
+            .runtime_slot
+            .project_initial_document_inspection(commit.inspection_endpoint)
+        {
+            tracing::warn!(%error, "initial document inspection projection failed");
+        }
+        target
             .owner_state
             .clear_committed_document_navigation_state();
         self.clear_target_loaded_document_session_state(target_id);
-        let previous = self.replace_loaded_page_for_target(target_id, Some(page));
-        let contents = self
-            .web_contents_for_target_mut(target_id)
-            .expect("installed initial WebContents");
-        contents
-            .main_frame
-            .current_document
-            .as_mut()
-            .expect("installed initial Document")
-            .lifecycle = lifecycle;
-        if artifacts.initial_lifecycle_events.iter().any(|event| {
-            matches!(
-            event.kind,
-            moli_core::page::RendererDocumentLifecycleEventKind::Started {
-                reason: moli_core::page::RendererLifecycleStartReason::ExplicitDocumentOpen
-                    | moli_core::page::RendererLifecycleStartReason::JavascriptDocumentReplacement
-            }
-        )
-        }) {
-            contents.navigation.mark_initial_empty_document_exited();
-        }
+        self.reset_document_projection_for_target(
+            target_id,
+            true,
+            TargetPageAbsenceReason::NoTarget,
+        );
+        self.finish_document_projection_replacement_for_target(target_id, retiring);
         let runtime = &mut self
             .page_targets
             .get_mut(target_id)
-            .expect("validated initial document projection")
+            .expect("resolved projection")
             .runtime_slot;
         runtime.reset_subresource_cursor();
         runtime.clear_websocket_artifacts();
         if let Some(loader_id) = loader_id {
             let _ = self.project_committed_document_lifecycle_for_target(
                 target_id,
-                crate::conn::CommittedDocumentLifecycle {
-                    document: self
-                        .target_document_id(target_id)
-                        .expect("installed initial Document"),
-                    artifacts,
-                },
+                commit.lifecycle,
                 None,
                 target_id.to_owned(),
                 loader_id,
             );
         }
-        self.assert_target_materialized_initial_empty_document_has_page(target_id)?;
-        if let Some(page) = previous {
-            Self::close_page_best_effort(page).await;
-        }
-        Ok(InitialDocumentPageInstallResult::Installed)
-    }
-
-    async fn close_page_best_effort(page: Page) {
-        let _ = page.close_async().await;
+        Ok(commit.diagnostics)
     }
 
     pub(crate) fn loaded_page(&self) -> Option<&Page> {

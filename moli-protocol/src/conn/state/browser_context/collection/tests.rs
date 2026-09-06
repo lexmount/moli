@@ -151,13 +151,25 @@ fn emulation_policy_survives_projection_drop_and_updates_without_sessions() {
 
 #[tokio::test]
 async fn close_retires_projection_waiters_and_channel_before_the_owned_page_teardown() {
+    use crate::conn::state::InitialDocumentAdmission;
     let mut context = BrowserContext::new("BID-close".into());
+    context.bind_page_navigation_engines(Default::default(), None);
     context.set_active_target_id("TID-close");
     context.attach_active_session("SID-close");
     context.target_popup_ids.insert("TID-close".into(), 7);
-    context.start_initial_document_page_build_for_target("TID-close");
+    let InitialDocumentAdmission::Build(build) = context
+        .start_initial_document_for_target("TID-close", Default::default(), &Default::default())
+        .unwrap()
+    else {
+        panic!("expected build");
+    };
+    let InitialDocumentAdmission::Join(waiter) = context
+        .start_initial_document_for_target("TID-close", Default::default(), &Default::default())
+        .unwrap()
+    else {
+        panic!("expected join");
+    };
     let slot = &context.page_targets.get("TID-close").unwrap().runtime_slot;
-    let waiter = slot.initial_document_page_build_waiter().unwrap();
     let dialog_scope = slot.javascript_dialog_scope_observer();
     let id = context.selected_web_contents_id().unwrap();
 
@@ -184,14 +196,18 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     );
     // Cancellation of the teardown future must not resurrect either authority.
     drop(closing);
+    assert!(build.materialize().await.is_err());
     assert!(context.take_page_target_for_close("TID-close").is_none());
     drop(projection);
 }
 
 #[tokio::test]
 async fn close_all_retires_background_builds_and_removes_every_projection() {
+    use crate::conn::state::InitialDocumentAdmission;
     let mut context = BrowserContext::new("BID-close-all".into());
+    context.bind_page_navigation_engines(Default::default(), None);
     let mut waiters = Vec::new();
+    let mut builds = Vec::new();
     for id in ["TID-first", "TID-background"] {
         assert!(context.register_page_target_fixture(
             id.into(),
@@ -199,16 +215,20 @@ async fn close_all_retires_background_builds_and_removes_every_projection() {
             TargetIdentityState::about_blank(),
             TargetPageSlot::empty_for_initial_document_page_build(),
         ));
-        context.start_initial_document_page_build_for_target(id);
-        waiters.push(
-            context
-                .page_targets
-                .get(id)
-                .unwrap()
-                .runtime_slot
-                .initial_document_page_build_waiter()
-                .unwrap(),
-        );
+        let InitialDocumentAdmission::Build(build) = context
+            .start_initial_document_for_target(id, Default::default(), &Default::default())
+            .unwrap()
+        else {
+            panic!("expected build");
+        };
+        builds.push(build);
+        let InitialDocumentAdmission::Join(waiter) = context
+            .start_initial_document_for_target(id, Default::default(), &Default::default())
+            .unwrap()
+        else {
+            panic!("expected join");
+        };
+        waiters.push(waiter);
     }
     context.set_active_target_id("TID-first");
     context.close_all_pages_async().await;
@@ -223,4 +243,7 @@ async fn close_all_retires_background_builds_and_removes_every_projection() {
     }
     context.close_all_pages_async().await;
     assert_eq!(context.selected_web_contents_id(), None);
+    for build in builds {
+        assert!(build.materialize().await.is_err());
+    }
 }

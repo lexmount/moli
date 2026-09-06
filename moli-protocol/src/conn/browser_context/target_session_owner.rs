@@ -8,11 +8,10 @@ use crate::conn::state::{
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
     DocumentStartScript, EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage,
-    InitialDocumentPageInstallResult, InitialDocumentPageOwner, LoadedNavigationPageCommit,
-    NETWORK_ERROR_PAGE_URL, NetworkErrorPageNavigation, PausedDocumentTransfer,
-    PendingFetchAuthNavigation, PendingFetchNavigation, PendingSubresourceFetchAuthRequest,
-    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
-    RuntimeBindingDefinition,
+    LoadedNavigationPageCommit, NETWORK_ERROR_PAGE_URL, NetworkErrorPageNavigation,
+    PausedDocumentTransfer, PendingFetchAuthNavigation, PendingFetchNavigation,
+    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
+    PendingSubresourceFetchResponseRequest, RuntimeBindingDefinition,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
@@ -198,6 +197,7 @@ fn prepared_document_inspection(
         },
     ));
     moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
+        root_frame_projection_id: Some(target_id.to_owned()),
         document_start_scripts,
         runtime_bindings: target.devtools_sessions.runtime_bindings_for_renderer(),
         runtime_inspector_session_restore_snapshots: target
@@ -1116,37 +1116,6 @@ impl CdpConnection {
         context.commit_loaded_navigation(prepared)
     }
 
-    pub(crate) fn initial_document_page_owner_for_owner(
-        &self,
-        owner: &CommandOwnerScope,
-    ) -> Option<InitialDocumentPageOwner> {
-        let (browser_context_id, target_id) = self.target_owner_identity_for_owner(owner)?;
-        Some(InitialDocumentPageOwner {
-            browser_context_id,
-            target_id: target_id?,
-        })
-    }
-
-    pub(crate) async fn install_initial_loaded_page_for_page_owner_async(
-        &mut self,
-        owner: &InitialDocumentPageOwner,
-        page: Page,
-        page_creation_artifacts: RendererPageCreationArtifacts,
-    ) -> Result<InitialDocumentPageInstallResult, String> {
-        let Some(browser_context) = self.browser_context_by_id_mut(&owner.browser_context_id)
-        else {
-            let _ = page.close_async().await;
-            return Ok(InitialDocumentPageInstallResult::Stale);
-        };
-        browser_context
-            .install_target_initial_loaded_page_async(
-                &owner.target_id,
-                page,
-                page_creation_artifacts,
-            )
-            .await
-    }
-
     pub(crate) fn clear_pending_navigation_history_update_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -1723,33 +1692,6 @@ impl CdpConnection {
         ))
     }
 
-    /// Captures the reserved residence of the Page currently being built for
-    /// `session_id`.
-    ///
-    /// Renderer construction can open and publish into its output stream
-    /// before protocol commits that Page into the target slot. The reservation
-    /// therefore owns an explicit attachment id before renderer work starts;
-    /// callers never predict that identity from mutable current-Page state.
-    pub(crate) fn pending_target_page_residence_identity_for_owner(
-        &self,
-        owner: &CommandOwnerScope,
-    ) -> Option<TargetPageResidenceIdentity> {
-        let (browser_context_id, routed_target_id) = self.target_owner_identity_for_owner(owner)?;
-        let target_id = routed_target_id.or_else(|| {
-            self.browser_context_by_id(&browser_context_id)
-                .and_then(|browser_context| browser_context.active_target_id())
-                .map(str::to_owned)
-        });
-        let document_id = self
-            .browser_context_by_id(&browser_context_id)?
-            .target_pending_document_id(target_id.as_deref()?)?;
-        Some(TargetPageResidenceIdentity::new(
-            browser_context_id,
-            target_id,
-            document_id,
-        ))
-    }
-
     pub(crate) fn reserve_target_page_residence_identity_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -2275,14 +2217,6 @@ impl CdpConnection {
         session_id: Option<&str>,
     ) -> Option<moli_storage_key::MoliStorageKey> {
         self.target_session_owner_ref(session_id)?
-            .initial_empty_document_storage_key_if_current()
-    }
-
-    pub(crate) fn runtime_session_owner_initial_empty_document_storage_key_for_owner(
-        &self,
-        owner: &CommandOwnerScope,
-    ) -> Option<moli_storage_key::MoliStorageKey> {
-        self.target_session_owner_ref_for_owner(owner)?
             .initial_empty_document_storage_key_if_current()
     }
 
@@ -3533,10 +3467,11 @@ mod tests {
             "a reservation must not masquerade as the current Page"
         );
         assert!(
-            conn.pending_target_page_residence_identity_for_owner(
-                &crate::conn::CommandOwnerScope::for_session("SID-pending-residence"),
-            )
-            .is_some(),
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .target_pending_document_id("TID-pending-residence")
+                .is_some(),
             "the future Page attachment should remain explicitly addressable"
         );
     }

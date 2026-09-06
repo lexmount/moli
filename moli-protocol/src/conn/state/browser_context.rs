@@ -881,6 +881,7 @@ impl BrowserContext {
             .count()
     }
 
+    #[cfg(test)]
     pub(crate) fn assert_target_materialized_initial_empty_document_has_page(
         &self,
         target_id: &str,
@@ -900,6 +901,7 @@ impl BrowserContext {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn can_install_current_initial_empty_document_page(&self, target_id: &str) -> bool {
         let Some(target) = self.page_target(target_id) else {
             return false;
