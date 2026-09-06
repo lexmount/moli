@@ -3,24 +3,26 @@ use std::{
     sync::{Arc, Weak},
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 #[cfg(test)]
 use tokio::sync::oneshot;
 use url::Url;
 
 use crate::{
-    local_executor::JsLocalExecutor, network::ResourceRequestClient,
-    render_runtime::RenderRuntimeOwner, types::ScriptExecutionReport,
+    local_executor::JsLocalExecutor,
+    network::ResourceRequestClient,
+    render_runtime::{RenderRuntimeHandle, RenderRuntimeOwner},
+    types::ScriptExecutionReport,
 };
 
 use super::{
     DocumentStartScript, ExternalRawDocumentBodyStream, PageVmInitStage,
     RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
-    RendererBrowserContextRuntimeOwnerAccess, RendererDocumentCommitPermit,
-    RendererDocumentIsolateAccountingDiagnostics, RendererInspectorSessionRestoreSnapshot,
-    RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply, RendererPageCreationArtifacts,
-    RendererPageCreationDiagnostics, RendererPageHandle, RendererPageReservationToken,
-    RendererPageState, RendererPendingDownloadActivation, RendererPerformanceMetricSnapshot,
+    RendererBrowserContextRuntimeOwnerAccess, RendererDocumentIsolateAccountingDiagnostics,
+    RendererInspectorSessionRestoreSnapshot, RendererOwnerCommand, RendererOwnerHandle,
+    RendererOwnerReply, RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
+    RendererPageHandle, RendererPageReservationToken, RendererPageState,
+    RendererPendingDownloadActivation, RendererPerformanceMetricSnapshot,
     RendererReservedServiceWorkerClient,
 };
 
@@ -815,8 +817,7 @@ impl JsRuntime {
                 lifecycle_decider,
             )
             .await?;
-        let permit = prepared.issue_commit_permit();
-        prepared.commit(permit).await
+        prepared.materialize(None).await
     }
 
     /// Moves a streaming response and all document bootstrap inputs onto the
@@ -963,8 +964,8 @@ impl Drop for JsRuntimeOwner {
 /// An opaque handle to owner-local streaming document inputs held before the
 /// renderer commit barrier.
 ///
-/// Dropping this handle schedules cancellation. Only a permit issued for this
-/// exact handle can consume the owner-local residence and start bootstrap.
+/// Dropping this handle schedules cancellation. Materialization consumes the
+/// handle itself; there is no separately mintable or pairable commit permit.
 pub struct PreparedRendererDocument {
     runtime: JsRuntime,
     token: RendererPageReservationToken,
@@ -994,38 +995,16 @@ impl PreparedRendererDocument {
         self.renderer_devtools_agent_token
     }
 
-    pub fn issue_commit_permit(&self) -> RendererDocumentCommitPermit {
-        RendererDocumentCommitPermit::new(self.token)
-    }
-
-    /// Replaces the live target configuration consumed when the first
-    /// execution contexts are created.
-    pub async fn update_commit_configuration(
-        &self,
-        configuration: super::RendererPreparedDocumentCommitConfiguration,
-    ) -> Result<()> {
-        let reply = self
-            .runtime
-            .inner
-            .renderer_owner
-            .dispatch_command(
-                RendererOwnerCommand::UpdatePreparedRendererDocumentCommitConfiguration {
-                    token: self.token,
-                    configuration,
-                },
-            )
-            .await?;
-        match reply {
-            RendererOwnerReply::PreparedRendererDocumentCommitConfigurationUpdated => Ok(()),
-            _ => Err(anyhow!(
-                "renderer owner returned non-update reply for prepared document configuration"
-            )),
+    pub fn inspection_configuration_endpoint(&self) -> RendererPreparedDocumentInspectionEndpoint {
+        RendererPreparedDocumentInspectionEndpoint {
+            render_runtime: self.runtime.inner._render_runtime.handle(),
+            token: self.token,
         }
     }
 
-    pub async fn commit(
+    pub async fn materialize(
         mut self,
-        permit: RendererDocumentCommitPermit,
+        policy: Option<super::RendererPreparedDocumentPolicy>,
     ) -> Result<(
         RendererPageHandle,
         Arc<RendererPageState>,
@@ -1033,16 +1012,15 @@ impl PreparedRendererDocument {
         RendererPageCreationArtifacts,
         Option<RendererPendingDownloadActivation>,
     )> {
-        anyhow::ensure!(
-            permit.prepared_document() == self.token,
-            "renderer document commit permit does not belong to this prepared document"
-        );
         self.cancel_on_drop = false;
         let reply = self
             .runtime
             .inner
             .renderer_owner
-            .dispatch_command(RendererOwnerCommand::CommitPreparedRendererDocument { permit })
+            .dispatch_command(RendererOwnerCommand::MaterializePreparedRendererDocument {
+                token: self.token,
+                policy: policy.map(Box::new),
+            })
             .await?;
         self.runtime
             .inner
@@ -1067,6 +1045,43 @@ impl PreparedRendererDocument {
             _ => Err(anyhow!(
                 "renderer owner returned non-cancel reply for prepared document request"
             )),
+        }
+    }
+}
+
+/// DevTools bootstrap ingress for one exact reserved renderer Document.
+/// It cannot change Browser policy, start parsing, or publish a current binding.
+/// Its weak renderer route does not keep the runtime or reservation alive.
+#[derive(Clone)]
+pub struct RendererPreparedDocumentInspectionEndpoint {
+    render_runtime: RenderRuntimeHandle,
+    token: RendererPageReservationToken,
+}
+
+impl RendererPreparedDocumentInspectionEndpoint {
+    /// Admission is synchronous so a later Browser materialization follows the
+    /// bootstrap update on the same renderer owner. The reply future is only an
+    /// acknowledgement, never authority to commit a Browser Document.
+    pub fn start_configure(
+        &self,
+        configuration: super::RendererPreparedDocumentInspectionConfiguration,
+    ) -> impl std::future::Future<Output = Result<()>> + use<> {
+        let reply = self.render_runtime.enqueue(
+            RendererOwnerCommand::ConfigurePreparedDocumentInspection {
+                token: self.token,
+                configuration,
+            },
+        );
+        async move {
+            match reply?
+                .await
+                .context("prepared document inspection acknowledgement was canceled")??
+            {
+                RendererOwnerReply::PreparedDocumentInspectionConfigured => Ok(()),
+                _ => Err(anyhow!(
+                    "renderer owner returned an invalid inspection configuration acknowledgement"
+                )),
+            }
         }
     }
 }

@@ -121,9 +121,9 @@ async fn network_configuration_commands_succeed_while_the_target_is_changing_doc
             .runtime_slot
             .primary_network_events_enabled()
     );
-    let configuration = ctx
+    let (configuration, _) = ctx
         .conn
-        .prepared_document_commit_configuration_for_owner(
+        .prepared_document_build_inputs_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-navigation"),
             &url::Url::parse("data:text/html,committed").unwrap(),
         )
@@ -235,9 +235,9 @@ async fn commit_configuration_resolves_the_exact_target_network_runtime() {
         ("SID-a", "Moli/Target-A"),
         ("SID-b", "Moli/Target-B"),
     ] {
-        let configuration = ctx
+        let (configuration, _) = ctx
             .conn
-            .prepared_document_commit_configuration_for_owner(
+            .prepared_document_build_inputs_for_owner(
                 &crate::conn::CommandOwnerScope::for_session(session_id),
                 &url::Url::parse("about:blank").unwrap(),
             )

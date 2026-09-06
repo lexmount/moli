@@ -4,8 +4,7 @@ use moli_core::{
     page::{RendererMainDocumentCommit, RendererPageCreationDiagnostics, RendererRuntimeRealmInfo},
     runtime::{
         CommittedDocumentResourceSource, PageVmInitStage, PreparedDocumentPage,
-        PreparedDocumentPageCommitConfiguration, PreparedDocumentPageCommitPermit,
-        RendererPageReservationToken, RendererReplyBoundary,
+        PreparedDocumentPagePolicy, RendererPageReservationToken, RendererReplyBoundary,
     },
 };
 use moli_fetch::{
@@ -348,39 +347,25 @@ impl ResponseCommitReady {
         &self.final_url
     }
 
-    pub(crate) async fn update_commit_configuration(
-        &self,
-        configuration: PreparedDocumentPageCommitConfiguration,
-    ) -> Result<(), String> {
-        self.prepared_page
-            .as_ref()
-            .expect("response commit-ready value must retain its prepared Page")
-            .update_commit_configuration(configuration)
-            .await
-            .map_err(|error| {
-                format!(
-                    "failed to attach commit-time target configuration for page `{}`: {error:#}",
-                    self.requested_url
-                )
-            })
-    }
-
-    pub(crate) fn issue_commit_permit(&self) -> PreparedDocumentPageCommitPermit {
-        self.prepared_page
-            .as_ref()
-            .expect("response commit-ready value must retain its prepared Page")
-            .issue_commit_permit()
-    }
-
-    pub(crate) async fn commit(
+    pub(crate) async fn materialize(
         mut self,
-        permit: PreparedDocumentPageCommitPermit,
+        policy: PreparedDocumentPagePolicy,
+        inspection: moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration,
     ) -> Result<LoadedNavigation, String> {
         let prepared_page = self
             .prepared_page
             .take()
             .expect("response commit-ready value must retain its prepared Page");
-        let built = match prepared_page.commit(permit).await {
+        // Admit the service-owned bootstrap update without waiting on it to
+        // authorize the Browser operation. Both use this exact renderer owner.
+        let inspection_ack = prepared_page
+            .inspection_configuration_endpoint()
+            .start_configure(inspection);
+        let built = prepared_page.materialize(Some(policy)).await;
+        if let Err(error) = inspection_ack.await {
+            tracing::warn!(%error, "prepared document inspection configuration failed");
+        }
+        let built = match built {
             Ok(built) => built,
             Err(error) => {
                 if let Some(body_capture) = self.body_capture.take() {
@@ -1506,11 +1491,17 @@ impl CdpConnection {
         .with_main_document_commit_seed(RendererMainDocumentCommitSeed::from_navigation(navigation))
     }
 
-    pub(crate) fn prepared_document_commit_configuration_for_owner(
+    pub(crate) fn prepared_document_build_inputs_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         final_url: &Url,
-    ) -> Result<PreparedDocumentPageCommitConfiguration, String> {
+    ) -> Result<
+        (
+            PreparedDocumentPagePolicy,
+            moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration,
+        ),
+        String,
+    > {
         let idle_override = self.idle_override_for_navigation(owner, final_url);
         let load_inputs = self.navigation_load_inputs_for_owner(owner);
         // The renderer runtime is shared by the BrowserContext, but each Page
@@ -1526,7 +1517,7 @@ impl CdpConnection {
             .clone()
             .or_else(|| self.global_browser_identity_override.clone())
             .unwrap_or_else(|| self.base_browser_identity.clone());
-        Ok(PreparedDocumentPageCommitConfiguration {
+        let inspection = moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
             document_start_scripts: load_inputs.document_start_scripts,
             runtime_bindings: load_inputs.runtime_bindings,
             runtime_inspector_session_restore_snapshots: load_inputs
@@ -1535,24 +1526,34 @@ impl CdpConnection {
             // inspector restore snapshots recreate persistent utility worlds;
             // bare worlds must not cross a navigation.
             runtime_isolated_worlds: Vec::new(),
-            permission_overrides: load_inputs.permission_overrides,
-            extra_http_headers: load_inputs.extra_http_headers,
-            locale_override: load_inputs.locale_override,
-            timezone_override: load_inputs.timezone_override,
-            script_execution_disabled: load_inputs.script_execution_disabled,
-            bypass_content_security_policy: load_inputs.bypass_content_security_policy,
-            cpu_throttling_rate: load_inputs.cpu_throttling_rate,
-            emulated_media: load_inputs.emulated_media,
-            idle_override,
-            viewport_surface: load_inputs.viewport_surface,
-            browser_resource_runtime,
-            navigator_identity,
-            network_offline: load_inputs.network_offline,
-            bypass_service_worker: load_inputs.bypass_service_worker,
-            cache_disabled: load_inputs.cache_disabled,
-            blocked_url_patterns: load_inputs.blocked_url_patterns,
-            fetch_subresource_interception: load_inputs.fetch_subresource_interception,
-        })
+        };
+        Ok((
+            PreparedDocumentPagePolicy {
+                permission_overrides: load_inputs.permission_overrides,
+                extra_http_headers: load_inputs.extra_http_headers,
+                locale_override: load_inputs.locale_override,
+                timezone_override: load_inputs.timezone_override,
+                script_execution_disabled: load_inputs.script_execution_disabled,
+                bypass_content_security_policy: load_inputs.bypass_content_security_policy,
+                cpu_throttling_rate: load_inputs.cpu_throttling_rate,
+                emulated_media: load_inputs.emulated_media,
+                idle_override,
+                viewport_surface: load_inputs.viewport_surface,
+                browser_resource_runtime,
+                navigator_identity,
+                network_offline: load_inputs.network_offline,
+                bypass_service_worker: load_inputs.bypass_service_worker,
+                cache_disabled: load_inputs.cache_disabled,
+                blocked_url_patterns: load_inputs.blocked_url_patterns,
+                fetch_subresource_interception_enabled: load_inputs
+                    .fetch_subresource_interception
+                    .0,
+                fetch_subresource_interception_resource_type: load_inputs
+                    .fetch_subresource_interception
+                    .1,
+            },
+            inspection,
+        ))
     }
 
     fn idle_override_for_navigation(
@@ -2133,15 +2134,9 @@ impl CdpConnection {
         match navigation {
             NavigationLoadOutcome::ResponseCommitReady(navigation) => {
                 let navigation = *navigation;
-                let configuration = self.prepared_document_commit_configuration_for_owner(
-                    owner,
-                    navigation.final_url(),
-                )?;
-                navigation
-                    .update_commit_configuration(configuration)
-                    .await?;
-                let permit = navigation.issue_commit_permit();
-                navigation.commit(permit).await
+                let (policy, inspection) =
+                    self.prepared_document_build_inputs_for_owner(owner, navigation.final_url())?;
+                navigation.materialize(policy, inspection).await
             }
             NavigationLoadOutcome::Loaded(navigation) => Ok(*navigation),
             NavigationLoadOutcome::Download(_) => {

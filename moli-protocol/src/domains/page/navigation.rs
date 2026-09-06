@@ -3265,46 +3265,37 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
-            let update_result = if conn
-                .accepts_pending_document_navigation_for_owner(&state.owner, &token)
+            let inputs = if conn.accepts_pending_document_navigation_for_owner(&state.owner, &token)
             {
-                match conn.prepared_document_commit_configuration_for_owner(
-                    &state.owner,
-                    navigation.final_url(),
-                ) {
-                    Ok(configuration) => {
-                        navigation.update_commit_configuration(configuration).await
-                    }
-                    Err(error) => Err(error),
-                }
+                conn.prepared_document_build_inputs_for_owner(&state.owner, navigation.final_url())
             } else {
                 // Preserve the CDP supersession error without publishing an attachment.
                 Err("renderer channel navigation was superseded by a newer navigation".to_owned())
             };
-            if let Err(error) = update_result {
-                push_navigation_commit_error(out, &state, error);
-            } else {
-                // The renderer reservation already has its exact pending Document output
-                // owner. Building it must not replace the current inspection binding:
-                // failure or cancellation leaves the outgoing Document inspectable.
-                let permit = navigation.issue_commit_permit();
-                match navigation.commit(permit).await {
-                    Ok(navigation) => {
-                        let navigation = network::materialize_loaded_navigation_progress(
-                            conn, &state, navigation,
-                        );
-                        commit_loaded_navigation_async(
-                            conn,
-                            out,
-                            &token,
-                            state,
-                            navigation,
-                            true,
-                            command_context,
-                        )
-                        .await;
+            match inputs {
+                Err(error) => push_navigation_commit_error(out, &state, error),
+                Ok((policy, inspection)) => {
+                    // The renderer reservation already has its exact pending Document output
+                    // owner. Building it must not replace the current inspection binding:
+                    // failure or cancellation leaves the outgoing Document inspectable.
+                    match navigation.materialize(policy, inspection).await {
+                        Ok(navigation) => {
+                            let navigation = network::materialize_loaded_navigation_progress(
+                                conn, &state, navigation,
+                            );
+                            commit_loaded_navigation_async(
+                                conn,
+                                out,
+                                &token,
+                                state,
+                                navigation,
+                                true,
+                                command_context,
+                            )
+                            .await;
+                        }
+                        Err(error) => push_navigation_commit_error(out, &state, error),
                     }
-                    Err(error) => push_navigation_commit_error(out, &state, error),
                 }
             }
         }

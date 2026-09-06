@@ -98,12 +98,18 @@ mod lifecycle_decision;
 
 use self::lifecycle_decision::PendingLifecycleNavigation;
 
-#[derive(Debug, Clone)]
-pub struct RendererPreparedDocumentCommitConfiguration {
+#[derive(Debug, Clone, Default)]
+pub struct RendererPreparedDocumentInspectionConfiguration {
     pub document_start_scripts: Vec<DocumentStartScript>,
     pub runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     pub runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
     pub runtime_isolated_worlds: Vec<crate::protocol_types::RuntimeIsolatedWorldDefinition>,
+}
+
+/// Effective Browser policy consumed atomically when materializing a Document.
+/// Inspector session configuration travels through its own restricted ingress.
+#[derive(Debug, Clone)]
+pub struct RendererPreparedDocumentPolicy {
     pub permission_overrides: Vec<crate::protocol_types::PermissionOverrideRegistration>,
     pub extra_http_headers: Vec<(String, String)>,
     pub locale_override: Option<String>,
@@ -231,12 +237,13 @@ pub enum RendererOwnerCommand {
         token: RendererPageReservationToken,
         request: RendererCreateStreamingRawPageRequest,
     },
-    UpdatePreparedRendererDocumentCommitConfiguration {
+    ConfigurePreparedDocumentInspection {
         token: RendererPageReservationToken,
-        configuration: RendererPreparedDocumentCommitConfiguration,
+        configuration: RendererPreparedDocumentInspectionConfiguration,
     },
-    CommitPreparedRendererDocument {
-        permit: RendererDocumentCommitPermit,
+    MaterializePreparedRendererDocument {
+        token: RendererPageReservationToken,
+        policy: Option<Box<RendererPreparedDocumentPolicy>>,
     },
     CancelPreparedRendererDocument {
         token: RendererPageReservationToken,
@@ -291,7 +298,7 @@ pub enum RendererOwnerReply {
     PreparedRendererDocumentStored {
         renderer_devtools_agent_token: RendererDevToolsAgentToken,
     },
-    PreparedRendererDocumentCommitConfigurationUpdated,
+    PreparedDocumentInspectionConfigured,
     PreparedRendererDocumentCanceled,
     AsyncPageCommandRan(Box<RendererCommandTurnOutput>),
     RuntimeInspectorSessionResponseSettled {
@@ -2417,7 +2424,7 @@ impl RendererOwnerHandle {
                 self.release_page_output_reservation(token);
                 outcome
             }
-            RendererOwnerCommand::UpdatePreparedRendererDocumentCommitConfiguration {
+            RendererOwnerCommand::ConfigurePreparedDocumentInspection {
                 token,
                 configuration,
             } => {
@@ -2430,25 +2437,25 @@ impl RendererOwnerHandle {
                     .into();
                 }
                 match owner_local_store
-                    .update_prepared_document_commit_configuration(token, configuration)
-                    .map(|()| {
-                        RendererOwnerReply::PreparedRendererDocumentCommitConfigurationUpdated
-                    }) {
+                    .configure_prepared_document_inspection(token, configuration)
+                    .map(|()| RendererOwnerReply::PreparedDocumentInspectionConfigured)
+                {
                     Ok(reply) => Ok(reply).into(),
                     Err(error) => Err(error).into(),
                 }
             }
-            RendererOwnerCommand::CommitPreparedRendererDocument { permit } => {
-                let token = permit.prepared_document();
+            RendererOwnerCommand::MaterializePreparedRendererDocument { token, policy } => {
                 if token.local_host_id() != self.state.owner_local_host_id {
                     return Err(anyhow!(
-                        "prepared document commit permit belongs to renderer owner {}, not {}",
+                        "prepared document belongs to renderer owner {}, not {}",
                         token.local_host_id().as_u64(),
                         self.state.owner_local_host_id.as_u64()
                     ))
                     .into();
                 }
-                match owner_local_store.take_prepared_document(token) {
+                match owner_local_store
+                    .take_prepared_document_for_materialization(token, policy.map(|policy| *policy))
+                {
                     Ok(residence) => {
                         self.create_page_reply_from_prepared_document_on_owner_local_store(
                             token.page_id(),

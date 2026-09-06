@@ -2,11 +2,9 @@ use crate::{
     network::{ResourceRequestClient, SharedWebStorageStore},
     page::{
         CompletedPageCommand, DocumentStartScript, EmulatedMediaOverrides, NavigationResponse,
-        Page, PendingPageCommand, PermissionOverrideRegistration,
-        RendererInspectorSessionRestoreSnapshot, RendererMainDocumentCommit,
-        RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
-        RendererPendingDownloadActivation, RuntimeBindingRegistration,
-        RuntimeIsolatedWorldDefinition, SubresourceAuthCredentials, SubresourceResourceType,
+        Page, PendingPageCommand, RendererInspectorSessionRestoreSnapshot,
+        RendererMainDocumentCommit, RendererPageCreationArtifacts, RendererPageCreationDiagnostics,
+        RendererPendingDownloadActivation, SubresourceAuthCredentials, SubresourceResourceType,
         ViewportSurface,
     },
     renderer::ExternalRawDocumentBodyStream,
@@ -194,30 +192,7 @@ pub struct PreparedDocumentPage {
     prepared: moli_renderer_v8::PreparedRendererDocument,
 }
 
-#[derive(Debug, Clone)]
-pub struct PreparedDocumentPageCommitConfiguration {
-    pub document_start_scripts: Vec<DocumentStartScript>,
-    pub runtime_bindings: Vec<RuntimeBindingRegistration>,
-    pub runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
-    pub runtime_isolated_worlds: Vec<RuntimeIsolatedWorldDefinition>,
-    pub permission_overrides: Vec<PermissionOverrideRegistration>,
-    pub extra_http_headers: Vec<(String, String)>,
-    pub locale_override: Option<String>,
-    pub timezone_override: Option<String>,
-    pub script_execution_disabled: bool,
-    pub bypass_content_security_policy: bool,
-    pub cpu_throttling_rate: f64,
-    pub emulated_media: EmulatedMediaOverrides,
-    pub idle_override: Option<crate::page::EmulatedIdleOverride>,
-    pub viewport_surface: Option<ViewportSurface>,
-    pub browser_resource_runtime: BrowserResourceRuntime,
-    pub navigator_identity: moli_browser_profile::BrowserIdentityProfile,
-    pub network_offline: bool,
-    pub bypass_service_worker: bool,
-    pub cache_disabled: bool,
-    pub blocked_url_patterns: Vec<String>,
-    pub fetch_subresource_interception: (bool, Option<SubresourceResourceType>),
-}
+pub use moli_renderer_v8::RendererPreparedDocumentPolicy as PreparedDocumentPagePolicy;
 
 impl std::fmt::Debug for PreparedDocumentPage {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -229,12 +204,6 @@ impl std::fmt::Debug for PreparedDocumentPage {
             )
             .finish_non_exhaustive()
     }
-}
-
-/// Typed authority to start one exact prepared renderer document.
-#[derive(Debug)]
-pub struct PreparedDocumentPageCommitPermit {
-    permit: moli_renderer_v8::RendererDocumentCommitPermit,
 }
 
 impl PreparedDocumentPage {
@@ -250,54 +219,17 @@ impl PreparedDocumentPage {
         self.prepared.renderer_devtools_agent_token()
     }
 
-    pub async fn update_commit_configuration(
+    pub fn inspection_configuration_endpoint(
         &self,
-        configuration: PreparedDocumentPageCommitConfiguration,
-    ) -> Result<()> {
-        self.prepared
-            .update_commit_configuration(
-                moli_renderer_v8::RendererPreparedDocumentCommitConfiguration {
-                    document_start_scripts: configuration.document_start_scripts,
-                    runtime_bindings: configuration.runtime_bindings,
-                    runtime_inspector_session_restore_snapshots: configuration
-                        .runtime_inspector_session_restore_snapshots,
-                    runtime_isolated_worlds: configuration.runtime_isolated_worlds,
-                    permission_overrides: configuration.permission_overrides,
-                    extra_http_headers: configuration.extra_http_headers,
-                    locale_override: configuration.locale_override,
-                    timezone_override: configuration.timezone_override,
-                    script_execution_disabled: configuration.script_execution_disabled,
-                    bypass_content_security_policy: configuration.bypass_content_security_policy,
-                    cpu_throttling_rate: configuration.cpu_throttling_rate,
-                    emulated_media: configuration.emulated_media,
-                    idle_override: configuration.idle_override,
-                    viewport_surface: configuration.viewport_surface,
-                    browser_resource_runtime: configuration.browser_resource_runtime,
-                    navigator_identity: configuration.navigator_identity,
-                    network_offline: configuration.network_offline,
-                    bypass_service_worker: configuration.bypass_service_worker,
-                    cache_disabled: configuration.cache_disabled,
-                    blocked_url_patterns: configuration.blocked_url_patterns,
-                    fetch_subresource_interception_enabled: configuration
-                        .fetch_subresource_interception
-                        .0,
-                    fetch_subresource_interception_resource_type: configuration
-                        .fetch_subresource_interception
-                        .1,
-                },
-            )
-            .await
+    ) -> moli_renderer_v8::RendererPreparedDocumentInspectionEndpoint {
+        self.prepared.inspection_configuration_endpoint()
     }
 
-    pub fn issue_commit_permit(&self) -> PreparedDocumentPageCommitPermit {
-        PreparedDocumentPageCommitPermit {
-            permit: self.prepared.issue_commit_permit(),
-        }
-    }
-
-    pub async fn commit(
+    /// Native admission consumes the prepared residence and installs Browser
+    /// policy together. No separate update or materialization permit is exposed.
+    pub async fn materialize(
         self,
-        permit: PreparedDocumentPageCommitPermit,
+        policy: Option<PreparedDocumentPagePolicy>,
     ) -> Result<BuiltDocumentPage> {
         let (
             handle,
@@ -307,7 +239,7 @@ impl PreparedDocumentPage {
             pending_download,
         ) = self
             .prepared
-            .commit(permit.permit)
+            .materialize(policy)
             .await
             .context("failed to commit prepared streaming raw page")?;
         Ok(BuiltDocumentPage {
@@ -1782,8 +1714,7 @@ impl NavigationEngine {
                 main_document_commit,
             )
             .await?;
-        let permit = prepared.issue_commit_permit();
-        prepared.commit(permit).await
+        prepared.materialize(None).await
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2224,8 +2155,7 @@ impl NavigationEngine {
                 PageVmInitStage::Load,
             )
             .await?;
-        let permit = prepared.issue_commit_permit();
-        prepared.commit(permit).await
+        prepared.materialize(None).await
     }
 
     #[allow(clippy::too_many_arguments)]

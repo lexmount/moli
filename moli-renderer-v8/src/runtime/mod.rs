@@ -282,7 +282,7 @@ pub use self::lifecycle_decision::{
 use self::owner::RendererOwnerState;
 pub use self::owner::{
     RendererOwnerCommand, RendererOwnerHandle, RendererOwnerReply,
-    RendererPreparedDocumentCommitConfiguration,
+    RendererPreparedDocumentInspectionConfiguration, RendererPreparedDocumentPolicy,
 };
 pub use self::owner_local::RendererPageTestingHandle;
 pub use self::owner_local::{
@@ -291,7 +291,10 @@ pub use self::owner_local::{
     RendererPageHandle, RendererRuntimeInspection, RendererRuntimeInspectorSessionDetachGuard,
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
-pub use self::page::{JsRuntime, JsRuntimeOwner, PendingHtmlPage, PreparedRendererDocument};
+pub use self::page::{
+    JsRuntime, JsRuntimeOwner, PendingHtmlPage, PreparedRendererDocument,
+    RendererPreparedDocumentInspectionEndpoint,
+};
 use self::page::{PageVmNavigationResponse, PageVmStateCapture};
 pub(crate) use self::page_context_cancel::{
     RendererPageContextCancelReason, RendererPageContextCancelReceiver,
@@ -556,23 +559,6 @@ impl RendererPageReservationToken {
 
     pub fn page_id(self) -> PageId {
         self.page_id
-    }
-}
-
-/// Typed authority to consume one matching prepared document and enter its
-/// renderer bootstrap.
-#[derive(Debug)]
-pub struct RendererDocumentCommitPermit {
-    prepared_document: RendererPageReservationToken,
-}
-
-impl RendererDocumentCommitPermit {
-    fn new(prepared_document: RendererPageReservationToken) -> Self {
-        Self { prepared_document }
-    }
-
-    fn prepared_document(&self) -> RendererPageReservationToken {
-        self.prepared_document
     }
 }
 

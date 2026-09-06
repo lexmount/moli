@@ -794,9 +794,9 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
             "LID-idle-cross-document".to_owned(),
         )
         .expect("cross-Document navigation should enter the pending state");
-    let configuration = ctx
+    let (configuration, _) = ctx
         .conn
-        .prepared_document_commit_configuration_for_owner(
+        .prepared_document_build_inputs_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
             &url::Url::parse("http://127.0.0.1:65530/same-site-different-origin").unwrap(),
         )
@@ -808,9 +808,9 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
             is_screen_unlocked: false,
         })
     );
-    let cross_site_configuration = ctx
+    let (cross_site_configuration, _) = ctx
         .conn
-        .prepared_document_commit_configuration_for_owner(
+        .prepared_document_build_inputs_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
             &url::Url::parse("http://idle-override-cross-site.test/").unwrap(),
         )
