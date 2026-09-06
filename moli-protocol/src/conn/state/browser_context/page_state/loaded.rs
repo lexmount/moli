@@ -28,6 +28,7 @@ impl BrowserContext {
             permissions,
             &self.global_extra_headers,
             self.global_network_conditions,
+            self.global_geolocation_override.as_ref(),
         );
         self.web_contents_for_target_mut(target_id)
             .ok_or("initial WebContents unavailable")?
@@ -297,6 +298,7 @@ impl BrowserContext {
             permissions,
             &self.global_extra_headers,
             self.global_network_conditions,
+            self.global_geolocation_override.as_ref(),
         );
         self.web_contents_for_target_mut(target_id)
             .ok_or("navigation WebContents unavailable")?

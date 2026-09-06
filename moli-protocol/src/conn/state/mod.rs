@@ -126,9 +126,11 @@ pub(crate) use web_contents::{
 pub(in crate::conn) use web_contents::{PageSurface, WindowOpener};
 
 pub use browser_context::BrowserContext;
+#[cfg(test)]
+pub(crate) use browser_context::BrowserContextResourceStorageHandles;
 pub(crate) use browser_context::{
-    BrowserContextPageStorageHandles, BrowserContextResourceStorageHandles,
-    BrowserContextStoragePartitionHandles, ContextNetworkPolicy, SiteDataClearOptions,
+    BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles, ContextNetworkPolicy,
+    SiteDataClearOptions,
 };
 pub(crate) use browser_context::{
     CompletedContextPermissionUpdate, PendingContextPermissionUpdate,

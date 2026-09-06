@@ -218,14 +218,6 @@ impl BrowserContext {
             .base_network_request_policy
             .cache_disabled = disabled;
         self.install_effective_network_request_policy_for_target(target_id);
-        let effective = self
-            .web_contents_for_target(target_id)
-            .expect("resolved WebContents must remain live")
-            .network_request_policy
-            .cache_disabled;
-        if let Some(engine) = self.page_navigation_engine_mut(target_id) {
-            engine.set_cache_disabled(effective);
-        }
     }
 
     pub(crate) fn set_base_extra_headers_for_target(

@@ -13,6 +13,125 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
+#[tokio::test]
+async fn resource_defaults_without_a_page_do_not_materialize_a_fallback_engine() {
+    let mut conn = CdpConnection::new_with_deferred_navigation_runtime(
+        CdpInitialStoragePartition::memory(),
+        Default::default(),
+    );
+    assert!(conn.standalone_navigation_engine.engine.get().is_none());
+    conn.set_user_agent_override_async("Lazy/1").await;
+    conn.set_tls_verify_host_async(false).await;
+    assert_eq!(
+        conn.fetch_config().browser_identity().user_agent(),
+        "Lazy/1"
+    );
+    assert!(!conn.fetch_config().tls_verify_host());
+    assert!(conn.browser_context.is_none());
+    assert!(conn.standalone_navigation_engine.engine.get().is_none());
+
+    let context = conn.new_browser_context("BID-empty".into());
+    conn.insert_browser_context(context);
+    let owner = CommandOwnerScope::capture(&conn, None);
+    assert!(
+        conn.start_rebuild_resource_runtime_for_owner(&owner)
+            .unwrap()
+            .is_none()
+    );
+    assert!(conn.resource_request_client_for_owner(&owner).is_err());
+    assert!(
+        conn.browser_context
+            .as_ref()
+            .unwrap()
+            .active_target_id()
+            .is_none()
+    );
+    assert!(conn.standalone_navigation_engine.engine.get().is_none());
+}
+
+#[tokio::test]
+async fn resource_maintenance_rejects_stale_routes_without_touching_the_selected_peer() {
+    let mut conn = CdpConnection::new();
+    let mut context = conn.new_browser_context("BID-live".into());
+    context.set_active_target_id("TID-peer");
+    conn.insert_browser_context(context);
+    let peer = CommandOwnerScope::capture(&conn, None);
+    let client = conn.resource_request_client_for_owner(&peer).unwrap();
+    let scopes = [
+        CommandOwnerScope::for_session("SID-missing"),
+        CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+            browser_context_id: "BID-live".into(),
+            target_id: "TID-missing".into(),
+            session_key: moli_page_types::DevToolsSessionKey::Primary,
+        }),
+        CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::BrowserContext {
+            browser_context_id: "BID-missing".into(),
+        }),
+    ];
+    for scope in scopes {
+        assert!(
+            matches!(conn.start_rebuild_resource_runtime_for_owner(&scope), Err(error) if error == "NoDocumentLoaded")
+        );
+        assert!(
+            matches!(conn.resource_request_client_for_owner(&scope), Err(error) if error == "NoDocumentLoaded")
+        );
+    }
+    let current = conn.resource_request_client_for_owner(&peer).unwrap();
+    assert!(client.shares_resource_runtime_with(&current));
+    assert!(client.shares_page_network_policy_with(&current));
+    assert!(
+        !conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .target_has_loaded_page("TID-peer")
+    );
+}
+
+#[tokio::test]
+async fn detached_session_cannot_rebuild_but_its_live_browser_owner_keeps_its_client() {
+    let mut conn = CdpConnection::new();
+    let mut context = conn.new_browser_context("BID-live".into());
+    context.set_active_target_id("TID-owner");
+    context.attach_active_session("SID-owner");
+    let route = crate::conn::CdpSessionRoute::PageTarget {
+        browser_context_id: "BID-live".into(),
+        target_id: "TID-owner".into(),
+        session_key: moli_page_types::DevToolsSessionKey::Primary,
+    };
+    conn.install_browser_context_fixture_for_test(context);
+    let session = CommandOwnerScope::for_session("SID-owner");
+    let client = conn.resource_request_client_for_owner(&session).unwrap();
+    let context = conn.browser_context.as_mut().unwrap();
+    assert!(context.dispose_devtools_session_for_target(
+        "TID-owner",
+        "SID-owner",
+        &moli_page_types::DevToolsSessionKey::Primary
+    ));
+    context.set_active_target_id("TID-peer");
+    conn.detach_known_session_event_plan("TID-owner", "SID-owner", None, None);
+    assert!(
+        matches!(conn.start_rebuild_resource_runtime_for_owner(&session), Err(error) if error == "NoDocumentLoaded")
+    );
+    assert!(conn.resource_request_client_for_owner(&session).is_err());
+    let owner = CommandOwnerScope::for_route(route);
+    let retained = conn.resource_request_client_for_owner(&owner).unwrap();
+    assert!(client.shares_page_network_policy_with(&retained));
+    assert!(std::sync::Arc::ptr_eq(
+        &client.cookie_store(),
+        &retained.cookie_store()
+    ));
+    assert!(
+        conn.start_rebuild_resource_runtime_for_owner(&owner)
+            .unwrap()
+            .is_none()
+    );
+    assert_eq!(
+        conn.browser_context.as_ref().unwrap().active_target_id(),
+        Some("TID-peer")
+    );
+}
+
 fn stored_cookie(name: &str, value: &str) -> moli_cookie_jar::StoredCookie {
     moli_cookie_jar::StoredCookie {
         name: name.to_owned(),

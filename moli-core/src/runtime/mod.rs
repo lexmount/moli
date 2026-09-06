@@ -46,9 +46,9 @@ pub use moli_renderer_v8::{
 };
 pub use navigation_engine::{
     BuiltDocumentPage, CommittedDocumentResourceSource, NavigationEngine,
-    NavigationPageStorageHandles, NavigationResourceStorageHandles, NavigationRuntimeConfig,
-    NavigationStreamingRawResponse, PendingBuiltDocumentPage, PendingPreparedDocumentPage,
-    PreparedDocumentPage, PreparedDocumentPagePolicy,
+    NavigationEngineDiagnostics, NavigationPageStorageHandles, NavigationResourceStorageHandles,
+    NavigationRuntimeConfig, NavigationStreamingRawResponse, PendingBuiltDocumentPage,
+    PendingPreparedDocumentPage, PreparedDocumentPage, PreparedDocumentPagePolicy,
 };
 
 static NEXT_SESSION_ID: AtomicU64 = AtomicU64::new(1);

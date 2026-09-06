@@ -85,7 +85,7 @@ async fn projection_drop_preserves_the_contexts_page_engine_selection_and_docume
     assert_eq!(context.selected_web_contents_id(), Some(id));
     let contents = context.physical.web_contents.get(&id).unwrap();
     assert_eq!(
-        contents.navigation_engine.as_ref().unwrap() as *const NavigationEngine,
+        contents.navigation_engine_for_test().unwrap() as *const NavigationEngine,
         engine
     );
     let document = contents.main_frame.current_document.as_ref().unwrap();

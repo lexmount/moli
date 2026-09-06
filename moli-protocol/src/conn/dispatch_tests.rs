@@ -871,11 +871,6 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
         created_context.network_policy().http_no_proxy.as_deref(),
         Some("localhost,127.0.0.1")
     );
-    let client = conn.ensure_resource_request_client().unwrap();
-    assert_eq!(client.http_proxy(), Some("127.0.0.1:80"));
-    assert_eq!(client.http_no_proxy(), Some("localhost,127.0.0.1"));
-    assert!(!client.tls_verify_host());
-
     let (get_contexts_result, _) = conn
         .execute_devtools_command(DevToolsCommand::GetBrowserContexts(
             DevToolsGetBrowserContextsCommand {
@@ -910,6 +905,14 @@ async fn devtools_browser_context_commands_create_list_and_remove_user_context()
     else {
         panic!("expected create target result");
     };
+
+    // A Context owns policy defaults; its WebContents owns the request engine.
+    // Do not test inheritance through the unrelated standalone fixture engine.
+    let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
+    let client = conn.resource_request_client_for_owner(&owner).unwrap();
+    assert_eq!(client.http_proxy(), Some("127.0.0.1:80"));
+    assert_eq!(client.http_no_proxy(), Some("localhost,127.0.0.1"));
+    assert!(!client.tls_verify_host());
 
     let (remove_result, _, remove_events) = conn
         .execute_devtools_command_with_protocol_events(DevToolsCommand::RemoveBrowserContext(
@@ -967,7 +970,7 @@ async fn devtools_browser_context_create_installs_socks_proxy_for_requests() {
     let (create_result, create_events) = conn
         .execute_devtools_command(DevToolsCommand::CreateBrowserContext(
             DevToolsCreateBrowserContextCommand {
-                context,
+                context: context.clone(),
                 browser_context_id: None,
                 accept_insecure_certs: None,
                 proxy_server: Some("socks5://[::1]:1080".to_owned()),
@@ -994,7 +997,18 @@ async fn devtools_browser_context_create_installs_socks_proxy_for_requests() {
     );
     // The actual request policy comes from proxy_server, not an inert copy of
     // PAC/SOCKS metadata. Frontend parsing keeps validating those input fields.
-    let client = conn.ensure_resource_request_client().unwrap();
+    let (result, _) = conn
+        .execute_devtools_command(DevToolsCommand::CreateTarget(DevToolsCreateTargetCommand {
+            context,
+            url: "about:blank".to_owned(),
+            browser_context_id: Some(create_result.browser_context_id),
+            activate: true,
+        }))
+        .await
+        .into_parts();
+    assert!(matches!(result, Ok(DevToolsCommandResult::CreateTarget(_))));
+    let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
+    let client = conn.resource_request_client_for_owner(&owner).unwrap();
     assert_eq!(client.http_proxy(), Some("socks5://[::1]:1080"));
     assert!(client.tls_verify_host());
 }

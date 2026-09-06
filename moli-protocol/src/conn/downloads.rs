@@ -140,14 +140,19 @@ impl CdpConnection {
                 if let Some(initiator_url) = &context.initiator_url {
                     request = request.with_initiator_url(initiator_url);
                 }
-                let inputs = self.navigation_load_inputs_for_owner(owner);
-                let client =
-                    self.ensure_resource_request_client_for_navigation_load_inputs(&inputs)?;
+                #[cfg(test)]
+                self.ensure_page_navigation_engine_for_target(
+                    &context.browser_context_id,
+                    &context.frame_id,
+                )
+                .ok_or("navigation WebContents engine unavailable")?;
+                let fetch_defaults = self.document_fetch_defaults();
                 self.browser_context_by_id_mut(&context.browser_context_id)
                     .expect("download owner was resolved without yielding")
                     .start_download_request(
+                        &context.frame_id,
+                        fetch_defaults,
                         &default_policy,
-                        client,
                         request,
                         activation.suggested_filename,
                     )?

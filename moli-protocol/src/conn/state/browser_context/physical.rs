@@ -44,11 +44,27 @@ pub(super) struct BrowserContext {
 impl BrowserContext {
     pub(super) fn inherited_document_policy(
         &self,
-        mut fetch_config: moli_fetch::FetchConfig,
+        fetch_config: moli_fetch::FetchConfig,
         defaults: &moli_core::browser::PermissionDefaults,
         global_headers: &[(String, String)],
         global_network_conditions: Option<EmulatedNetworkConditions>,
         global_geolocation_override: Option<&EmulatedGeolocationOverrideState>,
+    ) -> super::super::web_contents::InheritedDocumentPolicy {
+        let mut policy =
+            self.inherited_resource_policy(fetch_config, global_headers, global_network_conditions);
+        policy.permissions = self.permission_overrides.snapshot(defaults);
+        policy.emulation.geolocation = policy
+            .emulation
+            .geolocation
+            .or_else(|| global_geolocation_override.cloned());
+        policy
+    }
+
+    pub(super) fn inherited_resource_policy(
+        &self,
+        mut fetch_config: moli_fetch::FetchConfig,
+        global_headers: &[(String, String)],
+        global_network_conditions: Option<EmulatedNetworkConditions>,
     ) -> super::super::web_contents::InheritedDocumentPolicy {
         if let Some(identity) = &self.browser_identity_override {
             fetch_config.set_browser_identity(identity.clone());
@@ -64,9 +80,6 @@ impl BrowserContext {
         }
         let mut emulation = self.emulation_defaults.clone();
         emulation.network_conditions = emulation.network_conditions.or(global_network_conditions);
-        emulation.geolocation = emulation
-            .geolocation
-            .or_else(|| global_geolocation_override.cloned());
         super::super::web_contents::InheritedDocumentPolicy {
             fetch_config,
             extra_headers: super::super::web_contents::merge_extra_header_layers(&[
@@ -74,7 +87,7 @@ impl BrowserContext {
                 &self.network_policy.extra_headers,
             ]),
             emulation,
-            permissions: self.permission_overrides.snapshot(defaults),
+            permissions: Vec::new(),
             storage: self.storage_partition.handles.clone(),
         }
     }
@@ -200,6 +213,92 @@ mod tests {
     use super::*;
 
     #[tokio::test]
+    async fn resource_maintenance_never_adopts_a_peers_transport_or_policy() {
+        let mut context = BrowserContext::new(
+            BrowserContextStoragePartitionHandles::memory(),
+            StoragePartitionKind::Ephemeral,
+            None,
+            None,
+        );
+        let mut ids = Vec::new();
+        for (agent, verify) in [("Native/first", false), ("Native/peer", true)] {
+            let mut contents = WebContents::default();
+            contents.install_navigation_engine(
+                context.new_page_navigation_engine(NavigationRuntimeConfig::default()),
+            );
+            contents.browser_identity_override = Some(BrowserIdentityProfile::new(agent, "en"));
+            contents.tls_verify_host_override = Some(verify);
+            ids.push(contents.id());
+            context.web_contents.insert(contents.id(), contents);
+        }
+        let inherited =
+            context.inherited_resource_policy(moli_fetch::FetchConfig::default(), &[], None);
+        let first = context
+            .web_contents
+            .get_mut(&ids[0])
+            .unwrap()
+            .ensure_resource_request_client(&inherited)
+            .unwrap();
+        let peer = context
+            .web_contents
+            .get_mut(&ids[1])
+            .unwrap()
+            .ensure_resource_request_client(&inherited)
+            .unwrap();
+        assert!(!first.shares_resource_runtime_with(&peer));
+        assert!(std::sync::Arc::ptr_eq(
+            &first.cookie_store(),
+            &peer.cookie_store()
+        ));
+        let contents = context.web_contents.get_mut(&ids[0]).unwrap();
+        contents.invalidate_resource_runtime();
+        assert!(
+            contents
+                .start_resource_runtime_rebuild(&inherited)
+                .unwrap()
+                .is_none()
+        );
+        let rebuilt = contents.ensure_resource_request_client(&inherited).unwrap();
+        assert!(!rebuilt.shares_resource_runtime_with(&peer));
+        assert!(rebuilt.shares_page_network_policy_with(&first));
+        assert!(
+            rebuilt
+                .browser_resource_runtime()
+                .matches_fetch_config(contents.navigation_fetch_config().unwrap())
+        );
+        assert!(
+            !contents
+                .navigation_fetch_config()
+                .unwrap()
+                .tls_verify_host()
+        );
+        assert_eq!(
+            rebuilt
+                .browser_resource_runtime()
+                .browser_identity()
+                .user_agent(),
+            "Native/first"
+        );
+        let contents = context.web_contents.get(&ids[1]).unwrap();
+        assert!(
+            contents
+                .navigation_fetch_config()
+                .unwrap()
+                .tls_verify_host()
+        );
+        assert_eq!(
+            peer.browser_resource_runtime()
+                .browser_identity()
+                .user_agent(),
+            "Native/peer"
+        );
+        assert!(
+            peer.browser_resource_runtime()
+                .matches_fetch_config(contents.navigation_fetch_config().unwrap())
+        );
+    }
+
+    #[tokio::test]
     async fn document_policy_capture_needs_no_projection_or_current_document() {
         let mut context = BrowserContext::new(
             BrowserContextStoragePartitionHandles::memory(),
@@ -274,8 +373,7 @@ mod tests {
         assert!(policy.fetch_subresource_interception_enabled);
         assert!(
             !contents
-                .navigation_engine
-                .as_ref()
+                .navigation_engine_for_test()
                 .unwrap()
                 .fetch_config()
                 .tls_verify_host()

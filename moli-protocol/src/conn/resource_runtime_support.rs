@@ -1,25 +1,21 @@
-use moli_core::network::{
-    BrowserResourceRuntime, BrowserResourceRuntimeOwner, ResourceRequestClient,
-};
+#[cfg(test)]
+use moli_core::network::ResourceRequestClient;
 use moli_core::page::{CompletedPageCommand, PendingPageCommand};
 
-use super::{
-    BrowserContext, CdpConnection, TargetNavigationLoadInputs,
-    state::BrowserContextResourceStorageHandles,
-};
+use super::{BrowserContext, CdpConnection};
+#[cfg(test)]
+use super::{TargetNavigationLoadInputs, state::BrowserContextResourceStorageHandles};
 
 impl CdpConnection {
     pub(crate) fn invalidate_resource_runtime(&mut self) {
-        self.active_navigation_engine_mut()
-            .reset_resource_runtime_without_loaded_page();
+        if let Some(context) = self.browser_context.as_mut() {
+            context.invalidate_selected_resource_runtime();
+        } else if let Some(engine) = self.standalone_navigation_engine.engine.get_mut() {
+            engine.reset_resource_runtime_without_loaded_page();
+        }
     }
 
-    pub(crate) async fn invalidate_resource_runtime_async(&mut self) {
-        self.active_navigation_engine_mut()
-            .reset_resource_runtime_async(None)
-            .await;
-    }
-
+    #[cfg(test)]
     pub(crate) fn resource_storage_handles(&self) -> BrowserContextResourceStorageHandles {
         self.browser_context
             .as_ref()
@@ -42,14 +38,26 @@ impl CdpConnection {
             .ok_or_else(|| "resource request client unavailable".to_owned())
     }
 
+    #[cfg(test)]
     pub(crate) fn ensure_resource_request_client_for_navigation_load_inputs(
         &mut self,
-        load_inputs: &TargetNavigationLoadInputs,
+        inputs: &TargetNavigationLoadInputs,
     ) -> Result<ResourceRequestClient, String> {
-        let storage = load_inputs.resource_storage_handles();
+        if let (Some(context_id), Some(target_id)) =
+            (&inputs.browser_context_id, &inputs.root_frame_id)
+        {
+            self.ensure_page_navigation_engine_for_target(context_id, target_id)
+                .ok_or("navigation WebContents engine unavailable")?;
+            let defaults = self.document_fetch_defaults();
+            return self
+                .browser_context_by_id_mut(context_id)
+                .ok_or("BrowserContext unavailable")?
+                .resource_request_client_for_test(target_id, defaults);
+        }
+        let storage = inputs.resource_storage_handles();
         let engine = self
-            .configured_navigation_engine_for_load_inputs_mut(load_inputs)
-            .ok_or_else(|| "navigation Page engine unavailable".to_owned())?;
+            .configured_navigation_engine_for_load_inputs_mut(inputs)
+            .ok_or("navigation Page engine unavailable")?;
         engine
             .ensure_resource_runtime_ready_for_navigation_storage(storage.into_navigation_storage())
             .map_err(|error| format!("failed to initialize resource runtime: {error}"))?;
@@ -58,6 +66,23 @@ impl CdpConnection {
             .ok_or_else(|| "resource request client unavailable".to_owned())
     }
 
+    #[cfg(test)]
+    pub(crate) fn resource_request_client_for_owner(
+        &mut self,
+        owner: &super::CommandOwnerScope,
+    ) -> Result<ResourceRequestClient, String> {
+        let (context_id, target_id) = self
+            .resolved_page_owner_identity_for_owner(owner)
+            .ok_or("NoDocumentLoaded")?;
+        self.ensure_page_navigation_engine_for_target(&context_id, &target_id)
+            .ok_or("navigation WebContents engine unavailable")?;
+        let defaults = self.document_fetch_defaults();
+        self.browser_context_by_id_mut(&context_id)
+            .ok_or("BrowserContext unavailable")?
+            .resource_request_client_for_test(&target_id, defaults)
+    }
+
+    #[cfg(test)]
     pub(super) fn configured_navigation_engine_for_load_inputs_mut(
         &mut self,
         load_inputs: &TargetNavigationLoadInputs,
@@ -91,6 +116,7 @@ impl CdpConnection {
         Some(engine)
     }
 
+    #[cfg(test)]
     pub(super) fn navigation_engine_for_load_inputs_mut(
         &mut self,
         load_inputs: &TargetNavigationLoadInputs,
@@ -115,44 +141,6 @@ impl CdpConnection {
             }
             (None, _) => Some(self.standalone_navigation_engine.ensure_mut()),
         }
-    }
-
-    pub(crate) fn build_registered_browser_resource_runtime_for_navigation_load_inputs(
-        &self,
-        load_inputs: &TargetNavigationLoadInputs,
-    ) -> Result<BrowserResourceRuntime, String> {
-        let mut fetch_config = self.fetch_config().clone();
-        let browser_identity = load_inputs
-            .browser_identity_override
-            .clone()
-            .or_else(|| self.global_browser_identity_override.clone())
-            .unwrap_or_else(|| self.base_browser_identity.clone());
-        fetch_config.set_browser_identity(browser_identity);
-        fetch_config.set_http_proxy(
-            load_inputs
-                .http_proxy_override
-                .clone()
-                .or_else(|| self.base_http_proxy.clone()),
-        );
-        fetch_config.set_http_no_proxy(
-            load_inputs
-                .http_no_proxy_override
-                .clone()
-                .or_else(|| self.base_http_no_proxy.clone()),
-        );
-        fetch_config.set_tls_verify_host(
-            load_inputs
-                .tls_verify_host_override
-                .unwrap_or(self.base_tls_verify_host),
-        );
-        let storage = load_inputs.resource_storage_handles();
-        load_inputs
-            .renderer_runtime
-            .replace_owned(BrowserResourceRuntimeOwner::new(
-                &fetch_config,
-                storage.cookie_store,
-            ))
-            .map_err(|error| format!("browser context resource owner unavailable: {error}"))
     }
 
     #[cfg(test)]
@@ -180,19 +168,17 @@ impl CdpConnection {
     }
 
     pub(crate) async fn rebuild_resource_runtime_for_loaded_page_async(&mut self) {
-        if let Some(context) = self.browser_context.as_mut()
-            && context.rebuild_selected_resource_runtime_async().await
-        {
-            return;
+        let owner = super::CommandOwnerScope::capture(self, None);
+        let result = async {
+            if let Some(pending) = self.start_rebuild_resource_runtime_for_owner(&owner)? {
+                let completion = pending.wait().await.map_err(|error| error.to_string())?;
+                self.finish_rebuild_resource_runtime_for_owner(&owner, completion)?;
+            }
+            Ok::<(), String>(())
         }
-        let storage = self.resource_storage_handles().into_navigation_storage();
-        let engine = self.standalone_navigation_engine.ensure_mut();
-        if engine
-            .rebuild_resource_runtime_for_page_with_storage_async(storage, None)
-            .await
-            .is_err()
-        {
-            engine.reset_resource_runtime_async(None).await;
+        .await;
+        if let Err(error) = result {
+            tracing::warn!(%error, "resource-runtime update failed; retaining the current Document");
         }
     }
 
@@ -208,30 +194,27 @@ impl CdpConnection {
         &mut self,
         owner: &super::CommandOwnerScope,
     ) -> Result<Option<PendingPageCommand>, String> {
-        let load_inputs = self.navigation_load_inputs_for_owner(owner);
-        let navigator_identity = load_inputs
-            .browser_identity_override
-            .clone()
-            .or_else(|| self.global_browser_identity_override.clone())
-            .unwrap_or_else(|| self.base_browser_identity.clone());
-        let storage = load_inputs.resource_storage_handles();
-        let request_client = self
-            .configured_navigation_engine_for_load_inputs_mut(&load_inputs)
-            .ok_or_else(|| "navigation Page engine unavailable".to_owned())?
-            .rebuild_resource_request_client_for_navigation_storage(
-                storage.into_navigation_storage(),
-            )
-            .map_err(|error| format!("failed to rebuild resource runtime: {error}"))?;
-        let Some((context_id, target_id)) = self.resource_runtime_apply_owner(owner) else {
-            return Ok(None);
+        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
+        else {
+            // Only live Browser/context defaults may exist without a page.
+            // An expired session or Page route must never fall back to a peer.
+            return match owner.resolve_route(self) {
+                Some(super::CdpSessionRoute::Browser) => Ok(None),
+                Some(super::CdpSessionRoute::BrowserContext { browser_context_id })
+                    if self.browser_context_by_id(&browser_context_id).is_some() =>
+                {
+                    Ok(None)
+                }
+                _ => Err("NoDocumentLoaded".to_owned()),
+            };
         };
-        self.browser_context_by_id(&context_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_target_resource_runtime_update(
-                &target_id,
-                &request_client.browser_resource_runtime(),
-                navigator_identity,
-            )
+        #[cfg(test)]
+        self.ensure_page_navigation_engine_for_target(&context_id, &target_id)
+            .ok_or("navigation WebContents engine unavailable")?;
+        let defaults = self.document_fetch_defaults();
+        self.browser_context_by_id_mut(&context_id)
+            .ok_or("BrowserContext unavailable")?
+            .start_target_resource_runtime_rebuild(&target_id, defaults)
     }
 
     pub(crate) fn finish_rebuild_resource_runtime_for_session_owner(
@@ -248,25 +231,11 @@ impl CdpConnection {
         owner: &super::CommandOwnerScope,
         completion: CompletedPageCommand,
     ) -> Result<(), String> {
-        if let Some((context_id, target_id)) = self.resource_runtime_apply_owner(owner)
+        if let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
             && let Some(context) = self.browser_context_by_id_mut(&context_id)
         {
             return context.finish_target_resource_runtime_update(&target_id, completion);
         }
         BrowserContext::finish_unobserved_resource_runtime_update(completion)
-    }
-
-    fn resource_runtime_apply_owner(
-        &self,
-        owner: &super::CommandOwnerScope,
-    ) -> Option<(String, String)> {
-        if matches!(
-            owner.resolve_route(self),
-            Some(super::CdpSessionRoute::Browser)
-        ) {
-            let context = self.browser_context.as_ref()?;
-            return Some((context.id.clone(), context.active_target_id()?.to_owned()));
-        }
-        self.resolved_page_owner_identity_for_owner(owner)
     }
 }
