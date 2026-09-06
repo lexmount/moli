@@ -248,6 +248,34 @@ Recorded from the M0 discussion (see proposal §6.2 and the session decisions):
 - `moli_image::RgbaImage` is the published page-visible snapshot unit (straight
   alpha), already the type `CanvasResourceStore` stores and page painting consumes.
 
+### M2 status (surface/backend contract implemented)
+
+M2 delivered the independently tested canvas surface and reusable backend in
+`moli-canvas`:
+
+- `surface.rs::CanvasSurface` is the single authoritative writable pixel store:
+  **premultiplied RGBA8** internally, with lazy materialization, a reusable
+  backend, an immutable cached straight-alpha snapshot, region readback, and
+  reset/resize. Deterministic `flush_count`/`snapshot_count` counters prove
+  scheduling properties (N draws share the surface; a clean observation does
+  zero additional conversion).
+- `backend/vello_cpu.rs::VelloCpuBackend` reuses one `VelloCpuScenePainter` per
+  canvas and renders into the caller-owned persistent buffer with
+  `CompositeMode::SrcOver` (incremental source-over batches preserving prior
+  content) or `CompositeMode::Replace` (destructive clear/overwrite). This
+  uses `VelloCpuScenePainter`'s public `render_ctx`/`resources` rather than
+  `VelloCpuImageRenderer`, whose `render` hardcodes `Replace`. Whether
+  `RenderContext::reset()` retains the large fine-stage buffers remains an
+  empirical M2 detail noted for the reuse benchmark.
+- Pixel-format contract: premultiplied internal (Vello-native); `unpremultiply`
+  happens only at snapshot/readback/export boundaries; transparent pixels
+  normalize to transparent black so repeated conversion is stable.
+- Native tests (`tests/surface_api.rs`, no V8/Document) cover repeated
+  source-over rendering, snapshot isolation and clean repeated reads, clear
+  ordering, reset/resize (same/different/zero size), region readback clipping
+  and independence, low-alpha round-trip, oversized/invalid failure without
+  mutation, and deterministic scheduling counters.
+
 ---
 
 ## 8. Checklist for final review (routed against this inventory)
