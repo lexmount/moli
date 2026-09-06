@@ -18,19 +18,16 @@ pub(super) async fn commit_loaded_navigation_async(
     state: NavigationDispatchState,
     prepared: crate::conn::PreparedDocumentNavigation,
     navigation: MaterializedLoadedDocumentProgress,
-    inspection_restore: Option<crate::conn::NavigationInspectionRestore>,
     command_context: &mut CommandDispatchContext,
 ) {
     let MaterializedLoadedDocumentProgress {
         pending_download,
-        page_creation_artifacts: _,
         final_url,
         response_headers,
         response_from_cache,
         main_document_body,
         initial_runtime_realms,
         renderer_output_predecessor,
-        main_document_commit: _,
         progress_gate,
         network_error_page,
     } = navigation;
@@ -47,7 +44,6 @@ pub(super) async fn commit_loaded_navigation_async(
         navigation_activity.state(),
         prepared,
         initial_runtime_realms,
-        inspection_restore,
         command_context,
     )
     .await
@@ -199,7 +195,6 @@ async fn commit_and_project_loaded_navigation_async(
     state: &NavigationDispatchState,
     prepared: crate::conn::PreparedDocumentNavigation,
     initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
-    inspection_restore: Option<crate::conn::NavigationInspectionRestore>,
     command_context: &mut CommandDispatchContext,
 ) -> Option<crate::conn::CommittedDocumentLifecycle> {
     let commit = match conn.commit_loaded_navigation(prepared) {
@@ -212,49 +207,8 @@ async fn commit_and_project_loaded_navigation_async(
 
     // Everything below observes a committed Browser Document. Inspection failure
     // settles DevTools work; it must never turn this navigation into a rollback.
-    let restoration = commit
-        .inspection_projection
-        .map_err(anyhow::Error::from)
-        .and_then(|()| {
-            let Some(commit_state) = inspection_restore else {
-                return Ok(None);
-            };
-            let pending = conn
-                .runtime_session_owner_slot_for_owner(&state.owner)
-                .map_err(anyhow::Error::msg)?
-                .current_renderer_inspection_binding()
-                .ok_or_else(|| anyhow::anyhow!("committed Document has no inspection binding"))?
-                .start_runtime_state_restore(
-                    commit_state.renderer_runtime_inspector_session_id.clone(),
-                    &commit_state.runtime_inspector_session_restore_snapshots,
-                    &commit_state.stored_runtime_bindings,
-                    &commit_state.session_runtime_bindings,
-                    commit_state.runtime_frontend_enabled,
-                );
-            Ok(Some(pending))
-        });
-    // This await retains only the exact inspection capability, not the channel
-    // or a Browser residence borrow used to resolve it.
-    let restoration = match restoration {
-        Ok(Some(pending)) => pending.await.map(Some),
-        Ok(None) => Ok(None),
-        Err(error) => Err(error),
-    };
-    let inspection_available = match restoration {
-        Ok(restored) => {
-            if let Some((snapshot, predecessor)) = restored {
-                if let Some((context_id, Some(target_id))) =
-                    conn.target_owner_identity_for_owner(&state.owner)
-                    && let Some(context) = conn.browser_context_by_id_mut(&context_id)
-                {
-                    context.observe_renderer_page_state_for_target(&target_id, &snapshot);
-                }
-                if let Some(predecessor) = predecessor {
-                    command_context.set_renderer_output_predecessor(predecessor);
-                }
-            }
-            true
-        }
+    let inspection_available = match commit.inspection_projection {
+        Ok(()) => true,
         Err(error) => {
             tracing::warn!(%error, session_id = state.owner.session_id(),
                 "inspection projection failed after Browser navigation committed");

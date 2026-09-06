@@ -61,7 +61,6 @@ async fn commit_navigation_outcome_for_session_test(
                 .await
                 .expect("test navigation should commit")
         }
-        NavigationLoadOutcome::Loaded(navigation) => *navigation,
         NavigationLoadOutcome::Download(_) => {
             panic!("test navigation should not resolve to a download")
         }

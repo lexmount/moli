@@ -92,6 +92,7 @@ pub(in crate::conn) struct CommittedDocumentInfo {
 impl PreparedDocumentNavigation {
     /// Configure the move-owned Browser participant without borrowing its owner.
     /// These are effective values, never frontend registration/session identities.
+    #[cfg(test)]
     async fn apply_document_policy(
         mut self,
         interception: (bool, Option<moli_core::page::SubresourceResourceType>),
@@ -206,8 +207,9 @@ impl WebContents {
         })
     }
 
-    /// Start/configure/complete stays inside the Browser participant. The
-    /// returned future owns its Page and policy, never a Browser registry borrow.
+    /// Construct a commit participant for fixtures with an already built Page.
+    /// Production navigation must materialize an admitted prepared Document.
+    #[cfg(test)]
     pub(in crate::conn::state) fn start_loaded_document_navigation(
         &self,
         navigation: NavigationId,

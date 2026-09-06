@@ -393,6 +393,7 @@ impl ResponseCommitReady {
         Ok(LoadedNavigation {
             page: built.page,
             pending_download: built.pending_download,
+            #[cfg(test)]
             page_creation_artifacts: built.page_creation_artifacts,
             requested_url: self.requested_url.clone(),
             final_url: self.final_url.clone(),
@@ -403,6 +404,7 @@ impl ResponseCommitReady {
             response_from_cache: self.response_from_cache,
             initial_runtime_realms: diagnostics.initial_runtime_realms,
             renderer_output_predecessor: diagnostics.renderer_output_predecessor,
+            #[cfg(test)]
             main_document_commit: self.main_document_commit.take(),
             document_progress_transfer,
             network_error_page: self.network_error_page.take(),
@@ -718,9 +720,6 @@ impl BackgroundNavigationLoadJob {
     ) -> bool {
         let is_successful_document = match navigation {
             Ok(NavigationLoadOutcome::ResponseCommitReady(navigation)) => {
-                navigation.network_error_page.is_none()
-            }
-            Ok(NavigationLoadOutcome::Loaded(navigation)) => {
                 navigation.network_error_page.is_none()
             }
             _ => false,
@@ -1955,7 +1954,6 @@ impl CdpConnection {
                 let inspection = self.prepared_document_inspection_for_owner(owner);
                 navigation.materialize(policy, inspection).await
             }
-            NavigationLoadOutcome::Loaded(navigation) => Ok(*navigation),
             NavigationLoadOutcome::Download(_) => {
                 Err("navigation resolved to a download".to_owned())
             }

@@ -1,10 +1,12 @@
 use moli_core::browser::DownloadBody;
+#[cfg(test)]
+use moli_core::page::RendererPageCreationArtifacts;
 use moli_core::page::{
-    Page, RendererMainDocumentCommit, RendererPageCreationArtifacts,
-    RendererPendingDownloadActivation, RendererRuntimeRealmInfo,
+    Page, RendererMainDocumentCommit, RendererPendingDownloadActivation, RendererRuntimeRealmInfo,
 };
 use serde::Serialize;
 use serde_json::Value;
+#[cfg(test)]
 use std::sync::Arc;
 use url::Url;
 
@@ -172,6 +174,9 @@ impl CompletedDownloadBodyArtifact {
 pub struct LoadedNavigation<P = Page> {
     pub page: P,
     pub pending_download: Option<RendererPendingDownloadActivation>,
+    // Already-built Page fixtures retain their creation data. In production
+    // the admitted Browser participant owns it through commit, not Protocol.
+    #[cfg(test)]
     pub page_creation_artifacts: RendererPageCreationArtifacts,
     pub requested_url: Url,
     pub final_url: Url,
@@ -182,6 +187,7 @@ pub struct LoadedNavigation<P = Page> {
     pub response_from_cache: bool,
     pub initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
     pub renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
+    #[cfg(test)]
     pub(crate) main_document_commit: Option<Arc<RendererMainDocumentCommit>>,
     pub(crate) document_progress_transfer: CompletedDocumentProgressTransfer,
     pub(crate) network_error_page: Option<NetworkErrorPageNavigation>,
@@ -215,7 +221,6 @@ pub struct DownloadNavigation {
 #[derive(Debug)]
 pub enum NavigationLoadOutcome {
     ResponseCommitReady(Box<ResponseCommitReady>),
-    Loaded(Box<LoadedNavigation>),
     Download(Box<DownloadNavigation>),
     NetworkFailure(String),
 }

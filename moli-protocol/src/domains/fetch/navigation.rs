@@ -196,7 +196,7 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
                             response,
                         )
                         .await;
-                    complete_or_pause_response_stage_into_buffer_async(
+                    complete_pending_fetch_navigation_result_into_buffer_async(
                         conn, out, pending, navigation,
                     )
                     .await;
@@ -258,7 +258,8 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
             network::MainDocumentBodyProgressSource::default(),
         )
         .await;
-    complete_or_pause_response_stage_into_buffer_async(conn, out, pending, navigation).await;
+    complete_pending_fetch_navigation_result_into_buffer_async(conn, out, pending, navigation)
+        .await;
 }
 
 pub(super) async fn load_or_pause_navigation_for_auth_as_background_events_async(
@@ -358,8 +359,13 @@ pub(super) async fn cancel_navigation_auth_as_background_events_async(
                 response,
             )
             .await;
-        complete_or_pause_response_stage_into_buffer_async(conn, &mut output, pending, navigation)
-            .await;
+        complete_pending_fetch_navigation_result_into_buffer_async(
+            conn,
+            &mut output,
+            pending,
+            navigation,
+        )
+        .await;
     }
     out.extend_plan_as_background_events(
         output.into_plan(),
@@ -596,44 +602,6 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
         response_status,
         &response_headers,
     )]);
-}
-
-async fn complete_or_pause_response_stage_into_buffer_async(
-    conn: &mut CdpConnection,
-    out: &mut CommandOutputBuffer,
-    pending: PendingFetchNavigation,
-    navigation: Result<NavigationLoadOutcome, String>,
-) {
-    match navigation {
-        Ok(NavigationLoadOutcome::Loaded(_)) if pending.intercept_response => {
-            debug_assert!(
-                false,
-                "response-stage document pause should register a body source before building a LoadedNavigation"
-            );
-            complete_pending_fetch_navigation_result_into_buffer_async(
-                conn,
-                out,
-                pending,
-                Err(
-                    "response-stage document pause reached unexpected loaded-navigation path"
-                        .to_owned(),
-                ),
-            )
-            .await;
-        }
-        navigation @ Ok(_) => {
-            complete_pending_fetch_navigation_result_into_buffer_async(
-                conn, out, pending, navigation,
-            )
-            .await;
-        }
-        navigation @ Err(_) => {
-            complete_pending_fetch_navigation_result_into_buffer_async(
-                conn, out, pending, navigation,
-            )
-            .await;
-        }
-    }
 }
 
 fn pause_data_url_response_stage_navigation_into_buffer(
