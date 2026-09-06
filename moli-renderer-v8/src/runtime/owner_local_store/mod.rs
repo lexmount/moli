@@ -877,22 +877,10 @@ impl RendererOwnerLocalStore {
         }
     }
 
-    pub(super) fn take_prepared_document(
+    pub(super) fn configure_prepared_document_inspection(
         &mut self,
         token: RendererPageReservationToken,
-    ) -> Result<RendererPreparedDocumentResidence> {
-        self.prepared_documents.remove(&token).ok_or_else(|| {
-            anyhow!(
-                "renderer owner no longer tracks prepared document for page {}",
-                token.page_id().as_u64()
-            )
-        })
-    }
-
-    pub(super) fn update_prepared_document_commit_configuration(
-        &mut self,
-        token: RendererPageReservationToken,
-        configuration: crate::runtime::RendererPreparedDocumentCommitConfiguration,
+        configuration: crate::runtime::RendererPreparedDocumentInspectionConfiguration,
     ) -> Result<()> {
         let residence = self.prepared_documents.get_mut(&token).ok_or_else(|| {
             anyhow!(
@@ -900,46 +888,55 @@ impl RendererOwnerLocalStore {
                 token.page_id().as_u64()
             )
         })?;
-        macro_rules! apply_configuration {
-            ($request:expr) => {{
-                let request = $request;
-                request.document_start_scripts = configuration.document_start_scripts;
-                request.runtime_bindings = configuration.runtime_bindings;
-                request.runtime_inspector_session_restore_snapshots =
-                    configuration.runtime_inspector_session_restore_snapshots;
-                request.runtime_isolated_worlds = configuration.runtime_isolated_worlds;
-                request.permission_overrides = configuration.permission_overrides;
-                request.extra_http_headers = configuration.extra_http_headers;
-                request.locale_override = configuration.locale_override;
-                request.timezone_override = configuration.timezone_override;
-                request.script_execution_disabled = configuration.script_execution_disabled;
-                request.bypass_content_security_policy =
-                    configuration.bypass_content_security_policy;
-                request.cpu_throttling_rate = configuration.cpu_throttling_rate;
-                request.emulated_media = configuration.emulated_media;
-                request.idle_override = configuration.idle_override;
-                request.navigator_overrides = configuration.navigator_overrides;
-                request.viewport_surface = configuration.viewport_surface;
-                request
-                    .loader
-                    .replace_browser_resource_runtime(configuration.browser_resource_runtime);
-                request.navigator_identity = configuration.navigator_identity;
-                request.network_offline = configuration.network_offline;
-                request
-                    .loader
-                    .set_bypass_service_worker(configuration.bypass_service_worker);
-                request
-                    .loader
-                    .set_cache_disabled(configuration.cache_disabled);
-                request.blocked_url_patterns = configuration.blocked_url_patterns;
-                request.fetch_subresource_interception_enabled =
-                    configuration.fetch_subresource_interception_enabled;
-                request.fetch_subresource_interception_resource_type =
-                    configuration.fetch_subresource_interception_resource_type;
-            }};
-        }
-        apply_configuration!(&mut residence.request);
+        let request = &mut residence.request;
+        request.document_start_scripts = configuration.document_start_scripts;
+        request.runtime_bindings = configuration.runtime_bindings;
+        request.runtime_inspector_session_restore_snapshots =
+            configuration.runtime_inspector_session_restore_snapshots;
+        request.runtime_isolated_worlds = configuration.runtime_isolated_worlds;
         Ok(())
+    }
+
+    pub(super) fn take_prepared_document_for_materialization(
+        &mut self,
+        token: RendererPageReservationToken,
+        policy: Option<crate::runtime::RendererPreparedDocumentPolicy>,
+    ) -> Result<RendererPreparedDocumentResidence> {
+        let mut residence = self.prepared_documents.remove(&token).ok_or_else(|| {
+            anyhow!(
+                "renderer owner no longer tracks prepared document for page {}",
+                token.page_id().as_u64()
+            )
+        })?;
+        if let Some(policy) = policy {
+            let request = &mut residence.request;
+            request.permission_overrides = policy.permission_overrides;
+            request.extra_http_headers = policy.extra_http_headers;
+            request.locale_override = policy.locale_override;
+            request.timezone_override = policy.timezone_override;
+            request.script_execution_disabled = policy.script_execution_disabled;
+            request.bypass_content_security_policy = policy.bypass_content_security_policy;
+            request.cpu_throttling_rate = policy.cpu_throttling_rate;
+            request.emulated_media = policy.emulated_media;
+            request.idle_override = policy.idle_override;
+            request.navigator_overrides = policy.navigator_overrides;
+            request.viewport_surface = policy.viewport_surface;
+            request
+                .loader
+                .replace_browser_resource_runtime(policy.browser_resource_runtime);
+            request.navigator_identity = policy.navigator_identity;
+            request.network_offline = policy.network_offline;
+            request
+                .loader
+                .set_bypass_service_worker(policy.bypass_service_worker);
+            request.loader.set_cache_disabled(policy.cache_disabled);
+            request.blocked_url_patterns = policy.blocked_url_patterns;
+            request.fetch_subresource_interception_enabled =
+                policy.fetch_subresource_interception_enabled;
+            request.fetch_subresource_interception_resource_type =
+                policy.fetch_subresource_interception_resource_type;
+        }
+        Ok(residence)
     }
 
     pub(super) fn cancel_prepared_document(&mut self, token: RendererPageReservationToken) {

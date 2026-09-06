@@ -48,8 +48,8 @@ async fn commit_navigation_outcome_for_session_test(
     match outcome {
         NavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
-            let configuration = conn
-                .prepared_document_commit_configuration_for_owner(
+            let (policy, inspection) = conn
+                .prepared_document_build_inputs_for_owner(
                     &match session_id {
                         Some(session_id) => CommandOwnerScope::for_session(session_id),
                         None => CommandOwnerScope::capture(conn, None),
@@ -58,12 +58,7 @@ async fn commit_navigation_outcome_for_session_test(
                 )
                 .expect("test navigation commit configuration should resolve");
             navigation
-                .update_commit_configuration(configuration)
-                .await
-                .expect("test navigation commit configuration should apply");
-            let permit = navigation.issue_commit_permit();
-            navigation
-                .commit(permit)
+                .materialize(policy, inspection)
                 .await
                 .expect("test navigation should commit")
         }
