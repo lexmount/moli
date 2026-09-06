@@ -9,9 +9,8 @@ use std::time::Duration;
 
 use super::conn::{
     BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection, CdpInitialStoragePartition,
-    CdpSchedulerEvent, CommandDispatchContext, CommandResponseFlushPermit,
-    LoadedNavigationRendererAttachmentCommit, ParsedCdpCommand, PendingCdpCommandDispatch,
-    RuntimeInspectorResponseReady,
+    CdpSchedulerEvent, CommandDispatchContext, CommandResponseFlushPermit, ParsedCdpCommand,
+    PendingCdpCommandDispatch, RuntimeInspectorResponseReady,
 };
 use crate::devtools_runtime::{DevToolsCommand, DevToolsCommandResult, DevToolsError};
 use crate::domains::activity::{
@@ -342,11 +341,7 @@ impl TestContext {
         .expect("navigation fixture must have matching Page creation artifacts");
         let page_commit = self
             .conn
-            .commit_loaded_navigation_for_owner(
-                &owner,
-                prepared,
-                LoadedNavigationRendererAttachmentCommit::Prepare(None),
-            )
+            .commit_loaded_navigation_for_owner(&owner, prepared, None)
             .expect("navigation fixture target must remain installed")
             .expect("navigation fixture Page commit must succeed");
         assert!(

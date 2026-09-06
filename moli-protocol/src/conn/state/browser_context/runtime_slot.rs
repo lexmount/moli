@@ -30,10 +30,10 @@ use crate::conn::state::page_slot::{
     InitialDocumentPageBuildWaiter, TargetPageAbsenceReason, TargetPageSlot,
 };
 use crate::conn::state::{
-    CommittedRendererAgentAttachment, CommittedRendererDocumentBinding,
-    DevToolsRendererChannelError, DocumentId, NavigationId, PreparedRendererAgentAttachment,
-    PreparedRendererCallReplacements, RendererAgentAttachment, RendererPageResidenceIdentity,
-    TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver,
+    CommittedRendererDocumentBinding, DevToolsRendererChannelError, DocumentId, NavigationId,
+    PreparedRendererAgentAttachment, PreparedRendererCallReplacements, RendererAgentAttachment,
+    RendererPageResidenceIdentity, TargetJavaScriptDialogScope,
+    TargetJavaScriptDialogScopeObserver,
 };
 
 pub(crate) struct FinishedRendererDocumentNavigation {
@@ -207,29 +207,6 @@ impl TargetRuntimeSlot {
             .attach_candidate(token, agent_token)
     }
 
-    pub(crate) fn rollback_committed_renderer_agent_candidate(
-        &mut self,
-        transaction: CommittedRendererAgentAttachment,
-    ) -> Result<(), DevToolsRendererChannelError> {
-        self.devtools_renderer_channel
-            .rollback_committed_candidate(transaction)
-    }
-
-    pub(crate) fn bind_document_to_committed_renderer_agent_candidate(
-        &mut self,
-        endpoint: moli_renderer_v8::RendererInspectionEndpoint,
-        transaction: &CommittedRendererAgentAttachment,
-    ) -> Result<(), DevToolsRendererChannelError> {
-        let current = transaction.current();
-        if self.devtools_renderer_channel.current() != Some(current)
-            || endpoint.agent_token() != current.agent_token()
-        {
-            return Err(DevToolsRendererChannelError::CommittedCandidateMismatch);
-        }
-        self.devtools_renderer_channel.bind_current(endpoint)?;
-        Ok(())
-    }
-
     pub(crate) fn commit_loaded_navigation_renderer_attachment(
         &mut self,
         endpoint: moli_renderer_v8::RendererInspectionEndpoint,
@@ -396,19 +373,13 @@ impl TargetRuntimeSlot {
         let Some(page) = page else {
             return;
         };
-        if self
+        if !self
             .devtools_renderer_channel
             .current()
             .is_some_and(|attachment| {
                 attachment.agent_token() == page.renderer_devtools_agent_token()
             })
         {
-            if self.devtools_renderer_channel.current_binding().is_none() {
-                self.devtools_renderer_channel
-                    .bind_current(page.renderer_inspection_endpoint())
-                    .expect("a matching candidate Page must bind its reserved attachment");
-            }
-        } else {
             self.devtools_renderer_channel
                 .attach_current(page.renderer_inspection_endpoint())
                 .expect("a loaded page cannot be installed into a closed renderer channel");
@@ -1061,34 +1032,6 @@ impl BrowserContext {
             .expect("resolved target projection must remain live")
             .runtime_slot
             .transition_renderer_channel_for_page_absence(reason);
-    }
-    pub(crate) fn commit_renderer_agent_candidate_transaction_for_target(
-        &mut self,
-        target_id: &str,
-        candidate: PreparedRendererAgentAttachment,
-        renderer_page: RendererPageResidenceIdentity,
-    ) -> Result<CommittedRendererAgentAttachment, DevToolsRendererChannelError> {
-        let transaction = self
-            .page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection must remain live")
-            .runtime_slot
-            .devtools_renderer_channel
-            .commit_candidate_transaction(candidate)?;
-        if self.bind_pending_document_navigation_renderer_page_for_target(
-            target_id,
-            transaction.navigation(),
-            renderer_page,
-        ) {
-            return Ok(transaction);
-        }
-        self.page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection must remain live")
-            .runtime_slot
-            .devtools_renderer_channel
-            .rollback_committed_candidate(transaction)?;
-        Err(DevToolsRendererChannelError::CommittedCandidateMismatch)
     }
     pub(crate) fn performance_metric_snapshot_for_target(
         &self,

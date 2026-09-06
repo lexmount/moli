@@ -3265,73 +3265,46 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
-            let update_result = match conn.prepared_document_commit_configuration_for_owner(
-                &state.owner,
-                navigation.final_url(),
-            ) {
-                Ok(configuration) => navigation.update_commit_configuration(configuration).await,
-                Err(error) => Err(error),
+            let update_result = if conn
+                .accepts_pending_document_navigation_for_owner(&state.owner, &token)
+            {
+                match conn.prepared_document_commit_configuration_for_owner(
+                    &state.owner,
+                    navigation.final_url(),
+                ) {
+                    Ok(configuration) => {
+                        navigation.update_commit_configuration(configuration).await
+                    }
+                    Err(error) => Err(error),
+                }
+            } else {
+                // Preserve the CDP supersession error without publishing an attachment.
+                Err("renderer channel navigation was superseded by a newer navigation".to_owned())
             };
             if let Err(error) = update_result {
                 push_navigation_commit_error(out, &state, error);
             } else {
-                let renderer_page = navigation.renderer_page_residence_identity();
-                let candidate = conn.prepare_renderer_agent_candidate_token_for_owner(
-                    &state.owner,
-                    &token,
-                    navigation.renderer_devtools_agent_token(),
-                );
-                match candidate.and_then(|candidate| {
-                    conn.commit_renderer_agent_candidate_for_owner(
-                        &state.owner,
-                        candidate,
-                        renderer_page,
-                    )
-                }) {
-                    Ok(transaction) => {
-                        let permit = navigation.issue_commit_permit();
-                        match navigation.commit(permit).await {
-                            Ok(navigation) => {
-                                let navigation = network::materialize_loaded_navigation_progress(
-                                    conn, &state, navigation,
-                                );
-                                commit_loaded_navigation_async(
-                                    conn,
-                                    out,
-                                    &token,
-                                    state,
-                                    navigation,
-                                    Some(transaction),
-                                    command_context,
-                                )
-                                .await;
-                            }
-                            Err(error) => {
-                                if let Err(rollback_error) = conn
-                                    .rollback_committed_renderer_agent_candidate_for_owner(
-                                        &state.owner,
-                                        transaction,
-                                    )
-                                {
-                                    tracing::warn!(
-                                        %rollback_error,
-                                        session_id = state.owner.session_id(),
-                                        "failed to roll back renderer channel after prepared document commit failure"
-                                    );
-                                }
-                                push_navigation_commit_error(out, &state, error);
-                            }
-                        }
-                    }
-                    Err(error) => {
-                        tracing::debug!(
-                            %error,
-                            session_id = state.owner.session_id(),
-                            navigation_id = token.get(),
-                            "dropping superseded response commit-ready navigation"
+                // The renderer reservation already has its exact pending Document output
+                // owner. Building it must not replace the current inspection binding:
+                // failure or cancellation leaves the outgoing Document inspectable.
+                let permit = navigation.issue_commit_permit();
+                match navigation.commit(permit).await {
+                    Ok(navigation) => {
+                        let navigation = network::materialize_loaded_navigation_progress(
+                            conn, &state, navigation,
                         );
-                        push_navigation_commit_error(out, &state, error);
+                        commit_loaded_navigation_async(
+                            conn,
+                            out,
+                            &token,
+                            state,
+                            navigation,
+                            true,
+                            command_context,
+                        )
+                        .await;
                     }
+                    Err(error) => push_navigation_commit_error(out, &state, error),
                 }
             }
         }
@@ -3342,7 +3315,7 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                 &token,
                 state,
                 *navigation,
-                None,
+                false,
                 command_context,
             )
             .await;

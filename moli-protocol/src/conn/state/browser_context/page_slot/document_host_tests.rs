@@ -63,11 +63,7 @@ async fn loaded_navigation_commit_settles_document_history_and_navigation_togeth
     )
     .unwrap();
     let committed = owner
-        .commit_loaded_navigation_for_target(
-            TARGET,
-            prepared,
-            crate::conn::LoadedNavigationRendererAttachmentCommit::Prepare(Some(candidate)),
-        )
+        .commit_loaded_navigation_for_target(TARGET, prepared, Some(candidate))
         .unwrap();
     assert_eq!(
         owner.target_document_id(TARGET),

@@ -56,7 +56,7 @@ pub(in crate::conn) mod session;
 mod storage_partition;
 #[cfg(test)]
 mod tests;
-pub(crate) use page_state::{LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit};
+pub(crate) use page_state::LoadedNavigationPageCommit;
 use physical::BrowserContext as PhysicalBrowserContext;
 pub(crate) use physical::{ContextEmulationDefaults, ContextNetworkPolicy};
 use storage_partition::StoragePartitionKind;

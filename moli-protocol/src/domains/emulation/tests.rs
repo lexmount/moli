@@ -531,14 +531,15 @@ async fn pending_idle_override_response_does_not_replay_into_replacement_page() 
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn renderer_candidate_binding_does_not_retire_outgoing_browser_policy_commands() {
+async fn inspection_reattach_does_not_retire_outgoing_browser_policy_commands() {
     let mut ctx = TestContext::new();
     load_session_page_for_pending_emulation_test(&mut ctx).await;
     let context = ctx.conn.browser_context.as_mut().unwrap();
     let page_source = super::EmulationPageCommandSource::browser(context, "TID-1");
-    let residence = context
-        .target_renderer_page_residence_identity("TID-1")
-        .unwrap();
+    let endpoint = context
+        .loaded_page()
+        .unwrap()
+        .renderer_inspection_endpoint();
     let document_id = context.target_document_id("TID-1");
     let old_attachment = context
         .page_target("TID-1")
@@ -546,17 +547,10 @@ async fn renderer_candidate_binding_does_not_retire_outgoing_browser_policy_comm
         .runtime_slot
         .current_renderer_attachment()
         .unwrap();
-    let agent = old_attachment.agent_token();
-    let navigation =
-        context.begin_target_document_navigation("TID-1", "candidate-rebind".to_owned());
-    let candidate = context
-        .page_target("TID-1")
-        .unwrap()
+    context
+        .active_page_target_mut()
         .runtime_slot
-        .prepare_renderer_agent_candidate_token(&navigation, agent)
-        .unwrap();
-    let transaction = context
-        .commit_renderer_agent_candidate_transaction_for_target("TID-1", candidate, residence)
+        .commit_loaded_navigation_renderer_attachment(endpoint, None)
         .unwrap();
     assert_ne!(
         context
@@ -581,7 +575,7 @@ async fn renderer_candidate_binding_does_not_retire_outgoing_browser_policy_comm
             ),
             page_source,
         ),
-        "a renderer reservation must not hide a Browser error on the still-current Page"
+        "an inspection reattach must not hide a Browser error on the still-current Page"
     );
     assert!(
         super::pending_emulation_page_configuration_will_be_replayed(
@@ -592,11 +586,6 @@ async fn renderer_candidate_binding_does_not_retire_outgoing_browser_policy_comm
         ),
         "Inspector replay still follows the exact attachment"
     );
-    ctx.conn
-        .runtime_session_owner_slot_mut(Some("SID-1"))
-        .unwrap()
-        .rollback_committed_renderer_agent_candidate(transaction)
-        .unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]

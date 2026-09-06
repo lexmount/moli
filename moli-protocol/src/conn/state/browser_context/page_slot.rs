@@ -1091,6 +1091,7 @@ impl BrowserContext {
             .is_some_and(|contents| contents.navigation.has_inflight_background_navigation())
     }
 
+    #[cfg(test)]
     pub(crate) fn bind_pending_document_navigation_renderer_page_for_target(
         &mut self,
         target_id: &str,

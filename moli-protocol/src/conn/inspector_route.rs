@@ -4,8 +4,7 @@ use moli_core::page::{
 };
 
 use super::state::{
-    CommittedRendererAgentAttachment, FinishedRendererDocumentNavigation,
-    PreparedRendererAgentAttachment, RendererAgentAttachment, RendererPageResidenceIdentity,
+    FinishedRendererDocumentNavigation, PreparedRendererAgentAttachment, RendererAgentAttachment,
 };
 use super::{CdpConnection, CommandOwnerScope, NavigationId};
 
@@ -149,46 +148,6 @@ impl CdpConnection {
         }
     }
 
-    pub(crate) fn commit_renderer_agent_candidate_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        candidate: PreparedRendererAgentAttachment,
-        renderer_page: RendererPageResidenceIdentity,
-    ) -> Result<CommittedRendererAgentAttachment, String> {
-        self.validate_navigation_target_owner_for_scope(owner, candidate.navigation())?;
-        let (context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(owner)
-            .ok_or("NoDocumentLoaded")?;
-        let transaction = self
-            .browser_context_by_id_mut(&context_id)
-            .ok_or("NoDocumentLoaded")?
-            .commit_renderer_agent_candidate_transaction_for_target(
-                &target_id,
-                candidate,
-                renderer_page,
-            )
-            .map_err(|error| error.to_string())?;
-        let page_owner = self
-            .pending_target_page_residence_identity_for_owner(owner)
-            .ok_or_else(|| "NavigationTargetOwnerMissing".to_owned())?;
-        self.bind_renderer_page_output_owner(renderer_page, page_owner);
-        Ok(transaction)
-    }
-
-    pub(crate) fn rollback_committed_renderer_agent_candidate_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-        transaction: CommittedRendererAgentAttachment,
-    ) -> Result<(), String> {
-        self.validate_navigation_target_owner_for_scope(owner, transaction.navigation())?;
-        let navigation = *transaction.navigation();
-        self.runtime_session_owner_slot_mut_for_owner(owner)?
-            .rollback_committed_renderer_agent_candidate(transaction)
-            .map_err(|error| error.to_string())?;
-        self.clear_pending_document_navigation_for_owner_if_matches(owner, &navigation);
-        Ok(())
-    }
-
     pub(crate) fn finish_renderer_document_navigation_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
@@ -266,7 +225,7 @@ mod tests {
     use crate::testing::TestContext;
 
     #[test]
-    fn rollback_retires_navigation_initial_document_and_resource_state() {
+    fn cancellation_retires_navigation_initial_document_and_resource_state() {
         let mut context = BrowserContext::new("BID-rollback".to_owned());
         context.set_active_target_id("TID-rollback");
         context.begin_active_target_initial_empty_document("about:blank".to_owned());
@@ -302,19 +261,8 @@ mod tests {
                 RendererDevToolsAgentToken::allocate(),
             )
             .unwrap();
-        let transaction = conn
-            .commit_renderer_agent_candidate_for_owner(
-                &owner,
-                candidate,
-                RendererPageResidenceIdentity::from_parts(
-                    moli_core::RendererOwnerLocalHostId::new_for_testing(7),
-                    moli_core::PageId::new_for_testing(8),
-                ),
-            )
-            .unwrap();
-
-        conn.rollback_committed_renderer_agent_candidate_for_owner(&owner, transaction)
-            .unwrap();
+        drop(candidate);
+        conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &navigation);
 
         assert!(cancellation.is_cancelled());
         assert!(!conn.accepts_pending_document_navigation_for_owner(&owner, &navigation));
@@ -327,7 +275,7 @@ mod tests {
                 .target_initial_empty_document_has_pending_cross_document_navigation(
                     target.target_id()
                 ),
-            "rollback must retire the initial document's pending state with its navigation"
+            "cancellation must retire the initial document's pending state with its navigation"
         );
         assert!(target.owner_state.page_resource_store.is_empty());
     }
