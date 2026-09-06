@@ -9,10 +9,10 @@ use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
     DocumentStartScript, EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage,
     InitialDocumentPageInstallResult, InitialDocumentPageOwner, LoadedNavigationPageCommit,
-    LoadedNavigationRendererAttachmentCommit, NETWORK_ERROR_PAGE_URL, NetworkErrorPageNavigation,
-    PausedDocumentTransfer, PendingFetchAuthNavigation, PendingFetchNavigation,
-    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
-    PendingSubresourceFetchResponseRequest, RuntimeBindingDefinition,
+    NETWORK_ERROR_PAGE_URL, NetworkErrorPageNavigation, PausedDocumentTransfer,
+    PendingFetchAuthNavigation, PendingFetchNavigation, PendingSubresourceFetchAuthRequest,
+    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
+    RuntimeBindingDefinition,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use moli_cookie_jar::{StoredCookieQueryReport, StoredCookieSetReport};
@@ -962,12 +962,12 @@ impl<'a> TargetSessionOwnerMut<'a> {
     pub(super) fn commit_loaded_navigation(
         &mut self,
         prepared: crate::conn::PreparedDocumentNavigation,
-        renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
+        renderer_agent_candidate: Option<crate::conn::state::PreparedRendererAgentAttachment>,
     ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
         Some(self.browser_context.commit_loaded_navigation_for_target(
             &self.target_id,
             prepared,
-            renderer_attachment_commit,
+            renderer_agent_candidate,
         ))
     }
 }
@@ -1072,10 +1072,10 @@ impl CdpConnection {
         &mut self,
         owner: &crate::conn::CommandOwnerScope,
         prepared: crate::conn::PreparedDocumentNavigation,
-        renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
+        renderer_agent_candidate: Option<crate::conn::state::PreparedRendererAgentAttachment>,
     ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
         self.target_session_owner_mut_for_owner(owner)?
-            .commit_loaded_navigation(prepared, renderer_attachment_commit)
+            .commit_loaded_navigation(prepared, renderer_agent_candidate)
     }
 
     pub(crate) fn initial_document_page_owner_for_owner(
@@ -3397,10 +3397,7 @@ mod tests {
                 session_key: DevToolsSessionKey::Primary,
             };
             owner
-                .commit_loaded_navigation(
-                    prepared,
-                    LoadedNavigationRendererAttachmentCommit::Prepare(None),
-                )
+                .commit_loaded_navigation(prepared, None)
                 .expect("background page owner should exist")
                 .expect("background page Inspector binding should activate")
         };

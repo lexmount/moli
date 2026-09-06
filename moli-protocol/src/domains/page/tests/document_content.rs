@@ -33,13 +33,7 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
         )
         .unwrap();
         let committed = browser_context
-            .commit_loaded_navigation_for_target(
-                "TID-1",
-                prepared,
-                crate::conn::LoadedNavigationRendererAttachmentCommit::Prepare(Some(
-                    renderer_agent_candidate,
-                )),
-            )
+            .commit_loaded_navigation_for_target("TID-1", prepared, Some(renderer_agent_candidate))
             .expect("document-content test Document should commit");
         assert!(
             browser_context

@@ -1,9 +1,7 @@
 use crate::conn::TargetPageResidenceIdentity;
 use crate::conn::state::TargetPageAbsenceReason;
 use crate::conn::state::web_contents::{PreparedDocumentNavigation, RetiringDocument};
-use crate::conn::state::{
-    CommittedRendererAgentAttachment, DocumentId, PreparedRendererAgentAttachment,
-};
+use crate::conn::state::{DocumentId, PreparedRendererAgentAttachment};
 use crate::conn::{BrowserContext, PageTargetHost, TargetRuntimeSlot};
 use moli_core::page::{Page, RendererPageCommandPostResponseContinuation};
 
@@ -12,11 +10,6 @@ pub(crate) struct LoadedNavigationPageCommit {
     pub(crate) previous_document_retirement: RetiringDocument,
     pub(crate) committed_document_post_response_continuation:
         Option<RendererPageCommandPostResponseContinuation>,
-}
-
-pub(crate) enum LoadedNavigationRendererAttachmentCommit {
-    Prepare(Option<PreparedRendererAgentAttachment>),
-    AlreadyCommitted(CommittedRendererAgentAttachment),
 }
 
 impl BrowserContext {
@@ -225,7 +218,7 @@ impl BrowserContext {
         &mut self,
         target_id: &str,
         prepared: PreparedDocumentNavigation,
-        renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
+        renderer_agent_candidate: Option<PreparedRendererAgentAttachment>,
     ) -> anyhow::Result<LoadedNavigationPageCommit> {
         let navigation = prepared.navigation();
         anyhow::ensure!(
@@ -241,22 +234,12 @@ impl BrowserContext {
             .expect("resolved target projection")
             .session_id()
             .map(str::to_owned);
-        let previous_attachment = match renderer_attachment_commit {
-            LoadedNavigationRendererAttachmentCommit::Prepare(renderer_agent_candidate) => self
-                .page_targets
-                .get_mut(target_id)
-                .expect("resolved target projection")
-                .runtime_slot
-                .commit_loaded_navigation_renderer_attachment(endpoint, renderer_agent_candidate)?,
-            LoadedNavigationRendererAttachmentCommit::AlreadyCommitted(transaction) => {
-                self.page_targets
-                    .get_mut(target_id)
-                    .expect("resolved target projection")
-                    .runtime_slot
-                    .bind_document_to_committed_renderer_agent_candidate(endpoint, &transaction)?;
-                transaction.previous()
-            }
-        };
+        let previous_attachment = self
+            .page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection")
+            .runtime_slot
+            .commit_loaded_navigation_renderer_attachment(endpoint, renderer_agent_candidate)?;
         let new_attachment_id = self
             .page_targets
             .get_mut(target_id)

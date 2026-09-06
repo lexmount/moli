@@ -348,26 +348,6 @@ impl ResponseCommitReady {
         &self.final_url
     }
 
-    pub(crate) fn renderer_devtools_agent_token(
-        &self,
-    ) -> moli_core::page::RendererDevToolsAgentToken {
-        self.prepared_page
-            .as_ref()
-            .expect("response commit-ready value must retain its prepared Page")
-            .renderer_devtools_agent_token()
-    }
-
-    pub(crate) fn renderer_page_residence_identity(&self) -> RendererPageResidenceIdentity {
-        let prepared_page = self
-            .prepared_page
-            .as_ref()
-            .expect("response commit-ready value must retain its prepared Page");
-        RendererPageResidenceIdentity::from_parts(
-            prepared_page.renderer_owner_local_host_id(),
-            prepared_page.renderer_page_id(),
-        )
-    }
-
     pub(crate) async fn update_commit_configuration(
         &self,
         configuration: PreparedDocumentPageCommitConfiguration,

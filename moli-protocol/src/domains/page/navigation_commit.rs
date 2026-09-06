@@ -1,9 +1,6 @@
 use url::Url;
 
-use crate::conn::{
-    CdpConnection, CommandDispatchContext, CommittedRendererAgentAttachment,
-    LoadedNavigationRendererAttachmentCommit, NavigationDispatchState, NavigationId,
-};
+use crate::conn::{CdpConnection, CommandDispatchContext, NavigationDispatchState, NavigationId};
 use crate::domains::activity::{
     MainDocumentDownloadNavigationActivity, MainDocumentNavigationActivity,
 };
@@ -27,7 +24,7 @@ pub(super) async fn commit_loaded_navigation_async(
     token: &NavigationId,
     state: NavigationDispatchState,
     navigation: MaterializedLoadedDocumentProgress,
-    committed_renderer_attachment: Option<CommittedRendererAgentAttachment>,
+    configuration_applied_at_creation: bool,
     command_context: &mut CommandDispatchContext,
 ) {
     let MaterializedLoadedDocumentProgress {
@@ -81,7 +78,7 @@ pub(super) async fn commit_loaded_navigation_async(
         &main_document_commit,
         &page_creation_artifacts,
         initial_runtime_realms,
-        committed_renderer_attachment,
+        configuration_applied_at_creation,
         command_context,
     )
     .await
@@ -236,7 +233,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
     main_document_commit: &moli_core::page::RendererMainDocumentCommit,
     page_creation_artifacts: &RendererPageCreationArtifacts,
     initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
-    committed_renderer_attachment: Option<CommittedRendererAgentAttachment>,
+    configuration_applied_at_creation: bool,
     command_context: &mut CommandDispatchContext,
 ) -> Option<LoadedPageCommitOutcome> {
     let timing_enabled = moli_trace::cdp_nav_timing_enabled();
@@ -249,24 +246,10 @@ async fn restore_and_commit_loaded_navigation_page_async(
         );
     }
     let mut outcome = LoadedPageCommitOutcome::default();
-    let prepared_configuration_committed = committed_renderer_attachment.is_some();
     let mut page = page;
-    let page_agent_token = page.renderer_devtools_agent_token();
-    if let Some(transaction) = committed_renderer_attachment.as_ref()
-        && (token != transaction.navigation()
-            || transaction.current().agent_token() != page_agent_token
-            || conn.current_renderer_agent_attachment_id_for_owner(&state.owner)
-                != Some(transaction.current().id()))
-    {
-        tracing::warn!(
-            session_id = state.owner.session_id(),
-            "prepared navigation Page does not match its committed renderer attachment"
-        );
-        return None;
-    }
-    let renderer_agent_candidate = match committed_renderer_attachment.as_ref() {
-        None => match conn.prepare_renderer_agent_candidate_for_owner(&state.owner, token, &page) {
-            Ok(candidate) => Some(candidate),
+    let renderer_agent_candidate =
+        match conn.prepare_renderer_agent_candidate_for_owner(&state.owner, token, &page) {
+            Ok(candidate) => candidate,
             Err(error) => {
                 tracing::debug!(
                     %error,
@@ -276,9 +259,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
                 );
                 return None;
             }
-        },
-        Some(_) => None,
-    };
+        };
     let Some(commit_state) = conn.prepare_loaded_navigation_commit_for_owner(&state.owner) else {
         return Some(outcome);
     };
@@ -286,8 +267,8 @@ async fn restore_and_commit_loaded_navigation_page_async(
         .effective_permission_overrides_for_browser_context_id(&commit_state.browser_context_id);
 
     let restore_started = timing_enabled.then(std::time::Instant::now);
-    let runtime_restoration = if let Some(candidate) = renderer_agent_candidate.as_ref() {
-        candidate
+    let runtime_restoration = if !configuration_applied_at_creation {
+        renderer_agent_candidate
             .binding()
             .expect("a materialized renderer candidate has its own binding")
             .restore_runtime_state(
@@ -362,7 +343,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
     let (fetch_subresource_enabled, fetch_subresource_resource_type) =
         commit_state.fetch_subresource_config;
     let fetch_restore_started = timing_enabled.then(std::time::Instant::now);
-    if !prepared_configuration_committed
+    if !configuration_applied_at_creation
         && (fetch_subresource_enabled || fetch_subresource_resource_type.is_some())
         && let Err(error) = page
             .set_fetch_subresource_interception_async(
@@ -399,7 +380,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
         );
     }
     let permission_started = timing_enabled.then(std::time::Instant::now);
-    if !prepared_configuration_committed
+    if !configuration_applied_at_creation
         && !permission_overrides.is_empty()
         && let Err(error) = page
             .set_permission_overrides_async(&permission_overrides)
@@ -457,12 +438,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
     let page_commit = match conn.commit_loaded_navigation_for_owner(
         &state.owner,
         prepared,
-        match committed_renderer_attachment {
-            Some(transaction) => {
-                LoadedNavigationRendererAttachmentCommit::AlreadyCommitted(transaction)
-            }
-            None => LoadedNavigationRendererAttachmentCommit::Prepare(renderer_agent_candidate),
-        },
+        Some(renderer_agent_candidate),
     ) {
         Some(Ok(commit)) => commit,
         Some(Err(error)) => {
