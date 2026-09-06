@@ -41,6 +41,7 @@ use super::{
 };
 
 mod collection;
+mod downloads;
 pub(in crate::conn) mod javascript_dialog;
 mod navigation;
 mod page_runtime;

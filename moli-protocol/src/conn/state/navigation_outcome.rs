@@ -1,8 +1,8 @@
+use moli_core::browser::DownloadBody;
 use moli_core::page::{
     Page, RendererMainDocumentCommit, RendererPageCreationArtifacts,
     RendererPendingDownloadActivation, RendererRuntimeRealmInfo,
 };
-use moli_fetch::StreamingRawResponse;
 use serde::Serialize;
 use serde_json::Value;
 use std::sync::Arc;
@@ -150,29 +150,20 @@ impl RendererMainDocumentCommitSeed {
 }
 
 #[derive(Debug)]
-pub(crate) enum CompletedDownloadBody {
-    Buffered(Vec<u8>),
-    Streaming(Box<StreamingRawResponse>),
-}
-
-#[derive(Debug)]
 pub(crate) struct CompletedDownloadBodyArtifact {
-    body: CompletedDownloadBody,
+    body: DownloadBody,
     response_headers: Vec<(String, String)>,
 }
 
 impl CompletedDownloadBodyArtifact {
-    pub(crate) fn from_body(
-        body: CompletedDownloadBody,
-        response_headers: Vec<(String, String)>,
-    ) -> Self {
+    pub(crate) fn from_body(body: DownloadBody, response_headers: Vec<(String, String)>) -> Self {
         Self {
             body,
             response_headers,
         }
     }
 
-    pub(crate) fn into_parts(self) -> (CompletedDownloadBody, Vec<(String, String)>) {
+    pub(crate) fn into_parts(self) -> (DownloadBody, Vec<(String, String)>) {
         (self.body, self.response_headers)
     }
 }

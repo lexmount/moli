@@ -146,7 +146,7 @@ pub(crate) use target_state::{
     PendingBidiChannelListener, PendingInspectorAwait, TargetOwnerState,
 };
 
-pub(crate) use navigation_outcome::{CompletedDownloadBody, CompletedDownloadBodyArtifact};
+pub(crate) use navigation_outcome::CompletedDownloadBodyArtifact;
 pub use navigation_outcome::{
     DownloadNavigation, LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome,
     NavigationRequestLoadPolicy, TargetInfo,

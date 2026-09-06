@@ -46,7 +46,6 @@ chromiumoxide_cdp = "0.9.1"
 data-url = "0.3.2"
 moli-crypto = { path = "../moli-crypto" }
 http = "1"
-sanitize-filename = "=0.6.0"
 
 [dev-dependencies]
 axum = { version = "0.8.6", features = ["ws"] }

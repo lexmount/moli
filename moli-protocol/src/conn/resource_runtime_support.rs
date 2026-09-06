@@ -27,6 +27,7 @@ impl CdpConnection {
             .unwrap_or_else(|| self.initial_storage_partition.resource_storage_handles())
     }
 
+    #[cfg(test)]
     pub(crate) fn ensure_resource_request_client(
         &mut self,
     ) -> Result<ResourceRequestClient, String> {
