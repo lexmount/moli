@@ -1,6 +1,8 @@
 use crate::conn::TargetPageResidenceIdentity;
 use crate::conn::state::TargetPageAbsenceReason;
-use crate::conn::state::web_contents::{PreparedDocumentNavigation, RetiringDocument};
+use crate::conn::state::web_contents::{
+    DocumentNavigationDestination, PreparedDocumentNavigation, RetiringDocument,
+};
 use crate::conn::state::{DevToolsRendererChannelError, DocumentId};
 use crate::conn::{BrowserContext, PageTargetHost, TargetRuntimeSlot};
 use moli_core::page::{Page, RendererPageCommandPostResponseContinuation};
@@ -215,18 +217,80 @@ impl BrowserContext {
 }
 
 impl BrowserContext {
-    pub(crate) fn commit_loaded_navigation_for_target(
-        &mut self,
+    pub(crate) fn owns_web_contents(&self, id: moli_core::browser::WebContentsId) -> bool {
+        self.physical.web_contents.contains_key(&id)
+    }
+
+    pub(crate) fn start_loaded_document_navigation_for_target(
+        &self,
         target_id: &str,
+        navigation: moli_core::browser::NavigationId,
+        page: Page,
+        destination: DocumentNavigationDestination,
+        artifacts: &moli_core::page::RendererPageCreationArtifacts,
+        defaults: &moli_core::browser::PermissionDefaults,
+    ) -> Result<
+        impl std::future::Future<Output = anyhow::Result<PreparedDocumentNavigation>> + use<>,
+        &'static str,
+    > {
+        let contents = self
+            .web_contents_for_target(target_id)
+            .ok_or("navigation WebContents unavailable")?;
+        let interception = self
+            .page_targets
+            .get(target_id)
+            .ok_or("navigation projection unavailable")?
+            .fetch_owner
+            .subresource_interception_config();
+        contents.start_loaded_document_navigation(
+            navigation,
+            page,
+            destination,
+            artifacts,
+            interception,
+            self.physical.permission_overrides.snapshot(defaults),
+        )
+    }
+
+    pub(in crate::conn) fn start_document_materialization_for_target(
+        &self,
+        target_id: &str,
+        navigation: moli_core::browser::NavigationId,
+        page: moli_core::runtime::PreparedDocumentPage,
+        destination: DocumentNavigationDestination,
+    ) -> Result<crate::conn::state::web_contents::AdmittedDocumentMaterialization, &'static str>
+    {
+        self.web_contents_for_target(target_id)
+            .ok_or("navigation WebContents unavailable")?
+            .start_document_materialization(navigation, page, destination)
+    }
+
+    pub(crate) fn commit_loaded_navigation(
+        &mut self,
         prepared: PreparedDocumentNavigation,
     ) -> anyhow::Result<LoadedNavigationPageCommit> {
         let navigation = prepared.navigation();
         let commit = self
-            .web_contents_for_target_mut(target_id)
-            .expect("resolved WebContents")
+            .physical
+            .web_contents
+            .get_mut(&prepared.web_contents_id())
+            .ok_or_else(|| anyhow::anyhow!("navigation WebContents unavailable"))?
             .commit_document_navigation(prepared)
             .map_err(anyhow::Error::msg)?;
         debug_assert_eq!(commit.navigation, navigation);
+        let Some(target_id) = self
+            .page_targets
+            .get_for_web_contents(commit.web_contents)
+            .map(|target| target.target_id().to_owned())
+        else {
+            return Ok(LoadedNavigationPageCommit {
+                inspection_projection: Err(DevToolsRendererChannelError::Closed),
+                replaced_page_owner: None,
+                previous_document_retirement: commit.retirement,
+                committed_document_post_response_continuation: commit.post_response_continuation,
+            });
+        };
+        let target_id = target_id.as_str();
         debug_assert_eq!(self.target_document_id(target_id), Some(commit.document));
         debug_assert_eq!(
             self.web_contents_for_target(target_id)

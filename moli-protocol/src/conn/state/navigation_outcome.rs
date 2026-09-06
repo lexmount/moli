@@ -169,8 +169,8 @@ impl CompletedDownloadBodyArtifact {
 }
 
 #[derive(Debug)]
-pub struct LoadedNavigation {
-    pub page: Page,
+pub struct LoadedNavigation<P = Page> {
+    pub page: P,
     pub pending_download: Option<RendererPendingDownloadActivation>,
     pub page_creation_artifacts: RendererPageCreationArtifacts,
     pub requested_url: Url,

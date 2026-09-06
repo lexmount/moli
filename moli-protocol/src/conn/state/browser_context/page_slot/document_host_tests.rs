@@ -7,6 +7,31 @@ use std::{
 
 const TARGET: &str = "TID-dialog-owner";
 
+async fn prepare_navigation(
+    owner: &BrowserContext,
+    navigation: NavigationId,
+    page: Page,
+    url: url::Url,
+    artifacts: &RendererPageCreationArtifacts,
+) -> crate::conn::PreparedDocumentNavigation {
+    owner
+        .start_loaded_document_navigation_for_target(
+            TARGET,
+            navigation,
+            page,
+            crate::conn::DocumentNavigationDestination {
+                url,
+                security_origin: "null".into(),
+                secure_context_type: "InsecureScheme".into(),
+            },
+            artifacts,
+            &Default::default(),
+        )
+        .unwrap()
+        .await
+        .unwrap()
+}
+
 fn empty_document_context() -> BrowserContext {
     let mut owner = BrowserContext::new("BID-dialog-owner".into());
     owner.set_active_target_id(TARGET);
@@ -46,18 +71,8 @@ async fn loaded_navigation_commit_settles_document_history_and_navigation_togeth
         .unwrap();
     let url = page.final_url().clone();
     let artifacts = page.take_page_creation_artifacts().unwrap();
-    let prepared = crate::conn::PreparedDocumentNavigation::new(
-        token,
-        page,
-        url.clone(),
-        "null".into(),
-        "InsecureScheme".into(),
-        &artifacts,
-    )
-    .unwrap();
-    let committed = owner
-        .commit_loaded_navigation_for_target(TARGET, prepared)
-        .unwrap();
+    let prepared = prepare_navigation(&owner, token, page, url.clone(), &artifacts).await;
+    let committed = owner.commit_loaded_navigation(prepared).unwrap();
     assert!(committed.inspection_projection.is_ok());
     assert_eq!(
         owner.target_document_id(TARGET),
@@ -86,6 +101,56 @@ async fn loaded_navigation_commit_settles_document_history_and_navigation_togeth
             .unwrap()
             .snapshot()
             .is_some()
+    );
+    committed.previous_document_retirement.close().await;
+}
+
+#[tokio::test]
+async fn disappearing_agent_host_cannot_cancel_an_admitted_browser_commit() {
+    let browser = Browser::new(BrowserConfig::default()).unwrap();
+    let mut owner = empty_document_context();
+    let navigation = owner.begin_target_document_navigation(TARGET, "LOADER-native".into());
+    let contents_id = owner.page_targets.get(TARGET).unwrap().web_contents_id();
+    let expected_document = owner.physical.web_contents[&contents_id]
+        .navigation
+        .pending_document()
+        .unwrap()
+        .1;
+    let mut page = browser
+        .fetch("data:text/html,<title>native</title>")
+        .await
+        .unwrap();
+    let artifacts = page.take_page_creation_artifacts().unwrap();
+    let url = page.final_url().clone();
+    let prepared = prepare_navigation(&owner, navigation, page, url.clone(), &artifacts).await;
+
+    drop(owner.page_targets.remove(TARGET).unwrap());
+    let committed = owner.commit_loaded_navigation(prepared).unwrap();
+    assert!(committed.inspection_projection.is_err());
+    let contents = owner.physical.web_contents.get_mut(&contents_id).unwrap();
+    assert_eq!(
+        contents.main_frame.current_document.as_ref().unwrap().id,
+        expected_document
+    );
+    assert_eq!(contents.navigation.pending_document(), None);
+    assert_eq!(
+        contents.navigation.committed_document_navigation(),
+        Some(navigation)
+    );
+    let (_, history) = contents.navigation.navigation_history_snapshot(None);
+    assert_eq!(history.last().unwrap().url, url.as_str());
+    assert_eq!(history.last().unwrap().title, "native");
+    assert_eq!(
+        contents
+            .main_frame
+            .current_document
+            .as_mut()
+            .unwrap()
+            .page
+            .evaluate_runtime_expression_async("40 + 2")
+            .await
+            .unwrap()["value"],
+        42
     );
     committed.previous_document_retirement.close().await;
 }
@@ -121,16 +186,8 @@ async fn failed_inspection_projection_cannot_veto_browser_document_commit() {
         .unwrap();
     let artifacts = page.take_page_creation_artifacts().unwrap();
     let url = page.final_url().clone();
-    let prepared = crate::conn::PreparedDocumentNavigation::new(
-        navigation,
-        page,
-        url.clone(),
-        "null".into(),
-        "InsecureScheme".into(),
-        &artifacts,
-    )
-    .unwrap();
-    let result = owner.commit_loaded_navigation_for_target(TARGET, prepared);
+    let prepared = prepare_navigation(&owner, navigation, page, url.clone(), &artifacts).await;
+    let result = owner.commit_loaded_navigation(prepared);
 
     assert_eq!(
         owner.target_document_id(TARGET),
@@ -187,18 +244,8 @@ async fn committed_occurrence_retains_the_previous_document_output_projection() 
     let current_renderer = moli_core::browser::RendererPageResidenceIdentity::from_page(&page);
     let artifacts = page.take_page_creation_artifacts().unwrap();
     let url = page.final_url().clone();
-    let prepared = crate::conn::PreparedDocumentNavigation::new(
-        navigation,
-        page,
-        url,
-        "null".into(),
-        "InsecureScheme".into(),
-        &artifacts,
-    )
-    .unwrap();
-    let committed = owner
-        .commit_loaded_navigation_for_target(TARGET, prepared)
-        .unwrap();
+    let prepared = prepare_navigation(&owner, navigation, page, url, &artifacts).await;
+    let committed = owner.commit_loaded_navigation(prepared).unwrap();
     let current_document = owner.target_document_id(TARGET).unwrap();
     assert_ne!(current_document, previous_document);
     let projection = &owner.page_targets.get(TARGET).unwrap().runtime_slot;
@@ -222,18 +269,8 @@ async fn inspection_restore_failure_cannot_roll_back_a_committed_browser_documen
     let mut page = browser.fetch("data:text/html,<title>committed</title><script>Object.defineProperty(globalThis,'protectedBinding',{value:1,configurable:false})</script>").await.unwrap();
     let artifacts = page.take_page_creation_artifacts().unwrap();
     let url = page.final_url().clone();
-    let prepared = crate::conn::PreparedDocumentNavigation::new(
-        navigation,
-        page,
-        url.clone(),
-        "null".into(),
-        "InsecureScheme".into(),
-        &artifacts,
-    )
-    .unwrap();
-    let committed = owner
-        .commit_loaded_navigation_for_target(TARGET, prepared)
-        .unwrap();
+    let prepared = prepare_navigation(&owner, navigation, page, url.clone(), &artifacts).await;
+    let committed = owner.commit_loaded_navigation(prepared).unwrap();
     assert!(committed.inspection_projection.is_ok());
     let document = owner.target_document_id(TARGET);
     let registration = moli_core::page::RuntimeBindingRegistration {
@@ -298,15 +335,7 @@ async fn rejected_browser_candidate_cannot_rotate_inspection_or_document_project
         .unwrap();
     let artifacts = page.take_page_creation_artifacts().unwrap();
     let url = page.final_url().clone();
-    let prepared = crate::conn::PreparedDocumentNavigation::new(
-        stale,
-        page,
-        url,
-        "null".into(),
-        "InsecureScheme".into(),
-        &artifacts,
-    )
-    .unwrap();
+    let prepared = prepare_navigation(&owner, stale, page, url, &artifacts).await;
     let current = owner.begin_target_document_navigation(TARGET, "LOADER-current".into());
     let history = owner.target_navigation_history_snapshot(TARGET).unwrap();
     let target_url = owner
@@ -315,11 +344,7 @@ async fn rejected_browser_candidate_cannot_rotate_inspection_or_document_project
         .unwrap()
         .target_url()
         .to_owned();
-    assert!(
-        owner
-            .commit_loaded_navigation_for_target(TARGET, prepared)
-            .is_err()
-    );
+    assert!(owner.commit_loaded_navigation(prepared).is_err());
     assert_eq!(owner.target_document_id(TARGET), document);
     assert_eq!(
         owner

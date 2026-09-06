@@ -90,15 +90,13 @@ pub(super) struct TargetSessionStateMut<'a> {
     pub(super) devtools_session_state: &'a mut DevToolsSessionState,
 }
 
-pub(crate) struct TargetLoadedNavigationCommitState {
-    pub(crate) browser_context_id: String,
+pub(crate) struct NavigationInspectionRestore {
     pub(crate) runtime_frontend_enabled: bool,
     pub(crate) renderer_runtime_inspector_session_id: Option<String>,
     pub(crate) runtime_inspector_session_restore_snapshots:
         Vec<RendererInspectorSessionRestoreSnapshot>,
     pub(crate) stored_runtime_bindings: Vec<RuntimeBindingDefinition>,
     pub(crate) session_runtime_bindings: Vec<RuntimeBindingDefinition>,
-    pub(crate) fetch_subresource_config: (bool, Option<moli_core::page::SubresourceResourceType>),
 }
 
 pub(crate) struct TargetNavigationRequestPreflight {
@@ -925,15 +923,12 @@ impl<'a> TargetSessionOwnerMut<'a> {
         }
     }
 
-    pub(super) fn prepare_loaded_navigation_commit(
-        &mut self,
-    ) -> Option<TargetLoadedNavigationCommitState> {
+    pub(super) fn navigation_inspection_restore(&mut self) -> Option<NavigationInspectionRestore> {
         {
             let target = self.target();
             let page_state = target;
             let devtools_session_state = page_state.devtools_sessions.session(&self.session_key);
-            Some(TargetLoadedNavigationCommitState {
-                browser_context_id: self.browser_context.id.clone(),
+            Some(NavigationInspectionRestore {
                 runtime_frontend_enabled: devtools_session_state
                     .map(|state| state.runtime_session_state.runtime_frontend_enabled)
                     .unwrap_or_default(),
@@ -949,7 +944,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
                 session_runtime_bindings: devtools_session_state
                     .map(|state| state.runtime_bindings.clone())
                     .unwrap_or_default(),
-                fetch_subresource_config: target.fetch_owner.subresource_interception_config(),
             })
         }
     }
@@ -957,16 +951,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
     pub(super) fn clear_pending_navigation_history_update(&mut self) -> Option<()> {
         self.browser_context
             .clear_target_pending_navigation_history_update(&self.target_id)
-    }
-
-    pub(super) fn commit_loaded_navigation(
-        &mut self,
-        prepared: crate::conn::PreparedDocumentNavigation,
-    ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
-        Some(
-            self.browser_context
-                .commit_loaded_navigation_for_target(&self.target_id, prepared),
-        )
     }
 }
 
@@ -1058,21 +1042,53 @@ impl CdpConnection {
             .register_pending_fetch_navigation_request(pending)
     }
 
-    pub(crate) fn prepare_loaded_navigation_commit_for_owner(
+    pub(crate) fn navigation_inspection_restore_for_owner(
         &mut self,
         owner: &crate::conn::CommandOwnerScope,
-    ) -> Option<TargetLoadedNavigationCommitState> {
+    ) -> Option<NavigationInspectionRestore> {
         self.target_session_owner_mut_for_owner(owner)?
-            .prepare_loaded_navigation_commit()
+            .navigation_inspection_restore()
     }
 
-    pub(crate) fn commit_loaded_navigation_for_owner(
+    pub(crate) fn start_loaded_document_navigation_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+        navigation: crate::conn::NavigationId,
+        page: Page,
+        destination: crate::conn::DocumentNavigationDestination,
+        artifacts: &RendererPageCreationArtifacts,
+    ) -> Result<
+        impl std::future::Future<Output = anyhow::Result<crate::conn::PreparedDocumentNavigation>>
+        + use<>,
+        String,
+    > {
+        let (context_id, target_id) = self
+            .resolved_page_owner_identity_for_owner(owner)
+            .ok_or("navigation WebContents unavailable")?;
+        self.browser_context_by_id(&context_id)
+            .ok_or("navigation BrowserContext unavailable")?
+            .start_loaded_document_navigation_for_target(
+                &target_id,
+                navigation,
+                page,
+                destination,
+                artifacts,
+                &self.permission_defaults,
+            )
+            .map_err(str::to_owned)
+    }
+
+    pub(crate) fn commit_loaded_navigation(
         &mut self,
-        owner: &crate::conn::CommandOwnerScope,
         prepared: crate::conn::PreparedDocumentNavigation,
-    ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .commit_loaded_navigation(prepared)
+    ) -> anyhow::Result<LoadedNavigationPageCommit> {
+        let context = self
+            .browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .find(|context| context.owns_web_contents(prepared.web_contents_id()))
+            .ok_or_else(|| anyhow::anyhow!("navigation WebContents unavailable"))?;
+        context.commit_loaded_navigation(prepared)
     }
 
     pub(crate) fn initial_document_page_owner_for_owner(
@@ -3260,7 +3276,7 @@ mod tests {
     }
 
     #[test]
-    fn target_session_owner_mut_prepares_background_navigation_commit_state() {
+    fn target_session_owner_snapshots_only_background_inspection_restore() {
         let mut background = BrowserContext::new("BID-background".to_owned());
         background.register_page_target_url_fixture(
             "TID-background".to_owned(),
@@ -3296,11 +3312,10 @@ mod tests {
                 session_key: DevToolsSessionKey::Primary,
             };
             owner
-                .prepare_loaded_navigation_commit()
+                .navigation_inspection_restore()
                 .expect("background navigation commit state should prepare")
         };
 
-        assert_eq!(commit_state.browser_context_id, "BID-background");
         assert!(commit_state.runtime_frontend_enabled);
         assert_eq!(
             background
@@ -3310,7 +3325,6 @@ mod tests {
             "about:blank",
             "preparing commit state should not mutate target identity"
         );
-        assert_eq!(commit_state.fetch_subresource_config, (true, None));
     }
 
     #[test]
@@ -3358,7 +3372,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn target_session_owner_mut_commits_loaded_page_to_background_owner() {
+    async fn browser_context_commits_loaded_page_to_background_owner() {
         let mut ctx = TestContext::new();
         let loaded = ctx
             .conn
@@ -3376,28 +3390,26 @@ mod tests {
         let initial_attachment_id = background.target_document_id("TID-background");
         let navigation =
             background.begin_target_document_navigation("TID-background", "LOADER-nav".into());
-        let prepared = crate::conn::PreparedDocumentNavigation::new(
-            navigation,
-            loaded.page,
-            page_url.clone(),
-            "https://nav.example".into(),
-            "Secure".into(),
-            &artifacts,
-        )
-        .unwrap();
+        let prepared = background
+            .start_loaded_document_navigation_for_target(
+                "TID-background",
+                navigation,
+                loaded.page,
+                crate::conn::DocumentNavigationDestination {
+                    url: page_url.clone(),
+                    security_origin: "https://nav.example".into(),
+                    secure_context_type: "Secure".into(),
+                },
+                &artifacts,
+                &Default::default(),
+            )
+            .unwrap()
+            .await
+            .unwrap();
 
-        let committed = {
-            let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut background,
-                target_id: "TID-background".to_owned(),
-                command_session_id: None,
-                session_key: DevToolsSessionKey::Primary,
-            };
-            owner
-                .commit_loaded_navigation(prepared)
-                .expect("background page owner should exist")
-                .expect("background Browser Document should commit")
-        };
+        let committed = background
+            .commit_loaded_navigation(prepared)
+            .expect("background Browser Document should commit");
         assert!(committed.inspection_projection.is_ok());
 
         let target = background

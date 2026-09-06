@@ -365,6 +365,13 @@ impl ResponseCommitReady {
         if let Err(error) = inspection_ack.await {
             tracing::warn!(%error, "prepared document inspection configuration failed");
         }
+        self.finish_materialization(built).await
+    }
+
+    async fn finish_materialization<P>(
+        mut self,
+        built: anyhow::Result<moli_core::runtime::BuiltDocumentPage<P>>,
+    ) -> Result<LoadedNavigation<P>, String> {
         let built = match built {
             Ok(built) => built,
             Err(error) => {
@@ -1555,6 +1562,62 @@ impl CdpConnection {
             },
             inspection,
         ))
+    }
+
+    pub(crate) fn start_response_document_materialization_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        navigation: NavigationId,
+        mut response: ResponseCommitReady,
+    ) -> Result<
+        impl std::future::Future<Output = Result<LoadedNavigation<PreparedDocumentNavigation>, String>>
+        + use<>,
+        String,
+    > {
+        let (context_id, target_id) = self
+            .resolved_page_owner_identity_for_owner(owner)
+            .ok_or("navigation WebContents unavailable")?;
+        let commit = response
+            .main_document_commit
+            .as_ref()
+            .ok_or("loaded navigation is missing its frozen main Document commit identity")?;
+        let destination = DocumentNavigationDestination {
+            url: response
+                .network_error_page
+                .as_ref()
+                .map(|error| error.unreachable_url().clone())
+                .unwrap_or_else(|| response.final_url.clone()),
+            security_origin: commit.security_origin.clone(),
+            secure_context_type: commit.secure_context_type.clone(),
+        };
+        let page = response
+            .prepared_page
+            .take()
+            .expect("response must retain its prepared Document");
+        let endpoint = page.inspection_configuration_endpoint();
+        let materialization = self
+            .browser_context_by_id(&context_id)
+            .ok_or("navigation BrowserContext unavailable")?
+            .start_document_materialization_for_target(&target_id, navigation, page, destination)
+            .map_err(|error| match error {
+                "stale navigation document candidate"
+                | "canceled navigation document candidate" => {
+                    "renderer channel navigation was superseded by a newer navigation".to_owned()
+                }
+                error => error.to_owned(),
+            })?;
+        // Native admission precedes any renderer/runtime policy mutation.
+        // The owned operation is tied to this reservation and cannot be retargeted.
+        let (policy, inspection) =
+            self.prepared_document_build_inputs_for_owner(owner, response.final_url())?;
+        let inspection_ack = endpoint.start_configure(inspection);
+        Ok(async move {
+            let built = materialization.materialize(policy).await;
+            if let Err(error) = inspection_ack.await {
+                tracing::warn!(%error, "prepared document inspection configuration failed");
+            }
+            response.finish_materialization(built).await
+        })
     }
 
     fn idle_override_for_navigation(

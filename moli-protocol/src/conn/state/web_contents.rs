@@ -13,8 +13,11 @@ mod document_host;
 mod emulation_policy;
 mod javascript_dialog;
 mod navigation_commit;
+pub(in crate::conn) use navigation_commit::AdmittedDocumentMaterialization;
 mod network_request_policy;
-pub(crate) use navigation_commit::{PreparedDocumentNavigation, RetiringDocument};
+pub(crate) use navigation_commit::{
+    DocumentNavigationDestination, PreparedDocumentNavigation, RetiringDocument,
+};
 mod page_surface;
 mod session_storage;
 mod window;
