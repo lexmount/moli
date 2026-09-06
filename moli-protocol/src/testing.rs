@@ -370,9 +370,9 @@ impl TestContext {
             finished.renderer_call_replacements.is_none(),
             "fixture must not replace in-flight renderer calls"
         );
-        let (binding, _) = self.conn.bind_renderer_document_lifecycle_for_owner(
+        let (binding, _) = self.conn.project_committed_document_lifecycle_for_owner(
             &owner,
-            page_creation_artifacts,
+            page_commit.lifecycle,
             Some(token),
             target_id,
             crate::domains::page::LOADER_ID.to_owned(),

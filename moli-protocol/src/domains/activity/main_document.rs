@@ -496,7 +496,7 @@ impl MainDocumentNavigationActivity {
         let renderer_events =
             std::mem::take(&mut self.deferred_initial_renderer_document_lifecycle_events);
         let (binding, mut accepted_events) = conn
-            .ingest_renderer_document_lifecycle_events_for_owner(
+            .project_renderer_document_lifecycle_events_for_owner(
                 &self.state.owner,
                 renderer_events,
             );

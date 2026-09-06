@@ -17,6 +17,7 @@ pub(crate) struct PreparedDocumentNavigation {
     identity: DocumentNavigationIdentity,
     page: Page,
     lifecycle: DocumentLifecycle,
+    creation_artifacts: RendererPageCreationArtifacts,
     info: CommittedDocumentInfo,
 }
 
@@ -136,6 +137,7 @@ impl PreparedDocumentNavigation {
             identity,
             page,
             lifecycle,
+            creation_artifacts: artifacts.clone(),
             info: CommittedDocumentInfo {
                 url: destination.url,
                 title,
@@ -155,6 +157,7 @@ pub(in crate::conn) struct CommittedDocumentNavigation {
     pub(in crate::conn) previous_document: Option<DocumentId>,
     pub(in crate::conn) previous_renderer: Option<RendererPageResidenceIdentity>,
     pub(in crate::conn) inspection_endpoint: moli_renderer_v8::RendererInspectionEndpoint,
+    pub(in crate::conn) lifecycle: CommittedDocumentLifecycle,
     pub(in crate::conn) info: CommittedDocumentInfo,
     pub(in crate::conn) retirement: RetiringDocument,
     pub(in crate::conn) post_response_continuation:
@@ -163,6 +166,13 @@ pub(in crate::conn) struct CommittedDocumentNavigation {
 
 /// Retirement has no commit authority and never retains a Browser registry borrow.
 pub(crate) struct RetiringDocument(Option<Page>);
+
+/// A creation prefix published by the Browser commit, never a request to
+/// initialize or rewind native state from a frontend projection.
+pub(crate) struct CommittedDocumentLifecycle {
+    pub(crate) document: DocumentId,
+    pub(crate) artifacts: RendererPageCreationArtifacts,
+}
 
 impl RetiringDocument {
     pub(crate) async fn close(self) {
@@ -296,6 +306,10 @@ impl WebContents {
             previous_document,
             previous_renderer,
             inspection_endpoint,
+            lifecycle: CommittedDocumentLifecycle {
+                document: document_id,
+                artifacts: prepared.creation_artifacts,
+            },
             info: prepared.info,
             retirement,
             post_response_continuation,
@@ -389,7 +403,14 @@ mod tests {
         );
         let document = contents.main_frame.current_document.as_ref().unwrap();
         assert_eq!(document.id, expected_document);
-        assert!(document.lifecycle.snapshot().is_some());
+        assert_eq!(
+            document.lifecycle.snapshot(),
+            Some(committed.lifecycle.artifacts.lifecycle_snapshot)
+        );
+        assert!(
+            document.lifecycle.snapshot().unwrap().load.is_some(),
+            "Browser commit includes the full creation prefix without a DevTools replay"
+        );
         assert_eq!(
             retired.as_mut().poll(&mut context),
             Poll::Ready(DocumentRetirement::Superseded)

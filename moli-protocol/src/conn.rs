@@ -583,14 +583,15 @@ pub(crate) use state::{
     TargetSharedWorkerProtocolAttachmentRetirement, WindowSurface, WindowSurfaceState,
     viewport_surface_install_script,
 };
+pub(crate) use state::{
+    CommittedDocumentLifecycle, DocumentLifecycleEvent, DocumentNavigationDestination,
+    LoadedNavigationPageCommit, PreparedDocumentNavigation,
+};
 #[cfg(test)]
 pub(crate) use state::{
     DevToolsEmulationSessionState, DevToolsSessionState, EmulationPolicy, JavaScriptDialogKey,
     TargetJavaScriptDialog, TargetJavaScriptDialogScopeObserver, TargetPageSlot,
     TargetRuntimeSessionState,
-};
-pub(crate) use state::{
-    DocumentNavigationDestination, LoadedNavigationPageCommit, PreparedDocumentNavigation,
 };
 pub(crate) use target::{
     PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,
@@ -1895,10 +1896,10 @@ impl CdpConnection {
         }
     }
 
-    pub(crate) fn bind_renderer_document_lifecycle_for_owner(
+    pub(crate) fn project_committed_document_lifecycle_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
-        artifacts: moli_core::page::RendererPageCreationArtifacts,
+        artifacts: CommittedDocumentLifecycle,
         navigation: Option<NavigationId>,
         frame_id: String,
         loader_id: String,
@@ -1917,7 +1918,7 @@ impl CdpConnection {
             let previous_document_scope = context
                 .renderer_document_lifecycle_binding_for_target(&target_id)
                 .map(CommittedRendererDocumentBinding::renderer_document_identity);
-            let events = context.bind_renderer_document_lifecycle_for_target(
+            let events = context.project_committed_document_lifecycle_for_target(
                 &target_id, artifacts, navigation, frame_id, loader_id,
             );
             let binding = context
@@ -1938,7 +1939,47 @@ impl CdpConnection {
         (binding, events)
     }
 
-    pub(crate) fn ingest_renderer_document_lifecycle_events_for_owner(
+    #[cfg(test)]
+    pub(crate) fn bind_renderer_document_lifecycle_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        artifacts: moli_core::page::RendererPageCreationArtifacts,
+        navigation: Option<NavigationId>,
+        frame_id: String,
+        loader_id: String,
+    ) -> (
+        Option<CommittedRendererDocumentBinding>,
+        Vec<moli_core::page::RendererDocumentLifecycleEvent>,
+    ) {
+        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
+        else {
+            return (None, Vec::new());
+        };
+        let Some(context) = self.browser_context_by_id_mut(&context_id) else {
+            return (None, Vec::new());
+        };
+        let Some(document) = context.target_document_id(&target_id) else {
+            return (None, Vec::new());
+        };
+        let Some(lifecycle) =
+            moli_core::browser::DocumentLifecycle::from_creation_artifacts(&artifacts)
+        else {
+            return (None, Vec::new());
+        };
+        context.install_document_lifecycle_for_test(&target_id, lifecycle);
+        self.project_committed_document_lifecycle_for_owner(
+            owner,
+            CommittedDocumentLifecycle {
+                document,
+                artifacts,
+            },
+            navigation,
+            frame_id,
+            loader_id,
+        )
+    }
+
+    pub(crate) fn project_renderer_document_lifecycle_events_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         events: Vec<moli_core::page::RendererDocumentLifecycleEvent>,
@@ -1958,7 +1999,7 @@ impl CdpConnection {
                 .renderer_document_lifecycle_binding_for_target(&target_id)
                 .map(CommittedRendererDocumentBinding::renderer_document_identity);
             let events =
-                context.ingest_renderer_document_lifecycle_events_for_target(&target_id, events);
+                context.project_renderer_document_lifecycle_events_for_target(&target_id, events);
             let binding = context
                 .renderer_document_lifecycle_binding_for_target(&target_id)
                 .cloned();
@@ -1975,6 +2016,29 @@ impl CdpConnection {
             self.retire_javascript_dialogs_for_owner(owner);
         }
         (binding, events)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn ingest_renderer_document_lifecycle_events_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        events: Vec<moli_core::page::RendererDocumentLifecycleEvent>,
+    ) -> (
+        Option<CommittedRendererDocumentBinding>,
+        Vec<moli_core::page::RendererDocumentLifecycleEvent>,
+    ) {
+        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
+        else {
+            return (None, Vec::new());
+        };
+        let Some(context) = self.browser_context_by_id_mut(&context_id) else {
+            return (None, Vec::new());
+        };
+        let events = events
+            .into_iter()
+            .filter(|event| context.observe_document_lifecycle_for_target(&target_id, *event))
+            .collect();
+        self.project_renderer_document_lifecycle_events_for_owner(owner, events)
     }
 
     fn retire_javascript_dialogs_for_owner(&mut self, owner: &CommandOwnerScope) {

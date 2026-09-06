@@ -23,7 +23,7 @@ pub(super) async fn commit_loaded_navigation_async(
 ) {
     let MaterializedLoadedDocumentProgress {
         pending_download,
-        page_creation_artifacts,
+        page_creation_artifacts: _,
         final_url,
         response_headers,
         response_from_cache,
@@ -35,15 +35,13 @@ pub(super) async fn commit_loaded_navigation_async(
         network_error_page,
     } = navigation;
     let is_network_error_page = network_error_page.is_some();
-    let (page_creation_artifacts, mut deferred_initial_renderer_document_lifecycle_events) =
-        split_renderer_page_creation_lifecycle_at_load_boundary(page_creation_artifacts);
     let mut navigation_activity =
         MainDocumentNavigationActivity::new(state, final_url.clone(), progress_gate, Some(*token));
     if let Some(error_page) = network_error_page.as_ref() {
         navigation_activity =
             navigation_activity.with_network_error_page_result(error_page.error_text().to_owned());
     }
-    let Some(()) = commit_and_project_loaded_navigation_async(
+    let Some(lifecycle) = commit_and_project_loaded_navigation_async(
         conn,
         out,
         navigation_activity.state(),
@@ -68,10 +66,15 @@ pub(super) async fn commit_loaded_navigation_async(
         );
     }
 
+    let (artifacts, mut deferred_initial_renderer_document_lifecycle_events) =
+        split_renderer_page_creation_lifecycle_at_load_boundary(lifecycle.artifacts);
     let (renderer_document_binding, mut initial_renderer_document_lifecycle_events) = conn
-        .bind_renderer_document_lifecycle_for_owner(
+        .project_committed_document_lifecycle_for_owner(
             &navigation_activity.state().owner,
-            page_creation_artifacts,
+            crate::conn::CommittedDocumentLifecycle {
+                document: lifecycle.document,
+                artifacts,
+            },
             Some(*token),
             navigation_activity.state().frame_id.clone(),
             navigation_activity.state().loader_id.clone(),
@@ -87,7 +90,7 @@ pub(super) async fn commit_loaded_navigation_async(
         // into the Page output FIFO, even if it is produced before protocol
         // finishes installing this binding. Never read the Page back here:
         // ordered ingress and the commit cursor preserve that handoff.
-        let (_, visible_events) = conn.ingest_renderer_document_lifecycle_events_for_owner(
+        let (_, visible_events) = conn.project_renderer_document_lifecycle_events_for_owner(
             &navigation_activity.state().owner,
             std::mem::take(&mut deferred_initial_renderer_document_lifecycle_events),
         );
@@ -198,7 +201,7 @@ async fn commit_and_project_loaded_navigation_async(
     initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
     inspection_restore: Option<crate::conn::NavigationInspectionRestore>,
     command_context: &mut CommandDispatchContext,
-) -> Option<()> {
+) -> Option<crate::conn::CommittedDocumentLifecycle> {
     let commit = match conn.commit_loaded_navigation(prepared) {
         Ok(commit) => commit,
         Err(error) => {
@@ -320,7 +323,7 @@ async fn commit_and_project_loaded_navigation_async(
         }
         out.extend_background_events_after_messages(events);
     }
-    Some(())
+    Some(commit.lifecycle)
 }
 
 /// Rebind failures are session failures, never Browser crash or close commands.

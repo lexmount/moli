@@ -781,49 +781,49 @@ impl BrowserContext {
         lifecycle
     }
 
-    pub(super) fn bind_document_lifecycle_for_target(
+    #[cfg(test)]
+    pub(in crate::conn) fn install_document_lifecycle_for_test(
         &mut self,
         target_id: &str,
-        snapshot: RendererDocumentLifecycleSnapshot,
+        lifecycle: DocumentLifecycle,
     ) {
-        if self
+        let snapshot = lifecycle.snapshot().expect("fixture lifecycle");
+        let previous = self
+            .document_lifecycle_for_target(target_id)
+            .and_then(DocumentLifecycle::snapshot)
+            .map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch));
+        if let Some(document) = self
             .web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .bind_document_lifecycle(snapshot)
-        {
-            return;
-        }
-        #[cfg(test)]
-        if let Some(fixture) = self
-            .page_slot_for_target_mut(target_id)
-            .expect("registered Target projection")
-            .document_fixture
+            .unwrap()
+            .main_frame
+            .current_document
             .as_mut()
         {
-            let previous = fixture
-                .lifecycle
-                .snapshot()
-                .map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch));
-            fixture.lifecycle = DocumentLifecycle::from_snapshot(snapshot);
-            if previous != Some((snapshot.frame, snapshot.document, snapshot.epoch))
-                || snapshot.terminated.is_some()
-            {
-                self.web_contents_for_target_mut(target_id)
-                    .expect("registered Target must reference live WebContents")
-                    .javascript_dialogs
-                    .clear();
-            }
-            return;
+            document.lifecycle = lifecycle;
+        } else {
+            self.page_slot_for_target_mut(target_id)
+                .unwrap()
+                .document_fixture
+                .as_mut()
+                .expect("current fixture Document")
+                .lifecycle = lifecycle;
         }
-        panic!("current Document must own its lifecycle");
+        if previous != Some((snapshot.frame, snapshot.document, snapshot.epoch))
+            || snapshot.terminated.is_some()
+        {
+            self.web_contents_for_target_mut(target_id)
+                .unwrap()
+                .javascript_dialogs
+                .clear();
+        }
     }
 
-    pub(super) fn observe_document_lifecycle_for_target(
+    #[cfg(test)]
+    pub(in crate::conn) fn observe_document_lifecycle_for_target(
         &mut self,
         target_id: &str,
         event: RendererDocumentLifecycleEvent,
     ) -> bool {
-        #[cfg(test)]
         if self
             .web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
@@ -853,11 +853,26 @@ impl BrowserContext {
                     .javascript_dialogs
                     .clear();
             }
+            if accepted
+                && matches!(
+                    event.kind,
+                    RendererDocumentLifecycleEventKind::Started {
+                        reason: RendererLifecycleStartReason::ExplicitDocumentOpen
+                            | RendererLifecycleStartReason::JavascriptDocumentReplacement
+                    }
+                )
+            {
+                self.web_contents_for_target_mut(target_id)
+                    .unwrap()
+                    .navigation
+                    .mark_initial_empty_document_exited();
+            }
             return accepted;
         }
         self.web_contents_for_target_mut(target_id)
             .expect("registered Target must reference live WebContents")
-            .observe_document_lifecycle(event)
+            .apply_document_lifecycle(event)
+            .is_some()
     }
 
     pub(super) fn document_lifetime_mut_for_target(
@@ -1307,6 +1322,7 @@ impl BrowserContext {
             .root_post_load_observation = None;
     }
 
+    #[cfg(test)]
     pub(crate) fn bind_renderer_document_lifecycle_for_target(
         &mut self,
         target_id: &str,
@@ -1315,7 +1331,41 @@ impl BrowserContext {
         frame_id: String,
         loader_id: String,
     ) -> Vec<RendererDocumentLifecycleEvent> {
+        let Some(document) = self.target_document_id(target_id) else {
+            return Vec::new();
+        };
         let Some(lifecycle) = DocumentLifecycle::from_creation_artifacts(&artifacts) else {
+            return Vec::new();
+        };
+        self.install_document_lifecycle_for_test(target_id, lifecycle);
+        self.project_committed_document_lifecycle_for_target(
+            target_id,
+            crate::conn::CommittedDocumentLifecycle {
+                document,
+                artifacts,
+            },
+            navigation,
+            frame_id,
+            loader_id,
+        )
+    }
+
+    pub(crate) fn project_committed_document_lifecycle_for_target(
+        &mut self,
+        target_id: &str,
+        lifecycle: crate::conn::CommittedDocumentLifecycle,
+        navigation: Option<NavigationId>,
+        frame_id: String,
+        loader_id: String,
+    ) -> Vec<RendererDocumentLifecycleEvent> {
+        let crate::conn::CommittedDocumentLifecycle {
+            document,
+            artifacts,
+        } = lifecycle;
+        if self.target_document_id(target_id) != Some(document) {
+            return Vec::new();
+        }
+        let Some(initial_snapshot) = DocumentLifecycle::creation_prefix_snapshot(&artifacts) else {
             tracing::warn!(
                 active_document = ?artifacts.active_document,
                 active_epoch = ?artifacts.active_epoch,
@@ -1325,7 +1375,6 @@ impl BrowserContext {
             );
             return Vec::new();
         };
-        let initial_snapshot = lifecycle.snapshot().expect("validated creation lifecycle");
         let RendererPageCreationArtifacts {
             active_document,
             active_epoch,
@@ -1373,7 +1422,6 @@ impl BrowserContext {
             document_id = binding.document_id.get(),
             "bound renderer document lifecycle to committed protocol document"
         );
-        self.bind_document_lifecycle_for_target(target_id, initial_snapshot);
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .renderer_document_lifecycle = RendererDocumentLifecycleProtocolState {
@@ -1384,13 +1432,26 @@ impl BrowserContext {
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .root_post_load_observation = None;
-        self.ingest_renderer_document_lifecycle_events_for_target(
+        self.project_renderer_document_lifecycle_events_for_target(
             target_id,
             initial_lifecycle_events,
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn ingest_renderer_document_lifecycle_events_for_target(
+        &mut self,
+        target_id: &str,
+        events: Vec<RendererDocumentLifecycleEvent>,
+    ) -> Vec<RendererDocumentLifecycleEvent> {
+        let accepted = events
+            .into_iter()
+            .filter(|event| self.observe_document_lifecycle_for_target(target_id, *event))
+            .collect();
+        self.project_renderer_document_lifecycle_events_for_target(target_id, accepted)
+    }
+
+    pub(crate) fn project_renderer_document_lifecycle_events_for_target(
         &mut self,
         target_id: &str,
         events: Vec<RendererDocumentLifecycleEvent>,
@@ -1452,12 +1513,22 @@ impl BrowserContext {
                 .binding
                 .as_ref()
                 .is_some_and(|binding| event.epoch != binding.renderer_epoch);
-            if !self.observe_document_lifecycle_for_target(target_id, event) {
+            if self
+                .page_slot_for_target(target_id)
+                .unwrap()
+                .renderer_document_lifecycle
+                .binding
+                .as_ref()
+                .is_none_or(|binding| {
+                    binding.renderer_frame != event.frame
+                        || binding.renderer_document != event.document
+                })
+            {
                 tracing::debug!(
                     sequence = event.sequence,
                     event_epoch = event.epoch.0,
                     event_document = ?event.document,
-                    "dropping stale or reordered renderer lifecycle event"
+                    "dropping lifecycle occurrence from another renderer Document"
                 );
                 continue;
             }
@@ -1538,19 +1609,6 @@ impl BrowserContext {
                 accepted.push(event);
             }
         }
-        if self
-            .renderer_document_lifecycle_binding_for_target(target_id)
-            .is_some_and(|binding| {
-                binding.document_open_replacement_epoch == Some(binding.renderer_epoch)
-            })
-        {
-            // The admitted document.open transition exits the initial document
-            // at this boundary, before a later renderer snapshot can arrive.
-            self.web_contents_for_target_mut(target_id)
-                .expect("validated lifecycle owner")
-                .navigation
-                .mark_initial_empty_document_exited();
-        }
         accepted
     }
 
@@ -1581,6 +1639,45 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<RendererDocumentLifecycleSnapshot> {
         self.document_lifecycle_for_target(target_id)?.snapshot()
+    }
+
+    pub(crate) fn apply_renderer_document_lifecycle(
+        &mut self,
+        renderer_page: RendererPageResidenceIdentity,
+        event: RendererDocumentLifecycleEvent,
+    ) -> Option<crate::conn::DocumentLifecycleEvent> {
+        if let Some(contents) = self.physical.web_contents.values_mut().find(|contents| {
+            contents
+                .main_frame
+                .current_document
+                .as_ref()
+                .is_some_and(|document| {
+                    RendererPageResidenceIdentity::from_page(&document.page) == renderer_page
+                })
+        }) {
+            return contents.apply_document_lifecycle(event);
+        }
+        #[cfg(test)]
+        {
+            let target_id = self
+                .page_targets
+                .iter()
+                .find(|target| {
+                    self.loaded_page_for_target(target.target_id()).is_none()
+                        && self.routes_renderer_page_for_target(target.target_id(), renderer_page)
+                        && target.runtime_slot.page_slot().document_fixture.is_some()
+                })
+                .map(|target| target.target_id().to_owned());
+            if let Some(target_id) = target_id
+                && self.observe_document_lifecycle_for_target(&target_id, event)
+            {
+                return Some(crate::conn::DocumentLifecycleEvent::new(
+                    self.target_document_id(&target_id).unwrap(),
+                    event,
+                ));
+            }
+        }
+        None
     }
 
     pub(crate) fn register_renderer_document_lifecycle_waiter_for_target(
@@ -2730,7 +2827,10 @@ mod renderer_document_lifecycle_tests {
                             sequence: 1,
                             timestamp_micros: 10,
                         },
-                        dom_content_loaded: None,
+                        dom_content_loaded: Some(RendererLifecycleEventStamp {
+                            sequence: dcl.sequence,
+                            timestamp_micros: dcl.timestamp_micros,
+                        }),
                         load: None,
                         terminated: None,
                     },

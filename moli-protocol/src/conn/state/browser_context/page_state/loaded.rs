@@ -8,6 +8,7 @@ use crate::conn::{BrowserContext, PageTargetHost, TargetRuntimeSlot};
 use moli_core::page::{Page, RendererPageCommandPostResponseContinuation};
 
 pub(crate) struct LoadedNavigationPageCommit {
+    pub(crate) lifecycle: crate::conn::state::web_contents::CommittedDocumentLifecycle,
     pub(crate) inspection_projection: Result<(), DevToolsRendererChannelError>,
     pub(crate) replaced_page_owner: Option<TargetPageResidenceIdentity>,
     pub(crate) previous_document_retirement: RetiringDocument,
@@ -44,6 +45,11 @@ impl BrowserContext {
             Self::close_page_best_effort(page).await;
             return Ok(InitialDocumentPageInstallResult::Stale);
         }
+        if artifacts.lifecycle_snapshot.frame.page_id != page.renderer_page_id() {
+            return Err("initial lifecycle belongs to another renderer Page".into());
+        }
+        let lifecycle = moli_core::browser::DocumentLifecycle::from_creation_artifacts(&artifacts)
+            .ok_or("inconsistent initial document lifecycle")?;
         let loader_id = self.target_initial_empty_document_loader_id_if_current(target_id);
         self.web_contents_for_target_mut(target_id)
             .expect("validated initial document owner")
@@ -56,6 +62,26 @@ impl BrowserContext {
             .clear_committed_document_navigation_state();
         self.clear_target_loaded_document_session_state(target_id);
         let previous = self.replace_loaded_page_for_target(target_id, Some(page));
+        let contents = self
+            .web_contents_for_target_mut(target_id)
+            .expect("installed initial WebContents");
+        contents
+            .main_frame
+            .current_document
+            .as_mut()
+            .expect("installed initial Document")
+            .lifecycle = lifecycle;
+        if artifacts.initial_lifecycle_events.iter().any(|event| {
+            matches!(
+            event.kind,
+            moli_core::page::RendererDocumentLifecycleEventKind::Started {
+                reason: moli_core::page::RendererLifecycleStartReason::ExplicitDocumentOpen
+                    | moli_core::page::RendererLifecycleStartReason::JavascriptDocumentReplacement
+            }
+        )
+        }) {
+            contents.navigation.mark_initial_empty_document_exited();
+        }
         let runtime = &mut self
             .page_targets
             .get_mut(target_id)
@@ -64,9 +90,14 @@ impl BrowserContext {
         runtime.reset_subresource_cursor();
         runtime.clear_websocket_artifacts();
         if let Some(loader_id) = loader_id {
-            let _ = self.bind_renderer_document_lifecycle_for_target(
+            let _ = self.project_committed_document_lifecycle_for_target(
                 target_id,
-                artifacts,
+                crate::conn::CommittedDocumentLifecycle {
+                    document: self
+                        .target_document_id(target_id)
+                        .expect("installed initial Document"),
+                    artifacts,
+                },
                 None,
                 target_id.to_owned(),
                 loader_id,
@@ -284,6 +315,7 @@ impl BrowserContext {
             .map(|target| target.target_id().to_owned())
         else {
             return Ok(LoadedNavigationPageCommit {
+                lifecycle: commit.lifecycle,
                 inspection_projection: Err(DevToolsRendererChannelError::Closed),
                 replaced_page_owner: None,
                 previous_document_retirement: commit.retirement,
@@ -362,6 +394,7 @@ impl BrowserContext {
             )
         });
         Ok(LoadedNavigationPageCommit {
+            lifecycle: commit.lifecycle,
             inspection_projection,
             replaced_page_owner,
             previous_document_retirement: commit.retirement,

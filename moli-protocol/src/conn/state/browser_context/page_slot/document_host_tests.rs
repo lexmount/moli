@@ -128,6 +128,13 @@ async fn disappearing_agent_host_cannot_cancel_an_admitted_browser_commit() {
     let committed = owner.commit_loaded_navigation(prepared).unwrap();
     assert!(committed.inspection_projection.is_err());
     let contents = owner.physical.web_contents.get_mut(&contents_id).unwrap();
+    let document = contents.main_frame.current_document.as_ref().unwrap();
+    assert_eq!(
+        document.lifecycle.snapshot(),
+        Some(artifacts.lifecycle_snapshot)
+    );
+    assert!(document.lifecycle.snapshot().unwrap().load.is_some());
+    let renderer_page = RendererPageResidenceIdentity::from_page(&document.page);
     assert_eq!(
         contents.main_frame.current_document.as_ref().unwrap().id,
         expected_document
@@ -152,7 +159,239 @@ async fn disappearing_agent_host_cannot_cancel_an_admitted_browser_commit() {
             .unwrap()["value"],
         42
     );
+    let snapshot = artifacts.lifecycle_snapshot;
+    let event = RendererDocumentLifecycleEvent {
+        frame: snapshot.frame,
+        document: snapshot.document,
+        epoch: snapshot.epoch,
+        sequence: u64::MAX,
+        timestamp_micros: 100,
+        kind: RendererDocumentLifecycleEventKind::Terminated {
+            last_reached: Some(RendererDocumentLifecycleMilestone::Load),
+            reason: moli_core::page::RendererDocumentTerminationReason::RestartedByDocumentOpen,
+        },
+    };
+    assert!(
+        owner
+            .apply_renderer_document_lifecycle(
+                renderer_page,
+                RendererDocumentLifecycleEvent {
+                    document: event.document.successor_for_testing(),
+                    ..event
+                }
+            )
+            .is_none()
+    );
+    let occurrence = owner
+        .apply_renderer_document_lifecycle(renderer_page, event)
+        .unwrap();
+    assert_eq!(occurrence.document(), expected_document);
+    assert_eq!(occurrence.event(), event);
+    assert!(
+        owner
+            .apply_renderer_document_lifecycle(renderer_page, event)
+            .is_none()
+    );
+    assert_eq!(
+        owner.physical.web_contents[&contents_id]
+            .main_frame
+            .current_document
+            .as_ref()
+            .unwrap()
+            .lifecycle
+            .snapshot()
+            .unwrap()
+            .terminated
+            .unwrap()
+            .sequence,
+        event.sequence
+    );
     committed.previous_document_retirement.close().await;
+}
+
+#[tokio::test]
+async fn initial_creation_lifecycle_exits_empty_document_before_projection_can_drive_it() {
+    let browser = Browser::new(BrowserConfig::default()).unwrap();
+    let mut owner = empty_document_context();
+    owner.begin_active_target_initial_empty_document("about:blank".into());
+    let mut page = browser.fetch("data:text/html,initial").await.unwrap();
+    let mut artifacts = page.take_page_creation_artifacts().unwrap();
+    // Feed a complete, consistent creation occurrence into the installation
+    // boundary. A parser script's document.open() is not a way to construct
+    // this fixture: the parser may ignore that call.
+    let snapshot = artifacts.lifecycle_snapshot;
+    let sequence = artifacts.initial_lifecycle_events.last().unwrap().sequence + 1;
+    let terminated = RendererDocumentLifecycleEvent {
+        frame: snapshot.frame,
+        document: snapshot.document,
+        epoch: snapshot.epoch,
+        sequence,
+        timestamp_micros: snapshot.load.unwrap().timestamp_micros + 1,
+        kind: RendererDocumentLifecycleEventKind::Terminated {
+            last_reached: Some(RendererDocumentLifecycleMilestone::Load),
+            reason: moli_core::page::RendererDocumentTerminationReason::RestartedByDocumentOpen,
+        },
+    };
+    let restarted = RendererDocumentLifecycleEvent {
+        epoch: RendererLifecycleEpoch(snapshot.epoch.0 + 1),
+        sequence: sequence + 1,
+        timestamp_micros: terminated.timestamp_micros + 1,
+        kind: RendererDocumentLifecycleEventKind::Started {
+            reason: RendererLifecycleStartReason::ExplicitDocumentOpen,
+        },
+        ..terminated
+    };
+    let load = RendererDocumentLifecycleEvent {
+        sequence: sequence + 2,
+        timestamp_micros: restarted.timestamp_micros + 1,
+        kind: RendererDocumentLifecycleEventKind::Milestone(
+            RendererDocumentLifecycleMilestone::Load,
+        ),
+        ..restarted
+    };
+    for event in [terminated, restarted, load] {
+        artifacts.lifecycle_snapshot.apply_event(event);
+        artifacts.initial_lifecycle_events.push(event);
+    }
+    artifacts.active_epoch = restarted.epoch;
+    assert!(DocumentLifecycle::from_creation_artifacts(&artifacts).is_some());
+    let snapshot = artifacts.lifecycle_snapshot;
+    assert!(snapshot.epoch.0 > 1);
+    assert!(snapshot.load.is_some());
+    assert!(matches!(
+        owner
+            .install_target_initial_loaded_page_async(TARGET, page, artifacts)
+            .await
+            .unwrap(),
+        crate::conn::InitialDocumentPageInstallResult::Installed
+    ));
+    assert_eq!(
+        owner.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET),
+        Some(snapshot)
+    );
+    assert_eq!(
+        owner.target_is_on_initial_empty_document(TARGET),
+        Some(false)
+    );
+}
+
+#[tokio::test]
+async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replacement() {
+    use crate::conn::CommittedDocumentLifecycle;
+    let browser = Browser::new(BrowserConfig::default()).unwrap();
+    let mut owner = empty_document_context();
+    let navigation = owner.begin_target_document_navigation(TARGET, "LOADER-native".into());
+    let mut page = browser
+        .fetch("data:text/html,<title>native</title>")
+        .await
+        .unwrap();
+    let renderer_page = RendererPageResidenceIdentity::from_page(&page);
+    let artifacts = page.take_page_creation_artifacts().unwrap();
+    let snapshot = artifacts.lifecycle_snapshot;
+    assert!(snapshot.load.is_some());
+    let url = page.final_url().clone();
+    let candidate = prepare_navigation(&owner, navigation, page, url, &artifacts).await;
+    let commit = owner.commit_loaded_navigation(candidate).unwrap();
+    let document = commit.lifecycle.document;
+    assert!(
+        owner
+            .renderer_document_lifecycle_binding_for_target(TARGET)
+            .is_none()
+    );
+
+    let terminated = RendererDocumentLifecycleEvent {
+        frame: snapshot.frame,
+        document: snapshot.document,
+        epoch: snapshot.epoch,
+        sequence: u64::MAX - 1,
+        timestamp_micros: 100,
+        kind: RendererDocumentLifecycleEventKind::Terminated {
+            last_reached: Some(RendererDocumentLifecycleMilestone::Load),
+            reason: moli_core::page::RendererDocumentTerminationReason::RestartedByDocumentOpen,
+        },
+    };
+    let occurrence = owner
+        .apply_renderer_document_lifecycle(renderer_page, terminated)
+        .unwrap();
+    let native = owner.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET);
+    // Projection is delayed until after the Browser has accepted more progress.
+    // Replaying/rebinding the creation occurrence may only affect visibility.
+    for _ in 0..2 {
+        let projected = owner.project_committed_document_lifecycle_for_target(
+            TARGET,
+            CommittedDocumentLifecycle {
+                document,
+                artifacts: artifacts.clone(),
+            },
+            Some(navigation),
+            TARGET.into(),
+            "LOADER-native".into(),
+        );
+        assert_eq!(projected, artifacts.initial_lifecycle_events);
+        assert_eq!(
+            owner.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET),
+            native
+        );
+        assert_eq!(
+            owner
+                .page_slot_for_target(TARGET)
+                .unwrap()
+                .renderer_document_lifecycle_visible_snapshot(),
+            Some(snapshot)
+        );
+    }
+    assert_eq!(
+        owner.project_renderer_document_lifecycle_events_for_target(
+            TARGET,
+            vec![occurrence.event()]
+        ),
+        vec![terminated]
+    );
+    assert_eq!(
+        owner
+            .page_slot_for_target(TARGET)
+            .unwrap()
+            .renderer_document_lifecycle_visible_snapshot(),
+        native
+    );
+
+    let next = owner.begin_target_document_navigation(TARGET, "LOADER-next".into());
+    let mut page = browser.fetch("data:text/html,next").await.unwrap();
+    let url = page.final_url().clone();
+    let next_artifacts = page.take_page_creation_artifacts().unwrap();
+    let candidate = prepare_navigation(&owner, next, page, url, &next_artifacts).await;
+    let replacement = owner.commit_loaded_navigation(candidate).unwrap();
+    assert_ne!(
+        owner.target_document_id(TARGET),
+        Some(occurrence.document())
+    );
+    assert!(
+        owner
+            .apply_renderer_document_lifecycle(renderer_page, terminated)
+            .is_none()
+    );
+    assert!(
+        owner
+            .project_committed_document_lifecycle_for_target(
+                TARGET,
+                commit.lifecycle,
+                Some(navigation),
+                TARGET.into(),
+                "LOADER-native".into(),
+            )
+            .is_empty()
+    );
+    assert!(
+        owner
+            .renderer_document_lifecycle_binding_for_target(TARGET)
+            .is_none()
+    );
+    assert_eq!(
+        owner.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET),
+        Some(next_artifacts.lifecycle_snapshot)
+    );
+    commit.previous_document_retirement.close().await;
+    replacement.previous_document_retirement.close().await;
 }
 
 #[tokio::test]
@@ -559,11 +798,13 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
     let document = contents.main_frame.current_document.as_ref().unwrap();
     let id = document.id;
     let snapshot = document.lifecycle.snapshot().unwrap();
-    assert!(contents.bind_document_lifecycle(snapshot));
-    assert!(
-        !contents.javascript_dialogs.is_empty(),
-        "same-source rebind must preserve its dialog"
-    );
+    contents
+        .navigation
+        .begin_initial_empty_document("about:blank".into(), None, None);
+    contents
+        .navigation
+        .mark_initial_empty_document_materialized();
+    assert!(!contents.javascript_dialogs.is_empty());
     let terminated = RendererDocumentLifecycleEvent {
         frame: snapshot.frame,
         document: snapshot.document,
@@ -576,32 +817,40 @@ async fn browser_dialog_retirement_follows_admitted_document_lifecycle_without_p
         },
     };
     assert!(
-        !contents.observe_document_lifecycle(RendererDocumentLifecycleEvent {
-            document: snapshot.document.successor_for_testing(),
-            ..terminated
-        })
+        contents
+            .apply_document_lifecycle(RendererDocumentLifecycleEvent {
+                document: snapshot.document.successor_for_testing(),
+                ..terminated
+            })
+            .is_none()
     );
     assert!(
         !contents.javascript_dialogs.is_empty(),
         "foreign lifecycle must not dismiss current dialog"
     );
-    assert!(contents.observe_document_lifecycle(terminated));
+    assert!(contents.apply_document_lifecycle(terminated).is_some());
     assert!(contents.javascript_dialogs.is_empty());
     assert!(!completion.finish(true, "late reply".into()));
     assert!(!completion.wait().accepted);
     assert!(
-        contents.observe_document_lifecycle(RendererDocumentLifecycleEvent {
-            epoch: RendererLifecycleEpoch(snapshot.epoch.0 + 1),
-            sequence: u64::MAX - 1,
-            kind: RendererDocumentLifecycleEventKind::Started {
-                reason: RendererLifecycleStartReason::ExplicitDocumentOpen
-            },
-            ..terminated
-        })
+        contents
+            .apply_document_lifecycle(RendererDocumentLifecycleEvent {
+                epoch: RendererLifecycleEpoch(snapshot.epoch.0 + 1),
+                sequence: u64::MAX - 1,
+                kind: RendererDocumentLifecycleEventKind::Started {
+                    reason: RendererLifecycleStartReason::ExplicitDocumentOpen
+                },
+                ..terminated
+            })
+            .is_some()
     );
     assert_eq!(
         contents.main_frame.current_document.as_ref().unwrap().id,
         id
+    );
+    assert_eq!(
+        contents.navigation.is_on_initial_empty_document(),
+        Some(false)
     );
 }
 
