@@ -792,12 +792,16 @@ where
                     // atomic's box resolves to the atomic rather than to an
                     // inline ancestor (e.g. a wrapping `<label>`). `paint_order`
                     // is consumed only by hit testing, never by painting, so
-                    // this does not alter rendering.
+                    // this does not alter rendering. Use the outer (background)
+                    // clip: the atomic's own box spans its full border box, so
+                    // it must not be constrained by the box's internal content
+                    // clip, or edge points (e.g. a caret at an input's left
+                    // border) fall through to the enclosing inline.
                     if self.world.boxes[index].inline_context_owner.is_some()
                         && !self.world.boxes[index].inline_flattened
                         && let Some(direct) = self.direct_fragments[index]
                     {
-                        self.assign_fragment_paint_metadata(direct, self.content_clips[index]);
+                        self.assign_fragment_paint_metadata(direct, self.background_clips[index]);
                     }
                 }
                 PaintOrderEvent::BoxOutline(id) => {
