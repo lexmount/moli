@@ -890,7 +890,15 @@ fn complete_fetch_config_update_command(
         Ok(completion) => completion,
         Err(error) => return CommandOutputPlan::error(-32000, error),
     };
-    match finish_fetch_interception_update(conn, &owner_scope, completion) {
+    let finish = if matches!(
+        completed.kind,
+        PendingFetchCommandKind::RemoveNetworkIntercept
+    ) {
+        conn.finish_removed_network_interception(completion)
+    } else {
+        finish_fetch_interception_update(conn, &owner_scope, completion)
+    };
+    match finish {
         Ok(()) => CommandOutputPlan::from_devtools_result(result),
         Err(error) => CommandOutputPlan::error(-32000, error),
     }

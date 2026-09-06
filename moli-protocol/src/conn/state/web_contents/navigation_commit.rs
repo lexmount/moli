@@ -8,7 +8,7 @@ use moli_core::{
 };
 use url::Url;
 
-use super::{DocumentHost, WebContents};
+use super::{DocumentHost, InheritedDocumentPolicy, WebContents};
 
 /// Browser-only commit participant in the private migration residence (20/24b).
 /// No frontend identity, renderer attachment, arbitrary callback or Page lease.
@@ -44,12 +44,12 @@ pub(in crate::conn) struct AdmittedDocumentMaterialization {
     identity: DocumentNavigationIdentity,
     page: PreparedDocumentPage,
     destination: DocumentNavigationDestination,
+    policy: PreparedDocumentPagePolicy,
 }
 
 impl AdmittedDocumentMaterialization {
     pub(in crate::conn) async fn materialize(
         self,
-        policy: PreparedDocumentPagePolicy,
     ) -> anyhow::Result<BuiltDocumentPage<PreparedDocumentNavigation>> {
         anyhow::ensure!(
             !self.identity.cancellation.is_cancelled(),
@@ -60,7 +60,7 @@ impl AdmittedDocumentMaterialization {
             page_creation_diagnostics,
             page_creation_artifacts,
             pending_download,
-        } = self.page.materialize(Some(policy)).await?;
+        } = self.page.materialize(Some(self.policy)).await?;
         anyhow::ensure!(
             !self.identity.cancellation.is_cancelled(),
             "canceled navigation document candidate"
@@ -98,18 +98,16 @@ impl PreparedDocumentNavigation {
         permissions: &[moli_core::page::PermissionOverrideRegistration],
     ) -> anyhow::Result<Self> {
         use anyhow::Context;
-        if interception.0 || interception.1.is_some() {
-            self.page
-                .set_fetch_subresource_interception_async(interception.0, interception.1)
-                .await
-                .context("failed to restore page fetch interception state")?;
-        }
-        if !permissions.is_empty() {
-            self.page
-                .set_permission_overrides_async(permissions)
-                .await
-                .context("failed to apply page permission overrides")?;
-        }
+        // Empty/disabled is an effective value too: policy may have been
+        // revoked while the Page was being built outside the Browser borrow.
+        self.page
+            .set_fetch_subresource_interception_async(interception.0, interception.1)
+            .await
+            .context("failed to restore page fetch interception state")?;
+        self.page
+            .set_permission_overrides_async(permissions)
+            .await
+            .context("failed to apply page permission overrides")?;
         Ok(self)
     }
 
@@ -210,13 +208,12 @@ impl WebContents {
 
     /// Start/configure/complete stays inside the Browser participant. The
     /// returned future owns its Page and policy, never a Browser registry borrow.
-    pub(in crate::conn) fn start_loaded_document_navigation(
+    pub(in crate::conn::state) fn start_loaded_document_navigation(
         &self,
         navigation: NavigationId,
         page: Page,
         destination: DocumentNavigationDestination,
         artifacts: &RendererPageCreationArtifacts,
-        interception: (bool, Option<moli_core::page::SubresourceResourceType>),
         permissions: Vec<moli_core::page::PermissionOverrideRegistration>,
     ) -> Result<
         impl std::future::Future<Output = anyhow::Result<PreparedDocumentNavigation>> + use<>,
@@ -224,6 +221,7 @@ impl WebContents {
     > {
         let identity = self.document_navigation_identity(navigation)?;
         let prepared = PreparedDocumentNavigation::new(identity, page, destination, artifacts)?;
+        let interception = self.fetch_subresource_interception;
         Ok(async move {
             anyhow::ensure!(
                 !prepared.identity.cancellation.is_cancelled(),
@@ -240,17 +238,22 @@ impl WebContents {
         })
     }
 
-    pub(in crate::conn) fn start_document_materialization(
-        &self,
+    pub(in crate::conn::state) fn start_document_materialization(
+        &mut self,
         navigation: NavigationId,
         page: PreparedDocumentPage,
         destination: DocumentNavigationDestination,
-    ) -> Result<AdmittedDocumentMaterialization, &'static str> {
+        inherited: InheritedDocumentPolicy,
+    ) -> Result<AdmittedDocumentMaterialization, String> {
         let identity = self.document_navigation_identity(navigation)?;
+        // Reject stale/canceled work before changing this engine's resource
+        // runtime. Policy and identity are frozen by the same Browser Start.
+        let policy = self.capture_document_policy(inherited, &destination.url)?;
         Ok(AdmittedDocumentMaterialization {
             identity,
             page,
             destination,
+            policy,
         })
     }
 
@@ -351,12 +354,66 @@ mod tests {
                     secure_context_type: "InsecureScheme".into(),
                 },
                 &artifacts,
-                (false, None),
                 Vec::new(),
             )
             .unwrap()
             .await
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn loaded_candidate_admission_clears_revoked_permissions() {
+        let browser = Browser::new(BrowserConfig::default()).unwrap();
+        let mut page = browser.fetch("data:text/html,candidate").await.unwrap();
+        let artifacts = page.take_page_creation_artifacts().unwrap();
+        let query =
+            "navigator.permissions.query({name:'geolocation'}).then(result => result.state)";
+        let original = page
+            .evaluate_runtime_expression_with_await_async(query, true)
+            .await
+            .unwrap();
+        page.set_permission_overrides_async(&[moli_core::page::PermissionOverrideRegistration {
+            permission: serde_json::json!({"name": "geolocation"}),
+            setting: "granted".into(),
+            origin: None,
+            embedded_origin: None,
+        }])
+        .await
+        .unwrap();
+        assert_eq!(
+            page.evaluate_runtime_expression_with_await_async(query, true)
+                .await
+                .unwrap()["value"],
+            "granted"
+        );
+        assert_ne!(original["value"], "granted");
+        let url = page.final_url().clone();
+        let mut contents = WebContents::default();
+        let navigation = contents.navigation.start_document_navigation();
+        let mut candidate = contents
+            .start_loaded_document_navigation(
+                navigation,
+                page,
+                DocumentNavigationDestination {
+                    url,
+                    security_origin: "null".into(),
+                    secure_context_type: "InsecureScheme".into(),
+                },
+                &artifacts,
+                Vec::new(),
+            )
+            .unwrap()
+            .await
+            .unwrap();
+        assert_eq!(
+            candidate
+                .page
+                .evaluate_runtime_expression_with_await_async(query, true)
+                .await
+                .unwrap(),
+            original,
+            "an empty effective policy must clear permissions revoked since Page construction"
+        );
     }
 
     #[tokio::test]
@@ -527,6 +584,7 @@ mod tests {
                 }],
             ),
         ] {
+            contents.fetch_subresource_interception = interception;
             let navigation = contents.navigation.start_document_navigation();
             let candidate_browser = Browser::new(BrowserConfig::default()).unwrap();
             let mut page = candidate_browser
@@ -545,7 +603,6 @@ mod tests {
                         secure_context_type: "InsecureScheme".into(),
                     },
                     &artifacts,
-                    interception,
                     permissions,
                 )
                 .unwrap();
@@ -613,7 +670,6 @@ mod tests {
                     page,
                     destination,
                     &artifacts,
-                    (false, None),
                     Vec::new(),
                 )
                 .unwrap();
@@ -702,7 +758,6 @@ mod tests {
                         secure_context_type: "InsecureScheme".into(),
                     },
                     &artifacts,
-                    (false, None),
                     Vec::new(),
                 )
                 .err(),
@@ -722,7 +777,6 @@ mod tests {
                         secure_context_type: "InsecureScheme".into(),
                     },
                     &inconsistent,
-                    (false, None),
                     Vec::new(),
                 )
                 .err(),

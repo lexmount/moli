@@ -174,6 +174,41 @@ pub(crate) struct TargetNavigationLoadInputs {
     main_document_commit_seed: Option<RendererMainDocumentCommitSeed>,
 }
 
+fn prepared_document_inspection(
+    context: &BrowserContext,
+    target_id: &str,
+) -> moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
+    let target = context
+        .page_target(target_id)
+        .expect("resolved Page target must remain live");
+    let surface = if context.is_active_target(target_id) {
+        context.generated_surface_override_script_for_active_target()
+    } else {
+        context.generated_surface_override_script_for_background_state(target)
+    };
+    let mut document_start_scripts = vec![BrowserContext::surface_preload_descriptor(surface)];
+    document_start_scripts.extend(context.default_document_start_script_descriptors());
+    document_start_scripts.extend(target.owner_state.document_start_scripts.iter().map(
+        |(identifier, script)| {
+            BrowserContext::target_document_start_script_descriptor(
+                Some(target_id),
+                identifier,
+                script,
+            )
+        },
+    ));
+    moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
+        document_start_scripts,
+        runtime_bindings: target.devtools_sessions.runtime_bindings_for_renderer(),
+        runtime_inspector_session_restore_snapshots: target
+            .devtools_sessions
+            .runtime_inspector_restore_snapshots(),
+        // Bare Page.createIsolatedWorld worlds are Document-scoped. Only the
+        // inspector restore snapshot recreates persistent utility worlds.
+        runtime_isolated_worlds: Vec::new(),
+    }
+}
+
 impl TargetNavigationLoadInputs {
     pub(crate) fn with_main_document_commit_seed(
         mut self,
@@ -233,28 +268,7 @@ impl TargetNavigationLoadInputs {
     }
 
     fn from_browser_context_target(browser_context: &BrowserContext, target_id: &str) -> Self {
-        let target = browser_context
-            .page_target(target_id)
-            .expect("resolved Page target owner must remain live");
-        let page_state = target;
-        let generated_surface_script = if browser_context.is_active_target(target_id) {
-            browser_context.generated_surface_override_script_for_active_target()
-        } else {
-            browser_context.generated_surface_override_script_for_background_state(page_state)
-        };
-        let mut document_start_scripts = vec![BrowserContext::surface_preload_descriptor(
-            generated_surface_script,
-        )];
-        document_start_scripts.extend(browser_context.default_document_start_script_descriptors());
-        document_start_scripts.extend(target.owner_state.document_start_scripts.iter().map(
-            |(identifier, script)| {
-                BrowserContext::target_document_start_script_descriptor(
-                    Some(target_id),
-                    identifier,
-                    script,
-                )
-            },
-        ));
+        let inspection = prepared_document_inspection(browser_context, target_id);
 
         let effective_network_conditions = browser_context
             .target_emulation_policy(target_id)
@@ -291,11 +305,10 @@ impl TargetNavigationLoadInputs {
             navigation_initiator_url: browser_context.target_navigation_initiator_url(target_id),
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_navigation_referrer: true,
-            document_start_scripts,
-            runtime_bindings: page_state.devtools_sessions.runtime_bindings_for_renderer(),
-            runtime_inspector_session_restore_snapshots: page_state
-                .devtools_sessions
-                .runtime_inspector_restore_snapshots(),
+            document_start_scripts: inspection.document_start_scripts,
+            runtime_bindings: inspection.runtime_bindings,
+            runtime_inspector_session_restore_snapshots: inspection
+                .runtime_inspector_session_restore_snapshots,
             extra_http_headers: browser_context
                 .merged_extra_headers_for_target_policy(effective_policy.extra_headers()),
             locale_override: effective_policy
@@ -330,9 +343,9 @@ impl TargetNavigationLoadInputs {
             bypass_service_worker: effective_policy.bypass_service_worker(),
             cache_disabled: effective_policy.cache_disabled(),
             blocked_url_patterns: effective_policy.blocked_url_patterns().to_vec(),
-            fetch_subresource_interception: page_state
-                .fetch_owner
-                .subresource_interception_config(),
+            fetch_subresource_interception: browser_context
+                .target_fetch_interception_policy(target_id)
+                .expect("live WebContents"),
             permission_overrides: Vec::new(),
             main_document_commit_seed: None,
         }
@@ -990,6 +1003,23 @@ impl CdpConnection {
                 self.effective_permission_overrides_for_browser_context_id(browser_context_id);
         }
         inputs
+    }
+
+    pub(crate) fn prepared_document_inspection_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
+        match self.target_session_owner_ref_for_owner(owner) {
+            Some(owner) => prepared_document_inspection(owner.browser_context, &owner.target_id),
+            None => moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
+                document_start_scripts: self
+                    .browser_context
+                    .as_ref()
+                    .map(|context| context.default_document_start_script_descriptors())
+                    .unwrap_or_default(),
+                ..Default::default()
+            },
+        }
     }
 
     pub(crate) fn navigation_initiator_url_for_owner(
@@ -3176,6 +3206,12 @@ mod tests {
                     }],
                 );
         }
+        assert!(
+            background
+                .start_target_fetch_interception_update("TID-background", true, None)
+                .unwrap()
+                .is_none()
+        );
         background
             .background_target_mut("TID-background")
             .expect("background target must exist")

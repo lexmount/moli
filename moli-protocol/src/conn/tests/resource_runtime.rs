@@ -48,15 +48,14 @@ async fn commit_navigation_outcome_for_session_test(
     match outcome {
         NavigationLoadOutcome::ResponseCommitReady(navigation) => {
             let navigation = *navigation;
-            let (policy, inspection) = conn
-                .prepared_document_build_inputs_for_owner(
-                    &match session_id {
-                        Some(session_id) => CommandOwnerScope::for_session(session_id),
-                        None => CommandOwnerScope::capture(conn, None),
-                    },
-                    navigation.final_url(),
-                )
+            let owner = match session_id {
+                Some(session_id) => CommandOwnerScope::for_session(session_id),
+                None => CommandOwnerScope::capture(conn, None),
+            };
+            let policy = conn
+                .capture_document_policy_for_owner(&owner, navigation.final_url())
                 .expect("test navigation commit configuration should resolve");
+            let inspection = conn.prepared_document_inspection_for_owner(&owner);
             navigation
                 .materialize(policy, inspection)
                 .await
@@ -74,6 +73,20 @@ async fn commit_navigation_outcome_for_session_test(
 
 #[tokio::test]
 async fn buffered_navigation_commits_to_admitted_inactive_owner_after_session_detach() {
+    buffered_navigation_policy_checkpoint(None).await;
+}
+
+#[tokio::test]
+async fn stale_document_materialization_does_not_mutate_engine_policy() {
+    buffered_navigation_policy_checkpoint(Some(false)).await;
+}
+
+#[tokio::test]
+async fn canceled_document_materialization_does_not_mutate_engine_policy() {
+    buffered_navigation_policy_checkpoint(Some(true)).await;
+}
+
+async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
     let mut conn = CdpConnection::new();
     let ambient_context = conn.new_browser_context("BID-ambient".to_owned());
     conn.insert_browser_context(ambient_context);
@@ -125,7 +138,9 @@ async fn buffered_navigation_commits_to_admitted_inactive_owner_after_session_de
             requested_url,
             200,
             vec![("content-type".to_owned(), "text/html".to_owned())],
-            crate::conn::CapturedBody::from_string("<main>target</main>".to_owned()),
+            crate::conn::CapturedBody::from_string(
+                "<script>document.title = new Intl.DateTimeFormat().resolvedOptions().locale</script>".to_owned(),
+            ),
             None,
             moli_fetch::NetworkObservationJournal::default(),
             crate::domains::network::MainDocumentBodyProgressSource::default(),
@@ -135,10 +150,50 @@ async fn buffered_navigation_commits_to_admitted_inactive_owner_after_session_de
     let NavigationLoadOutcome::ResponseCommitReady(response) = outcome else {
         panic!("buffered HTML must retain an unmaterialized renderer candidate");
     };
+    let context = conn.browser_context_by_id_mut("BID-target").unwrap();
+    context.set_base_locale_override_for_target("TID-target", Some("fr-FR".to_owned()));
+    if let Some(canceled) = reject_canceled {
+        assert!(
+            context
+                .page_navigation_engine("TID-target")
+                .unwrap()
+                .fetch_config()
+                .tls_verify_host()
+        );
+        context.set_tls_verify_host_override_for_target("TID-target", Some(false));
+        let admission = if canceled {
+            context
+                .document_navigation_cancellation_handle_for_target("TID-target", &token)
+                .unwrap()
+                .cancel();
+            token
+        } else {
+            moli_core::browser::NavigationId::allocate()
+        };
+        let result = conn.start_response_document_materialization_for_owner(
+            &navigation.owner,
+            admission,
+            *response,
+        );
+        assert!(
+            matches!(result, Err(ref message) if message == "renderer channel navigation was superseded by a newer navigation")
+        );
+        assert!(
+            conn.browser_context_by_id("BID-target")
+                .unwrap()
+                .page_navigation_engine("TID-target")
+                .unwrap()
+                .fetch_config()
+                .tls_verify_host(),
+            "rejected admission must not install the new native TLS policy on the engine"
+        );
+        return;
+    }
     let materialization = conn
         .start_response_document_materialization_for_owner(&navigation.owner, token, *response)
         .unwrap();
     let context = conn.browser_context_by_id_mut("BID-target").unwrap();
+    context.set_base_locale_override_for_target("TID-target", Some("de-DE".to_owned()));
     assert!(context.dispose_devtools_session_for_target(
         "TID-target",
         "SID-target",
@@ -191,6 +246,11 @@ async fn buffered_navigation_commits_to_admitted_inactive_owner_after_session_de
     assert_eq!(context.active_target_id(), Some("TID-peer"));
     assert!(!context.target_has_loaded_page("TID-peer"));
     assert!(!context.has_pending_document_navigation_for_target("TID-target"));
+    assert_eq!(
+        context.target_document_title("TID-target").unwrap(),
+        "fr-FR",
+        "creation must use policy captured by Browser admission, before detach or later policy changes"
+    );
     assert_eq!(
         context
             .target_navigation_history_snapshot("TID-target")

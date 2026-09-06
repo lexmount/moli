@@ -23,7 +23,7 @@ use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask, RendererOutputPublicationOrdering,
     RendererOutputTransportMessage,
     network::{SharedWebStorageStore, new_shared_web_storage_store},
-    page::{NavigationResponse, Page, SubresourceAuthCredentials},
+    page::{NavigationResponse, SubresourceAuthCredentials},
     runtime::{
         NavigationEngine, NavigationRuntimeConfig, storage_partition::StoragePartitionState,
     },

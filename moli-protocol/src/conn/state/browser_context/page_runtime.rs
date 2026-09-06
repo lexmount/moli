@@ -14,6 +14,16 @@ pub(crate) use input::PageInputCommand;
 pub(crate) use network_commands::NetworkPolicyUpdateKind;
 
 impl BrowserContext {
+    pub(in crate::conn) fn observe_renderer_page_state(
+        &mut self,
+        snapshot: &std::sync::Arc<moli_renderer_v8::RendererPageState>,
+    ) -> bool {
+        self.physical
+            .web_contents
+            .values_mut()
+            .any(|contents| contents.observe_renderer_page_state(snapshot))
+    }
+
     pub(crate) fn start_target_resource_runtime_update(
         &self,
         target_id: &str,
@@ -58,15 +68,24 @@ impl BrowserContext {
     }
 
     pub(crate) fn start_target_fetch_interception_update(
-        &self,
+        &mut self,
         target_id: &str,
         enabled: bool,
         resource_type: Option<moli_core::page::SubresourceResourceType>,
     ) -> Result<Option<PendingPageCommand>, String> {
-        self.loaded_page_for_target(target_id)
-            .map(|page| page.start_set_fetch_subresource_interception(enabled, resource_type))
-            .transpose()
-            .map_err(|error| error.to_string())
+        self.web_contents_for_target_mut(target_id)
+            .ok_or_else(|| "WebContents unavailable".to_owned())?
+            .start_fetch_interception_update(enabled, resource_type)
+    }
+
+    pub(in crate::conn) fn target_fetch_interception_policy(
+        &self,
+        target_id: &str,
+    ) -> Option<(bool, Option<moli_core::page::SubresourceResourceType>)> {
+        Some(
+            self.web_contents_for_target(target_id)?
+                .fetch_subresource_interception(),
+        )
     }
 
     pub(crate) fn finish_target_fetch_interception_update(
@@ -117,17 +136,6 @@ impl BrowserContext {
             .ok_or("NoDocumentLoaded")?
             .finish_page_diagnostics_snapshot(completion)
             .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn target_idle_override_for_navigation(
-        &self,
-        target_id: &str,
-        final_url: &url::Url,
-    ) -> Option<moli_core::page::EmulatedIdleOverride> {
-        let page = self.loaded_page_for_target(target_id)?;
-        moli_site::same_site_urls(page.final_url(), final_url, true)
-            .then(|| page.idle_override())
-            .flatten()
     }
 
     pub(crate) fn start_target_service_worker_bypass_refresh(
