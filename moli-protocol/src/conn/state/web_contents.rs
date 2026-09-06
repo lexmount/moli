@@ -7,6 +7,8 @@ use moli_core::{
 use super::navigation_controller::NavigationController;
 
 mod document_host;
+mod document_policy;
+pub(in crate::conn::state) use document_policy::InheritedDocumentPolicy;
 mod emulation_policy;
 mod javascript_dialog;
 mod navigation_commit;
@@ -27,6 +29,7 @@ pub(crate) use javascript_dialog::{
     JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogKey, JavaScriptDialogSnapshot,
 };
 pub(in crate::conn) use network_request_policy::NetworkRequestPolicy;
+pub(in crate::conn) use network_request_policy::merge_extra_header_layers;
 pub(in crate::conn) use page_surface::PageSurface;
 pub(crate) use session_storage::SessionStorageNamespace;
 pub(in crate::conn) use window::{Window, WindowOpener};
@@ -51,6 +54,7 @@ pub(in crate::conn) struct WebContents {
     pub(in crate::conn) crashed: bool,
     pub(in crate::conn) emulation_policy: EmulationPolicy,
     pub(in crate::conn) network_request_policy: NetworkRequestPolicy,
+    fetch_subresource_interception: (bool, Option<moli_core::page::SubresourceResourceType>),
     pub(in crate::conn) network_offline: bool,
     pub(in crate::conn) tls_verify_host_override: Option<bool>,
     pub(in crate::conn) bypass_content_security_policy: bool,
@@ -73,6 +77,7 @@ impl Default for WebContents {
             crashed: false,
             emulation_policy: EmulationPolicy::default(),
             network_request_policy: NetworkRequestPolicy::default(),
+            fetch_subresource_interception: (false, None),
             network_offline: false,
             tls_verify_host_override: None,
             bypass_content_security_policy: false,
@@ -84,6 +89,32 @@ impl Default for WebContents {
 }
 
 impl WebContents {
+    pub(in crate::conn::state) fn fetch_subresource_interception(
+        &self,
+    ) -> (bool, Option<moli_core::page::SubresourceResourceType>) {
+        self.fetch_subresource_interception
+    }
+
+    pub(in crate::conn::state) fn start_fetch_interception_update(
+        &mut self,
+        enabled: bool,
+        resource_type: Option<moli_core::page::SubresourceResourceType>,
+    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+        // Install effective Browser policy even before the first Document, and
+        // retain it if the outgoing renderer has already stopped accepting work.
+        self.fetch_subresource_interception = (enabled, resource_type);
+        self.main_frame
+            .current_document
+            .as_ref()
+            .map(|document| {
+                document
+                    .page
+                    .start_set_fetch_subresource_interception(enabled, resource_type)
+            })
+            .transpose()
+            .map_err(|error| error.to_string())
+    }
+
     /// Retire Browser authority synchronously, then close the renderer without
     /// retaining any Context/registry borrow across await.
     pub(in crate::conn) fn begin_close(mut self) -> ClosingWebContents {

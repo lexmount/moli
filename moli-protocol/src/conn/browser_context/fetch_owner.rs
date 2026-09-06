@@ -186,33 +186,21 @@ fn remove_network_intercept_from_browser_context(
     browser_context: &mut BrowserContext,
     intercept_id: &str,
 ) -> Result<Option<Option<moli_core::page::PendingPageCommand>>, String> {
-    let target = browser_context.active_page_target_mut();
-    if target.fetch_owner.remove_network_intercept(intercept_id) {
-        let (subresource_enabled, subresource_resource_type) =
-            target.fetch_owner.subresource_interception_config();
-        let target_id = target.target_id().to_owned();
-        return browser_context
-            .start_target_fetch_interception_update(
-                &target_id,
-                subresource_enabled,
-                subresource_resource_type,
-            )
-            .map(Some)
-            .map_err(|error| format!("failed to update page fetch interception: {error}"));
-    }
-
     let target_ids = browser_context
-        .background_targets()
+        .page_targets
+        .iter()
         .map(|target| target.target_id().to_owned())
         .collect::<Vec<_>>();
     for target_id in target_ids {
-        let removed = browser_context
+        let target = browser_context
             .page_target_mut(&target_id)
-            .expect("background target must remain registered")
-            .fetch_owner
-            .remove_network_intercept(intercept_id);
-        if removed {
-            return Ok(Some(None));
+            .expect("target must remain registered");
+        if target.fetch_owner.remove_network_intercept(intercept_id) {
+            let (enabled, resource_type) = target.fetch_owner.subresource_interception_config();
+            return browser_context
+                .start_target_fetch_interception_update(&target_id, enabled, resource_type)
+                .map(Some)
+                .map_err(|error| format!("failed to update page fetch interception: {error}"));
         }
     }
 
@@ -220,6 +208,28 @@ fn remove_network_intercept_from_browser_context(
 }
 
 impl CdpConnection {
+    pub(crate) fn finish_removed_network_interception(
+        &mut self,
+        completion: moli_core::page::CompletedPageCommand,
+    ) -> Result<(), String> {
+        // BiDi's global removal may refer to a background or inactive page.
+        // Observe only the physical origin of the completion, not the command
+        // caller's selected page. Retirement does not undo the installed policy.
+        for context in self
+            .browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+        {
+            if context.observe_renderer_page_state(completion.page_state()) {
+                break;
+            }
+        }
+        completion
+            .into_unit_page_command_turn()
+            .map(drop)
+            .map_err(|error| error.to_string())
+    }
+
     pub(crate) fn target_fetch_subresource_interception_snapshot_for_owner(
         &self,
         owner: &CommandOwnerScope,

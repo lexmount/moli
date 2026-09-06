@@ -418,16 +418,7 @@ impl BrowserContext {
     }
 }
 
-fn merge_extra_header_layers(layers: &[&[(String, String)]]) -> Vec<(String, String)> {
-    let mut headers = Vec::new();
-    for layer in layers {
-        for (name, value) in *layer {
-            headers.retain(|(existing, _)| existing != name);
-            headers.push((name.clone(), value.clone()));
-        }
-    }
-    headers
-}
+use crate::conn::state::web_contents::merge_extra_header_layers;
 
 #[cfg(test)]
 mod tests {

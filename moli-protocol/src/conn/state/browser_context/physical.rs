@@ -42,6 +42,43 @@ pub(super) struct BrowserContext {
 }
 
 impl BrowserContext {
+    pub(super) fn inherited_document_policy(
+        &self,
+        mut fetch_config: moli_fetch::FetchConfig,
+        defaults: &moli_core::browser::PermissionDefaults,
+        global_headers: &[(String, String)],
+        global_network_conditions: Option<EmulatedNetworkConditions>,
+        global_geolocation_override: Option<&EmulatedGeolocationOverrideState>,
+    ) -> super::super::web_contents::InheritedDocumentPolicy {
+        if let Some(identity) = &self.browser_identity_override {
+            fetch_config.set_browser_identity(identity.clone());
+        }
+        if let Some(proxy) = &self.network_policy.http_proxy {
+            fetch_config.set_http_proxy(Some(proxy.clone()));
+        }
+        if let Some(no_proxy) = &self.network_policy.http_no_proxy {
+            fetch_config.set_http_no_proxy(Some(no_proxy.clone()));
+        }
+        if let Some(verify) = self.network_policy.tls_verify_host {
+            fetch_config.set_tls_verify_host(verify);
+        }
+        let mut emulation = self.emulation_defaults.clone();
+        emulation.network_conditions = emulation.network_conditions.or(global_network_conditions);
+        emulation.geolocation = emulation
+            .geolocation
+            .or_else(|| global_geolocation_override.cloned());
+        super::super::web_contents::InheritedDocumentPolicy {
+            fetch_config,
+            extra_headers: super::super::web_contents::merge_extra_header_layers(&[
+                global_headers,
+                &self.network_policy.extra_headers,
+            ]),
+            emulation,
+            permissions: self.permission_overrides.snapshot(defaults),
+            storage: self.storage_partition.handles.clone(),
+        }
+    }
+
     pub(super) fn new(
         handles: BrowserContextStoragePartitionHandles,
         kind: StoragePartitionKind,
@@ -156,4 +193,104 @@ pub(crate) struct ContextEmulationDefaults {
     pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
     pub(crate) geolocation: Option<EmulatedGeolocationOverrideState>,
     pub(crate) device_metrics: Option<EmulatedDeviceMetrics>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn document_policy_capture_needs_no_projection_or_current_document() {
+        let mut context = BrowserContext::new(
+            BrowserContextStoragePartitionHandles::memory(),
+            StoragePartitionKind::Ephemeral,
+            None,
+            None,
+        );
+        context.network_policy.extra_headers = vec![("X-Policy".into(), "context".into())];
+        context.network_policy.tls_verify_host = Some(false);
+        context.emulation_defaults.locale = Some("fr-FR".into());
+        let mut contents = WebContents::default();
+        contents.install_navigation_engine(
+            context.new_page_navigation_engine(NavigationRuntimeConfig::default()),
+        );
+        contents.network_request_policy.extra_headers = vec![("X-Policy".into(), "page".into())];
+        contents.emulation_policy.cpu_throttling_rate = 2.5;
+        contents.emulation_policy.script_execution_disabled = true;
+        contents.emulation_policy.touch_emulation_enabled = true;
+        assert!(
+            contents
+                .start_fetch_interception_update(true, None)
+                .unwrap()
+                .is_none()
+        );
+        let id = contents.id();
+        context.web_contents.insert(id, contents);
+        let geolocation =
+            EmulatedGeolocationOverrideState::Position(crate::conn::EmulatedGeolocationOverride {
+                latitude: 48.85837,
+                longitude: 2.294481,
+                accuracy: 7.0,
+                altitude: None,
+                altitude_accuracy: None,
+                heading: None,
+                speed: None,
+            });
+        let inherited = context.inherited_document_policy(
+            moli_fetch::FetchConfig::default(),
+            &moli_core::browser::PermissionDefaults::default(),
+            &[
+                ("X-Global".into(), "global".into()),
+                ("X-Policy".into(), "global".into()),
+            ],
+            Some(EmulatedNetworkConditions::offline()),
+            Some(&geolocation),
+        );
+        let contents = context.web_contents.get_mut(&id).unwrap();
+        let policy = contents
+            .capture_document_policy(inherited, &url::Url::parse("about:blank").unwrap())
+            .unwrap();
+        assert_eq!(
+            policy.extra_http_headers,
+            [
+                ("X-Global".into(), "global".into()),
+                ("X-Policy".into(), "page".into())
+            ]
+        );
+        assert_eq!(policy.locale_override.as_deref(), Some("fr-FR"));
+        assert!(policy.network_offline);
+        assert_eq!(policy.navigator_overrides.online, Some(false));
+        assert_eq!(policy.navigator_overrides.max_touch_points, 1);
+        assert_eq!(
+            policy
+                .navigator_overrides
+                .geolocation
+                .as_ref()
+                .map(|position| position.latitude),
+            Some(48.85837),
+        );
+        assert!(policy.script_execution_disabled);
+        assert_eq!(policy.cpu_throttling_rate, 2.5);
+        assert!(policy.fetch_subresource_interception_enabled);
+        assert!(
+            !contents
+                .navigation_engine
+                .as_ref()
+                .unwrap()
+                .fetch_config()
+                .tls_verify_host()
+        );
+        assert!(contents.main_frame.current_document.is_none());
+        assert!(
+            contents
+                .start_fetch_interception_update(false, None)
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(contents.fetch_subresource_interception(), (false, None));
+        assert!(
+            policy.fetch_subresource_interception_enabled,
+            "capture is a value, not a live registration view"
+        );
+    }
 }

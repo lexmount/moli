@@ -806,13 +806,14 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
             "LID-idle-cross-document".to_owned(),
         )
         .expect("cross-Document navigation should enter the pending state");
-    let (configuration, _) = ctx
+    let configuration = ctx
         .conn
-        .prepared_document_build_inputs_for_owner(
+        .capture_document_policy_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
             &url::Url::parse("http://127.0.0.1:65530/same-site-different-origin").unwrap(),
         )
-        .expect("commit configuration should resolve the target resource runtime");
+        .expect("commit configuration should resolve the target resource runtime")
+        .expect("live WebContents policy");
     assert_eq!(
         configuration.idle_override,
         Some(moli_core::page::EmulatedIdleOverride {
@@ -820,13 +821,14 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
             is_screen_unlocked: false,
         })
     );
-    let (cross_site_configuration, _) = ctx
+    let cross_site_configuration = ctx
         .conn
-        .prepared_document_build_inputs_for_owner(
+        .capture_document_policy_for_owner(
             &crate::conn::CommandOwnerScope::for_session("SID-1"),
             &url::Url::parse("http://idle-override-cross-site.test/").unwrap(),
         )
-        .expect("cross-site commit configuration should resolve the target resource runtime");
+        .expect("cross-site commit configuration should resolve the target resource runtime")
+        .expect("live WebContents policy");
     assert_eq!(
         cross_site_configuration.idle_override, None,
         "a cross-site renderer replacement must not inherit frame-host idle state",

@@ -4,9 +4,11 @@ use moli_core::{
     page::{RendererMainDocumentCommit, RendererPageCreationDiagnostics, RendererRuntimeRealmInfo},
     runtime::{
         CommittedDocumentResourceSource, PageVmInitStage, PreparedDocumentPage,
-        PreparedDocumentPagePolicy, RendererPageReservationToken, RendererReplyBoundary,
+        RendererPageReservationToken, RendererReplyBoundary,
     },
 };
+#[cfg(test)]
+use moli_core::{page::Page, runtime::PreparedDocumentPagePolicy};
 use moli_fetch::{
     BrowserNavigationRequestKind, FetchCancelHandle, FetchConfig, NetworkFetchFailureContext,
     NetworkFetchResult, NetworkObservationJournal, RawResponse, Request, ResponseHead,
@@ -343,13 +345,15 @@ impl std::fmt::Debug for ResponseCommitReady {
 }
 
 impl ResponseCommitReady {
+    #[cfg(test)]
     pub(crate) fn final_url(&self) -> &Url {
         &self.final_url
     }
 
+    #[cfg(test)]
     pub(crate) async fn materialize(
         mut self,
-        policy: PreparedDocumentPagePolicy,
+        policy: Option<PreparedDocumentPagePolicy>,
         inspection: moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration,
     ) -> Result<LoadedNavigation, String> {
         let prepared_page = self
@@ -361,7 +365,7 @@ impl ResponseCommitReady {
         let inspection_ack = prepared_page
             .inspection_configuration_endpoint()
             .start_configure(inspection);
-        let built = prepared_page.materialize(Some(policy)).await;
+        let built = prepared_page.materialize(policy).await;
         if let Err(error) = inspection_ack.await {
             tracing::warn!(%error, "prepared document inspection configuration failed");
         }
@@ -1498,70 +1502,46 @@ impl CdpConnection {
         .with_main_document_commit_seed(RendererMainDocumentCommitSeed::from_navigation(navigation))
     }
 
-    pub(crate) fn prepared_document_build_inputs_for_owner(
+    fn document_fetch_defaults(&self) -> FetchConfig {
+        let mut config = FetchConfig::default();
+        config.set_browser_identity(
+            self.global_browser_identity_override
+                .clone()
+                .unwrap_or_else(|| self.base_browser_identity.clone()),
+        );
+        config.set_http_proxy(self.base_http_proxy.clone());
+        config.set_http_no_proxy(self.base_http_no_proxy.clone());
+        config.set_tls_verify_host(self.base_tls_verify_host);
+        config
+    }
+
+    #[cfg(test)]
+    pub(crate) fn capture_document_policy_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         final_url: &Url,
-    ) -> Result<
-        (
-            PreparedDocumentPagePolicy,
-            moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration,
-        ),
-        String,
-    > {
-        let idle_override = self.idle_override_for_navigation(owner, final_url);
-        let load_inputs = self.navigation_load_inputs_for_owner(owner);
-        // The renderer runtime is shared by the BrowserContext, but each Page
-        // target owns its NavigationEngine and may have a different transport
-        // identity. Resolve through that target's engine at the commit
-        // boundary instead of copying whichever runtime another target most
-        // recently registered on the shared renderer context.
-        let browser_resource_runtime = self
-            .ensure_resource_request_client_for_navigation_load_inputs(&load_inputs)?
-            .browser_resource_runtime();
-        let navigator_identity = load_inputs
-            .browser_identity_override
-            .clone()
-            .or_else(|| self.global_browser_identity_override.clone())
-            .unwrap_or_else(|| self.base_browser_identity.clone());
-        let inspection = moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
-            document_start_scripts: load_inputs.document_start_scripts,
-            runtime_bindings: load_inputs.runtime_bindings,
-            runtime_inspector_session_restore_snapshots: load_inputs
-                .runtime_inspector_session_restore_snapshots,
-            // `Page.createIsolatedWorld` is Document-scoped. Only renderer
-            // inspector restore snapshots recreate persistent utility worlds;
-            // bare worlds must not cross a navigation.
-            runtime_isolated_worlds: Vec::new(),
+    ) -> Result<Option<PreparedDocumentPagePolicy>, String> {
+        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
+        else {
+            // Standalone construction has no installed WebContents policy to
+            // refresh. Keep the native policy supplied when it was prepared.
+            return Ok(None);
         };
-        Ok((
-            PreparedDocumentPagePolicy {
-                permission_overrides: load_inputs.permission_overrides,
-                extra_http_headers: load_inputs.extra_http_headers,
-                locale_override: load_inputs.locale_override,
-                timezone_override: load_inputs.timezone_override,
-                script_execution_disabled: load_inputs.script_execution_disabled,
-                bypass_content_security_policy: load_inputs.bypass_content_security_policy,
-                cpu_throttling_rate: load_inputs.cpu_throttling_rate,
-                emulated_media: load_inputs.emulated_media,
-                idle_override,
-                navigator_overrides: load_inputs.navigator_overrides,
-                viewport_surface: load_inputs.viewport_surface,
-                browser_resource_runtime,
-                navigator_identity,
-                network_offline: load_inputs.network_offline,
-                bypass_service_worker: load_inputs.bypass_service_worker,
-                cache_disabled: load_inputs.cache_disabled,
-                blocked_url_patterns: load_inputs.blocked_url_patterns,
-                fetch_subresource_interception_enabled: load_inputs
-                    .fetch_subresource_interception
-                    .0,
-                fetch_subresource_interception_resource_type: load_inputs
-                    .fetch_subresource_interception
-                    .1,
-            },
-            inspection,
-        ))
+        self.ensure_page_navigation_engine_for_target(&context_id, &target_id)
+            .ok_or("navigation WebContents engine unavailable")?;
+        let defaults = self.document_fetch_defaults();
+        self.browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .find(|context| context.id == context_id)
+            .ok_or("navigation BrowserContext unavailable")?
+            .capture_document_policy_for_target(
+                &target_id,
+                final_url,
+                defaults,
+                &self.permission_defaults,
+            )
+            .map(Some)
     }
 
     pub(crate) fn start_response_document_materialization_for_owner(
@@ -1595,43 +1575,39 @@ impl CdpConnection {
             .take()
             .expect("response must retain its prepared Document");
         let endpoint = page.inspection_configuration_endpoint();
+        let defaults = self.document_fetch_defaults();
         let materialization = self
-            .browser_context_by_id(&context_id)
+            .browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .find(|context| context.id == context_id)
             .ok_or("navigation BrowserContext unavailable")?
-            .start_document_materialization_for_target(&target_id, navigation, page, destination)
-            .map_err(|error| match error {
+            .start_document_materialization_for_target(
+                &target_id,
+                navigation,
+                page,
+                destination,
+                defaults,
+                &self.permission_defaults,
+            )
+            .map_err(|error| match error.as_str() {
                 "stale navigation document candidate"
                 | "canceled navigation document candidate" => {
                     "renderer channel navigation was superseded by a newer navigation".to_owned()
                 }
-                error => error.to_owned(),
+                _ => error,
             })?;
         // Native admission precedes any renderer/runtime policy mutation.
         // The owned operation is tied to this reservation and cannot be retargeted.
-        let (policy, inspection) =
-            self.prepared_document_build_inputs_for_owner(owner, response.final_url())?;
+        let inspection = self.prepared_document_inspection_for_owner(owner);
         let inspection_ack = endpoint.start_configure(inspection);
         Ok(async move {
-            let built = materialization.materialize(policy).await;
+            let built = materialization.materialize().await;
             if let Err(error) = inspection_ack.await {
                 tracing::warn!(%error, "prepared document inspection configuration failed");
             }
             response.finish_materialization(built).await
         })
-    }
-
-    fn idle_override_for_navigation(
-        &mut self,
-        owner: &CommandOwnerScope,
-        final_url: &Url,
-    ) -> Option<moli_core::page::EmulatedIdleOverride> {
-        // Chromium stores this override on RenderFrameHostImpl's IdleManager,
-        // not on the DevTools target. Preserve it only while a same-site
-        // navigation can retain that frame-host state; a cross-site renderer
-        // replacement must start with the actual idle state.
-        let (context_id, target_id) = self.resolved_page_owner_identity_for_owner(owner)?;
-        self.browser_context_by_id(&context_id)?
-            .target_idle_override_for_navigation(&target_id, final_url)
     }
 
     pub(crate) async fn prepare_paused_streaming_response_navigation_async(
@@ -2139,7 +2115,8 @@ impl CdpConnection {
         Ok(diagnostics)
     }
 
-    pub async fn load_navigation_via_runtime_async(
+    #[cfg(test)]
+    pub(crate) async fn load_navigation_via_runtime_async(
         &mut self,
         raw_url: &str,
     ) -> Result<LoadedNavigation, String> {
@@ -2168,6 +2145,7 @@ impl CdpConnection {
             .await
     }
 
+    #[cfg(test)]
     async fn load_navigation_via_runtime_with_load_inputs_async(
         &mut self,
         owner: &CommandOwnerScope,
@@ -2190,6 +2168,7 @@ impl CdpConnection {
             .await
     }
 
+    #[cfg(test)]
     async fn commit_navigation_load_outcome_for_owner_async(
         &mut self,
         owner: &CommandOwnerScope,
@@ -2198,8 +2177,9 @@ impl CdpConnection {
         match navigation {
             NavigationLoadOutcome::ResponseCommitReady(navigation) => {
                 let navigation = *navigation;
-                let (policy, inspection) =
-                    self.prepared_document_build_inputs_for_owner(owner, navigation.final_url())?;
+                let policy =
+                    self.capture_document_policy_for_owner(owner, navigation.final_url())?;
+                let inspection = self.prepared_document_inspection_for_owner(owner);
                 navigation.materialize(policy, inspection).await
             }
             NavigationLoadOutcome::Loaded(navigation) => Ok(*navigation),
@@ -2611,7 +2591,11 @@ impl CdpConnection {
         fetch_config
     }
 
-    pub async fn load_page_via_runtime_async(&mut self, raw_url: &str) -> Result<Page, String> {
+    #[cfg(test)]
+    pub(crate) async fn load_page_via_runtime_async(
+        &mut self,
+        raw_url: &str,
+    ) -> Result<Page, String> {
         let navigation = self.load_navigation_via_runtime_async(raw_url).await?;
         Ok(navigation.page)
     }

@@ -267,33 +267,54 @@ impl BrowserContext {
         let contents = self
             .web_contents_for_target(target_id)
             .ok_or("navigation WebContents unavailable")?;
-        let interception = self
-            .page_targets
-            .get(target_id)
-            .ok_or("navigation projection unavailable")?
-            .fetch_owner
-            .subresource_interception_config();
         contents.start_loaded_document_navigation(
             navigation,
             page,
             destination,
             artifacts,
-            interception,
             self.physical.permission_overrides.snapshot(defaults),
         )
     }
 
     pub(in crate::conn) fn start_document_materialization_for_target(
-        &self,
+        &mut self,
         target_id: &str,
         navigation: moli_core::browser::NavigationId,
         page: moli_core::runtime::PreparedDocumentPage,
         destination: DocumentNavigationDestination,
-    ) -> Result<crate::conn::state::web_contents::AdmittedDocumentMaterialization, &'static str>
-    {
-        self.web_contents_for_target(target_id)
+        fetch_defaults: moli_fetch::FetchConfig,
+        permissions: &moli_core::browser::PermissionDefaults,
+    ) -> Result<crate::conn::state::web_contents::AdmittedDocumentMaterialization, String> {
+        let inherited = self.physical.inherited_document_policy(
+            fetch_defaults,
+            permissions,
+            &self.global_extra_headers,
+            self.global_network_conditions,
+            self.global_geolocation_override.as_ref(),
+        );
+        self.web_contents_for_target_mut(target_id)
             .ok_or("navigation WebContents unavailable")?
-            .start_document_materialization(navigation, page, destination)
+            .start_document_materialization(navigation, page, destination, inherited)
+    }
+
+    #[cfg(test)]
+    pub(in crate::conn) fn capture_document_policy_for_target(
+        &mut self,
+        target_id: &str,
+        final_url: &url::Url,
+        fetch_defaults: moli_fetch::FetchConfig,
+        permissions: &moli_core::browser::PermissionDefaults,
+    ) -> Result<moli_core::runtime::PreparedDocumentPagePolicy, String> {
+        let inherited = self.physical.inherited_document_policy(
+            fetch_defaults,
+            permissions,
+            &self.global_extra_headers,
+            self.global_network_conditions,
+            self.global_geolocation_override.as_ref(),
+        );
+        self.web_contents_for_target_mut(target_id)
+            .ok_or("navigation WebContents unavailable")?
+            .capture_document_policy(inherited, final_url)
     }
 
     pub(crate) fn commit_loaded_navigation(
