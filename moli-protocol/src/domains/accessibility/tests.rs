@@ -421,7 +421,7 @@ async fn accessibility_loaded_page_methods_target_background_owner_without_activ
         "method": "Accessibility.getFullAXTree"
     }))
     .await;
-    let full_tree = ctx.take_one();
+    let full_tree = ctx.take_response_by_id(201);
     assert_eq!(full_tree["sessionId"], "SID-background");
     let nodes = full_tree["result"]["nodes"]
         .as_array()
@@ -540,7 +540,7 @@ async fn accessibility_loaded_page_methods_target_inactive_owner_without_activat
         "method": "Accessibility.getFullAXTree"
     }))
     .await;
-    let full_tree = ctx.take_one();
+    let full_tree = ctx.take_response_by_id(211);
     assert_eq!(full_tree["sessionId"], "SID-inactive");
     let nodes = full_tree["result"]["nodes"]
         .as_array()
@@ -556,7 +556,7 @@ async fn accessibility_loaded_page_methods_target_inactive_owner_without_activat
         "method": "Accessibility.getRootAXNode"
     }))
     .await;
-    let root = ctx.take_one();
+    let root = ctx.take_response_by_id(212);
     assert_eq!(root["sessionId"], "SID-inactive");
     assert_eq!(root["result"]["node"]["role"]["value"], "RootWebArea");
     assert_eq!(

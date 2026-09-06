@@ -15,23 +15,32 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
         .await
         .expect("document-content test page should load");
     let artifacts = navigation.page_creation_artifacts;
-    {
+    let committed = {
         let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
         let renderer_agent_candidate = browser_context
             .active_page_target_mut()
             .runtime_slot
             .prepare_renderer_agent_candidate(&committed_document, &navigation.page)
             .expect("document-content test renderer candidate should attach");
-        browser_context.commit_document_navigation_if_matches(&committed_document);
-        browser_context
-            .active_page_target_mut()
-            .runtime_slot
-            .commit_loaded_navigation_renderer_attachment(
-                &navigation.page,
-                Some(renderer_agent_candidate),
+        let identity = navigation.main_document_commit.as_ref().unwrap();
+        let prepared = crate::conn::PreparedDocumentNavigation::new(
+            committed_document,
+            navigation.page,
+            navigation.final_url,
+            identity.security_origin.clone(),
+            identity.secure_context_type.clone(),
+            &artifacts,
+        )
+        .unwrap();
+        let committed = browser_context
+            .commit_loaded_navigation_for_target(
+                "TID-1",
+                prepared,
+                crate::conn::LoadedNavigationRendererAttachmentCommit::Prepare(Some(
+                    renderer_agent_candidate,
+                )),
             )
-            .expect("document-content test renderer candidate should commit");
-        browser_context.replace_active_page_for_test(Some(navigation.page));
+            .expect("document-content test Document should commit");
         assert!(
             browser_context
                 .active_page_target_mut()
@@ -42,7 +51,9 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
                 .is_empty(),
             "the fixture should not leave buffered Inspector output behind"
         );
-    }
+        committed
+    };
+    committed.previous_document_retirement.close().await;
     let (binding, _) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
         &crate::conn::CommandOwnerScope::for_session("SID-1"),
         artifacts,

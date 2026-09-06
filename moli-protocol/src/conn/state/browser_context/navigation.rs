@@ -1,6 +1,6 @@
 use super::BrowserContext;
 use crate::conn::state::{PageNavigationHistoryEntry, TargetPageAbsenceReason};
-use moli_core::page::{Page, RendererMainDocumentCommit, SameDocumentHistoryUpdate};
+use moli_core::page::{Page, SameDocumentHistoryUpdate};
 use url::Url;
 
 impl BrowserContext {
@@ -192,22 +192,6 @@ impl BrowserContext {
         target.set_target_url(next_url);
         target.set_target_security_origin(url.origin().ascii_serialization());
         Some(target_id.to_owned())
-    }
-
-    pub(crate) fn commit_target_loaded_navigation_identity(
-        &mut self,
-        target_id: &str,
-        main_document_commit: &RendererMainDocumentCommit,
-        target_url: &Url,
-    ) -> Option<()> {
-        self.web_contents_for_target_mut(target_id)?
-            .navigation
-            .mark_initial_empty_document_exited();
-        let target = self.page_targets.get_mut(target_id)?;
-        target.set_target_url(target_url.to_string());
-        target.set_target_security_origin(main_document_commit.security_origin.clone());
-        target.set_target_secure_context_type(main_document_commit.secure_context_type.clone());
-        Some(())
     }
 
     pub(crate) fn clear_target_pending_navigation_history_update(

@@ -262,12 +262,17 @@ impl TestContext {
         session_id: Option<&str>,
     ) {
         self.conn.commit_declared_session_fixtures_for_test();
+        let owner = crate::conn::CommandOwnerScope::capture(&self.conn, session_id);
+        let token = self
+            .conn
+            .start_document_navigation_for_owner(&owner, crate::domains::page::LOADER_ID.to_owned())
+            .expect("navigation fixture requires a live Browser owner");
         let navigation = self
             .conn
             .load_navigation_via_runtime_for_session_owner_async(session_id, raw_url)
             .await
             .expect("navigation fixture should load");
-        self.install_loaded_navigation_fixture_for_session_owner(navigation, session_id)
+        self.install_loaded_navigation_fixture_for_session_owner(navigation, session_id, token)
             .await;
     }
 
@@ -286,6 +291,11 @@ impl TestContext {
         session_id: Option<&str>,
     ) {
         self.conn.commit_declared_session_fixtures_for_test();
+        let owner = crate::conn::CommandOwnerScope::capture(&self.conn, session_id);
+        let token = self
+            .conn
+            .start_document_navigation_for_owner(&owner, crate::domains::page::LOADER_ID.to_owned())
+            .expect("navigation fixture requires a live Browser owner");
         let navigation = self
             .conn
             .build_loaded_navigation_from_buffered_response_for_session_owner_async(
@@ -299,7 +309,7 @@ impl TestContext {
             )
             .await
             .expect("buffered navigation fixture should build");
-        self.install_loaded_navigation_fixture_for_session_owner(navigation, session_id)
+        self.install_loaded_navigation_fixture_for_session_owner(navigation, session_id, token)
             .await;
     }
 
@@ -307,6 +317,7 @@ impl TestContext {
         &mut self,
         navigation: crate::conn::LoadedNavigation,
         session_id: Option<&str>,
+        token: crate::conn::NavigationId,
     ) {
         let owner = crate::conn::CommandOwnerScope::capture(&self.conn, session_id);
         let (_, target_id) = self
@@ -320,15 +331,22 @@ impl TestContext {
         let main_document_commit = navigation
             .main_document_commit
             .expect("navigation fixture must retain its frozen Document commit identity");
+        let prepared = crate::conn::PreparedDocumentNavigation::new(
+            token,
+            navigation.page,
+            final_url,
+            main_document_commit.security_origin.clone(),
+            main_document_commit.secure_context_type.clone(),
+            &page_creation_artifacts,
+        )
+        .expect("navigation fixture must have matching Page creation artifacts");
         let page_commit = self
             .conn
-            .commit_loaded_navigation_page_for_owner_async(
+            .commit_loaded_navigation_for_owner(
                 &owner,
-                navigation.page,
+                prepared,
                 LoadedNavigationRendererAttachmentCommit::Prepare(None),
-                &final_url,
             )
-            .await
             .expect("navigation fixture target must remain installed")
             .expect("navigation fixture Page commit must succeed");
         assert!(
@@ -337,17 +355,23 @@ impl TestContext {
                 .is_none(),
             "lifecycle-target fixture must not retain a DocumentCommit response gate"
         );
-        let _ = self
+        page_commit.previous_document_retirement.close().await;
+        let finished = self
             .conn
-            .commit_loaded_navigation_target_identity_for_owner(
-                &owner,
-                &main_document_commit,
-                &final_url,
-            );
+            .finish_renderer_document_navigation_for_owner(&owner, &token)
+            .expect("navigation fixture must finish its renderer suspension");
+        assert!(
+            finished.released_output.is_empty(),
+            "fixture output is ingested after the Document binding"
+        );
+        assert!(
+            finished.renderer_call_replacements.is_none(),
+            "fixture must not replace in-flight renderer calls"
+        );
         let (binding, _) = self.conn.bind_renderer_document_lifecycle_for_owner(
             &owner,
             page_creation_artifacts,
-            None,
+            Some(token),
             target_id,
             crate::domains::page::LOADER_ID.to_owned(),
         );

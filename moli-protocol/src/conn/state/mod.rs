@@ -109,6 +109,7 @@ pub(crate) use shared_worker_attachment::{
 pub(crate) use shared_worker_target::SharedWorkerTargetState;
 #[cfg(test)]
 pub(crate) use web_contents::JavaScriptDialogKey;
+pub(crate) use web_contents::PreparedDocumentNavigation;
 pub(crate) use web_contents::{
     EmulationPolicy, EmulationPolicyChange, SessionStorageNamespace, WindowSurface,
     WindowSurfaceState,

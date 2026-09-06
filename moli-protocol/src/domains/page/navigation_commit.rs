@@ -79,6 +79,7 @@ pub(super) async fn commit_loaded_navigation_async(
         &final_url,
         &target_url,
         &main_document_commit,
+        &page_creation_artifacts,
         initial_runtime_realms,
         committed_renderer_attachment,
         command_context,
@@ -233,6 +234,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
     final_url: &Url,
     target_url: &Url,
     main_document_commit: &moli_core::page::RendererMainDocumentCommit,
+    page_creation_artifacts: &RendererPageCreationArtifacts,
     initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
     committed_renderer_attachment: Option<CommittedRendererAgentAttachment>,
     command_context: &mut CommandDispatchContext,
@@ -431,20 +433,37 @@ async fn restore_and_commit_loaded_navigation_page_async(
         );
     }
     let page_commit_started = timing_enabled.then(std::time::Instant::now);
-    let page_commit = match conn
-        .commit_loaded_navigation_page_for_owner_async(
-            &state.owner,
-            page,
-            match committed_renderer_attachment {
-                Some(transaction) => {
-                    LoadedNavigationRendererAttachmentCommit::AlreadyCommitted(transaction)
-                }
-                None => LoadedNavigationRendererAttachmentCommit::Prepare(renderer_agent_candidate),
-            },
-            target_url,
-        )
-        .await
-    {
+    let prepared = match crate::conn::PreparedDocumentNavigation::new(
+        *token,
+        page,
+        target_url.clone(),
+        main_document_commit.security_origin.clone(),
+        main_document_commit.secure_context_type.clone(),
+        page_creation_artifacts,
+    ) {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            if state.navigate_id.is_some() {
+                out.push_error_after_messages(-32000, error);
+            } else {
+                tracing::warn!(
+                    session_id = state.owner.session_id(),
+                    "navigation commit rejected: {error}"
+                );
+            }
+            return None;
+        }
+    };
+    let page_commit = match conn.commit_loaded_navigation_for_owner(
+        &state.owner,
+        prepared,
+        match committed_renderer_attachment {
+            Some(transaction) => {
+                LoadedNavigationRendererAttachmentCommit::AlreadyCommitted(transaction)
+            }
+            None => LoadedNavigationRendererAttachmentCommit::Prepare(renderer_agent_candidate),
+        },
+    ) {
         Some(Ok(commit)) => commit,
         Some(Err(error)) => {
             if state.navigate_id.is_some() {
@@ -463,6 +482,7 @@ async fn restore_and_commit_loaded_navigation_page_async(
         }
         None => return None,
     };
+    page_commit.previous_document_retirement.close().await;
     if let Some(replaced_page_owner) = page_commit.replaced_page_owner.as_ref() {
         let worker_retirement_events =
             crate::domains::target::retire_dedicated_worker_targets_for_replaced_page_async(
@@ -477,16 +497,10 @@ async fn restore_and_commit_loaded_navigation_page_async(
             .response_flush()
             .defer_until_response_flush(move || continuation.release());
     }
-    let _ = conn.commit_loaded_navigation_target_identity_for_owner(
-        &state.owner,
-        main_document_commit,
-        target_url,
-    );
     if commit_state.runtime_frontend_enabled {
         let _ = conn
             .set_renderer_runtime_agent_owns_page_console_api_events_for_owner(&state.owner, true);
     }
-    conn.commit_document_navigation_for_owner_if_matches(&state.owner, token);
     if let Some(started) = page_commit_started {
         tracing::info!(
             target: "moli_cdp_nav_timing",
