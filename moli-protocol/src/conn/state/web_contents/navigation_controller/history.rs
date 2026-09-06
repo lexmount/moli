@@ -26,7 +26,7 @@ pub struct PageNavigationHistoryEntry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum PendingNavigationHistoryUpdate {
+pub(super) enum PendingNavigationHistoryUpdate {
     ReplaceCurrent,
     ReplaceInitialEmptyDocument,
     TraverseToEntry(i32),
@@ -189,6 +189,10 @@ impl NavigationHistoryState {
         self.pending_update = None;
     }
 
+    pub(super) fn take_pending_update(&mut self) -> Option<PendingNavigationHistoryUpdate> {
+        self.pending_update.take()
+    }
+
     pub(super) fn entry_url(&self, entry_id: i32) -> Option<String> {
         self.entries
             .iter()
@@ -244,8 +248,12 @@ impl NavigationHistoryState {
         self.push_entry(entry);
     }
 
-    pub(super) fn record_loaded_entry(&mut self, mut entry: PageNavigationHistoryEntry) {
-        match self.pending_update.take() {
+    pub(super) fn record_loaded_entry(
+        &mut self,
+        mut entry: PageNavigationHistoryEntry,
+        update: Option<PendingNavigationHistoryUpdate>,
+    ) {
+        match update {
             Some(PendingNavigationHistoryUpdate::ReplaceCurrent) => {
                 entry.transition_type = "reload".to_owned();
                 if let Some(current_entry) =
@@ -377,7 +385,7 @@ mod tests {
         assert_eq!(history, before);
         let mut next = history.snapshot().1[0].clone();
         next.id = history.allocate_entry_id();
-        history.record_loaded_entry(next);
+        history.record_loaded_entry(next, None);
         assert_eq!(
             history.resolve_traversal(HistoryTraversalDestination::Entry(1)),
             Ok(ResolvedHistoryTraversal::Entry {

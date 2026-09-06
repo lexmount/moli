@@ -801,15 +801,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
             .await
     }
 
-    pub(super) async fn discard_loaded_page_after_failed_navigation_async(
-        &mut self,
-        final_url: &Url,
-    ) -> Option<()> {
-        self.browser_context
-            .discard_target_loaded_page_after_failed_navigation_async(&self.target_id, final_url)
-            .await
-    }
-
     pub(super) fn runtime_slot_mut(&mut self) -> &mut TargetRuntimeSlot {
         &mut self.target_mut().runtime_slot
     }
@@ -953,11 +944,6 @@ impl<'a> TargetSessionOwnerMut<'a> {
                 fetch_navigation_request_id,
             })
         }
-    }
-
-    pub(super) fn clear_pending_navigation_history_update(&mut self) -> Option<()> {
-        self.browser_context
-            .clear_target_pending_navigation_history_update(&self.target_id)
     }
 }
 
@@ -1113,30 +1099,12 @@ impl CdpConnection {
         context.commit_loaded_navigation(prepared)
     }
 
-    pub(crate) fn clear_pending_navigation_history_update_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Option<()> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .clear_pending_navigation_history_update()
-    }
-
     pub(crate) async fn mark_target_crashed_for_owner_async(
         &mut self,
         owner: &CommandOwnerScope,
     ) -> Option<()> {
         self.target_session_owner_mut_for_owner(owner)?
             .mark_target_crashed_async()
-            .await
-    }
-
-    pub(crate) async fn discard_loaded_page_after_failed_navigation_for_owner_async(
-        &mut self,
-        owner: &CommandOwnerScope,
-        final_url: &Url,
-    ) -> Option<()> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .discard_loaded_page_after_failed_navigation_async(final_url)
             .await
     }
 
@@ -3297,7 +3265,7 @@ mod tests {
     }
 
     #[test]
-    fn target_session_owner_mut_clears_background_navigation_history_update() {
+    fn canceled_background_navigation_retires_its_history_update() {
         let mut background = BrowserContext::new("BID-background".to_owned());
         background.register_page_target_url_fixture(
             "TID-background".to_owned(),
@@ -3313,17 +3281,14 @@ mod tests {
                 .mark_target_next_navigation_history_replace_current("TID-background")
                 .unwrap();
         }
-        {
-            let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut background,
-                target_id: "TID-background".to_owned(),
-                command_session_id: None,
-                session_key: DevToolsSessionKey::Primary,
-            };
-            owner
-                .clear_pending_navigation_history_update()
-                .expect("background history update should clear");
-        }
+        let navigation = background
+            .begin_target_document_navigation("TID-background", "LOADER-reload".to_owned());
+        assert!(
+            background.clear_pending_document_navigation_if_matches_for_target(
+                "TID-background",
+                &navigation,
+            )
+        );
         background.record_target_navigation_history_for_test(
             "TID-background",
             ("https://new.example/".to_owned(), "new".to_owned()),

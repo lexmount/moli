@@ -1,6 +1,150 @@
 use super::*;
 use crate::conn::state::web_contents::tests::{BrowserFixture, prepare};
 
+#[tokio::test]
+async fn precommit_retirement_preserves_document_and_retires_request_history() {
+    for checkpoint in 0..3 {
+        let mut browser = BrowserFixture::new();
+        let committed = browser.navigate("committed").await;
+        let history = browser.contents.navigation_history_snapshot();
+        let document = browser
+            .contents
+            .main_frame
+            .current_document
+            .as_ref()
+            .unwrap();
+        let lifecycle = document.lifecycle.snapshot();
+        let renderer = RendererPageResidenceIdentity::from_page(&document.page);
+        browser
+            .contents
+            .navigation
+            .mark_next_navigation_history_replace_current();
+        let navigation = browser.contents.navigation.start_document_navigation();
+        let mut load = browser.start(navigation).unwrap();
+        let cancellation = load.identity().cancellation.clone();
+        let preparation_cancellation = load.identity().preparation_cancellation.clone();
+        let response = if checkpoint > 0 {
+            Some(prepare(&mut load, "never committed").await.unwrap())
+        } else {
+            None
+        };
+        let candidate = if checkpoint == 2 {
+            Some(
+                browser
+                    .materialization(navigation, response.unwrap())
+                    .unwrap()
+                    .materialize()
+                    .await
+                    .unwrap(),
+            )
+        } else {
+            None
+        };
+
+        assert!(
+            browser
+                .contents
+                .clear_pending_document_navigation_if_matches(&navigation)
+        );
+        assert!(
+            !browser
+                .contents
+                .clear_pending_document_navigation_if_matches(&navigation)
+        );
+        assert!(load.request_cancellation.is_cancelled());
+        assert!(cancellation.is_cancelled());
+        assert!(preparation_cancellation.is_cancelled());
+        assert!(
+            !browser
+                .contents
+                .navigation
+                .has_pending_document_navigation()
+        );
+        assert_eq!(browser.contents.navigation_history_snapshot(), history);
+        let document = browser
+            .contents
+            .main_frame
+            .current_document
+            .as_ref()
+            .unwrap();
+        assert_eq!(document.id, committed);
+        assert_eq!(document.lifecycle.snapshot(), lifecycle);
+        assert_eq!(
+            RendererPageResidenceIdentity::from_page(&document.page),
+            renderer
+        );
+        assert_eq!(
+            browser.evaluate("document.title").await,
+            serde_json::json!("committed")
+        );
+        if let Some(candidate) = candidate {
+            assert!(matches!(
+                browser.contents.commit_document_navigation(candidate.page),
+                Err("stale navigation document candidate")
+            ));
+        }
+
+        assert_ne!(browser.navigate("winner").await, committed);
+        let (index, entries) = browser.contents.navigation_history_snapshot();
+        assert_eq!(index, 1);
+        assert_eq!(
+            entries.len(),
+            2,
+            "the retired reload cannot replace winner history"
+        );
+        assert_eq!(entries[0].title, "committed");
+        assert_eq!(entries[1].title, "winner");
+        assert_eq!(entries[1].transition_type, "typed");
+    }
+}
+
+#[tokio::test]
+async fn superseded_request_cannot_clear_or_transfer_history_intent() {
+    for traverse in [false, true] {
+        let mut browser = BrowserFixture::new();
+        browser.navigate("first").await;
+        browser.navigate("current").await;
+        let before = browser.contents.navigation_history_snapshot();
+        browser
+            .contents
+            .navigation
+            .mark_next_navigation_history_replace_current();
+        let superseded = browser.contents.navigation.start_document_navigation();
+        if traverse {
+            browser
+                .contents
+                .navigation
+                .mark_next_navigation_history_traverse_to_entry(before.1[0].id);
+        }
+        let winner = browser.contents.navigation.start_document_navigation();
+        assert!(
+            !browser
+                .contents
+                .clear_pending_document_navigation_if_matches(&superseded)
+        );
+        assert_eq!(browser.contents.navigation_history_snapshot(), before);
+        assert_eq!(
+            browser.contents.navigation.can_reset_navigation_history(),
+            !traverse
+        );
+        browser.complete_navigation(winner, "winner").await;
+        let (index, entries) = browser.contents.navigation_history_snapshot();
+        assert_eq!(index, if traverse { 0 } else { 2 });
+        assert_eq!(entries.len(), if traverse { 2 } else { 3 });
+        assert_eq!(entries[index].title, "winner");
+        assert_eq!(entries[index].transition_type, "typed");
+        assert!(
+            !browser
+                .contents
+                .clear_pending_document_navigation_if_matches(&winner)
+        );
+        assert_eq!(
+            browser.contents.navigation_history_snapshot(),
+            (index, entries)
+        );
+    }
+}
+
 #[test]
 fn stale_load_admission_preserves_engine_policy_and_current_reservation() {
     rejected_admission(false);

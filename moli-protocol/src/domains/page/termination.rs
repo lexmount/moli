@@ -187,10 +187,10 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
     for pending in pending_navigations {
         let token = pending.document_navigation_token;
         let navigation_state = pending.navigation;
-        let navigation = network::materialize_navigation_failure_preserving_committed_document(
+        let navigation = network::materialize_navigation_load_result(
             conn,
             &navigation_state,
-            navigation_error_text.to_owned(),
+            Err(navigation_error_text.to_owned()),
         );
         let predecessor = complete_tokened_materialized_navigation_background_events_async(
             conn,
@@ -205,10 +205,10 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
     for pending in pending_auth_navigations {
         let token = pending.document_navigation_token;
         let navigation_state = pending.navigation;
-        let navigation = network::materialize_navigation_failure_preserving_committed_document(
+        let navigation = network::materialize_navigation_load_result(
             conn,
             &navigation_state,
-            navigation_error_text.to_owned(),
+            Err(navigation_error_text.to_owned()),
         );
         let predecessor = complete_tokened_materialized_navigation_background_events_async(
             conn,
@@ -222,10 +222,10 @@ async fn fail_pending_fetch_state_for_owner_background_events_async(
     }
     for pending in pending_response_navigations {
         let (token, navigation, _) = pending.fail(navigation_error_text.to_owned());
-        let result = network::materialize_navigation_failure_preserving_committed_document(
+        let result = network::materialize_navigation_load_result(
             conn,
             &navigation,
-            navigation_error_text.to_owned(),
+            Err(navigation_error_text.to_owned()),
         );
         let predecessor = complete_tokened_materialized_navigation_background_events_async(
             conn, out, token, navigation, result,

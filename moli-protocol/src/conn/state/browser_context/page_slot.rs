@@ -31,7 +31,6 @@ pub(crate) enum TargetPageAbsenceReason {
     NoTarget,
     InitialDocumentPageBuildPending,
     InitialDocumentPageBuildInProgress,
-    NavigationFailed,
     TargetClosed,
     TargetCrashed,
     #[cfg(test)]
@@ -44,7 +43,6 @@ impl TargetPageAbsenceReason {
             Self::NoTarget => "no-target",
             Self::InitialDocumentPageBuildPending => "initial-document-page-build-pending",
             Self::InitialDocumentPageBuildInProgress => "initial-document-page-build-in-progress",
-            Self::NavigationFailed => "navigation-failed",
             Self::TargetClosed => "target-closed",
             Self::TargetCrashed => "target-crashed",
             #[cfg(test)]

@@ -244,6 +244,7 @@ async fn history_reset_rejects_pending_traversal_before_touching_renderer() {
         .contents
         .navigation
         .mark_next_navigation_history_traverse_to_entry(before.1[0].id);
+    let traversal = browser.contents.navigation.start_document_navigation();
     assert!(
         matches!(browser.contents.start_reset_navigation_history(), Err(error) if error == "History cannot be pruned")
     );
@@ -254,10 +255,11 @@ async fn history_reset_rejects_pending_traversal_before_touching_renderer() {
             .await,
         json!([2, 2])
     );
-    browser
-        .contents
-        .navigation
-        .clear_pending_navigation_history_update();
+    assert!(
+        browser
+            .contents
+            .clear_pending_document_navigation_if_matches(&traversal)
+    );
     let completion = browser
         .contents
         .start_reset_navigation_history()

@@ -50,7 +50,6 @@ pub(crate) struct MaterializedDownloadDocumentProgress {
 
 pub(crate) struct MaterializedFailedDocumentProgress {
     pub(crate) error_text: String,
-    pub(crate) document_policy: FailedNavigationDocumentPolicy,
     pub(crate) response_mode: FailedNavigationResponseMode,
     pub(crate) progress_gate: MainDocumentProgressGate,
 }
@@ -59,18 +58,6 @@ pub(crate) struct MaterializedFailedDocumentProgress {
 pub(crate) enum FailedNavigationResponseMode {
     ProtocolError,
     CdpErrorTextResult,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum FailedNavigationDocumentPolicy {
-    InvalidateCommittedDocument,
-    PreserveCommittedDocument,
-}
-
-impl FailedNavigationDocumentPolicy {
-    pub(crate) fn invalidates_committed_document(self) -> bool {
-        matches!(self, Self::InvalidateCommittedDocument)
-    }
 }
 
 pub(crate) enum MaterializedNavigationLoadOutcome {
@@ -276,13 +263,11 @@ fn materialize_failed_navigation_progress(
     conn: &CdpConnection,
     state: &NavigationDispatchState,
     error_text: String,
-    document_policy: FailedNavigationDocumentPolicy,
     response_mode: FailedNavigationResponseMode,
 ) -> MaterializedFailedDocumentProgress {
     let progress_gate = failed_navigation_progress_gate(conn, state, &error_text);
     MaterializedFailedDocumentProgress {
         error_text,
-        document_policy,
         response_mode,
         progress_gate,
     }
@@ -343,7 +328,6 @@ fn materialize_navigation_load_outcome(
                 conn,
                 state,
                 error_text,
-                FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
                 FailedNavigationResponseMode::CdpErrorTextResult,
             ))
         }
@@ -362,25 +346,10 @@ pub(crate) fn materialize_navigation_load_result(
                 conn,
                 state,
                 error_text,
-                FailedNavigationDocumentPolicy::InvalidateCommittedDocument,
                 FailedNavigationResponseMode::ProtocolError,
             ))
         }
     }
-}
-
-pub(crate) fn materialize_navigation_failure_preserving_committed_document(
-    conn: &mut CdpConnection,
-    state: &NavigationDispatchState,
-    error_text: String,
-) -> MaterializedNavigationLoadOutcome {
-    MaterializedNavigationLoadOutcome::Failed(materialize_failed_navigation_progress(
-        conn,
-        state,
-        error_text,
-        FailedNavigationDocumentPolicy::PreserveCommittedDocument,
-        FailedNavigationResponseMode::ProtocolError,
-    ))
 }
 
 fn materialize_download_navigation_progress(
