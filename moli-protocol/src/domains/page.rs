@@ -20,10 +20,9 @@ use moli_core::page::{
     ChildFrameNavigationSnapshot, ChildFrameTreeEventSnapshot, ChildFrameTreeSnapshot,
     CompletedPageCommand, PendingPageCommand, RendererCaptureScreencastFrameReply,
     RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
-    RendererCaptureScreenshotRequest, RendererDocumentLifecycleEvent,
-    RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
-    RendererDocumentLifecycleWaitOutcome, RendererDocumentLifecycleWaiter,
-    RendererDocumentSourcedSameDocumentNavigation,
+    RendererCaptureScreenshotRequest, RendererDocumentLifecycleIdentity,
+    RendererDocumentLifecycleMilestone, RendererDocumentLifecycleWaitOutcome,
+    RendererDocumentLifecycleWaiter, RendererDocumentSourcedSameDocumentNavigation,
     RendererDocumentSourcedTopLevelLocationNavigation, RendererLayoutMetrics,
     RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
     RendererScreenshotClip, RendererScreenshotFormat, RendererScreenshotPurpose,
@@ -531,7 +530,7 @@ pub(crate) struct PagePreparedOutputs {
     window_open_events: Vec<popup::PagePreparedWindowOpenEvent>,
     popup_activations: Vec<popup::PagePreparedPopupActivation>,
     document_title_changes: Vec<RendererDocumentTitleChanged>,
-    document_lifecycle_events: Vec<RendererDocumentLifecycleEvent>,
+    document_lifecycle_events: Vec<crate::conn::DocumentLifecycleEvent>,
     child_frame_activities: Vec<PagePreparedChildFrameActivity>,
     same_document_navigations: Vec<PagePreparedSameDocumentNavigation>,
     top_level_location_navigation: Option<PagePreparedTopLevelLocationNavigation>,
@@ -806,8 +805,8 @@ impl PagePreparedOutputs {
         self.child_frame_activities.push(activity);
     }
 
-    pub(crate) fn from_renderer_document_lifecycle_event(
-        event: moli_core::page::RendererDocumentLifecycleEvent,
+    pub(crate) fn from_browser_document_lifecycle_event(
+        event: crate::conn::DocumentLifecycleEvent,
     ) -> Self {
         Self {
             document_lifecycle_events: vec![event],
@@ -1115,7 +1114,7 @@ impl PagePreparedOutputSlot {
 
     pub(crate) fn take_document_lifecycle_events(
         &mut self,
-    ) -> Option<Vec<RendererDocumentLifecycleEvent>> {
+    ) -> Option<Vec<crate::conn::DocumentLifecycleEvent>> {
         (!self.outputs.document_lifecycle_events.is_empty())
             .then(|| std::mem::take(&mut self.outputs.document_lifecycle_events))
     }
@@ -1235,11 +1234,8 @@ impl PageOutputProjectionStep {
                     .and_then(ProtocolOutputPayloads::page_mut)
                     .and_then(PagePreparedOutputSlot::take_document_lifecycle_events)
                 {
-                    let (binding, accepted) = conn
-                        .ingest_renderer_document_lifecycle_events_for_owner(
-                            &owner,
-                            renderer_events,
-                        );
+                    let (binding, accepted) =
+                        conn.project_document_lifecycle_events_for_owner(&owner, renderer_events);
                     if let Some(binding) = binding {
                         let mut events = Vec::new();
                         emit_bound_renderer_document_lifecycle_background_events(

@@ -1,9 +1,6 @@
 use moli_core::{
-    browser::{DocumentLifecycle, MainFrameSlotId, WebContentsId},
-    page::{
-        Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
-        RendererDocumentLifecycleSnapshot,
-    },
+    browser::{MainFrameSlotId, WebContentsId},
+    page::{Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind},
     runtime::NavigationEngine,
 };
 
@@ -16,12 +13,14 @@ mod navigation_commit;
 pub(in crate::conn) use navigation_commit::AdmittedDocumentMaterialization;
 mod network_request_policy;
 pub(crate) use navigation_commit::{
-    DocumentNavigationDestination, PreparedDocumentNavigation, RetiringDocument,
+    CommittedDocumentLifecycle, DocumentNavigationDestination, PreparedDocumentNavigation,
+    RetiringDocument,
 };
 mod page_surface;
 mod session_storage;
 mod window;
 pub(in crate::conn) use document_host::DocumentHost;
+pub(crate) use document_host::DocumentLifecycleEvent;
 pub(crate) use emulation_policy::{EmulationPolicy, EmulationPolicyChange};
 use javascript_dialog::JavaScriptDialogs;
 pub(crate) use javascript_dialog::{
@@ -121,42 +120,17 @@ impl WebContents {
             .is_some_and(|document| document.page.observe_renderer_page_state(snapshot))
     }
 
-    pub(in crate::conn) fn bind_document_lifecycle(
-        &mut self,
-        snapshot: RendererDocumentLifecycleSnapshot,
-    ) -> bool {
-        let Some(document) = self.main_frame.current_document.as_mut() else {
-            return false;
-        };
-        if document.lifecycle.snapshot() == Some(snapshot) {
-            return true;
-        }
-        let previous = document
-            .lifecycle
-            .snapshot()
-            .map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch));
-        document.lifecycle = DocumentLifecycle::from_snapshot(snapshot);
-        if previous != Some((snapshot.frame, snapshot.document, snapshot.epoch))
-            || snapshot.terminated.is_some()
-        {
-            self.javascript_dialogs.clear();
-        }
-        true
-    }
-
-    pub(in crate::conn) fn observe_document_lifecycle(
+    pub(in crate::conn) fn apply_document_lifecycle(
         &mut self,
         event: RendererDocumentLifecycleEvent,
-    ) -> bool {
-        let Some(document) = self.main_frame.current_document.as_mut() else {
-            return false;
-        };
+    ) -> Option<DocumentLifecycleEvent> {
+        let document = self.main_frame.current_document.as_mut()?;
         let restarts = document
             .lifecycle
             .snapshot()
             .is_some_and(|snapshot| snapshot.epoch != event.epoch);
         if !document.lifecycle.observe(event) {
-            return false;
+            return None;
         }
         if restarts
             || matches!(
@@ -166,7 +140,16 @@ impl WebContents {
         {
             self.javascript_dialogs.clear();
         }
-        true
+        if matches!(
+            event.kind,
+            RendererDocumentLifecycleEventKind::Started {
+                reason: moli_core::page::RendererLifecycleStartReason::ExplicitDocumentOpen
+                    | moli_core::page::RendererLifecycleStartReason::JavascriptDocumentReplacement
+            }
+        ) {
+            self.navigation.mark_initial_empty_document_exited();
+        }
+        Some(DocumentLifecycleEvent::new(document.id, event))
     }
 
     pub(in crate::conn) fn replace_document(&mut self, next: Option<DocumentHost>) -> Option<Page> {
