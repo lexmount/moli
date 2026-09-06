@@ -19,6 +19,95 @@ async fn two_native_documents() -> TestContext {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn native_history_reset_completion_survives_selection_and_session_detach() {
+    let mut ctx = two_native_documents().await;
+    ctx.install_buffered_navigation_fixture_for_session_owner(
+        url::Url::parse("https://history.example/").unwrap(),
+        "<title>history</title>".into(),
+        Some("SID-native-original"),
+    )
+    .await;
+    let initial = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .target_navigation_history_snapshot("TID-dom-inspection")
+        .unwrap();
+    ctx.process_async(json!({"id": 701, "sessionId": "SID-native-original", "method": "Runtime.evaluate", "params": {
+        "expression": "history.pushState(null, '', '#one'); history.pushState(null, '', '#two')",
+    }})).await;
+    let response = ctx.take_response_by_id(701);
+    assert!(
+        response["result"]["exceptionDetails"].is_null(),
+        "{response}"
+    );
+    let before = ctx
+        .conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .target_navigation_history_snapshot("TID-dom-inspection")
+        .unwrap();
+    assert_eq!(before.1.len(), initial.1.len() + 2);
+    let raw = json!({"id": 702, "sessionId": "SID-native-original", "method": "Page.resetNavigationHistory"}).to_string();
+    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+        panic!("history reset must execute on the Browser Document");
+    };
+    let completed = pending.wait().await;
+    assert!(
+        ctx.conn
+            .browser_context
+            .as_mut()
+            .unwrap()
+            .select_page_target_async("TID-native-background")
+            .await
+            .unwrap()
+    );
+    let peer = ctx
+        .conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .target_navigation_history_snapshot("TID-native-background")
+        .unwrap();
+    ctx.process_async(
+        json!({"id": 703, "method": "Target.detachFromTarget", "params": {
+            "targetId": "TID-dom-inspection", "sessionId": "SID-native-original",
+        }}),
+    )
+    .await;
+    assert!(ctx.take_response_by_id(703).get("error").is_none());
+    assert!(
+        ctx.conn
+            .session_route(Some("SID-native-original"))
+            .is_none()
+    );
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("history reset must complete without its frontend session");
+    };
+    let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+    assert!(
+        messages
+            .iter()
+            .any(|message| message["id"] == json!(702) && message["result"] == json!({})),
+        "{messages:?}"
+    );
+    let context = ctx.conn.browser_context.as_mut().unwrap();
+    assert_eq!(context.active_target_id(), Some("TID-native-background"));
+    assert_eq!(
+        context.target_navigation_history_snapshot("TID-native-background"),
+        Some(peer)
+    );
+    assert_eq!(
+        context.target_navigation_history_snapshot("TID-dom-inspection"),
+        Some((0, vec![before.1[before.0].clone()]))
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn native_input_completion_keeps_its_document_after_selection_and_session_detach() {
     let mut ctx = two_native_documents().await;
     ctx.process_async(json!({"id": 21, "sessionId": "SID-native-original", "method": "Runtime.evaluate", "params": {

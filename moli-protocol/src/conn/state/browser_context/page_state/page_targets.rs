@@ -99,7 +99,7 @@ impl BrowserContext {
     ) {
         let target_identity = background_target_identity_for_initial_url(&url, creator.as_ref());
         let mut contents = WebContents::default();
-        contents.navigation.begin_initial_empty_document(
+        contents.begin_initial_empty_document(
             initial_empty_document_url.unwrap_or_else(|| url.clone()),
             creator,
             initial_empty_document_storage_key,
@@ -125,7 +125,7 @@ impl BrowserContext {
         initial_empty_document_url: Option<String>,
     ) {
         let mut contents = WebContents::default();
-        contents.navigation.begin_initial_empty_document(
+        contents.begin_initial_empty_document(
             initial_empty_document_url.unwrap_or_else(|| url.clone()),
             None,
             None,
@@ -688,29 +688,26 @@ impl BrowserContext {
         );
         self.web_contents_for_target_mut(&target_id)
             .expect("selected WebContents")
-            .navigation
             .begin_initial_empty_document(initial_url, None, storage_key);
     }
 
     #[cfg(test)]
     pub(crate) fn mark_target_initial_empty_document_materialized(&mut self, target_id: &str) {
         if let Some(target) = self.web_contents_for_target_mut(target_id) {
-            target.navigation.mark_initial_empty_document_materialized();
+            target.mark_initial_empty_document_materialized();
         }
     }
 
     pub(crate) fn mark_target_initial_url_replaces_empty_document(&mut self, target_id: &str) {
         if let Some(target) = self.web_contents_for_target_mut(target_id) {
-            target
-                .navigation
-                .mark_next_navigation_history_replace_initial_empty_document();
+            target.mark_next_navigation_history_replace_initial_empty_document();
         }
     }
 
     #[cfg(test)]
     pub(crate) fn mark_target_initial_empty_document_exited(&mut self, target_id: &str) {
         if let Some(target) = self.web_contents_for_target_mut(target_id) {
-            target.navigation.mark_initial_empty_document_exited();
+            target.mark_initial_empty_document_exited();
         }
     }
 

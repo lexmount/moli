@@ -821,10 +821,10 @@ impl BrowserContext {
     }
 
     fn target_owner_diagnostics(&self, target: &PageTargetHost) -> Value {
-        let navigation = &self
+        let navigation = self
             .web_contents_for_target(target.target_id())
             .expect("live WebContents")
-            .navigation;
+            .navigation();
         let initial = navigation.initial_empty_document_state().map(|document| {
             let creator = document.creator().map(|creator| json!({
                 "targetId": self.page_targets.iter()
@@ -890,7 +890,7 @@ impl BrowserContext {
             return Ok(());
         };
         if contents
-            .navigation
+            .navigation()
             .has_materialized_current_initial_empty_document()
             && contents.main_frame.current_document.is_none()
         {
@@ -911,7 +911,7 @@ impl BrowserContext {
                 .web_contents_for_target(target_id)
                 .is_some_and(|contents| {
                     contents
-                        .navigation
+                        .navigation()
                         .can_install_current_initial_empty_document_page()
                 })
     }
@@ -929,7 +929,7 @@ impl BrowserContext {
         let navigation = &self
             .web_contents_for_target(target.target_id())
             .expect("live WebContents")
-            .navigation;
+            .navigation();
         let Some(initial_url) = navigation.initial_empty_document_url_if_current() else {
             return false;
         };
@@ -1067,7 +1067,7 @@ impl BrowserContext {
     pub(crate) fn accepts_pending_document_navigation_event(&self, token: &NavigationId) -> bool {
         self.physical.web_contents.values().any(|contents| {
             contents
-                .navigation
+                .navigation()
                 .accepts_pending_document_navigation_event(token)
         })
     }
@@ -1079,7 +1079,7 @@ impl BrowserContext {
     ) -> Option<moli_fetch::FetchCancelHandle> {
         self.physical.web_contents.values().find_map(|contents| {
             contents
-                .navigation
+                .navigation()
                 .document_navigation_cancellation_handle(token)
         })
     }
@@ -1091,7 +1091,7 @@ impl BrowserContext {
     ) -> bool {
         let Some(contents) = self.physical.web_contents.values_mut().find(|contents| {
             contents
-                .navigation
+                .navigation()
                 .accepts_pending_document_navigation_event(token)
         }) else {
             if let Some(cancellation) = additional_cancellation {
@@ -1099,31 +1099,28 @@ impl BrowserContext {
             }
             return false;
         };
-        contents
-            .navigation
-            .arm_background_navigation_completion(token, additional_cancellation)
+        contents.arm_background_navigation_completion(token, additional_cancellation)
     }
 
     pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
-        self.physical.web_contents.values_mut().any(|contents| {
-            contents
-                .navigation
-                .settle_background_navigation_completion(token)
-        })
+        self.physical
+            .web_contents
+            .values_mut()
+            .any(|contents| contents.settle_background_navigation_completion(token))
     }
 
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
         self.physical
             .web_contents
             .values()
-            .any(|contents| contents.navigation.has_inflight_background_navigation())
+            .any(|contents| contents.navigation().has_inflight_background_navigation())
     }
 
     #[cfg(test)]
     pub(crate) fn accepts_document_body_completion_event(&self, token: &NavigationId) -> bool {
         self.physical.web_contents.values().any(|contents| {
             contents
-                .navigation
+                .navigation()
                 .accepts_document_body_completion_event(token)
         })
     }

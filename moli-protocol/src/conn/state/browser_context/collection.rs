@@ -139,7 +139,7 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<&crate::conn::state::InitialDocument> {
         self.web_contents_for_target(target_id)?
-            .navigation
+            .navigation()
             .initial_empty_document_state()
     }
 
@@ -152,23 +152,19 @@ impl BrowserContext {
             .map(|_| format!("LID-INITIAL-{target_id}"))
     }
 
-    pub(crate) fn commit_target_document_title(&mut self, target_id: &str, title: String) -> bool {
-        let Some(target) = self.page_targets.get_mut(target_id) else {
-            return false;
-        };
-        let changed = target
+    pub(crate) fn commit_target_document_title(
+        &mut self,
+        target_id: &str,
+        change: &moli_core::RendererDocumentTitleChanged,
+    ) -> Option<bool> {
+        let changed = self
+            .web_contents_for_target_mut(target_id)?
+            .commit_document_title(change)?;
+        self.page_targets
+            .get_mut(target_id)?
             .owner_state
-            .committed_document_title()
-            .unwrap_or_default()
-            != title;
-        target.owner_state.committed_document_title = Some(title.clone());
-        self.physical
-            .web_contents
-            .get_mut(&target.web_contents_id())
-            .expect("live target projection must reference registered WebContents")
-            .navigation
-            .refresh_current_navigation_history_title(title);
-        changed
+            .committed_document_title = Some(change.title.clone());
+        Some(changed)
     }
 
     pub(crate) fn set_target_crash_state(&mut self, target_id: &str, crashed: bool) {

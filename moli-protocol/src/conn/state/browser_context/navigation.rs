@@ -4,6 +4,17 @@ use moli_core::page::{Page, SameDocumentHistoryUpdate};
 use url::Url;
 
 impl BrowserContext {
+    pub(in crate::conn) fn resolve_target_history_traversal(
+        &self,
+        target: &str,
+        destination: crate::conn::HistoryTraversalDestination,
+    ) -> Option<Result<crate::conn::ResolvedHistoryTraversal, &'static str>> {
+        Some(
+            self.web_contents_for_target(target)?
+                .resolve_history_traversal(destination),
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn record_target_navigation_history_for_test(
         &mut self,
@@ -12,8 +23,7 @@ impl BrowserContext {
     ) {
         self.web_contents_for_target_mut(target_id)
             .expect("registered fixture WebContents")
-            .navigation
-            .record_loaded_page_navigation_history(snapshot);
+            .record_navigation_history_for_test(snapshot);
     }
 
     pub(crate) fn target_service_worker_client_id(&self, target_id: &str) -> Option<u64> {
@@ -48,25 +58,12 @@ impl BrowserContext {
         url.host_str().is_some().then_some(url)
     }
 
-    fn target_history_page_snapshot(&self, target_id: &str) -> Option<(String, String)> {
-        let page = self.loaded_page_for_target(target_id)?;
-        let target = self.page_targets.get(target_id)?;
-        Some((
-            target.target_url().to_owned(),
-            target
-                .owner_state
-                .committed_document_title()
-                .map(str::to_owned)
-                .unwrap_or_else(|| page.document_title()),
-        ))
-    }
-
     pub(crate) fn target_initial_empty_document_url_if_current(
         &self,
         target_id: &str,
     ) -> Option<String> {
         self.web_contents_for_target(target_id)?
-            .navigation
+            .navigation()
             .initial_empty_document_url_if_current()
             .map(str::to_owned)
     }
@@ -76,14 +73,14 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<moli_storage_key::MoliStorageKey> {
         self.web_contents_for_target(target_id)?
-            .navigation
+            .navigation()
             .initial_empty_document_storage_key_if_current()
             .cloned()
     }
 
     pub(crate) fn target_is_on_initial_empty_document(&self, target_id: &str) -> Option<bool> {
         self.web_contents_for_target(target_id)?
-            .navigation
+            .navigation()
             .is_on_initial_empty_document()
     }
 
@@ -94,50 +91,28 @@ impl BrowserContext {
         self.web_contents_for_target(target_id)
             .is_some_and(|contents| {
                 contents
-                    .navigation
+                    .navigation()
                     .initial_empty_document_pending_cross_document_navigation()
             })
     }
 
     pub(crate) fn target_navigation_history_snapshot(
-        &mut self,
+        &self,
         target_id: &str,
     ) -> Option<(usize, Vec<PageNavigationHistoryEntry>)> {
-        let page_snapshot = self.target_history_page_snapshot(target_id);
         Some(
-            self.web_contents_for_target_mut(target_id)?
-                .navigation
-                .navigation_history_snapshot(page_snapshot),
+            self.web_contents_for_target(target_id)?
+                .navigation_history_snapshot(),
         )
     }
 
     pub(crate) fn target_navigation_history_entry_url(
-        &mut self,
+        &self,
         target_id: &str,
         entry_id: i32,
     ) -> Option<String> {
-        let page_snapshot = self.target_history_page_snapshot(target_id);
-        self.web_contents_for_target_mut(target_id)?
-            .navigation
-            .navigation_history_entry_url(page_snapshot, entry_id)
-    }
-
-    pub(crate) fn reset_target_navigation_history(&mut self, target_id: &str) -> Option<bool> {
-        let page_snapshot = self.target_history_page_snapshot(target_id);
-        Some(
-            self.web_contents_for_target_mut(target_id)?
-                .navigation
-                .reset_navigation_history(page_snapshot),
-        )
-    }
-
-    pub(crate) fn can_reset_target_navigation_history(&mut self, target_id: &str) -> Option<bool> {
-        let page_snapshot = self.target_history_page_snapshot(target_id);
-        Some(
-            self.web_contents_for_target_mut(target_id)?
-                .navigation
-                .can_reset_navigation_history(page_snapshot),
-        )
+        self.web_contents_for_target(target_id)?
+            .navigation_history_entry_url(entry_id)
     }
 
     pub(crate) fn mark_target_next_navigation_history_replace_current(
@@ -145,7 +120,6 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<()> {
         self.web_contents_for_target_mut(target_id)?
-            .navigation
             .mark_next_navigation_history_replace_current();
         Some(())
     }
@@ -156,42 +130,30 @@ impl BrowserContext {
         entry_id: i32,
     ) -> Option<()> {
         self.web_contents_for_target_mut(target_id)?
-            .navigation
             .mark_next_navigation_history_traverse_to_entry(entry_id);
         Some(())
     }
 
-    pub(crate) fn record_target_same_document_navigation(
+    pub(in crate::conn) fn commit_target_same_document_navigation(
         &mut self,
         target_id: &str,
-        url: &Url,
+        document: moli_core::browser::DocumentId,
+        url: Url,
         history_update: SameDocumentHistoryUpdate,
-    ) -> Option<String> {
-        let next_url = url.to_string();
-        let page_snapshot = self.target_history_page_snapshot(target_id);
-        let title = page_snapshot
-            .as_ref()
-            .map(|(_, title)| title.clone())
-            .or_else(|| {
-                self.page_targets
-                    .get(target_id)?
-                    .owner_state
-                    .committed_document_title()
-                    .map(str::to_owned)
-            })
-            .unwrap_or_default();
-        self.web_contents_for_target_mut(target_id)?
-            .navigation
-            .record_same_document_navigation_history(
-                page_snapshot,
-                next_url.clone(),
-                title,
-                history_update,
-            );
+    ) -> Option<crate::conn::state::web_contents::SameDocumentNavigationCommitted> {
+        let committed = self
+            .web_contents_for_target_mut(target_id)?
+            .commit_same_document_navigation(document, url, history_update)?;
+        if self.target_document_id(target_id) != Some(committed.document) {
+            return None;
+        }
         let target = self.page_targets.get_mut(target_id)?;
-        target.set_target_url(next_url);
-        target.set_target_security_origin(url.origin().ascii_serialization());
-        Some(target_id.to_owned())
+        if target.web_contents_id() != committed.web_contents {
+            return None;
+        }
+        target.set_target_url(committed.url.to_string());
+        target.set_target_security_origin(committed.url.origin().ascii_serialization());
+        Some(committed)
     }
 
     pub(crate) fn clear_target_pending_navigation_history_update(
@@ -199,7 +161,6 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<()> {
         self.web_contents_for_target_mut(target_id)?
-            .navigation
             .clear_pending_navigation_history_update();
         Some(())
     }
@@ -217,8 +178,7 @@ impl BrowserContext {
 
     pub(crate) async fn mark_target_crashed_async(&mut self, target_id: &str) -> Option<()> {
         let contents = self.web_contents_for_target_mut(target_id)?;
-        contents.crashed = true;
-        contents.navigation.clear_navigation_history();
+        contents.mark_renderer_crashed();
         let target = self.page_targets.get_mut(target_id)?;
         target.owner_state.clear_loaded_document_context_state();
         target.fetch_owner.clear_pending();
@@ -243,7 +203,6 @@ impl BrowserContext {
         final_url: &Url,
     ) -> Option<()> {
         self.web_contents_for_target_mut(target_id)?
-            .navigation
             .mark_initial_empty_document_exited();
         let target = self.page_targets.get_mut(target_id)?;
         target.set_target_url(final_url.to_string());

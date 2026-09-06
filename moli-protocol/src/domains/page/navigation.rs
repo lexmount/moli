@@ -10,10 +10,7 @@ use crate::devtools_runtime::{
 use chromiumoxide_cdp::cdp::browser_protocol::page::{
     NavigateParams, NavigateToHistoryEntryParams, ReloadParams,
 };
-use moli_core::page::{
-    ChildFrameDocumentOpenedSnapshot, CompletedPageCommand, PendingPageCommand,
-    SameDocumentHistoryUpdate,
-};
+use moli_core::page::{ChildFrameDocumentOpenedSnapshot, CompletedPageCommand, PendingPageCommand};
 use moli_fetch::NET_ERR_ABORTED_ERROR_TEXT;
 use moli_url_policy::{LocalFileNavigationAccess, route_navigation_url};
 use serde_json::{Value, json};
@@ -1105,7 +1102,7 @@ fn start_protocol_neutral_navigation_command(
                 &command_owner,
                 &command.destination,
             ) {
-                Ok(ResolvedDevToolsHistoryTraversal::Noop) => {
+                Ok(crate::conn::ResolvedHistoryTraversal::Noop) => {
                     return (
                         PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_result(
                             DevToolsCommandResult::Empty,
@@ -1113,7 +1110,7 @@ fn start_protocol_neutral_navigation_command(
                         Ok(DirectNavigationResult::empty()),
                     );
                 }
-                Ok(ResolvedDevToolsHistoryTraversal::Entry {
+                Ok(crate::conn::ResolvedHistoryTraversal::Entry {
                     entry_id,
                     url,
                     same_document_delta,
@@ -1668,74 +1665,22 @@ fn build_cdp_traverse_history_command(
     }
 }
 
-enum ResolvedDevToolsHistoryTraversal {
-    Noop,
-    Entry {
-        entry_id: i32,
-        url: String,
-        same_document_delta: Option<i64>,
-    },
-}
-
 fn resolve_devtools_history_traversal_destination(
-    conn: &mut CdpConnection,
+    conn: &CdpConnection,
     owner: &CommandOwnerScope,
     destination: &DevToolsHistoryTraversalDestination,
-) -> Result<ResolvedDevToolsHistoryTraversal, DevToolsError> {
-    let Some((current_index, entries)) =
-        conn.target_session_owner_navigation_history_snapshot_for_owner(owner)
-    else {
-        return Err(DevToolsError::new(
-            DevToolsErrorKind::NoSuchTarget,
-            "TargetNotLoaded",
-        ));
-    };
-    let target_index = match destination {
-        DevToolsHistoryTraversalDestination::Entry { entry_id, .. } => entries
-            .iter()
-            .position(|entry| entry.id == *entry_id)
-            .ok_or_else(|| {
-                DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
-            })?,
+) -> Result<crate::conn::ResolvedHistoryTraversal, DevToolsError> {
+    let destination = match destination {
+        DevToolsHistoryTraversalDestination::Entry { entry_id, .. } => {
+            crate::conn::HistoryTraversalDestination::Entry(*entry_id)
+        }
         DevToolsHistoryTraversalDestination::Delta(delta) => {
-            let target_index = current_index as i128 + i128::from(*delta);
-            if target_index < 0 || target_index >= entries.len() as i128 {
-                return Err(DevToolsError::new(
-                    DevToolsErrorKind::NoSuchHistoryEntry,
-                    "NoSuchHistoryEntry",
-                ));
-            }
-            usize::try_from(target_index).map_err(|_| {
-                DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
-            })?
+            crate::conn::HistoryTraversalDestination::Delta(*delta)
         }
     };
-    if target_index == current_index {
-        return Ok(ResolvedDevToolsHistoryTraversal::Noop);
-    }
-    let current_entry = entries.get(current_index).ok_or_else(|| {
-        DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
-    })?;
-    let target_entry = entries.get(target_index).ok_or_else(|| {
-        DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
-    })?;
-    let same_document_delta = (current_entry.document_sequence_number.is_some()
-        && current_entry.document_sequence_number == target_entry.document_sequence_number)
-        .then(|| {
-            let current_index = i64::try_from(current_index).map_err(|_| {
-                DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
-            })?;
-            let target_index = i64::try_from(target_index).map_err(|_| {
-                DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, "NoSuchHistoryEntry")
-            })?;
-            Ok::<_, DevToolsError>(target_index - current_index)
-        })
-        .transpose()?;
-    Ok(ResolvedDevToolsHistoryTraversal::Entry {
-        entry_id: target_entry.id,
-        url: target_entry.url.clone(),
-        same_document_delta,
-    })
+    conn.resolve_history_traversal_for_owner(owner, destination)
+        .ok_or_else(|| DevToolsError::new(DevToolsErrorKind::NoSuchTarget, "TargetNotLoaded"))?
+        .map_err(|error| DevToolsError::new(DevToolsErrorKind::NoSuchHistoryEntry, error))
 }
 
 fn start_same_document_history_traversal_command(
@@ -1850,8 +1795,10 @@ pub(super) fn start_session_owner_history_traversal_from_renderer(
     let destination = DevToolsHistoryTraversalDestination::Delta(delta);
     let (entry_id, url) =
         match resolve_devtools_history_traversal_destination(conn, owner, &destination) {
-            Ok(ResolvedDevToolsHistoryTraversal::Entry { entry_id, url, .. }) => (entry_id, url),
-            Ok(ResolvedDevToolsHistoryTraversal::Noop) => {
+            Ok(crate::conn::ResolvedHistoryTraversal::Entry { entry_id, url, .. }) => {
+                (entry_id, url)
+            }
+            Ok(crate::conn::ResolvedHistoryTraversal::Noop) => {
                 return PageCommandTaskStep::Complete(CommandOutputPlan::success());
             }
             Err(error) => {
@@ -1940,12 +1887,12 @@ fn start_devtools_traverse_history_command(
         &options.owner,
         &command.destination,
     ) {
-        Ok(ResolvedDevToolsHistoryTraversal::Noop) => {
+        Ok(crate::conn::ResolvedHistoryTraversal::Noop) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_result(
                 DevToolsCommandResult::Empty,
             ));
         }
-        Ok(ResolvedDevToolsHistoryTraversal::Entry {
+        Ok(crate::conn::ResolvedHistoryTraversal::Entry {
             entry_id,
             url,
             same_document_delta,
@@ -2454,56 +2401,29 @@ pub(super) fn try_start_reset_navigation_history_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> PageCommandTaskStep {
-    match conn.can_reset_navigation_history_for_session_owner(cmd.session_id) {
-        Some(true) => {}
-        Some(false) => {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32000,
-                "History cannot be pruned",
-            ));
-        }
-        None => {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32000,
-                "NoDocumentLoaded",
-            ));
-        }
-    }
-    let pending = {
-        let Some((page_context_id, page_target_id)) = conn
-            .loaded_document_owner_identity_for_owner(&CommandOwnerScope::capture(
-                conn,
-                cmd.session_id,
-            ))
-        else {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32000,
-                "NoDocumentLoaded",
-            ));
-        };
-        let page_context = conn
-            .browser_context_by_id_mut(&page_context_id)
-            .expect("resolved document context remains registered");
-        match page_context.start_reset_navigation_history_for_target(&page_target_id) {
-            Ok(pending) => pending,
-            Err(error) => {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    error.to_string(),
-                ));
-            }
-        }
+    let Some(page) = conn.target_page_residence_identity_for_session(cmd.session_id) else {
+        return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, "NoDocumentLoaded"));
     };
-    PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
-        command_id: cmd.id,
-        owner_scope: crate::conn::CommandOwnerScope::capture(conn, cmd.session_id),
-        kind: Box::new(super::PendingPageCommandKind::ResetNavigationHistory { pending }),
-    })
+    let pending = page
+        .target_id()
+        .and_then(|target_id| {
+            conn.browser_context_by_id(page.browser_context_id())
+                .map(|context| context.start_reset_navigation_history_for_target(target_id))
+        })
+        .unwrap_or_else(|| Err("NoDocumentLoaded".into()));
+    match pending {
+        Ok(pending) => PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
+            command_id: cmd.id,
+            owner_scope: crate::conn::CommandOwnerScope::capture(conn, cmd.session_id),
+            kind: Box::new(super::PendingPageCommandKind::ResetNavigationHistory { page, pending }),
+        }),
+        Err(error) => PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error)),
+    }
 }
 
 pub(super) fn complete_reset_navigation_history_command(
     conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
+    page: &crate::conn::TargetPageResidenceIdentity,
     completed: Result<CompletedPageCommand, String>,
 ) -> PageCommandTaskStep {
     let completion = match completed {
@@ -2512,36 +2432,19 @@ pub(super) fn complete_reset_navigation_history_command(
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
         }
     };
-    let Some((page_context_id, page_target_id)) =
-        conn.loaded_document_owner_identity_for_owner(owner)
+    let Some((page_context, target_id)) = conn
+        .browser_context_by_id_mut(page.browser_context_id())
+        .zip(page.target_id())
     else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, "NoDocumentLoaded"));
     };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("resolved document context remains registered");
-    match page_context.finish_reset_navigation_history_for_target(&page_target_id, completion) {
-        Ok(true) => {}
-        Ok(false) => {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32000,
-                "History cannot be pruned",
-            ));
-        }
-        Err(error) => {
-            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32000,
-                error.to_string(),
-            ));
-        }
-    }
-    match conn.reset_navigation_history_for_owner(owner) {
-        Some(true) => PageCommandTaskStep::Complete(CommandOutputPlan::success()),
-        Some(false) => PageCommandTaskStep::Complete(CommandOutputPlan::error(
+    match page_context.finish_reset_navigation_history_for_target(target_id, completion) {
+        Ok(true) => PageCommandTaskStep::Complete(CommandOutputPlan::success()),
+        Ok(false) => PageCommandTaskStep::Complete(CommandOutputPlan::error(
             -32000,
             "History cannot be pruned",
         )),
-        None => PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, "NoDocumentLoaded")),
+        Err(error) => PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error)),
     }
 }
 
@@ -3384,74 +3287,36 @@ pub(super) fn push_navigation_commit_error(
     }
 }
 
-fn emit_same_document_navigation_background_event(
+pub(super) fn emit_same_document_navigation_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
-    url: Url,
-    navigation_type: &str,
-    history_update: SameDocumentHistoryUpdate,
-) {
-    let Some(frame_id) =
-        conn.record_same_document_navigation_for_owner(owner, &url, history_update)
-    else {
-        return;
-    };
-    for event_session_id in conn.page_event_session_ids_for_owner(owner) {
-        let event = SameDocumentNavigationEvent {
-            target_id: DevToolsTargetId::from(frame_id.as_str()),
-            frame_id: DevToolsFrameId::from(frame_id.as_str()),
-            url: url.as_str().to_owned(),
-            navigation_type: navigation_type.to_owned(),
-        };
-        out.push(BackgroundProtocolEvent::page_same_document_navigation(
-            event_session_id.as_deref(),
-            event,
-        ));
-    }
-}
-
-pub(crate) async fn emit_same_document_navigation_background_events_async(
-    conn: &mut CdpConnection,
-    out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
     navigations: Vec<super::PagePreparedSameDocumentNavigation>,
 ) {
     for navigation in navigations {
-        let session_id = owner.session_id();
-        let source_document = navigation.source_document();
-        if !conn.target_page_residence_identity_is_current(navigation.owner()) {
-            tracing::debug!(
-                session_id,
-                ?source_document,
-                browser_context_id = navigation.owner().browser_context_id(),
-                target_id = navigation.owner().target_id(),
-                document_id = navigation.owner().document_id().get(),
-                "dropping same-document navigation produced by a stale Page residence"
-            );
-            continue;
-        }
+        let page = navigation.owner().clone();
         let navigation = navigation.into_navigation();
         let Ok(url) = Url::parse(&navigation.url) else {
             continue;
         };
-        if conn.has_pending_document_navigation_for_owner(owner) {
-            tracing::debug!(
-                session_id,
-                url = url.as_str(),
-                navigation_type = navigation.navigation_type.as_str(),
-                "dropping renderer same-document navigation while cross-document navigation is pending"
-            );
+        let Some((frame_id, committed)) =
+            conn.commit_same_document_navigation_for_page(&page, url, navigation.history_update)
+        else {
             continue;
+        };
+        // Browser mutation is already committed. The session that initiated
+        // the renderer action does not own history or its other observers.
+        let owner = CommandOwnerScope::for_page_residence(&page);
+        for event_session_id in conn.page_event_session_ids_for_owner(&owner) {
+            out.push(BackgroundProtocolEvent::page_same_document_navigation(
+                event_session_id.as_deref(),
+                SameDocumentNavigationEvent {
+                    target_id: DevToolsTargetId::from(frame_id.as_str()),
+                    frame_id: DevToolsFrameId::from(frame_id.as_str()),
+                    url: committed.url.to_string(),
+                    navigation_type: navigation.navigation_type.clone(),
+                },
+            ));
         }
-        emit_same_document_navigation_background_event(
-            conn,
-            out,
-            owner,
-            url,
-            &navigation.navigation_type,
-            navigation.history_update,
-        );
     }
 }
 

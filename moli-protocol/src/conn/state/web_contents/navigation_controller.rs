@@ -4,8 +4,9 @@
 use moli_core::browser::{DocumentId, NavigationId, WebContentsId};
 
 mod history;
-pub(super) use history::NavigationHistoryState;
-pub use history::{PageNavigationHistoryEntry, PendingNavigationHistoryUpdate};
+use history::NavigationHistoryState;
+pub use history::PageNavigationHistoryEntry;
+pub(crate) use history::{HistoryTraversalDestination, ResolvedHistoryTraversal};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct InitialDocumentCreator {
@@ -41,7 +42,7 @@ impl InitialDocumentCreator {
 #[derive(Debug)]
 enum InitialDocumentLifecycle {
     Unmaterialized,
-    Building(super::web_contents::InitialDocumentBuildState),
+    Building(super::InitialDocumentBuildState),
     Materialized,
     Exited,
 }
@@ -180,9 +181,16 @@ pub(in crate::conn) struct NavigationController {
 }
 
 impl NavigationController {
+    pub(super) fn resolve_history_traversal(
+        &self,
+        destination: HistoryTraversalDestination,
+    ) -> Result<ResolvedHistoryTraversal, &'static str> {
+        self.history.resolve_traversal(destination)
+    }
+
     pub(in crate::conn::state) fn initial_document_build(
         &self,
-    ) -> Option<&super::web_contents::InitialDocumentBuildState> {
+    ) -> Option<&super::InitialDocumentBuildState> {
         match &self.initial_empty_document.as_ref()?.lifecycle {
             InitialDocumentLifecycle::Building(build) => Some(build),
             _ => None,
@@ -192,7 +200,7 @@ impl NavigationController {
     pub(in crate::conn::state) fn admit_initial_document_build(
         &mut self,
         url: &str,
-        build: super::web_contents::InitialDocumentBuildState,
+        build: super::InitialDocumentBuildState,
     ) {
         let initial = self
             .initial_empty_document
@@ -210,7 +218,7 @@ impl NavigationController {
 
     pub(in crate::conn::state) fn take_initial_document_build_for_commit(
         &mut self,
-    ) -> super::web_contents::InitialDocumentBuildState {
+    ) -> super::InitialDocumentBuildState {
         let initial = self
             .initial_empty_document
             .as_mut()
@@ -224,38 +232,38 @@ impl NavigationController {
         build
     }
 
-    pub(super) fn pending_document(&self) -> Option<(NavigationId, DocumentId)> {
+    pub(in crate::conn::state) fn pending_document(&self) -> Option<(NavigationId, DocumentId)> {
         self.pending_navigation_request
             .as_ref()
             .filter(|request| !request.committed)
             .map(|request| (request.navigation_id, request.document_id))
     }
 
-    pub(super) fn current_document_navigation(&self) -> Option<NavigationId> {
+    pub(in crate::conn::state) fn current_document_navigation(&self) -> Option<NavigationId> {
         self.pending_document()
             .map(|(navigation, _)| navigation)
             .or(self.committed_document_navigation)
     }
 
-    pub(super) fn committed_document_navigation(&self) -> Option<NavigationId> {
+    pub(in crate::conn::state) fn committed_document_navigation(&self) -> Option<NavigationId> {
         self.committed_document_navigation
     }
 
-    pub(super) fn retains_navigation(&self, navigation: NavigationId) -> bool {
+    pub(in crate::conn::state) fn retains_navigation(&self, navigation: NavigationId) -> bool {
         self.pending_navigation_request
             .as_ref()
             .is_some_and(|request| request.matches(&navigation))
             || self.committed_document_navigation == Some(navigation)
     }
 
-    pub(crate) fn start_document_navigation(&mut self) -> NavigationId {
+    pub(super) fn start_document_navigation(&mut self) -> NavigationId {
         self.cancel_initial_document_build();
         let navigation = NavigationId::allocate();
         self.pending_navigation_request = Some(PendingNavigationRequest::new(navigation));
         navigation
     }
 
-    pub(crate) fn commit_pending_document_navigation_if_matches(
+    pub(super) fn commit_pending_document_navigation_if_matches(
         &mut self,
         navigation: &NavigationId,
     ) -> bool {
@@ -276,7 +284,7 @@ impl NavigationController {
         true
     }
 
-    pub(crate) fn clear_pending_document_navigation_if_matches(
+    pub(super) fn clear_pending_document_navigation_if_matches(
         &mut self,
         navigation: &NavigationId,
     ) -> bool {
@@ -287,7 +295,7 @@ impl NavigationController {
         true
     }
 
-    pub(crate) fn clear_document_navigation_state(&mut self) {
+    pub(super) fn clear_document_navigation_state(&mut self) {
         self.cancel_initial_document_build();
         self.pending_navigation_request = None;
         self.committed_document_navigation = None;
@@ -297,7 +305,7 @@ impl NavigationController {
         self.is_on_initial_empty_document() == Some(true) && self.has_pending_document_navigation()
     }
 
-    pub(crate) fn clear_navigation_history(&mut self) {
+    pub(super) fn clear_navigation_history(&mut self) {
         self.history.clear();
     }
 
@@ -308,7 +316,7 @@ impl NavigationController {
             && self.history == NavigationHistoryState::default()
     }
 
-    pub(super) fn current_url(&self) -> Option<&str> {
+    pub(in crate::conn::state) fn current_url(&self) -> Option<&str> {
         self.history.current_url()
     }
 
@@ -349,7 +357,7 @@ impl NavigationController {
         true
     }
 
-    pub(super) fn accepts_document_preparation(
+    pub(in crate::conn::state) fn accepts_document_preparation(
         &self,
         navigation: NavigationId,
         renderer: moli_core::browser::RendererPageResidenceIdentity,
@@ -368,7 +376,7 @@ impl NavigationController {
             })
     }
 
-    pub(crate) fn arm_background_navigation_completion(
+    pub(super) fn arm_background_navigation_completion(
         &mut self,
         token: &NavigationId,
         additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
@@ -385,7 +393,7 @@ impl NavigationController {
         true
     }
 
-    pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
+    pub(super) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
         let Some(request) = self
             .pending_navigation_request
             .as_mut()
@@ -426,7 +434,7 @@ impl NavigationController {
             .is_some_and(|request| !request.committed)
     }
 
-    pub(crate) fn begin_initial_empty_document(
+    pub(super) fn begin_initial_empty_document(
         &mut self,
         initial_url: String,
         creator: Option<InitialDocumentCreator>,
@@ -451,13 +459,13 @@ impl NavigationController {
     }
 
     #[cfg(test)]
-    pub(crate) fn mark_initial_empty_document_materialized(&mut self) {
+    pub(super) fn mark_initial_empty_document_materialized(&mut self) {
         if let Some(state) = self.initial_empty_document.as_mut() {
             state.mark_materialized();
         }
     }
 
-    pub(crate) fn mark_initial_empty_document_exited(&mut self) {
+    pub(super) fn mark_initial_empty_document_exited(&mut self) {
         if let Some(state) = self.initial_empty_document.as_mut() {
             state.mark_exited();
         }
@@ -514,76 +522,55 @@ impl NavigationController {
         }
     }
 
-    fn reconcile_navigation_history_page_snapshot(
-        &mut self,
-        page_snapshot: Option<(String, String)>,
-    ) {
-        let Some(page_snapshot) = page_snapshot else {
-            return;
-        };
+    pub(super) fn seed_document_history(&mut self, page_snapshot: (String, String)) {
         if !self.history.is_empty() {
-            let (_, title) = page_snapshot;
-            self.history.refresh_current_entry_title(title);
             return;
         }
         let entry = self.navigation_history_entry_for_page_snapshot(page_snapshot);
         self.history.seed_entry(entry);
     }
 
-    pub(crate) fn refresh_current_navigation_history_title(&mut self, title: String) -> bool {
+    pub(super) fn refresh_current_navigation_history_title(&mut self, title: String) -> bool {
         self.history.refresh_current_entry_title(title)
     }
 
-    pub(crate) fn mark_next_navigation_history_replace_current(&mut self) {
+    pub(super) fn current_history_title(&self) -> Option<&str> {
+        self.history.current_title()
+    }
+
+    pub(super) fn mark_next_navigation_history_replace_current(&mut self) {
         self.history.mark_replace_current();
     }
 
-    pub(crate) fn mark_next_navigation_history_replace_initial_empty_document(&mut self) {
+    pub(super) fn mark_next_navigation_history_replace_initial_empty_document(&mut self) {
         self.history.mark_replace_initial_empty_document();
     }
 
-    pub(crate) fn mark_next_navigation_history_traverse_to_entry(&mut self, entry_id: i32) {
+    pub(super) fn mark_next_navigation_history_traverse_to_entry(&mut self, entry_id: i32) {
         self.history.mark_traverse_to_entry(entry_id);
     }
 
-    pub(crate) fn clear_pending_navigation_history_update(&mut self) {
+    pub(super) fn clear_pending_navigation_history_update(&mut self) {
         self.history.clear_pending_update();
     }
 
-    pub(crate) fn navigation_history_entry_url(
-        &mut self,
-        page_snapshot: Option<(String, String)>,
-        entry_id: i32,
-    ) -> Option<String> {
-        self.reconcile_navigation_history_page_snapshot(page_snapshot);
+    pub(crate) fn navigation_history_entry_url(&self, entry_id: i32) -> Option<String> {
         self.history.entry_url(entry_id)
     }
 
-    pub(crate) fn navigation_history_snapshot(
-        &mut self,
-        page_snapshot: Option<(String, String)>,
-    ) -> (usize, Vec<PageNavigationHistoryEntry>) {
-        self.reconcile_navigation_history_page_snapshot(page_snapshot);
+    pub(crate) fn navigation_history_snapshot(&self) -> (usize, Vec<PageNavigationHistoryEntry>) {
         self.history.snapshot()
     }
 
-    pub(crate) fn reset_navigation_history(
-        &mut self,
-        page_snapshot: Option<(String, String)>,
-    ) -> bool {
-        self.reconcile_navigation_history_page_snapshot(page_snapshot);
+    pub(super) fn reset_navigation_history(&mut self) -> bool {
         self.history.prune_all_but_current()
     }
 
-    pub(crate) fn can_reset_navigation_history(
-        &mut self,
-        page_snapshot: Option<(String, String)>,
-    ) -> bool {
-        self.reconcile_navigation_history_page_snapshot(page_snapshot);
+    pub(super) fn can_reset_navigation_history(&self) -> bool {
         self.history.can_prune_all_but_current()
     }
 
-    pub(crate) fn record_loaded_page_navigation_history(
+    pub(super) fn record_loaded_page_navigation_history(
         &mut self,
         page_snapshot: (String, String),
     ) {
@@ -591,17 +578,105 @@ impl NavigationController {
         self.history.record_loaded_entry(entry);
     }
 
-    pub(crate) fn record_same_document_navigation_history(
+    pub(super) fn record_same_document_navigation_history(
         &mut self,
-        page_snapshot: Option<(String, String)>,
         url: String,
         title: String,
         history_update: moli_core::page::SameDocumentHistoryUpdate,
+    ) -> bool {
+        self.history
+            .record_same_document_update(url, title, history_update)
+    }
+}
+
+impl super::WebContents {
+    pub(in crate::conn::state) fn navigation(&self) -> &NavigationController {
+        &self.navigation
+    }
+
+    pub(in crate::conn::state) fn start_document_navigation(&mut self) -> NavigationId {
+        self.navigation.start_document_navigation()
+    }
+
+    #[cfg(test)]
+    pub(in crate::conn::state) fn commit_pending_document_navigation_if_matches(
+        &mut self,
+        token: &NavigationId,
+    ) -> bool {
+        self.navigation
+            .commit_pending_document_navigation_if_matches(token)
+    }
+
+    pub(in crate::conn::state) fn clear_pending_document_navigation_if_matches(
+        &mut self,
+        token: &NavigationId,
+    ) -> bool {
+        self.navigation
+            .clear_pending_document_navigation_if_matches(token)
+    }
+
+    pub(in crate::conn::state) fn clear_document_navigation_state(&mut self) {
+        self.navigation.clear_document_navigation_state()
+    }
+
+    pub(in crate::conn::state) fn arm_background_navigation_completion(
+        &mut self,
+        token: &NavigationId,
+        additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
+    ) -> bool {
+        self.navigation
+            .arm_background_navigation_completion(token, additional_cancellation)
+    }
+
+    pub(in crate::conn::state) fn settle_background_navigation_completion(
+        &mut self,
+        token: &NavigationId,
+    ) -> bool {
+        self.navigation
+            .settle_background_navigation_completion(token)
+    }
+
+    pub(in crate::conn::state) fn begin_initial_empty_document(
+        &mut self,
+        initial_url: String,
+        creator: Option<InitialDocumentCreator>,
+        storage_key: Option<moli_storage_key::MoliStorageKey>,
     ) {
-        self.reconcile_navigation_history_page_snapshot(page_snapshot);
-        let _ = self
-            .history
-            .record_same_document_update(url, title, history_update);
+        self.navigation
+            .begin_initial_empty_document(initial_url, creator, storage_key)
+    }
+
+    #[cfg(test)]
+    pub(in crate::conn::state) fn mark_initial_empty_document_materialized(&mut self) {
+        self.navigation.mark_initial_empty_document_materialized()
+    }
+
+    pub(in crate::conn::state) fn mark_initial_empty_document_exited(&mut self) {
+        self.navigation.mark_initial_empty_document_exited()
+    }
+
+    pub(in crate::conn::state) fn mark_next_navigation_history_replace_current(&mut self) {
+        self.navigation
+            .mark_next_navigation_history_replace_current()
+    }
+
+    pub(in crate::conn::state) fn mark_next_navigation_history_replace_initial_empty_document(
+        &mut self,
+    ) {
+        self.navigation
+            .mark_next_navigation_history_replace_initial_empty_document()
+    }
+
+    pub(in crate::conn::state) fn mark_next_navigation_history_traverse_to_entry(
+        &mut self,
+        entry_id: i32,
+    ) {
+        self.navigation
+            .mark_next_navigation_history_traverse_to_entry(entry_id)
+    }
+
+    pub(in crate::conn::state) fn clear_pending_navigation_history_update(&mut self) {
+        self.navigation.clear_pending_navigation_history_update()
     }
 }
 
@@ -615,6 +690,161 @@ fn is_initial_empty_document_url(raw_url: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use moli_core::page::SameDocumentHistoryUpdate;
+
+    #[test]
+    fn navigation_history_seed_entry_preserves_pending_update() {
+        let mut history = NavigationHistoryState::default();
+        history.mark_replace_current();
+
+        let seed_id = history.allocate_entry_id();
+        history.seed_entry(PageNavigationHistoryEntry {
+            id: seed_id,
+            url: "https://example.test/seed".to_owned(),
+            user_typed_url: "https://example.test/seed".to_owned(),
+            title: "seed".to_owned(),
+            transition_type: "typed".to_owned(),
+            document_sequence_number: None,
+        });
+
+        let reloaded_id = history.allocate_entry_id();
+        history.record_loaded_entry(PageNavigationHistoryEntry {
+            id: reloaded_id,
+            url: "https://example.test/reloaded".to_owned(),
+            user_typed_url: "https://example.test/reloaded".to_owned(),
+            title: "reloaded".to_owned(),
+            transition_type: "typed".to_owned(),
+            document_sequence_number: None,
+        });
+
+        let (current_index, entries) = history.snapshot();
+        assert_eq!(current_index, 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].url, "https://example.test/reloaded");
+        assert_eq!(entries[0].user_typed_url, "https://example.test/seed");
+        assert_eq!(entries[0].transition_type, "reload");
+    }
+
+    #[test]
+    fn initial_empty_document_seeds_browser_navigation_history_metadata() {
+        let mut owner = NavigationController::default();
+
+        owner.begin_initial_empty_document("about:blank".to_owned(), None, None);
+
+        let (current_index, entries) = owner.navigation_history_snapshot();
+        assert_eq!(current_index, 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].url, "about:blank");
+        assert_eq!(entries[0].user_typed_url, "about:blank");
+        assert_eq!(entries[0].transition_type, "auto_toplevel");
+    }
+
+    #[test]
+    fn direct_target_initial_url_replaces_empty_document_history_entry() {
+        let mut owner = NavigationController::default();
+
+        owner.begin_initial_empty_document("about:blank".to_owned(), None, None);
+        owner.mark_next_navigation_history_replace_initial_empty_document();
+        owner.record_loaded_page_navigation_history((
+            "https://example.test/direct".to_owned(),
+            "direct".to_owned(),
+        ));
+
+        let (current_index, entries) = owner.navigation_history_snapshot();
+        assert_eq!(current_index, 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].url, "https://example.test/direct");
+        assert_eq!(entries[0].user_typed_url, "https://example.test/direct");
+        assert_eq!(entries[0].title, "direct");
+        assert_eq!(entries[0].transition_type, "auto_toplevel");
+    }
+
+    #[test]
+    fn navigation_history_prune_rejects_only_pending_existing_entry_traversal() {
+        let mut history = NavigationHistoryState::default();
+        let initial_id = history.allocate_entry_id();
+        history.seed_entry(PageNavigationHistoryEntry {
+            id: initial_id,
+            url: "https://example.test/initial".to_owned(),
+            user_typed_url: "https://example.test/initial".to_owned(),
+            title: "initial".to_owned(),
+            transition_type: "typed".to_owned(),
+            document_sequence_number: None,
+        });
+        assert!(history.record_same_document_update(
+            "https://example.test/pushed".to_owned(),
+            "pushed".to_owned(),
+            SameDocumentHistoryUpdate::Push,
+        ));
+        let pushed_id = history.snapshot().1[1].id;
+
+        history.mark_replace_current();
+        assert!(
+            history.can_prune_all_but_current(),
+            "a new pending reload/replace entry must survive pruning"
+        );
+        assert!(history.prune_all_but_current());
+        let (current_index, entries) = history.snapshot();
+        assert_eq!(current_index, 0);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, pushed_id);
+
+        history.mark_traverse_to_entry(pushed_id);
+        assert!(
+            !history.can_prune_all_but_current(),
+            "pending traversal to an existing history index cannot be pruned"
+        );
+        assert!(!history.prune_all_but_current());
+    }
+
+    #[test]
+    fn navigation_history_traversal_reuses_same_document_entries() {
+        let mut history = NavigationHistoryState::default();
+        let initial_id = history.allocate_entry_id();
+        history.seed_entry(PageNavigationHistoryEntry {
+            id: initial_id,
+            url: "https://example.test/page".to_owned(),
+            user_typed_url: "https://example.test/page".to_owned(),
+            title: "page".to_owned(),
+            transition_type: "typed".to_owned(),
+            document_sequence_number: None,
+        });
+        assert!(history.record_same_document_update(
+            "https://example.test/page?state=pushed".to_owned(),
+            "page".to_owned(),
+            SameDocumentHistoryUpdate::Push,
+        ));
+
+        let (_, entries) = history.snapshot();
+        let pushed_id = entries[1].id;
+        assert_eq!(
+            entries[0].document_sequence_number, entries[1].document_sequence_number,
+            "pushState entries must retain the current document sequence"
+        );
+        assert_eq!(entries[1].user_typed_url, "https://example.test/page");
+        assert_eq!(entries[1].transition_type, "link");
+
+        assert!(history.record_same_document_update(
+            "https://example.test/page".to_owned(),
+            "page".to_owned(),
+            SameDocumentHistoryUpdate::Traverse { delta: -1 },
+        ));
+        let (current_index, entries) = history.snapshot();
+        assert_eq!(current_index, 0);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].id, initial_id);
+        assert_eq!(entries[1].id, pushed_id);
+
+        assert!(history.record_same_document_update(
+            "https://example.test/page?state=pushed".to_owned(),
+            "page".to_owned(),
+            SameDocumentHistoryUpdate::Traverse { delta: 1 },
+        ));
+        let (current_index, entries) = history.snapshot();
+        assert_eq!(current_index, 1);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[1].id, pushed_id);
+    }
 
     #[test]
     fn background_result_keeps_cancellation_until_browser_commit_or_retirement() {

@@ -1,5 +1,20 @@
 use moli_core::page::SameDocumentHistoryUpdate;
 
+pub(crate) enum HistoryTraversalDestination {
+    Entry(i32),
+    Delta(i64),
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ResolvedHistoryTraversal {
+    Noop,
+    Entry {
+        entry_id: i32,
+        url: String,
+        same_document_delta: Option<i64>,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PageNavigationHistoryEntry {
     pub id: i32,
@@ -11,14 +26,14 @@ pub struct PageNavigationHistoryEntry {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PendingNavigationHistoryUpdate {
+enum PendingNavigationHistoryUpdate {
     ReplaceCurrent,
     ReplaceInitialEmptyDocument,
     TraverseToEntry(i32),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(in crate::conn) struct NavigationHistoryState {
+pub(super) struct NavigationHistoryState {
     entries: Vec<PageNavigationHistoryEntry>,
     current_index: Option<usize>,
     next_entry_id: i32,
@@ -39,19 +54,64 @@ impl Default for NavigationHistoryState {
 }
 
 impl NavigationHistoryState {
-    pub(crate) fn current_url(&self) -> Option<&str> {
+    pub(super) fn resolve_traversal(
+        &self,
+        destination: HistoryTraversalDestination,
+    ) -> Result<ResolvedHistoryTraversal, &'static str> {
+        let current_index = self.current_index.ok_or("NoSuchHistoryEntry")?;
+        let target_index = match destination {
+            HistoryTraversalDestination::Entry(id) => self
+                .entries
+                .iter()
+                .position(|entry| entry.id == id)
+                .ok_or("NoSuchHistoryEntry")?,
+            HistoryTraversalDestination::Delta(delta) => {
+                usize::try_from(current_index as i128 + i128::from(delta))
+                    .map_err(|_| "NoSuchHistoryEntry")?
+            }
+        };
+        let current = self
+            .entries
+            .get(current_index)
+            .ok_or("NoSuchHistoryEntry")?;
+        let target = self.entries.get(target_index).ok_or("NoSuchHistoryEntry")?;
+        if current_index == target_index {
+            return Ok(ResolvedHistoryTraversal::Noop);
+        }
+        let same_document_delta = if current.document_sequence_number.is_some()
+            && current.document_sequence_number == target.document_sequence_number
+        {
+            Some(
+                i64::try_from(target_index as i128 - current_index as i128)
+                    .map_err(|_| "NoSuchHistoryEntry")?,
+            )
+        } else {
+            None
+        };
+        Ok(ResolvedHistoryTraversal::Entry {
+            entry_id: target.id,
+            url: target.url.clone(),
+            same_document_delta,
+        })
+    }
+
+    pub(super) fn current_title(&self) -> Option<&str> {
+        Some(self.entries.get(self.current_index?)?.title.as_str())
+    }
+
+    pub(super) fn current_url(&self) -> Option<&str> {
         Some(self.entries.get(self.current_index?)?.url.as_str())
     }
 
-    pub(crate) fn clear(&mut self) {
+    pub(super) fn clear(&mut self) {
         *self = Self::default();
     }
 
-    pub(crate) fn is_empty(&self) -> bool {
+    pub(super) fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 
-    pub(crate) fn allocate_entry_id(&mut self) -> i32 {
+    pub(super) fn allocate_entry_id(&mut self) -> i32 {
         let id = self.next_entry_id;
         self.next_entry_id = self
             .next_entry_id
@@ -113,30 +173,30 @@ impl NavigationHistoryState {
         self.push_entry(loaded_entry);
     }
 
-    pub(crate) fn mark_replace_current(&mut self) {
+    pub(super) fn mark_replace_current(&mut self) {
         self.pending_update = Some(PendingNavigationHistoryUpdate::ReplaceCurrent);
     }
 
-    pub(crate) fn mark_replace_initial_empty_document(&mut self) {
+    pub(super) fn mark_replace_initial_empty_document(&mut self) {
         self.pending_update = Some(PendingNavigationHistoryUpdate::ReplaceInitialEmptyDocument);
     }
 
-    pub(crate) fn mark_traverse_to_entry(&mut self, entry_id: i32) {
+    pub(super) fn mark_traverse_to_entry(&mut self, entry_id: i32) {
         self.pending_update = Some(PendingNavigationHistoryUpdate::TraverseToEntry(entry_id));
     }
 
-    pub(crate) fn clear_pending_update(&mut self) {
+    pub(super) fn clear_pending_update(&mut self) {
         self.pending_update = None;
     }
 
-    pub(crate) fn entry_url(&self, entry_id: i32) -> Option<String> {
+    pub(super) fn entry_url(&self, entry_id: i32) -> Option<String> {
         self.entries
             .iter()
             .find(|entry| entry.id == entry_id)
             .map(|entry| entry.url.clone())
     }
 
-    pub(crate) fn refresh_current_entry_title(&mut self, title: String) -> bool {
+    pub(super) fn refresh_current_entry_title(&mut self, title: String) -> bool {
         let Some(current_entry) = self
             .current_index
             .and_then(|current_index| self.entries.get_mut(current_index))
@@ -150,11 +210,11 @@ impl NavigationHistoryState {
         true
     }
 
-    pub(crate) fn snapshot(&self) -> (usize, Vec<PageNavigationHistoryEntry>) {
+    pub(super) fn snapshot(&self) -> (usize, Vec<PageNavigationHistoryEntry>) {
         (self.current_index.unwrap_or(0), self.entries.clone())
     }
 
-    pub(crate) fn can_prune_all_but_current(&self) -> bool {
+    pub(super) fn can_prune_all_but_current(&self) -> bool {
         !matches!(
             self.pending_update,
             Some(PendingNavigationHistoryUpdate::TraverseToEntry(_))
@@ -163,7 +223,7 @@ impl NavigationHistoryState {
             .is_some_and(|current_index| current_index < self.entries.len())
     }
 
-    pub(crate) fn prune_all_but_current(&mut self) -> bool {
+    pub(super) fn prune_all_but_current(&mut self) -> bool {
         if !self.can_prune_all_but_current() {
             return false;
         }
@@ -179,12 +239,12 @@ impl NavigationHistoryState {
         true
     }
 
-    pub(crate) fn seed_entry(&mut self, mut entry: PageNavigationHistoryEntry) {
+    pub(super) fn seed_entry(&mut self, mut entry: PageNavigationHistoryEntry) {
         self.assign_new_document_sequence_number(&mut entry);
         self.push_entry(entry);
     }
 
-    pub(crate) fn record_loaded_entry(&mut self, mut entry: PageNavigationHistoryEntry) {
+    pub(super) fn record_loaded_entry(&mut self, mut entry: PageNavigationHistoryEntry) {
         match self.pending_update.take() {
             Some(PendingNavigationHistoryUpdate::ReplaceCurrent) => {
                 entry.transition_type = "reload".to_owned();
@@ -211,7 +271,7 @@ impl NavigationHistoryState {
         }
     }
 
-    pub(crate) fn record_same_document_update(
+    pub(super) fn record_same_document_update(
         &mut self,
         url: String,
         title: String,
@@ -255,11 +315,9 @@ impl NavigationHistoryState {
                 let Some(target_entry) = self.entries.get(target_index) else {
                     return false;
                 };
-                debug_assert_eq!(
-                    target_entry.url, url,
-                    "renderer/browser same-document traversal URL drift: current_index={current_index}, delta={delta}, target_index={target_index}, browser_target_url={}, renderer_target_url={url}",
-                    target_entry.url,
-                );
+                if target_entry.url != url {
+                    return false;
+                }
                 self.current_index = Some(target_index);
                 true
             }
@@ -270,6 +328,90 @@ impl NavigationHistoryState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_traversal_resolution_is_native_read_only_and_document_aware() {
+        let mut history = NavigationHistoryState::default();
+        for url in ["https://example.test/a", "https://example.test/a#one"] {
+            assert!(history.record_same_document_update(
+                url.into(),
+                "A".into(),
+                SameDocumentHistoryUpdate::Push
+            ));
+        }
+        let before = history.clone();
+        for destination in [
+            HistoryTraversalDestination::Entry(1),
+            HistoryTraversalDestination::Delta(-1),
+        ] {
+            assert_eq!(
+                history.resolve_traversal(destination),
+                Ok(ResolvedHistoryTraversal::Entry {
+                    entry_id: 1,
+                    url: "https://example.test/a".into(),
+                    same_document_delta: Some(-1),
+                })
+            );
+        }
+        for destination in [
+            HistoryTraversalDestination::Entry(2),
+            HistoryTraversalDestination::Delta(0),
+        ] {
+            assert_eq!(
+                history.resolve_traversal(destination),
+                Ok(ResolvedHistoryTraversal::Noop)
+            );
+        }
+        for destination in [
+            HistoryTraversalDestination::Entry(42),
+            HistoryTraversalDestination::Delta(1),
+            HistoryTraversalDestination::Delta(-2),
+            HistoryTraversalDestination::Delta(i64::MAX),
+            HistoryTraversalDestination::Delta(i64::MIN),
+        ] {
+            assert_eq!(
+                history.resolve_traversal(destination),
+                Err("NoSuchHistoryEntry")
+            );
+        }
+        assert_eq!(history, before);
+        let mut next = history.snapshot().1[0].clone();
+        next.id = history.allocate_entry_id();
+        history.record_loaded_entry(next);
+        assert_eq!(
+            history.resolve_traversal(HistoryTraversalDestination::Entry(1)),
+            Ok(ResolvedHistoryTraversal::Entry {
+                entry_id: 1,
+                url: "https://example.test/a".into(),
+                same_document_delta: None,
+            }),
+            "equal URLs do not make two Browser Documents the same history document"
+        );
+        assert_eq!(
+            NavigationHistoryState::default()
+                .resolve_traversal(HistoryTraversalDestination::Delta(0)),
+            Err("NoSuchHistoryEntry")
+        );
+    }
+
+    #[test]
+    fn same_document_history_traversal_rejects_mismatched_url_atomically() {
+        let mut history = NavigationHistoryState::default();
+        for url in ["https://example.test/a", "https://example.test/b"] {
+            assert!(history.record_same_document_update(
+                url.into(),
+                String::new(),
+                SameDocumentHistoryUpdate::Push
+            ));
+        }
+        let before = history.clone();
+        assert!(!history.record_same_document_update(
+            "https://example.test/wrong".into(),
+            String::new(),
+            SameDocumentHistoryUpdate::Traverse { delta: -1 }
+        ));
+        assert_eq!(history, before);
+    }
 
     #[test]
     fn same_document_traversal_moves_cursor_without_allocating_or_appending() {
