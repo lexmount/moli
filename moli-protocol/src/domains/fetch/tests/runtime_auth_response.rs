@@ -498,17 +498,30 @@ async fn runtime_child_frame_fetch_subresource_interception_uses_child_frame_att
     }))
     .await;
     ctx.expect_result(36_402, json!({}), Some("SID-1"));
-    enable_runtime_async(&mut ctx, "SID-1", 36_403).await;
+    // Exercise the case where the child commits before Runtime.enable finishes.
+    // Enabling another domain must not discard that already observed lifecycle.
+    let child_frame_navigated = |message: &Value| {
+        message["sessionId"] == json!("SID-1")
+            && message["method"] == json!("Page.frameNavigated")
+            && message["params"]["frame"]["id"] == json!(child_frame_id)
+            && message["params"]["frame"]["url"] == json!(child_url)
+    };
     wait_until_message(
         &mut ctx,
         "SID-1",
-        "child frame navigated before child fetch",
-        |message| {
-            message["method"] == json!("Page.frameNavigated")
-                && message["params"]["frame"]["id"] == json!(child_frame_id)
-        },
+        "child frame committed before Runtime.enable",
+        child_frame_navigated,
     )
     .await;
+    ctx.process_async(json!({
+        "id": 36_403, "method": "Runtime.enable", "sessionId": "SID-1",
+    }))
+    .await;
+    ctx.expect_result(36_403, json!({}), Some("SID-1"));
+    assert!(
+        ctx.sent.iter().any(child_frame_navigated),
+        "preserve the child commit event while consuming only the Runtime.enable response"
+    );
 
     ctx.process_async(json!({
         "id": 36_404,
