@@ -930,37 +930,45 @@ impl JsRuntime {
 }
 
 impl JsRuntime {
-    /// Reserve an empty document without starting its parser or author script.
+    /// Reserve a response without starting its parser or author script.
     /// Inspection bootstrap can then enter the same FIFO through its own weak
     /// endpoint, before Browser materialization consumes the reservation.
     #[allow(clippy::too_many_arguments)]
-    pub fn reserve_initial_document(
+    pub fn reserve_document_response(
         &self,
         token: RendererPageReservationToken,
-        url: Url,
+        requested_url: Url,
+        final_url: Url,
+        navigation_initiator_url: Option<Url>,
+        redirected: bool,
+        redirect_count: usize,
+        response_status: u16,
+        response_headers: Vec<(String, String)>,
+        body: ExternalRawDocumentBodyStream,
         loader: &ResourceRequestClient,
         web_storage: crate::RendererWebStorageHandles,
         indexed_db_manager: Option<crate::context_bootstrap::WeakIndexedDbManager>,
         storage_bucket_store: Option<crate::context_bootstrap::SharedStorageBucketStore>,
         top_level_storage_key: Option<moli_storage_key::MoliStorageKey>,
+        stage: PageVmInitStage,
+        reply_boundary: crate::RendererReplyBoundary,
+        reserved_service_worker_client: Option<RendererReservedServiceWorkerClient>,
     ) -> PendingPreparedRendererDocument {
         let mut request = self
             .inner
             .renderer_owner
             .build_create_streaming_raw_page_request(
-                url.clone(),
-                url,
-                None,
-                false,
-                0,
+                requested_url,
+                final_url,
+                navigation_initiator_url,
+                redirected,
+                redirect_count,
                 Vec::new(),
-                200,
-                vec![("content-type".into(), "text/html; charset=utf-8".into())],
+                response_status,
+                response_headers,
                 loader,
                 web_storage,
-                ExternalRawDocumentBodyStream::from_bytes(
-                    b"<!doctype html><html><head></head><body></body></html>".to_vec(),
-                ),
+                body,
                 Vec::new(),
                 Vec::new(),
                 Vec::new(),
@@ -976,11 +984,13 @@ impl JsRuntime {
                 Vec::new(),
                 false,
                 None,
-                PageVmInitStage::Load,
+                stage,
             );
         request.indexed_db_manager = indexed_db_manager;
         request.storage_bucket_store = storage_bucket_store;
         request.top_level_storage_key = top_level_storage_key;
+        request.reply_boundary = reply_boundary;
+        request.reserved_service_worker_client = reserved_service_worker_client;
         request.top_level_navigation_dispatch =
             crate::RendererTopLevelNavigationDispatch::DelegateToBrowser;
         request.navigation_reply_policy =

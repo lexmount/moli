@@ -78,6 +78,7 @@ impl BrowserContext {
             .start_fetch_interception_update(enabled, resource_type)
     }
 
+    #[cfg(test)]
     pub(in crate::conn) fn target_fetch_interception_policy(
         &self,
         target_id: &str,

@@ -102,6 +102,9 @@ use self::lifecycle_decision::PendingLifecycleNavigation;
 pub struct RendererPreparedDocumentInspectionConfiguration {
     /// AgentHost's root-frame wire label; never a Browser object identity.
     pub root_frame_projection_id: Option<String>,
+    /// Frozen wire occurrence appended between session reset and default-world
+    /// creation. This projects a commit; it does not authorize a Browser commit.
+    pub main_document_commit: Option<RendererMainDocumentCommit>,
     pub document_start_scripts: Vec<DocumentStartScript>,
     pub runtime_bindings: Vec<crate::protocol_types::RuntimeBindingRegistration>,
     pub runtime_inspector_session_restore_snapshots: Vec<RendererInspectorSessionRestoreSnapshot>,
