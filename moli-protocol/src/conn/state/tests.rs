@@ -848,7 +848,6 @@ fn pending_auth_navigation_rejects_generic_request_action_without_consuming_id()
             owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
             fetch_request_id: "FETCH-AUTH".to_owned(),
             response_stage_request_id: "FETCH-AUTH".to_owned(),
-            document_navigation_token: None,
             navigation: test_navigation_dispatch_state("FETCH-AUTH"),
             challenge: FetchAuthChallenge {
                 origin: "https://example.test".to_owned(),
@@ -857,9 +856,7 @@ fn pending_auth_navigation_rejects_generic_request_action_without_consuming_id()
                 realm: "test-area".to_owned(),
             },
             request_cookie_report: None,
-            auth_response: PendingFetchAuthNavigation::test_auth_response(
-                Url::parse("https://example.test/").unwrap(),
-            ),
+            auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
             intercept_response: false,
             response_stage_url_match_policy:
                 crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -898,7 +895,6 @@ fn unscoped_fetch_owned_auth_navigation_allows_routed_action_session() {
             owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
             fetch_request_id: "FETCH-AUTH".to_owned(),
             response_stage_request_id: "FETCH-AUTH".to_owned(),
-            document_navigation_token: None,
             navigation: test_navigation_dispatch_state("FETCH-AUTH"),
             challenge: FetchAuthChallenge {
                 origin: "https://example.test".to_owned(),
@@ -907,9 +903,7 @@ fn unscoped_fetch_owned_auth_navigation_allows_routed_action_session() {
                 realm: "test-area".to_owned(),
             },
             request_cookie_report: None,
-            auth_response: PendingFetchAuthNavigation::test_auth_response(
-                Url::parse("https://example.test/").unwrap(),
-            ),
+            auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
             intercept_response: false,
             response_stage_url_match_policy:
                 crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -932,7 +926,6 @@ fn unscoped_fetch_owned_auth_navigation_allows_routed_action_session() {
             owner_kind: PendingSubresourceFetchOwnerKind::NetworkOrBidi,
             fetch_request_id: "NETWORK-AUTH".to_owned(),
             response_stage_request_id: "NETWORK-AUTH".to_owned(),
-            document_navigation_token: None,
             navigation: test_navigation_dispatch_state("NETWORK-AUTH"),
             challenge: FetchAuthChallenge {
                 origin: "https://example.test".to_owned(),
@@ -941,9 +934,7 @@ fn unscoped_fetch_owned_auth_navigation_allows_routed_action_session() {
                 realm: "test-area".to_owned(),
             },
             request_cookie_report: None,
-            auth_response: PendingFetchAuthNavigation::test_auth_response(
-                Url::parse("https://example.test/").unwrap(),
-            ),
+            auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
             intercept_response: false,
             response_stage_url_match_policy:
                 crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,

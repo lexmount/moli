@@ -85,6 +85,12 @@ define_browser_identity!(
     "navigation id",
     "Identity of one browser-owned navigation attempt."
 );
+define_browser_identity!(
+    BrowserRequestId,
+    NEXT_BROWSER_REQUEST_ID,
+    "browser request id",
+    "Identity of one browser-owned request decision, independent of protocol request IDs."
+);
 
 #[cfg(any(test, feature = "test-support"))]
 impl DocumentId {
@@ -116,6 +122,7 @@ mod tests {
         assert_ne!(MainFrameSlotId::allocate(), MainFrameSlotId::allocate());
         assert_ne!(DocumentId::allocate(), DocumentId::allocate());
         assert_ne!(NavigationId::allocate(), NavigationId::allocate());
+        assert_ne!(BrowserRequestId::allocate(), BrowserRequestId::allocate());
     }
 
     #[test]
@@ -134,5 +141,9 @@ mod tests {
         );
         assert_eq!(size_of::<Option<DocumentId>>(), size_of::<DocumentId>());
         assert_eq!(size_of::<Option<NavigationId>>(), size_of::<NavigationId>());
+        assert_eq!(
+            size_of::<Option<BrowserRequestId>>(),
+            size_of::<BrowserRequestId>()
+        );
     }
 }

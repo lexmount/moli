@@ -1201,7 +1201,6 @@ async fn disable_clears_fetch_state() {
                 owner_kind: crate::conn::PendingSubresourceFetchOwnerKind::Fetch,
                 fetch_request_id: "INT-1".to_owned(),
                 response_stage_request_id: "INT-1".to_owned(),
-                document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_route(
@@ -1232,9 +1231,7 @@ async fn disable_clears_fetch_state() {
                     realm: "test-area".to_owned(),
                 },
                 request_cookie_report: None,
-                auth_response: PendingFetchAuthNavigation::test_auth_response(
-                    Url::parse("http://example.test/auth").unwrap(),
-                ),
+                auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
                 intercept_response: false,
                 response_stage_url_match_policy:
                     crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -1427,7 +1424,6 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                 owner_kind: crate::conn::PendingSubresourceFetchOwnerKind::Fetch,
                 fetch_request_id: "INT-8".to_owned(),
                 response_stage_request_id: "INT-8".to_owned(),
-                document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
@@ -1456,9 +1452,7 @@ async fn continue_with_auth_rejects_invalid_response_without_consuming_pending_a
                     realm: "test-area".to_owned(),
                 },
                 request_cookie_report: None,
-                auth_response: PendingFetchAuthNavigation::test_auth_response(
-                    Url::parse("http://example.test/auth").unwrap(),
-                ),
+                auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
                 intercept_response: false,
                 response_stage_url_match_policy:
                     crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,
@@ -1502,7 +1496,6 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                 owner_kind: crate::conn::PendingSubresourceFetchOwnerKind::Fetch,
                 fetch_request_id: "INT-9".to_owned(),
                 response_stage_request_id: "INT-9".to_owned(),
-                document_navigation_token: None,
                 navigation: crate::conn::NavigationDispatchState {
                     navigate_id: Some(1),
                     owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
@@ -1531,9 +1524,7 @@ async fn continue_with_auth_unsupported_challenge_preserves_pending_auth_navigat
                     realm: "token-area".to_owned(),
                 },
                 request_cookie_report: None,
-                auth_response: PendingFetchAuthNavigation::test_auth_response(
-                    Url::parse("http://example.test/auth").unwrap(),
-                ),
+                auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
                 intercept_response: false,
                 response_stage_url_match_policy:
                     crate::conn::ResponseStageUrlMatchPolicy::AlreadyMatched,

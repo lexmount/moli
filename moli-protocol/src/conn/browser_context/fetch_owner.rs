@@ -1,5 +1,6 @@
 use super::target_session_owner::TargetSessionOwnerMut;
 use super::*;
+use crate::conn::state::{InterceptedNavigationResponse, NavigationInterceptionPermit};
 use crate::conn::state::{
     TargetFetchConfig, TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot,
 };
@@ -13,6 +14,32 @@ use crate::conn::{
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::domains::network::TargetIoStreamRead;
+
+impl CdpConnection {
+    pub(crate) fn pause_navigation_auth(
+        &mut self,
+        response: InterceptedNavigationResponse<moli_fetch::RawResponse>,
+    ) -> Result<NavigationInterceptionPermit, String> {
+        // Browser identity was frozen at load admission, before the fetch.
+        // Session routing and the current Target/loader are not authority here.
+        self.browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .find(|context| context.owns_web_contents(response.web_contents()))
+            .ok_or("navigation BrowserContext unavailable")?
+            .pause_navigation_auth(response)
+    }
+
+    pub(crate) fn take_navigation_auth(
+        &mut self,
+        permit: NavigationInterceptionPermit,
+    ) -> Option<InterceptedNavigationResponse<moli_fetch::RawResponse>> {
+        self.browser_context
+            .iter_mut()
+            .chain(self.inactive_browser_contexts.iter_mut())
+            .find_map(|context| context.take_navigation_auth(permit))
+    }
+}
 
 pub(crate) type SessionOwnerPendingFetchState = (
     Vec<PendingFetchNavigation>,

@@ -23,7 +23,6 @@ use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask, RendererOutputPublicationOrdering,
     RendererOutputTransportMessage,
     network::{SharedWebStorageStore, new_shared_web_storage_store},
-    page::SubresourceAuthCredentials,
     runtime::{
         NavigationEngine, NavigationRuntimeConfig, storage_partition::StoragePartitionState,
     },
@@ -73,6 +72,7 @@ mod settings;
 mod site_data_manager_surface;
 mod state;
 pub(crate) use state::{CompletedContextPermissionUpdate, PendingContextPermissionUpdate};
+pub(crate) use state::{InterceptedNavigationLoad, InterceptedNavigationResponse};
 pub(crate) use state::{NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind};
 mod target;
 mod top_level_navigation_work;

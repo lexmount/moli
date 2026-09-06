@@ -59,6 +59,15 @@ impl FetchClientHandle {
     /// materialize at this API boundary. Auth challenge-response still uses the
     /// buffered libcurl path so intermediate 401/407 bodies are hidden.
     pub async fn fetch_raw(&self, request: Request) -> Result<RawResponse> {
+        self.fetch_raw_with_cancel(request, FetchCancelHandle::new())
+            .await
+    }
+
+    pub async fn fetch_raw_with_cancel(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+    ) -> Result<RawResponse> {
         if request.auth_requires_buffered_transport() {
             // Digest auth retries are still completed inside libcurl on the
             // buffered path. Keep auth requests there until the raw streaming
@@ -66,13 +75,13 @@ impl FetchClientHandle {
             // surfacing them as final responses.
             return self
                 .runtime
-                .submit_auth_raw(request)?
+                .submit_auth_raw(request, cancel_handle)?
                 .await
                 .context("fetch runtime task dropped raw response channel")?;
         }
 
         let response = self
-            .fetch_raw_stream_with_cancel(request, FetchCancelHandle::new())
+            .fetch_raw_stream_with_cancel(request, cancel_handle)
             .await?;
         response.into_materialized_raw_response().await
     }
@@ -81,9 +90,21 @@ impl FetchClientHandle {
         &self,
         request: Request,
     ) -> Result<NetworkFetchResult<RawResponse>> {
+        self.fetch_raw_with_cancel_and_network_metadata(request, FetchCancelHandle::new())
+            .await
+    }
+
+    pub async fn fetch_raw_with_cancel_and_network_metadata(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+    ) -> Result<NetworkFetchResult<RawResponse>> {
         let recorder = NetworkObservationRecorder::default();
         let request = request.with_network_observation_recorder(recorder.clone());
-        network_fetch_result_from_result(self.fetch_raw(request).await, recorder)
+        network_fetch_result_from_result(
+            self.fetch_raw_with_cancel(request, cancel_handle).await,
+            recorder,
+        )
     }
 
     pub async fn fetch_raw_stream_with_cancel(

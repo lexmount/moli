@@ -31,6 +31,9 @@ pub(in crate::conn) use web_contents::{
     BuiltInitialDocument, InitialDocumentAdmission, InitialDocumentBuildKey,
     InitialDocumentPageBuildWaiter,
 };
+pub(crate) use web_contents::{
+    InterceptedNavigationLoad, InterceptedNavigationResponse, NavigationInterceptionPermit,
+};
 
 #[cfg(test)]
 pub(in crate::conn) use web_contents::DocumentHost;

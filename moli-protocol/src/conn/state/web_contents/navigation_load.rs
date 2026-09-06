@@ -131,7 +131,7 @@ impl WebContents {
 }
 
 impl AdmittedNavigationLoad {
-    fn identity(&self) -> &DocumentNavigationIdentity {
+    pub(super) fn identity(&self) -> &DocumentNavigationIdentity {
         self.identity
             .as_ref()
             .expect("navigation response admission already consumed")
@@ -260,7 +260,7 @@ impl AdmittedNavigationLoad {
             .engine
             .resource_request_client()
             .expect("admitted resource runtime")
-            .fetch_raw_with_network_metadata(request)
+            .fetch_raw_with_cancel_and_network_metadata(request, self.request_cancellation.clone())
             .await?;
         anyhow::ensure!(
             !self.identity().is_cancelled(),
