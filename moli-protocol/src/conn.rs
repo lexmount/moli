@@ -589,7 +589,10 @@ pub(crate) use state::{
     TargetJavaScriptDialog, TargetJavaScriptDialogScopeObserver, TargetPageSlot,
     TargetRuntimeSessionState,
 };
-pub(crate) use state::{LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit};
+pub(crate) use state::{
+    LoadedNavigationPageCommit, LoadedNavigationRendererAttachmentCommit,
+    PreparedDocumentNavigation,
+};
 pub(crate) use target::{
     PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,
     SessionDisposalTarget, TargetAttachSessionCommit, TargetClosureCleanupPlan, TargetEventPlan,
@@ -1876,6 +1879,7 @@ impl CdpConnection {
             .start_document_navigation_for_target(&target_id, loader_id)
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_document_navigation_for_owner_if_matches(
         &mut self,
         owner: &CommandOwnerScope,

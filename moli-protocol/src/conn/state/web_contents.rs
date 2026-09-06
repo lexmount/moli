@@ -12,7 +12,9 @@ use super::navigation_controller::NavigationController;
 mod document_host;
 mod emulation_policy;
 mod javascript_dialog;
+mod navigation_commit;
 mod network_request_policy;
+pub(crate) use navigation_commit::{PreparedDocumentNavigation, RetiringDocument};
 mod page_surface;
 mod session_storage;
 mod window;
@@ -123,6 +125,9 @@ impl WebContents {
         let Some(document) = self.main_frame.current_document.as_mut() else {
             return false;
         };
+        if document.lifecycle.snapshot() == Some(snapshot) {
+            return true;
+        }
         let previous = document
             .lifecycle
             .snapshot()

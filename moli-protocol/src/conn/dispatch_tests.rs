@@ -2365,34 +2365,33 @@ async fn stale_initial_document_page_build_does_not_overwrite_committed_page() {
     let real_page_url = "data:text/html,<title>real-page</title>";
     let parsed_real_page_url = url::Url::parse(real_page_url).expect("data URL should parse");
     let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
-    let real_page = conn
-        .load_page_via_runtime_async(real_page_url)
+    let token = conn
+        .start_document_navigation_for_owner(&owner, "LOADER-real-page".into())
+        .unwrap();
+    let loaded = conn
+        .load_navigation_via_runtime_async(real_page_url)
         .await
         .expect("real navigation page should build");
-    conn.commit_loaded_navigation_page_for_owner_async(
+    let artifacts = loaded.page_creation_artifacts;
+    let prepared = crate::conn::PreparedDocumentNavigation::new(
+        token,
+        loaded.page,
+        parsed_real_page_url.clone(),
+        "null".into(),
+        "InsecureScheme".into(),
+        &artifacts,
+    )
+    .unwrap();
+    conn.commit_loaded_navigation_for_owner(
         &owner,
-        real_page,
+        prepared,
         crate::conn::LoadedNavigationRendererAttachmentCommit::Prepare(None),
-        &parsed_real_page_url,
     )
-    .await
     .expect("real navigation page owner should exist")
-    .expect("real navigation page Inspector binding should activate");
-    let real_page_commit = moli_core::page::RendererMainDocumentCommit {
-        frame_id: "TID-1".to_owned(),
-        loader_id: "LOADER-real-page".to_owned(),
-        url: parsed_real_page_url.to_string(),
-        unreachable_url: None,
-        security_origin: "null".to_owned(),
-        secure_context_type: "InsecureScheme".to_owned(),
-        timestamp: 0.0,
-    };
-    conn.commit_loaded_navigation_target_identity_for_owner(
-        &owner,
-        &real_page_commit,
-        &parsed_real_page_url,
-    )
-    .expect("real navigation identity should commit");
+    .expect("real navigation page Inspector binding should activate")
+    .previous_document_retirement
+    .close()
+    .await;
     let attachment_after_real_page = conn
         .browser_context
         .as_ref()

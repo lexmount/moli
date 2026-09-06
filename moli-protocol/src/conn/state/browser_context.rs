@@ -1152,6 +1152,7 @@ impl BrowserContext {
         self.clear_pending_document_navigation_if_matches_for_target(target_id, navigation)
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_document_navigation_if_matches(&mut self, token: &NavigationId) {
         let target_id = self
             .page_targets

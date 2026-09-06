@@ -24,6 +24,83 @@ fn context_with_document(page: Page) -> BrowserContext {
 }
 
 #[tokio::test]
+async fn loaded_navigation_commit_settles_document_history_and_navigation_together() {
+    let browser = Browser::new(BrowserConfig::default()).unwrap();
+    let first = browser
+        .fetch("data:text/html,<title>first</title>")
+        .await
+        .unwrap();
+    let mut owner = context_with_document(first);
+    let old_document = owner.target_document_id(TARGET).unwrap();
+    let token = owner.begin_target_document_navigation(TARGET, "LOADER-atomic".into());
+    let expected_document = owner
+        .web_contents_for_target(TARGET)
+        .unwrap()
+        .navigation
+        .pending_document()
+        .unwrap()
+        .1;
+    let mut page = browser
+        .fetch("data:text/html,<title>second</title>")
+        .await
+        .unwrap();
+    let url = page.final_url().clone();
+    let candidate = owner
+        .page_targets
+        .get(TARGET)
+        .unwrap()
+        .runtime_slot
+        .prepare_renderer_agent_candidate(&token, &page)
+        .unwrap();
+    let artifacts = page.take_page_creation_artifacts().unwrap();
+    let prepared = crate::conn::PreparedDocumentNavigation::new(
+        token,
+        page,
+        url.clone(),
+        "null".into(),
+        "InsecureScheme".into(),
+        &artifacts,
+    )
+    .unwrap();
+    let committed = owner
+        .commit_loaded_navigation_for_target(
+            TARGET,
+            prepared,
+            crate::conn::LoadedNavigationRendererAttachmentCommit::Prepare(Some(candidate)),
+        )
+        .unwrap();
+    assert_eq!(
+        owner.target_document_id(TARGET),
+        Some(expected_document),
+        "commit must install the Document allocated by this Browser navigation"
+    );
+    assert_ne!(expected_document, old_document);
+    assert!(
+        !owner.has_pending_document_navigation_for_target(TARGET),
+        "returning a committed Page must not leave its Browser navigation pending"
+    );
+    assert_eq!(
+        owner.committed_document_loader_id_for_target(TARGET),
+        Some("LOADER-atomic")
+    );
+    let (_, entries) = owner.target_navigation_history_snapshot(TARGET).unwrap();
+    assert_eq!(entries.last().unwrap().url, url.as_str());
+    assert_eq!(entries.last().unwrap().title, "second");
+    assert_eq!(
+        owner.page_targets.get(TARGET).unwrap().target_url(),
+        url.as_str()
+    );
+    assert!(
+        owner
+            .document_lifecycle_for_target(TARGET)
+            .unwrap()
+            .snapshot()
+            .is_some()
+    );
+    committed.previous_document_retirement.close().await;
+}
+
+#[tokio::test]
 async fn document_replacement_updates_inspection_binding_with_physical_page() {
     let browser = Browser::new(BrowserConfig::default()).unwrap();
     let first = browser

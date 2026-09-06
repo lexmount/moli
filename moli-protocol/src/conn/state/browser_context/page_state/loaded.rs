@@ -1,15 +1,15 @@
 use crate::conn::TargetPageResidenceIdentity;
-#[cfg(test)]
 use crate::conn::state::TargetPageAbsenceReason;
+use crate::conn::state::web_contents::{PreparedDocumentNavigation, RetiringDocument};
 use crate::conn::state::{
     CommittedRendererAgentAttachment, DocumentId, PreparedRendererAgentAttachment,
 };
 use crate::conn::{BrowserContext, PageTargetHost, TargetRuntimeSlot};
 use moli_core::page::{Page, RendererPageCommandPostResponseContinuation};
-use url::Url;
 
 pub(crate) struct LoadedNavigationPageCommit {
     pub(crate) replaced_page_owner: Option<TargetPageResidenceIdentity>,
+    pub(crate) previous_document_retirement: RetiringDocument,
     pub(crate) committed_document_post_response_continuation:
         Option<RendererPageCommandPostResponseContinuation>,
 }
@@ -221,52 +221,39 @@ impl BrowserContext {
 }
 
 impl BrowserContext {
-    pub(crate) async fn commit_loaded_navigation_page_for_target_async(
+    pub(crate) fn commit_loaded_navigation_for_target(
         &mut self,
         target_id: &str,
-        mut page: Page,
+        prepared: PreparedDocumentNavigation,
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
-        history_url: &Url,
     ) -> anyhow::Result<LoadedNavigationPageCommit> {
-        let committed_document_post_response_continuation =
-            page.take_committed_document_post_response_continuation();
-        let previous_page_owner = self.target_document_id(target_id).map(|document_id| {
-            TargetPageResidenceIdentity::new(
-                self.id.clone(),
-                Some(target_id.to_owned()),
-                document_id,
-            )
-        });
+        let navigation = prepared.navigation();
+        anyhow::ensure!(
+            self.web_contents_for_target(target_id)
+                .and_then(|contents| contents.navigation.pending_document())
+                .is_some_and(|(pending, _)| pending == navigation),
+            "stale navigation document candidate"
+        );
+        let endpoint = prepared.inspection_endpoint();
         let primary_session_id = self
             .page_targets
             .get(target_id)
             .expect("resolved target projection")
             .session_id()
             .map(str::to_owned);
-        let previous_title = self
-            .page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection")
-            .owner_state
-            .committed_document_title()
-            .map(str::to_owned)
-            .or_else(|| {
-                self.loaded_page_for_target(target_id)
-                    .map(Page::document_title)
-            });
         let previous_attachment = match renderer_attachment_commit {
             LoadedNavigationRendererAttachmentCommit::Prepare(renderer_agent_candidate) => self
                 .page_targets
                 .get_mut(target_id)
                 .expect("resolved target projection")
                 .runtime_slot
-                .commit_loaded_navigation_renderer_attachment(&page, renderer_agent_candidate)?,
+                .commit_loaded_navigation_renderer_attachment(endpoint, renderer_agent_candidate)?,
             LoadedNavigationRendererAttachmentCommit::AlreadyCommitted(transaction) => {
                 self.page_targets
                     .get_mut(target_id)
                     .expect("resolved target projection")
                     .runtime_slot
-                    .bind_page_to_committed_renderer_agent_candidate(&page, &transaction)?;
+                    .bind_document_to_committed_renderer_agent_candidate(endpoint, &transaction)?;
                 transaction.previous()
             }
         };
@@ -298,61 +285,59 @@ impl BrowserContext {
                 .install_pending_renderer_call_replacements(replacements);
         }
 
-        self.web_contents_for_target_mut(target_id)
+        let retiring_projection = self.begin_document_projection_replacement_for_target(target_id);
+        let commit = self
+            .web_contents_for_target_mut(target_id)
             .expect("resolved WebContents")
-            .navigation
-            .mark_initial_empty_document_exited();
-        if let Some(previous_title) = previous_title {
-            self.web_contents_for_target_mut(target_id)
-                .expect("resolved WebContents")
-                .navigation
-                .refresh_current_navigation_history_title(previous_title);
-        }
-        let committed_document_title = page.document_title();
-        self.web_contents_for_target_mut(target_id)
-            .expect("resolved WebContents")
-            .navigation
-            .record_loaded_page_navigation_history((
-                history_url.to_string(),
-                committed_document_title.clone(),
-            ));
-        self.page_targets
+            .commit_document_navigation(prepared)
+            .map_err(anyhow::Error::msg)?;
+        debug_assert_eq!(commit.navigation, navigation);
+        debug_assert_eq!(self.target_document_id(target_id), Some(commit.document));
+        debug_assert_eq!(
+            self.web_contents_for_target(target_id)
+                .map(|contents| (contents.id(), contents.main_frame.id())),
+            Some((commit.web_contents, commit.frame_slot)),
+        );
+
+        // The Browser commit is complete. These writes only replace its DevTools projection;
+        // old document retirement cannot interrupt the native transaction.
+        self.reset_document_projection_for_target(
+            target_id,
+            true,
+            TargetPageAbsenceReason::NoTarget,
+        );
+        let target = self
+            .page_targets
             .get_mut(target_id)
-            .expect("resolved target projection")
+            .expect("resolved target projection");
+        target
             .owner_state
             .clear_committed_document_navigation_state();
-        self.commit_target_document_title(target_id, committed_document_title);
-        for session in self
+        target.owner_state.committed_document_title = Some(commit.info.title);
+        target.set_target_url(commit.info.url.to_string());
+        target.set_target_security_origin(commit.info.security_origin);
+        target.set_target_secure_context_type(commit.info.secure_context_type);
+        self.clear_target_loaded_document_session_state(target_id);
+        self.retain_navigation_projections_for_target(target_id);
+        self.finish_document_projection_replacement_for_target(target_id, retiring_projection);
+        let runtime = &mut self
             .page_targets
             .get_mut(target_id)
             .expect("resolved target projection")
-            .devtools_sessions
-            .states_mut()
-        {
-            session.clear_runtime_remote_object_tracking();
-            session
-                .page_session_state
-                .clear_loaded_document_context_state();
-        }
-
-        let previous = self.replace_loaded_page_for_target(target_id, Some(page));
-        self.page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection")
-            .runtime_slot
-            .reset_subresource_cursor();
-        self.page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection")
-            .runtime_slot
-            .clear_websocket_artifacts();
-        let replaced_page_owner = previous.as_ref().and(previous_page_owner);
-        if let Some(page) = previous {
-            BrowserContext::close_page_best_effort(page).await;
-        }
+            .runtime_slot;
+        runtime.reset_subresource_cursor();
+        runtime.clear_websocket_artifacts();
+        let replaced_page_owner = commit.previous_document.map(|document_id| {
+            TargetPageResidenceIdentity::new(
+                self.id.clone(),
+                Some(target_id.to_owned()),
+                document_id,
+            )
+        });
         Ok(LoadedNavigationPageCommit {
             replaced_page_owner,
-            committed_document_post_response_continuation,
+            previous_document_retirement: commit.retirement,
+            committed_document_post_response_continuation: commit.post_response_continuation,
         })
     }
 }

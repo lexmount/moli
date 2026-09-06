@@ -203,6 +203,13 @@ mod tests {
             Some("SID-1"),
         )
         .await;
+        // Only the fixture's completed navigation may precede the Log command.
+        // Keep replay-before-response and absence-of-unrelated-output assertions intact.
+        for message in ctx.take_all() {
+            assert_eq!(message["method"], "Page.frameNavigated");
+            assert_eq!(message["sessionId"], "SID-1");
+            assert_eq!(message["params"]["frame"]["id"], "TID-1");
+        }
     }
 
     fn loaded_lifecycle_error_contains(ctx: &TestContext, needle: &str) -> bool {

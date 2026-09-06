@@ -949,40 +949,21 @@ impl<'a> TargetSessionOwnerMut<'a> {
         }
     }
 
-    pub(super) fn commit_loaded_navigation_target_identity(
-        &mut self,
-        main_document_commit: &RendererMainDocumentCommit,
-        target_url: &Url,
-    ) -> Option<()> {
-        self.browser_context
-            .commit_target_loaded_navigation_identity(
-                &self.target_id,
-                main_document_commit,
-                target_url,
-            )
-    }
-
     pub(super) fn clear_pending_navigation_history_update(&mut self) -> Option<()> {
         self.browser_context
             .clear_target_pending_navigation_history_update(&self.target_id)
     }
 
-    pub(super) async fn commit_loaded_navigation_page_async(
+    pub(super) fn commit_loaded_navigation(
         &mut self,
-        page: Page,
+        prepared: crate::conn::PreparedDocumentNavigation,
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
-        history_url: &Url,
     ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
-        Some(
-            self.browser_context
-                .commit_loaded_navigation_page_for_target_async(
-                    &self.target_id,
-                    page,
-                    renderer_attachment_commit,
-                    history_url,
-                )
-                .await,
-        )
+        Some(self.browser_context.commit_loaded_navigation_for_target(
+            &self.target_id,
+            prepared,
+            renderer_attachment_commit,
+        ))
     }
 }
 
@@ -1082,26 +1063,14 @@ impl CdpConnection {
             .prepare_loaded_navigation_commit()
     }
 
-    pub(crate) fn commit_loaded_navigation_target_identity_for_owner(
+    pub(crate) fn commit_loaded_navigation_for_owner(
         &mut self,
         owner: &crate::conn::CommandOwnerScope,
-        main_document_commit: &RendererMainDocumentCommit,
-        target_url: &Url,
-    ) -> Option<()> {
-        self.target_session_owner_mut_for_owner(owner)?
-            .commit_loaded_navigation_target_identity(main_document_commit, target_url)
-    }
-
-    pub(crate) async fn commit_loaded_navigation_page_for_owner_async(
-        &mut self,
-        owner: &crate::conn::CommandOwnerScope,
-        page: Page,
+        prepared: crate::conn::PreparedDocumentNavigation,
         renderer_attachment_commit: LoadedNavigationRendererAttachmentCommit,
-        history_url: &Url,
     ) -> Option<anyhow::Result<LoadedNavigationPageCommit>> {
         self.target_session_owner_mut_for_owner(owner)?
-            .commit_loaded_navigation_page_async(page, renderer_attachment_commit, history_url)
-            .await
+            .commit_loaded_navigation(prepared, renderer_attachment_commit)
     }
 
     pub(crate) fn initial_document_page_owner_for_owner(
@@ -3339,46 +3308,6 @@ mod tests {
             "about:blank",
             "preparing commit state should not mutate target identity"
         );
-        let navigation_url = Url::parse("https://nav.example/path").unwrap();
-        background
-            .background_target_mut("TID-background")
-            .expect("background target")
-            .set_target_secure_context_type("InsecureScheme".to_owned());
-        let main_document_commit = RendererMainDocumentCommit {
-            frame_id: "TID-background".to_owned(),
-            loader_id: "LOADER-nav".to_owned(),
-            url: navigation_url.to_string(),
-            unreachable_url: None,
-            security_origin: "https://nav.example".to_owned(),
-            secure_context_type: "Secure".to_owned(),
-            timestamp: 0.0,
-        };
-        {
-            let mut owner = TargetSessionOwnerMut {
-                browser_context: &mut background,
-                target_id: "TID-background".to_owned(),
-                command_session_id: None,
-                session_key: DevToolsSessionKey::Primary,
-            };
-            owner
-                .commit_loaded_navigation_target_identity(&main_document_commit, &navigation_url)
-                .expect("background navigation identity should commit")
-        };
-        assert_eq!(
-            background
-                .background_target("TID-background")
-                .expect("background target")
-                .target_url(),
-            "https://nav.example/path"
-        );
-        assert_eq!(
-            background
-                .background_target("TID-background")
-                .expect("background target")
-                .target_identity()
-                .secure_context_type(),
-            "Secure"
-        );
         assert_eq!(commit_state.fetch_subresource_config, (true, None));
     }
 
@@ -3429,12 +3358,13 @@ mod tests {
     #[tokio::test]
     async fn target_session_owner_mut_commits_loaded_page_to_background_owner() {
         let mut ctx = TestContext::new();
-        let page = ctx
+        let loaded = ctx
             .conn
-            .load_page_via_runtime_async("data:text/html,<title>background commit</title>")
+            .load_navigation_via_runtime_async("data:text/html,<title>background commit</title>")
             .await
             .expect("page should load");
-        let page_url = page.final_url().clone();
+        let page_url = Url::parse("https://nav.example/path").unwrap();
+        let artifacts = loaded.page_creation_artifacts;
         let mut background = BrowserContext::new("BID-background".to_owned());
         background.register_page_target_url_fixture(
             "TID-background".to_owned(),
@@ -3442,8 +3372,19 @@ mod tests {
             "about:blank".to_owned(),
         );
         let initial_attachment_id = background.target_document_id("TID-background");
+        let navigation =
+            background.begin_target_document_navigation("TID-background", "LOADER-nav".into());
+        let prepared = crate::conn::PreparedDocumentNavigation::new(
+            navigation,
+            loaded.page,
+            page_url.clone(),
+            "https://nav.example".into(),
+            "Secure".into(),
+            &artifacts,
+        )
+        .unwrap();
 
-        {
+        let committed = {
             let mut owner = TargetSessionOwnerMut {
                 browser_context: &mut background,
                 target_id: "TID-background".to_owned(),
@@ -3451,15 +3392,13 @@ mod tests {
                 session_key: DevToolsSessionKey::Primary,
             };
             owner
-                .commit_loaded_navigation_page_async(
-                    page,
+                .commit_loaded_navigation(
+                    prepared,
                     LoadedNavigationRendererAttachmentCommit::Prepare(None),
-                    &page_url,
                 )
-                .await
                 .expect("background page owner should exist")
-                .expect("background page Inspector binding should activate");
-        }
+                .expect("background page Inspector binding should activate")
+        };
 
         let target = background
             .background_target("TID-background")
@@ -3472,6 +3411,16 @@ mod tests {
             .unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].title, "background commit");
+        assert_eq!(entries[0].url, page_url.as_str());
+        let target = background.background_target("TID-background").unwrap();
+        assert_eq!(target.target_url(), page_url.as_str());
+        assert_eq!(
+            target.target_identity().security_origin(),
+            "https://nav.example"
+        );
+        assert_eq!(target.target_identity().secure_context_type(), "Secure");
+        assert!(!background.has_pending_document_navigation_for_target("TID-background"));
+        committed.previous_document_retirement.close().await;
     }
 
     #[test]

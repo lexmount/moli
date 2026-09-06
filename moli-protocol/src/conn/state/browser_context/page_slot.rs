@@ -1,4 +1,6 @@
 use super::BrowserContext;
+#[cfg(test)]
+use moli_core::page::RendererLifecycleEventStamp;
 use moli_core::{
     browser::{
         DocumentId, DocumentLifecycle, DocumentLifetime, DocumentLifetimeObserver, NavigationId,
@@ -9,8 +11,7 @@ use moli_core::{
         RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
         RendererDocumentLifecycleSnapshot, RendererDocumentLifecycleWaitOutcome,
         RendererDocumentLifecycleWaiter, RendererDocumentToken, RendererFrameToken,
-        RendererLifecycleEpoch, RendererLifecycleEventStamp, RendererLifecycleStartReason,
-        RendererPageCreationArtifacts,
+        RendererLifecycleEpoch, RendererLifecycleStartReason, RendererPageCreationArtifacts,
     },
 };
 use tokio::sync::watch;
@@ -642,14 +643,30 @@ impl BrowserContext {
             };
             DocumentHost::new(id, page)
         });
-        if self.target_document_id(target_id).is_some() || next_document.is_some() {
+        self.reset_document_projection_for_target(
+            target_id,
+            next_document.is_some(),
+            absence_reason,
+        );
+        self.web_contents_for_target_mut(target_id)
+            .expect("registered Target must reference live WebContents")
+            .replace_document(next_document)
+    }
+
+    pub(super) fn reset_document_projection_for_target(
+        &mut self,
+        target_id: &str,
+        has_document: bool,
+        absence_reason: TargetPageAbsenceReason,
+    ) {
+        if self.target_document_id(target_id).is_some() || has_document {
             self.page_slot_for_target_mut(target_id)
                 .expect("registered Target projection")
                 .finish_renderer_document_lifecycle_observers(
                     RendererDocumentLifecycleObservation::Superseded,
                 );
         }
-        if next_document.is_some() {
+        if has_document {
             self.page_slot_for_target_mut(target_id)
                 .expect("registered Target projection")
                 .complete_initial_document_page_build();
@@ -689,9 +706,6 @@ impl BrowserContext {
         {
             fixture.lifetime.supersede();
         }
-        self.web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .replace_document(next_document)
     }
 
     pub(super) fn replace_target_document(
@@ -1200,6 +1214,7 @@ impl BrowserContext {
             .retain(|(id, _)| contents.navigation.retains_navigation(*id));
     }
 
+    #[cfg(test)]
     pub(crate) fn commit_pending_document_navigation_if_matches_for_target(
         &mut self,
         target_id: &str,
@@ -1283,24 +1298,23 @@ impl BrowserContext {
         frame_id: String,
         loader_id: String,
     ) -> Vec<RendererDocumentLifecycleEvent> {
+        let Some(lifecycle) = DocumentLifecycle::from_creation_artifacts(&artifacts) else {
+            tracing::warn!(
+                active_document = ?artifacts.active_document,
+                active_epoch = ?artifacts.active_epoch,
+                snapshot_document = ?artifacts.lifecycle_snapshot.document,
+                snapshot_epoch = ?artifacts.lifecycle_snapshot.epoch,
+                "rejecting inconsistent renderer page creation lifecycle artifacts"
+            );
+            return Vec::new();
+        };
+        let initial_snapshot = lifecycle.snapshot().expect("validated creation lifecycle");
         let RendererPageCreationArtifacts {
             active_document,
             active_epoch,
             lifecycle_snapshot,
             initial_lifecycle_events,
         } = artifacts;
-        if lifecycle_snapshot.document != active_document
-            || lifecycle_snapshot.epoch != active_epoch
-        {
-            tracing::warn!(
-                ?active_document,
-                ?active_epoch,
-                snapshot_document = ?lifecycle_snapshot.document,
-                snapshot_epoch = ?lifecycle_snapshot.epoch,
-                "rejecting inconsistent renderer page creation lifecycle artifacts"
-            );
-            return Vec::new();
-        }
         let Some(document_id) = self.target_document_id(target_id) else {
             tracing::debug!(
                 ?active_document,
@@ -1309,29 +1323,6 @@ impl BrowserContext {
             );
             return Vec::new();
         };
-        let initial_snapshot = initial_lifecycle_events
-            .iter()
-            .find(|event| {
-                event.frame == lifecycle_snapshot.frame
-                    && event.document == active_document
-                    && matches!(
-                        event.kind,
-                        RendererDocumentLifecycleEventKind::Started { .. }
-                    )
-            })
-            .map(|event| RendererDocumentLifecycleSnapshot {
-                frame: event.frame,
-                document: event.document,
-                epoch: event.epoch,
-                started: RendererLifecycleEventStamp {
-                    sequence: event.sequence,
-                    timestamp_micros: event.timestamp_micros,
-                },
-                dom_content_loaded: None,
-                load: None,
-                terminated: None,
-            })
-            .unwrap_or(lifecycle_snapshot);
         let binding = CommittedRendererDocumentBinding {
             renderer_frame: lifecycle_snapshot.frame,
             renderer_document: active_document,

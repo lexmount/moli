@@ -42,7 +42,7 @@ pub(crate) struct FinishedRendererDocumentNavigation {
 }
 
 #[derive(Debug)]
-struct RetiringRendererDocumentOutput {
+pub(super) struct RetiringRendererDocumentOutput {
     renderer_page: RendererPageResidenceIdentity,
     document_id: DocumentId,
     binding: CommittedRendererDocumentBinding,
@@ -215,33 +215,30 @@ impl TargetRuntimeSlot {
             .rollback_committed_candidate(transaction)
     }
 
-    pub(crate) fn bind_page_to_committed_renderer_agent_candidate(
+    pub(crate) fn bind_document_to_committed_renderer_agent_candidate(
         &mut self,
-        page: &Page,
+        endpoint: moli_renderer_v8::RendererInspectionEndpoint,
         transaction: &CommittedRendererAgentAttachment,
     ) -> Result<(), DevToolsRendererChannelError> {
         let current = transaction.current();
         if self.devtools_renderer_channel.current() != Some(current)
-            || page.renderer_devtools_agent_token() != current.agent_token()
+            || endpoint.agent_token() != current.agent_token()
         {
             return Err(DevToolsRendererChannelError::CommittedCandidateMismatch);
         }
-        self.devtools_renderer_channel
-            .bind_current(page.renderer_inspection_endpoint())?;
+        self.devtools_renderer_channel.bind_current(endpoint)?;
         Ok(())
     }
 
     pub(crate) fn commit_loaded_navigation_renderer_attachment(
         &mut self,
-        page: &Page,
+        endpoint: moli_renderer_v8::RendererInspectionEndpoint,
         candidate: Option<PreparedRendererAgentAttachment>,
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
         let Some(candidate) = candidate else {
-            return self.attach_page_renderer_agent_as_current(page);
+            return self.devtools_renderer_channel.attach_current(endpoint);
         };
-        if page.renderer_devtools_agent_token() != candidate.agent_token()
-            || candidate.binding().is_none()
-        {
+        if endpoint.agent_token() != candidate.agent_token() || candidate.binding().is_none() {
             return Err(DevToolsRendererChannelError::CandidatePageAttachmentMismatch);
         }
         let previous = self.devtools_renderer_channel.commit_candidate(candidate)?;
@@ -322,14 +319,6 @@ impl TargetRuntimeSlot {
             }
             false
         });
-    }
-
-    pub(crate) fn attach_page_renderer_agent_as_current(
-        &mut self,
-        page: &Page,
-    ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
-        self.devtools_renderer_channel
-            .attach_current(page.renderer_inspection_endpoint())
     }
 
     pub(crate) fn has_renderer_navigation(&self, navigation: &NavigationId) -> bool {
@@ -955,15 +944,29 @@ impl BrowserContext {
     pub(super) fn replace_loaded_page_for_target(
         &mut self,
         target_id: &str,
-        page: Option<Page>,
+        mut page: Option<Page>,
     ) -> Option<Page> {
+        let retiring = self.begin_document_projection_replacement_for_target(target_id);
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection")
+            .runtime_slot
+            .ensure_renderer_attachment_for_replacement(page.as_mut());
+        let previous = self.replace_target_document(target_id, page);
+        self.finish_document_projection_replacement_for_target(target_id, retiring);
+        previous
+    }
+
+    pub(super) fn begin_document_projection_replacement_for_target(
+        &mut self,
+        target_id: &str,
+    ) -> Option<RetiringRendererDocumentOutput> {
         self.page_targets
             .get_mut(target_id)
             .expect("resolved target projection must remain live")
             .runtime_slot
             .javascript_dialog_scope
             .retire();
-        let mut page = page;
         let retiring_document = self
             .loaded_page_for_target(target_id)
             .zip(self.renderer_document_lifecycle_binding_for_target(target_id))
@@ -974,7 +977,7 @@ impl BrowserContext {
                     binding.clone(),
                 )
             });
-        let retiring_document = retiring_document.map(|(renderer_page, document_id, binding)| {
+        retiring_document.map(|(renderer_page, document_id, binding)| {
             RetiringRendererDocumentOutput {
                 renderer_page,
                 document_id,
@@ -987,13 +990,14 @@ impl BrowserContext {
                     .network_agent
                     .rotate_document_for_replacement(),
             }
-        });
-        self.page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection must remain live")
-            .runtime_slot
-            .ensure_renderer_attachment_for_replacement(page.as_mut());
-        let previous = self.replace_target_document(target_id, page);
+        })
+    }
+
+    pub(super) fn finish_document_projection_replacement_for_target(
+        &mut self,
+        target_id: &str,
+        retiring_document: Option<RetiringRendererDocumentOutput>,
+    ) {
         if let Some(retiring_document) = retiring_document {
             self.page_targets
                 .get_mut(target_id)
@@ -1014,7 +1018,6 @@ impl BrowserContext {
                 .reset_document_output_state();
         }
         self.ingest_owner_page_observable_output_updates_for_target(target_id);
-        previous
     }
     pub(super) fn clear_loaded_page_with_reason_for_target(
         &mut self,
