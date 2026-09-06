@@ -424,85 +424,35 @@ impl JsContextHost {
         content_security_reporting_endpoints:
             crate::content_security_policy::ContentSecurityPolicyReportingEndpoints,
     ) -> bool {
-        enum FinishLoadingAction {
-            MissingOrRunning,
-            DiscardTerminated,
-            Spawn {
-                pending_messages: Vec<V8StructuredClonePayload>,
-                name: String,
-                storage_key_top_level_site: String,
-                creator_storage_key: MoliStorageKey,
-                reserved_service_worker_client_id: Option<ServiceWorkerClientId>,
-                module_credentials_mode: moli_fetch::RequestCredentialsMode,
-                request_client: crate::network::ResourceRequestClient,
-            },
-        }
-
-        let action = match self.workers.get_mut(&worker_id) {
-            Some(state) => match &mut state.execution {
-                WorkerExecutionState::Loading {
-                    pending_messages,
-                    load_task,
-                    terminated,
-                    name,
-                    module_credentials_mode,
-                    storage_key_top_level_site,
-                    creator_storage_key,
-                    reserved_service_worker_client_id,
-                    outside_settings_load,
-                } => {
-                    let _ = load_task.take();
-                    if *terminated {
-                        FinishLoadingAction::DiscardTerminated
-                    } else {
-                        FinishLoadingAction::Spawn {
-                            pending_messages: std::mem::take(pending_messages),
-                            name: name.clone(),
-                            storage_key_top_level_site: storage_key_top_level_site.clone(),
-                            creator_storage_key: creator_storage_key.clone(),
-                            reserved_service_worker_client_id: reserved_service_worker_client_id
-                                .take(),
-                            module_credentials_mode: *module_credentials_mode,
-                            request_client: outside_settings_load.request_client(),
-                        }
-                    }
-                }
-                WorkerExecutionState::Running { .. } => FinishLoadingAction::MissingOrRunning,
-            },
-            None => FinishLoadingAction::MissingOrRunning,
+        let Some(state) = self.workers.get_mut(&worker_id) else {
+            return false;
         };
-        let (
+        let WorkerExecutionState::Loading {
             pending_messages,
+            load_task,
+            terminated,
             name,
+            module_credentials_mode,
             storage_key_top_level_site,
             creator_storage_key,
             reserved_service_worker_client_id,
-            module_credentials_mode,
-            request_client,
-        ) = match action {
-            FinishLoadingAction::MissingOrRunning => return false,
-            FinishLoadingAction::DiscardTerminated => {
-                self.forget_worker(worker_id);
-                return false;
-            }
-            FinishLoadingAction::Spawn {
-                pending_messages,
-                name,
-                storage_key_top_level_site,
-                creator_storage_key,
-                reserved_service_worker_client_id,
-                module_credentials_mode,
-                request_client,
-            } => (
-                pending_messages,
-                name,
-                storage_key_top_level_site,
-                creator_storage_key,
-                reserved_service_worker_client_id,
-                module_credentials_mode,
-                request_client,
-            ),
+            outside_settings_load,
+        } = &mut state.execution
+        else {
+            return false;
         };
+        let _ = load_task.take();
+        if *terminated {
+            self.forget_worker(worker_id);
+            return false;
+        }
+        let pending_messages = std::mem::take(pending_messages);
+        let name = name.clone();
+        let storage_key_top_level_site = storage_key_top_level_site.clone();
+        let creator_storage_key = creator_storage_key.clone();
+        let reserved_service_worker_client_id = reserved_service_worker_client_id.take();
+        let module_credentials_mode = *module_credentials_mode;
+        let request_client = outside_settings_load.request_client();
         let network_policy = WorkerNetworkPolicy {
             secure_context,
             permission_overrides: self.permission_overrides().to_vec(),

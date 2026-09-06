@@ -147,7 +147,17 @@ pub(in crate::network) enum ScriptTextCacheLookup {
     CompletedHit(Box<ScriptTextLoadResult>),
 }
 
+/// In-flight work belongs to its existing Document/Worker load registry, not
+/// the Context cache. Clients used before a context exists are restricted to
+/// their exact transport; neither identity pins a retired context or runtime.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::network) enum ScriptTextLoadScope {
+    Context(u64),
+    UnboundRuntime(u64),
+}
+
 pub(in crate::network) struct ScriptTextLoad {
+    scope: ScriptTextLoadScope,
     state: Mutex<ScriptTextLoadState>,
     notify: Notify,
 }
@@ -188,8 +198,9 @@ impl Drop for ScriptTextConsumerLease {
 }
 
 impl ScriptTextLoad {
-    fn pending() -> SharedScriptTextLoad {
+    fn pending(scope: ScriptTextLoadScope) -> SharedScriptTextLoad {
         Arc::new(Self {
+            scope,
             state: Mutex::new(ScriptTextLoadState::default()),
             notify: Notify::new(),
         })
@@ -315,6 +326,7 @@ impl SharedMemoryResourceCache {
     pub(in crate::network) fn lookup_script_text(
         &mut self,
         key: ScriptTextCacheKey,
+        scope: ScriptTextLoadScope,
         matches_vary: impl FnOnce(&[HttpCacheVaryHeader]) -> bool,
     ) -> ScriptTextCacheLookup {
         let cache_key = MemoryCacheKey::ScriptText(key);
@@ -330,9 +342,10 @@ impl SharedMemoryResourceCache {
             };
 
             if expires_at_unix_ms.is_some_and(|expires_at| expires_at <= unix_now_ms())
+                || (expires_at_unix_ms.is_none() && load.scope != scope)
                 || !matches_vary(&vary_headers)
             {
-                return self.insert_pending_script(cache_key);
+                return self.insert_pending_script(cache_key, scope);
             }
 
             let result = load.try_result();
@@ -351,20 +364,25 @@ impl SharedMemoryResourceCache {
             };
         }
 
-        self.insert_pending_script(cache_key)
+        self.insert_pending_script(cache_key, scope)
     }
 
     pub(in crate::network) fn replace_script_text(
         &mut self,
         key: ScriptTextCacheKey,
+        scope: ScriptTextLoadScope,
     ) -> ScriptTextCacheLookup {
         let cache_key = MemoryCacheKey::ScriptText(key);
         self.remove_entry(&cache_key);
-        self.insert_pending_script(cache_key)
+        self.insert_pending_script(cache_key, scope)
     }
 
-    fn insert_pending_script(&mut self, key: MemoryCacheKey) -> ScriptTextCacheLookup {
-        let load = ScriptTextLoad::pending();
+    fn insert_pending_script(
+        &mut self,
+        key: MemoryCacheKey,
+        scope: ScriptTextLoadScope,
+    ) -> ScriptTextCacheLookup {
+        let load = ScriptTextLoad::pending(scope);
         self.insert_entry(
             key,
             MemoryCacheEntry::ScriptText {
@@ -823,6 +841,8 @@ mod tests {
 
     use super::*;
 
+    const SCOPE: ScriptTextLoadScope = ScriptTextLoadScope::UnboundRuntime(1);
+
     fn script_request(url: &str) -> Request {
         Request::get(url)
             .expect("script request URL")
@@ -869,11 +889,12 @@ mod tests {
         let key = script_text_cache_key(&request);
         let mut cache = SharedMemoryResourceCache::default();
         let ScriptTextCacheLookup::Owner(stale) =
-            cache.lookup_script_text(key.clone(), |vary| vary.is_empty())
+            cache.lookup_script_text(key.clone(), SCOPE, |vary| vary.is_empty())
         else {
             panic!("first script load");
         };
-        let ScriptTextCacheLookup::Owner(winner) = cache.replace_script_text(key.clone()) else {
+        let ScriptTextCacheLookup::Owner(winner) = cache.replace_script_text(key.clone(), SCOPE)
+        else {
             panic!("replacement script load");
         };
         let winner_vary = vec![HttpCacheVaryHeader {
@@ -902,14 +923,14 @@ mod tests {
             }]),
         );
         let ScriptTextCacheLookup::CompletedHit(hit) =
-            cache.lookup_script_text(key.clone(), |vary| vary == winner_vary)
+            cache.lookup_script_text(key.clone(), SCOPE, |vary| vary == winner_vary)
         else {
             panic!("stale completion must not replace the winning variant");
         };
         assert_eq!(hit.unwrap().body_text(), "winner");
         assert_eq!(cache.diagnostics().retained_bytes, retained);
         assert!(matches!(
-            cache.lookup_script_text(key, |vary| vary.is_empty()),
+            cache.lookup_script_text(key, SCOPE, |vary| vary.is_empty()),
             ScriptTextCacheLookup::Owner(_)
         ));
         assert_eq!(cache.diagnostics().retained_bytes, 0);
@@ -922,7 +943,7 @@ mod tests {
     ) -> SharedScriptTextLoad {
         let key = script_text_cache_key(request);
         let ScriptTextCacheLookup::Owner(load) =
-            cache.lookup_script_text(key.clone(), |vary| vary.is_empty())
+            cache.lookup_script_text(key.clone(), SCOPE, |vary| vary.is_empty())
         else {
             panic!("new script key should own its load");
         };
@@ -934,7 +955,7 @@ mod tests {
 
     #[test]
     fn cancelling_one_shared_script_consumer_preserves_its_sibling() {
-        let load = ScriptTextLoad::pending();
+        let load = ScriptTextLoad::pending(SCOPE);
         let delivered = Arc::new(AtomicUsize::new(0));
         let first_delivered = Arc::clone(&delivered);
         let first = load
@@ -961,7 +982,7 @@ mod tests {
 
     #[test]
     fn cancelling_last_shared_script_consumer_cancels_transport() {
-        let load = ScriptTextLoad::pending();
+        let load = ScriptTextLoad::pending(SCOPE);
         let first = load
             .wait_callback(Box::new(|_| {}))
             .expect("first pending consumer");
@@ -1028,7 +1049,7 @@ mod tests {
         insert_script(&mut cache, &requests[0], responses[0].clone());
         insert_script(&mut cache, &requests[1], responses[1].clone());
         assert!(matches!(
-            cache.lookup_script_text(keys[0].clone(), |vary| vary.is_empty()),
+            cache.lookup_script_text(keys[0].clone(), SCOPE, |vary| vary.is_empty()),
             ScriptTextCacheLookup::CompletedHit(_)
         ));
         insert_script(&mut cache, &requests[2], responses[2].clone());
@@ -1044,7 +1065,7 @@ mod tests {
         let key = script_text_cache_key(&request);
         let mut cache = SharedMemoryResourceCache::with_limits(1024, 32);
         let ScriptTextCacheLookup::Owner(load) =
-            cache.lookup_script_text(key.clone(), |vary| vary.is_empty())
+            cache.lookup_script_text(key.clone(), SCOPE, |vary| vary.is_empty())
         else {
             panic!("new script key should own its load");
         };
@@ -1063,7 +1084,7 @@ mod tests {
         let key = script_text_cache_key(&request);
         let mut cache = SharedMemoryResourceCache::with_limits(1024, 32);
         let ScriptTextCacheLookup::Owner(load) =
-            cache.lookup_script_text(key.clone(), |vary| vary.is_empty())
+            cache.lookup_script_text(key.clone(), SCOPE, |vary| vary.is_empty())
         else {
             panic!("new script key should own its load");
         };
@@ -1122,7 +1143,7 @@ mod tests {
         let key = script_text_cache_key(&request);
         let mut cache = SharedMemoryResourceCache::with_limits(usize::MAX, usize::MAX);
         let ScriptTextCacheLookup::Owner(load) =
-            cache.lookup_script_text(key.clone(), |vary| vary.is_empty())
+            cache.lookup_script_text(key.clone(), SCOPE, |vary| vary.is_empty())
         else {
             panic!("new script key should own its load");
         };
@@ -1140,7 +1161,7 @@ mod tests {
         load.finish(result);
 
         assert!(matches!(
-            cache.lookup_script_text(key, |vary| vary.is_empty()),
+            cache.lookup_script_text(key, SCOPE, |vary| vary.is_empty()),
             ScriptTextCacheLookup::Owner(_)
         ));
     }
@@ -1180,7 +1201,7 @@ mod tests {
         let mut cache = SharedMemoryResourceCache::with_limits(usize::MAX, usize::MAX);
 
         let ScriptTextCacheLookup::Owner(expired_load) =
-            cache.lookup_script_text(expired_key.clone(), |vary| vary.is_empty())
+            cache.lookup_script_text(expired_key.clone(), SCOPE, |vary| vary.is_empty())
         else {
             panic!("new expired script key should own its load");
         };

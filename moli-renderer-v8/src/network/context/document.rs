@@ -135,7 +135,7 @@ impl DocumentResourceLoader {
         }
         let loads = ResourceLoadRegistry::new(task_runner);
         Self {
-            request_client,
+            request_client: request_client.with_load_context(&loads),
             authority: Arc::new(DocumentResourceLoaderAuthority {
                 id: NEXT_DOCUMENT_RESOURCE_LOADER_ID
                     .fetch_add(1, Ordering::Relaxed)
@@ -199,14 +199,8 @@ impl DocumentResourceLoader {
     }
 
     pub(crate) fn with_replacement_transport(&self, transport: ResourceRequestClient) -> Self {
-        let mut request_client =
-            ResourceRequestClient::from_browser_resource_runtime_with_page_network_policy(
-                transport.browser_resource_runtime(),
-                self.request_client.page_network_policy(),
-            );
-        if let Some(browser_site_context) = self.request_client.shared_browser_site_context() {
-            request_client = request_client.with_shared_browser_site_context(browser_site_context);
-        }
+        let mut request_client = self.request_client.clone();
+        request_client.replace_browser_resource_runtime(transport.browser_resource_runtime());
         Self {
             request_client,
             authority: Arc::clone(&self.authority),
