@@ -108,6 +108,10 @@ impl InitialDocument {
 struct PendingNavigationRequest {
     navigation_id: NavigationId,
     document_id: DocumentId,
+    document_preparation: Option<(
+        moli_core::browser::RendererPageResidenceIdentity,
+        moli_fetch::FetchCancelHandle,
+    )>,
     cancellation_handles: Vec<moli_fetch::FetchCancelHandle>,
     background_completion_pending: bool,
     committed: bool,
@@ -118,6 +122,7 @@ impl PendingNavigationRequest {
         Self {
             navigation_id,
             document_id: DocumentId::allocate(),
+            document_preparation: None,
             cancellation_handles: vec![moli_fetch::FetchCancelHandle::new()],
             background_completion_pending: false,
             committed: false,
@@ -147,10 +152,14 @@ impl PendingNavigationRequest {
 
     fn retire_without_cancellation(&mut self) {
         self.cancellation_handles.clear();
+        self.document_preparation = None;
     }
 
     fn cancel(&self) {
         for cancellation in &self.cancellation_handles {
+            cancellation.cancel();
+        }
+        if let Some((_, cancellation)) = &self.document_preparation {
             cancellation.cancel();
         }
     }
@@ -299,6 +308,10 @@ impl NavigationController {
             && self.history == NavigationHistoryState::default()
     }
 
+    pub(super) fn current_url(&self) -> Option<&str> {
+        self.history.current_url()
+    }
+
     pub(crate) fn document_navigation_cancellation_handle(
         &self,
         token: &NavigationId,
@@ -307,6 +320,52 @@ impl NavigationController {
             .as_ref()
             .filter(|request| request.matches(token) && !request.committed)
             .map(PendingNavigationRequest::cancellation_handle)
+    }
+
+    pub(super) fn admit_document_load(
+        &mut self,
+        navigation: NavigationId,
+        renderer: moli_core::browser::RendererPageResidenceIdentity,
+        cancellation: moli_fetch::FetchCancelHandle,
+        request_cancellation: moli_fetch::FetchCancelHandle,
+    ) -> bool {
+        let Some(pending) = self.pending_navigation_request.as_mut().filter(|pending| {
+            pending.matches(&navigation)
+                && !pending.committed
+                && !pending.cancellation_handle().is_cancelled()
+        }) else {
+            return false;
+        };
+        if let Some((_, previous)) = pending
+            .document_preparation
+            .replace((renderer, cancellation))
+        {
+            previous.cancel();
+        }
+        // Transport consumers can cancel a response (for example to replace it
+        // with synthetic content), but cannot cancel the Browser navigation.
+        // The navigation still revokes every admitted transport when retired.
+        pending.cancellation_handles.push(request_cancellation);
+        true
+    }
+
+    pub(super) fn accepts_document_preparation(
+        &self,
+        navigation: NavigationId,
+        renderer: moli_core::browser::RendererPageResidenceIdentity,
+    ) -> bool {
+        self.pending_navigation_request
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.matches(&navigation)
+                    && !pending.committed
+                    && !pending.cancellation_handle().is_cancelled()
+                    && pending.document_preparation.as_ref().is_some_and(
+                        |(current, cancellation)| {
+                            *current == renderer && !cancellation.is_cancelled()
+                        },
+                    )
+            })
     }
 
     pub(crate) fn arm_background_navigation_completion(

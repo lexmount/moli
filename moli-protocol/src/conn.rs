@@ -23,7 +23,7 @@ use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask, RendererOutputPublicationOrdering,
     RendererOutputTransportMessage,
     network::{SharedWebStorageStore, new_shared_web_storage_store},
-    page::{NavigationResponse, SubresourceAuthCredentials},
+    page::SubresourceAuthCredentials,
     runtime::{
         NavigationEngine, NavigationRuntimeConfig, storage_partition::StoragePartitionState,
     },
@@ -1581,6 +1581,7 @@ impl CdpConnection {
             .runtime_inspector_response_ready_sender()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn document_navigation_cancellation_handle(
         &self,
         token: &NavigationId,

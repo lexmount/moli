@@ -153,6 +153,7 @@ pub type DocumentStartScript = moli_core::page::DocumentStartScript;
 /// because both builds used the same target/session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PendingRendererPageBinding {
+    #[cfg(test)]
     PageBuild {
         renderer_page: RendererPageResidenceIdentity,
         document_id: DocumentId,
@@ -171,16 +172,18 @@ enum PendingRendererPageBinding {
 impl PendingRendererPageBinding {
     fn renderer_page(&self) -> RendererPageResidenceIdentity {
         match self {
-            Self::PageBuild { renderer_page, .. }
-            | Self::InitialDocumentBuild { renderer_page, .. }
+            #[cfg(test)]
+            Self::PageBuild { renderer_page, .. } => *renderer_page,
+            Self::InitialDocumentBuild { renderer_page, .. }
             | Self::DocumentNavigation { renderer_page, .. } => *renderer_page,
         }
     }
 
     fn document_id(&self) -> DocumentId {
         match self {
-            Self::PageBuild { document_id, .. }
-            | Self::InitialDocumentBuild { document_id, .. }
+            #[cfg(test)]
+            Self::PageBuild { document_id, .. } => *document_id,
+            Self::InitialDocumentBuild { document_id, .. }
             | Self::DocumentNavigation { document_id, .. } => *document_id,
         }
     }
@@ -821,6 +824,7 @@ impl BrowserContext {
             })
     }
 
+    #[cfg(test)]
     pub(crate) fn reserve_renderer_document_for_target(
         &mut self,
         target_id: &str,
@@ -1109,6 +1113,47 @@ impl BrowserContext {
     pub(crate) fn has_pending_document_navigation_for_target(&self, target_id: &str) -> bool {
         self.web_contents_for_target(target_id)
             .is_some_and(|contents| contents.navigation.has_pending_document_navigation())
+    }
+
+    pub(in crate::conn) fn pending_navigation_id_for_loader(
+        &self,
+        target_id: &str,
+        loader_id: &str,
+    ) -> Option<NavigationId> {
+        let controller = &self.web_contents_for_target(target_id)?.navigation;
+        self.page_slot_for_target(target_id)?
+            .cdp_navigation_loaders
+            .iter()
+            .find_map(|(navigation, loader)| {
+                (loader == loader_id
+                    && controller.accepts_pending_document_navigation_event(navigation))
+                .then_some(*navigation)
+            })
+    }
+
+    pub(in crate::conn) fn project_navigation_load_for_target(
+        &mut self,
+        target_id: &str,
+        load: &crate::conn::state::web_contents::AdmittedNavigationLoad,
+    ) -> Result<(), String> {
+        let contents = self
+            .web_contents_for_target(target_id)
+            .ok_or("navigation WebContents unavailable")?;
+        if contents.id() != load.web_contents_id()
+            || !contents
+                .navigation
+                .accepts_document_preparation(load.navigation_id(), load.renderer_page())
+        {
+            return Err("stale navigation document candidate".to_owned());
+        }
+        self.page_slot_for_target_mut(target_id)
+            .expect("resolved projection")
+            .pending_renderer_page = Some(PendingRendererPageBinding::DocumentNavigation {
+            navigation: load.navigation_id(),
+            renderer_page: load.renderer_page(),
+            document_id: load.document_id(),
+        });
+        Ok(())
     }
 
     pub(crate) fn current_document_loader_id_for_target(&self, target_id: &str) -> Option<&str> {
@@ -1874,6 +1919,41 @@ mod page_residence_tests {
 #[cfg(test)]
 mod pending_renderer_page_tests {
     use super::*;
+
+    #[test]
+    fn load_admission_matches_pending_loader_without_reusing_committed_navigation() {
+        let mut context = context_with_page_slot_for_test(TargetPageSlot::default());
+        let committed = context
+            .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-shared".to_owned());
+        assert!(
+            context.commit_pending_document_navigation_if_matches_for_target(
+                PAGE_SLOT_TEST_TARGET,
+                &committed,
+            )
+        );
+        assert_eq!(
+            context.pending_navigation_id_for_loader(PAGE_SLOT_TEST_TARGET, "LOADER-shared"),
+            None,
+        );
+        let pending = context
+            .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-shared".to_owned());
+        assert_ne!(committed, pending);
+        assert_eq!(
+            context.pending_navigation_id_for_loader(PAGE_SLOT_TEST_TARGET, "LOADER-shared"),
+            Some(pending),
+        );
+        let next = context
+            .begin_target_document_navigation(PAGE_SLOT_TEST_TARGET, "LOADER-next".to_owned());
+        assert_eq!(
+            context.pending_navigation_id_for_loader(PAGE_SLOT_TEST_TARGET, "LOADER-shared"),
+            None,
+            "the committed loader must not authorize the newer pending request",
+        );
+        assert_eq!(
+            context.pending_navigation_id_for_loader(PAGE_SLOT_TEST_TARGET, "LOADER-next"),
+            Some(next),
+        );
+    }
 
     #[test]
     fn loader_projection_follows_navigation_lifetime_without_authorizing_stale_work() {

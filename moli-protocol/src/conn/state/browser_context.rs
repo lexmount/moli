@@ -1072,6 +1072,7 @@ impl BrowserContext {
         })
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub(crate) fn document_navigation_cancellation_handle(
         &self,
         token: &NavigationId,

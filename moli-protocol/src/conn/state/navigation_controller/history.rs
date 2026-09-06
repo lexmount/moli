@@ -39,6 +39,10 @@ impl Default for NavigationHistoryState {
 }
 
 impl NavigationHistoryState {
+    pub(crate) fn current_url(&self) -> Option<&str> {
+        Some(self.entries.get(self.current_index?)?.url.as_str())
+    }
+
     pub(crate) fn clear(&mut self) {
         *self = Self::default();
     }

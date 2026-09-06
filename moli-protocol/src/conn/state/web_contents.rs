@@ -19,6 +19,8 @@ pub(crate) use initial_document::{
 };
 mod navigation_commit;
 pub(in crate::conn) use navigation_commit::AdmittedDocumentMaterialization;
+mod navigation_load;
+pub(in crate::conn) use navigation_load::{AdmittedNavigationLoad, PreparedNavigationResponse};
 mod network_request_policy;
 pub(crate) use navigation_commit::{
     CommittedDocumentLifecycle, DocumentNavigationDestination, PreparedDocumentNavigation,
