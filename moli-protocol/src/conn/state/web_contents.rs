@@ -25,6 +25,10 @@ pub(crate) use initial_document::{
 mod navigation_commit;
 pub(in crate::conn) use navigation_commit::AdmittedDocumentMaterialization;
 mod navigation_history;
+mod navigation_interception;
+pub(crate) use navigation_interception::{
+    InterceptedNavigationLoad, InterceptedNavigationResponse, NavigationInterceptionPermit,
+};
 mod navigation_load;
 pub(crate) use navigation_history::SameDocumentNavigationCommitted;
 pub(in crate::conn) use navigation_load::{AdmittedNavigationLoad, PreparedNavigationResponse};

@@ -1522,6 +1522,7 @@ impl CdpConnection {
     pub(crate) async fn prepare_paused_streaming_response_navigation_async(
         &mut self,
         navigation: &NavigationDispatchState,
+        work: &mut InterceptedNavigationLoad,
         response: &StreamingRawResponse,
         network_observation_journal: &NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
@@ -1576,11 +1577,11 @@ impl CdpConnection {
             renderer_body_rx,
             renderer_completion_rx,
         );
-        let mut load = self.admit_navigation_load(navigation)?;
         let main_document_commit = load_inputs
             .main_document_commit_for_final_url(&final_url, None)
             .map(Arc::new);
-        let prepared_page = load
+        let prepared_page = work
+            .load
             .prepare_document_response_async(
                 requested_url.clone(),
                 final_url.clone(),
@@ -2464,52 +2465,18 @@ impl CdpConnection {
         })
     }
 
-    pub(crate) async fn fetch_navigation_auth_raw_response_for_navigation_async(
+    pub(crate) fn start_intercepted_navigation_load(
         &mut self,
         navigation: &NavigationDispatchState,
-        auth: SubresourceAuthCredentials,
-    ) -> Result<NetworkFetchResult<RawResponse>, String> {
+    ) -> Result<InterceptedNavigationLoad, String> {
         let load = self.admit_navigation_load(navigation)?;
-        load.validate_request(navigation.requested_url.as_str())
-            .map_err(|error| error.to_string())?;
-        load.fetch_intercepted_auth_response(
-            &navigation.request_method,
-            navigation.requested_url.as_str(),
+        Ok(InterceptedNavigationLoad::new(
+            load,
+            navigation.requested_url.clone(),
+            navigation.request_method.clone(),
             navigation.clone_request_body_bytes(),
             navigation.request_headers.clone(),
-            auth,
-        )
-        .await
-        .map_err(|error| {
-            format!(
-                "failed to fetch page `{}`: {error}",
-                navigation.requested_url
-            )
-        })
-    }
-
-    pub(crate) async fn fetch_navigation_streaming_raw_response_for_navigation_async(
-        &mut self,
-        navigation: &NavigationDispatchState,
-        auth: Option<SubresourceAuthCredentials>,
-    ) -> Result<NetworkFetchResult<StreamingRawResponse>, String> {
-        let load = self.admit_navigation_load(navigation)?;
-        load.validate_request(navigation.requested_url.as_str())
-            .map_err(|error| error.to_string())?;
-        load.fetch_intercepted_response(
-            &navigation.request_method,
-            navigation.requested_url.as_str(),
-            navigation.clone_request_body_bytes(),
-            navigation.request_headers.clone(),
-            auth,
-        )
-        .await
-        .map_err(|error| {
-            format!(
-                "failed to fetch page `{}`: {error}",
-                navigation.requested_url
-            )
-        })
+        ))
     }
 
     #[cfg(test)]
@@ -2670,6 +2637,24 @@ impl CdpConnection {
         .await
     }
 
+    pub(crate) async fn build_intercepted_navigation_response_async(
+        &mut self,
+        navigation: &NavigationDispatchState,
+        response: InterceptedNavigationResponse<RawResponse>,
+    ) -> Result<NavigationLoadOutcome, String> {
+        let (mut work, response) = response.into_parts();
+        let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
+        self.build_navigation_from_buffered_raw_response_with_load_inputs_async(
+            &mut work.load,
+            &load_inputs,
+            work.requested_url,
+            work.method,
+            work.headers,
+            response,
+        )
+        .await
+    }
+
     async fn build_navigation_from_buffered_raw_response_with_load_inputs_async(
         &mut self,
         load: &mut AdmittedNavigationLoad,
@@ -2780,17 +2765,17 @@ impl CdpConnection {
     pub(crate) async fn build_navigation_from_streaming_raw_response_for_navigation_async(
         &mut self,
         navigation: &NavigationDispatchState,
-        response: NetworkFetchResult<StreamingRawResponse>,
+        response: InterceptedNavigationResponse<StreamingRawResponse>,
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> Result<NavigationLoadOutcome, String> {
-        let mut load = self.admit_navigation_load(navigation)?;
+        let (mut work, response) = response.into_parts();
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.build_navigation_from_streaming_raw_response_with_load_inputs_async(
-            &mut load,
+            &mut work.load,
             &load_inputs,
-            navigation.requested_url.clone(),
-            navigation.request_method.clone(),
-            navigation.request_headers.clone(),
+            work.requested_url,
+            work.method,
+            work.headers,
             response,
             None,
             Vec::new(),
@@ -2855,22 +2840,6 @@ impl CdpConnection {
             RendererReplyBoundary::Stage,
         )
         .await
-    }
-
-    pub(crate) async fn collect_navigation_streaming_raw_response_async(
-        &mut self,
-        response: NetworkFetchResult<StreamingRawResponse>,
-    ) -> Result<NetworkFetchResult<RawResponse>, String> {
-        let (response, network_observation_journal) =
-            response.into_parts_with_observation_journal();
-        let response = response
-            .into_materialized_raw_response()
-            .await
-            .map_err(|error| format!("failed to read page body from stream: {error}"))?;
-        Ok(NetworkFetchResult::with_observation_journal(
-            response,
-            network_observation_journal,
-        ))
     }
 
     fn build_download_from_raw_response(

@@ -203,10 +203,19 @@ impl ResourceRequestClient {
         &self,
         request: Request,
     ) -> Result<NetworkFetchResult<RawResponse>> {
+        self.fetch_raw_with_cancel_and_network_metadata(request, FetchCancelHandle::new())
+            .await
+    }
+
+    pub async fn fetch_raw_with_cancel_and_network_metadata(
+        &self,
+        request: Request,
+        cancel_handle: FetchCancelHandle,
+    ) -> Result<NetworkFetchResult<RawResponse>> {
         let request = self.apply_network_policy(request)?;
         self.resource_runtime
             .client()
-            .fetch_raw_with_network_metadata(request)
+            .fetch_raw_with_cancel_and_network_metadata(request, cancel_handle)
             .await
     }
 

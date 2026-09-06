@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::str::FromStr;
-use std::sync::Arc;
 use url::Url;
 
 use super::body_spool::ensure_materialize_limit;
@@ -467,10 +466,9 @@ pub struct PendingFetchAuthNavigation {
     // response stage must retain the id announced by the original request.
     pub fetch_request_id: String,
     pub response_stage_request_id: String,
-    pub(crate) document_navigation_token: Option<NavigationId>,
     pub navigation: NavigationDispatchState,
     pub request_cookie_report: Option<StoredCookieQueryReport>,
-    pub auth_response: Arc<NetworkFetchResult<RawResponse>>,
+    pub(crate) auth_permit: super::state::NavigationInterceptionPermit,
     pub challenge: FetchAuthChallenge,
     pub intercept_response: bool,
     pub response_stage_url_match_policy: ResponseStageUrlMatchPolicy,
@@ -479,26 +477,8 @@ pub struct PendingFetchAuthNavigation {
 
 impl PendingFetchAuthNavigation {
     #[cfg(test)]
-    pub(crate) fn test_auth_response(url: Url) -> Arc<NetworkFetchResult<RawResponse>> {
-        Arc::new(NetworkFetchResult::without_request_observation(
-            RawResponse::from_head_and_body(
-                ResponseHead {
-                    final_url: url,
-                    status: 401,
-                    headers: vec![(
-                        "WWW-Authenticate".to_owned(),
-                        "Basic realm=\"test\"".to_owned(),
-                    )],
-                    request_cookie_report: None,
-                    cookie_set_reports: Vec::new(),
-                    redirected: false,
-                    redirect_chain: Vec::new(),
-                    from_cache: false,
-                    negotiated_http_version: None,
-                },
-                b"auth required".to_vec(),
-            ),
-        ))
+    pub(crate) fn test_auth_permit() -> super::state::NavigationInterceptionPermit {
+        super::state::NavigationInterceptionPermit::for_correlation_test()
     }
 
     pub fn pop_next_auth_required_pause(&mut self) -> Option<PendingSubresourceFetchAuthStage> {

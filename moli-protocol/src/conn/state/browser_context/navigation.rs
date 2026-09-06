@@ -4,6 +4,37 @@ use moli_core::page::{Page, SameDocumentHistoryUpdate};
 use url::Url;
 
 impl BrowserContext {
+    #[cfg(test)]
+    pub(crate) fn has_paused_navigation_auth_for_test(&self, target: &str) -> bool {
+        self.web_contents_for_target(target)
+            .is_some_and(|contents| contents.navigation().has_paused_auth_for_test())
+    }
+
+    pub(in crate::conn) fn pause_navigation_auth(
+        &mut self,
+        response: crate::conn::state::web_contents::InterceptedNavigationResponse<
+            moli_fetch::RawResponse,
+        >,
+    ) -> Result<crate::conn::state::web_contents::NavigationInterceptionPermit, String> {
+        self.physical
+            .web_contents
+            .get_mut(&response.web_contents())
+            .ok_or("navigation WebContents unavailable")?
+            .pause_navigation_auth(response)
+    }
+
+    pub(in crate::conn) fn take_navigation_auth(
+        &mut self,
+        permit: crate::conn::state::web_contents::NavigationInterceptionPermit,
+    ) -> Option<
+        crate::conn::state::web_contents::InterceptedNavigationResponse<moli_fetch::RawResponse>,
+    > {
+        self.physical
+            .web_contents
+            .get_mut(&permit.web_contents())?
+            .take_navigation_auth(permit)
+    }
+
     pub(in crate::conn) fn resolve_target_history_traversal(
         &self,
         target: &str,

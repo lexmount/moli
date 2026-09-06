@@ -110,6 +110,7 @@ struct PendingNavigationRequest {
     navigation_id: NavigationId,
     document_id: DocumentId,
     history_update: Option<PendingNavigationHistoryUpdate>,
+    paused_auth: Option<Box<super::navigation_interception::PausedNavigationAuth>>,
     document_preparation: Option<(
         moli_core::browser::RendererPageResidenceIdentity,
         moli_fetch::FetchCancelHandle,
@@ -128,6 +129,7 @@ impl PendingNavigationRequest {
             navigation_id,
             document_id: DocumentId::allocate(),
             history_update,
+            paused_auth: None,
             document_preparation: None,
             cancellation_handles: vec![moli_fetch::FetchCancelHandle::new()],
             background_completion_pending: false,
@@ -186,6 +188,67 @@ pub(in crate::conn) struct NavigationController {
 }
 
 impl NavigationController {
+    #[cfg(test)]
+    pub(in crate::conn::state) fn has_paused_auth_for_test(&self) -> bool {
+        self.pending_navigation_request
+            .as_ref()
+            .is_some_and(|request| request.paused_auth.is_some())
+    }
+
+    pub(super) fn pause_auth_response(
+        &mut self,
+        response: super::InterceptedNavigationResponse<moli_fetch::RawResponse>,
+    ) -> Result<super::NavigationInterceptionPermit, String> {
+        let identity = response.identity();
+        let pending = self
+            .pending_navigation_request
+            .as_mut()
+            .filter(|pending| {
+                pending.navigation_id == identity.navigation
+                    && pending.document_id == identity.document
+                    && !pending.committed
+                    && !identity.is_cancelled()
+            })
+            .ok_or("stale navigation auth response")?;
+        if pending.paused_auth.is_some() {
+            return Err("navigation already has a paused auth response".to_owned());
+        }
+        let request = moli_core::browser::BrowserRequestId::allocate();
+        let permit = super::NavigationInterceptionPermit {
+            web_contents: identity.web_contents,
+            navigation: identity.navigation,
+            document: identity.document,
+            request,
+        };
+        pending.paused_auth = Some(Box::new(
+            super::navigation_interception::PausedNavigationAuth { request, response },
+        ));
+        Ok(permit)
+    }
+
+    pub(super) fn take_auth_response(
+        &mut self,
+        permit: super::NavigationInterceptionPermit,
+    ) -> Option<super::InterceptedNavigationResponse<moli_fetch::RawResponse>> {
+        let pending = self.pending_navigation_request.as_mut().filter(|pending| {
+            pending.navigation_id == permit.navigation
+                && pending.document_id == permit.document
+                && !pending.committed
+                && !pending.cancellation_handle().is_cancelled()
+        })?;
+        let paused = pending.paused_auth.as_ref()?;
+        if paused.request != permit.request || paused.response.identity().is_cancelled() {
+            return None;
+        }
+        Some(
+            pending
+                .paused_auth
+                .take()
+                .expect("validated auth response")
+                .response,
+        )
+    }
+
     pub(super) fn resolve_history_traversal(
         &self,
         destination: HistoryTraversalDestination,

@@ -561,7 +561,8 @@ pub(super) async fn complete_continue_with_auth_command_async(
         }
         PendingContinueWithAuthState::NavigationFail { pending } => {
             out.push_success();
-            let token = pending.document_navigation_token;
+            drop(conn.take_navigation_auth(pending.auth_permit));
+            let token = Some(pending.auth_permit.navigation());
             let navigation_state = pending.navigation;
             let navigation = network::materialize_navigation_load_result(
                 conn,
@@ -579,15 +580,31 @@ pub(super) async fn complete_continue_with_auth_command_async(
         }
         PendingContinueWithAuthState::NavigationContinue { pending, auth } => {
             out.push_success();
-            let prior_network_observation_journal =
-                pending.auth_response.observation_journal().clone();
+            let response = conn.take_navigation_auth(pending.auth_permit);
+            let Some(response) = response else {
+                let token = Some(pending.auth_permit.navigation());
+                let navigation = network::materialize_navigation_load_result(
+                    conn,
+                    &pending.navigation,
+                    Err("stale navigation auth response".to_owned()),
+                );
+                complete_tokened_materialized_navigation_as_background_events_async(
+                    conn,
+                    out,
+                    token,
+                    pending.navigation,
+                    navigation,
+                )
+                .await;
+                return;
+            };
             load_or_pause_navigation_for_auth_as_background_events_async(
                 conn,
                 out,
                 PendingFetchNavigation {
                     fetch_request_id: pending.response_stage_request_id,
                     interception_session_id: pending.interception_session_id.clone(),
-                    document_navigation_token: pending.document_navigation_token,
+                    document_navigation_token: Some(pending.auth_permit.navigation()),
                     navigation: pending.navigation,
                     request_cookie_report: None,
                     intercept_response: pending.intercept_response,
@@ -595,7 +612,7 @@ pub(super) async fn complete_continue_with_auth_command_async(
                     auth_required_blocked_intercepts: Vec::new(),
                 },
                 Some(auth),
-                Some(prior_network_observation_journal),
+                Some(response.retry()),
             )
             .await;
         }

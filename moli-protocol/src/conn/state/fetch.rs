@@ -2372,7 +2372,6 @@ mod tests {
             owner_kind: PendingSubresourceFetchOwnerKind::Fetch,
             fetch_request_id: request_id.to_owned(),
             response_stage_request_id: request_id.to_owned(),
-            document_navigation_token: None,
             navigation: NavigationDispatchState {
                 navigate_id: Some(1),
                 owner: owner_session_id
@@ -2400,7 +2399,7 @@ mod tests {
                 source_document_security: Default::default(),
             },
             request_cookie_report: None,
-            auth_response: PendingFetchAuthNavigation::test_auth_response(test_url("auth-page")),
+            auth_permit: PendingFetchAuthNavigation::test_auth_permit(),
             challenge: FetchAuthChallenge {
                 origin: "https://example.test".to_owned(),
                 source: "Server".to_owned(),
