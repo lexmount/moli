@@ -27,6 +27,7 @@ mod target_state;
 #[cfg(test)]
 mod tests;
 mod web_contents;
+pub(in crate::conn) use web_contents::{AdmittedNavigationLoad, PreparedNavigationResponse};
 pub(in crate::conn) use web_contents::{
     BuiltInitialDocument, InitialDocumentAdmission, InitialDocumentBuildKey,
     InitialDocumentPageBuildWaiter,

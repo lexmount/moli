@@ -19,6 +19,15 @@ pub use downloads::{
 pub use permissions::{PermissionDefaults, PermissionOverrides};
 pub use renderer_residence::RendererPageResidenceIdentity;
 
+/// Navigation semantics, independent of the protocol that requested the load.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum NavigationRequestLoadPolicy {
+    #[default]
+    DocumentInitiated,
+    BrowserInitiated,
+    Reload,
+}
+
 use std::{
     num::NonZeroU64,
     sync::atomic::{AtomicU64, Ordering},

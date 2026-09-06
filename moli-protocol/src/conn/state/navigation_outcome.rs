@@ -324,13 +324,7 @@ impl NavigationDispatchState {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum NavigationRequestLoadPolicy {
-    #[default]
-    DocumentInitiated,
-    BrowserInitiated,
-    Reload,
-}
+pub use moli_core::browser::NavigationRequestLoadPolicy;
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

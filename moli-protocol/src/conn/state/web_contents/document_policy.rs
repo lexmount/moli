@@ -18,11 +18,17 @@ pub(in crate::conn::state) struct InheritedDocumentPolicy {
 }
 
 impl WebContents {
-    pub(in crate::conn::state) fn capture_document_policy(
+    pub(super) fn configure_navigation_resources(
         &mut self,
-        inherited: InheritedDocumentPolicy,
-        final_url: &Url,
-    ) -> Result<PreparedDocumentPagePolicy, String> {
+        inherited: &InheritedDocumentPolicy,
+    ) -> Result<
+        (
+            moli_browser_profile::BrowserIdentityProfile,
+            Vec<(String, String)>,
+            bool,
+        ),
+        String,
+    > {
         let navigator_identity = self
             .browser_identity_override
             .clone()
@@ -70,9 +76,22 @@ impl WebContents {
                     .into_navigation_storage(),
             )
             .map_err(|error| format!("failed to initialize resource runtime: {error}"))?;
+        Ok((navigator_identity, extra_http_headers, network_offline))
+    }
+
+    pub(in crate::conn::state) fn capture_document_policy(
+        &mut self,
+        inherited: InheritedDocumentPolicy,
+        final_url: &Url,
+    ) -> Result<PreparedDocumentPagePolicy, String> {
+        let (navigator_identity, extra_http_headers, network_offline) =
+            self.configure_navigation_resources(&inherited)?;
         // Contexts share a renderer runtime, not a Page transport identity.
         // Never copy the resource runtime most recently registered by a peer.
-        let browser_resource_runtime = engine
+        let browser_resource_runtime = self
+            .navigation_engine
+            .as_ref()
+            .expect("configured engine")
             .resource_request_client()
             .ok_or("resource request client unavailable")?
             .browser_resource_runtime();

@@ -129,6 +129,7 @@ impl TargetNavigationStorageHandles {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn page_storage_handles(&self) -> BrowserContextPageStorageHandles {
         self.page_handles.clone()
     }
@@ -145,6 +146,7 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) http_proxy_override: Option<String>,
     pub(crate) http_no_proxy_override: Option<String>,
     pub(crate) tls_verify_host_override: Option<bool>,
+    #[cfg(test)]
     pub(crate) navigation_initiator_url: Option<Url>,
     pub(crate) browser_navigation_kind: BrowserNavigationRequestKind,
     pub(crate) infer_navigation_referrer: bool,
@@ -234,6 +236,7 @@ impl TargetNavigationLoadInputs {
             .map(|seed| seed.resolve(final_url, network_error_page))
     }
 
+    #[cfg(test)]
     pub(crate) fn page_storage_handles(&self) -> BrowserContextPageStorageHandles {
         self.storage_handles.page_storage_handles()
     }
@@ -310,6 +313,7 @@ impl TargetNavigationLoadInputs {
             tls_verify_host_override: browser_context
                 .tls_verify_host_override_for_target(target_id)
                 .or(browser_context.network_policy().tls_verify_host),
+            #[cfg(test)]
             navigation_initiator_url: browser_context.target_navigation_initiator_url(target_id),
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_navigation_referrer: true,
@@ -411,6 +415,7 @@ impl TargetNavigationLoadInputs {
             http_proxy_override: None,
             http_no_proxy_override: None,
             tls_verify_host_override: None,
+            #[cfg(test)]
             navigation_initiator_url: None,
             browser_navigation_kind: BrowserNavigationRequestKind::Navigate,
             infer_navigation_referrer: true,
@@ -1695,6 +1700,7 @@ impl CdpConnection {
         ))
     }
 
+    #[cfg(test)]
     pub(crate) fn reserve_target_page_residence_identity_for_owner(
         &mut self,
         owner: &CommandOwnerScope,

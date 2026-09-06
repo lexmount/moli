@@ -24,12 +24,19 @@ pub(crate) struct PreparedDocumentNavigation {
 /// Admission freezes the Browser objects before the move-owned work can await.
 /// Only WebContents can create this identity; Protocol cannot retarget a result.
 #[derive(Debug)]
-struct DocumentNavigationIdentity {
-    web_contents: WebContentsId,
-    frame_slot: MainFrameSlotId,
-    navigation: NavigationId,
-    document: DocumentId,
-    cancellation: moli_fetch::FetchCancelHandle,
+pub(super) struct DocumentNavigationIdentity {
+    pub(super) web_contents: WebContentsId,
+    pub(super) frame_slot: MainFrameSlotId,
+    pub(super) navigation: NavigationId,
+    pub(super) document: DocumentId,
+    pub(super) cancellation: moli_fetch::FetchCancelHandle,
+    pub(super) preparation_cancellation: moli_fetch::FetchCancelHandle,
+}
+
+impl DocumentNavigationIdentity {
+    pub(super) fn is_cancelled(&self) -> bool {
+        self.cancellation.is_cancelled() || self.preparation_cancellation.is_cancelled()
+    }
 }
 
 pub(crate) struct DocumentNavigationDestination {
@@ -52,7 +59,7 @@ impl AdmittedDocumentMaterialization {
         self,
     ) -> anyhow::Result<BuiltDocumentPage<PreparedDocumentNavigation>> {
         anyhow::ensure!(
-            !self.identity.cancellation.is_cancelled(),
+            !self.identity.is_cancelled(),
             "canceled navigation document candidate"
         );
         let BuiltDocumentPage {
@@ -62,7 +69,7 @@ impl AdmittedDocumentMaterialization {
             pending_download,
         } = self.page.materialize(Some(self.policy)).await?;
         anyhow::ensure!(
-            !self.identity.cancellation.is_cancelled(),
+            !self.identity.is_cancelled(),
             "canceled navigation document candidate"
         );
         let page = PreparedDocumentNavigation::new(
@@ -182,7 +189,7 @@ impl RetiringDocument {
 }
 
 impl WebContents {
-    fn document_navigation_identity(
+    pub(super) fn document_navigation_identity(
         &self,
         navigation: NavigationId,
     ) -> Result<DocumentNavigationIdentity, &'static str> {
@@ -204,6 +211,7 @@ impl WebContents {
             navigation,
             document,
             cancellation,
+            preparation_cancellation: moli_fetch::FetchCancelHandle::new(),
         })
     }
 
@@ -226,14 +234,14 @@ impl WebContents {
         let interception = self.fetch_subresource_interception;
         Ok(async move {
             anyhow::ensure!(
-                !prepared.identity.cancellation.is_cancelled(),
+                !prepared.identity.is_cancelled(),
                 "canceled navigation document candidate"
             );
             let prepared = prepared
                 .apply_document_policy(interception, &permissions)
                 .await?;
             anyhow::ensure!(
-                !prepared.identity.cancellation.is_cancelled(),
+                !prepared.identity.is_cancelled(),
                 "canceled navigation document candidate"
             );
             Ok(prepared)
@@ -243,11 +251,28 @@ impl WebContents {
     pub(in crate::conn::state) fn start_document_materialization(
         &mut self,
         navigation: NavigationId,
-        page: PreparedDocumentPage,
+        response: super::PreparedNavigationResponse,
         destination: DocumentNavigationDestination,
         inherited: InheritedDocumentPolicy,
     ) -> Result<AdmittedDocumentMaterialization, String> {
-        let identity = self.document_navigation_identity(navigation)?;
+        let super::PreparedNavigationResponse { identity, page } = response;
+        let renderer = RendererPageResidenceIdentity::from_parts(
+            page.renderer_owner_local_host_id(),
+            page.renderer_page_id(),
+        );
+        if identity.web_contents != self.id()
+            || identity.frame_slot != self.main_frame.id()
+            || identity.navigation != navigation
+            || self.navigation.pending_document() != Some((navigation, identity.document))
+            || !self
+                .navigation
+                .accepts_document_preparation(navigation, renderer)
+        {
+            return Err("stale navigation document candidate".to_owned());
+        }
+        if identity.is_cancelled() {
+            return Err("canceled navigation document candidate".to_owned());
+        }
         // Reject stale/canceled work before changing this engine's resource
         // runtime. Policy and identity are frozen by the same Browser Start.
         let policy = self.capture_document_policy(inherited, &destination.url)?;
@@ -271,7 +296,7 @@ impl WebContents {
                         && *document == prepared.identity.document
                         && self.id() == prepared.identity.web_contents
                         && self.main_frame.id() == prepared.identity.frame_slot
-                        && !prepared.identity.cancellation.is_cancelled()
+                        && !prepared.identity.is_cancelled()
                 })
         else {
             return Err("stale navigation document candidate");

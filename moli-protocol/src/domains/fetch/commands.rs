@@ -1905,7 +1905,10 @@ fn continue_streaming_document_response_in_background(
             document_navigation_token,
             navigation.clone(),
         );
-        let navigation_result = job.run(Some(body_completion_sink)).await;
+        let navigation_result = match job {
+            Ok(job) => job.run(Some(body_completion_sink)).await,
+            Err(error) => Err(error),
+        };
         let _ = sender.send(page::BackgroundNavigationCompletion::new(
             document_navigation_token,
             navigation,

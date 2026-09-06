@@ -267,7 +267,7 @@ impl BrowserContext {
         &mut self,
         target_id: &str,
         navigation: moli_core::browser::NavigationId,
-        page: moli_core::runtime::PreparedDocumentPage,
+        page: crate::conn::state::web_contents::PreparedNavigationResponse,
         destination: DocumentNavigationDestination,
         fetch_defaults: moli_fetch::FetchConfig,
         permissions: &moli_core::browser::PermissionDefaults,
@@ -282,6 +282,25 @@ impl BrowserContext {
         self.web_contents_for_target_mut(target_id)
             .ok_or("navigation WebContents unavailable")?
             .start_document_materialization(navigation, page, destination, inherited)
+    }
+
+    pub(in crate::conn) fn start_navigation_load_for_target(
+        &mut self,
+        target_id: &str,
+        navigation: moli_core::browser::NavigationId,
+        policy: moli_core::browser::NavigationRequestLoadPolicy,
+        fetch_defaults: moli_fetch::FetchConfig,
+        permissions: &moli_core::browser::PermissionDefaults,
+    ) -> Result<crate::conn::state::web_contents::AdmittedNavigationLoad, String> {
+        let inherited = self.physical.inherited_document_policy(
+            fetch_defaults,
+            permissions,
+            &self.global_extra_headers,
+            self.global_network_conditions,
+        );
+        self.web_contents_for_target_mut(target_id)
+            .ok_or("navigation WebContents unavailable")?
+            .start_navigation_load(navigation, policy, inherited)
     }
 
     #[cfg(test)]
