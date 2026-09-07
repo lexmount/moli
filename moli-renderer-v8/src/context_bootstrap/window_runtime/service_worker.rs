@@ -335,6 +335,44 @@ struct BackgroundSyncOptions {
     min_interval: u64,
 }
 
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "RegistrationOptions")]
+struct ServiceWorkerRegistrationOptions {
+    #[webidl(name = "scope", converter = "usv_string")]
+    requested_scope: Option<String>,
+
+    #[webidl(
+        name = "type",
+        converter = "enum",
+        default = WorkerScriptKind::Classic
+    )]
+    script_kind: WorkerScriptKind,
+
+    #[webidl(
+        name = "updateViaCache",
+        converter = "enum",
+        default = ServiceWorkerUpdateViaCache::Imports
+    )]
+    update_via_cache: ServiceWorkerUpdateViaCache,
+}
+
+impl Default for ServiceWorkerRegistrationOptions {
+    fn default() -> Self {
+        Self {
+            requested_scope: None,
+            script_kind: WorkerScriptKind::Classic,
+            update_via_cache: ServiceWorkerUpdateViaCache::Imports,
+        }
+    }
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "ServiceWorkerContainer.getRegistration")]
+struct ServiceWorkerGetRegistrationArgs {
+    #[webidl(name = "clientURL", converter = "usv_string", default = "")]
+    client_url: String,
+}
+
 #[derive(Clone, Copy)]
 enum ServiceWorkerRegistrationPhase<'a> {
     Snapshot(&'a crate::service_worker_runtime::ServiceWorkerRegistrationSnapshot),
@@ -401,6 +439,9 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
     ) else {
         return;
     };
+    let Some(options) = service_worker_registration_options(scope, &args) else {
+        return;
+    };
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
@@ -416,24 +457,22 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
         rv.set(promise.into());
         return;
     };
-    let script_kind = match service_worker_script_kind(scope, &args) {
-        Ok(script_kind) => script_kind,
-        Err(message) => {
-            reject_service_worker_promise(scope, resolver, message);
+    let scope_url = match service_worker_scope_url(
+        request_context.document_url(),
+        &script_url,
+        options.requested_scope.as_deref(),
+    ) {
+        Some(scope_url) => scope_url,
+        None => {
+            reject_service_worker_promise_with_type_error(
+                scope,
+                resolver,
+                "failed to resolve service worker scope URL",
+            );
             rv.set(promise.into());
             return;
         }
     };
-    let update_via_cache = match service_worker_update_via_cache(scope, &args) {
-        Ok(update_via_cache) => update_via_cache,
-        Err(message) => {
-            reject_service_worker_promise(scope, resolver, message);
-            rv.set(promise.into());
-            return;
-        }
-    };
-    let scope_url =
-        service_worker_scope_url(scope, request_context.document_url(), &script_url, &args);
     if let Err(message) = crate::service_worker_runtime::verify_service_worker_registration_urls(
         &scope_url,
         &script_url,
@@ -465,8 +504,8 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
     host.start_service_worker_runtime(
         script_url,
         scope_url,
-        script_kind,
-        update_via_cache,
+        options.script_kind,
+        options.update_via_cache,
         &request_context,
         request_client,
         request_id,
@@ -1120,24 +1159,51 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registration_ca
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    let Some(parsed) = webidl::parse_args::<ServiceWorkerGetRegistrationArgs>(scope, &args) else {
+        return;
+    };
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
-    let value: v8::Local<'_, v8::Value> = if let Some(host_ptr) =
-        context_host_ptr_from_global_bridge(scope)
-    {
-        let host = unsafe { &mut *host_ptr };
-        let owner = service_worker_container_owner_scope(scope, args.this());
-        let state = host
-            .service_worker_window_request_context(owner)
-            .and_then(|request_context| {
-                service_worker_client_url(scope, request_context.document_url(), &args).and_then(
-                    |client_url| {
-                        host.service_worker_registration_for_client(&request_context, &client_url)
-                    },
-                )
-            });
-        if let Some(state) = state {
+    let promise = resolver.get_promise(scope);
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        let _ = resolver.resolve(scope, v8::undefined(scope).into());
+        rv.set(promise.into());
+        return;
+    };
+    let host = unsafe { &mut *host_ptr };
+    let owner = service_worker_container_owner_scope(scope, args.this());
+    let Some(request_context) = host.service_worker_window_request_context(owner) else {
+        let _ = resolver.resolve(scope, v8::undefined(scope).into());
+        rv.set(promise.into());
+        return;
+    };
+    let client_url =
+        match service_worker_client_url(request_context.document_url(), &parsed.client_url) {
+            Ok(client_url) => client_url,
+            Err(ServiceWorkerClientUrlError::Invalid) => {
+                reject_service_worker_promise_with_type_error(
+                    scope,
+                    resolver,
+                    "Failed to parse the client URL.",
+                );
+                rv.set(promise.into());
+                return;
+            }
+            Err(ServiceWorkerClientUrlError::CrossOrigin) => {
+                reject_service_worker_promise_with_dom_exception(
+                    scope,
+                    resolver,
+                    "The client URL must have the same origin as the document.",
+                    "SecurityError",
+                );
+                rv.set(promise.into());
+                return;
+            }
+        };
+    let value: v8::Local<'_, v8::Value> = host
+        .service_worker_registration_for_client(&request_context, &client_url)
+        .map(|state| {
             build_service_worker_registration_object_for_container(
                 scope,
                 args.this(),
@@ -1146,14 +1212,10 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_get_registration_ca
                 ServiceWorkerRegistrationPhase::Snapshot(&state),
             )
             .into()
-        } else {
-            v8::undefined(scope).into()
-        }
-    } else {
-        v8::undefined(scope).into()
-    };
+        })
+        .unwrap_or_else(|| v8::undefined(scope).into());
     let _ = resolver.resolve(scope, value);
-    rv.set(resolver.get_promise(scope).into());
+    rv.set(promise.into());
 }
 
 pub(in crate::context_bootstrap) fn navigator_service_worker_get_registrations_callback<'s>(
@@ -2137,100 +2199,62 @@ fn resolve_service_worker_script_url(document_url: &url::Url, script: &str) -> O
     Some(script_url)
 }
 
+fn service_worker_registration_options<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<ServiceWorkerRegistrationOptions> {
+    let context = webidl::Context::argument("ServiceWorkerContainer.register", 2);
+    match webidl::dictionary_arg(args, 1, context) {
+        Ok(Some(options)) => {
+            match webidl::parse_dictionary_object::<ServiceWorkerRegistrationOptions>(
+                scope, options,
+            ) {
+                Ok(options) => Some(options),
+                Err(error) => {
+                    webidl::throw_error(scope, &error);
+                    None
+                }
+            }
+        }
+        Ok(None) => Some(ServiceWorkerRegistrationOptions::default()),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            None
+        }
+    }
+}
+
 fn service_worker_scope_url(
-    scope: &mut v8::PinScope<'_, '_>,
     document_url: &url::Url,
     script_url: &url::Url,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> url::Url {
-    if args.length() > 1
-        && let Ok(options) = v8::Local::<v8::Object>::try_from(args.get(1))
-        && let Some(scope_value) = options.get(scope, v8str(scope, "scope").into())
-        && !scope_value.is_null_or_undefined()
-        && let Some(scope_string) = scope_value.to_string(scope)
-        && let Ok(mut scope_url) = document_url.join(&scope_string.to_rust_string_lossy(scope))
-    {
-        scope_url.set_fragment(None);
-        return scope_url;
-    }
-    default_service_worker_scope_url(script_url)
+    requested_scope: Option<&str>,
+) -> Option<url::Url> {
+    let Some(requested_scope) = requested_scope else {
+        return Some(default_service_worker_scope_url(script_url));
+    };
+    let mut scope_url = document_url.join(requested_scope).ok()?;
+    scope_url.set_fragment(None);
+    Some(scope_url)
 }
 
-fn service_worker_script_kind(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> Result<WorkerScriptKind, &'static str> {
-    if args.length() <= 1 {
-        return Ok(WorkerScriptKind::Classic);
-    }
-    let value = args.get(1);
-    if value.is_null_or_undefined() {
-        return Ok(WorkerScriptKind::Classic);
-    }
-    let Ok(options) = v8::Local::<v8::Object>::try_from(value) else {
-        return Ok(WorkerScriptKind::Classic);
-    };
-    let Some(type_value) = options.get(scope, v8str(scope, "type").into()) else {
-        return Ok(WorkerScriptKind::Classic);
-    };
-    if type_value.is_null_or_undefined() {
-        return Ok(WorkerScriptKind::Classic);
-    }
-    let Some(type_string) = type_value.to_string(scope) else {
-        return Err("failed to parse service worker type");
-    };
-    match type_string.to_rust_string_lossy(scope).as_str() {
-        "classic" => Ok(WorkerScriptKind::Classic),
-        "module" => Ok(WorkerScriptKind::Module),
-        _ => Err("invalid service worker type"),
-    }
-}
-
-fn service_worker_update_via_cache(
-    scope: &mut v8::PinScope<'_, '_>,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> Result<ServiceWorkerUpdateViaCache, &'static str> {
-    if args.length() <= 1 {
-        return Ok(ServiceWorkerUpdateViaCache::default());
-    }
-    let value = args.get(1);
-    if value.is_null_or_undefined() {
-        return Ok(ServiceWorkerUpdateViaCache::default());
-    }
-    let Ok(options) = v8::Local::<v8::Object>::try_from(value) else {
-        return Ok(ServiceWorkerUpdateViaCache::default());
-    };
-    let Some(update_via_cache_value) = options.get(scope, v8str(scope, "updateViaCache").into())
-    else {
-        return Ok(ServiceWorkerUpdateViaCache::default());
-    };
-    if update_via_cache_value.is_null_or_undefined() {
-        return Ok(ServiceWorkerUpdateViaCache::default());
-    }
-    let Some(update_via_cache_string) = update_via_cache_value.to_string(scope) else {
-        return Err("failed to parse service worker updateViaCache");
-    };
-    ServiceWorkerUpdateViaCache::parse_webidl_token(
-        &update_via_cache_string.to_rust_string_lossy(scope),
-    )
-    .ok_or("invalid service worker updateViaCache")
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ServiceWorkerClientUrlError {
+    Invalid,
+    CrossOrigin,
 }
 
 fn service_worker_client_url(
-    scope: &mut v8::PinScope<'_, '_>,
     document_url: &url::Url,
-    args: &v8::FunctionCallbackArguments<'_>,
-) -> Option<url::Url> {
-    let client = if args.length() > 0 && !args.get(0).is_null_or_undefined() {
-        args.get(0)
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))?
-    } else {
-        String::new()
-    };
-    let mut client_url = document_url.join(&client).ok()?;
+    client: &str,
+) -> Result<url::Url, ServiceWorkerClientUrlError> {
+    let mut client_url = document_url
+        .join(client)
+        .map_err(|_| ServiceWorkerClientUrlError::Invalid)?;
+    if !moli_url::same_origin(document_url, &client_url) {
+        return Err(ServiceWorkerClientUrlError::CrossOrigin);
+    }
     client_url.set_fragment(None);
-    Some(client_url)
+    Ok(client_url)
 }
 
 fn default_service_worker_scope_url(script_url: &url::Url) -> url::Url {
