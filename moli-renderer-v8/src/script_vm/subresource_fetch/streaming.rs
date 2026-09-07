@@ -12,12 +12,17 @@ impl ScriptVm {
     ) -> Result<AsyncSubresourceFetchBodyActivity> {
         let completion_result =
             completion_result.bind_child_body(&mut running.pending.continuation);
+        let consumed_preload = matches!(
+            &completion_result,
+            AsyncSubresourceFetchResult::PreloadFailure(_)
+        );
         let (encoded, result) = match completion_result {
             AsyncSubresourceFetchResult::Response(response) => (None, Ok(response)),
             AsyncSubresourceFetchResult::Image { response, encoded } => {
                 (Some(encoded), Ok(response))
             }
-            AsyncSubresourceFetchResult::Failure(error) => (None, Err(error)),
+            AsyncSubresourceFetchResult::Failure(error)
+            | AsyncSubresourceFetchResult::PreloadFailure(error) => (None, Err(error)),
             AsyncSubresourceFetchResult::ChildDocumentResponse { .. } => {
                 unreachable!("body bound above")
             }
@@ -205,7 +210,7 @@ impl ScriptVm {
                 activity?
             }
             Err(error) => {
-                let activity = self.resolve_pending_subresource_fetch_body(
+                let activity = self.resolve_pending_subresource_fetch_completion(
                     pending,
                     request_url,
                     request_method,
@@ -215,7 +220,11 @@ impl ScriptVm {
                     skip_fetch_security_validation,
                     response_filter,
                     network_error_text,
-                    Err(error),
+                    if consumed_preload {
+                        AsyncSubresourceFetchResult::PreloadFailure(error)
+                    } else {
+                        AsyncSubresourceFetchResult::Failure(error)
+                    },
                 );
                 trace_async_subresource_stage(
                     "async_subresource_complete_running_done",
@@ -511,6 +520,7 @@ impl ScriptVm {
         self._context_host
             .borrow_mut()
             .record_streaming_subresource_fetch(StreamingSubresourceFetchState {
+                skip_fetch_security_validation: started.skip_fetch_security_validation,
                 response_filter: started.response_filter,
                 pending,
                 request_url: started.request_url,
@@ -929,6 +939,7 @@ impl ScriptVm {
                 self._context_host
                     .borrow_mut()
                     .record_streaming_subresource_fetch(StreamingSubresourceFetchState {
+                skip_fetch_security_validation: started.skip_fetch_security_validation,
                         response_filter: started.response_filter,
                         pending,
                         request_url: started.request_url.clone(),
@@ -1098,6 +1109,7 @@ impl ScriptVm {
             let disk_pool = pending.load.request_client().disk_pool();
             self._context_host.borrow_mut().record_streaming_subresource_fetch(
                 StreamingSubresourceFetchState {
+                skip_fetch_security_validation: started.skip_fetch_security_validation,
                         response_filter: started.response_filter,
                     pending,
                     request_url: started.request_url.clone(),
@@ -1833,6 +1845,7 @@ impl ScriptVm {
                                 ),
                             );
                         }
+                        let request_origin = streaming.pending.request_origin();
                         if let PendingSubresourceContinuation::Xhr { xhr, initiator_url, .. } =
                             streaming.pending.continuation
                             && let Some(response_body) = xhr_delivery_body
@@ -1862,7 +1875,7 @@ impl ScriptVm {
                             {
                                 observable_head.headers =
                                     crate::network_host::filter_cors_exposed_response_headers(
-                                        &streaming.pending.request_origin,
+                                        &request_origin,
                                         &observable_head,
                                         streaming.pending.credentials_mode,
                                         streaming.pending.load.request_client().web_security_disabled(),

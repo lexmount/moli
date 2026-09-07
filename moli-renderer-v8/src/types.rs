@@ -95,7 +95,8 @@ pub(super) enum PendingSubresourceContinuation {
         client_id: crate::service_worker_runtime::ServiceWorkerClientId,
     },
     EventSource(v8::Global<v8::Object>),
-    Fetch(PendingWindowFetchContinuation),
+    Fetch(Box<PendingWindowFetchContinuation>),
+
     Image {
         image_handle: crate::document_runtime::DomHandle,
         sequence: crate::native_bridge::ImageLoadEventId,
@@ -570,6 +571,10 @@ pub(super) struct PendingSubresourceFetchState {
 }
 
 impl PendingSubresourceFetchState {
+    pub(super) fn request_origin(&self) -> moli_url::WebOrigin {
+        self.request_origin.clone()
+    }
+
     pub(super) fn detach_keepalive_window_fetch(&mut self) -> bool {
         let PendingSubresourceExecutionContext::WindowFetch(context) = &self.execution_context
         else {
@@ -1135,6 +1140,7 @@ impl StreamingSubresourceBody {
 }
 
 pub(super) struct StreamingSubresourceFetchState {
+    pub(super) skip_fetch_security_validation: bool,
     pub(super) response_filter: Option<AsyncSubresourceFetchResponseFilter>,
     pub(super) pending: PendingSubresourceFetchState,
     pub(super) request_url: Url,
