@@ -132,6 +132,9 @@ pub(in crate::context_bootstrap) fn build_constructor_template_for_profile<'s>(
         ConstructorKind::ClipboardEvent => {
             build_event_subclass_template(scope, EventSubclassKind::ClipboardEvent)
         }
+        ConstructorKind::ClipboardChangeEvent => {
+            build_event_subclass_template(scope, EventSubclassKind::ClipboardChangeEvent)
+        }
         ConstructorKind::ClipboardItem => {
             v8::FunctionTemplate::builder(moli_webapi_declare::web_api_constructor!(
                 web_api_interfaces::ClipboardItem,

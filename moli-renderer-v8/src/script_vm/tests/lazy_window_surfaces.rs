@@ -622,6 +622,7 @@ fn navigator_scalar_access_does_not_materialize_unused_same_object_children() {
         "MediaCapabilities",
         "Clipboard",
         "ClipboardItem",
+        "ClipboardChangeEvent",
     ] {
         assert_eq!(
             constructor_materialization_count(&mut vm, name),

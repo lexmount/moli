@@ -8,7 +8,10 @@ use super::{
     },
     events::{
         before_unload_event_return_value_getter_function,
-        before_unload_event_return_value_setter_function, close_event_code_getter_function,
+        before_unload_event_return_value_setter_function,
+        clipboard_change_event_change_id_getter_function,
+        clipboard_change_event_types_getter_function,
+        clipboard_event_clipboard_data_getter_function, close_event_code_getter_function,
         close_event_reason_getter_function, close_event_was_clean_getter_function,
         command_event_command_getter_function, command_event_source_getter_function,
         event_bubbles_getter_function, event_cancel_bubble_getter_function,
@@ -155,6 +158,29 @@ struct CloseEventTemplateAccessorsDeclaration {
 
     #[webapi(accessor_property, getter = close_event_reason_getter_function)]
     reason: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ClipboardEvent, enumerable)]
+struct ClipboardEventTemplateAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "clipboardData",
+        getter = clipboard_event_clipboard_data_getter_function
+    )]
+    clipboard_data: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ClipboardChangeEvent, enumerable)]
+struct ClipboardChangeEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = clipboard_change_event_types_getter_function)]
+    types: (),
+
+    #[webapi(
+        accessor_property = "changeId",
+        getter = clipboard_change_event_change_id_getter_function
+    )]
+    change_id: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -418,6 +444,16 @@ pub(super) fn install_event_template_bindings<'s>(
         "CloseEvent" => {
             let proto = template.prototype_template(scope);
             CloseEventTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
+        }
+        "ClipboardEvent" => {
+            let proto = template.prototype_template(scope);
+            ClipboardEventTemplateAccessorsDeclaration::initialize_prototype_template(scope, proto);
+        }
+        "ClipboardChangeEvent" => {
+            let proto = template.prototype_template(scope);
+            ClipboardChangeEventTemplateAccessorsDeclaration::initialize_prototype_template(
+                scope, proto,
+            );
         }
         "TrackEvent" => {
             let proto = template.prototype_template(scope);
