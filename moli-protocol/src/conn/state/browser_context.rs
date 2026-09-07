@@ -46,7 +46,11 @@ pub(in crate::conn) mod javascript_dialog;
 mod navigation;
 mod page_runtime;
 mod resource_runtime;
-pub(crate) use page_runtime::{NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind};
+pub(crate) use page_runtime::{
+    CompletedCaptureDocumentImage, CompletedCaptureDocumentSnapshot, CompletedSetDocumentContent,
+    DocumentSnapshot, NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind,
+    PendingCaptureDocumentImage, PendingCaptureDocumentSnapshot, PendingSetDocumentContent,
+};
 pub(in crate::conn) mod page_slot;
 mod page_state;
 mod permissions;

@@ -92,6 +92,60 @@ define_browser_identity!(
     "Identity of one browser-owned request decision, independent of protocol request IDs."
 );
 
+/// Stable routing capability for one browser-owned WebContents.
+///
+/// This carries only physical Browser identities. Frontend target and session
+/// identifiers are deliberately resolved before this capability is created.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct WebContentsHandle {
+    context: BrowserContextId,
+    web_contents: WebContentsId,
+}
+
+impl WebContentsHandle {
+    pub const fn new(context: BrowserContextId, web_contents: WebContentsId) -> Self {
+        Self {
+            context,
+            web_contents,
+        }
+    }
+
+    pub const fn context(self) -> BrowserContextId {
+        self.context
+    }
+
+    pub const fn id(self) -> WebContentsId {
+        self.web_contents
+    }
+}
+
+/// Exact routing capability for one replaceable browser-owned Document.
+///
+/// A delayed operation must present this complete capability again at commit;
+/// matching only the stable WebContents is insufficient after navigation.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct DocumentHandle {
+    web_contents: WebContentsHandle,
+    document: DocumentId,
+}
+
+impl DocumentHandle {
+    pub const fn new(web_contents: WebContentsHandle, document: DocumentId) -> Self {
+        Self {
+            web_contents,
+            document,
+        }
+    }
+
+    pub const fn web_contents(self) -> WebContentsHandle {
+        self.web_contents
+    }
+
+    pub const fn id(self) -> DocumentId {
+        self.document
+    }
+}
+
 static NEXT_BROWSER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 /// Process-monotonic sequence of completed Browser semantic occurrences.
@@ -175,5 +229,17 @@ mod tests {
             size_of::<Option<BrowserSequence>>(),
             size_of::<BrowserSequence>()
         );
+    }
+
+    #[test]
+    fn document_handle_preserves_the_complete_physical_route() {
+        let context = BrowserContextId::allocate();
+        let contents = WebContentsId::allocate();
+        let document = DocumentId::allocate();
+        let handle = DocumentHandle::new(WebContentsHandle::new(context, contents), document);
+
+        assert_eq!(handle.web_contents().context(), context);
+        assert_eq!(handle.web_contents().id(), contents);
+        assert_eq!(handle.id(), document);
     }
 }

@@ -3,6 +3,11 @@ use moli_core::page::{CompletedPageCommand, PendingPageCommand, RendererCommandT
 use std::time::Duration;
 
 mod document_commands;
+pub(crate) use document_commands::{
+    CompletedCaptureDocumentImage, CompletedCaptureDocumentSnapshot, CompletedSetDocumentContent,
+    DocumentSnapshot, PendingCaptureDocumentImage, PendingCaptureDocumentSnapshot,
+    PendingSetDocumentContent,
+};
 mod document_queries;
 mod emulation;
 mod input;

@@ -4,7 +4,8 @@ use indexmap::IndexMap;
 use moli_browser_profile::BrowserIdentityProfile;
 use moli_core::{
     browser::{
-        BrowserContextId, DownloadManager, DownloadPolicy, PermissionOverrides, WebContentsId,
+        BrowserContextId, DocumentHandle, DownloadManager, DownloadPolicy, PermissionOverrides,
+        WebContentsId,
     },
     runtime::{
         NavigationEngine, NavigationRuntimeConfig, RendererBrowserContextRuntime,
@@ -15,7 +16,7 @@ use moli_core::{
 use super::super::emulation::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedNetworkConditions,
 };
-use super::super::web_contents::{ClosingWebContents, WebContents};
+use super::super::web_contents::{ClosingWebContents, DocumentHost, WebContents};
 use super::{
     BrowserContextStoragePartitionHandles,
     storage_partition::{StoragePartition, StoragePartitionKind},
@@ -42,6 +43,39 @@ pub(super) struct BrowserContext {
 }
 
 impl BrowserContext {
+    pub(super) fn document(&self, handle: DocumentHandle) -> Result<&DocumentHost, String> {
+        if handle.web_contents().context() != self.id {
+            return Err("Document belongs to a different BrowserContext".into());
+        }
+        let document = self
+            .web_contents
+            .get(&handle.web_contents().id())
+            .and_then(|contents| contents.main_frame.current_document.as_ref())
+            .ok_or("NoDocumentLoaded")?;
+        if document.id != handle.id() {
+            return Err("Document changed".into());
+        }
+        Ok(document)
+    }
+
+    pub(super) fn document_mut(
+        &mut self,
+        handle: DocumentHandle,
+    ) -> Result<&mut DocumentHost, String> {
+        if handle.web_contents().context() != self.id {
+            return Err("Document belongs to a different BrowserContext".into());
+        }
+        let document = self
+            .web_contents
+            .get_mut(&handle.web_contents().id())
+            .and_then(|contents| contents.main_frame.current_document.as_mut())
+            .ok_or("NoDocumentLoaded")?;
+        if document.id != handle.id() {
+            return Err("Document changed".into());
+        }
+        Ok(document)
+    }
+
     pub(super) fn inherited_document_policy(
         &self,
         fetch_config: moli_fetch::FetchConfig,

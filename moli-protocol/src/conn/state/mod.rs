@@ -138,6 +138,11 @@ pub(crate) use browser_context::{
     SiteDataClearOptions,
 };
 pub(crate) use browser_context::{
+    CompletedCaptureDocumentImage, CompletedCaptureDocumentSnapshot, CompletedSetDocumentContent,
+    DocumentSnapshot, PendingCaptureDocumentImage, PendingCaptureDocumentSnapshot,
+    PendingSetDocumentContent,
+};
+pub(crate) use browser_context::{
     CompletedContextPermissionUpdate, PendingContextPermissionUpdate,
 };
 pub(crate) use browser_context::{

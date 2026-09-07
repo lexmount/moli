@@ -262,9 +262,11 @@ async fn browser_native_commands_do_not_require_a_live_inspector_session() {
     let residence = context
         .target_renderer_page_residence_identity(&target_id)
         .unwrap();
-    let pending_capture = context
-        .start_capture_screenshot_with_request_for_target(
-            &target_id,
+    let document = ctx.conn.resolve_browser_document_for_owner(&owner).unwrap();
+    let pending_capture = ctx
+        .conn
+        .start_capture_document_image(
+            document,
             moli_core::page::RendererCaptureScreenshotRequest::viewport_png(),
         )
         .unwrap();
@@ -279,14 +281,17 @@ async fn browser_native_commands_do_not_require_a_live_inspector_session() {
         .await
         .unwrap();
 
-    let completion = pending_capture.wait().await.unwrap();
-    let context = ctx.conn.browser_context_by_id_mut(&context_id).unwrap();
-    assert!(residence.matches_residence(completion.page_state().renderer_residence()));
+    let completion = pending_capture.wait().await;
     assert!(
-        context
-            .finish_capture_screenshot_for_target(&target_id, completion)
-            .is_ok(),
+        ctx.conn.finish_capture_document_image(completion).is_ok(),
         "session detach must not cancel already admitted Browser capture"
+    );
+    assert_eq!(
+        ctx.conn
+            .browser_context_by_id(&context_id)
+            .unwrap()
+            .target_renderer_page_residence_identity(&target_id),
+        Some(residence)
     );
 
     ctx.process_async(json!({"id": 2, "method": "Input.insertText", "params": {"text": "native"}}))
@@ -356,4 +361,37 @@ async fn native_capture_rejects_a_foreign_page_without_devtools_attachments() {
         .await
         .unwrap();
     assert!(first.finish_capture_screenshot(completion).is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completed_browser_document_command_cannot_retarget_a_replacement_document() {
+    let mut ctx = dom_context().await;
+    let owner = CommandOwnerScope::capture(&ctx.conn, None);
+    let document = ctx.conn.resolve_browser_document_for_owner(&owner).unwrap();
+    let completed = ctx
+        .conn
+        .start_capture_document_snapshot(document)
+        .unwrap()
+        .wait()
+        .await;
+
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<title>replacement-document</title>",
+        None,
+    )
+    .await;
+
+    assert!(matches!(
+        ctx.conn.finish_capture_document_snapshot(completed),
+        Err(error) if error == "Document changed"
+    ));
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .target_document_title("TID-dom-inspection")
+            .as_deref(),
+        Some("replacement-document")
+    );
 }

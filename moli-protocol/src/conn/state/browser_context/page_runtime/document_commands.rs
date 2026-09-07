@@ -1,10 +1,85 @@
 use super::BrowserContext;
+use moli_core::browser::{DocumentHandle, WebContentsHandle};
 use moli_core::page::{
     CompletedPageCommand, PendingPageCommand, RendererCaptureScreencastFrameReply,
     RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
     RendererCaptureScreenshotRequest, RendererCommandTurnOutput, RendererResourceTextSearchOutcome,
     RendererSetDocumentContentResult, SubresourceNetworkRecord,
 };
+
+struct PendingDocumentCommand {
+    document: DocumentHandle,
+    pending: PendingPageCommand,
+}
+
+struct CompletedDocumentCommand {
+    document: DocumentHandle,
+    completed: Result<CompletedPageCommand, String>,
+}
+
+impl PendingDocumentCommand {
+    async fn wait(self) -> CompletedDocumentCommand {
+        CompletedDocumentCommand {
+            document: self.document,
+            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+        }
+    }
+}
+
+impl CompletedDocumentCommand {
+    fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
+        self.completed
+            .as_ref()
+            .ok()
+            .and_then(CompletedPageCommand::renderer_output_predecessor)
+    }
+
+    fn into_parts(self) -> (DocumentHandle, Result<CompletedPageCommand, String>) {
+        (self.document, self.completed)
+    }
+}
+
+macro_rules! define_document_command {
+    ($pending:ident, $completed:ident) => {
+        pub(crate) struct $pending(PendingDocumentCommand);
+
+        pub(crate) struct $completed(CompletedDocumentCommand);
+
+        impl $pending {
+            pub(crate) async fn wait(self) -> $completed {
+                $completed(self.0.wait().await)
+            }
+        }
+
+        impl $completed {
+            pub(crate) fn document(&self) -> DocumentHandle {
+                self.0.document
+            }
+
+            pub(crate) fn renderer_output_predecessor(
+                &self,
+            ) -> Option<moli_core::RendererOutputFence> {
+                self.0.renderer_output_predecessor()
+            }
+
+            fn into_inner(self) -> CompletedDocumentCommand {
+                self.0
+            }
+        }
+    };
+}
+
+define_document_command!(PendingSetDocumentContent, CompletedSetDocumentContent);
+define_document_command!(
+    PendingCaptureDocumentSnapshot,
+    CompletedCaptureDocumentSnapshot
+);
+define_document_command!(PendingCaptureDocumentImage, CompletedCaptureDocumentImage);
+
+pub(crate) struct DocumentSnapshot {
+    pub(crate) url: String,
+    pub(crate) html: String,
+}
 
 impl BrowserContext {
     #[cfg(test)]
@@ -71,34 +146,56 @@ impl BrowserContext {
         &mut self,
         target_id: &str,
     ) -> Result<String, String> {
-        let completion = self
-            .start_serialize_html_for_target(target_id)?
-            .wait()
-            .await
-            .map_err(|error| error.to_string())?;
-        self.finish_serialize_html_for_target(target_id, completion)
+        let document = self
+            .document_handle_for_target(target_id)
+            .ok_or("NoDocumentLoaded")?;
+        let completion = self.start_capture_document_snapshot(document)?.wait().await;
+        Ok(self.finish_capture_document_snapshot(completion)?.html)
     }
 
-    pub(crate) fn start_set_document_content_for_target(
+    pub(crate) fn document_handle_for_target(&self, target_id: &str) -> Option<DocumentHandle> {
+        let contents_id = self.page_targets.get(target_id)?.web_contents_id();
+        let document_id = self
+            .physical
+            .web_contents
+            .get(&contents_id)?
+            .main_frame
+            .current_document
+            .as_ref()?
+            .id;
+        Some(DocumentHandle::new(
+            WebContentsHandle::new(self.physical.id, contents_id),
+            document_id,
+        ))
+    }
+
+    pub(crate) fn start_set_document_content(
         &self,
-        target_id: &str,
+        document: DocumentHandle,
         frame_id: String,
         html: String,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+    ) -> Result<PendingSetDocumentContent, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_set_document_content(frame_id, html)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingSetDocumentContent(PendingDocumentCommand {
+            document,
+            pending,
+        }))
     }
 
-    pub(crate) fn finish_set_document_content_command_turn_for_target(
+    pub(crate) fn finish_set_document_content(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedSetDocumentContent,
     ) -> Result<(RendererSetDocumentContentResult, RendererCommandTurnOutput), String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_set_document_content_command_turn(completion)
+        let (document, completion) = completed.into_inner().into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_set_document_content_command_turn(completion?)
             .map_err(|error| error.to_string())
     }
 
@@ -146,46 +243,64 @@ impl BrowserContext {
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_serialize_html_for_target(
+    pub(crate) fn start_capture_document_snapshot(
         &self,
-        target_id: &str,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+        document: DocumentHandle,
+    ) -> Result<PendingCaptureDocumentSnapshot, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_serialize_html()
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingCaptureDocumentSnapshot(PendingDocumentCommand {
+            document,
+            pending,
+        }))
     }
 
-    pub(crate) fn finish_serialize_html_for_target(
+    pub(crate) fn finish_capture_document_snapshot(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
-    ) -> Result<String, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_serialize_html(completion)
-            .map_err(|error| error.to_string())
+        completed: CompletedCaptureDocumentSnapshot,
+    ) -> Result<DocumentSnapshot, String> {
+        let (document, completion) = completed.into_inner().into_parts();
+        let document = self.physical.document_mut(document)?;
+        let html = document
+            .page
+            .finish_serialize_html(completion?)
+            .map_err(|error| error.to_string())?;
+        Ok(DocumentSnapshot {
+            url: document.page.final_url().as_str().to_owned(),
+            html,
+        })
     }
 
-    pub(crate) fn start_capture_screenshot_with_request_for_target(
+    pub(crate) fn start_capture_document_image(
         &self,
-        target_id: &str,
+        document: DocumentHandle,
         request: RendererCaptureScreenshotRequest,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+    ) -> Result<PendingCaptureDocumentImage, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_capture_screenshot_with_request(request)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingCaptureDocumentImage(PendingDocumentCommand {
+            document,
+            pending,
+        }))
     }
 
-    pub(crate) fn finish_capture_screenshot_for_target(
+    pub(crate) fn finish_capture_document_image(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedCaptureDocumentImage,
     ) -> Result<RendererCaptureScreenshotReply, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_capture_screenshot(completion)
+        let (document, completion) = completed.into_inner().into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_capture_screenshot(completion?)
             .map_err(|error| error.to_string())
     }
 

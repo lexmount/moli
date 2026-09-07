@@ -35,6 +35,7 @@ mod activity_source;
 mod bidi_channel_work;
 mod body_spool;
 mod browser_context;
+mod browser_document_commands;
 mod command_owner_scope;
 mod command_view;
 mod cookie_manager_surface;
@@ -74,6 +75,11 @@ mod state;
 pub(crate) use state::{
     ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
     NavigationRequestInterception,
+};
+pub(crate) use state::{
+    CompletedCaptureDocumentImage, CompletedCaptureDocumentSnapshot, CompletedSetDocumentContent,
+    DocumentSnapshot, PendingCaptureDocumentImage, PendingCaptureDocumentSnapshot,
+    PendingSetDocumentContent,
 };
 pub(crate) use state::{CompletedContextPermissionUpdate, PendingContextPermissionUpdate};
 pub(crate) use state::{NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind};
