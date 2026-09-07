@@ -1320,6 +1320,7 @@ mod tests {
             frame_id: "FRAME-1".to_owned(),
             loader_id: "LID-1".to_owned(),
             document_id: crate::conn::DocumentId::from_raw_for_test(1),
+            browser_sequence: moli_core::browser::BrowserSequence::allocate(),
             document_open_replacement_epoch: None,
         };
         let renderer_lifecycle_events = vec![

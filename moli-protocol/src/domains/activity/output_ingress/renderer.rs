@@ -5,7 +5,7 @@ use std::collections::VecDeque;
 use super::super::publication_route::RendererPublicationOwner;
 use super::super::publication_route::RendererPublicationProjection;
 use super::super::publication_route::RendererPublicationRoute;
-use super::super::runtime_command_barrier::RuntimeCommandOutputBarriers;
+use super::super::renderer_command_response_order::RendererCommandResponseOrder;
 use super::prepared_outputs::PreparedProtocolOutputs;
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
@@ -52,7 +52,7 @@ fn renderer_owner_action_owner(
 pub(crate) async fn ingest_renderer_output_transport_async(
     conn: &mut CdpConnection,
     publication: RendererOutputTransportMessage,
-    barriers: &mut RuntimeCommandOutputBarriers,
+    order: &mut RendererCommandResponseOrder,
     command_context: &mut CommandDispatchContext,
 ) -> Vec<BackgroundProtocolEvent> {
     match publication {
@@ -83,7 +83,7 @@ pub(crate) async fn ingest_renderer_output_transport_async(
             while let Some(output) = ready.pop_front() {
                 let (output, owner) = output.into_parts();
                 let cursor = output.cursor();
-                ingest_renderer_output_publication(conn, output, owner, barriers, command_context)
+                ingest_renderer_output_publication(conn, output, owner, order, command_context)
                     .await;
                 match conn.complete_renderer_output_projection(cursor) {
                     super::RendererOutputIngressAdmission::Ready(next) => ready.extend(next),
@@ -102,7 +102,7 @@ async fn ingest_renderer_output_publication(
     conn: &mut CdpConnection,
     publication: RendererOutputPublication,
     owner: RendererPublicationOwner,
-    barriers: &mut RuntimeCommandOutputBarriers,
+    order: &mut RendererCommandResponseOrder,
     command_context: &mut CommandDispatchContext,
 ) {
     let cursor = publication.cursor();
@@ -150,7 +150,7 @@ async fn ingest_renderer_output_publication(
                 records,
                 cursor,
                 projection,
-                barriers,
+                order,
                 command_context,
             )
             .await;
@@ -166,7 +166,7 @@ async fn ingest_renderer_output_publication(
                 records,
                 cursor,
                 projection,
-                barriers,
+                order,
                 command_context,
             )
             .await;
@@ -180,7 +180,7 @@ async fn project_renderer_output_records_for_owner(
     records: Vec<moli_core::RendererOutputRecord>,
     cursor: moli_core::RendererOutputCursor,
     projection: RendererPublicationProjection,
-    barriers: &mut RuntimeCommandOutputBarriers,
+    order: &mut RendererCommandResponseOrder,
     command_context: &mut CommandDispatchContext,
 ) {
     for record in records {
@@ -243,7 +243,7 @@ async fn project_renderer_output_records_for_owner(
                     action,
                 )
                 .await;
-                barriers
+                order
                     .route_publication_outputs(
                         conn,
                         &action_owner,
@@ -289,7 +289,7 @@ async fn project_renderer_output_records_for_owner(
                         &observation,
                     )
                 };
-                barriers
+                order
                     .route_publication_outputs(
                         conn,
                         owner,
@@ -410,7 +410,7 @@ mod tests {
                 })
                 .collect();
             let cursor = RendererOutputCursor::new_for_test(stream, 1);
-            let mut barriers = RuntimeCommandOutputBarriers::default();
+            let mut order = RendererCommandResponseOrder::default();
             let mut commands = CommandDispatchContext::default();
             if let Some(projection) = projection {
                 project_renderer_output_records_for_owner(
@@ -419,7 +419,7 @@ mod tests {
                     records,
                     cursor,
                     projection,
-                    &mut barriers,
+                    &mut order,
                     &mut commands,
                 )
                 .await;
@@ -439,7 +439,7 @@ mod tests {
                     &mut conn,
                     RendererOutputPublication::new_for_test(cursor, records),
                     missing_route,
-                    &mut barriers,
+                    &mut order,
                     &mut commands,
                 )
                 .await;

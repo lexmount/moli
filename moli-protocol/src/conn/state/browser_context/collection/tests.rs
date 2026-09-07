@@ -201,7 +201,7 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     assert!(matches!(
         projection
             .runtime_slot
-            .finish_renderer_document_navigation(&NavigationId::allocate()),
+            .finish_navigation_without_document_projection(&NavigationId::allocate()),
         Err(DevToolsRendererChannelError::Closed)
     ));
     assert_eq!(

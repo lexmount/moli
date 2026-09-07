@@ -1,7 +1,7 @@
 use super::{CdpConnection, CdpTurnOutcome};
 use crate::domains::activity::{
-    ReadyProtocolSchedulerWork, RuntimeCommandOutputBarrierCompletion,
-    RuntimeCommandOutputBarrierPermit, RuntimeCommandOutputBarriers,
+    ReadyProtocolSchedulerWork, RendererCommandResponseCompletion, RendererCommandResponseOrder,
+    RendererCommandResponsePermit,
 };
 use moli_core::RendererOutputTransportMessage;
 
@@ -254,13 +254,13 @@ impl CdpConnection {
     pub async fn ingest_renderer_output_turn_async(
         &mut self,
         publication: RendererOutputTransportMessage,
-        barriers: &mut RuntimeCommandOutputBarriers,
+        order: &mut RendererCommandResponseOrder,
     ) -> CdpTurnOutcome {
         let mut command_context = super::CommandDispatchContext::default();
         let protocol_events = crate::domains::activity::ingest_renderer_output_transport_async(
             self,
             publication,
-            barriers,
+            order,
             &mut command_context,
         )
         .await;
@@ -290,14 +290,14 @@ impl CdpConnection {
         )
     }
 
-    pub async fn release_runtime_command_output_barrier_turn_async(
+    pub async fn release_renderer_command_response_permit_turn_async(
         &mut self,
-        barriers: &mut RuntimeCommandOutputBarriers,
-        permit: RuntimeCommandOutputBarrierPermit,
-    ) -> RuntimeCommandOutputBarrierCompletion {
+        order: &mut RendererCommandResponseOrder,
+        permit: RendererCommandResponsePermit,
+    ) -> RendererCommandResponseCompletion {
         let mut command_context = super::CommandDispatchContext::default();
-        let terminal = barriers.release(self, permit, &mut command_context).await;
-        RuntimeCommandOutputBarrierCompletion::new(
+        let terminal = order.release(self, permit, &mut command_context).await;
+        RendererCommandResponseCompletion::new(
             terminal,
             CdpTurnOutcome::new_with_protocol_and_post_response_events(
                 command_context.take_protocol_events(),
@@ -307,14 +307,14 @@ impl CdpConnection {
         )
     }
 
-    pub async fn cancel_runtime_command_output_barrier_turn_async(
+    pub async fn cancel_renderer_command_response_permit_turn_async(
         &mut self,
-        barriers: &mut RuntimeCommandOutputBarriers,
-        permit: RuntimeCommandOutputBarrierPermit,
-    ) -> RuntimeCommandOutputBarrierCompletion {
+        order: &mut RendererCommandResponseOrder,
+        permit: RendererCommandResponsePermit,
+    ) -> RendererCommandResponseCompletion {
         let mut command_context = super::CommandDispatchContext::default();
-        let terminal = barriers.cancel(self, permit, &mut command_context).await;
-        RuntimeCommandOutputBarrierCompletion::new(
+        let terminal = order.cancel(self, permit, &mut command_context).await;
+        RendererCommandResponseCompletion::new(
             terminal,
             CdpTurnOutcome::new_with_protocol_and_post_response_events(
                 command_context.take_protocol_events(),

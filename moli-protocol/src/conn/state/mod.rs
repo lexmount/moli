@@ -51,7 +51,8 @@ pub(crate) use identity::{
 pub(crate) use moli_core::browser::{DocumentId, NavigationId, RendererPageResidenceIdentity};
 
 pub(crate) use devtools_renderer_channel::{
-    DevToolsRendererChannelError, RendererAgentAttachment, RendererAgentBinding,
+    DevToolsRendererChannelError, DocumentProjectionFence, RendererAgentAttachment,
+    RendererAgentBinding,
 };
 
 pub(crate) use dedicated_worker_target::{
@@ -78,7 +79,7 @@ pub(crate) use page_slot::{
 };
 pub use page_slot::{DocumentStartScript, IsolatedWorldDefinition, RuntimeBindingDefinition};
 
-pub(crate) use runtime_slot::{FinishedRendererDocumentNavigation, TargetRuntimeSlot};
+pub(crate) use runtime_slot::{DocumentProjectionOutputRelease, TargetRuntimeSlot};
 
 pub use fetch::TargetFetchConfig;
 pub(crate) use fetch::{TargetFetchOwner, TargetFetchSubresourceInterceptionSnapshot};

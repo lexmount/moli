@@ -164,7 +164,7 @@ mod tests {
             .expect("start cross-Document navigation");
         assert!(
             ctx.conn
-                .renderer_document_navigation_is_suspended_for_session_owner(None)
+                .document_projection_is_pending_for_session_owner(None)
         );
 
         let source = command(
@@ -186,7 +186,10 @@ mod tests {
 
         let _ = ctx
             .conn
-            .finish_renderer_document_navigation_for_owner(&navigation_owner, &navigation);
+            .finish_navigation_without_document_projection_for_owner(
+                &navigation_owner,
+                &navigation,
+            );
         ctx.conn
             .clear_pending_document_navigation_for_owner_if_matches(&navigation_owner, &navigation);
     }

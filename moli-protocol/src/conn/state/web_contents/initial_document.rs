@@ -1,7 +1,7 @@
 use moli_core::{
     browser::{
-        DocumentId, DocumentLifecycle, MainFrameSlotId, RendererPageResidenceIdentity,
-        WebContentsId,
+        BrowserSequence, DocumentId, DocumentLifecycle, MainFrameSlotId,
+        RendererPageResidenceIdentity, WebContentsId,
     },
     runtime::{BuiltDocumentPage, PendingPreparedDocumentPage, PreparedDocumentPagePolicy},
 };
@@ -308,12 +308,14 @@ impl WebContents {
         {
             self.navigation.mark_initial_empty_document_exited();
         }
+        let browser_sequence = BrowserSequence::allocate();
         completion.finish(Ok(()));
         Ok(CommittedInitialDocument {
             key,
             inspection_endpoint,
             lifecycle: CommittedDocumentLifecycle {
                 document: key.document,
+                browser_sequence,
                 artifacts: page_creation_artifacts,
             },
             diagnostics: page_creation_diagnostics,

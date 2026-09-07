@@ -503,7 +503,7 @@ impl CdpConnection {
     /// prevents a known Main-thread fallthrough from binding to the outgoing
     /// Document while a replacement is being projected.
     pub fn command_waits_for_document_projection(&self, command: &ParsedCdpCommand) -> bool {
-        if !self.renderer_document_navigation_is_suspended_for_session_owner(command.session_id()) {
+        if !self.document_projection_is_pending_for_session_owner(command.session_id()) {
             return false;
         }
         let Some(cmd) = Cmd::from_parsed(command) else {

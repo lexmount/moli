@@ -1,6 +1,6 @@
 use moli_core::{
     browser::{
-        DocumentId, DocumentLifecycle, MainFrameSlotId, NavigationId,
+        BrowserSequence, DocumentId, DocumentLifecycle, MainFrameSlotId, NavigationId,
         RendererPageResidenceIdentity, WebContentsId,
     },
     page::{Page, RendererPageCommandPostResponseContinuation, RendererPageCreationArtifacts},
@@ -177,6 +177,7 @@ pub(crate) struct RetiringDocument(Option<Page>);
 /// initialize or rewind native state from a frontend projection.
 pub(crate) struct CommittedDocumentLifecycle {
     pub(crate) document: DocumentId,
+    pub(crate) browser_sequence: BrowserSequence,
     pub(crate) artifacts: RendererPageCreationArtifacts,
 }
 
@@ -328,6 +329,7 @@ impl WebContents {
             self.navigation
                 .commit_pending_document_navigation_if_matches(&navigation)
         );
+        let browser_sequence = BrowserSequence::allocate();
         Ok(CommittedDocumentNavigation {
             web_contents: self.id(),
             frame_slot: self.main_frame.id(),
@@ -338,6 +340,7 @@ impl WebContents {
             inspection_endpoint,
             lifecycle: CommittedDocumentLifecycle {
                 document: document_id,
+                browser_sequence,
                 artifacts: prepared.creation_artifacts,
             },
             info: prepared.info,

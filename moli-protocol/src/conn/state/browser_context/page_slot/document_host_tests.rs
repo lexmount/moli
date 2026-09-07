@@ -250,11 +250,13 @@ async fn creation_projection_cannot_rewind_native_progress_or_retarget_a_replace
     let native = owner.renderer_document_lifecycle_authoritative_snapshot_for_target(TARGET);
     // Projection is delayed until after the Browser has accepted more progress.
     // Replaying/rebinding the creation occurrence may only affect visibility.
+    let browser_sequence = moli_core::browser::BrowserSequence::allocate();
     for _ in 0..2 {
         let projected = owner.project_committed_document_lifecycle_for_target(
             TARGET,
             CommittedDocumentLifecycle {
                 document,
+                browser_sequence,
                 artifacts: artifacts.clone(),
             },
             Some(navigation),

@@ -568,18 +568,18 @@ pub(crate) use state::{
     CommittedRendererDocumentBinding, CompletedDownloadBodyArtifact, ContextNetworkPolicy,
     DedicatedWorkerMainScriptOutcome, DedicatedWorkerMainScriptSnapshot,
     DedicatedWorkerTargetState, DevToolsBrowserIdentityOverride, DevToolsConsoleOutputSessionState,
-    DevToolsLogViolationThreshold, DocumentId, DuplicatePendingRendererCommand,
-    EmulatedNetworkConditions, EmulatedViewportSurface, EmulationPolicyChange,
-    InitialDocumentCreator, InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationId,
-    NavigationResultProjection, NavigationSourceDocumentSecurityContext,
-    NetworkErrorPageNavigation, PageScreencastConfig, PageScreencastFormat,
-    PendingBidiChannelListener, PendingInspectorAwait, PendingRendererCommandKey,
-    PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand,
-    RendererAgentBinding, RendererCommandCorrelation, RendererCommandDescriptor,
-    RendererCommandReplay, RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
-    RendererMainDocumentCommitSeed, RendererPageResidenceIdentity,
-    ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
-    SiteDataClearOptions, TargetIdentityState, TargetOwnerState,
+    DevToolsLogViolationThreshold, DocumentId, DocumentProjectionFence,
+    DocumentProjectionOutputRelease, DuplicatePendingRendererCommand, EmulatedNetworkConditions,
+    EmulatedViewportSurface, EmulationPolicyChange, InitialDocumentCreator,
+    InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationId, NavigationResultProjection,
+    NavigationSourceDocumentSecurityContext, NetworkErrorPageNavigation, PageScreencastConfig,
+    PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait,
+    PendingRendererCommandKey, PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction,
+    ProfilerInspectorCommand, RendererAgentBinding, RendererCommandCorrelation,
+    RendererCommandDescriptor, RendererCommandReplay, RendererDocumentLifecycleObservation,
+    RendererDocumentLifecycleObserver, RendererMainDocumentCommitSeed,
+    RendererPageResidenceIdentity, ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState,
+    SharedWorkerTargetState, SiteDataClearOptions, TargetIdentityState, TargetOwnerState,
     TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity, TargetPageSessionState,
     TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
     TargetRootDocumentProtocolAttachmentIdentity, TargetRuntimeSlot,
@@ -1781,12 +1781,12 @@ impl CdpConnection {
         self.document_navigation_state_for_owner(&owner_scope)
     }
 
-    pub fn renderer_document_navigation_is_suspended_for_session_owner(
+    pub fn document_projection_is_pending_for_session_owner(
         &self,
         session_id: Option<&str>,
     ) -> bool {
         self.runtime_session_owner_slot(session_id)
-            .is_ok_and(TargetRuntimeSlot::renderer_document_navigation_is_suspended)
+            .is_ok_and(TargetRuntimeSlot::document_projection_is_pending)
     }
 
     pub(crate) fn accepts_pending_document_navigation_for_owner(
@@ -1994,10 +1994,16 @@ impl CdpConnection {
             return (None, Vec::new());
         };
         context.install_document_lifecycle_for_test(&target_id, lifecycle);
+        let browser_sequence = context
+            .renderer_document_lifecycle_binding_for_target(&target_id)
+            .filter(|binding| binding.document_id == document)
+            .map(|binding| binding.browser_sequence)
+            .unwrap_or_else(moli_core::browser::BrowserSequence::allocate);
         self.project_committed_document_lifecycle_for_owner(
             owner,
             CommittedDocumentLifecycle {
                 document,
+                browser_sequence,
                 artifacts,
             },
             navigation,
