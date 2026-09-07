@@ -61,6 +61,13 @@ pub(super) enum NavigationNavigateHistoryKind {
     Replace,
 }
 
+#[derive(Default)]
+struct LocationNavigationOptions {
+    dispatch_child_navigate_event_for_all_kinds: bool,
+    force_exact_same_document_navigation: bool,
+    explicit_initiator_url: Option<url::Url>,
+}
+
 pub(crate) fn navigate_location_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     location: v8::Local<'s, v8::Object>,
@@ -68,7 +75,12 @@ pub(crate) fn navigate_location_object<'s>(
     raw_target: Option<String>,
 ) {
     navigate_location_object_with_source_element_and_child_navigate_event(
-        scope, location, kind, raw_target, None, false, false,
+        scope,
+        location,
+        kind,
+        raw_target,
+        None,
+        LocationNavigationOptions::default(),
     );
 }
 
@@ -112,8 +124,10 @@ pub(crate) fn navigate_top_level_same_document_from_browser(
         LocationNavigationKind::Assign,
         Some(target),
         None,
-        false,
-        true,
+        LocationNavigationOptions {
+            force_exact_same_document_navigation: true,
+            ..LocationNavigationOptions::default()
+        },
     );
     true
 }
@@ -167,8 +181,10 @@ pub(crate) fn navigate_top_level_meta_refresh(
         kind,
         Some(target.to_string()),
         None,
-        false,
-        same_document_fragment,
+        LocationNavigationOptions {
+            force_exact_same_document_navigation: same_document_fragment,
+            ..LocationNavigationOptions::default()
+        },
     );
     context_host_ptr_from_global_bridge(scope)
         .is_some_and(|host_ptr| unsafe { &*host_ptr }.has_pending_location_navigation())
@@ -189,8 +205,7 @@ pub(crate) fn navigate_location_object_with_source_element<'s>(
         kind,
         raw_target,
         source_element,
-        false,
-        false,
+        LocationNavigationOptions::default(),
     );
 }
 
@@ -201,7 +216,36 @@ pub(crate) fn navigate_location_object_with_child_navigate_event<'s>(
     raw_target: Option<String>,
 ) {
     navigate_location_object_with_source_element_and_child_navigate_event(
-        scope, location, kind, raw_target, None, true, false,
+        scope,
+        location,
+        kind,
+        raw_target,
+        None,
+        LocationNavigationOptions {
+            dispatch_child_navigate_event_for_all_kinds: true,
+            ..LocationNavigationOptions::default()
+        },
+    );
+}
+
+pub(crate) fn navigate_location_object_with_child_navigate_event_and_initiator_url<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    location: v8::Local<'s, v8::Object>,
+    kind: LocationNavigationKind,
+    raw_target: Option<String>,
+    initiator_url: url::Url,
+) {
+    navigate_location_object_with_source_element_and_child_navigate_event(
+        scope,
+        location,
+        kind,
+        raw_target,
+        None,
+        LocationNavigationOptions {
+            dispatch_child_navigate_event_for_all_kinds: true,
+            explicit_initiator_url: Some(initiator_url),
+            ..LocationNavigationOptions::default()
+        },
     );
 }
 
@@ -211,9 +255,13 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     kind: LocationNavigationKind,
     raw_target: Option<String>,
     source_element: Option<v8::Local<'s, v8::Object>>,
-    dispatch_child_navigate_event_for_all_kinds: bool,
-    force_exact_same_document_navigation: bool,
+    options: LocationNavigationOptions,
 ) {
+    let LocationNavigationOptions {
+        dispatch_child_navigate_event_for_all_kinds,
+        force_exact_same_document_navigation,
+        explicit_initiator_url,
+    } = options;
     let current_href = location_href_slot(scope, location).unwrap_or_default();
     let current_url = url::Url::parse(&current_href).ok();
     let raw_target_is_fragment_only = raw_target
@@ -608,7 +656,8 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         }
         if let Some(host_ptr) = host_ptr {
             let host = unsafe { &mut *host_ptr };
-            let initiator_url = location_navigation_initiator_url(scope, host);
+            let initiator_url =
+                explicit_initiator_url.or_else(|| location_navigation_initiator_url(scope, host));
             if matches!(kind, LocationNavigationKind::Assign) && !is_javascript_url {
                 host.mark_child_browsing_context_top_level_history_increment(handle);
             }
