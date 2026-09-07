@@ -28,7 +28,8 @@ impl<'a> FetchUrlList<'a> {
     }
 
     /// Returning to the initiating origin cannot restore basic response tainting.
-    pub fn has_cross_origin_url(self, origin: &WebOrigin) -> bool {
+    pub fn has_cross_origin_url(self, origin: impl Into<WebOrigin>) -> bool {
+        let origin = origin.into();
         self.urls().any(|url| !origin.same_origin(&url.into()))
     }
 
@@ -52,13 +53,22 @@ impl<'a> FetchUrlList<'a> {
         Ok(())
     }
 
+    pub fn has_cross_origin_url_for_origin(self, origin: &WebOrigin) -> bool {
+        self.has_cross_origin_url(origin)
+    }
+
+    pub fn serialized_origin_for_origin(self, origin: &WebOrigin) -> String {
+        self.serialized_origin(origin)
+    }
+
     pub fn has_cross_site_url(self, origin: &Url) -> bool {
         self.urls().any(|url| !same_site_urls(origin, url, true))
     }
 
     /// A first hop out of the initiating origin retains that origin. Crossing
     /// origins from an already cross-origin URL serializes the origin as null.
-    pub fn serialized_origin(self, origin: &WebOrigin) -> String {
+    pub fn serialized_origin(self, origin: impl Into<WebOrigin>) -> String {
+        let origin = origin.into();
         if self.redirects.iter().any(|redirect| {
             !same_origin(&redirect.from_url, &redirect.to_url)
                 && !origin.same_origin(&(&redirect.from_url).into())
