@@ -41,23 +41,15 @@ pub(in crate::context_bootstrap) fn append_console_message<'s>(
     level: &str,
 ) {
     let mut parts = Vec::with_capacity(args.length().max(0) as usize);
+    let mut arg_snapshot_values = Vec::with_capacity(parts.capacity());
     for index in 0..args.length() {
-        let value = args.get(index);
-        let text = value
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))
-            .unwrap_or_else(|| String::from("undefined"));
-        parts.push(text);
+        let snapshot = console_arg_remote_object_json(scope, args.get(index));
+        parts.push(console_arg_text(&snapshot));
+        arg_snapshot_values.push(snapshot);
     }
     let text = parts.join(" ");
     let message = format!("{level}: {text}");
     let stack = current_console_stack(scope);
-
-    let mut arg_snapshot_values = Vec::with_capacity(args.length().max(0) as usize);
-    for index in 0..args.length() {
-        let value = args.get(index);
-        arg_snapshot_values.push(console_arg_remote_object_json(scope, value));
-    }
 
     if let Some(buffers) = current_console_message_buffers(scope) {
         let mut buffers = buffers.borrow_mut();
@@ -146,10 +138,9 @@ pub(crate) fn console_arg_remote_object_json(
         return serde_json::json!({ "type": "number" });
     }
     if value.is_string() {
-        let value = value
-            .to_string(scope)
-            .map(|value| value.to_rust_string_lossy(scope))
-            .unwrap_or_default();
+        let value = v8::Local::<v8::String>::try_from(value)
+            .expect("string console argument")
+            .to_rust_string_lossy(scope);
         return serde_json::json!({
             "type": "string",
             "value": value,
@@ -158,17 +149,25 @@ pub(crate) fn console_arg_remote_object_json(
     if value.is_function() {
         return serde_json::json!({
             "type": "function",
-            "description": value_description(scope, value),
+            "description": console_value_description(scope, value),
         });
     }
     if value.is_symbol() {
+        let symbol = v8::Local::<v8::Symbol>::try_from(value).expect("symbol console argument");
+        let description = v8::Local::<v8::String>::try_from(symbol.description(scope))
+            .map(|description| description.to_rust_string_lossy(scope))
+            .unwrap_or_default();
         return serde_json::json!({
             "type": "symbol",
-            "description": value_description(scope, value),
+            "description": format!("Symbol({description})"),
         });
     }
     if value.is_big_int() {
-        let mut description = value_description(scope, value);
+        // ToString of a primitive BigInt cannot invoke author conversion hooks.
+        let mut description = value
+            .to_string(scope)
+            .map(|value| value.to_rust_string_lossy(scope))
+            .unwrap_or_default();
         description.push('n');
         return serde_json::json!({
             "type": "bigint",
@@ -176,48 +175,68 @@ pub(crate) fn console_arg_remote_object_json(
         });
     }
 
+    // This is the renderer-owned reporting snapshot, not the Inspector's
+    // RemoteObject. The original V8 console still supplies inspectable objectIds
+    // to CDP. Never serialize/coerce objects here: getters, toJSON, conversion
+    // hooks and Proxy traps belong to the page, not to log bookkeeping.
+    let subtype = if value.is_proxy() {
+        Some("proxy")
+    } else if value.is_array() {
+        Some("array")
+    } else if value.is_native_error() {
+        Some("error")
+    } else if value.is_reg_exp() {
+        Some("regexp")
+    } else if value.is_date() {
+        Some("date")
+    } else if value.is_promise() {
+        Some("promise")
+    } else if value.is_map() {
+        Some("map")
+    } else if value.is_set() {
+        Some("set")
+    } else if value.is_typed_array() {
+        Some("typedarray")
+    } else if value.is_array_buffer() {
+        Some("arraybuffer")
+    } else {
+        None
+    };
     let mut object = serde_json::json!({
-        "type": "object",
-        "description": value_description(scope, value),
+        "type": "object", "description": console_value_description(scope, value)
     });
-    if let Some(serialized) = json_serializable_console_value(scope, value)
-        && let Some(object) = object.as_object_mut()
-    {
-        object.insert("value".to_owned(), serialized);
-    }
-    if value.is_array()
-        && let Some(object) = object.as_object_mut()
-    {
-        object.insert(
-            "subtype".to_owned(),
-            serde_json::Value::String("array".to_owned()),
-        );
+    if let Some(subtype) = subtype {
+        object["subtype"] = serde_json::json!(subtype);
     }
     object
 }
 
-fn json_serializable_console_value(
+fn console_value_description(
     scope: &mut v8::PinScope<'_, '_>,
     value: v8::Local<'_, v8::Value>,
-) -> Option<serde_json::Value> {
-    let json = {
-        let try_catch = std::pin::pin!(v8::TryCatch::new(scope));
-        let scope = try_catch.init();
-        let body = v8::json::stringify(&scope, value)?;
-        let body = body.to_rust_string_lossy(&scope);
-        if body == "undefined" {
-            return None;
-        }
-        body
-    };
-    serde_json::from_str(&json).ok()
-}
-
-fn value_description(scope: &mut v8::PinScope<'_, '_>, value: v8::Local<'_, v8::Value>) -> String {
+) -> String {
+    // V8 implements ToDetailString with NoSideEffectsToString under a
+    // no-script scope. Unlike ToString, this cannot call author conversion
+    // hooks, but still retains useful native Error/function descriptions.
     value
-        .to_string(scope)
+        .to_detail_string(scope)
         .map(|value| value.to_rust_string_lossy(scope))
         .unwrap_or_default()
+}
+
+fn console_arg_text(snapshot: &serde_json::Value) -> String {
+    if let Some(value) = snapshot.get("value") {
+        return value
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| value.to_string());
+    }
+    snapshot
+        .get("description")
+        .or_else(|| snapshot.get("unserializableValue"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("undefined")
+        .to_owned()
 }
 
 fn record_runtime_observable_console_source_event(

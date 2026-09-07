@@ -34,6 +34,39 @@ async fn worker_compression_streams_roundtrip_all_formats() {
 }
 
 #[tokio::test]
+async fn worker_console_capture_does_not_serialize_or_coerce_page_objects() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        let hits = 0;
+        const object = {
+            get property() { hits++; return 1; },
+            toJSON() { hits++; return {}; },
+            [Symbol.toPrimitive]() { hits++; return 'object'; }
+        };
+        const proxy = new Proxy({}, {
+            get() { hits++; }, ownKeys() { hits++; return []; }
+        });
+        console.log(object, proxy);
+        postMessage(hits);
+    "#
+        .into(),
+        "https://console-worker.test/worker.js".into(),
+    );
+    loop {
+        let message = timeout(TIMEOUT, handle.recv())
+            .await
+            .expect("worker console probe")
+            .expect("worker result");
+        if matches!(message, WorkerToParentMessage::Console(_)) {
+            continue;
+        }
+        assert_eq!(expect_post_json(message), "0");
+        break;
+    }
+}
+
+#[tokio::test]
 async fn worker_postmessage_to_parent() {
     ensure_v8();
     let mut handle = spawn_worker(

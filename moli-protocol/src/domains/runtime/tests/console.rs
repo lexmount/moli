@@ -1311,6 +1311,88 @@ async fn runtime_console_api_called_preserves_basic_argument_shapes() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn runtime_console_capture_does_not_run_page_hooks_and_keeps_remote_objects() {
+    let mut ctx = TestContext::new();
+    with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
+
+    // Exercise both states: reporting must be safe even before an Inspector
+    // Runtime session exists; enabling it must retain real remote object ids.
+    for (index, enabled) in [false, true].into_iter().enumerate() {
+        if enabled {
+            enable_runtime_and_take_execution_context_id_async(&mut ctx, 206_850).await;
+        }
+        ctx.sent.clear();
+        let command_id = 206_851 + index as u64;
+        ctx.process_async(json!({
+            "id": command_id,
+            "method": "Runtime.evaluate",
+            "params": {"expression": r#"
+              (() => {
+                const hits = [];
+                const object = {
+                  answer: 42,
+                  get getter() { hits.push('getter'); return 1; },
+                  toJSON() { hits.push('toJSON'); return {}; },
+                  [Symbol.toPrimitive]() { hits.push('toPrimitive'); return 'object'; }
+                };
+                const proxy = new Proxy({}, {
+                  get() { hits.push('Proxy.get'); },
+                  ownKeys() { hits.push('Proxy.ownKeys'); return []; },
+                  getOwnPropertyDescriptor() { hits.push('Proxy.descriptor'); }
+                });
+                const error = new Error('console');
+                Object.defineProperty(error, 'stack', {get() { hits.push('stack'); return 'stack'; }});
+                console.log('safe-capture', object, proxy, error);
+                return JSON.stringify(hits);
+              })()
+            "#}
+        })).await;
+        let response = take_response_by_id(&mut ctx, command_id);
+        assert_eq!(
+            response["result"]["result"]["value"],
+            json!("[]"),
+            "{response}"
+        );
+        if !enabled {
+            continue;
+        }
+
+        wait_until_message(&mut ctx, None, "safe console object", |message| {
+            message["method"] == json!("Runtime.consoleAPICalled")
+                && message["params"]["args"][0]["value"] == json!("safe-capture")
+        })
+        .await;
+        let object_id = ctx
+            .sent
+            .iter()
+            .find(|message| {
+                message["method"] == json!("Runtime.consoleAPICalled")
+                    && message["params"]["args"][0]["value"] == json!("safe-capture")
+            })
+            .unwrap()["params"]["args"][1]["objectId"]
+            .as_str()
+            .expect("native object id")
+            .to_owned();
+        ctx.process_async(json!({
+            "id": 206_853,
+            "method": "Runtime.getProperties",
+            "params": {"objectId": object_id, "ownProperties": true}
+        }))
+        .await;
+        let properties = take_response_by_id(&mut ctx, 206_853);
+        let properties = properties["result"]["result"]
+            .as_array()
+            .expect("inspectable object");
+        assert!(properties.iter().any(|property| {
+            property["name"] == json!("answer") && property["value"]["value"] == json!(42)
+        }));
+        assert!(properties.iter().any(|property| {
+            property["name"] == json!("getter") && property["get"]["type"] == json!("function")
+        }));
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn runtime_console_error_does_not_invoke_error_prepare_stack_trace() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<!doctype html><body></body>").await;
