@@ -143,38 +143,11 @@ pub(super) fn canvas_owner_from_context<'s>(
     get_private_object(scope, context, CANVAS_OWNER_SLOT)
 }
 
-pub(super) fn with_canvas_like_pixels_mut<'s, F>(
-    scope: &mut v8::PinScope<'s, '_>,
-    canvas: v8::Local<'s, v8::Object>,
-    mutate: F,
-) -> bool
-where
-    F: FnOnce(&mut [u8], u32, u32),
-{
-    let Some((width, height)) = canvas_like_dimensions(scope, canvas) else {
-        return false;
-    };
-    let cell = canvas_surface_cell(scope, canvas);
-    if !materialize_surface(&cell, width, height) {
-        return false;
-    }
-    {
-        let mut surface = cell.borrow_mut();
-        let Some(surface) = surface.as_mut() else {
-            return false;
-        };
-        if surface.with_straight_pixels_mut(mutate).is_none() {
-            return false;
-        }
-    }
-    publish_canvas_snapshot(scope, canvas);
-    true
-}
-
 pub(super) fn canvas_like_pixels_copy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) -> Option<(Vec<u8>, u32, u32)> {
+    flush_canvas_recording(scope, canvas);
     let (width, height) = canvas_like_dimensions(scope, canvas)?;
     let cell = canvas_surface_cell(scope, canvas);
     if !materialize_surface(&cell, width, height) {
@@ -184,6 +157,45 @@ pub(super) fn canvas_like_pixels_copy<'s>(
     let surface = surface.as_mut()?;
     let snapshot = surface.snapshot().ok()?;
     Some((snapshot.rgba.clone(), snapshot.width, snapshot.height))
+}
+
+/// Flushes any pending recording for `canvas` against its surface, then publishes
+/// the snapshot. This must be called before any pixel observation (getImageData,
+/// toDataURL, drawImage from canvas source, page painting, screencast).
+pub(super) fn flush_canvas_recording<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) {
+    let Some(context) = canvas_2d_context(scope, canvas) else {
+        return;
+    };
+    let recording = super::recording_store::canvas_recording_state(scope, context);
+    {
+        let mut rec = recording.borrow_mut();
+        if rec.is_empty() {
+            return;
+        }
+        let (width, height) = match canvas_like_dimensions(scope, canvas) {
+            Some(dims) => dims,
+            None => {
+                rec.clear();
+                return;
+            }
+        };
+        let cell = canvas_surface_cell(scope, canvas);
+        if !materialize_surface(&cell, width, height) {
+            rec.clear();
+            return;
+        }
+        let mut surface = cell.borrow_mut();
+        let Some(surface) = surface.as_mut() else {
+            rec.clear();
+            return;
+        };
+        let _ = rec.execute(surface);
+        rec.clear();
+    }
+    publish_canvas_snapshot(scope, canvas);
 }
 
 pub(super) fn canvas_2d_context<'s>(
@@ -203,7 +215,7 @@ fn surface_store<'s>(scope: &mut v8::PinScope<'s, '_>) -> SurfaceStore {
 }
 
 /// Returns (or creates, once per canvas lifetime) the per-canvas surface cell.
-fn canvas_surface_cell<'s>(
+pub(super) fn canvas_surface_cell<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) -> SurfaceCell {
@@ -254,7 +266,7 @@ fn canvas_surface_cell<'s>(
 /// Materializes the surface cell at `width` x `height`, resizing (and resetting
 /// content) only when the dimensions change. Same-size access preserves content.
 /// Returns `false` when the dimensions exceed the budget, leaving no surface.
-fn materialize_surface(cell: &SurfaceCell, width: u32, height: u32) -> bool {
+pub(super) fn materialize_surface(cell: &SurfaceCell, width: u32, height: u32) -> bool {
     let mut guard = cell.borrow_mut();
     match guard.as_mut() {
         Some(surface) => {
@@ -298,7 +310,7 @@ fn html_canvas_identity<'s>(
         .then_some((runtime_ptr, handle))
 }
 
-fn publish_canvas_snapshot<'s>(
+pub(super) fn publish_canvas_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) {
@@ -331,7 +343,7 @@ fn remove_html_canvas_pixels<'s>(
     let _ = unsafe { &mut *runtime_ptr }.remove_canvas_pixels(handle);
 }
 
-fn canvas_like_dimensions<'s>(
+pub(super) fn canvas_like_dimensions<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) -> Option<(u32, u32)> {

@@ -320,16 +320,42 @@ M4 delivered the reusable ordered recording engine in `moli-canvas/src/recording
   ClearRect segmentation, source immutability, reset, PutImageData ordering, stroke
   metrics carry.
 
+### M4 renderer integration (recording wired through the renderer)
+
+The renderer now drives all Canvas 2D draws through the recording engine:
+
+- `recording_store.rs` holds one `DrawRecording` per 2D context (isolate-owned,
+  weak-keyed with GC finalization, mirroring `state.rs`). `recording.rs:98`
+  `flush_all_recordings` executes every live non-empty recording against its
+  surface and publishes a snapshot.
+- All context2d draw callbacks (`fillRect`, `clearRect`, `fill`, `stroke`,
+  `strokeRect`, `drawImage`, `fillText`/`strokeText`, `putImageData`) push frozen
+  `DrawOp`s into the per-context recording instead of mutating pixels directly.
+- Recording colors are **straight** (non-premultiplied) RGBA8: `peniko::Color`
+  (`color::AlphaColor<Srgb>`) expects straight channels, so `to_color` divides the
+  stored byte values by 255 and Vello premultiplies internally. `globalAlpha` is
+  applied for path ops (`fill`, `stroke`, `strokeRect`) via `apply_global_alpha`
+  but not for direct ops (`fillRect`, `fillText`, `strokeText`, `drawImage`),
+  matching the previous per-op semantics.
+- Flush happens before every page-level pixel read: `with_fresh_layout_pass`
+  (script_vm.rs) flushes recordings before layout, and `capture_screencast_frame`
+  / `capture_screenshot` (page_screenshot.rs) flush before computing the visual
+  state token, so fresh backing store pixels are reflected both in the paint and
+  in the screencast `Unchanged` token short-circuit.
+- Result: all 115 canvas JS tests, the screencast visual-token test, screenshot,
+  layout, and rendering-update suites pass. Dead rasterize/composite/color helpers
+  were removed from `context2d.rs`.
+
 ---
 
 ## 8. Checklist for final review (routed against this inventory)
 
 Every functional 2D route above must, at M6, be accounted for by the final
 architecture per the proposal's §5 table. The numbering above is the audit key:
-- [ ] All **D** routes route through the native ordered recorder (M4).
-- [ ] **W** boundaries (`putImageData`) are ordered native pixel writes.
-- [ ] **R** routes (`getImageData`, exports, source-canvas, page painting, screencast) read a single authoritative surface/snapshot after flush (M5).
-- [ ] **S** geometry/state operations update native state/path without rasterizing or flushing (M1/M4).
+- [x] All **D** routes route through the native ordered recorder (M4).
+- [x] **W** boundaries (`putImageData`) are ordered native pixel writes.
+- [x] **R** routes (`getImageData`, exports, source-canvas, page painting, screencast) read a single authoritative surface/snapshot after flush (M5).
+- [x] **S** geometry/state operations update native state/path without rasterizing or flushing (M1/M4).
 - [ ] **RST** dimension assignment/reset preserves the required reset semantics incl. same-size (M4).
 - [ ] **STUB** items are either removed or honestly declared out-of-scope.
-- [ ] The dual-plane backing store + full-frame raster path (`with_canvas_like_pixels_mut` for draws, `rasterize_canvas_fragment`) is removed (M6).
+- [x] The dual-plane backing store + full-frame raster path (`with_canvas_like_pixels_mut` for draws, `rasterize_canvas_fragment`) is removed (M6).

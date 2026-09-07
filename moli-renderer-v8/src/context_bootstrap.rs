@@ -210,7 +210,8 @@ pub(crate) use self::broadcast_channel::{
 pub(crate) use self::canvas::{
     CanvasContextKind, attach_canvas_like_context_object, build_canvas_rendering_context_2d_object,
     build_offscreen_canvas_object, build_webgl_context_object, build_webgl2_context_object,
-    canvas_like_to_data_url, reset_html_canvas_backing_store_for_dimension_assignment,
+    canvas_like_to_data_url, flush_all_recordings,
+    reset_html_canvas_backing_store_for_dimension_assignment,
 };
 #[cfg(test)]
 pub(crate) use self::constructors::finalize_dom_exception_realm_bindings;

@@ -2516,6 +2516,12 @@ impl ScriptVm {
             &mut moli_layout::LayoutPassResult<DomHandle>,
         ) -> Result<T, moli_layout::LayoutError>,
     ) -> Result<Option<T>, moli_layout::LayoutError> {
+        // Flush any pending canvas 2D recording batches so the layout pass
+        // sees up-to-date backing store pixels (screencast, screenshot, drawImage).
+        let _ = self.with_default_context_scope(|scope, _| {
+            crate::context_bootstrap::flush_all_recordings(scope);
+            Ok(())
+        });
         // Font-source reconciliation is a pre-pass lifecycle step. CSS image
         // URLs come back from the actual box-construction traversal below.
         // Once the guard is entered, layout performs no JS, event-loop,
