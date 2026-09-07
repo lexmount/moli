@@ -8828,6 +8828,72 @@ fn window_named_properties_respect_later_prototype_properties_and_descriptor_fla
 }
 
 #[test]
+fn main_and_child_window_proxies_have_immutable_prototypes() {
+    let mut vm = new_storage_test_vm("https://window-proxy-prototype.test/");
+
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+                "use strict";
+                const frame = document.createElement("iframe");
+                (document.body || document.documentElement || document).appendChild(frame);
+
+                const probe = target => {
+                    const original = Object.getPrototypeOf(target);
+                    const replacement = {};
+                    const outcome = callback => {
+                        try {
+                            callback();
+                            return "returned";
+                        } catch (error) {
+                            return error && error.name;
+                        }
+                    };
+
+                    const objectDifferent = outcome(() => {
+                        Object.setPrototypeOf(target, replacement);
+                    });
+                    const dunderDifferent = outcome(() => {
+                        target.__proto__ = replacement;
+                    });
+                    const reflectDifferent = Reflect.setPrototypeOf(target, replacement);
+                    const unchanged = Object.getPrototypeOf(target) === original;
+                    const objectSame = Object.setPrototypeOf(target, original) === target;
+                    const dunderSame = outcome(() => {
+                        target.__proto__ = original;
+                    });
+                    const reflectSame = Reflect.setPrototypeOf(target, original);
+
+                    return {
+                        objectDifferent,
+                        dunderDifferent,
+                        reflectDifferent,
+                        unchanged,
+                        objectSame,
+                        dunderSame,
+                        reflectSame,
+                    };
+                };
+
+                const observations = {
+                    main: probe(window),
+                    child: probe(frame.contentWindow),
+                };
+                frame.remove();
+                return JSON.stringify(observations);
+            })()
+            "#,
+        )
+        .expect("WindowProxy immutable prototype probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"main":{"objectDifferent":"TypeError","dunderDifferent":"TypeError","reflectDifferent":false,"unchanged":true,"objectSame":true,"dunderSame":"returned","reflectSame":true},"child":{"objectDifferent":"TypeError","dunderDifferent":"TypeError","reflectDifferent":false,"unchanged":true,"objectSame":true,"dunderSame":"returned","reflectSame":true}}"#
+    );
+}
+
+#[test]
 fn window_internal_child_context_identity_is_not_read_from_web_properties() {
     let mut vm = new_storage_test_vm("https://window-private-identity.test/");
 

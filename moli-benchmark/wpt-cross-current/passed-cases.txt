@@ -5247,6 +5247,7 @@ html/browsers/the-window-object/window-open-noopener.html?_top
 html/browsers/the-window-object/window-prototype-chain.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-define-own-property-unforgeable-same-origin.html
 html/browsers/the-windowproxy-exotic-object/windowproxy-prevent-extensions.html
+html/browsers/the-windowproxy-exotic-object/windowproxy-prototype-setting-same-origin.html
 html/browsers/windows/browsing-context-names/choose-_blank-001.html
 html/browsers/windows/browsing-context-names/choose-default-002.html
 html/browsers/windows/browsing-context-window.html

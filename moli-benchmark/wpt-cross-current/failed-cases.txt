@@ -2925,7 +2925,6 @@ html/browsers/the-window-object/window-indexed-properties-strict.html
 html/browsers/the-window-object/window-indexed-properties.html
 html/browsers/the-window-object/window-open-noopener.html?indexed
 html/browsers/the-window-object/window-open-noreferrer.html
-html/browsers/the-windowproxy-exotic-object/windowproxy-prototype-setting-same-origin.html
 html/browsers/windows/browsing-context-names/choose-default-001.html
 html/browsers/windows/browsing-context.html
 html/browsers/windows/document-domain-removed-iframe.html
