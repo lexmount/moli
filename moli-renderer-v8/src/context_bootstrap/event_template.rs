@@ -6,6 +6,8 @@ use super::{
         ui_event_init_callback,
     },
     events::{
+        clipboard_change_event_change_id_getter_function, clipboard_change_event_types_getter_function,
+        clipboard_event_clipboard_data_getter_function,
         toggle_event_source_getter_function,
         command_event_command_getter_function, command_event_source_getter_function,
         before_unload_event_return_value_getter_function,
@@ -152,6 +154,29 @@ struct CloseEventTemplateAccessorsDeclaration {
 
     #[webapi(accessor_property, getter = close_event_reason_getter_function)]
     reason: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ClipboardEvent, enumerable, receiver)]
+struct ClipboardEventTemplateAccessorsDeclaration {
+    #[webapi(
+        accessor_property = "clipboardData",
+        getter = clipboard_event_clipboard_data_getter_function
+    )]
+    clipboard_data: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(interface = web_api_interfaces::ClipboardChangeEvent, enumerable, receiver)]
+struct ClipboardChangeEventTemplateAccessorsDeclaration {
+    #[webapi(accessor_property, getter = clipboard_change_event_types_getter_function)]
+    types: (),
+
+    #[webapi(
+        accessor_property = "changeId",
+        getter = clipboard_change_event_change_id_getter_function
+    )]
+    change_id: (),
 }
 
 #[derive(WebApiFunctionTemplate)]
@@ -536,6 +561,8 @@ fn install_declaration<'s, D: WebApiFunctionTemplateDeclaration>(
 // prototype mutations cannot change which fields are exposed as own properties.
 fn event_template_declaration(interface: &str) -> Option<EventTemplateDeclaration> {
     Some(match interface {
+        "ClipboardEvent" => EventTemplateDeclaration::new::<ClipboardEventTemplateAccessorsDeclaration>(),
+        "ClipboardChangeEvent" => EventTemplateDeclaration::new::<ClipboardChangeEventTemplateAccessorsDeclaration>(),
         "ToggleEvent" => EventTemplateDeclaration::new::<ToggleEventTemplateAccessorsDeclaration>(),
         "CommandEvent" => EventTemplateDeclaration::new::<CommandEventTemplateAccessorsDeclaration>(),
         "BeforeUnloadEvent" => EventTemplateDeclaration::new::<BeforeUnloadEventTemplateAccessorsDeclaration>(),
