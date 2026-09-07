@@ -746,8 +746,12 @@ pub(crate) struct WorkerHandle {
     pub(crate) tx: mpsc::UnboundedSender<WorkerMessage>,
     /// Receive messages *from* the worker.
     rx: Option<mpsc::UnboundedReceiver<WorkerToParentMessage>>,
-    /// Join handle for the worker OS thread.
-    join_handle: Option<std::thread::JoinHandle<()>>,
+    thread: Arc<WorkerThread>,
+}
+
+#[derive(Debug)]
+pub(crate) struct WorkerThread {
+    join_handle: Mutex<Option<std::thread::JoinHandle<()>>>,
     isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
     termination_requested: Arc<AtomicBool>,
     devtools: WorkerDevToolsHandle,
@@ -779,49 +783,21 @@ impl WorkerHandle {
         termination_requested: Arc<AtomicBool>,
     ) -> Self {
         let devtools = WorkerDevToolsHandle::new(tx.clone(), Arc::clone(&isolate_handle));
-        Self::new_with_termination_requested_and_devtools(
-            tx,
-            rx,
-            join_handle,
-            isolate_handle,
-            termination_requested,
-            devtools,
-        )
+        let thread = WorkerThread::new(isolate_handle, termination_requested, devtools);
+        thread.set_join_handle(join_handle);
+        Self::from_thread(tx, rx, thread)
     }
 
-    pub(crate) fn new_with_termination_requested_and_devtools(
+    pub(crate) fn from_thread(
         tx: mpsc::UnboundedSender<WorkerMessage>,
         rx: mpsc::UnboundedReceiver<WorkerToParentMessage>,
-        join_handle: std::thread::JoinHandle<()>,
-        isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
-        termination_requested: Arc<AtomicBool>,
-        devtools: WorkerDevToolsHandle,
+        thread: Arc<WorkerThread>,
     ) -> Self {
         Self {
             tx,
             rx: Some(rx),
-            join_handle: Some(join_handle),
-            isolate_handle,
-            termination_requested,
-            devtools,
+            thread,
         }
-    }
-
-    fn terminate_execution_if_ready(&self) {
-        if let Some(handle) = self.isolate_handle.lock().as_ref() {
-            handle.terminate_execution();
-        }
-    }
-
-    fn request_termination(&self) {
-        // Publish the lifecycle transition before interrupting V8. The worker
-        // event loop can then reject an already-selected task without relying
-        // on ordering between cloned mpsc senders.
-        self.devtools
-            .dispose("Worker terminated before Inspector task dispatch");
-        self.termination_requested.store(true, Ordering::Release);
-        self.terminate_execution_if_ready();
-        let _ = self.tx.send(WorkerMessage::Terminate);
     }
 
     /// Send a message to the worker (`postMessage`).
@@ -831,16 +807,13 @@ impl WorkerHandle {
 
     /// Ask the worker to terminate.
     pub(crate) fn terminate(&self) {
-        self.request_termination();
+        self.thread.request_termination();
     }
 
-    pub(crate) fn terminate_and_join(mut self) {
-        self.request_termination();
-        if let Some(join_handle) = self.join_handle.take()
-            && join_handle.thread().id() != std::thread::current().id()
-        {
-            let _ = join_handle.join();
-        }
+    #[cfg(test)]
+    pub(crate) fn terminate_and_join(self) {
+        self.terminate();
+        self.thread.join();
     }
 
     pub(crate) fn dispatch_runtime_protocol_message(
@@ -850,7 +823,7 @@ impl WorkerHandle {
         deferred_response: Option<RendererRuntimeInspectorResponseSender>,
         response_tx: oneshot::Sender<Result<Vec<RendererRuntimeInspectorMessage>, String>>,
     ) -> bool {
-        self.devtools.dispatch_runtime_protocol_message(
+        self.thread.devtools.dispatch_runtime_protocol_message(
             inspector_session_id,
             raw_json,
             deferred_response,
@@ -863,7 +836,8 @@ impl WorkerHandle {
         &self,
         inspector_session_id: Option<String>,
     ) -> bool {
-        self.devtools
+        self.thread
+            .devtools
             .attach_runtime_inspector_session(inspector_session_id)
     }
 
@@ -871,16 +845,17 @@ impl WorkerHandle {
         &self,
         inspector_session_id: Option<String>,
     ) -> bool {
-        self.devtools
+        self.thread
+            .devtools
             .detach_runtime_inspector_session(inspector_session_id)
     }
 
     pub(crate) fn run_if_waiting_for_debugger_for_devtools(&self) -> bool {
-        self.devtools.run_if_waiting_for_debugger()
+        self.thread.devtools.run_if_waiting_for_debugger()
     }
 
     pub(crate) fn devtools_handle(&self) -> WorkerDevToolsHandle {
-        self.devtools.clone()
+        self.thread.devtools.clone()
     }
 
     pub(crate) fn set_extra_http_headers(&self, headers: &[(String, String)]) {
@@ -1392,7 +1367,66 @@ impl Drop for WorkerHandle {
         // Signal termination so the worker thread can exit, but do not
         // synchronously join here. Render-side teardown must not block on a
         // worker thread finishing its event loop.
-        self.request_termination();
-        let _ = self.join_handle.take();
+        self.terminate();
+    }
+}
+
+impl WorkerThread {
+    pub(crate) fn new(
+        isolate_handle: Arc<Mutex<Option<v8::IsolateHandle>>>,
+        termination_requested: Arc<AtomicBool>,
+        devtools: WorkerDevToolsHandle,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            join_handle: Mutex::new(None),
+            isolate_handle,
+            termination_requested,
+            devtools,
+        })
+    }
+
+    pub(crate) fn set_join_handle(&self, handle: std::thread::JoinHandle<()>) {
+        *self.join_handle.lock() = Some(handle);
+    }
+
+    pub(crate) fn request_termination(&self) {
+        self.devtools
+            .dispose("Worker terminated before Inspector task dispatch");
+        // Reject already-selected work before interrupting V8.
+        self.termination_requested.store(true, Ordering::Release);
+        if let Some(handle) = self.isolate_handle.lock().as_ref() {
+            handle.terminate_execution();
+        }
+        let _ = self.devtools.worker_tx.send(WorkerMessage::Terminate);
+    }
+
+    pub(crate) fn join(&self) {
+        // Serialize explicit handle joins with owner shutdown. Taking the
+        // handle and unlocking before join would let the owner return early.
+        let mut slot = self.join_handle.lock();
+        if slot
+            .as_ref()
+            .is_some_and(|handle| handle.thread().id() != std::thread::current().id())
+        {
+            let _ = slot.take().expect("checked worker thread").join();
+        }
+    }
+
+    pub(crate) fn reap_finished(&self) -> bool {
+        let Some(mut slot) = self.join_handle.try_lock() else {
+            return false;
+        };
+        if slot.as_ref().is_some_and(|handle| !handle.is_finished()) {
+            return false;
+        }
+        if let Some(handle) = slot.take() {
+            let _ = handle.join();
+        }
+        true
+    }
+
+    #[cfg(test)]
+    pub(crate) fn is_joined(&self) -> bool {
+        self.join_handle.lock().is_none()
     }
 }

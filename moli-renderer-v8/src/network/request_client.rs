@@ -941,7 +941,7 @@ impl ResourceRequestClient {
     ) -> Result<Response> {
         let request_client = self.clone();
         let (response_tx, response_rx) = mpsc::sync_channel(1);
-        thread::Builder::new()
+        let helper = thread::Builder::new()
             .name("lm-worker-script-fetch".to_owned())
             .spawn(move || {
                 // importScripts() and module-worker graph loading are
@@ -960,9 +960,11 @@ impl ResourceRequestClient {
                 let _ = response_tx.send(result);
             })
             .context("failed to spawn worker script fetch thread")?;
-        response_rx
+        let result = response_rx
             .recv()
-            .context("worker script fetch thread dropped response channel")?
+            .context("worker script fetch thread dropped response channel");
+        let _ = helper.join();
+        result?
     }
 
     pub(crate) fn fetch_raw_for_blocking_boundary(&self, request: Request) -> Result<RawResponse> {

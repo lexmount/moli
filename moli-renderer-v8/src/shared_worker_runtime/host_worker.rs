@@ -76,7 +76,7 @@ impl RendererSharedWorkerHost {
         let mut state = self.state.lock();
         if !matches!(*state, RendererSharedWorkerHostState::Loading { .. }) {
             drop(state);
-            handle.terminate_and_join();
+            handle.terminate();
             return false;
         }
         self.set_current_script_url(script_url);
@@ -134,32 +134,7 @@ impl RendererSharedWorkerHost {
         tx.send(message).is_ok()
     }
 
-    pub(super) fn terminate_and_join(&self) {
-        let (task, handle) = {
-            let mut state = self.state.lock();
-            match &mut *state {
-                RendererSharedWorkerHostState::Loading { task } => {
-                    let task = task.take();
-                    *state = RendererSharedWorkerHostState::Closed;
-                    (task, None)
-                }
-                RendererSharedWorkerHostState::Running { handle, .. } => {
-                    let handle = handle.take();
-                    *state = RendererSharedWorkerHostState::Closed;
-                    (None, handle)
-                }
-                RendererSharedWorkerHostState::Closed => (None, None),
-            }
-        };
-        if let Some(task) = task {
-            task.cancel();
-        }
-        if let Some(handle) = handle {
-            handle.terminate_and_join();
-        }
-    }
-
-    pub(super) fn terminate_without_join(&self) {
+    pub(super) fn terminate(&self) {
         let (task, handle) = {
             let mut state = self.state.lock();
             match &mut *state {

@@ -16,7 +16,7 @@ impl SharedWorkerRuntimeService {
             SharedWorkerClientRemoval::Terminate { instance: host, .. } => {
                 host.remove_client_endpoint(client_id);
                 host.publish_destroyed_target_event();
-                host.terminate_and_join();
+                host.terminate();
             }
             SharedWorkerClientRemoval::CancelLoading { instance_id, .. } => {
                 if let Some(host) = self.take_loading_host_for_client_removal(instance_id) {

@@ -4743,7 +4743,7 @@ self.addEventListener("message", event => {
                 other => panic!("unexpected worker message: {other:?}"),
             }
         }
-        host.terminate_without_join();
+        host.terminate();
     }
 
     #[test]

@@ -1355,7 +1355,7 @@ impl JsContextHost {
                     }
                 }
                 WorkerExecutionState::Running { handle } => {
-                    handle.terminate_and_join();
+                    handle.terminate();
                 }
             }
         }
