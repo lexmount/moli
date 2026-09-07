@@ -47,6 +47,7 @@ mod message_port_lifecycle;
 mod misc;
 mod navigation;
 mod navigation_event_init;
+mod navigator_overrides;
 mod notification_init;
 mod payload_event_init;
 mod performance;
