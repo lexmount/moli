@@ -874,6 +874,9 @@ fn child_meta_refresh_callback<'s>(
     // Keep the Document's revision counter so a later identical declaration
     // cannot authorize a stale callback from an earlier schedule.
     task.timer_id = None;
+    let Some(initiator_url) = host.child_browsing_context_current_url(handle) else {
+        return;
+    };
     let Some(window) = host.child_browsing_context_window_wrapper(scope, handle) else {
         return;
     };
@@ -883,7 +886,13 @@ fn child_meta_refresh_callback<'s>(
     else {
         return;
     };
-    navigate_child_meta_refresh(scope, location, &navigation.url, navigation.delay_ms);
+    navigate_child_meta_refresh(
+        scope,
+        location,
+        &navigation.url,
+        navigation.delay_ms,
+        initiator_url,
+    );
 }
 
 fn child_meta_refresh_handle_from_data(
