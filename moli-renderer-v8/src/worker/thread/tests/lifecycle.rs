@@ -239,6 +239,62 @@ async fn service_worker_global_scope_does_not_expose_close() {
 }
 
 #[tokio::test]
+async fn service_worker_global_prototype_chain_is_complete_and_immutable() {
+    ensure_v8();
+    let (bootstrap_tx, mut bootstrap_rx) =
+        tokio::sync::mpsc::unbounded_channel::<crate::worker::WorkerBootstrapCompletion>();
+    let handle = spawn_test_worker_with_options(
+        WorkerSpawnOptions::new(
+            r#"
+            const chain = [];
+            for (let value = self; value !== null; value = Object.getPrototypeOf(value)) {
+                chain.push(value);
+            }
+            const expected = [
+                self,
+                ServiceWorkerGlobalScope.prototype,
+                WorkerGlobalScope.prototype,
+                EventTarget.prototype,
+                Object.prototype,
+            ];
+            if (chain.length !== expected.length ||
+                chain.some((value, index) => value !== expected[index])) {
+                throw new Error("service worker global prototype chain is incomplete");
+            }
+            for (const value of chain) {
+                const original = Object.getPrototypeOf(value);
+                if (Reflect.setPrototypeOf(value, {}) ||
+                    Object.getPrototypeOf(value) !== original ||
+                    !Reflect.setPrototypeOf(value, original)) {
+                    throw new Error("service worker global prototype chain is mutable");
+                }
+                if (!Object.isExtensible(value)) {
+                    throw new Error("immutable prototype object must remain extensible");
+                }
+            }
+            "#
+            .to_owned(),
+            "https://example.test/app/immutable-prototype-sw.js".to_owned(),
+        )
+        .with_global_kind(crate::worker::WorkerGlobalKind::Service {
+            registration_id: ServiceWorkerRegistrationId::from_u64_for_test(1),
+            version_id: ServiceWorkerVersionId::from_u64_for_test(1),
+            scope_url: url::Url::parse("https://example.test/app/").unwrap(),
+        })
+        .with_bootstrap_completion_sender(bootstrap_tx),
+    );
+
+    let bootstrap = timeout(TIMEOUT, bootstrap_rx.recv())
+        .await
+        .expect("timed out waiting for immutable service worker bootstrap")
+        .expect("service worker bootstrap channel closed");
+    bootstrap
+        .result
+        .expect("service worker global prototype chain should be complete and immutable");
+    handle.terminate_and_join();
+}
+
+#[tokio::test]
 async fn worker_pause_evaluation_until_debugger_exposes_context_before_bootstrap() {
     ensure_v8();
     let (bootstrap_tx, mut bootstrap_rx) =

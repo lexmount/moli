@@ -596,6 +596,16 @@ pub(crate) fn install_worker_lazy_exposed_interfaces<'s>(
         .map_err(|error| anyhow!("failed to initialize worker caches accessor: {error}"))
 }
 
+pub(crate) fn prepare_service_worker_event_target_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
+    exposed_interfaces::prepare_worker_event_target_template(
+        scope,
+        exposed_interfaces::RealmKind::ServiceWorker,
+        constructor_specs(),
+    )
+}
+
 pub(in crate::context_bootstrap) fn build_profiled_exposed_interface_template<'s>(
     scope: &mut v8::PinScope<'s, '_, ()>,
     spec: self::specs::ConstructorSpec,
