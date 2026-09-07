@@ -1,11 +1,12 @@
 use std::{
     fmt,
-    future::Future,
     path::PathBuf,
-    pin::Pin,
     sync::{Arc, mpsc as std_mpsc},
     thread,
 };
+
+#[cfg(any(test, feature = "test-support"))]
+use std::{future::Future, pin::Pin};
 
 use indexmap::IndexMap;
 use parking_lot::Mutex;
@@ -132,6 +133,7 @@ impl Browser {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     fn spawn_local_context_operation<R: Send + 'static>(
         &mut self,
         id: BrowserContextId,
@@ -508,32 +510,66 @@ impl BrowserContextHandle {
         &self,
         handle: WebContentsHandle,
     ) -> Result<PendingWebContentsClose, String> {
-        self.try_update(move |context| {
-            let closing = context.close_web_contents(handle)?;
+        let context = self.id;
+        self.browser.execute(move |browser| {
+            let closing = browser.context_mut(context)?.close_web_contents(handle)?;
+            browser.navigation_work.remove_web_contents(handle);
             let (completion_tx, completion) = oneshot::channel();
             tokio::task::spawn_local(async move {
                 closing.close_async().await;
                 let _ = completion_tx.send(());
             });
             Ok(PendingWebContentsClose { completion })
-        })
+        })?
     }
 
     pub fn close_all_web_contents(&self) -> Vec<PendingWebContentsClose> {
-        self.update_live(|context| {
-            context
-                .close_all_web_contents()
-                .into_iter()
-                .map(|closing| {
-                    let (completion_tx, completion) = oneshot::channel();
-                    tokio::task::spawn_local(async move {
-                        closing.close_async().await;
-                        let _ = completion_tx.send(());
-                    });
-                    PendingWebContentsClose { completion }
-                })
-                .collect()
-        })
+        let context = self.id;
+        self.browser
+            .execute(move |browser| {
+                let closing = browser.context_mut(context)?.close_all_web_contents();
+                browser.navigation_work.remove_context(context);
+                Ok::<_, String>(
+                    closing
+                        .into_iter()
+                        .map(|closing| {
+                            let (completion_tx, completion) = oneshot::channel();
+                            tokio::task::spawn_local(async move {
+                                closing.close_async().await;
+                                let _ = completion_tx.send(());
+                            });
+                            PendingWebContentsClose { completion }
+                        })
+                        .collect(),
+                )
+            })
+            .expect("live Browser owner must accept WebContents teardown")
+            .expect("live BrowserContext handle must resolve in its owner")
+    }
+
+    pub fn start_document_navigation(
+        &self,
+        handle: WebContentsHandle,
+    ) -> Result<super::NavigationId, String> {
+        let context = self.id;
+        self.browser.execute(move |browser| {
+            let navigation = browser
+                .context_mut(context)?
+                .start_document_navigation(handle)?;
+            browser.navigation_work.remove_web_contents(handle);
+            Ok(navigation)
+        })?
+    }
+
+    pub fn clear_document_navigation_state(&self, handle: WebContentsHandle) -> Result<(), String> {
+        let context = self.id;
+        self.browser.execute(move |browser| {
+            browser
+                .context_mut(context)?
+                .clear_document_navigation_state(handle)?;
+            browser.navigation_work.remove_web_contents(handle);
+            Ok(())
+        })?
     }
 
     pub fn retire_document(
@@ -777,8 +813,6 @@ impl BrowserContextHandle {
         fn mark_next_navigation_history_traverse_to_entry(handle: WebContentsHandle, entry_id: i32) -> ();
         fn commit_same_document_navigation(handle: WebContentsHandle, document: super::DocumentId, url: url::Url, history_update: crate::page::SameDocumentHistoryUpdate) -> Option<super::web_contents::SameDocumentNavigationCommitted>;
         fn mark_renderer_crashed(handle: WebContentsHandle) -> ();
-        fn start_document_navigation(handle: WebContentsHandle) -> super::NavigationId;
-        fn clear_document_navigation_state(handle: WebContentsHandle) -> ();
         fn begin_initial_empty_document(handle: WebContentsHandle, initial_url: String, creator: Option<super::web_contents::InitialDocumentCreator>, storage_key: Option<moli_storage_key::MoliStorageKey>) -> ();
         fn mark_initial_url_replaces_empty_document(handle: WebContentsHandle) -> ();
         fn crash_web_contents_renderer_from_io(handle: WebContentsHandle) -> ();
@@ -886,9 +920,16 @@ impl BrowserContextHandle {
         navigation: &super::NavigationId,
     ) -> Result<bool, String> {
         let navigation = *navigation;
-        self.try_update(move |context| {
-            context.clear_pending_navigation_if_matches(handle, &navigation)
-        })
+        let context = self.id;
+        self.browser.execute(move |browser| {
+            let cleared = browser
+                .context_mut(context)?
+                .clear_pending_navigation_if_matches(handle, &navigation)?;
+            if cleared {
+                browser.navigation_work.remove_web_contents(handle);
+            }
+            Ok(cleared)
+        })?
     }
 
     pub fn apply_renderer_document_lifecycle(
