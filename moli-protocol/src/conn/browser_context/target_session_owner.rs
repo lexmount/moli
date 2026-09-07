@@ -99,6 +99,7 @@ pub(super) struct TargetSessionStateMut<'a> {
 }
 
 pub(crate) struct TargetNavigationRequestPreflight {
+    pub(crate) web_contents: moli_core::browser::WebContentsHandle,
     pub(crate) frame_id: String,
     pub(crate) session_id: Option<String>,
     pub(crate) document_fetch_event_session_id: Option<String>,
@@ -840,6 +841,9 @@ impl<'a> TargetSessionOwnerMut<'a> {
         fallback_browser_identity: &moli_browser_profile::BrowserIdentityProfile,
         network_request_id_allocator: &mut ConnectionNetworkRequestIdAllocator,
     ) -> Option<TargetNavigationRequestPreflight> {
+        let web_contents = self
+            .browser_context
+            .web_contents_handle_for_target(&self.target_id)?;
         {
             let target = self.target();
             let frame_id = self.target_id.clone();
@@ -931,6 +935,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
                     needs_fetch_navigation_request_id,
                 );
             Some(TargetNavigationRequestPreflight {
+                web_contents,
                 frame_id,
                 session_id: target_session_id,
                 document_fetch_event_session_id,

@@ -1,5 +1,6 @@
 use moli_core::browser::{
-    DownloadAccessError, DownloadBody, DownloadObservation, DownloadSnapshot, DownloadState,
+    DownloadAccessError, DownloadBody, DownloadObservation, DownloadPolicy, DownloadSnapshot,
+    DownloadState, WebContentsHandle,
 };
 use moli_core::page::RendererPendingDownloadActivation;
 use moli_fetch::Request;
@@ -14,27 +15,31 @@ use super::{
 #[path = "downloads/lifecycle_tests.rs"]
 mod lifecycle_tests;
 
-struct PendingDownloadOwnerContext {
-    browser_context_id: String,
+#[derive(Debug, Eq, PartialEq)]
+pub(crate) struct PreparedDownloadActivation {
+    web_contents: WebContentsHandle,
     frame_id: String,
     request_headers: Vec<(String, String)>,
     initiator_url: Option<Url>,
+    policy: DownloadPolicy,
+    event_route: DownloadEventRoute,
+    activation: RendererPendingDownloadActivation,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 struct DownloadEventRoute {
     browser_observers: Vec<BrowserDownloadObserver>,
     automation_events_enabled: bool,
     page_observers: Vec<PageDownloadObserver>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 struct BrowserDownloadObserver {
     session_id: Option<String>,
     subscription_generation: u64,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Eq, PartialEq)]
 struct PageDownloadObserver {
     session_id: Option<String>,
     subscription_generation: u64,
@@ -49,56 +54,86 @@ impl DownloadEventRoute {
 }
 
 impl CdpConnection {
-    pub(crate) async fn handle_pending_download_activation_background_events_async(
-        &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
+    pub(crate) fn prepare_download_activation_for_owner(
+        &self,
         owner: &CommandOwnerScope,
         activation: RendererPendingDownloadActivation,
-        command_context: &mut CommandDispatchContext,
-    ) -> Result<(), String> {
-        self.handle_pending_download_activation_with_event_route_async(
-            out,
-            owner,
-            activation,
-            true,
-            command_context,
-        )
-        .await
+    ) -> Option<PreparedDownloadActivation> {
+        let web_contents = self.browser_web_contents_for_owner(owner).ok()?;
+        self.prepare_download_activation(owner, web_contents, activation)
     }
 
-    pub(crate) async fn handle_pending_download_activation_inline_async(
-        &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
+    pub(crate) fn prepare_download_activation(
+        &self,
         owner: &CommandOwnerScope,
+        web_contents: WebContentsHandle,
         activation: RendererPendingDownloadActivation,
-        command_context: &mut CommandDispatchContext,
-    ) -> Result<(), String> {
-        self.handle_pending_download_activation_with_event_route_async(
-            out,
-            owner,
+    ) -> Option<PreparedDownloadActivation> {
+        let context = self.browser_context_by_browser_id(web_contents.context())?;
+        let frame_id = context
+            .download_frame_id_for_web_contents(web_contents)?
+            .to_owned();
+        let request_headers = context.effective_extra_headers_for_target(&frame_id);
+        let initiator_url = context.target_document_url(&frame_id).cloned();
+        let (policy, automation_events_enabled) =
+            self.download_configuration_for_browser_context(web_contents.context())?;
+        let event_route = self.download_event_route(owner, automation_events_enabled);
+        Some(PreparedDownloadActivation {
+            web_contents,
+            frame_id,
+            request_headers,
+            initiator_url,
+            policy,
+            event_route,
             activation,
-            false,
-            command_context,
-        )
-        .await
+        })
     }
 
-    async fn handle_pending_download_activation_with_event_route_async(
+    pub(crate) async fn handle_prepared_download_activation_background_events_async(
         &mut self,
         out: &mut Vec<BackgroundProtocolEvent>,
-        owner: &CommandOwnerScope,
-        activation: RendererPendingDownloadActivation,
+        activation: PreparedDownloadActivation,
+        command_context: &mut CommandDispatchContext,
+    ) -> Result<(), String> {
+        self.handle_prepared_download_activation_async(out, activation, true, command_context)
+            .await
+    }
+
+    pub(crate) async fn handle_prepared_download_activation_inline_async(
+        &mut self,
+        out: &mut Vec<BackgroundProtocolEvent>,
+        activation: PreparedDownloadActivation,
+        command_context: &mut CommandDispatchContext,
+    ) -> Result<(), String> {
+        self.handle_prepared_download_activation_async(out, activation, false, command_context)
+            .await
+    }
+
+    async fn handle_prepared_download_activation_async(
+        &mut self,
+        out: &mut Vec<BackgroundProtocolEvent>,
+        prepared: PreparedDownloadActivation,
         allow_background_events: bool,
         command_context: &mut CommandDispatchContext,
     ) -> Result<(), String> {
-        let Some(context) = self.pending_download_owner_context(owner) else {
+        let PreparedDownloadActivation {
+            web_contents,
+            frame_id,
+            request_headers,
+            initiator_url,
+            policy,
+            event_route,
+            activation,
+        } = prepared;
+        let Some(context) = self.browser_context_by_browser_id(web_contents.context()) else {
             return Ok(());
         };
-        let event_route = self.download_event_route(
-            owner,
-            self.automation_download_events_enabled_for_context(Some(&context.browser_context_id)),
-        );
-        let policy = self.download_policy_for_browser_context(Some(&context.browser_context_id));
+        if context
+            .download_frame_id_for_web_contents(web_contents)
+            .is_none()
+        {
+            return Ok(());
+        }
         let observation = if policy.behavior.is_canceled_without_download() {
             if !event_route.has_observers() {
                 return Ok(());
@@ -117,15 +152,15 @@ impl CdpConnection {
             if policy.download_path.is_none() {
                 return Ok(());
             }
-            let default_policy = self.download_policy.clone();
             if let Some(response) = activation.response {
                 let url = Url::parse(&response.final_url)
                     .or_else(|_| Url::parse(&activation.url))
                     .map_err(|error| format!("invalid download url: {error}"))?;
-                self.browser_context_by_id_mut(&context.browser_context_id)
-                    .expect("download owner was resolved without yielding")
+                self.browser_context_by_browser_id_mut(web_contents.context())
+                    .expect("exact download Context was resolved without yielding")
                     .start_download_response(
-                        &default_policy,
+                        web_contents,
+                        &policy,
                         url,
                         response.headers,
                         DownloadBody::Buffered(response.body),
@@ -133,26 +168,20 @@ impl CdpConnection {
             } else {
                 let mut request = Request::get(&activation.url)
                     .map_err(|error| format!("invalid download url: {error}"))?;
-                request.request_headers = context.request_headers;
+                request.request_headers = request_headers;
                 request = request
                     .with_top_level_navigation_cookie_context()
                     .with_page_network_policy();
-                if let Some(initiator_url) = &context.initiator_url {
+                if let Some(initiator_url) = &initiator_url {
                     request = request.with_initiator_url(initiator_url);
                 }
-                #[cfg(test)]
-                self.ensure_page_navigation_engine_for_target(
-                    &context.browser_context_id,
-                    &context.frame_id,
-                )
-                .ok_or("navigation WebContents engine unavailable")?;
                 let fetch_defaults = self.document_fetch_defaults();
-                self.browser_context_by_id_mut(&context.browser_context_id)
-                    .expect("download owner was resolved without yielding")
+                self.browser_context_by_browser_id_mut(web_contents.context())
+                    .expect("exact download Context was resolved without yielding")
                     .start_download_request(
-                        &context.frame_id,
+                        web_contents,
                         fetch_defaults,
-                        &default_policy,
+                        &policy,
                         request,
                         activation.suggested_filename,
                     )?
@@ -161,7 +190,7 @@ impl CdpConnection {
         if let Some(observation) = observation {
             self.observe_download(
                 DownloadProjection {
-                    frame_id: context.frame_id,
+                    frame_id,
                     event_route,
                     observation,
                     started: false,
@@ -183,24 +212,27 @@ impl CdpConnection {
         body_artifact: CompletedDownloadBodyArtifact,
         command_context: &mut CommandDispatchContext,
     ) -> Result<(), String> {
-        // The frozen initiating frame, not a subsequently selected Context or a
-        // still-attached session, identifies the navigation's Browser residence.
-        let Some(context_id) = self
-            .browser_context_id_for_target(&state.frame_id)
-            .map(str::to_owned)
+        let web_contents = state.web_contents;
+        let Some(context) = self.browser_context_by_browser_id(web_contents.context()) else {
+            return Ok(());
+        };
+        if context
+            .download_frame_id_for_web_contents(web_contents)
+            .is_none()
+        {
+            return Ok(());
+        }
+        let Some((policy, automation_events_enabled)) =
+            self.download_configuration_for_browser_context(web_contents.context())
         else {
             return Ok(());
         };
-        let event_route = self.download_event_route(
-            &state.owner,
-            self.automation_download_events_enabled_for_context(Some(&context_id)),
-        );
-        let default_policy = self.download_policy.clone();
+        let event_route = self.download_event_route(&state.owner, automation_events_enabled);
         let (body, headers) = body_artifact.into_parts();
         let observation = self
-            .browser_context_by_id_mut(&context_id)
-            .expect("download owner was resolved without yielding")
-            .start_download_response(&default_policy, final_url, headers, body)?;
+            .browser_context_by_browser_id_mut(web_contents.context())
+            .expect("exact navigation download Context was resolved without yielding")
+            .start_download_response(web_contents, &policy, final_url, headers, body)?;
         if let Some(observation) = observation {
             self.observe_download(
                 DownloadProjection {
@@ -284,31 +316,6 @@ impl CdpConnection {
 
     pub(crate) fn finish_open_download_as_stream(&mut self, bytes: Vec<u8>) -> String {
         self.open_global_io_stream(bytes)
-    }
-
-    fn pending_download_owner_context(
-        &self,
-        owner: &CommandOwnerScope,
-    ) -> Option<PendingDownloadOwnerContext> {
-        let (browser_context_id, target_id) = self.target_owner_identity_for_owner(owner)?;
-        let browser_context = self.browser_context_by_id(&browser_context_id)?;
-        let frame_id = target_id
-            .clone()
-            .or_else(|| browser_context.active_target_id_owned())
-            .unwrap_or_else(|| "FRAME-0".to_owned());
-        let request_headers = target_id
-            .as_deref()
-            .map(|target_id| browser_context.effective_extra_headers_for_target(target_id))
-            .unwrap_or_else(|| browser_context.effective_extra_headers());
-        let initiator_url = self
-            .resolved_page_owner_identity_for_owner(owner)
-            .and_then(|(_, target_id)| browser_context.target_document_url(&target_id).cloned());
-        Some(PendingDownloadOwnerContext {
-            browser_context_id,
-            frame_id,
-            request_headers,
-            initiator_url,
-        })
     }
 
     fn download_event_route(
@@ -582,6 +589,7 @@ fn download_progress_event(
 #[cfg(test)]
 mod tests {
     use moli_core::browser::DownloadBehavior;
+    use moli_core::page::RendererPendingDownloadActivation;
 
     use crate::{
         conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope},
@@ -640,7 +648,14 @@ mod tests {
         connection.install_browser_context_fixture_for_test(browser_context);
 
         let owner = connection
-            .pending_download_owner_context(&CommandOwnerScope::for_session("SID-background"))
+            .prepare_download_activation_for_owner(
+                &CommandOwnerScope::for_session("SID-background"),
+                RendererPendingDownloadActivation {
+                    url: "https://background.test/report.txt".to_owned(),
+                    suggested_filename: None,
+                    response: None,
+                },
+            )
             .expect("background session must resolve its Page target");
         assert_eq!(owner.frame_id, "TID-background");
         assert_eq!(

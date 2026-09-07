@@ -509,6 +509,7 @@ async fn get_request_post_data_returns_main_document_navigation_post_body() {
     let navigation_state = NavigationDispatchState {
         navigate_id: Some(1),
         owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
+        web_contents: NavigationDispatchState::detached_web_contents_for_test(),
         result_projection: crate::conn::NavigationResultProjection::Cdp(
             json!({"frameId": "TID-1", "loaderId": LOADER_ID}),
         ),
@@ -598,6 +599,7 @@ async fn get_request_post_data_uses_text_projection_while_bidi_collector_keeps_t
     let navigation_state = NavigationDispatchState {
         navigate_id: Some(1),
         owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
+        web_contents: NavigationDispatchState::detached_web_contents_for_test(),
         result_projection: crate::conn::NavigationResultProjection::Cdp(
             json!({"frameId": "TID-1", "loaderId": LOADER_ID}),
         ),

@@ -1,4 +1,4 @@
-use moli_core::browser::DownloadBody;
+use moli_core::browser::{DownloadBody, WebContentsHandle};
 #[cfg(test)]
 use moli_core::page::RendererPageCreationArtifacts;
 use moli_core::page::{
@@ -292,6 +292,7 @@ impl NavigationResultProjection {
 pub struct NavigationDispatchState {
     pub navigate_id: Option<u64>,
     pub(crate) owner: CommandOwnerScope,
+    pub(crate) web_contents: WebContentsHandle,
     pub(crate) result_projection: NavigationResultProjection,
     pub frame_id: String,
     pub session_id: Option<String>,
@@ -312,6 +313,14 @@ pub struct NavigationDispatchState {
 }
 
 impl NavigationDispatchState {
+    #[cfg(test)]
+    pub(crate) fn detached_web_contents_for_test() -> WebContentsHandle {
+        WebContentsHandle::new(
+            moli_core::browser::BrowserContextId::allocate(),
+            moli_core::browser::WebContentsId::allocate(),
+        )
+    }
+
     pub(crate) fn clone_request_body_bytes(&self) -> Option<Vec<u8>> {
         self.request_body_bytes
             .clone()

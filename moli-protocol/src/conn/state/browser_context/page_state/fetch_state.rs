@@ -388,6 +388,7 @@ mod tests {
         NavigationDispatchState {
             navigate_id: Some(1),
             owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
+            web_contents: NavigationDispatchState::detached_web_contents_for_test(),
             result_projection: NavigationResultProjection::Cdp(
                 json!({"frameId": "TID-1", "loaderId": "LID-0000000001"}),
             ),

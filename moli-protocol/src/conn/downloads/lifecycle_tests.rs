@@ -45,16 +45,22 @@ fn fixture() -> (TestDirectory, CdpConnection) {
 
 fn projection(conn: &mut CdpConnection, body: DownloadBody) -> DownloadProjection {
     let owner = CommandOwnerScope::for_session("SID-source");
-    let context = conn.pending_download_owner_context(&owner).unwrap();
-    let event_route = conn.download_event_route(
-        &owner,
-        conn.automation_download_events_enabled_for_context(Some(&context.browser_context_id)),
-    );
-    let policy = conn.download_policy.clone();
+    let web_contents = conn.browser_web_contents_for_owner(&owner).unwrap();
+    let (policy, automation_events_enabled) = conn
+        .download_configuration_for_browser_context(web_contents.context())
+        .unwrap();
+    let frame_id = conn
+        .browser_context_by_browser_id(web_contents.context())
+        .unwrap()
+        .download_frame_id_for_web_contents(web_contents)
+        .unwrap()
+        .to_owned();
+    let event_route = conn.download_event_route(&owner, automation_events_enabled);
     let observation = conn
-        .browser_context_by_id_mut(&context.browser_context_id)
+        .browser_context_by_browser_id_mut(web_contents.context())
         .unwrap()
         .start_download_response(
+            web_contents,
             &policy,
             Url::parse("https://source.test/report.txt").unwrap(),
             Vec::new(),
@@ -63,7 +69,7 @@ fn projection(conn: &mut CdpConnection, body: DownloadBody) -> DownloadProjectio
         .unwrap()
         .unwrap();
     DownloadProjection {
-        frame_id: context.frame_id,
+        frame_id,
         event_route,
         observation,
         started: false,
@@ -289,17 +295,17 @@ async fn retiring_context_cancels_download_and_new_same_wire_context_cannot_read
     );
 }
 
-#[tokio::test]
-async fn navigation_download_uses_its_frozen_frame_after_session_detach_and_selection_change() {
+fn navigation_download_state(conn: &CdpConnection) -> NavigationDispatchState {
     use crate::conn::{
         NavigationRequestLoadPolicy, NavigationResultProjection,
         NavigationSourceDocumentSecurityContext,
     };
 
-    let (directory, mut conn) = fixture();
-    let state = NavigationDispatchState {
+    let owner = CommandOwnerScope::for_session("SID-source");
+    NavigationDispatchState {
         navigate_id: None,
-        owner: CommandOwnerScope::for_session("SID-source"),
+        web_contents: conn.browser_web_contents_for_owner(&owner).unwrap(),
+        owner,
         result_projection: NavigationResultProjection::Cdp(serde_json::json!({})),
         frame_id: "TID-source".into(),
         session_id: Some("SID-source".into()),
@@ -317,7 +323,34 @@ async fn navigation_download_uses_its_frozen_frame_after_session_detach_and_sele
             "https://source.test".into(),
             "Secure".into(),
         ),
-    };
+    }
+}
+
+async fn replace_source_download_context(conn: &mut CdpConnection, directory: &TestDirectory) {
+    drop(
+        conn.remove_browser_context_by_id_restoring_active_async("CTX-source", None)
+            .await
+            .unwrap(),
+    );
+    let mut replacement = BrowserContext::new("CTX-source".into());
+    replacement.set_active_target_id("TID-source");
+    replacement.attach_active_session("SID-source");
+    conn.install_browser_context_fixture_for_test(replacement);
+    conn.configure_download_policy(
+        Some("CTX-source"),
+        DownloadPolicy {
+            behavior: DownloadBehavior::AllowAndName,
+            download_path: Some(directory.0.to_str().unwrap().to_owned()),
+        },
+        Some(true),
+    )
+    .unwrap();
+}
+
+#[tokio::test]
+async fn navigation_download_uses_its_frozen_frame_after_session_detach_and_selection_change() {
+    let (directory, mut conn) = fixture();
+    let state = navigation_download_state(&conn);
     conn.detach_known_session_event_plan("TID-source", "SID-source", None, None);
     assert!(conn.target_owner_identity_for_owner(&state.owner).is_none());
     let source = conn
@@ -360,4 +393,62 @@ async fn navigation_download_uses_its_frozen_frame_after_session_detach_and_sele
         b"navigation"
     );
     assert_eq!(conn.browser_context.as_ref().unwrap().id, "CTX-foreground");
+}
+
+#[tokio::test]
+async fn navigation_download_does_not_enter_a_replacement_with_the_same_wire_identity() {
+    let (directory, mut conn) = fixture();
+    let state = navigation_download_state(&conn);
+    replace_source_download_context(&mut conn, &directory).await;
+
+    let mut out = Vec::new();
+    conn.handle_navigation_download_response_async(
+        &mut out,
+        &state,
+        state.requested_url.clone(),
+        CompletedDownloadBodyArtifact::from_body(
+            DownloadBody::Buffered(b"stale navigation".to_vec()),
+            Vec::new(),
+        ),
+        &mut CommandDispatchContext::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(out.is_empty());
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 0);
+}
+
+#[tokio::test]
+async fn prepared_renderer_download_does_not_enter_a_replacement_web_contents() {
+    let (directory, mut conn) = fixture();
+    let owner = CommandOwnerScope::for_session("SID-source");
+    let prepared = conn
+        .prepare_download_activation_for_owner(
+            &owner,
+            RendererPendingDownloadActivation {
+                url: "https://source.test/report.txt".to_owned(),
+                suggested_filename: Some("report.txt".to_owned()),
+                response: Some(moli_core::page::RendererPendingDownloadResponse {
+                    final_url: "https://source.test/report.txt".to_owned(),
+                    status: 200,
+                    headers: Vec::new(),
+                    body: b"stale renderer".to_vec(),
+                }),
+            },
+        )
+        .unwrap();
+    replace_source_download_context(&mut conn, &directory).await;
+
+    let mut out = Vec::new();
+    conn.handle_prepared_download_activation_background_events_async(
+        &mut out,
+        prepared,
+        &mut CommandDispatchContext::default(),
+    )
+    .await
+    .unwrap();
+
+    assert!(out.is_empty());
+    assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 0);
 }

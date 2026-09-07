@@ -1305,7 +1305,6 @@ impl PageOutputProjectionStep {
                 input::emit_download_activity_background_events_async(
                     conn,
                     &mut events,
-                    &owner,
                     prepared_outputs,
                     context.command,
                 )
@@ -3493,6 +3492,7 @@ mod producer_tests {
             source_document,
         );
         let page_owner = page_residence_identity_for_test(&mut conn, "SID-activity-order");
+        let download_owner = CommandOwnerScope::for_session("SID-activity-order");
 
         let mut prepared =
             ProtocolOutputPayloads::from_slot(InputPreparedOutputSlot::from_outputs(
@@ -3509,13 +3509,15 @@ mod producer_tests {
             ));
         prepared.extend_payload(
             InputPreparedOutputSlot::from_outputs(
-                InputPreparedOutputs::from_download_activations_for_test(vec![
-                    RendererPendingDownloadActivation {
+                InputPreparedOutputs::from_download_activations_for_test(
+                    &conn,
+                    &download_owner,
+                    vec![RendererPendingDownloadActivation {
                         url: "https://example.test/report.txt".to_owned(),
                         suggested_filename: Some("report.txt".to_owned()),
                         response: None,
-                    },
-                ]),
+                    }],
+                ),
             )
             .into(),
         );

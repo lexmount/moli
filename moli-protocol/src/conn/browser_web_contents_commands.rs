@@ -1,6 +1,9 @@
 use moli_core::browser::WebContentsHandle;
 
-use super::{CdpConnection, CommandOwnerScope, WindowSurface, WindowSurfaceState};
+use super::{
+    CdpConnection, CommandOwnerScope, TargetPageResidenceIdentity, WindowSurface,
+    WindowSurfaceState,
+};
 
 impl CdpConnection {
     /// Resolves a frontend route once into a stable physical WebContents
@@ -33,6 +36,21 @@ impl CdpConnection {
         self.browser_contexts()
             .find_map(|context| context.web_contents_handle_for_target(target_id))
             .ok_or_else(|| "NoSuchTarget".to_owned())
+    }
+
+    pub(crate) fn browser_web_contents_for_page_residence(
+        &self,
+        page: &TargetPageResidenceIdentity,
+    ) -> Result<WebContentsHandle, String> {
+        if !self.target_page_residence_identity_is_current(page) {
+            return Err("WebContents unavailable".to_owned());
+        }
+        let target_id = page
+            .target_id()
+            .ok_or_else(|| "WebContents unavailable".to_owned())?;
+        self.browser_context_by_id(page.browser_context_id())
+            .and_then(|context| context.web_contents_handle_for_target(target_id))
+            .ok_or_else(|| "WebContents unavailable".to_owned())
     }
 
     pub(crate) fn browser_web_contents_for_window_id(

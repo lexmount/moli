@@ -570,12 +570,13 @@ impl MainDocumentNavigationActivity {
         pending_download: Option<RendererPendingDownloadActivation>,
     ) {
         let mut command_context = CommandDispatchContext::default();
-        let error = if let Some(download) = pending_download {
+        let error = if let Some(download) = pending_download.and_then(|download| {
+            conn.prepare_download_activation(&self.state.owner, self.state.web_contents, download)
+        }) {
             let mut download_events = Vec::new();
             let error = conn
-                .handle_pending_download_activation_inline_async(
+                .handle_prepared_download_activation_inline_async(
                     &mut download_events,
-                    &self.state.owner,
                     download,
                     &mut command_context,
                 )
@@ -934,6 +935,7 @@ mod tests {
         NavigationDispatchState {
             navigate_id: Some(77),
             owner: CommandOwnerScope::for_session("SID-nav"),
+            web_contents: NavigationDispatchState::detached_web_contents_for_test(),
             result_projection: NavigationResultProjection::Cdp(
                 json!({ "frameId": "FRAME-1", "loaderId": "LID-1" }),
             ),
