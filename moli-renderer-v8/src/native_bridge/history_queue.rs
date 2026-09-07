@@ -8,7 +8,7 @@ use crate::page_task_queue::{
     RendererPageNavigationApiTaskKind, RendererPageNavigationApiTaskProducer,
 };
 use moli_webapi_declare::WebApiObject;
-use std::collections::VecDeque;
+use std::{cell::RefCell, collections::VecDeque, rc::Rc};
 
 const NAVIGATION_LIFECYCLE_TRACE_LIMIT: usize = 128;
 
@@ -79,7 +79,28 @@ struct NavigationResultDeclaration<'scope> {
     finished: v8::Local<'scope, v8::Promise>,
 }
 
+// Consecutive deltas share the position advanced by actual history commits.
+// A synchronous navigation observed between calls starts a separate position,
+// without moving the starting point of already queued traversal steps.
+pub(crate) struct HistoryTraversalPosition {
+    pub(crate) index: u32,
+    source_entry_key: Option<String>,
+    current_entry_key: Option<String>,
+}
+
+impl HistoryTraversalPosition {
+    fn matches_entry(&self, key: Option<&str>) -> bool {
+        key.is_some()
+            && (self.source_entry_key.as_deref() == key || self.current_entry_key.as_deref() == key)
+    }
+}
+
 pub(crate) enum PendingHistoryTraversalAction {
+    ByDelta {
+        target: WindowTaskTarget,
+        delta: i64,
+        position: Rc<RefCell<HistoryTraversalPosition>>,
+    },
     SameDocument(PendingHistoryTraversal),
     ChildCrossDocument(Box<PendingChildCrossDocumentTraversal>),
 }
@@ -92,6 +113,7 @@ pub(crate) struct QueuedHistoryTraversalTask {
 }
 
 pub(super) struct HistoryQueueState {
+    active_delta_position: Option<(WindowTaskTarget, Rc<RefCell<HistoryTraversalPosition>>)>,
     pending_history_traversal_tasks: VecDeque<QueuedHistoryTraversalTask>,
     next_history_traversal_task_id: RendererPageHistoryTraversalTaskId,
     pending_microtask_navigation_finished_results: VecDeque<PendingNavigationFinishedResult>,
@@ -103,6 +125,7 @@ pub(super) struct HistoryQueueState {
 impl Default for HistoryQueueState {
     fn default() -> Self {
         Self {
+            active_delta_position: None,
             pending_history_traversal_tasks: VecDeque::new(),
             next_history_traversal_task_id: RendererPageHistoryTraversalTaskId::first(),
             pending_microtask_navigation_finished_results: VecDeque::new(),
@@ -123,7 +146,8 @@ impl HistoryQueueState {
                 {
                     Some(pending.target_index)
                 }
-                PendingHistoryTraversalAction::SameDocument(_)
+                PendingHistoryTraversalAction::ByDelta { .. }
+                | PendingHistoryTraversalAction::SameDocument(_)
                 | PendingHistoryTraversalAction::ChildCrossDocument(_) => None,
             })
     }
@@ -147,7 +171,8 @@ impl HistoryQueueState {
                 {
                     Some(pending)
                 }
-                PendingHistoryTraversalAction::SameDocument(_)
+                PendingHistoryTraversalAction::ByDelta { .. }
+                | PendingHistoryTraversalAction::SameDocument(_)
                 | PendingHistoryTraversalAction::ChildCrossDocument(_) => None,
             })
         {
@@ -413,6 +438,92 @@ impl JsContextHost {
         ))
     }
 
+    pub(crate) fn queue_history_traversal_by_delta<'s>(
+        &mut self,
+        scope: &mut v8::PinScope<'s, '_>,
+        target: WindowTaskTarget,
+        delta: i64,
+        source_index: u32,
+        source_entry_key: Option<String>,
+    ) -> Option<RendererPageHistoryTraversalProducer> {
+        let execution_context = self.current_runtime_window_execution_context_identity(scope)?;
+        let relevant_context = self.current_runtime_window_execution_context_binding(scope)?;
+        let previous_position = self
+            .history_queue
+            .pending_history_traversal_tasks
+            .iter()
+            .rev()
+            .find_map(|queued| match &queued.action {
+                PendingHistoryTraversalAction::ByDelta {
+                    target: queued_target,
+                    position,
+                    ..
+                } if *queued_target == target => Some(position),
+                _ => None,
+            })
+            .or_else(|| {
+                self.history_queue
+                    .active_delta_position
+                    .as_ref()
+                    .filter(|(active_target, _)| *active_target == target)
+                    .map(|(_, position)| position)
+            });
+        let position = previous_position
+            .filter(|position| position.borrow().matches_entry(source_entry_key.as_deref()))
+            .cloned()
+            .unwrap_or_else(|| {
+                Rc::new(RefCell::new(HistoryTraversalPosition {
+                    index: source_index,
+                    current_entry_key: source_entry_key.clone(),
+                    source_entry_key,
+                }))
+            });
+        let task_id = self.history_queue.next_history_traversal_task_id;
+        self.history_queue.next_history_traversal_task_id = task_id
+            .checked_next()
+            .expect("history-traversal task id overflow");
+        self.history_queue
+            .pending_history_traversal_tasks
+            .push_back(QueuedHistoryTraversalTask {
+                task_id,
+                execution_context,
+                relevant_context,
+                action: PendingHistoryTraversalAction::ByDelta {
+                    target,
+                    delta,
+                    position,
+                },
+            });
+        Some(self.page_history_traversal_sender().bind_task(
+            execution_context,
+            target,
+            task_id,
+            RendererPageHistoryTraversalTaskKind::ByDelta,
+        ))
+    }
+
+    pub(crate) fn replace_active_history_delta_position(
+        &mut self,
+        position: Option<(WindowTaskTarget, Rc<RefCell<HistoryTraversalPosition>>)>,
+    ) -> Option<(WindowTaskTarget, Rc<RefCell<HistoryTraversalPosition>>)> {
+        std::mem::replace(&mut self.history_queue.active_delta_position, position)
+    }
+
+    pub(crate) fn commit_active_history_delta_position(
+        &mut self,
+        target: WindowTaskTarget,
+        index: u32,
+        entry_key: Option<String>,
+    ) {
+        if let Some((active_target, position)) = &self.history_queue.active_delta_position
+            && *active_target == target
+        {
+            let mut position = position.borrow_mut();
+            position.index = index;
+            position.current_entry_key = entry_key;
+        }
+    }
+
     pub(crate) fn queue_microtask_navigation_finished_result<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
@@ -669,6 +780,9 @@ impl JsContextHost {
             return None;
         }
         let (target, kind) = match &queued.action {
+            PendingHistoryTraversalAction::ByDelta { target, .. } => {
+                (*target, RendererPageHistoryTraversalTaskKind::ByDelta)
+            }
             PendingHistoryTraversalAction::SameDocument(pending) => (
                 pending.target,
                 RendererPageHistoryTraversalTaskKind::SameDocument,
@@ -695,6 +809,9 @@ impl JsContextHost {
     ) -> Option<QueuedHistoryTraversalTask> {
         let queued = self.history_queue.pending_history_traversal_task(task_id)?;
         let (queued_target, queued_kind) = match &queued.action {
+            PendingHistoryTraversalAction::ByDelta { target, .. } => {
+                (*target, RendererPageHistoryTraversalTaskKind::ByDelta)
+            }
             PendingHistoryTraversalAction::SameDocument(pending) => (
                 pending.target,
                 RendererPageHistoryTraversalTaskKind::SameDocument,
