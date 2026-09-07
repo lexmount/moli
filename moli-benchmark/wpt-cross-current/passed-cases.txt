@@ -7759,6 +7759,7 @@ service-workers/service-worker/fetch-event-respond-with-response-body-with-inval
 service-workers/service-worker/fetch-event-respond-with-stops-propagation.https.html
 service-workers/service-worker/fetch-event-throws-after-respond-with.https.html
 service-workers/service-worker/fetch-request-no-freshness-headers.https.html
+service-workers/service-worker/immutable-prototype-serviceworker.https.html
 service-workers/service-worker/import-scripts-data-url.https.html
 service-workers/service-worker/indexeddb.https.html
 service-workers/service-worker/install-event-type.https.html

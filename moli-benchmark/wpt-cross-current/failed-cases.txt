@@ -3163,7 +3163,6 @@ service-workers/service-worker/fetch-request-xhr.https.html
 service-workers/service-worker/fetch-waits-for-activate.https.html
 service-workers/service-worker/getregistration.https.html
 service-workers/service-worker/getregistrations.https.html
-service-workers/service-worker/immutable-prototype-serviceworker.https.html
 service-workers/service-worker/import-scripts-cross-origin.https.html
 service-workers/service-worker/import-scripts-mime-types.https.html
 service-workers/service-worker/import-scripts-redirect.https.html
