@@ -1728,6 +1728,7 @@ impl ScriptVm {
                             trace_fields,
                             record_started,
                         );
+                        let request_origin = streaming.pending.request_origin();
                         if let PendingSubresourceContinuation::Xhr { xhr, .. } =
                             streaming.pending.continuation
                             && let Some(response_body) = xhr_delivery_body
@@ -1752,7 +1753,7 @@ impl ScriptVm {
                             {
                                 observable_head.headers =
                                     crate::network_host::filter_cors_exposed_response_headers(
-                                        &streaming.pending.request_origin,
+                                        &request_origin,
                                         &observable_head,
                                         streaming.pending.credentials_mode,
                                     );
