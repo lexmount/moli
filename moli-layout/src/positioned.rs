@@ -1,13 +1,30 @@
 use taffy::{
-    AbsoluteAxis, AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, AlignSelf,
-    AlignmentSafety, Direction, FlexWrap, Line, Point, Rect, Size, WritingMode,
+    AbsoluteAxis, AbstractAxis, AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword,
+    AlignSelf, AlignmentSafety, Direction, FlexWrap, Line, Point, Rect, Size, WritingMode,
 };
+
+use crate::ResolvedLayoutStyle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LogicalStaticEdge {
     Start,
     Center,
     End,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct LogicalStaticAlignment {
+    edge: LogicalStaticEdge,
+    safety: AlignmentSafety,
+}
+
+impl From<LogicalStaticEdge> for LogicalStaticAlignment {
+    fn from(edge: LogicalStaticEdge) -> Self {
+        Self {
+            edge,
+            safety: AlignmentSafety::Unsafe,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +51,7 @@ pub(crate) struct PhysicalStaticPosition {
     point: Point<f32>,
     horizontal_edge: HorizontalStaticEdge,
     vertical_edge: VerticalStaticEdge,
+    safety: Size<AlignmentSafety>,
 }
 
 impl PhysicalStaticPosition {
@@ -46,6 +64,10 @@ impl PhysicalStaticPosition {
             point,
             horizontal_edge,
             vertical_edge,
+            safety: Size {
+                width: AlignmentSafety::Unsafe,
+                height: AlignmentSafety::Unsafe,
+            },
         }
     }
 
@@ -59,22 +81,54 @@ impl PhysicalStaticPosition {
         }
     }
 
-    pub(crate) fn margin_box_origin(self, box_size: Size<f32>, margin: Rect<f32>) -> Point<f32> {
-        let x = match self.horizontal_edge {
-            HorizontalStaticEdge::Left => self.point.x + margin.left,
-            HorizontalStaticEdge::Center => {
-                self.point.x - box_size.width / 2.0 + (margin.left - margin.right) / 2.0
-            }
-            HorizontalStaticEdge::Right => self.point.x - box_size.width - margin.right,
+    pub(crate) fn border_box_origin(
+        self,
+        box_size: Size<f32>,
+        margin: Rect<f32>,
+        containing_size: Size<f32>,
+        containing_writing_mode: WritingMode,
+        containing_direction: Direction,
+    ) -> Point<f32> {
+        let horizontal = StaticPositionAxis {
+            offset: self.point.x,
+            edge: match self.horizontal_edge {
+                HorizontalStaticEdge::Left => PhysicalAxisStaticEdge::Min,
+                HorizontalStaticEdge::Center => PhysicalAxisStaticEdge::Center,
+                HorizontalStaticEdge::Right => PhysicalAxisStaticEdge::Max,
+            },
+            safety: self.safety.width,
         };
-        let y = match self.vertical_edge {
-            VerticalStaticEdge::Top => self.point.y + margin.top,
-            VerticalStaticEdge::Center => {
-                self.point.y - box_size.height / 2.0 + (margin.top - margin.bottom) / 2.0
-            }
-            VerticalStaticEdge::Bottom => self.point.y - box_size.height - margin.bottom,
+        let vertical = StaticPositionAxis {
+            offset: self.point.y,
+            edge: match self.vertical_edge {
+                VerticalStaticEdge::Top => PhysicalAxisStaticEdge::Min,
+                VerticalStaticEdge::Center => PhysicalAxisStaticEdge::Center,
+                VerticalStaticEdge::Bottom => PhysicalAxisStaticEdge::Max,
+            },
+            safety: self.safety.height,
         };
-        Point { x, y }
+        Point {
+            x: horizontal.border_box_start(
+                containing_size.width,
+                box_size.width,
+                Line {
+                    start: margin.left,
+                    end: margin.right,
+                },
+                containing_writing_mode
+                    .is_axis_flow_reversed(AbsoluteAxis::Horizontal, containing_direction),
+            ),
+            y: vertical.border_box_start(
+                containing_size.height,
+                box_size.height,
+                Line {
+                    start: margin.top,
+                    end: margin.bottom,
+                },
+                containing_writing_mode
+                    .is_axis_flow_reversed(AbsoluteAxis::Vertical, containing_direction),
+            ),
+        }
     }
 }
 
@@ -182,11 +236,167 @@ impl FlexCrossAxisStaticContext {
     }
 }
 
+/// Grid contributes alignment edges even when it does not establish the
+/// positioned child's containing block. These edges are relative to the grid's
+/// writing direction, including self-relative alignment in orthogonal flows.
+pub(crate) fn grid_static_alignment(
+    child: &ResolvedLayoutStyle,
+    container: &ResolvedLayoutStyle,
+) -> (LogicalStaticAlignment, LogicalStaticAlignment) {
+    let resolve = |logical_axis| {
+        let alignment = grid_item_alignment(child, container, logical_axis);
+        let axis = match logical_axis {
+            AbstractAxis::Inline => container.writing_mode().inline_axis(),
+            AbstractAxis::Block => container.writing_mode().block_axis(),
+        };
+        let edge = match alignment.keyword() {
+            AlignItemsKeyword::Center => LogicalStaticEdge::Center,
+            AlignItemsKeyword::End | AlignItemsKeyword::FlexEnd => LogicalStaticEdge::End,
+            AlignItemsKeyword::SelfStart | AlignItemsKeyword::SelfEnd => {
+                let starts_match = child
+                    .writing_mode()
+                    .is_axis_flow_reversed(axis, child.taffy.direction)
+                    == container
+                        .writing_mode()
+                        .is_axis_flow_reversed(axis, container.taffy.direction);
+                if (alignment.keyword() == AlignItemsKeyword::SelfStart) == starts_match {
+                    LogicalStaticEdge::Start
+                } else {
+                    LogicalStaticEdge::End
+                }
+            }
+            AlignItemsKeyword::Start
+            | AlignItemsKeyword::FlexStart
+            | AlignItemsKeyword::Baseline
+            | AlignItemsKeyword::Stretch => LogicalStaticEdge::Start,
+        };
+        LogicalStaticAlignment {
+            edge,
+            safety: alignment.safety,
+        }
+    };
+    // As in Blink's AlignmentOffsetForOutOfFlow, overflow safety belongs to
+    // absolute layout in the actual containing block, not to this static-
+    // position contribution from a different formatting parent.
+    (resolve(AbstractAxis::Inline), resolve(AbstractAxis::Block))
+}
+
+fn grid_item_alignment(
+    child: &ResolvedLayoutStyle,
+    container: &ResolvedLayoutStyle,
+    axis: AbstractAxis,
+) -> AlignItems {
+    use style::values::specified::align::AlignFlags;
+
+    // CSS alignment is resolved against the formatting parent, which need
+    // not be the numeric parent. Keep physical left/right through this
+    // conversion; their logical edge depends on the grid's direction.
+    let convert = |flags: AlignFlags| {
+        let flags = match flags.value() {
+            AlignFlags::LEFT | AlignFlags::RIGHT => flags.with_value(
+                if (flags.value() == AlignFlags::LEFT)
+                    == (container.taffy.direction == Direction::Ltr)
+                {
+                    AlignFlags::START
+                } else {
+                    AlignFlags::END
+                },
+            ),
+            _ => flags,
+        };
+        stylo_taffy::convert::item_alignment(flags)
+    };
+    let child_alignment = child.computed.as_ref().map_or_else(
+        || match axis {
+            AbstractAxis::Inline => child.taffy.justify_self,
+            AbstractAxis::Block => child.taffy.align_self,
+        },
+        |computed| {
+            convert(match axis {
+                AbstractAxis::Inline => computed.clone_justify_self().0,
+                AbstractAxis::Block => computed.clone_align_self().0,
+            })
+        },
+    );
+    child_alignment
+        .or_else(|| {
+            container.computed.as_ref().map_or_else(
+                || match axis {
+                    AbstractAxis::Inline => container.taffy.justify_items,
+                    AbstractAxis::Block => container.taffy.align_items,
+                },
+                |computed| {
+                    convert(match axis {
+                        AbstractAxis::Inline => *computed.clone_justify_items().computed.0,
+                        AbstractAxis::Block => computed.clone_align_items().0,
+                    })
+                },
+            )
+        })
+        .unwrap_or(AlignItems::STRETCH)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PhysicalAxisStaticEdge {
     Min,
     Center,
     Max,
+}
+
+/// One physical axis of the inset-modified containing block. A centered
+/// static position grows equally toward both containing-block edges until
+/// the nearer edge is reached, as in Blink's ComputeUnclampedIMCBInOneAxis.
+struct StaticPositionAxis {
+    offset: f32,
+    edge: PhysicalAxisStaticEdge,
+    safety: AlignmentSafety,
+}
+
+impl StaticPositionAxis {
+    fn inset_modified_bounds(&self, available: f32) -> Line<f32> {
+        match self.edge {
+            PhysicalAxisStaticEdge::Min => Line {
+                start: self.offset,
+                end: available,
+            },
+            PhysicalAxisStaticEdge::Max => Line {
+                start: 0.0,
+                end: self.offset,
+            },
+            PhysicalAxisStaticEdge::Center => {
+                let half = self.offset.min(available - self.offset);
+                Line {
+                    start: self.offset - half,
+                    end: self.offset + half,
+                }
+            }
+        }
+    }
+
+    fn border_box_start(
+        &self,
+        available: f32,
+        size: f32,
+        margin: Line<f32>,
+        containing_start_reversed: bool,
+    ) -> f32 {
+        let bounds = self.inset_modified_bounds(available);
+        let margin_box_size = size + margin.start + margin.end;
+        if self.safety == AlignmentSafety::Safe && margin_box_size > bounds.end - bounds.start {
+            return if containing_start_reversed {
+                bounds.end - size - margin.end
+            } else {
+                bounds.start + margin.start
+            };
+        }
+        match self.edge {
+            PhysicalAxisStaticEdge::Min => self.offset + margin.start,
+            PhysicalAxisStaticEdge::Center => {
+                self.offset - size / 2.0 + (margin.start - margin.end) / 2.0
+            }
+            PhysicalAxisStaticEdge::Max => self.offset - size - margin.end,
+        }
+    }
 }
 
 fn physical_axis_static_position(
@@ -211,8 +421,8 @@ pub(crate) fn physical_static_position_from_logical(
     content_size: Size<f32>,
     writing_mode: WritingMode,
     direction: Direction,
-    inline_edge: LogicalStaticEdge,
-    block_edge: LogicalStaticEdge,
+    inline_alignment: LogicalStaticAlignment,
+    block_alignment: LogicalStaticAlignment,
 ) -> PhysicalStaticPosition {
     let inline_axis = writing_mode.inline_axis();
     let (inline_offset, inline_physical_edge) = physical_axis_static_position(
@@ -221,7 +431,7 @@ pub(crate) fn physical_static_position_from_logical(
             AbsoluteAxis::Vertical => content_origin.y,
         },
         content_size.get_abs(inline_axis),
-        inline_edge,
+        inline_alignment.edge,
         writing_mode.is_inline_flow_reversed(direction),
     );
     let block_axis = writing_mode.block_axis();
@@ -231,11 +441,11 @@ pub(crate) fn physical_static_position_from_logical(
             AbsoluteAxis::Vertical => content_origin.y,
         },
         content_size.get_abs(block_axis),
-        block_edge,
+        block_alignment.edge,
         writing_mode.is_block_flow_reversed(),
     );
 
-    match inline_axis {
+    let mut position = match inline_axis {
         AbsoluteAxis::Horizontal => PhysicalStaticPosition::new(
             Point {
                 x: inline_offset,
@@ -268,7 +478,18 @@ pub(crate) fn physical_static_position_from_logical(
                 PhysicalAxisStaticEdge::Max => VerticalStaticEdge::Bottom,
             },
         ),
-    }
+    };
+    position.safety = match inline_axis {
+        AbsoluteAxis::Horizontal => Size {
+            width: inline_alignment.safety,
+            height: block_alignment.safety,
+        },
+        AbsoluteAxis::Vertical => Size {
+            width: block_alignment.safety,
+            height: inline_alignment.safety,
+        },
+    };
+    position
 }
 
 /// Resolve auto margins in one physical axis of an absolutely positioned box.
@@ -346,7 +567,7 @@ mod tests {
             VerticalStaticEdge::Center,
         );
         assert_eq!(
-            position.margin_box_origin(
+            position.border_box_origin(
                 Size {
                     width: 20.0,
                     height: 10.0,
@@ -357,9 +578,63 @@ mod tests {
                     top: 2.0,
                     bottom: 6.0,
                 },
+                Size {
+                    width: 200.0,
+                    height: 100.0
+                },
+                WritingMode::HorizontalTb,
+                Direction::Ltr,
             ),
             Point { x: 88.0, y: 43.0 }
         );
+    }
+
+    #[test]
+    fn static_alignment_uses_inset_modified_containing_bounds_for_safety() {
+        let center = StaticPositionAxis {
+            offset: 130.0,
+            edge: PhysicalAxisStaticEdge::Center,
+            safety: AlignmentSafety::Safe,
+        };
+        let margins = Line {
+            start: 0.0,
+            end: 0.0,
+        };
+        // The static position may come from a 156px grid content box, but its
+        // absolute containing block is 400px wide. A 220px child still fits
+        // symmetrically around 130px and must not fall back to the grid start.
+        assert_eq!(center.border_box_start(400.0, 220.0, margins, false), 20.0);
+        assert_eq!(center.border_box_start(400.0, 280.0, margins, false), 0.0);
+        assert_eq!(center.border_box_start(400.0, 280.0, margins, true), -20.0);
+
+        let end_center = StaticPositionAxis {
+            offset: 350.0,
+            ..center
+        };
+        assert_eq!(
+            end_center.border_box_start(400.0, 140.0, margins, false),
+            300.0
+        );
+        assert_eq!(
+            end_center.border_box_start(400.0, 140.0, margins, true),
+            260.0
+        );
+
+        let unsafe_center = StaticPositionAxis {
+            safety: AlignmentSafety::Unsafe,
+            ..center
+        };
+        assert_eq!(
+            unsafe_center.border_box_start(400.0, 280.0, margins, false),
+            -10.0
+        );
+
+        let end = StaticPositionAxis {
+            edge: PhysicalAxisStaticEdge::Max,
+            ..center
+        };
+        assert_eq!(end.border_box_start(400.0, 140.0, margins, false), 0.0);
+        assert_eq!(end.border_box_start(400.0, 140.0, margins, true), -10.0);
     }
 
     #[test]
@@ -372,8 +647,8 @@ mod tests {
             },
             WritingMode::VerticalRl,
             Direction::Rtl,
-            LogicalStaticEdge::Start,
-            LogicalStaticEdge::Start,
+            LogicalStaticEdge::Start.into(),
+            LogicalStaticEdge::Start.into(),
         );
         assert_eq!(
             position,

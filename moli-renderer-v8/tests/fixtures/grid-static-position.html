@@ -1,0 +1,49 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Grid static positions across containing blocks</title>
+<style>
+html, body { margin: 0; padding: 0; }
+html { overflow: hidden; }
+.slot { display: flow-root; position: relative; width: 400px; height: 160px; margin-left: 10px; }
+.grid {
+  display: grid;
+  box-sizing: border-box;
+  width: 200px;
+  height: 100px;
+  margin: 5px 0 0 30px;
+  border: 2px solid black;
+  padding: 10px 20px;
+  grid-template: 12px 24px / 16px 32px;
+}
+.item { position: absolute; width: 20px; height: 10px; background: green; }
+.center { place-items: center; }
+.end { place-items: end; }
+.rtl { direction: rtl; }
+.vertical { writing-mode: vertical-rl; }
+</style>
+<!-- Expected rectangles are relative to .slot and were checked in Chromium.
+     Track placement must not change the static rectangle when .grid is not
+     the containing block. Percentages and definite insets still use .slot. -->
+<div class="slot" id="start" data-expected="52,17,20,10"><div class="grid"><div class="item"></div></div></div>
+<div class="slot" id="inherited-center" data-expected="120,50,20,10"><div class="grid center"><div class="item"></div></div></div>
+<div class="slot" id="normal-overrides-center" data-expected="52,17,20,10"><div class="grid center"><div class="item" style="place-self:normal"></div></div></div>
+<div class="slot" id="end" data-expected="188,83,20,10"><div class="grid end"><div class="item"></div></div></div>
+<div class="slot" id="asymmetric-margins" data-expected="122,47,20,10"><div class="grid center"><div class="item" style="margin:3px 7px 9px 11px"></div></div></div>
+<div class="slot" id="percentage-containing-block" data-expected="30,15,200,80"><div class="grid center"><div class="item" style="width:50%;height:50%;grid-area:2/2/3/3"></div></div></div>
+<div class="slot" id="definite-inset" data-expected="100,50,20,10"><div class="grid center"><div class="item" style="left:25%"></div></div></div>
+<div class="slot" id="rtl-start" data-expected="188,17,20,10"><div class="grid rtl"><div class="item"></div></div></div>
+<div class="slot" id="rtl-self-start-ltr" data-expected="52,17,20,10"><div class="grid rtl"><div class="item" style="direction:ltr;justify-self:self-start"></div></div></div>
+<div class="slot" id="rtl-left" data-expected="52,17,20,10"><div class="grid rtl"><div class="item" style="justify-self:left"></div></div></div>
+<div class="slot" id="rtl-right" data-expected="188,17,20,10"><div class="grid rtl"><div class="item" style="justify-self:right"></div></div></div>
+<div class="slot" id="inherited-rtl-left" data-expected="52,17,20,10"><div class="grid rtl" style="justify-items:left"><div class="item"></div></div></div>
+<div class="slot" id="vertical-start" data-expected="188,17,20,10"><div class="grid vertical"><div class="item"></div></div></div>
+<div class="slot" id="vertical-rtl" data-expected="188,83,20,10"><div class="grid vertical rtl"><div class="item"></div></div></div>
+<div class="slot" id="orthogonal-self-start" data-expected="52,17,20,10"><div class="grid vertical"><div class="item" style="writing-mode:horizontal-tb;place-self:self-start"></div></div></div>
+<div class="slot" id="first-baseline-fallback" data-expected="52,17,20,10"><div class="grid center"><div class="item" style="place-self:baseline"></div></div></div>
+<div class="slot" id="last-baseline-fallback" data-expected="188,83,20,10"><div class="grid"><div class="item" style="place-self:last baseline"></div></div></div>
+<div class="slot" id="overflow-safe-center" data-expected="20,0,220,120"><div class="grid"><div class="item" style="width:220px;height:120px;place-self:safe center"></div></div></div>
+<div class="slot" id="overflow-safe-end" data-expected="0,0,220,120"><div class="grid"><div class="item" style="width:220px;height:120px;place-self:safe end"></div></div></div>
+<div class="slot" id="auto-margins" data-expected="120,50,20,10"><div class="grid center"><div class="item" style="margin:auto"></div></div></div>
+<div class="slot" id="fixed-position" data-expected="90,50,80,10"><div class="grid center"><div class="item" style="position:fixed;width:10%"></div></div></div>
+<div class="slot" id="positioned-grid-area" data-expected="74,36,20,10"><div class="grid center" style="position:relative"><div class="item" style="grid-area:2/2/3/3"></div></div></div>
+<div class="slot" id="rtl-containing-block-safe-center" data-expected="10,0,390,120" style="direction:rtl"><div class="grid"><div class="item" style="width:390px;height:120px;place-self:safe center"></div></div></div>

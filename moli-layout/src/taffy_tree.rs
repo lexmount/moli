@@ -24,8 +24,8 @@ use crate::{
     },
     positioned::{
         FlexCrossAxisStaticContext, HorizontalStaticEdge, PhysicalStaticPosition,
-        VerticalStaticEdge, flex_main_axis_static_edge, physical_static_position_from_logical,
-        resolve_absolute_axis_margins,
+        VerticalStaticEdge, flex_main_axis_static_edge, grid_static_alignment,
+        physical_static_position_from_logical, resolve_absolute_axis_margins,
     },
     replaced::measure_replaced,
     style::{InlineDirection, resolve_stylo_calc_value},
@@ -459,6 +459,15 @@ where
                     child: id,
                     container: original_parent,
                 });
+            } else if world.boxes[original_parent.index()]
+                .style
+                .display()
+                .is_grid_container()
+            {
+                positioned_static_sources.push(PositionedStaticSource::GridContainer {
+                    child: id,
+                    container: original_parent,
+                });
             } else if original_parent_uses_block_layout(world, original_parent) {
                 let placeholder_style = world.boxes[id.index()]
                     .style
@@ -889,6 +898,12 @@ enum PositionedStaticSource {
         child: LayoutBoxId,
         container: LayoutBoxId,
     },
+    /// When the grid does not establish the containing block, its content box
+    /// provides the static-position rectangle; grid placement is inapplicable.
+    GridContainer {
+        child: LayoutBoxId,
+        container: LayoutBoxId,
+    },
 }
 
 /// Resolves static-position contributions after the normal-flow formatting
@@ -910,6 +925,9 @@ fn finish_positioned_static_layout<N>(
             } => (child, block_static_position(world, placeholder, container)),
             PositionedStaticSource::FlexContainer { child, container } => {
                 (child, flex_static_position(world, child, container))
+            }
+            PositionedStaticSource::GridContainer { child, container } => {
+                (child, grid_static_position(world, child, container))
             }
         };
         let area = positioned_containing_area(world, child, viewport);
@@ -956,17 +974,14 @@ where
     )
 }
 
-fn flex_static_position<N>(
+fn static_position_content_rect<N>(
     world: &LayoutWorld<N>,
-    child: LayoutBoxId,
     container: LayoutBoxId,
-) -> PhysicalStaticPosition
+) -> (Point<f32>, Size<f32>)
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let container_box = &world.boxes[container.index()];
-    let child_box = &world.boxes[child.index()];
-    let container_layout = container_box.unrounded_layout;
+    let container_layout = world.boxes[container.index()].unrounded_layout;
     let scrollbar = world.get_scrollbar_insets(container.to_taffy());
     let container_origin = unrounded_global_origin(world, container);
     let content_origin = Point {
@@ -997,6 +1012,42 @@ where
             - container_layout.padding.bottom)
             .max(0.0),
     };
+    (content_origin, content_size)
+}
+
+fn grid_static_position<N>(
+    world: &LayoutWorld<N>,
+    child: LayoutBoxId,
+    container: LayoutBoxId,
+) -> PhysicalStaticPosition
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let container_style = &world.boxes[container.index()].style;
+    let child_style = &world.boxes[child.index()].style;
+    let (content_origin, content_size) = static_position_content_rect(world, container);
+    let (inline_edge, block_edge) = grid_static_alignment(child_style, container_style);
+    physical_static_position_from_logical(
+        content_origin,
+        content_size,
+        container_style.writing_mode(),
+        container_style.taffy.direction,
+        inline_edge,
+        block_edge,
+    )
+}
+
+fn flex_static_position<N>(
+    world: &LayoutWorld<N>,
+    child: LayoutBoxId,
+    container: LayoutBoxId,
+) -> PhysicalStaticPosition
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let container_box = &world.boxes[container.index()];
+    let child_box = &world.boxes[child.index()];
+    let (content_origin, content_size) = static_position_content_rect(world, container);
     let flex_direction = container_box.style.taffy.flex_direction;
     let is_column = matches!(
         flex_direction,
@@ -1043,8 +1094,8 @@ where
         content_size,
         container_writing_mode,
         container_box.style.taffy.direction,
-        inline_edge,
-        block_edge,
+        inline_edge.into(),
+        block_edge.into(),
     )
 }
 
@@ -1238,7 +1289,13 @@ fn apply_static_position<N>(
         return;
     }
     let layout = &mut world.boxes[child.index()].unrounded_layout;
-    let origin = static_position.margin_box_origin(layout.size, layout.margin);
+    let origin = static_position.border_box_origin(
+        layout.size,
+        layout.margin,
+        area.size,
+        area.writing_mode,
+        area.direction,
+    );
     if both_horizontal_insets_auto {
         layout.location.x = area.origin.x + origin.x - numeric_parent_origin.x;
     }
