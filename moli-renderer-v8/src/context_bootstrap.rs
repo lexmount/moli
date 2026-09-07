@@ -263,10 +263,10 @@ pub(crate) use self::image_data::{
     image_data_clone_payload_from_object, is_image_data_object,
 };
 pub(crate) use self::indexed_db::{
-    IndexedDbTaskId, discard_indexed_db_task_by_id, flush_blocked_indexed_db_requests,
-    flush_indexed_db_task_by_id, flush_next_indexed_db_task, indexed_db_has_pending_tasks,
-    install_worker_indexed_db_runtime_state, set_indexed_db_manager_for_context,
-    set_worker_indexed_db_task_wake_for_context,
+    IndexedDbTaskId, SharedIndexedDbConnectionQueue, discard_indexed_db_task_by_id,
+    flush_indexed_db_connection_requests, flush_indexed_db_task_by_id, flush_next_indexed_db_task,
+    indexed_db_has_pending_tasks, install_worker_indexed_db_runtime_state,
+    set_indexed_db_manager_for_context, set_worker_indexed_db_task_wake_for_context,
 };
 pub use self::indexed_db::{
     Key as IndexedDbKey, ObjectStoreOptions as IndexedDbObjectStoreOptions,

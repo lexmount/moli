@@ -178,6 +178,21 @@ external endpoint or on non-Linux systems, protocol churn/navigation still run;
 the artifact explicitly reports that FD sampling was unavailable. CI uses the
 managed Linux server, so the resource assertions are mandatory there.
 
+The Chromium-calibrated `svg-indexeddb-startup` group covers the JSXGraph-style
+SVG feature check and drives IndexedDB through asynchronous versionchange requests,
+request-callback/microtask schema migration, commit, reopen, abort rollback
+and FIFO admission across all open/delete calls. The shared connection lifecycle
+fixture also checks database versus open-request transaction attachment during
+complete/abort, concurrent initial opens, deferred version resolution, blocked
+head isolation, versionchange microtask close, and queue recovery after abort
+or close. Rust and CDP use the same Chromium-calibrated expected result. Its application
+fixture deliberately contains hidden error messages from the beginning;
+success requires completed database work and the ready panel, not a large
+text dump. This distinction comes from the live sketchometry investigation:
+the IndexedDB factory was present, while a missing SVG feature-detection
+method and prematurely completed upgrade transactions prevented startup.
+Each smoke group gets its own Moli process.
+
 Covered well:
 
 - The default raw `debugger-breakpoints`, `runtime-exception`, and
