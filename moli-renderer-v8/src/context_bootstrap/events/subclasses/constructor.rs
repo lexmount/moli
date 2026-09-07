@@ -26,6 +26,7 @@ enum SubclassInit<'s> {
     Basic(basic::BasicEventInit<'s>),
     Pointing(pointer::PointerEventInitPayload<'s>),
     Values(values::ValueEventInit<'s>),
+    ClipboardChange(data::ClipboardChangeEventInitMembers<'s>),
     Interaction(input::InteractionEventInit<'s>),
     Payload(payload::PayloadEventInit<'s>),
     Font(FontFaceSetLoadEventInit<'s>),
@@ -68,6 +69,9 @@ impl<'s> SubclassInit<'s> {
             | EventSubclassKind::PageTransitionEvent => {
                 Self::Values(values::ValueEventInit::parse(scope, args, kind)?)
             }
+            EventSubclassKind::ClipboardChangeEvent => Self::ClipboardChange(
+                data::parse_clipboard_change_event_init(scope, args)?,
+            ),
             EventSubclassKind::InputEvent
             | EventSubclassKind::TouchEvent
             | EventSubclassKind::CapturedMouseEvent => {
@@ -111,6 +115,7 @@ impl<'s> SubclassInit<'s> {
             Self::Basic(init) => init.event_flags(),
             Self::Pointing(init) => init.event_flags(),
             Self::Values(init) => init.event_flags(),
+            Self::ClipboardChange(init) => init.event_flags(),
             Self::Interaction(init) => init.event_flags(),
             Self::Payload(init) => init.event_flags(),
             Self::Font(init) => init.event_flags(),
@@ -133,6 +138,9 @@ impl<'s> SubclassInit<'s> {
             Self::Basic(init) => init.initialize(scope, event),
             Self::Pointing(init) => init.initialize(scope, event),
             Self::Values(init) => init.initialize(scope, event),
+            Self::ClipboardChange(init) => {
+                return data::initialize_clipboard_change_event(scope, event, init);
+            }
             Self::Interaction(init) => return init.initialize(scope, event),
             Self::Payload(init) => init.initialize(scope, event),
             Self::Font(init) => init.initialize(scope, event),
