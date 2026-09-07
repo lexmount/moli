@@ -372,7 +372,7 @@ impl ScriptVm {
                     Ok(())
                 }
                 Err(RawScriptExecutionError::Exception { report, .. }) => {
-                    self.report_classic_script_exception_and_finish_evaluation_best_effort(&report);
+                    self.report_classic_script_exception_and_finish_evaluation_best_effort(&report, false);
                     Ok(())
                 }
                 Err(error) => Err(error.into_anyhow()),

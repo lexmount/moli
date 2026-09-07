@@ -903,6 +903,7 @@ mod tests {
                 source_result: Ok(format!("window.defer{parser_position} = true")),
                 source_bytes: None,
                 network_result: None,
+                muted_errors: false,
                 network_request_handle: None,
             },
         )

@@ -347,6 +347,7 @@ impl AsyncFallbackQueue {
                 source_result: Err(error),
                 source_bytes: None,
                 network_result,
+                muted_errors: false,
                 network_request_handle: None,
             }),
         });
@@ -389,6 +390,7 @@ impl AsyncFallbackQueue {
                         entry.script.clone(),
                         source,
                         completion.outcome.source_bytes,
+                        completion.outcome.muted_errors,
                     );
                     entry.load_failure = None;
                 }
@@ -397,6 +399,7 @@ impl AsyncFallbackQueue {
                         source_result: Err(error),
                         source_bytes: completion.outcome.source_bytes,
                         network_result: completion.outcome.network_result,
+                        muted_errors: false,
                         network_request_handle: None,
                     });
                 }
@@ -487,11 +490,12 @@ fn parse_time_task_from_load_outcome(
         source_result,
         source_bytes,
         network_result,
+        muted_errors,
         ..
     } = outcome;
     match source_result {
         Ok(source) => ParseTimeDocumentScriptTask::classic_async_script(
-            prepared_script_with_loaded_source(script, source, source_bytes),
+            prepared_script_with_loaded_source(script, source, source_bytes, muted_errors),
             load_delay_binding,
         ),
         Err(error) => ParseTimeDocumentScriptTask::async_script_failure(
@@ -512,11 +516,12 @@ fn async_phase_page_task_from_load_outcome(
         source_result,
         source_bytes,
         network_result,
+        muted_errors,
         ..
     } = outcome;
     match source_result {
         Ok(source) => PostParseDocumentScriptTask::async_script(
-            prepared_script_with_loaded_source(script, source, source_bytes),
+            prepared_script_with_loaded_source(script, source, source_bytes, muted_errors),
             load_delay_binding,
         ),
         Err(error) => PostParseDocumentScriptTask::async_script_load_failure(
@@ -533,9 +538,15 @@ fn fallback_entry_from_parse_time_entry(entry: ParseTimeAsyncEntry) -> AsyncFall
         Some(PreparedScriptSourceLoadOutcome {
             source_result: Ok(source),
             source_bytes,
+            muted_errors,
             ..
         }) => AsyncFallbackEntry {
-            script: prepared_script_with_loaded_source(entry.original, source, source_bytes),
+            script: prepared_script_with_loaded_source(
+                entry.original,
+                source,
+                source_bytes,
+                muted_errors,
+            ),
             load_delay_binding: entry.load_delay_binding,
             awaiting_completion: false,
             source_load: None,
