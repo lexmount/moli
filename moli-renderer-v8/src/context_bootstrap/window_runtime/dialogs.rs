@@ -107,6 +107,23 @@ pub(crate) fn window_stop_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        webidl::throw_type_error(scope, "Window.stop called on incompatible receiver.");
+        return;
+    }
+    let owner = super::super::navigation_window::runtime_window_owner(scope, args.this());
+    if super::super::navigation_window::navigation_unload_event_active(scope, owner) {
+        return;
+    }
+    if let Some(crate::native_bridge::OwnerDispatchScope::Child(handle)) =
+        super::super::navigation_window::runtime_window_dispatch_scope(scope, owner)
+        && let Some(host_ptr) = context_host_ptr_from_global_bridge(scope)
+        && unsafe { &*host_ptr }.child_browsing_context_has_pending_cross_document_traversal(handle)
+    {
+        // Unlike an ordinary navigation, session history traversal is not
+        // canceled by Window.stop().
+        return;
+    }
     inform_about_canceled_navigation_for_window(scope, args.this());
 }
 
