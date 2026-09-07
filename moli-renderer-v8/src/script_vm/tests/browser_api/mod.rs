@@ -15,6 +15,7 @@ mod date_locale;
 mod details;
 mod event_handlers;
 mod events_selection_storage;
+mod fonts;
 mod gamepad;
 mod ice_candidate;
 mod idle_callbacks;

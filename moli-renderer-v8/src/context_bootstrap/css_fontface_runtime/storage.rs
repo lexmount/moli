@@ -182,6 +182,7 @@ pub(crate) fn rebuild_font_face_set_faces<'s>(
     sync_font_face_set_owners(scope, object, previous, combined);
     set_font_face_set_slot_value(scope, object, FONT_FACE_SET_FACES_SLOT, combined.into());
     sync_font_face_set_size(scope, object);
+    super::events::finish_font_set_if_idle(scope, object);
 }
 
 pub(super) fn font_face_set_owner_snapshot<'s>(
@@ -215,6 +216,9 @@ fn sync_font_face_set_owners<'s>(
             continue;
         };
         if !array_contains_value(scope, current, face) {
+            if let Ok(face) = v8::Local::<v8::Object>::try_from(face) {
+                super::loading::sync_registration(scope, owner, face, false);
+            }
             remove_font_face_set_owner(scope, face, owner);
         }
     }
@@ -224,6 +228,12 @@ fn sync_font_face_set_owners<'s>(
         };
         if !array_contains_value(scope, previous, face) {
             add_font_face_set_owner(scope, face, owner);
+            if let Ok(face) = v8::Local::<v8::Object>::try_from(face) {
+                super::loading::sync_registration(scope, owner, face, true);
+                if super::loading::string_slot(scope, face, FONT_FACE_STATUS_SLOT) == "loading" {
+                    super::events::font_face_loading_started(scope, face);
+                }
+            }
         }
     }
 }
