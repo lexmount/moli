@@ -6,37 +6,46 @@ use super::{
     service::ServiceWorkerRuntimeService, start_completion::ServiceWorkerRuntimeCompletion,
 };
 
-#[derive(Default)]
 pub(super) struct ServiceWorkerServiceLane {
-    events: Mutex<VecDeque<ServiceWorkerServiceLaneEvent>>,
+    events: Mutex<Option<VecDeque<Box<ServiceWorkerRuntimeCompletion>>>>,
 }
 
-enum ServiceWorkerServiceLaneEvent {
-    Completion(Box<ServiceWorkerRuntimeCompletion>),
+impl Default for ServiceWorkerServiceLane {
+    fn default() -> Self {
+        Self {
+            events: Mutex::new(Some(VecDeque::new())),
+        }
+    }
 }
 
 impl ServiceWorkerServiceLane {
     pub(super) fn enqueue_completion(&self, completion: ServiceWorkerRuntimeCompletion) {
-        self.events
-            .lock()
-            .push_back(ServiceWorkerServiceLaneEvent::Completion(Box::new(
-                completion,
-            )));
+        if let Some(events) = self.events.lock().as_mut() {
+            events.push_back(Box::new(completion));
+        }
+    }
+
+    pub(super) fn close(&self) {
+        let discarded = self.events.lock().take();
+        drop(discarded);
     }
 
     pub(super) fn drain(&self) -> usize {
-        let events = std::mem::take(&mut *self.events.lock());
+        let events = self
+            .events
+            .lock()
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default();
         let count = events.len();
         for event in events {
-            match event {
-                ServiceWorkerServiceLaneEvent::Completion(completion) => completion.complete(),
-            }
+            event.complete();
         }
         count
     }
 
     pub(super) fn pending_count(&self) -> usize {
-        self.events.lock().len()
+        self.events.lock().as_ref().map_or(0, VecDeque::len)
     }
 }
 
