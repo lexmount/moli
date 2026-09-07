@@ -360,8 +360,7 @@ pub struct PendingMoliDiagnosticsDispatch {
 }
 
 struct PendingMoliDiagnosticsPageSnapshot {
-    owner: crate::conn::TargetPageResidenceIdentity,
-    pending: moli_core::page::PendingPageCommand,
+    pending: PendingDocumentDiagnosticsSnapshot,
 }
 
 pub struct PendingRuntimeEnableEventsDispatch {
@@ -445,8 +444,7 @@ pub struct CompletedMoliDiagnosticsDispatch {
 }
 
 struct CompletedMoliDiagnosticsPageSnapshot {
-    owner: crate::conn::TargetPageResidenceIdentity,
-    completion: Result<moli_core::page::CompletedPageCommand, String>,
+    completed: CompletedDocumentDiagnosticsSnapshot,
 }
 
 pub struct CompletedRuntimeEnableEventsDispatch {
@@ -529,19 +527,11 @@ fn collect_moli_diagnostics_pending_snapshots(
         .into_iter()
         .chain(browser_context.background_targets())
     {
-        let Some(document_id) = browser_context.target_document_id(target.target_id()) else {
+        let Some(document) = browser_context.document_handle_for_target(target.target_id()) else {
             continue;
         };
-        if !browser_context.target_has_loaded_page(target.target_id()) {
-            continue;
-        }
         pending.push(PendingMoliDiagnosticsPageSnapshot {
-            owner: crate::conn::TargetPageResidenceIdentity::new(
-                browser_context.id.clone(),
-                Some(target.target_id().to_owned()),
-                document_id,
-            ),
-            pending: browser_context.start_target_page_diagnostics_snapshot(target.target_id())?,
+            pending: browser_context.start_document_diagnostics_snapshot(document)?,
         });
     }
     Ok(())
@@ -696,12 +686,7 @@ impl PendingMoliDiagnosticsDispatch {
         let mut completed = Vec::with_capacity(self.pending.len());
         for pending in self.pending {
             completed.push(CompletedMoliDiagnosticsPageSnapshot {
-                owner: pending.owner,
-                completion: pending
-                    .pending
-                    .wait()
-                    .await
-                    .map_err(|error| format!("moli diagnostics snapshot failed: {error}")),
+                completed: pending.pending.wait().await,
             });
         }
         Ok(CompletedMoliDiagnosticsDispatch { completed })
@@ -4751,18 +4736,7 @@ impl CdpConnection {
         let mut failed_page_snapshot_count = 0;
 
         for completed in completed.completed {
-            if !self.target_page_residence_identity_is_current(&completed.owner) {
-                failed_page_snapshot_count += 1;
-                continue;
-            }
-            let snapshot = completed.completion.and_then(|completion| {
-                self.browser_context_by_id_mut(completed.owner.browser_context_id())
-                    .ok_or_else(|| "NoDocumentLoaded".to_owned())?
-                    .finish_target_page_diagnostics_snapshot(
-                        completed.owner.target_id().ok_or("NoDocumentLoaded")?,
-                        completion,
-                    )
-            });
+            let snapshot = self.finish_document_diagnostics_snapshot(completed.completed);
             let Ok(snapshot) = snapshot else {
                 failed_page_snapshot_count += 1;
                 continue;
@@ -7021,13 +6995,21 @@ mod tests {
         ctx.conn
             .runtime_protocol_message_started_slot_mut(&route)
             .unwrap();
-        let pending = ctx
+        let context = ctx
             .conn
             .browser_context_by_id(&route.browser_context_id)
-            .unwrap()
-            .start_target_page_diagnostics_snapshot(&route.target_id)
             .unwrap();
-        let completion = pending.wait().await.unwrap();
+        let document = context
+            .document_handle_for_target(&route.target_id)
+            .expect("route should address an exact Document");
+        let pending = context
+            .start_document_diagnostics_snapshot(document)
+            .unwrap();
+        let completion = pending
+            .wait()
+            .await
+            .into_page_completion_for_test()
+            .unwrap();
         assert_eq!(completion.page_state().document_title(), "after-inspection");
         let error = ctx
             .conn

@@ -91,7 +91,7 @@ pub(super) fn complete_network_resource_preparation(
     let completion = match completed.completed {
         CompletedNetworkCommandWork::NetworkResourcePreparation(completion) => *completion,
         CompletedNetworkCommandWork::DocumentPolicy(_)
-        | CompletedNetworkCommandWork::Page { .. }
+        | CompletedNetworkCommandWork::ResourceRuntime(_)
         | CompletedNetworkCommandWork::Resource(_) => {
             return invalid_completion_step();
         }
@@ -134,7 +134,7 @@ pub(super) fn complete_network_resource_fetch(
     let outcome = match completed.completed {
         CompletedNetworkCommandWork::Resource(outcome) => outcome,
         CompletedNetworkCommandWork::DocumentPolicy(_)
-        | CompletedNetworkCommandWork::Page { .. }
+        | CompletedNetworkCommandWork::ResourceRuntime(_)
         | CompletedNetworkCommandWork::NetworkResourcePreparation(_) => {
             return invalid_completion_plan();
         }

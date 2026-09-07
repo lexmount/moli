@@ -1,10 +1,10 @@
 use crate::conn::{
     BrowserContext, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope,
-    CompletedDocumentPolicyUpdate, DocumentPolicyUpdate, DocumentRuntimePolicyReconciliation,
-    EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedViewportSurface,
-    EmulationPolicyChange, PendingDocumentPolicyUpdate, RendererAgentBinding,
-    RendererCommandCorrelation, RendererCommandDescriptor, RuntimeInspectorAsyncCompletionReceiver,
-    WindowSurfaceState,
+    CompletedDocumentPolicyUpdate, CompletedDocumentResourceRuntimeUpdate, DocumentPolicyUpdate,
+    DocumentRuntimePolicyReconciliation, EmulatedDeviceMetrics, EmulatedGeolocationOverrideState,
+    EmulatedViewportSurface, EmulationPolicyChange, PendingDocumentPolicyUpdate,
+    PendingDocumentResourceRuntimeUpdate, RendererAgentBinding, RendererCommandCorrelation,
+    RendererCommandDescriptor, RuntimeInspectorAsyncCompletionReceiver, WindowSurfaceState,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandResult, DevToolsDevicePixelRatioSetting, DevToolsError,
@@ -81,11 +81,13 @@ struct CompletedEmulationPageCommand {
 
 enum PendingEmulationPageWork {
     DocumentPolicy(PendingDocumentPolicyUpdate),
+    ResourceRuntime(PendingDocumentResourceRuntimeUpdate),
     Renderer(PendingPageCommand),
 }
 
 enum CompletedEmulationPageWork {
     DocumentPolicy(CompletedDocumentPolicyUpdate),
+    ResourceRuntime(CompletedDocumentResourceRuntimeUpdate),
     Renderer(Result<CompletedPageCommand, String>),
 }
 
@@ -171,6 +173,9 @@ impl PendingEmulationCommandDispatch {
                     let completed_page = match pending {
                         PendingEmulationPageWork::DocumentPolicy(pending) => {
                             CompletedEmulationPageWork::DocumentPolicy(pending.wait().await)
+                        }
+                        PendingEmulationPageWork::ResourceRuntime(pending) => {
+                            CompletedEmulationPageWork::ResourceRuntime(pending.wait().await)
                         }
                         PendingEmulationPageWork::Renderer(pending) => {
                             CompletedEmulationPageWork::Renderer(
@@ -856,7 +861,7 @@ fn start_user_agent_override_command(
                 source: EmulationPageCommandSource::browser_for_owner(conn, &owner_scope),
                 target: PendingEmulationPageTarget::SessionOwner { owner_scope },
                 operation: PendingEmulationPageOperation::RebuildResourceRuntime,
-                pending: PendingEmulationPageWork::Renderer(pending),
+                pending: PendingEmulationPageWork::ResourceRuntime(pending),
                 runtime_response_rx: None,
             }]),
         }),
@@ -1755,7 +1760,7 @@ fn start_user_agent_override_for_current_route(
         source: EmulationPageCommandSource::browser_for_owner(conn, &owner),
         target,
         operation: PendingEmulationPageOperation::RebuildResourceRuntime,
-        pending: PendingEmulationPageWork::Renderer(pending),
+        pending: PendingEmulationPageWork::ResourceRuntime(pending),
         runtime_response_rx: None,
     }))
 }
@@ -1773,7 +1778,7 @@ fn start_user_agent_loader_update_for_current_route(
         source: EmulationPageCommandSource::browser_for_owner(conn, &owner),
         target,
         operation: PendingEmulationPageOperation::RebuildResourceRuntime,
-        pending: PendingEmulationPageWork::Renderer(pending),
+        pending: PendingEmulationPageWork::ResourceRuntime(pending),
         runtime_response_rx: None,
     }))
 }
@@ -2596,6 +2601,19 @@ fn finish_completed_emulation_page_command(
                 Err(error) => Err(error),
             }
         }
+        CompletedEmulationPageWork::ResourceRuntime(completed) => {
+            match conn.finish_document_resource_runtime_update(completed) {
+                Ok(()) => Ok(()),
+                Err(_)
+                    if pending_emulation_page_configuration_will_be_replayed(
+                        conn, &target, &operation, source,
+                    ) =>
+                {
+                    Ok(())
+                }
+                Err(error) => Err(error),
+            }
+        }
         CompletedEmulationPageWork::Renderer(completed) => {
             let completion = match completed {
                 Ok(completion) => completion,
@@ -3122,15 +3140,7 @@ fn finish_pending_emulation_page_command(
                 .map_err(|error| error.to_string())
         }
         PendingEmulationPageOperation::RebuildResourceRuntime => {
-            if let PendingEmulationPageTarget::SessionOwner { owner_scope } = target {
-                return conn.finish_rebuild_resource_runtime_for_owner(&owner_scope, completion);
-            }
-            if let Some((context_id, target_id)) = target.resolve(conn)
-                && let Some(context) = conn.browser_context_by_id_mut(&context_id)
-            {
-                return context.finish_target_resource_runtime_update(&target_id, completion);
-            }
-            BrowserContext::finish_unobserved_resource_runtime_update(completion)
+            Err("resource runtime completed through a raw renderer command".to_owned())
         }
         PendingEmulationPageOperation::DocumentPolicy { .. } => {
             Err("document policy completed through a raw renderer command".to_owned())

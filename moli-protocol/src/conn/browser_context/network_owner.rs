@@ -2,14 +2,15 @@ use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionOwnerRef};
 use super::*;
 use crate::conn::CdpSessionRoute;
 use crate::conn::{CapturedBody, TargetRuntimeSlot};
-use crate::conn::{DocumentPolicyUpdate, PendingDocumentPolicyUpdate};
+use crate::conn::{
+    DocumentPolicyUpdate, PendingDocumentPolicyUpdate, PendingDocumentResourceRuntimeUpdate,
+};
 use crate::devtools_runtime::DevToolsNetworkDataType;
 use crate::domains::network::{
     CapturedRequestBody, CapturedResponseBody, CollectedNetworkDataArtifact,
     NetworkBacklogPreferredRequestId, PendingNetworkBacklogDeliverySnapshot,
     TargetNetworkBacklogPreparedDelivery,
 };
-use moli_core::page::PendingPageCommand;
 use moli_page_types::DevToolsSessionKey;
 
 struct TargetNetworkListenerOwnerMut<'a> {
@@ -734,7 +735,7 @@ impl CdpConnection {
         &mut self,
         command_owner: &crate::conn::CommandOwnerScope,
         user_agent: Option<String>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentResourceRuntimeUpdate>, String> {
         let browser_identity = user_agent.as_ref().map(|user_agent| {
             moli_browser_profile::BrowserIdentityProfile::new(
                 user_agent.clone(),
@@ -762,7 +763,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         browser_identity: Option<moli_browser_profile::BrowserIdentityProfile>,
-    ) -> Option<Result<Option<PendingPageCommand>, String>> {
+    ) -> Option<Result<Option<PendingDocumentResourceRuntimeUpdate>, String>> {
         let is_browser_session = matches!(
             self.session_route(session_id),
             Some(CdpSessionRoute::Browser)
@@ -790,7 +791,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         browser_identity: Option<crate::conn::DevToolsBrowserIdentityOverride>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentResourceRuntimeUpdate>, String> {
         let non_page_identity = browser_identity
             .as_ref()
             .map(crate::conn::DevToolsBrowserIdentityOverride::to_browser_identity);
@@ -814,7 +815,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         enabled: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentResourceRuntimeUpdate>, String> {
         if session_id.is_none()
             || matches!(
                 self.session_route(session_id),

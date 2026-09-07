@@ -54,14 +54,12 @@ async fn complete_child_frame_lifecycle(ctx: &mut TestContext) {
         .conn
         .start_child_frame_lifecycle_work_for_owner(owner, std::time::Duration::from_secs(2))
         .expect("loaded page should expose child-frame lifecycle work");
-    let completed = pending
-        .wait()
-        .await
-        .expect("child-frame lifecycle work should complete");
+    let completed = pending.wait().await;
     assert!(
         ctx.conn
-            .complete_child_frame_lifecycle_work_for_session_owner(completed)
-            .expect("child-frame lifecycle completion should apply"),
+            .finish_document_child_frame_lifecycle_work(completed)
+            .expect("child-frame lifecycle completion should apply")
+            .0,
         "child-frame lifecycle should settle before inspecting the nested frame tree"
     );
 }

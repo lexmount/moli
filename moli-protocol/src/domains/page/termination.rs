@@ -1,6 +1,6 @@
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, DEFAULT_LOADER_ID,
-    NavigationDispatchState, NavigationId, PendingFetchNavigation,
+    BackgroundProtocolEvent, CdpConnection, Cmd, CommandOwnerScope, CompletedDocumentLifecycleStop,
+    DEFAULT_LOADER_ID, NavigationDispatchState, NavigationId, PendingFetchNavigation,
     PendingSubresourceFetchAuthRequest, PendingSubresourceFetchRequest,
     PendingSubresourceFetchResponseRequest, monotonic_timestamp_seconds,
 };
@@ -385,10 +385,23 @@ pub(super) fn try_start_stop_loading_command_dispatch(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
 ) -> PageCommandTaskStep {
+    let owner_scope = crate::conn::CommandOwnerScope::capture(conn, cmd.session_id);
+    let pending = conn
+        .loaded_browser_document_for_owner(&owner_scope)
+        .ok()
+        .and_then(
+            |document| match conn.start_document_lifecycle_stop(document) {
+                Ok(pending) => Some(pending),
+                Err(error) => {
+                    tracing::debug!(%error, "failed to start renderer document lifecycle stop");
+                    None
+                }
+            },
+        );
     PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
         command_id: cmd.id,
-        owner_scope: crate::conn::CommandOwnerScope::capture(conn, cmd.session_id),
-        kind: Box::new(super::PendingPageCommandKind::StopLoading),
+        owner_scope,
+        kind: Box::new(super::PendingPageCommandKind::StopLoading { pending }),
     })
 }
 
@@ -396,15 +409,19 @@ pub(super) async fn complete_stop_loading_command_dispatch(
     conn: &mut CdpConnection,
     _command_id: Option<u64>,
     owner: &CommandOwnerScope,
+    completed: Option<CompletedDocumentLifecycleStop>,
+    command_context: &mut crate::conn::CommandDispatchContext,
 ) -> PageCommandTaskStep {
     let mut out = Vec::new();
-    if let Some((context_id, target_id)) = conn.loaded_document_owner_identity_for_owner(owner)
-        && let Some(context) = conn.browser_context_by_id_mut(&context_id)
-        && let Err(error) = context
-            .stop_target_document_lifecycle_async(&target_id)
-            .await
-    {
-        tracing::debug!(%error, "failed to stop renderer document lifecycle");
+    if let Some(completed) = completed {
+        match conn.finish_document_lifecycle_stop(completed) {
+            Ok(output) => {
+                command_context.consume_renderer_command_turn_output(output);
+            }
+            Err(error) => {
+                tracing::debug!(%error, "failed to stop renderer document lifecycle");
+            }
+        }
     }
     let (
         pending_navigations,
@@ -452,10 +469,12 @@ pub(super) fn try_start_crash_command_dispatch(
             ));
         }
     }
+    let owner_scope = crate::conn::CommandOwnerScope::capture(conn, cmd.session_id);
+    let web_contents = conn.browser_web_contents_for_owner(&owner_scope).ok();
     PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
         command_id: cmd.id,
-        owner_scope: crate::conn::CommandOwnerScope::capture(conn, cmd.session_id),
-        kind: Box::new(super::PendingPageCommandKind::Crash),
+        owner_scope,
+        kind: Box::new(super::PendingPageCommandKind::Crash { web_contents }),
     })
 }
 
@@ -463,6 +482,7 @@ pub(super) async fn complete_crash_command_dispatch(
     conn: &mut CdpConnection,
     _command_id: Option<u64>,
     owner: &CommandOwnerScope,
+    web_contents: Option<moli_core::browser::WebContentsHandle>,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> PageCommandTaskStep {
     let mut out = Vec::new();
@@ -493,10 +513,10 @@ pub(super) async fn complete_crash_command_dispatch(
     // it never enters a V8InspectorSession or the ordinary target IO task FIFO.
     // Seal both DevTools receivers and interrupt active V8 synchronously so
     // target retirement cannot wait behind earlier JavaScript or IO work.
-    if let Some((context_id, target_id)) = conn.loaded_document_owner_identity_for_owner(owner)
-        && let Some(context) = conn.browser_context_by_id_mut(&context_id)
+    if let Some(web_contents) = web_contents
+        && let Err(error) = conn.crash_browser_web_contents_renderer_from_io(web_contents)
     {
-        context.crash_target_renderer_from_io(&target_id);
+        tracing::debug!(%error, "failed to crash exact Browser WebContents renderer");
     }
 
     // Page.crash retires the target, not merely the DevTools session which

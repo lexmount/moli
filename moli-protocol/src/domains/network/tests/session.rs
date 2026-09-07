@@ -575,12 +575,11 @@ async fn attached_enable_after_pending_subresource_does_not_replay_history_to_ne
 
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-primary"))
         .await;
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    let document = context.document_handle_for_target("TID-1").unwrap();
     assert!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .target_subresource_network_records("TID-1")
+        context
+            .document_subresource_network_records(document)
             .unwrap()
             .iter()
             .any(|record| record.url().as_str() == script_url)

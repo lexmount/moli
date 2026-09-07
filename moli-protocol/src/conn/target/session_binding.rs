@@ -298,10 +298,8 @@ impl CdpConnection {
             else {
                 return Ok(());
             };
-            let completion = pending.wait().await.map_err(|error| {
-                anyhow::anyhow!("failed to restore detached session user agent: {error}")
-            })?;
-            self.finish_rebuild_resource_runtime_for_session_owner(Some(session_id), completion)
+            let completed = pending.wait().await;
+            self.finish_document_resource_runtime_update(completed)
                 .map_err(anyhow::Error::msg)
         }
         .await;

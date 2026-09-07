@@ -2584,11 +2584,16 @@ async fn closed_renderer_session_cleanup(method: &str, params: Value) {
 
     // Close the actual receiver before disposal, as the old fail-close tests
     // did. A cleanup error still is not authority to retire the Browser Page.
-    ctx.conn
+    let web_contents = ctx
+        .conn
         .browser_context
-        .as_mut()
+        .as_ref()
         .unwrap()
-        .crash_target_renderer_from_io("TID-closed-cleanup");
+        .web_contents_handle_for_target("TID-closed-cleanup")
+        .expect("target should own WebContents");
+    ctx.conn
+        .crash_browser_web_contents_renderer_from_io(web_contents)
+        .expect("target WebContents should remain live");
     ctx.process_async(
         json!({"id": 2, "method": "Target.detachFromTarget", "params": {
             "targetId": "TID-closed-cleanup", "sessionId": "SID-closed-cleanup",

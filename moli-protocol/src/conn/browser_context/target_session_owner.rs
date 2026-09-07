@@ -1704,16 +1704,6 @@ impl CdpConnection {
             })
     }
 
-    pub(crate) fn capture_document_lifetime_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Option<moli_core::browser::DocumentLifetimeObserver> {
-        let owner = self.target_session_owner_mut_for_owner(owner)?;
-        owner
-            .browser_context
-            .document_lifetime_observer_for_target(&owner.target_id)
-    }
-
     /// Captures the exact protocol attachment currently addressing a Page.
     pub(crate) fn target_page_protocol_attachment_identity_for_session(
         &self,

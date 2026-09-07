@@ -145,35 +145,16 @@ pub(crate) struct CompletedNetworkCommandDispatch {
 
 enum PendingNetworkCommandWork {
     DocumentPolicy(crate::conn::PendingDocumentPolicyUpdate),
-    Page {
-        document: Option<moli_core::browser::DocumentId>,
-        pending: moli_core::page::PendingPageCommand,
-    },
+    ResourceRuntime(crate::conn::PendingDocumentResourceRuntimeUpdate),
     NetworkResourcePreparation(crate::conn::PendingNetworkResourceLoadPreparation),
     Resource(Box<moli_core::page::RendererPreparedNetworkResourceLoad>),
 }
 
 enum CompletedNetworkCommandWork {
     DocumentPolicy(Box<crate::conn::CompletedDocumentPolicyUpdate>),
-    Page {
-        document: Option<moli_core::browser::DocumentId>,
-        completed: Result<Box<moli_core::page::CompletedPageCommand>, String>,
-    },
+    ResourceRuntime(Box<crate::conn::CompletedDocumentResourceRuntimeUpdate>),
     NetworkResourcePreparation(Box<crate::conn::CompletedNetworkResourceLoadPreparation>),
     Resource(moli_core::page::RendererNetworkResourceLoadOutcome),
-}
-
-impl PendingNetworkCommandWork {
-    fn page(
-        conn: &CdpConnection,
-        owner: &CommandOwnerScope,
-        pending: moli_core::page::PendingPageCommand,
-    ) -> Self {
-        Self::Page {
-            document: conn.current_document_id_for_owner(owner),
-            pending,
-        }
-    }
 }
 
 pub(crate) enum NetworkCommandTaskStep {
@@ -200,15 +181,8 @@ impl PendingNetworkCommandDispatch {
             PendingNetworkCommandWork::DocumentPolicy(pending) => {
                 CompletedNetworkCommandWork::DocumentPolicy(Box::new(pending.wait().await))
             }
-            PendingNetworkCommandWork::Page { document, pending } => {
-                CompletedNetworkCommandWork::Page {
-                    document,
-                    completed: pending
-                        .wait()
-                        .await
-                        .map(Box::new)
-                        .map_err(|error| error.to_string()),
-                }
+            PendingNetworkCommandWork::ResourceRuntime(pending) => {
+                CompletedNetworkCommandWork::ResourceRuntime(Box::new(pending.wait().await))
             }
             PendingNetworkCommandWork::NetworkResourcePreparation(pending) => {
                 CompletedNetworkCommandWork::NetworkResourcePreparation(Box::new(
@@ -487,14 +461,14 @@ fn validate_top_level_target_ids(
     Ok(target_ids)
 }
 
-fn pending_network_page_command_step(
+fn pending_network_resource_runtime_step(
     conn: &mut CdpConnection,
     command_id: Option<u64>,
     session_id: Option<&str>,
     kind: PendingNetworkCommandKind,
     start: impl FnOnce(
         &mut CdpConnection,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String>,
+    ) -> Result<Option<crate::conn::PendingDocumentResourceRuntimeUpdate>, String>,
 ) -> NetworkCommandTaskStep {
     let owner_scope = CommandOwnerScope::capture(conn, session_id);
     let result = start(conn);
@@ -502,7 +476,7 @@ fn pending_network_page_command_step(
         Ok(Some(pending)) => NetworkCommandTaskStep::Pending(PendingNetworkCommandDispatch {
             command_id,
             kind,
-            pending: PendingNetworkCommandWork::page(conn, &owner_scope, pending),
+            pending: PendingNetworkCommandWork::ResourceRuntime(pending),
             owner_scope,
         }),
         Ok(None) => NetworkCommandTaskStep::Complete(CommandOutputPlan::success()),
@@ -671,7 +645,7 @@ fn start_set_user_agent_override_command(
         Ok(browser_identity) => browser_identity,
         Err(plan) => return NetworkCommandTaskStep::Complete(plan),
     };
-    pending_network_page_command_step(
+    pending_network_resource_runtime_step(
         conn,
         cmd.id,
         cmd.session_id,
@@ -778,28 +752,22 @@ fn complete_rebuild_loader_network_command(
     completed: CompletedNetworkCommandDispatch,
 ) -> CommandOutputPlan {
     let owner_scope = completed.owner_scope.clone();
-    let completion = match completed.completed {
-        CompletedNetworkCommandWork::Page {
-            completed: Ok(completion),
-            ..
-        } => *completion,
-        CompletedNetworkCommandWork::Page {
-            document,
-            completed: Err(error),
-        } => {
-            if network_page_configuration_will_be_replayed(conn, &owner_scope, document) {
-                return CommandOutputPlan::success();
-            }
-            return CommandOutputPlan::error(-32000, error);
-        }
+    let completed = match completed.completed {
+        CompletedNetworkCommandWork::ResourceRuntime(completed) => *completed,
         CompletedNetworkCommandWork::DocumentPolicy(_)
         | CompletedNetworkCommandWork::NetworkResourcePreparation(_)
         | CompletedNetworkCommandWork::Resource(_) => {
             return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
         }
     };
-    match conn.finish_rebuild_resource_runtime_for_owner(&owner_scope, completion) {
+    let document = completed.document();
+    match conn.finish_document_resource_runtime_update(completed) {
         Ok(()) => CommandOutputPlan::success(),
+        Err(_)
+            if network_page_configuration_will_be_replayed(conn, &owner_scope, document.id()) =>
+        {
+            CommandOutputPlan::success()
+        }
         Err(error) => CommandOutputPlan::error(-32000, error),
     }
 }
@@ -807,11 +775,8 @@ fn complete_rebuild_loader_network_command(
 fn network_page_configuration_will_be_replayed(
     conn: &CdpConnection,
     owner_scope: &CommandOwnerScope,
-    dispatched_document: Option<moli_core::browser::DocumentId>,
+    dispatched_document: moli_core::browser::DocumentId,
 ) -> bool {
-    let Some(dispatched_document) = dispatched_document else {
-        return false;
-    };
     conn.runtime_session_owner_slot_for_owner(owner_scope)
         .is_ok_and(|_| conn.current_document_id_for_owner(owner_scope) != Some(dispatched_document))
 }

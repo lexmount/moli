@@ -2970,14 +2970,9 @@ pub(super) async fn complete_pending_child_frame_navigate_command(
                 return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
             }
         };
-        let child_gate = match child_gate.wait().await {
-            Ok(completed) => completed,
-            Err(message) => {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-            }
-        };
+        let child_gate = child_gate.wait().await;
         let (completed, renderer_output) = match conn
-            .complete_child_frame_lifecycle_work_command_turn_for_session_owner(child_gate)
+            .finish_document_child_frame_lifecycle_work(child_gate)
         {
             Ok(completed) => completed,
             Err(message) => {
