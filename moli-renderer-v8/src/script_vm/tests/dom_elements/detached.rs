@@ -7254,6 +7254,14 @@ fn detached_resource_template_accessors_use_owner_prototypes() {
     if (!condition) throw new Error(message);
   };
   const own = (object, name) => Object.prototype.hasOwnProperty.call(object, name);
+  const throwsTypeError = callback => {
+    try {
+      callback();
+      return false;
+    } catch (error) {
+      return error.name === "TypeError";
+    }
+  };
   const accessor = (prototype, name, hasSetter = true) => {
     const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
     assert(!!descriptor, `${prototype.constructor.name}.${name} descriptor missing`);
@@ -7267,6 +7275,7 @@ fn detached_resource_template_accessors_use_owner_prototypes() {
     accessor(HTMLStyleElement.prototype, name);
   }
   accessor(HTMLLinkElement.prototype, "disabled");
+  accessor(HTMLIFrameElement.prototype, "csp");
   accessor(HTMLIFrameElement.prototype, "sandbox");
   accessor(HTMLIFrameElement.prototype, "allowFullscreen");
   for (const name of ["default", "kind", "src", "srclang", "label"]) {
@@ -7276,10 +7285,14 @@ fn detached_resource_template_accessors_use_owner_prototypes() {
   accessor(HTMLTrackElement.prototype, "track", false);
 
   const div = document.createElement("div");
-  for (const name of ["blocking", "sandbox", "allowFullscreen", "default", "srclang", "readyState", "track"]) {
+  for (const name of ["blocking", "csp", "sandbox", "allowFullscreen", "default", "srclang", "readyState", "track"]) {
     assert(!own(HTMLElement.prototype, name), `${name} should not be on HTMLElement.prototype`);
     assert(!(name in div), `${name} should not be on div`);
   }
+  const cspDescriptor = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, "csp");
+  assert(throwsTypeError(() => cspDescriptor.get.call(div)), "iframe csp getter brand");
+  assert(throwsTypeError(() => cspDescriptor.set.call(div, "script-src 'none'")), "iframe csp setter brand");
+  assert(!div.hasAttribute("csp"), "iframe csp setter must not mutate an incompatible receiver");
 
   const detachedDocument = document.implementation.createHTMLDocument("");
   const styleElements = [document.createElement("style"), detachedDocument.createElement("style")];
@@ -7325,18 +7338,23 @@ fn detached_resource_template_accessors_use_owner_prototypes() {
   }
 
   for (const iframe of iframeElements) {
-    for (const name of ["sandbox", "allowFullscreen"]) {
+    for (const name of ["csp", "sandbox", "allowFullscreen"]) {
       assert(!own(iframe, name), `iframe.${name} should not be own before set`);
     }
+    assert(iframe.csp === "", "iframe csp default");
+    iframe.csp = 123456;
     iframe.sandbox = "allow-scripts";
     iframe.allowFullscreen = true;
+    assert(iframe.csp === "123456" && iframe.getAttribute("csp") === "123456", "iframe csp");
     assert(iframe.sandbox === "allow-scripts" && iframe.getAttribute("sandbox") === "allow-scripts", "iframe sandbox");
     assert(iframe.allowFullscreen === true && iframe.getAttribute("allowfullscreen") === "", "iframe allowFullscreen");
-    for (const name of ["sandbox", "allowFullscreen"]) {
+    for (const name of ["csp", "sandbox", "allowFullscreen"]) {
       assert(!own(iframe, name), `iframe.${name} should stay inherited after set`);
       assert(delete iframe[name], `iframe.${name} delete`);
       assert(!own(iframe, name), `iframe.${name} should stay inherited after delete`);
     }
+    iframe.setAttribute("csp", "default-src 'self'");
+    assert(iframe.csp === "default-src 'self'", "iframe csp after delete");
     assert(iframe.sandbox === "allow-scripts", "iframe sandbox after delete");
     assert(iframe.allowFullscreen === true, "iframe allowFullscreen after delete");
   }

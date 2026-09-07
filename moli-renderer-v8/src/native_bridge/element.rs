@@ -3874,6 +3874,13 @@ struct HtmlIFrameElementPrototypeDeclaration {
     srcdoc: (),
     #[webapi(
         accessor_property,
+        getter = dom_string_reflection_getter_function,
+        setter = dom_string_reflection_setter_function,
+        data = DomStringReflection::IframeCsp
+    )]
+    csp: (),
+    #[webapi(
+        accessor_property,
         getter = html_loading_getter_function,
         setter = dom_string_reflection_setter_function,
         setter_data = DomStringReflection::IframeLoading
