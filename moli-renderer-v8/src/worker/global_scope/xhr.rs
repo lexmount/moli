@@ -608,38 +608,42 @@ fn send_synchronous_worker_xhr(
         });
 
     let result = match spawn_result {
-        Ok(_) => select! {
-            recv(response_rx) -> result => result.unwrap_or_else(|_| {
-                Err("worker sync XHR fetch thread dropped response channel".to_owned())
-            }),
-            recv(timeout_rx) -> _ => {
-                let timeout = xhr_timeout.as_ref().expect("never channel should not fire without xhr timeout");
-                load.cancel();
-                record_worker_subresource_failure(
-                    &state.borrow(),
-                    timeout_document_url,
-                    timeout_request_url,
-                    timeout_request_method,
-                    timeout_request_headers,
-                    timeout_request_body,
-                    SubresourceResourceType::Xhr,
-                    format!(
-                        "Synchronous XMLHttpRequest timed out after {} ms",
-                        timeout.configured_timeout.as_millis()
-                    ),
-                );
-                throw_synchronous_xhr_failure(
-                    scope,
-                    xhr,
-                    &request_url_text,
-                    "TimeoutError",
-                );
-                return;
-            }
-        },
-        Err(error) => Err(format!(
+        Ok(helper) => {
+            let result = select! {
+                recv(response_rx) -> result => Some(result.unwrap_or_else(|_| {
+                    Err("worker sync XHR fetch thread dropped response channel".to_owned())
+                })),
+                recv(timeout_rx) -> _ => {
+                    load.cancel();
+                    None
+                }
+            };
+            let _ = helper.join();
+            result
+        }
+        Err(error) => Some(Err(format!(
             "failed to spawn worker sync XHR fetch thread: {error}"
-        )),
+        ))),
+    };
+    let Some(result) = result else {
+        let timeout = xhr_timeout
+            .as_ref()
+            .expect("never channel should not fire without xhr timeout");
+        record_worker_subresource_failure(
+            &state.borrow(),
+            timeout_document_url,
+            timeout_request_url,
+            timeout_request_method,
+            timeout_request_headers,
+            timeout_request_body,
+            SubresourceResourceType::Xhr,
+            format!(
+                "Synchronous XMLHttpRequest timed out after {} ms",
+                timeout.configured_timeout.as_millis()
+            ),
+        );
+        throw_synchronous_xhr_failure(scope, xhr, &request_url_text, "TimeoutError");
+        return;
     };
 
     match result {

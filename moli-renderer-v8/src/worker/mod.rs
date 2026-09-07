@@ -20,6 +20,7 @@ mod module_runtime;
 mod script_loading;
 mod script_mime;
 mod thread;
+mod thread_owner;
 mod timer_callback;
 
 pub(crate) use data_url::decode_data_url_script_source;
@@ -71,3 +72,4 @@ pub(crate) use thread::{
     WorkerGlobalKind, WorkerScriptKind, WorkerScriptSource, WorkerSpawnOptions,
     dispatch_current_worker_callback_exception, spawn_worker_with_options,
 };
+pub(crate) use thread_owner::{WorkerThreadOwner, WorkerThreadRegistrar};

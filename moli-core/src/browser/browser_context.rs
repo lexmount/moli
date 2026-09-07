@@ -454,7 +454,7 @@ impl BrowserContext {
             .expect("BrowserContext renderer owner must exist until teardown");
         runtime.terminate_renderer_producers_for_owner_shutdown();
         drop(self);
-        runtime.shutdown_network_and_join();
+        runtime.shutdown_and_join();
     }
 }
 

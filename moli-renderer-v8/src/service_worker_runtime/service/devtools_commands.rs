@@ -358,7 +358,7 @@ impl ServiceWorkerRuntimeService {
             };
             host
         };
-        host.terminate_without_join();
+        host.terminate();
         Ok(true)
     }
 
@@ -378,7 +378,7 @@ impl ServiceWorkerRuntimeService {
         };
         let stopped_count = hosts.len();
         for host in hosts {
-            host.terminate_without_join();
+            host.terminate();
         }
         Ok(stopped_count)
     }
