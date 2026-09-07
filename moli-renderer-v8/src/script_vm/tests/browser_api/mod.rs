@@ -53,5 +53,5 @@ mod traversal_coordinator;
 mod trusted_types;
 mod web_audio;
 mod webrtc;
-
+mod webrtc_events;
 mod worker_listener_invocation;
