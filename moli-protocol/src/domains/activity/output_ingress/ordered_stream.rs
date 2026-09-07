@@ -71,6 +71,10 @@ pub(crate) struct OrderedRendererOutputIngress {
 }
 
 impl OrderedRendererOutputIngress {
+    pub(crate) fn has_owner_reservation(&self, residence: RendererOutputResidenceIdentity) -> bool {
+        self.pending_owners.contains_key(&residence)
+    }
+
     pub(crate) fn open(
         &mut self,
         stream: RendererOutputStreamIdentity,
@@ -81,7 +85,9 @@ impl OrderedRendererOutputIngress {
             "renderer output stream opened more than once"
         );
         let registered_owner = self.pending_owners.remove(&stream.residence());
-        if let (Some(registered), Some(discovered)) = (&registered_owner, &discovered_owner) {
+        if let (Some(registered), Some(discovered)) = (&registered_owner, &discovered_owner)
+            && !matches!(discovered, RendererPublicationOwner::Unobserved)
+        {
             assert_eq!(
                 registered, discovered,
                 "registered and discovered renderer output owners must match"
@@ -178,12 +184,18 @@ impl OrderedRendererOutputIngress {
                 state.pending.is_empty(),
                 "renderer output owner must bind before the first publication"
             );
-            if let Some(existing) = &state.owner {
+            if let Some(existing) = &state.owner
+                && !matches!(existing, RendererPublicationOwner::Unobserved)
+            {
                 assert_eq!(
                     existing, &owner,
                     "one renderer output stream cannot change protocol owner"
                 );
             } else {
+                assert_eq!(
+                    state.next_expected_sequence, 1,
+                    "an unobserved stream cannot acquire a retrospective owner"
+                );
                 state.owner = Some(owner.clone());
             }
         }

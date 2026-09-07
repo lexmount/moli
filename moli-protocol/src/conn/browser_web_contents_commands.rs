@@ -99,16 +99,8 @@ impl CdpConnection {
     pub(crate) async fn select_browser_web_contents_async(
         &mut self,
         handle: WebContentsHandle,
-    ) -> Result<(), String> {
-        let browser_globals = self.browser_global_overrides.clone();
-        let pending = self
-            .browser_context_by_browser_id_mut(handle.context())
-            .ok_or_else(|| "WebContents unavailable".to_owned())?
-            .start_select_web_contents(handle, &browser_globals)?;
-        let completed = pending.wait().await;
-        self.browser_context_by_browser_id_mut(handle.context())
-            .ok_or_else(|| "WebContents unavailable".to_owned())?
-            .finish_select_web_contents(completed)
+    ) -> Result<moli_core::browser::BrowserEventRecord, String> {
+        self.browser.activate_web_contents(handle)?.wait().await
     }
 
     pub(crate) async fn apply_browser_page_surface_async(

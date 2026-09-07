@@ -144,13 +144,19 @@ pub(in crate::domains) use main_document_commit::{
     MainDocumentCommitPreparedOutput, append_renderer_main_document_commit_to_output_sink,
     project_main_document_commit_async,
 };
-pub use navigation::BackgroundNavigationCompletion;
 #[cfg(test)]
 pub(crate) use navigation::emit_prepared_child_frame_tree_background_events;
 pub(crate) use navigation::navigation_cookie_access_report;
+pub use navigation::{
+    BackgroundNavigationCompletion, CompletedDevToolsNavigationCommandDispatch,
+    DevToolsNavigationCommandTaskStep, PendingDevToolsNavigationCommandDispatch,
+};
 pub(crate) use navigation::{
     MaterializedNavigationCompletion, complete_materialized_navigation_into_buffer_async,
     emit_prepared_child_frame_activity, push_superseded_navigation_result,
+};
+pub(crate) use navigation_commit::{
+    fail_navigation_inspection_sessions, release_document_projection_output_async,
 };
 use prepared_navigation::{
     PagePreparedSameDocumentNavigation, PagePreparedTopLevelLocationNavigation,
@@ -2466,10 +2472,7 @@ pub(crate) fn emit_page_window_open_background_events_for_owner(
         return;
     }
     for event_session_id in conn.page_event_session_ids_for_owner(owner) {
-        let event_owner = event_session_id
-            .as_deref()
-            .map(CommandOwnerScope::for_session)
-            .unwrap_or_else(|| owner.clone());
+        let event_owner = owner.for_target_event_session(conn, event_session_id.as_deref());
         if conn.page_domain_enabled_for_owner(&event_owner) == Some(true) {
             out.push(BackgroundProtocolEvent::page_window_open(
                 event_session_id.as_deref(),
@@ -2605,8 +2608,8 @@ mod producer_tests {
         session_id: &str,
         source_document: RendererDocumentLifecycleIdentity,
     ) -> crate::conn::TargetRootDocumentProtocolAttachmentIdentity {
-        conn.target_root_document_protocol_attachment_identity_for_session(
-            Some(session_id),
+        conn.target_root_document_protocol_attachment_identity_for_owner(
+            &crate::conn::CommandOwnerScope::for_session(session_id),
             source_document,
         )
         .expect("test target should expose the exact root Document attachment")
@@ -4432,7 +4435,7 @@ mod producer_tests {
         crate::domains::network::emit_child_document_navigation_network_background_events(
             &mut conn,
             &mut background_events,
-            Some("SID-1"),
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
             "CHILD-FRAME-LEGACY",
             "LID-CHILD-LEGACY",
             "LID-CHILD-LEGACY",
@@ -4738,7 +4741,7 @@ mod producer_tests {
         super::emit_prepared_child_frame_tree_background_events(
             &mut conn,
             &mut emitted,
-            Some("SID-1"),
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
             vec![super::PagePreparedChildFrameTreeEvent::Attached {
                 frame_id: child_frame_id.clone(),
                 parent_frame_id: "TID-1".to_owned(),
@@ -4754,7 +4757,7 @@ mod producer_tests {
         super::emit_prepared_child_frame_tree_background_events(
             &mut conn,
             &mut emitted,
-            Some("SID-1"),
+            &crate::conn::CommandOwnerScope::for_session("SID-1"),
             vec![
                 super::PagePreparedChildFrameTreeEvent::Attached {
                     frame_id: child_frame_id.clone(),
@@ -6225,7 +6228,6 @@ fn page_set_download_behavior_command_output_plan(
 pub(crate) async fn execute_devtools_page_command_async_with_protocol_events(
     conn: &mut CdpConnection,
     command: DevToolsCommand,
-    background_command_id: Option<u64>,
 ) -> (
     Result<DevToolsCommandResult, DevToolsError>,
     Vec<crate::conn::BackgroundProtocolEvent>,
@@ -6276,16 +6278,6 @@ pub(crate) async fn execute_devtools_page_command_async_with_protocol_events(
             Vec::new(),
             None,
         ),
-        command @ (DevToolsCommand::Navigate(_)
-        | DevToolsCommand::Reload(_)
-        | DevToolsCommand::TraverseHistory(_)) => {
-            navigation::execute_devtools_navigation_command_async_with_protocol_events(
-                conn,
-                command,
-                background_command_id,
-            )
-            .await
-        }
         command @ (DevToolsCommand::AddPreloadScript(_)
         | DevToolsCommand::RemovePreloadScript(_)) => {
             preload::execute_devtools_preload_command_async(conn, command).await
@@ -6310,6 +6302,9 @@ async fn execute_devtools_get_frame_trees_command_async(
         let Some(target_id) = target_info.target_id.clone() else {
             continue;
         };
+        if !conn.webdriver_target_is_visible(&command.context, target_id.as_str()) {
+            continue;
+        }
         let frame_tree_command = DevToolsGetFrameTreeCommand {
             context: DevToolsCommandContext {
                 target_id: Some(target_id),

@@ -1145,6 +1145,33 @@ impl BrowserContext {
             )
     }
 
+    /// Allocate only a DevTools projection ID; the Browser already committed.
+    pub(crate) fn project_committed_document_loader_for_target(
+        &mut self,
+        target_id: &str,
+        navigation: Option<NavigationId>,
+        allocator: &mut crate::conn::ConnectionNetworkRequestIdAllocator,
+    ) -> Option<String> {
+        let Some(navigation) = navigation else {
+            return self.target_initial_empty_document_loader_id_if_current(target_id);
+        };
+        if let Some(loader) = self
+            .page_slot_for_target(target_id)?
+            .loader_id_for_navigation(navigation)
+        {
+            return Some(loader.to_owned());
+        }
+        let target = self.page_targets.get_mut(target_id)?;
+        let (loader, _, _) =
+            target.prepare_document_navigation_request_ids(allocator, false, false, false);
+        target
+            .runtime_slot
+            .page_slot_mut()
+            .cdp_navigation_loaders
+            .push((navigation, loader.clone()));
+        Some(loader)
+    }
+
     pub(super) fn retain_navigation_projections_for_target(&mut self, target_id: &str) {
         let target = self
             .page_targets

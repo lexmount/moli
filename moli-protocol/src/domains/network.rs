@@ -409,8 +409,13 @@ fn set_cache_behavior_result(
     command: DevToolsSetCacheBehaviorCommand,
 ) -> Result<DevToolsCommandResult, DevToolsError> {
     let target_ids = if command.target_ids.is_empty() {
-        conn.set_global_cache_disabled(command.cache_disabled);
+        if !conn.set_webdriver_cache_disabled(&command.context, command.cache_disabled) {
+            conn.set_global_cache_disabled(command.cache_disabled);
+        }
         top_level_target_ids(conn)
+            .into_iter()
+            .filter(|id| conn.webdriver_target_is_visible(&command.context, id))
+            .collect()
     } else {
         validate_top_level_target_ids(conn, &command)?
     };

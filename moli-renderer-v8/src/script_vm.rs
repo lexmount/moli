@@ -6682,7 +6682,7 @@ impl ScriptVm {
 
     pub(super) fn settle_renderer_output_publication(
         &mut self,
-    ) -> Option<crate::runtime::RendererOutputPublication> {
+    ) -> Option<crate::runtime::RendererSettledOutput> {
         self.page_inspector
             .devtools_target()
             .pause_ref()
@@ -6712,7 +6712,10 @@ impl ScriptVm {
                 }
             });
         }
-        Some(pending.finish())
+        Some(crate::runtime::RendererSettledOutput::new(
+            output_journal,
+            pending.finish(),
+        ))
     }
 
     pub(super) fn append_renderer_output_records(
@@ -7965,6 +7968,9 @@ impl ScriptVm {
                         loader,
                         Some(&document_character_set),
                         None,
+                        self.current_main_document_resource_loader()
+                            .ok_or_else(|| PreparedScriptExecutionError::from_message("script Document resource authority is unavailable".to_owned()))?
+                            .task_runner(),
                     )
                     .await;
                 if let Some(network_result) = outcome.network_result.as_deref() {

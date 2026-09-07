@@ -1195,7 +1195,7 @@ pub(in crate::domains) fn release_failed_dedicated_worker_target_after_debugger_
     ))
 }
 
-pub(in crate::domains) async fn retire_dedicated_worker_targets_for_replaced_page_async(
+pub(crate) async fn retire_dedicated_worker_targets_for_replaced_page_async(
     conn: &mut CdpConnection,
     replaced_page_owner: &TargetPageResidenceIdentity,
 ) -> Vec<BackgroundProtocolEvent> {

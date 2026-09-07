@@ -1,5 +1,9 @@
 use super::*;
 use crate::dom::native::Node;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+// All Page hosts share the frame namespace; navigation keeps the allocated id.
+static NEXT_CHILD_BROWSING_CONTEXT_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ChildFrameOwnerElementKind {
@@ -257,11 +261,10 @@ impl JsContextHost {
         }
     }
 
-    pub(in crate::native_bridge::context_host) fn next_child_browsing_context_frame_id(
-        &mut self,
-    ) -> String {
-        let next_id = self.next_child_browsing_context_id;
-        self.next_child_browsing_context_id += 1;
+    pub(in crate::native_bridge::context_host) fn next_child_browsing_context_frame_id() -> String {
+        let next_id = NEXT_CHILD_BROWSING_CONTEXT_ID
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+            .expect("child browsing-context id space exhausted");
         format!("child-browsing-context-{next_id}")
     }
 }

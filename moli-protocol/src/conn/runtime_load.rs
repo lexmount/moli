@@ -2193,7 +2193,8 @@ impl CdpConnection {
         load.set_redirect_state(
             navigation.redirect_headers.clone(),
             navigation.redirect_chain.clone(),
-        );
+        )
+        .ok()?;
         Some(BackgroundNavigationLoadJob {
             load,
             reply_boundary: RendererReplyBoundary::DocumentCommit,

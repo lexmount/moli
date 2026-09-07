@@ -342,6 +342,33 @@ impl BrowserContext {
         ))
     }
 
+    pub(in crate::browser) fn start_web_contents_visibility_update(
+        &self,
+        handle: crate::browser::WebContentsHandle,
+        foreground: bool,
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        if self.web_contents_has_pending_javascript_dialog(handle)? {
+            return Ok(None);
+        }
+        let contents = self.web_contents(handle)?;
+        let Some(document) = self.document_handle_for_web_contents(handle)? else {
+            return Ok(None);
+        };
+        let activity = contents
+            .page_surface(foreground, None, None, None)
+            .document_activity();
+        let pending = self
+            .document(document)?
+            .page
+            .start_set_document_activity(activity)
+            .map_err(|error| error.to_string())?;
+        Ok(Some(PendingDocumentPolicyUpdate {
+            document,
+            kind: DocumentPolicyUpdateKind::SetDocumentActivity,
+            pending,
+        }))
+    }
+
     pub fn page_surface_for_web_contents(
         &self,
         handle: crate::browser::WebContentsHandle,

@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::{
     browser::{
         BrowserContextId, DocumentHandle, DownloadManager, DownloadPolicy, PermissionOverrides,
-        WebContentsHandle, WebContentsId,
+        WebContentsHandle, WebContentsId, WebContentsSelection,
     },
     network::{SharedWebStorageStore, new_shared_web_storage_store},
     runtime::{
@@ -221,7 +221,7 @@ pub struct BrowserContext {
     // The Browser collection and its only selector have the same lifetime.
     // Keep insertion order when choosing a replacement foreground page.
     web_contents: IndexMap<WebContentsId, WebContents>,
-    selected_web_contents: Option<WebContentsId>,
+    selected_web_contents: Option<WebContentsSelection>,
     // Drop Documents/engines before the runtime root and its storage handles.
     renderer_output_transport_sender: Option<crate::RendererOutputTransportSender>,
     renderer_runtime_owner: Option<RendererBrowserContextRuntimeOwner>,
@@ -326,7 +326,7 @@ impl BrowserContext {
         let mut emulation = self.emulation_defaults.clone();
         emulation.network_conditions = emulation.network_conditions.or(global_network_conditions);
         super::web_contents::InheritedDocumentPolicy {
-            selected_web_contents: self.selected_web_contents,
+            selected_web_contents: self.selected_web_contents_id(),
             navigator_queries: Default::default(),
             fetch_config,
             extra_headers: super::web_contents::merge_extra_header_layers(&[
@@ -370,13 +370,21 @@ impl BrowserContext {
 
     pub fn selected_web_contents_id(&self) -> Option<WebContentsId> {
         self.selected_web_contents
+            .map(|selection| selection.web_contents.id())
     }
 
-    pub fn select_web_contents(&mut self, id: WebContentsId) -> bool {
+    pub fn selected_web_contents_snapshot(&self) -> Option<WebContentsSelection> {
+        self.selected_web_contents
+    }
+
+    pub(in crate::browser) fn select_web_contents(&mut self, id: WebContentsId) -> bool {
         if !self.web_contents.contains_key(&id) {
             return false;
         }
-        self.selected_web_contents = Some(id);
+        self.selected_web_contents = Some(WebContentsSelection {
+            web_contents: WebContentsHandle::new(self.id, id),
+            sequence: super::BrowserSequence::allocate(),
+        });
         true
     }
 
@@ -390,8 +398,17 @@ impl BrowserContext {
             .web_contents
             .shift_remove(&id)
             .expect("validated WebContents must remain resident until close");
-        if self.selected_web_contents == Some(id) {
-            self.selected_web_contents = None;
+        if self.selected_web_contents_id() == Some(id) {
+            self.selected_web_contents = self
+                .web_contents
+                .values()
+                .rev()
+                .find(|contents| contents.main_frame.current_document.is_some())
+                .or_else(|| self.web_contents.values().next_back())
+                .map(|contents| WebContentsSelection {
+                    web_contents: WebContentsHandle::new(self.id, contents.id()),
+                    sequence: super::BrowserSequence::allocate(),
+                });
         }
         for contents in self.web_contents.values_mut() {
             if contents
@@ -452,7 +469,7 @@ impl BrowserContext {
             .expect("BrowserContext renderer owner must exist until teardown");
         runtime.terminate_renderer_producers_for_owner_shutdown();
         drop(self);
-        runtime.shutdown_network_and_join();
+        runtime.shutdown_and_join();
     }
 }
 

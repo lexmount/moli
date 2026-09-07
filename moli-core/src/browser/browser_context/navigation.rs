@@ -30,7 +30,7 @@ pub struct DocumentNavigationMetadata {
 
 impl BrowserContext {
     pub fn selected_document_handle(&self) -> Option<DocumentHandle> {
-        let contents = WebContentsHandle::new(self.id, self.selected_web_contents?);
+        let contents = self.selected_web_contents_handle()?;
         let document = self
             .web_contents(contents)
             .ok()?

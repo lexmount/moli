@@ -588,23 +588,29 @@ pub(super) async fn complete_continue_with_auth_command_async(
         }
         PendingContinueWithAuthState::NavigationContinue { pending, auth } => {
             out.push_success();
-            let response = conn.take_navigation_auth(pending.auth_permit);
-            let Some(response) = response else {
-                let token = Some(pending.auth_permit.navigation());
-                let navigation = network::materialize_navigation_load_result(
-                    conn,
-                    &pending.navigation,
-                    Err(anyhow::anyhow!("stale navigation auth response")),
-                );
-                complete_tokened_materialized_navigation_as_background_events_async(
-                    conn,
-                    out,
-                    token,
-                    pending.navigation,
-                    navigation,
-                )
-                .await;
-                return;
+            let work = conn
+                .take_navigation_auth(pending.auth_permit)
+                .ok_or_else(|| "stale navigation auth response".to_owned())
+                .and_then(|response| response.retry());
+            let work = match work {
+                Ok(work) => work,
+                Err(error) => {
+                    let token = Some(pending.auth_permit.navigation());
+                    let navigation = network::materialize_navigation_load_result(
+                        conn,
+                        &pending.navigation,
+                        Err(anyhow::Error::msg(error)),
+                    );
+                    complete_tokened_materialized_navigation_as_background_events_async(
+                        conn,
+                        out,
+                        token,
+                        pending.navigation,
+                        navigation,
+                    )
+                    .await;
+                    return;
+                }
             };
             load_or_pause_navigation_for_auth_as_background_events_async(
                 conn,
@@ -620,7 +626,7 @@ pub(super) async fn complete_continue_with_auth_command_async(
                     auth_required_blocked_intercepts: Vec::new(),
                 },
                 Some(auth),
-                response.retry(),
+                work,
             )
             .await;
         }

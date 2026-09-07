@@ -88,7 +88,7 @@ impl AdmittedDocumentMaterialization {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CommittedDocumentInfo {
     pub url: Url,
     pub title: String,
@@ -178,6 +178,7 @@ pub struct RetiringDocument(Option<Page>);
 
 /// A creation prefix published by the Browser commit, never a request to
 /// initialize or rewind native state from a frontend projection.
+#[derive(Clone, Debug)]
 pub struct CommittedDocumentLifecycle {
     pub document: DocumentId,
     pub browser_sequence: BrowserSequence,
@@ -331,12 +332,24 @@ impl WebContents {
             .take_committed_document_post_response_continuation();
         let mut document = DocumentHost::new(document_id, prepared.page);
         document.lifecycle = prepared.lifecycle;
+        let browser_sequence = BrowserSequence::allocate();
+        let lifecycle = CommittedDocumentLifecycle {
+            document: document_id,
+            browser_sequence,
+            artifacts: prepared.creation_artifacts,
+        };
+        document.commit = Some(std::sync::Arc::new(super::DocumentCommitMetadata {
+            navigation: Some(navigation),
+            lifecycle: lifecycle.clone(),
+            info: Some(prepared.info.clone()),
+            previous_document,
+            previous_renderer,
+        }));
         let retirement = RetiringDocument(self.replace_document(Some(document)));
         assert!(
             self.navigation
                 .commit_pending_document_navigation_if_matches(&navigation)
         );
-        let browser_sequence = BrowserSequence::allocate();
         Ok(CommittedDocumentNavigation {
             web_contents: self.id(),
             frame_slot: self.main_frame.id(),
@@ -345,11 +358,7 @@ impl WebContents {
             previous_document,
             previous_renderer,
             inspection_endpoint,
-            lifecycle: CommittedDocumentLifecycle {
-                document: document_id,
-                browser_sequence,
-                artifacts: prepared.creation_artifacts,
-            },
+            lifecycle,
             info: prepared.info,
             retirement,
             post_response_continuation,

@@ -1131,6 +1131,7 @@ impl DocumentRuntime {
                     script.url.clone(),
                 );
             let request_origin = resource_loader.fetch_context().request_origin();
+            let fetch_task_runner = resource_loader.task_runner();
             resource_loader.spawn_resource_task(async move {
                 let outcome = crate::planning::load_prepared_script_source_outcome_with_document_character_set(
                     &script,
@@ -1138,6 +1139,7 @@ impl DocumentRuntime {
                     &request_client,
                     Some(&document_character_set),
                     Some(resource_type_hint),
+                    fetch_task_runner,
                 )
                 .await;
                 let _ = completion_tx.send_document_write_external_script(
@@ -1251,6 +1253,7 @@ impl DocumentRuntime {
         let completion_tx = unsafe { &*host_ptr }.resource_completion_sender();
         let document_character_set = self.document_character_set().to_owned();
         let request_origin = resource_loader.fetch_context().request_origin();
+        let fetch_task_runner = resource_loader.task_runner();
         resource_loader.spawn_resource_task(async move {
             let outcome =
                 crate::planning::load_prepared_script_source_outcome_with_document_character_set(
@@ -1259,6 +1262,7 @@ impl DocumentRuntime {
                     &loader,
                     Some(&document_character_set),
                     None,
+                    fetch_task_runner,
                 )
                 .await;
             let _ = completion_tx.send_document_write_external_script(

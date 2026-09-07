@@ -3,16 +3,15 @@ use super::*;
 
 impl ServiceWorkerRuntimeService {
     pub(crate) fn terminate_all_for_context_shutdown(&self) {
-        let (hosts, aborted_jobs, force_update_page_load_waiters) =
-            self.take_context_shutdown_work();
+        // No callback may retain or reopen work after its physical Context
+        // has retired, even when an inspection endpoint is still held.
+        self.service_lane().close();
+        let (progress, aborted_jobs) = self.take_context_shutdown_work();
         for aborted_job in aborted_jobs {
             Self::send_aborted_job(aborted_job);
         }
-        for waiter in force_update_page_load_waiters {
-            let _ = waiter.send(());
-        }
-        for host in hosts {
-            host.terminate_without_join();
+        for progress in progress {
+            self.run_lifecycle_progress(progress);
         }
     }
 
@@ -22,56 +21,50 @@ impl ServiceWorkerRuntimeService {
             .expect("test host stop should use the production ServiceWorker retirement path");
     }
 
-    fn take_context_shutdown_work(
-        &self,
-    ) -> (
-        Vec<SharedRendererServiceWorkerHost>,
-        Vec<ServiceWorkerAbortedJob>,
-        Vec<tokio::sync::oneshot::Sender<()>>,
-    ) {
+    fn take_context_shutdown_work(&self) -> (Vec<LifecycleProgress>, Vec<ServiceWorkerAbortedJob>) {
         let mut state = self.inner.state.lock();
-        let force_update_page_load_waiters = state.take_all_force_update_page_load_waiters();
-        let pending_update_checks = state
+        let mut progress = vec![LifecycleProgress::ForceUpdatePageLoadCompleted(
+            state.take_all_force_update_page_load_waiters(),
+        )];
+        let mut aborted_jobs = state
             .pending_main_script_update_checks
             .drain()
+            .map(|(_, pending_check)| pending_check.abort())
             .collect::<Vec<_>>();
-        let mut hosts = Vec::new();
-        let mut aborted_jobs = Vec::new();
-        for (registration_id, pending_check) in pending_update_checks {
-            if let Some(registration) = state.registrations.get_mut(&registration_id)
-                && registration.installing_version_id == Some(pending_check.new_version_id)
-            {
-                registration.installing_version_id = None;
-                registration
-                    .pending_register_jobs
-                    .remove(&pending_check.new_version_id);
-            }
-            hosts.extend(
-                remove_version_and_shutdown_host_locked(&mut state, pending_check.new_version_id)
-                    .into_iter()
-                    .filter_map(|progress| match progress {
-                        LifecycleProgress::TerminateHost(host) => Some(host),
-                        _ => None,
-                    }),
-            );
-            aborted_jobs.push(pending_check.abort());
-        }
-        hosts.extend(take_running_hosts_for_shutdown_locked(&mut state));
-        let pending_devtools_launch_version_ids = state
-            .pending_devtools_launches
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
-        for version_id in pending_devtools_launch_version_ids {
-            state.record_target_destroyed(version_id);
-        }
-        state.pending_devtools_launches.clear();
-        state.pending_devtools_evaluation_releases.clear();
         aborted_jobs.extend(abort_pending_register_jobs_for_context_shutdown_locked(
             &mut state,
         ));
         aborted_jobs.extend(state.job_coordinator.abort_all());
-        (hosts, aborted_jobs, force_update_page_load_waiters)
+        progress.extend(state.pending_fetch_jobs.drain().map(|(_, job)| {
+            job.cancel_handle.cancel();
+            LifecycleProgress::FetchFailed(Box::new((
+                job,
+                SERVICE_WORKER_JOB_ABORTED_ERROR.to_owned(),
+            )))
+        }));
+        let version_ids = state.versions.keys().copied().collect::<Vec<_>>();
+        for version_id in version_ids {
+            progress.extend(remove_version_and_shutdown_host_locked(
+                &mut state, version_id,
+            ));
+        }
+        // Drop runtime-owned callbacks and launch resources, not the persisted
+        // registrations in StoragePartition's resource store.
+        state.registrations.clear();
+        state.pending_ready_jobs.clear();
+        state.lifecycle_watchers.clear();
+        state.live_clients.clear();
+        state.notification_records.clear();
+        state.sync_registrations.clear();
+        state.periodic_sync_registrations.clear();
+        state.push_subscriptions.clear();
+        state.pending_devtools_launches.clear();
+        state.pending_devtools_evaluation_releases.clear();
+        state.devtools_related_pause_on_start_policies.clear();
+        state.main_script_update_check_diagnostics.clear();
+        state.stored_registration_cache.clear();
+        state.stored_registration_cache_revision = None;
+        (progress, aborted_jobs)
     }
 
     fn send_aborted_job(aborted_job: ServiceWorkerAbortedJob) {
@@ -91,16 +84,6 @@ impl ServiceWorkerRuntimeService {
             }
         }
     }
-}
-
-fn take_running_hosts_for_shutdown_locked(
-    state: &mut ServiceWorkerRuntimeState,
-) -> Vec<SharedRendererServiceWorkerHost> {
-    state
-        .versions
-        .values_mut()
-        .filter_map(|version| version.running_state.take_host_for_shutdown())
-        .collect()
 }
 
 fn abort_pending_register_jobs_for_context_shutdown_locked(

@@ -2389,7 +2389,7 @@ pub(crate) async fn execute_devtools_runtime_command_async_with_protocol_events(
     if let Err(error) = validation_result {
         return DevToolsCommandExecutionOutput::new(Err(error));
     }
-    let internal_command_id = conn.next_internal_runtime_command_id();
+    let internal_command_id = conn.next_internal_devtools_command_id();
     let mut step =
         start_protocol_neutral_runtime_command(conn, target.clone(), command, internal_command_id)
             .await;
@@ -2507,6 +2507,16 @@ impl CdpConnection {
         &mut self,
         mut command: DevToolsCommand,
     ) -> DevToolsRuntimeCommandTaskStep {
+        if let Err(error) = self.prepare_webdriver_command(&mut command) {
+            return self
+                .complete_devtools_runtime_direct_result(
+                    command.context().clone(),
+                    Err(error),
+                    Vec::new(),
+                    None,
+                )
+                .await;
+        }
         let command_context = command.context().clone();
         if let DevToolsCommand::GetRealms(command) = command {
             let result = execute_devtools_get_realms_command_async(self, command).await;
@@ -2598,7 +2608,7 @@ impl CdpConnection {
                 .await;
         }
 
-        let internal_command_id = self.next_internal_runtime_command_id();
+        let internal_command_id = self.next_internal_devtools_command_id();
         let state = DevToolsRuntimeCommandDispatchState {
             internal_command_id,
             command_context,
@@ -5977,7 +5987,7 @@ async fn devtools_probe_remote_value_async(
     command: DevToolsCommand,
 ) -> Result<Option<DevToolsRemoteValue>, DevToolsError> {
     let result_ownership = devtools_runtime_result_ownership(&command);
-    let internal_command_id = conn.next_internal_runtime_command_id();
+    let internal_command_id = conn.next_internal_devtools_command_id();
     let mut step =
         start_protocol_neutral_runtime_command(conn, target, command, internal_command_id).await;
     loop {
@@ -7290,7 +7300,7 @@ async fn release_devtools_objects_for_owner_async(
             continue;
         }
         let params = json!({ "objectId": object_id });
-        let command_id = conn.next_internal_runtime_command_id();
+        let command_id = conn.next_internal_devtools_command_id();
         let raw_json = runtime_inspector_command_json(command_id, "Runtime.releaseObject", &params);
         let response = dispatch_runtime_inspector_command_response_for_owner_async(
             conn, owner, raw_json, command_id,

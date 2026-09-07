@@ -28,6 +28,7 @@ pub const DEFAULT_CDP_PAGE_TARGET_ID: &str = "moli-default";
 pub const DEFAULT_CDP_TAB_TARGET_ID: &str = "moli-default-tab";
 
 mod activity_source;
+mod automation_session;
 mod bidi_channel_work;
 mod browser_context;
 mod browser_worker_commands;
@@ -115,7 +116,7 @@ pub(crate) use bidi_channel_work::{
     BidiChannelPageOwner,
 };
 pub(crate) use browser_context::{
-    PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
+    PageCloseNotifications, PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
     SessionOwnerRuntimeFrontendEnableResult, TargetNavigationLoadInputs,
 };
 pub(crate) use command_owner_scope::CommandOwnerScope;
@@ -168,7 +169,7 @@ pub use moli_protocol_cdp::{
 };
 use target::DEFAULT_BROWSER_CONTEXT_ID;
 pub(crate) use target::{
-    CdpSessionRoute, DefaultTargetLifecycle, TargetActivationTransition, TargetHandlerAccessMode,
+    CdpSessionRoute, DefaultTargetLifecycle, TargetHandlerAccessMode,
     TargetWorkerProtocolAttachmentIdentity,
 };
 
@@ -1045,6 +1046,7 @@ pub(crate) struct BrowserGlobalOverrides {
 /// Persistent per-connection state.
 pub struct CdpConnection {
     browser: BrowserHandle,
+    webdriver_sessions: HashMap<String, automation_session::WebDriverSessionScope>,
     // Browser/session routing state.
     pub browser_context: Option<BrowserContext>,
     pub inactive_browser_contexts: Vec<BrowserContext>,
@@ -1076,7 +1078,7 @@ pub struct CdpConnection {
     shared_tab_target_id_allocator: Option<Arc<AtomicU64>>,
     next_session_id: u32,
     next_page_domain_subscription_generation: u64,
-    next_internal_runtime_command_id: u64,
+    next_internal_devtools_command_id: u64,
     network_request_id_allocator: ConnectionNetworkRequestIdAllocator,
     // Browser profile, download and global IO state.
     download_policy: moli_core::browser::DownloadPolicy,
@@ -1122,14 +1124,6 @@ impl CdpConnection {
             .any(BrowserContext::has_pending_javascript_dialog)
     }
 
-    pub fn set_automation_javascript_dialog_handler_enabled(&mut self, enabled: bool) -> bool {
-        let Some(browser_context) = self.browser_context.as_ref() else {
-            return false;
-        };
-        browser_context.set_javascript_dialog_handler_enabled(enabled);
-        true
-    }
-
     pub fn enable_webdriver_bidi_download_events(&mut self) -> bool {
         self.download_subscriptions.enable_webdriver_bidi_events()
     }
@@ -1156,6 +1150,7 @@ impl CdpConnection {
         let base_tls_verify_host = fetch_config.tls_verify_host();
         Self {
             browser,
+            webdriver_sessions: HashMap::new(),
             browser_context: None,
             inactive_browser_contexts: Vec::new(),
             target_discovery_enabled: false,
@@ -1178,7 +1173,7 @@ impl CdpConnection {
             shared_tab_target_id_allocator: None,
             next_session_id: 0,
             next_page_domain_subscription_generation: 0,
-            next_internal_runtime_command_id: 902_000_000,
+            next_internal_devtools_command_id: 902_000_000,
             network_request_id_allocator: ConnectionNetworkRequestIdAllocator::default(),
             base_browser_identity,
             browser_global_overrides: BrowserGlobalOverrides::default(),
@@ -1213,12 +1208,13 @@ impl CdpConnection {
         self.target_host_lifecycle_observer = Some(observer);
     }
 
-    pub fn set_runtime_inspector_response_ready_sender(
+    /// Binds the scheduler's completion ingress once for this connection's
+    /// lifetime. Frontend attach/detach must not replace the receiver while
+    /// renderer callbacks still hold its sender.
+    pub fn bind_runtime_inspector_response_ready(
         &mut self,
-        sender: RuntimeInspectorResponseReadySender,
-    ) {
-        self.scheduler_hooks
-            .set_runtime_inspector_response_ready_sender(sender);
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>> {
+        self.scheduler_hooks.bind_runtime_inspector_response_ready()
     }
 
     pub fn set_background_navigation_completion_sender(
@@ -1250,7 +1246,7 @@ impl CdpConnection {
         self.scheduler_hooks.background_event_sender()
     }
 
-    pub(crate) fn runtime_inspector_response_ready_sender(
+    pub fn runtime_inspector_response_ready_sender(
         &self,
     ) -> Option<RuntimeInspectorResponseReadySender> {
         self.scheduler_hooks
@@ -1717,10 +1713,7 @@ impl CdpConnection {
             slot.retire_javascript_dialog_scope();
         }
         for event_session_id in event_session_ids {
-            let event_owner = event_session_id
-                .as_deref()
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| owner.clone());
+            let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
             let _ = self.with_target_devtools_session_state_for_owner_mut(&event_owner, |state| {
                 state.page_session_state.javascript_dialog_state.clear()
             });
@@ -1952,10 +1945,7 @@ impl CdpConnection {
         };
         let timestamp = monotonic_timestamp_seconds();
         for event_session_id in self.page_event_session_ids_for_owner(owner) {
-            let event_owner = event_session_id
-                .as_deref()
-                .map(CommandOwnerScope::for_session)
-                .unwrap_or_else(|| owner.clone());
+            let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
             let lifecycle_enabled = self
                 .target_page_session_state_for_owner(&event_owner)
                 .is_some_and(|state| state.page_lifecycle_events);
@@ -1985,6 +1975,13 @@ impl CdpConnection {
         &self,
         context: &DevToolsCommandContext,
     ) -> Option<CommandOwnerScope> {
+        if context
+            .session_id
+            .as_ref()
+            .is_some_and(|id| self.webdriver_sessions.contains_key(id.as_str()))
+        {
+            return self.webdriver_command_owner_scope(context);
+        }
         if let Some(target_id) = context.target_id.as_ref() {
             let route = self
                 .target_session_route_for_target_id(target_id.as_str())
@@ -2085,6 +2082,37 @@ impl CdpConnection {
                         &key.loader_id,
                     )
             })
+    }
+
+    /// Whether the exact milestone has crossed its protocol visibility gate.
+    /// Native waiter completion can precede the corresponding publication.
+    pub fn devtools_document_lifecycle_wait_is_visible(
+        &self,
+        context: &DevToolsCommandContext,
+        key: &DevToolsDocumentLifecycleWaitKey,
+    ) -> bool {
+        let Some(owner) = self.command_owner_scope_for_devtools_context(context) else {
+            return false;
+        };
+        let Ok(slot) = self.runtime_session_owner_slot_for_owner(&owner) else {
+            return false;
+        };
+        let Some(snapshot) = slot
+            .page_slot()
+            .renderer_document_lifecycle_visible_snapshot()
+        else {
+            return false;
+        };
+        snapshot.document == key.renderer_document
+            && snapshot.epoch == key.renderer_epoch
+            && match key.milestone {
+                moli_core::page::RendererDocumentLifecycleMilestone::DomContentLoaded => {
+                    snapshot.dom_content_loaded.is_some()
+                }
+                moli_core::page::RendererDocumentLifecycleMilestone::Load => {
+                    snapshot.load.is_some()
+                }
+            }
     }
 
     pub(crate) fn accepts_document_body_completion_for_owner(
@@ -2854,12 +2882,12 @@ impl CdpConnection {
             .browser_context
             .iter()
             .chain(self.inactive_browser_contexts.iter())
-            .filter(|context| {
-                let is_profile_backed = context.is_profile_backed_storage_partition();
-                saw_profile_backed_context |= is_profile_backed;
-                is_profile_backed
+            .filter_map(|context| {
+                let cookies = context.snapshot_profile_backed_cookies();
+                saw_profile_backed_context |= cookies.is_some();
+                cookies
             })
-            .flat_map(BrowserContext::snapshot_cookies)
+            .flatten()
             .collect();
         saw_profile_backed_context.then_some(cookies)
     }

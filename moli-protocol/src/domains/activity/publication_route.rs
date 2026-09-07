@@ -12,6 +12,9 @@ use crate::conn::{CdpConnection, CdpSessionRoute, RendererPageResidenceIdentity}
 /// attach or detach without restarting the renderer stream.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPublicationOwner {
+    /// No AgentHost observed this native reservation. Its ordered output is
+    /// consumed without inventing a Target or retaining an unbounded journal.
+    Unobserved,
     PageTarget {
         browser_context_id: String,
         target_id: Option<String>,
@@ -84,14 +87,12 @@ pub(crate) fn renderer_publication_owners(
     residence: RendererOutputResidenceIdentity,
 ) -> Vec<RendererPublicationOwner> {
     match residence {
-        // A Page stream is bound by the navigation/initial-document
-        // transaction that reserved that exact renderer Page. Inferring its
-        // target from the mutable inventory at `Opened` time is ambiguous:
-        // protocol can transiently retain two handles to the same Page while
-        // changing foreground selection. Leave Page
-        // discovery empty and let the explicit binding win in either
-        // open-before-bind or bind-before-open order.
-        RendererOutputResidenceIdentity::Page { .. } => Vec::new(),
+        RendererOutputResidenceIdentity::Page { .. } => vec![
+            conn.native_renderer_page_output_owner(
+                RendererPageResidenceIdentity::from_residence(residence).expect("Page residence"),
+            )
+            .unwrap_or(RendererPublicationOwner::Unobserved),
+        ],
         RendererOutputResidenceIdentity::SharedWorker {
             browser_context_runtime_id,
             ..
@@ -125,6 +126,7 @@ impl RendererPublicationOwner {
         stream: moli_core::RendererOutputStreamIdentity,
     ) -> Option<RendererPublicationRoute> {
         match self {
+            Self::Unobserved => None,
             Self::BrowserContext { browser_context_id } => {
                 if !conn
                     .browser_context

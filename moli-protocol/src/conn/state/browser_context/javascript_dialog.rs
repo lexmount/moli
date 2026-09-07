@@ -1,5 +1,5 @@
 use super::BrowserContext;
-use moli_core::browser::{DocumentHandle, WebContentsHandle};
+use moli_core::browser::DocumentHandle;
 use moli_core::page::{
     RendererDocumentLifecycleIdentity, RendererJavaScriptDialogId, RendererJavaScriptDialogSource,
     RendererPendingJavaScriptDialog,
@@ -301,14 +301,6 @@ impl TargetJavaScriptDialogState {
 }
 
 impl BrowserContext {
-    pub(crate) fn web_contents_has_pending_javascript_dialog(
-        &self,
-        handle: WebContentsHandle,
-    ) -> Result<bool, String> {
-        self.browser_context
-            .web_contents_has_pending_javascript_dialog(handle)
-    }
-
     pub(crate) fn install_document_javascript_dialog(
         &mut self,
         document: DocumentHandle,

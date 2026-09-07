@@ -30,6 +30,29 @@ impl TargetSessionStateMut<'_> {
     }
 }
 
+impl CdpConnection {
+    /// The primary automation listener and the exact private worker listeners
+    /// are distinct from CDP socket sessions, even when they inspect one host.
+    pub fn is_automation_protocol_session(&self, session_id: Option<&str>) -> bool {
+        let Some(session_id) = session_id else {
+            return true;
+        };
+        let Some(target_id) = self.worker_target_id_for_session(Some(session_id)) else {
+            return false;
+        };
+        let Some(route) = self.target_session_route_for_target_id(&target_id) else {
+            return false;
+        };
+        self.service_worker_runtime_listener_session_for_route(&route)
+            .as_deref()
+            == Some(session_id)
+            || self
+                .shared_worker_runtime_listener_session_for_route(&route)
+                .as_deref()
+                == Some(session_id)
+    }
+}
+
 impl TargetSessionOwnerMut<'_> {
     fn set_inspector_enabled(mut self, enabled: bool) {
         self.mutate_session_state_ref(|state| state.set_inspector_enabled(enabled));

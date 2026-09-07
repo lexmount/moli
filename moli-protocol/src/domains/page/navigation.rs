@@ -844,58 +844,156 @@ fn start_devtools_page_command(
     }
 }
 
-pub(crate) async fn execute_devtools_navigation_command_async_with_protocol_events(
-    conn: &mut CdpConnection,
-    command: DevToolsCommand,
-    background_command_id: Option<u64>,
-) -> (
-    Result<DevToolsCommandResult, DevToolsError>,
-    Vec<crate::conn::BackgroundProtocolEvent>,
-    Option<moli_core::RendererOutputFence>,
-) {
-    let wait = devtools_navigation_wait(&command);
-    let route = match devtools_navigation_target_route(conn, &command) {
-        Ok(route) => route,
-        Err(error) => return (Err(error), Vec::new(), None),
-    };
-    let (mut step, mut direct_result) = start_protocol_neutral_navigation_command(
-        conn,
-        route.clone(),
-        command,
-        background_command_id,
-    );
-    let mut command_context = crate::conn::CommandDispatchContext::default();
-    loop {
+pub enum DevToolsNavigationCommandTaskStep {
+    Complete(Box<crate::DevToolsCommandDispatchOutcome>),
+    Pending(Box<PendingDevToolsNavigationCommandDispatch>),
+}
+
+struct DevToolsNavigationCommandState {
+    context: crate::devtools_runtime::DevToolsCommandContext,
+    wait: DevToolsNavigationWait,
+    route: CdpSessionRoute,
+    direct_result: Result<DirectNavigationResult, DevToolsError>,
+    command_context: CommandDispatchContext,
+}
+
+/// The existing Page continuation, without a borrow of the protocol owner.
+/// Browser work retains its exact navigation capability across the wait.
+pub struct PendingDevToolsNavigationCommandDispatch {
+    state: DevToolsNavigationCommandState,
+    pending: super::PendingPageCommandDispatch,
+    scheduler_events: Vec<crate::CdpSchedulerEvent>,
+}
+
+pub struct CompletedDevToolsNavigationCommandDispatch {
+    state: DevToolsNavigationCommandState,
+    completed: super::CompletedPageCommandDispatch,
+}
+
+impl PendingDevToolsNavigationCommandDispatch {
+    pub fn take_scheduler_events(&mut self) -> Vec<crate::CdpSchedulerEvent> {
+        std::mem::take(&mut self.scheduler_events)
+    }
+
+    pub async fn wait(self) -> CompletedDevToolsNavigationCommandDispatch {
+        assert!(
+            self.scheduler_events.is_empty(),
+            "navigation scheduler events must be consumed before waiting"
+        );
+        CompletedDevToolsNavigationCommandDispatch {
+            state: self.state,
+            completed: self.pending.wait().await,
+        }
+    }
+}
+
+impl CdpConnection {
+    pub async fn start_devtools_navigation_command_dispatch(
+        &mut self,
+        mut command: DevToolsCommand,
+        background_command_id: Option<u64>,
+    ) -> DevToolsNavigationCommandTaskStep {
+        if let Err(error) = self.prepare_webdriver_command(&mut command) {
+            return DevToolsNavigationCommandTaskStep::Complete(Box::new(
+                self.finish_devtools_command_dispatch(
+                    command.context().clone(),
+                    Err(error),
+                    Vec::new(),
+                    None,
+                )
+                .await,
+            ));
+        }
+        let context = command.context().clone();
+        let wait = devtools_navigation_wait(&command);
+        let route = match devtools_navigation_target_route(self, &command) {
+            Ok(route) => route,
+            Err(error) => {
+                return DevToolsNavigationCommandTaskStep::Complete(Box::new(
+                    self.finish_devtools_command_dispatch(context, Err(error), Vec::new(), None)
+                        .await,
+                ));
+            }
+        };
+        let (step, direct_result) = start_protocol_neutral_navigation_command(
+            self,
+            route.clone(),
+            command,
+            background_command_id,
+        );
+        self.advance_devtools_navigation_command_dispatch(
+            DevToolsNavigationCommandState {
+                context,
+                wait,
+                route,
+                direct_result,
+                command_context: CommandDispatchContext::default(),
+            },
+            step,
+        )
+        .await
+    }
+
+    pub async fn complete_devtools_navigation_command_dispatch(
+        &mut self,
+        completed: CompletedDevToolsNavigationCommandDispatch,
+    ) -> DevToolsNavigationCommandTaskStep {
+        let CompletedDevToolsNavigationCommandDispatch {
+            mut state,
+            completed,
+        } = completed;
+        if let Ok(result) = state.direct_result.as_mut()
+            && let Err(error) = direct_navigation_result_from_completed(self, &completed, result)
+        {
+            state.direct_result = Err(error);
+        }
+        let step =
+            super::complete_pending_page_command(self, completed, &mut state.command_context).await;
+        self.advance_devtools_navigation_command_dispatch(state, step)
+            .await
+    }
+
+    async fn advance_devtools_navigation_command_dispatch(
+        &mut self,
+        mut state: DevToolsNavigationCommandState,
+        step: PageCommandTaskStep,
+    ) -> DevToolsNavigationCommandTaskStep {
         match step {
             PageCommandTaskStep::Complete(plan) => {
                 let (status, events) = plan.into_command_status_and_background_events();
                 if let Some(Err(error)) = status {
-                    direct_result = Err(error);
+                    state.direct_result = Err(error);
                 }
-                if wait == DevToolsNavigationWait::None
-                    && let Ok(direct_result) = direct_result.as_mut()
+                if state.wait == DevToolsNavigationWait::None
+                    && let Ok(direct_result) = state.direct_result.as_mut()
                 {
-                    fill_navigation_id_from_current_loader_for_route(conn, &route, direct_result);
+                    fill_navigation_id_from_current_loader_for_route(
+                        self,
+                        &state.route,
+                        direct_result,
+                    );
                 }
-                let mut ordered_events = command_context.take_protocol_events_before_events(events);
-                ordered_events.extend(command_context.take_post_response_events());
-                return (
-                    direct_result.map(DirectNavigationResult::into_result),
-                    ordered_events,
-                    command_context.take_renderer_output_predecessor(),
-                );
+                let mut ordered_events = state
+                    .command_context
+                    .take_protocol_events_before_events(events);
+                ordered_events.extend(state.command_context.take_post_response_events());
+                DevToolsNavigationCommandTaskStep::Complete(Box::new(
+                    self.finish_devtools_command_dispatch(
+                        state.context,
+                        state.direct_result.map(DirectNavigationResult::into_result),
+                        ordered_events,
+                        state.command_context.take_renderer_output_predecessor(),
+                    )
+                    .await,
+                ))
             }
-            PageCommandTaskStep::Pending(pending) => {
-                let completed = pending.wait().await;
-                if let Ok(result) = direct_result.as_mut()
-                    && let Err(error) =
-                        direct_navigation_result_from_completed(conn, &completed, result)
-                {
-                    direct_result = Err(error);
-                }
-                step = super::complete_pending_page_command(conn, completed, &mut command_context)
-                    .await;
-            }
+            PageCommandTaskStep::Pending(pending) => DevToolsNavigationCommandTaskStep::Pending(
+                Box::new(PendingDevToolsNavigationCommandDispatch {
+                    state,
+                    pending,
+                    scheduler_events: self.take_scheduler_events(),
+                }),
+            ),
         }
     }
 }
@@ -2039,10 +2137,10 @@ fn merge_child_frame_tree_attachments_into_events(
     }
 }
 
-fn emit_prepared_child_frame_document_open_prefix_for_session(
+fn emit_prepared_child_frame_document_open_prefix_for_owner(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     document: &mut PagePreparedChildFrameDocumentActivity,
 ) {
     let mut document_opened_events = std::mem::take(&mut document.document_opened_events);
@@ -2058,7 +2156,7 @@ fn emit_prepared_child_frame_document_open_prefix_for_session(
                 emit_renderer_command_child_frame_document_opened_background_events_with_security(
                     conn,
                     out,
-                    session_id,
+                    owner,
                     event,
                     document.timestamp,
                     &document.security_origin,
@@ -2066,13 +2164,13 @@ fn emit_prepared_child_frame_document_open_prefix_for_session(
                 );
             }
         }
-        emit_prepared_child_frame_tree_background_events(conn, out, session_id, vec![tree_event]);
+        emit_prepared_child_frame_tree_background_events(conn, out, owner, vec![tree_event]);
     }
     for event in document_opened_events {
         emit_renderer_command_child_frame_document_opened_background_events_with_security(
             conn,
             out,
-            session_id,
+            owner,
             event,
             document.timestamp,
             &document.security_origin,
@@ -2084,7 +2182,7 @@ fn emit_prepared_child_frame_document_open_prefix_for_session(
 fn emit_renderer_command_child_frame_document_opened_background_events_with_security(
     conn: &CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    owner_session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     event: ChildFrameDocumentOpenedSnapshot,
     timestamp: f64,
     parent_security_origin: &str,
@@ -2097,9 +2195,11 @@ fn emit_renderer_command_child_frame_document_opened_background_events_with_secu
         parent_security_origin,
         parent_secure_context_type,
     );
-    for session_id in conn.subscribed_page_event_session_ids_for_session_owner(owner_session_id) {
+    for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
         let lifecycle_enabled = conn
-            .target_page_session_state_for_session(session_id.as_deref())
+            .target_page_session_state_for_owner(
+                &owner.for_target_event_session(conn, session_id.as_deref()),
+            )
             .is_some_and(|state| state.page_lifecycle_events);
         emit_child_frame_document_opened_background_events(
             out,
@@ -2136,7 +2236,7 @@ pub(crate) async fn emit_prepared_child_frame_activity(
     if !binding_is_current {
         return;
     }
-    let session_id = activity.binding().session_id().map(str::to_owned);
+    let owner = CommandOwnerScope::for_page_attachment(activity.binding().attachment());
     let (binding, mut document) = activity.into_parts();
     let root_document = binding.root_document();
     let mut activity_events = Vec::new();
@@ -2146,12 +2246,11 @@ pub(crate) async fn emit_prepared_child_frame_activity(
     let document_network_count = document.document_networks.len();
     let document_opened_count = document.document_opened_events.len();
     let frame_tree_event_count = document.child_frame_tree_events.len();
-    let page_event_session_ids =
-        conn.subscribed_page_event_session_ids_for_session_owner(session_id.as_deref());
-    emit_prepared_child_frame_document_open_prefix_for_session(
+    let page_event_session_ids = conn.subscribed_page_event_session_ids_for_owner(&owner);
+    emit_prepared_child_frame_document_open_prefix_for_owner(
         conn,
         &mut activity_events,
-        session_id.as_deref(),
+        &owner,
         &mut document,
     );
     if !conn.target_root_document_protocol_attachment_identity_is_current(&binding) {
@@ -2172,7 +2271,7 @@ pub(crate) async fn emit_prepared_child_frame_activity(
         network::emit_child_document_navigation_network_background_events(
             conn,
             &mut activity_events,
-            session_id.as_deref(),
+            &owner,
             &document_network.frame_id,
             &document_network.loader_id,
             &document_network.loader_id,
@@ -2184,7 +2283,9 @@ pub(crate) async fn emit_prepared_child_frame_activity(
         if load.document_open_replacement {
             for event_session_id in &page_event_session_ids {
                 let lifecycle_enabled = conn
-                    .target_page_session_state_for_session(event_session_id.as_deref())
+                    .target_page_session_state_for_owner(
+                        &owner.for_target_event_session(conn, event_session_id.as_deref()),
+                    )
                     .is_some_and(|state| state.page_lifecycle_events);
                 emit_child_frame_document_open_completed_background_events(
                     &mut activity_events,
@@ -2224,7 +2325,7 @@ pub(crate) async fn emit_prepared_child_frame_activity(
             network::emit_child_document_navigation_network_background_events(
                 conn,
                 &mut activity_events,
-                session_id.as_deref(),
+                &owner,
                 &document_network.frame_id,
                 &document_network.loader_id,
                 &document_network.loader_id,
@@ -2245,7 +2346,9 @@ pub(crate) async fn emit_prepared_child_frame_activity(
                 &secure_context_type,
             );
             let lifecycle_enabled = conn
-                .target_page_session_state_for_session(event_session_id.as_deref())
+                .target_page_session_state_for_owner(
+                    &owner.for_target_event_session(conn, event_session_id.as_deref()),
+                )
                 .is_some_and(|state| state.page_lifecycle_events);
             emit_child_frame_lifecycle_terminal(
                 &mut activity_events,
@@ -2260,7 +2363,7 @@ pub(crate) async fn emit_prepared_child_frame_activity(
     out.extend(
         activity_events
             .into_iter()
-            .filter_map(|event| event.bind_to_root_document_route(conn, root_document)),
+            .filter_map(|event| event.bind_to_root_document_route(conn, &owner, root_document)),
     );
     if let Some(started) = timing_started {
         tracing::info!(
@@ -2275,7 +2378,7 @@ pub(crate) async fn emit_prepared_child_frame_activity(
 pub(crate) fn emit_prepared_child_frame_tree_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    owner_session_id: Option<&str>,
+    owner: &CommandOwnerScope,
     events: Vec<PagePreparedChildFrameTreeEvent>,
 ) {
     for event in events {
@@ -2285,14 +2388,12 @@ pub(crate) fn emit_prepared_child_frame_tree_background_events(
                 parent_frame_id,
             } => {
                 let is_new_attachment = conn
-                    .with_target_owner_state_for_session_mut(owner_session_id, |owner_state| {
+                    .with_target_owner_state_for_owner_mut(owner, |owner_state| {
                         owner_state.insert_attached_child_frame_id(frame_id.clone())
                     })
                     .unwrap_or(false);
                 if is_new_attachment {
-                    for session_id in
-                        conn.subscribed_page_event_session_ids_for_session_owner(owner_session_id)
-                    {
+                    for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
                         out.push(BackgroundProtocolEvent::page_frame_attached(
                             session_id.as_deref(),
                             frame_id.clone(),
@@ -2303,14 +2404,12 @@ pub(crate) fn emit_prepared_child_frame_tree_background_events(
             }
             PagePreparedChildFrameTreeEvent::Detached { frame_id } => {
                 let was_attached = conn
-                    .with_target_owner_state_for_session_mut(owner_session_id, |owner_state| {
+                    .with_target_owner_state_for_owner_mut(owner, |owner_state| {
                         owner_state.remove_attached_child_frame_id(&frame_id)
                     })
                     .unwrap_or(false);
                 if was_attached {
-                    for session_id in
-                        conn.subscribed_page_event_session_ids_for_session_owner(owner_session_id)
-                    {
+                    for session_id in conn.subscribed_page_event_session_ids_for_owner(owner) {
                         out.push(BackgroundProtocolEvent::page_frame_detached(
                             session_id.as_deref(),
                             frame_id.clone(),
@@ -2739,10 +2838,12 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                     &mut out,
                     &pending.navigation,
                     pending.request_cookie_report.as_ref(),
+                    Some(&pending.fetch_request_id),
                 );
             }
             pending.navigation.request_announced = pending.navigation.request_id.is_some();
             let paused_event = fetch::request_paused_background_event(
+                conn,
                 pending.interception_session_id.as_deref(),
                 &pending,
             );
@@ -2769,6 +2870,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                 &mut out,
                 &pending.navigation,
                 pending.request_cookie_report.as_ref(),
+                None,
             );
         }
         pending.navigation.request_announced = pending.navigation.request_id.is_some();
@@ -3090,7 +3192,6 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     command_context: &mut crate::conn::CommandDispatchContext,
 ) {
     let navigation_owner = state.owner.clone();
-    let navigation_session_id = navigation_owner.session_id().map(str::to_owned);
     let mut document_projection_release = None;
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
@@ -3138,52 +3239,18 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
             .emit_navigation_error_into_buffer(out, &error_text);
         }
     }
-    let primary_protocol_session_id = conn
-        .runtime_session_owner_primary_session_id_for_owner(&navigation_owner)
-        .or_else(|| navigation_session_id.clone());
-    let (routed_renderer_output, renderer_call_replacements) = document_projection_release
-        .or_else(|| {
-            conn.finish_navigation_without_document_projection_for_owner(&navigation_owner, &token)
-        })
-        .map(|finish| (finish.released_output, finish.renderer_call_replacements))
-        .unwrap_or_default();
-    if !routed_renderer_output.is_empty() {
-        let mut background_events = Vec::new();
-        crate::domains::runtime::push_routed_renderer_runtime_inspector_message_batch_background_events(
-            conn,
-            &mut background_events,
-            routed_renderer_output,
-            primary_protocol_session_id.as_deref(),
-        );
-        out.extend_background_events_after_messages(background_events);
-    }
-    if let Some(renderer_call_replacements) = renderer_call_replacements {
-        let (new_attachment_id, terminations, replays, failed_sessions) =
-            renderer_call_replacements.into_parts();
-        super::navigation_commit::fail_navigation_inspection_sessions(
+    let release = document_projection_release.or_else(|| {
+        conn.finish_navigation_without_document_projection_for_owner(&navigation_owner, &token)
+    });
+    if let Some(release) = release {
+        super::navigation_commit::release_document_projection_output_async(
             conn,
             out,
             command_context,
             &navigation_owner,
-            failed_sessions,
-            "Inspector call identity exhausted during navigation replay",
-        );
-        let termination_events = conn.terminate_prepared_renderer_calls_after_navigation(
-            terminations,
-            "Inspected target navigated or closed",
-        );
-        out.extend_background_events_after_messages(termination_events);
-        match conn
-            .replay_prepared_renderer_calls_after_navigation_async(replays, new_attachment_id)
-            .await
-        {
-            Ok(events) => out.extend_background_events_after_messages(events),
-            Err(error) => tracing::warn!(
-                %error,
-                session_id = navigation_session_id.as_deref(),
-                "failed to replay renderer Inspector commands after navigation"
-            ),
-        }
+            release,
+        )
+        .await;
     }
     conn.clear_pending_document_navigation_for_owner_if_matches(&navigation_owner, &token);
 }

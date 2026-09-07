@@ -14,6 +14,72 @@ use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
 #[tokio::test]
+async fn session_end_removes_only_its_contexts_but_connection_drop_does_not() {
+    let service = moli_core::browser::BrowserService::start().unwrap();
+    let browser = service.handle();
+    let mut conn = CdpConnection::new(
+        browser.clone(),
+        CdpInitialStoragePartition::memory(),
+        Default::default(),
+    );
+    conn.attach_webdriver_session("ending").unwrap();
+    conn.execute_devtools_command(
+        crate::devtools_runtime::DevToolsCommand::CreateBrowserContext(
+            crate::devtools_runtime::DevToolsCreateBrowserContextCommand {
+                context: crate::devtools_runtime::DevToolsCommandContext {
+                    protocol: crate::devtools_runtime::DevToolsProtocol::WebDriverBidi,
+                    session_id: Some("ending".into()),
+                    target_id: None,
+                    browser_context_id: None,
+                },
+                browser_context_id: None,
+                accept_insecure_certs: None,
+                proxy_server: None,
+                proxy_bypass_list: None,
+                proxy_autoconfig_url: None,
+                proxy_socks_version: None,
+                persistent_partition_id: None,
+            },
+        ),
+    )
+    .await
+    .into_parts()
+    .0
+    .unwrap();
+    let ending_contexts = conn
+        .browser_contexts()
+        .map(|context| context.browser_context_id())
+        .collect::<Vec<_>>();
+    assert_eq!(ending_contexts.len(), 2);
+    let mut peer = CdpConnection::new(
+        browser.clone(),
+        CdpInitialStoragePartition::memory(),
+        Default::default(),
+    );
+    let context = peer.new_browser_context("BID-surviving-peer".to_owned());
+    let peer_context = context.browser_context_id();
+    peer.insert_browser_context(context);
+    drop(peer);
+    assert!(browser.contains_context(peer_context));
+    assert!(
+        ending_contexts
+            .iter()
+            .all(|id| browser.contains_context(*id))
+    );
+
+    conn.close_webdriver_session("ending").unwrap();
+    assert!(conn.snapshot_profile_backed_cookies().is_none());
+
+    assert!(
+        ending_contexts
+            .iter()
+            .all(|id| !browser.contains_context(*id))
+    );
+    assert!(browser.contains_context(peer_context));
+    service.shutdown();
+}
+
+#[tokio::test]
 async fn resource_defaults_without_a_page_do_not_materialize_a_fallback_engine() {
     let mut conn = crate::test_support::connection_with_config(
         CdpInitialStoragePartition::memory(),

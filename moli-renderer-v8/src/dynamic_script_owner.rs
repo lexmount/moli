@@ -1509,6 +1509,7 @@ impl DynamicScriptOwner {
                             &loader,
                             document_character_set.as_deref(),
                             None,
+                            fetch_task_runner,
                         )
                         .await
                     };

@@ -9,8 +9,6 @@ pub struct BidiEventSourceHookPlan {
     runtime_contexts: Option<Vec<String>>,
     runtime_disabled_contexts: Option<Vec<String>>,
     record_runtime_context_ownership: bool,
-    runtime_events_enabled: bool,
-    runtime_events_disabled: bool,
     network_contexts: Option<Vec<String>>,
     network_disabled_contexts: Option<Vec<String>>,
     file_dialog_opened_contexts: Option<Vec<String>>,
@@ -30,14 +28,6 @@ impl BidiEventSourceHookPlan {
 
     pub fn records_runtime_context_ownership(&self) -> bool {
         self.record_runtime_context_ownership
-    }
-
-    pub fn runtime_events_enabled(&self) -> bool {
-        self.runtime_events_enabled
-    }
-
-    pub fn runtime_events_disabled(&self) -> bool {
-        self.runtime_events_disabled
     }
 
     pub fn network_contexts(&self) -> Option<&[String]> {
@@ -72,14 +62,6 @@ impl BidiEventSourceHookPlan {
         self.record_runtime_context_ownership = true;
     }
 
-    pub(super) fn enable_runtime_events(&mut self) {
-        self.runtime_events_enabled = true;
-    }
-
-    pub(super) fn disable_runtime_events(&mut self) {
-        self.runtime_events_disabled = true;
-    }
-
     pub(super) fn set_runtime_disable_scope(&mut self, scope: BidiEventSourceHookScope) {
         self.runtime_disabled_contexts = Some(scope.into_contexts());
     }
@@ -111,7 +93,6 @@ impl BidiEventSourceHookPlan {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(super) struct BidiEventSourceOwnership {
-    runtime_global: bool,
     runtime_contexts: BTreeSet<String>,
     network_contexts: BTreeSet<String>,
     file_dialog_opened_contexts: BTreeSet<String>,
@@ -119,10 +100,6 @@ pub(super) struct BidiEventSourceOwnership {
 }
 
 impl BidiEventSourceOwnership {
-    pub(super) fn runtime_global_opened(&self) -> bool {
-        self.runtime_global
-    }
-
     pub(super) fn runtime_context_opened(&self, context: &str) -> bool {
         self.runtime_contexts.contains(context)
     }
@@ -141,14 +118,6 @@ impl BidiEventSourceOwnership {
 
     pub(super) fn download_events_opened(&self) -> bool {
         self.download_events
-    }
-
-    pub(super) fn record_runtime_global_opened(&mut self) {
-        self.runtime_global = true;
-    }
-
-    pub(super) fn record_runtime_global_closed(&mut self) {
-        self.runtime_global = false;
     }
 
     pub(super) fn record_runtime_context_opened(&mut self, context: &str) {

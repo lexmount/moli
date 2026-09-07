@@ -170,26 +170,12 @@ pub(crate) fn owner_scoped_shared_worker_realm_id_from_protocol_context(
     Some(format!("shared-worker-{owner_context}"))
 }
 
-pub(crate) fn owner_scoped_service_worker_realm_id_from_protocol_context(
-    aux_data: &Value,
-    owner_context: Option<&str>,
-) -> Option<String> {
-    let owner_context = owner_context?;
-    if aux_data["type"].as_str()? != "service-worker" || aux_data["frameId"].as_str().is_some() {
-        return None;
-    }
-    Some(format!("service-worker-{owner_context}"))
-}
-
-fn runtime_realm_id_from_protocol_context(
+pub(crate) fn runtime_realm_id_from_protocol_context(
     context: &Value,
     aux_data: &Value,
     owner_context: Option<&str>,
 ) -> Option<String> {
     owner_scoped_shared_worker_realm_id_from_protocol_context(context, aux_data, owner_context)
-        .or_else(|| {
-            owner_scoped_service_worker_realm_id_from_protocol_context(aux_data, owner_context)
-        })
         .or_else(|| context["uniqueId"].as_str().map(str::to_owned))
 }
 

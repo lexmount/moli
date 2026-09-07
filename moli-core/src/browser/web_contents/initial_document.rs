@@ -310,8 +310,28 @@ impl WebContents {
         let _build = self.navigation.take_initial_document_build_for_commit();
         let mut document = DocumentHost::new(key.document, page);
         document.lifecycle = lifecycle;
+        let browser_sequence = BrowserSequence::allocate();
+        let lifecycle = CommittedDocumentLifecycle {
+            document: key.document,
+            browser_sequence,
+            artifacts: page_creation_artifacts,
+        };
+        document.commit = Some(std::sync::Arc::new(super::DocumentCommitMetadata {
+            navigation: None,
+            lifecycle: lifecycle.clone(),
+            info: None,
+            previous_document: self
+                .main_frame
+                .current_document
+                .as_ref()
+                .map(|previous| previous.id),
+            previous_renderer: self.main_frame.current_document.as_ref().map(|previous| {
+                crate::browser::RendererPageResidenceIdentity::from_page(&previous.page)
+            }),
+        }));
         self.replace_document(Some(document));
-        if page_creation_artifacts
+        if lifecycle
+            .artifacts
             .initial_lifecycle_events
             .iter()
             .any(|event| {
@@ -323,16 +343,11 @@ impl WebContents {
         {
             self.navigation.mark_initial_empty_document_exited();
         }
-        let browser_sequence = BrowserSequence::allocate();
         completion.finish(Ok(()));
         Ok(CommittedInitialDocument {
             key,
             inspection_endpoint,
-            lifecycle: CommittedDocumentLifecycle {
-                document: key.document,
-                browser_sequence,
-                artifacts: page_creation_artifacts,
-            },
+            lifecycle,
             diagnostics: page_creation_diagnostics,
         })
     }

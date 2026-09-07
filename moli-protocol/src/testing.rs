@@ -286,13 +286,13 @@ impl TestContext {
     pub fn from_conn(mut conn: CdpConnection) -> Self {
         let (renderer_publication_tx, renderer_publication_rx) =
             moli_core::renderer_output_transport_channel();
-        let (runtime_inspector_response_ready_tx, runtime_inspector_response_ready_rx) =
-            tokio::sync::mpsc::unbounded_channel();
+        let runtime_inspector_response_ready_rx = conn
+            .bind_runtime_inspector_response_ready()
+            .expect("test scheduler must own the connection's completion ingress");
         let (background_event_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (background_navigation_completion_tx, background_navigation_completion_rx) =
             tokio::sync::mpsc::unbounded_channel();
         conn.set_renderer_publication_sender(renderer_publication_tx);
-        conn.set_runtime_inspector_response_ready_sender(runtime_inspector_response_ready_tx);
         Self {
             conn,
             sent: Vec::new(),
@@ -2264,12 +2264,13 @@ mod tests {
     async fn test_context_consumes_selected_task_output_publications_one_per_turn() {
         let mut conn = crate::test_support::connection();
         let (publication_tx, publication_rx) = moli_core::renderer_output_transport_channel();
-        let (runtime_response_tx, runtime_response_rx) = tokio::sync::mpsc::unbounded_channel();
+        let runtime_response_rx = conn
+            .bind_runtime_inspector_response_ready()
+            .expect("test scheduler must own the connection's completion ingress");
         let (background_event_tx, background_event_rx) = tokio::sync::mpsc::unbounded_channel();
         let (background_navigation_completion_tx, background_navigation_completion_rx) =
             tokio::sync::mpsc::unbounded_channel();
         conn.set_renderer_publication_sender(publication_tx.clone());
-        conn.set_runtime_inspector_response_ready_sender(runtime_response_tx);
         let mut ctx = TestContext {
             conn,
             sent: Vec::new(),

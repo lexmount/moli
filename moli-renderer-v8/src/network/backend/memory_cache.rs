@@ -12,7 +12,6 @@ use indexmap::IndexMap;
 use moli_fetch::{BrowserRequestMetadata, RawResponse, Request, RequestResourceType, Response};
 use moli_http_cache::{HttpCacheVaryHeader, cacheable_response_parts_policy, unix_now_ms};
 use parking_lot::Mutex;
-use tokio::sync::Notify;
 use url::Url;
 
 /// Strong-reference budget for renderer subresources.
@@ -163,7 +162,6 @@ pub(in crate::network) enum ScriptTextLoadScope {
 pub(in crate::network) struct ScriptTextLoad {
     scope: ScriptTextLoadScope,
     state: Mutex<ScriptTextLoadState>,
-    notify: Notify,
 }
 
 #[derive(Default)]
@@ -206,24 +204,11 @@ impl ScriptTextLoad {
         Arc::new(Self {
             scope,
             state: Mutex::new(ScriptTextLoadState::default()),
-            notify: Notify::new(),
         })
     }
 
     fn try_result(&self) -> Option<ScriptTextLoadResult> {
         self.state.lock().result.clone()
-    }
-
-    pub(in crate::network) async fn wait(&self) -> ScriptTextLoadResult {
-        loop {
-            let notified = self.notify.notified();
-            tokio::pin!(notified);
-            notified.as_mut().enable();
-            if let Some(result) = self.try_result() {
-                return result;
-            }
-            notified.await;
-        }
     }
 
     pub(in crate::network) fn wait_callback(
@@ -301,7 +286,6 @@ impl ScriptTextLoad {
                 Vec::new()
             }
         };
-        self.notify.notify_waiters();
         for callback in callbacks {
             callback(result.clone());
         }

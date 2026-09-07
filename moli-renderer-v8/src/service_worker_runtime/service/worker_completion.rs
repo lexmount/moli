@@ -841,7 +841,7 @@ impl ServiceWorkerRuntimeService {
             );
             let target_run = previous.into_host().map(|host| {
                 let run = host.run_identity();
-                host.terminate_without_join();
+                host.terminate();
                 run
             });
             let failed_pending_events = version.pending_start_events.drain(..).collect::<Vec<_>>();
@@ -950,7 +950,7 @@ impl ServiceWorkerRuntimeService {
             host
         };
         if let Some(host) = host {
-            host.terminate_without_join();
+            host.terminate();
         }
     }
 }

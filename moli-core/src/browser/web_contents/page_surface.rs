@@ -182,6 +182,39 @@ mod tests {
                 .unwrap(),
             json!({"type": "string", "value": "[false,1,false,true,false,false,false]"})
         );
+        page.set_document_activity_async(
+            contents
+                .page_surface(true, None, None, None)
+                .document_activity(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            page.evaluate_runtime_expression_async(expression)
+                .await
+                .unwrap(),
+            json!({"type": "string", "value": "[false,1,true,false,false,false,false]"}),
+            "selection must preserve offline, touch and window policy"
+        );
+        page.evaluate_runtime_expression_async(
+            "Object.defineProperty(document, 'hidden', {configurable: false, value: false}); 0",
+        )
+        .await
+        .unwrap();
+        page.set_document_activity_async(
+            contents
+                .page_surface(false, None, None, None)
+                .document_activity(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            page.evaluate_runtime_expression_async(expression)
+                .await
+                .unwrap(),
+            json!({"type": "string", "value": "[false,1,false,false,false,false,false]"}),
+            "a non-configurable page property must not suppress updates to the other properties"
+        );
         page.close_async().await.unwrap();
     }
 }

@@ -299,6 +299,7 @@ fn pending_subresource_auth_required_parts(
 }
 
 pub(crate) fn navigation_response_stage_request_paused_event(
+    conn: &CdpConnection,
     session_id: Option<&str>,
     fetch_request_id: &str,
     navigation: &NavigationDispatchState,
@@ -314,6 +315,12 @@ pub(crate) fn navigation_response_stage_request_paused_event(
         request_cookie_report,
         response_status,
         response_headers,
+        navigation_blocked_intercepts(
+            conn,
+            navigation,
+            crate::conn::FetchRequestStage::Response,
+            final_url,
+        ),
     );
     BackgroundProtocolEvent::immediate_automation_event(
         build_event("Fetch.requestPaused", payload, session_id),
@@ -328,12 +335,13 @@ fn navigation_response_stage_request_paused_parts(
     request_cookie_report: Option<&StoredCookieQueryReport>,
     response_status: u16,
     response_headers: &[(String, Vec<u8>)],
+    blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
 ) -> (Value, AutomationEvent) {
     let network_event = NetworkRequestEvent {
         target_id: DevToolsTargetId::from(navigation.frame_id.as_str()),
         frame_id: Some(DevToolsFrameId::from(navigation.frame_id.as_str())),
         request_id: DevToolsRequestId::from(fetch_request_id),
-        loader_id: None,
+        loader_id: Some(DevToolsLoaderId::from(navigation.loader_id.as_str())),
         url: final_url.as_str().to_owned(),
         document_url: None,
         method: Some(navigation.request_method.clone()),
@@ -357,7 +365,7 @@ fn navigation_response_stage_request_paused_parts(
         has_extra_info: false,
         error_text: None,
         loading_failed_canceled: false,
-        blocked_intercepts: Vec::new(),
+        blocked_intercepts,
         fetch_request_id: None,
         network_id: navigation
             .request_id
@@ -481,6 +489,7 @@ pub(crate) fn encode_basic_auth(username: &str, password: &str) -> String {
 }
 
 pub(crate) fn request_paused_background_event(
+    conn: &CdpConnection,
     session_id: Option<&str>,
     pending: &PendingFetchNavigation,
 ) -> BackgroundProtocolEvent {
@@ -514,7 +523,12 @@ pub(crate) fn request_paused_background_event(
         has_extra_info: false,
         error_text: None,
         loading_failed_canceled: false,
-        blocked_intercepts: Vec::new(),
+        blocked_intercepts: navigation_blocked_intercepts(
+            conn,
+            &pending.navigation,
+            crate::conn::FetchRequestStage::Request,
+            &pending.navigation.requested_url,
+        ),
         fetch_request_id: None,
         network_id: pending
             .navigation
@@ -529,4 +543,17 @@ pub(crate) fn request_paused_background_event(
         message,
         AutomationEvent::RequestPaused(network_event),
     )
+}
+
+fn navigation_blocked_intercepts(
+    conn: &CdpConnection,
+    navigation: &NavigationDispatchState,
+    stage: crate::conn::FetchRequestStage,
+    url: &Url,
+) -> Vec<DevToolsNetworkInterceptId> {
+    conn.target_fetch_subresource_interception_snapshot_for_owner(&navigation.owner)
+        .map(|snapshot| {
+            snapshot.matching_network_intercepts(stage, DevToolsNetworkResourceType::Document, url)
+        })
+        .unwrap_or_default()
 }

@@ -590,7 +590,7 @@ impl RendererServiceWorkerHost {
         handle.dispatch_service_worker_push_unsubscribe_result(result);
     }
 
-    pub(super) fn terminate_without_join(&self) {
+    pub(super) fn terminate(&self) {
         let handle = {
             let mut state = self.state.lock();
             match &mut *state {

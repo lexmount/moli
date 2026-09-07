@@ -21,6 +21,7 @@ mod browser_context;
 mod browser_context_disposal;
 mod closing;
 mod creation;
+pub(crate) use creation::project_browser_created_target;
 mod events;
 mod info;
 mod popup;
@@ -63,12 +64,12 @@ pub(crate) fn popup_activation_creates_new_target_for_owner(
             .is_none()
     })
 }
+pub(crate) use worker_target::retire_dedicated_worker_targets_for_replaced_page_async;
 pub(in crate::domains) use worker_target::{
     TargetPreparedOutputSlot, dedicated_worker_main_script_network_replay_for_session,
     dedicated_worker_target_lifecycle_prepared_outputs_for_event,
     project_worker_target_output_async,
     release_failed_dedicated_worker_target_after_debugger_resume,
-    retire_dedicated_worker_targets_for_replaced_page_async,
     service_worker_target_lifecycle_prepared_outputs_for_event,
     shared_worker_target_lifecycle_prepared_outputs_for_event,
 };
@@ -576,15 +577,15 @@ pub(crate) async fn execute_devtools_create_target_command_async_with_protocol_e
         Err(error) => return (Err(error), Vec::new(), None),
     };
     let result = execution.result;
-    let creation_commit = execution.commit;
+    let mut creation_commit = execution.commit;
     let mut protocol_events = Vec::new();
     let (initial_document_events, renderer_output_predecessor) = conn
         .ensure_created_target_initial_document_page(&result.target_id)
         .await;
     protocol_events.extend(initial_document_events);
-    if let Some(activation) = creation_commit.activation() {
+    if let Some(activation) = creation_commit.take_activation() {
         protocol_events.extend(
-            conn.complete_staged_target_activation_async(activation)
+            conn.project_target_activation_async(activation)
                 .await
                 .into_protocol_events(),
         );
@@ -728,11 +729,11 @@ pub(crate) async fn complete_pending_target_command(
         }
         CompletedTargetCommandKind::CreateTarget {
             response_plan,
-            creation_commit,
+            mut creation_commit,
             initial_document,
         } => {
-            let activation_events = if let Some(activation) = creation_commit.activation() {
-                conn.complete_staged_target_activation_async(activation)
+            let activation_events = if let Some(activation) = creation_commit.take_activation() {
+                conn.project_target_activation_async(activation)
                     .await
                     .into_protocol_events()
             } else {

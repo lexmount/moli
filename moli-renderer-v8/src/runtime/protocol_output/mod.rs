@@ -25,7 +25,7 @@ pub use transport::{
 pub(in crate::runtime) use transport::{
     RendererOutputTransportTestLimits, renderer_output_transport_channel_with_test_limits,
 };
-pub(crate) use turn_journal::RendererTurnOutputJournal;
+pub(crate) use turn_journal::{RendererSettledOutput, RendererTurnOutputJournal};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum RendererOutputPublicationAdmission {

@@ -33,6 +33,25 @@ pub struct DocumentHost {
     pub(crate) page: Page,
     pub(crate) lifecycle: DocumentLifecycle,
     pub(crate) lifetime: DocumentLifetime,
+    pub(crate) commit: Option<std::sync::Arc<DocumentCommitMetadata>>,
+}
+
+/// Immutable facts from the physical commit, retained for late observers and
+/// bounded-stream recovery. No renderer endpoint or protocol state lives here.
+#[derive(Clone, Debug)]
+pub struct DocumentCommitMetadata {
+    pub navigation: Option<crate::browser::NavigationId>,
+    pub lifecycle: super::CommittedDocumentLifecycle,
+    pub info: Option<super::CommittedDocumentInfo>,
+    pub previous_document: Option<DocumentId>,
+    pub previous_renderer: Option<crate::browser::RendererPageResidenceIdentity>,
+}
+
+pub struct DocumentCommitSnapshot {
+    pub document: crate::browser::DocumentHandle,
+    pub frame_slot: crate::browser::MainFrameSlotId,
+    pub metadata: std::sync::Arc<DocumentCommitMetadata>,
+    pub inspection_endpoint: moli_renderer_v8::RendererInspectionEndpoint,
 }
 
 impl DocumentHost {
@@ -42,6 +61,7 @@ impl DocumentHost {
             page,
             lifecycle: DocumentLifecycle::default(),
             lifetime: DocumentLifetime::default(),
+            commit: None,
         }
     }
 

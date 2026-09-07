@@ -10,7 +10,7 @@ impl SharedWorkerRuntimeService {
         match self.downgrade().remove_host_for_instance(instance_id) {
             SharedWorkerRemovedHost::Running { host, clients } => {
                 host.close_worker_ports_and_send_closed(clients);
-                host.terminate_without_join();
+                host.terminate();
                 host.retire_target_output_without_destroyed();
                 true
             }

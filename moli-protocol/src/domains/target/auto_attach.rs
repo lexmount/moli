@@ -682,7 +682,13 @@ async fn set_auto_attach_inner_async(
                     }
                 }
             }
-            ensure_initial_document_for_attached_page_targets_async(conn, &attached_targets).await;
+            ensure_initial_document_for_attached_page_targets_async(
+                conn,
+                attached_targets
+                    .iter()
+                    .map(|(target, _, route)| (target.as_str(), route)),
+            )
+            .await;
             for (target_id, session_id, route) in &attached_targets {
                 if let Err(message) = conn
                     .apply_runtime_binding_state_for_owner_async(&CommandOwnerScope::for_route(
@@ -940,7 +946,7 @@ async fn auto_attach_child_page_for_tab_session_async(
     };
     ensure_initial_document_for_attached_page_targets_async(
         conn,
-        &[(page_target_id.clone(), session_id.clone(), route.clone())],
+        [(page_target_id.as_str(), &route)],
     )
     .await;
     if let Err(message) = conn
@@ -1114,11 +1120,11 @@ async fn detach_attached_session_for_owner_async(
     }
 }
 
-async fn ensure_initial_document_for_attached_page_targets_async(
+pub(super) async fn ensure_initial_document_for_attached_page_targets_async<'a>(
     conn: &mut CdpConnection,
-    attached_targets: &[(String, String, CdpSessionRoute)],
+    attached_targets: impl IntoIterator<Item = (&'a str, &'a CdpSessionRoute)>,
 ) {
-    for (target_id, _session_id, route) in attached_targets {
+    for (target_id, route) in attached_targets {
         if !conn.browser_contexts().any(|browser_context| {
             browser_context.target_has_pending_initial_document_page_build(target_id)
         }) {

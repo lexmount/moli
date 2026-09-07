@@ -94,6 +94,11 @@ pub(crate) use page_state::LoadedNavigationPageCommit;
 pub struct BrowserContext {
     pub id: String,
     pub(crate) page_targets: PageAgentHostRegistry,
+    /// Observer high-water mark and last exposed selection; never native selection authority.
+    pub(in crate::conn) projected_selection: Option<(
+        moli_core::browser::BrowserSequence,
+        moli_core::browser::WebContentsId,
+    )>,
     /// Test-only cookie overrides, inherited by the first page fixture.
     #[cfg(test)]
     pub(crate) default_document_cookie_manager_surface: BrowserContextCookieManagerSurface,
@@ -316,10 +321,14 @@ impl BrowserContext {
         let browser_context = browser
             .create_context(partition, kind, http_cache_root, http_cache_max_bytes)
             .expect("BrowserContext creation should succeed");
+        Self::from_browser_handle(id, browser_context)
+    }
 
+    pub(crate) fn from_browser_handle(id: String, browser_context: BrowserContextHandle) -> Self {
         Self {
             id,
             page_targets: PageAgentHostRegistry::default(),
+            projected_selection: None,
             #[cfg(test)]
             default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
             target_popup_ids: HashMap::new(),
@@ -353,10 +362,22 @@ impl BrowserContext {
         &mut self,
         sender: moli_core::RendererOutputTransportSender,
     ) {
-        self.browser_context
+        // Observer registration can race native Context disposal.
+        let _ = self
+            .browser_context
             .set_renderer_output_transport_sender(sender);
     }
 
+    pub(crate) fn snapshot_profile_backed_cookies(&self) -> Option<Vec<StoredCookie>> {
+        // The native Context can retire before its directory event is consumed.
+        // Partition classification and snapshot must be one exact owner read.
+        self.browser_context
+            .snapshot_profile_backed_cookies()
+            .ok()
+            .flatten()
+    }
+
+    #[cfg(test)]
     pub(crate) fn is_profile_backed_storage_partition(&self) -> bool {
         self.browser_context.storage_partition_kind() == StoragePartitionKind::ProfileBacked
     }
@@ -1277,7 +1298,8 @@ impl BrowserContext {
         let handle = self
             .web_contents_handle_for_target(&target_id)
             .expect("registered page target must have WebContents");
-        self.select_registered_web_contents(handle)
+        self.browser_context
+            .activate_web_contents(handle)
             .expect("registered WebContents must remain selectable");
     }
 

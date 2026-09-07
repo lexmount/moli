@@ -9,6 +9,29 @@ use moli_core::browser::{WebContentsCreation, WebContentsHandle, WebContentsId};
 mod tests;
 
 impl BrowserContext {
+    pub(in crate::conn) fn adopt_web_contents(
+        &mut self,
+        snapshot: &moli_core::browser::WebContentsSnapshot,
+        target_id: String,
+    ) -> bool {
+        if snapshot.handle.context() != self.browser_context.id()
+            || self
+                .page_targets
+                .get_for_web_contents(snapshot.handle.id())
+                .is_some()
+        {
+            return false;
+        }
+        self.page_targets.insert(PageAgentHost::new(
+            target_id,
+            None,
+            TargetIdentityState::with_url(snapshot.url.clone()),
+            snapshot.handle.id(),
+            snapshot.main_frame,
+            TargetPageSlot::empty_for_initial_document_page_build(),
+        ))
+    }
+
     #[cfg(test)]
     pub(crate) fn set_active_document_fixture_for_test(
         &mut self,
@@ -105,18 +128,6 @@ impl BrowserContext {
             "checked page projection must remain absent during registration"
         );
         true
-    }
-
-    pub(super) fn select_registered_web_contents(
-        &mut self,
-        handle: WebContentsHandle,
-    ) -> Result<(), String> {
-        if !self.browser_context.contains_web_contents(handle) {
-            return Err("WebContents unavailable".into());
-        }
-        let selected = self.browser_context.select_web_contents(handle.id());
-        debug_assert!(selected, "registered WebContents must be selectable");
-        Ok(())
     }
 
     pub(crate) fn selected_web_contents_id(&self) -> Option<WebContentsId> {

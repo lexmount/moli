@@ -553,19 +553,6 @@ impl TargetClosureCleanupPlan {
         }
     }
 
-    pub(crate) fn from_primary_and_attached_sessions(
-        target_id: impl Into<String>,
-        reason: Option<&str>,
-        primary_session_id: Option<String>,
-        attached_session_ids: Vec<String>,
-    ) -> Self {
-        Self::new(
-            target_id,
-            reason,
-            primary_session_id.into_iter().chain(attached_session_ids),
-        )
-    }
-
     pub(crate) fn target_id(&self) -> &str {
         &self.target_id
     }
@@ -700,11 +687,10 @@ mod tests {
 
     #[test]
     fn target_closure_cleanup_plan_preserves_target_reason_and_sessions() {
-        let plan = TargetClosureCleanupPlan::from_primary_and_attached_sessions(
+        let plan = TargetClosureCleanupPlan::new(
             "TID-page",
             Some("Render process gone."),
-            Some("SID-primary".to_owned()),
-            vec!["SID-attached".to_owned()],
+            vec!["SID-primary".to_owned(), "SID-attached".to_owned()],
         );
 
         assert_eq!(plan.target_id(), "TID-page");

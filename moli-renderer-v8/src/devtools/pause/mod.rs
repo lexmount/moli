@@ -193,6 +193,15 @@ impl RendererInspectorPauseBridge {
         self.shared.state.lock().route = Some(RendererInspectorPauseRoute { output_journal });
     }
 
+    pub(crate) fn output_journal(&self) -> Option<RendererTurnOutputJournal> {
+        self.shared
+            .state
+            .lock()
+            .route
+            .as_ref()
+            .map(|route| route.output_journal.clone())
+    }
+
     pub(crate) fn is_pause_active(&self) -> bool {
         self.shared.state.lock().phase != RendererInspectorPausePhase::Running
     }

@@ -65,33 +65,6 @@ fn empty_pending_fetch_state() -> super::fetch_owner::SessionOwnerPendingFetchSt
     )
 }
 
-pub(crate) struct ClosedPageTarget {
-    pub(crate) target_id: String,
-    pub(crate) primary_session_id: Option<String>,
-    pub(crate) attached_session_ids: Vec<String>,
-}
-
-impl ClosedPageTarget {
-    pub(crate) fn inspector_detached_session_ids(&self) -> impl Iterator<Item = &str> {
-        self.primary_session_id
-            .as_deref()
-            .into_iter()
-            .chain(self.attached_session_ids.iter().map(String::as_str))
-    }
-
-    pub(crate) fn into_detach_cleanup_plan(
-        self,
-        reason: Option<&str>,
-    ) -> crate::conn::TargetClosureCleanupPlan {
-        crate::conn::TargetClosureCleanupPlan::from_primary_and_attached_sessions(
-            self.target_id,
-            reason,
-            self.primary_session_id,
-            self.attached_session_ids,
-        )
-    }
-}
-
 pub(super) struct TargetSessionStateMut<'a> {
     pub(super) devtools_session_state: &'a mut DevToolsSessionState,
 }
@@ -1096,108 +1069,24 @@ impl CdpConnection {
             .await
     }
 
-    pub(crate) async fn close_web_contents_for_target_close_async(
+    pub(crate) async fn close_browser_web_contents_async(
         &mut self,
-        target_id: &str,
         handle: moli_core::browser::WebContentsHandle,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        reason: &'static str,
-    ) -> Option<ClosedPageTarget> {
-        let context = self.browser_context_by_browser_id(handle.context())?;
-        if context.web_contents_handle_for_target(target_id) != Some(handle) {
-            return None;
-        }
-        let was_selected = context.selected_web_contents_handle() == Some(handle);
-        let primary_route = self.target_session_route_for_target_id(target_id)?;
-        let primary_owner = CommandOwnerScope::for_route(primary_route);
-        let session_owners = self
-            .page_event_session_ids_for_owner(&primary_owner)
-            .into_iter()
-            .map(|session_id| {
-                session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| primary_owner.clone())
-            })
-            .collect::<Vec<_>>();
-        let mut claimed_await_events = Vec::new();
-        for owner in &session_owners {
-            self.fail_pending_inspector_awaits_for_owner_background_events_into(
-                out,
-                &mut claimed_await_events,
-                owner,
-                reason,
-            );
-        }
-        out.extend(claimed_await_events);
-
-        let (closing, primary_session_id, attached_session_ids, collected_network_data_artifacts) = {
-            let browser_context = self.browser_context_by_browser_id_mut(handle.context())?;
-            let (target, closing) = browser_context.begin_web_contents_close(handle).ok()?;
-            let collected_network_data_artifacts =
-                target.runtime_slot.collected_network_data_artifacts();
-            let attached_session_ids = target
-                .devtools_sessions
-                .attached_session_ids()
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
-            let primary_session_id = target.session_id().map(str::to_owned);
-            (
-                closing,
-                primary_session_id,
-                attached_session_ids,
-                collected_network_data_artifacts,
-            )
+        notifications: crate::conn::PageCloseNotifications,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let Ok(closing) = self.browser.close_web_contents(handle) else {
+            return Vec::new();
+        };
+        let record = closing.event;
+        let moli_core::browser::BrowserEvent::WebContentsClosed { activated, .. } = record.event
+        else {
+            unreachable!("Browser close must return its committed close occurrence");
         };
         closing.close_async().await;
-        self.record_collected_network_data_artifacts(collected_network_data_artifacts);
-
-        let closed = ClosedPageTarget {
-            target_id: target_id.to_owned(),
-            primary_session_id,
-            attached_session_ids,
-        };
-        if !was_selected {
-            return Some(closed);
-        }
-
-        let selected = self
-            .browser_context_by_browser_id(handle.context())
-            .and_then(|browser_context| {
-                let target_id = browser_context.last_selectable_background_target_id()?;
-                let handle = browser_context.web_contents_handle_for_target(&target_id)?;
-                Some((target_id, handle))
-            });
-        let selected_target_id = if let Some((target_id, handle)) = selected {
-            if let Err(error) = self.select_browser_web_contents_async(handle).await {
-                tracing::warn!(%error, "failed to update selected WebContents surface after close");
-            }
-            Some(target_id)
-        } else {
-            None
-        };
-        if self
-            .browser_context
-            .as_ref()
-            .is_some_and(|context| context.browser_context_id() == handle.context())
-        {
-            self.refresh_active_browser_context_loader();
-        }
-        if let Some(selected_target_id) = selected_target_id {
-            self.notify_target_host_activated(&selected_target_id);
-            out.extend(
-                self.page_screencast_session_ids_for_target(&selected_target_id)
-                    .into_iter()
-                    .map(|session_id| {
-                        BackgroundProtocolEvent::page_screencast_visibility_changed(
-                            session_id.as_deref(),
-                            true,
-                        )
-                    }),
-            );
-        }
-
-        Some(closed)
+        // The command executor already owns its automation lifecycle output;
+        // only an independently observed Browser close must synthesize it.
+        self.retire_closed_web_contents(handle, activated, record.sequence, notifications)
+            .await
     }
 
     pub(crate) async fn rollback_incomplete_popup_target_without_event_async(
@@ -1218,11 +1107,15 @@ impl CdpConnection {
 
         let mut page_session_ids = Vec::new();
         if let Some(browser_context_id) = browser_context_id {
+            let browser = self.browser.clone();
             let target = self
                 .browser_context_by_id_mut(&browser_context_id)
                 .and_then(|browser_context| {
                     let handle = browser_context.web_contents_handle_for_target(target_id)?;
-                    browser_context.begin_web_contents_close(handle).ok()
+                    let closing = browser.close_web_contents(handle).ok()?;
+                    let mut target = browser_context.take_closed_web_contents_projection(handle)?;
+                    target.runtime_slot.retire_for_target_close();
+                    Some((target, closing))
                 });
             if let Some((target, closing)) = target {
                 page_session_ids.extend(
@@ -1782,15 +1675,6 @@ impl CdpConnection {
     /// Binds renderer-produced child-frame activity to the Page attachment
     /// that captured it and to the exact root Document reported by the same
     /// renderer snapshot.
-    pub(crate) fn target_root_document_protocol_attachment_identity_for_session(
-        &self,
-        session_id: Option<&str>,
-        root_document: moli_core::RendererDocumentLifecycleIdentity,
-    ) -> Option<crate::conn::TargetRootDocumentProtocolAttachmentIdentity> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.target_root_document_protocol_attachment_identity_for_owner(&owner, root_document)
-    }
-
     pub(crate) fn target_root_document_protocol_attachment_identity_for_owner(
         &self,
         owner: &CommandOwnerScope,
@@ -1813,14 +1697,15 @@ impl CdpConnection {
         if !self.target_page_protocol_attachment_identity_is_current(expected.attachment()) {
             return false;
         }
-        self.target_session_owner_ref(expected.session_id())
-            .and_then(|owner| {
-                owner
-                    .browser_context
-                    .renderer_document_lifecycle_binding_for_target(&owner.target_id)
-                    .map(crate::conn::CommittedRendererDocumentBinding::renderer_document_identity)
-            })
-            == Some(expected.root_document())
+        self.target_session_owner_ref_for_owner(&CommandOwnerScope::for_page_attachment(
+            expected.attachment(),
+        ))
+        .and_then(|owner| {
+            owner
+                .browser_context
+                .renderer_document_lifecycle_binding_for_target(&owner.target_id)
+                .map(crate::conn::CommittedRendererDocumentBinding::renderer_document_identity)
+        }) == Some(expected.root_document())
     }
 
     pub(crate) fn target_root_document_lifecycle_identity_for_owner(
@@ -2008,23 +1893,13 @@ impl CdpConnection {
                 .background_target(&target_id)
                 .and_then(|target| target.session_id().map(str::to_owned))
         };
-        let primary_event_session_id =
-            primary_session_id.or_else(|| owner.session_id().map(str::to_owned));
-        session_ids.push(primary_event_session_id.clone());
+        session_ids.push(primary_session_id.clone());
         for attached_session_id in browser_context.attached_session_ids_for_target(&target_id) {
-            if primary_event_session_id.as_deref() != Some(attached_session_id.as_str()) {
+            if primary_session_id.as_deref() != Some(attached_session_id.as_str()) {
                 session_ids.push(Some(attached_session_id));
             }
         }
         session_ids
-    }
-
-    pub(crate) fn subscribed_page_event_session_ids_for_session_owner(
-        &self,
-        session_id: Option<&str>,
-    ) -> Vec<Option<String>> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.subscribed_page_event_session_ids_for_owner(&owner)
     }
 
     pub(crate) fn subscribed_page_event_session_ids_for_owner(
@@ -2034,10 +1909,7 @@ impl CdpConnection {
         self.page_event_session_ids_for_owner(owner)
             .into_iter()
             .filter(|event_session_id| {
-                let event_owner = event_session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| owner.clone());
+                let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
                 self.target_page_session_state_for_owner(&event_owner)
                     .is_some_and(|state| state.page_domain_enabled)
             })
@@ -2061,10 +1933,7 @@ impl CdpConnection {
             .subscribed_page_event_session_ids_for_owner(owner)
             .into_iter()
             .map(|event_session_id| {
-                let event_owner = event_session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| owner.clone());
+                let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
                 self.target_page_protocol_attachment_identity_for_owner(&event_owner)
             })
             .collect::<Option<Vec<_>>>()?;
@@ -2091,18 +1960,12 @@ impl CdpConnection {
             .page_event_session_ids_for_owner(owner)
             .into_iter()
             .filter(|event_session_id| {
-                let event_owner = event_session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| owner.clone());
+                let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
                 self.target_runtime_session_state_for_owner(&event_owner)
                     .is_some_and(|state| state.runtime_frontend_enabled)
             })
             .map(|event_session_id| {
-                let event_owner = event_session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| owner.clone());
+                let event_owner = owner.for_target_event_session(self, event_session_id.as_deref());
                 self.target_page_protocol_attachment_identity_for_owner(&event_owner)
             })
             .collect::<Option<Vec<_>>>()?;
@@ -3490,8 +3353,10 @@ mod tests {
             .expect("target session should be mutable");
         }
         assert!(
-            conn.subscribed_page_event_session_ids_for_session_owner(Some("SID-primary"))
-                .is_empty(),
+            conn.subscribed_page_event_session_ids_for_owner(&CommandOwnerScope::for_session(
+                "SID-primary"
+            ))
+            .is_empty(),
             "Page.setLifecycleEventsEnabled must not subscribe a session to Page events"
         );
 
@@ -3501,7 +3366,9 @@ mod tests {
         )
         .expect("Page-enabled attached session should be mutable");
         assert_eq!(
-            conn.subscribed_page_event_session_ids_for_session_owner(Some("SID-primary")),
+            conn.subscribed_page_event_session_ids_for_owner(&CommandOwnerScope::for_session(
+                "SID-primary"
+            )),
             vec![Some("SID-page-enabled".to_owned())]
         );
 
@@ -3510,7 +3377,9 @@ mod tests {
         })
         .expect("primary session should be mutable");
         assert_eq!(
-            conn.subscribed_page_event_session_ids_for_session_owner(Some("SID-page-enabled")),
+            conn.subscribed_page_event_session_ids_for_owner(&CommandOwnerScope::for_session(
+                "SID-page-enabled"
+            )),
             vec![
                 Some("SID-primary".to_owned()),
                 Some("SID-page-enabled".to_owned()),
@@ -3573,6 +3442,51 @@ mod tests {
             ],
             "one target-owned Runtime fact must freeze every enabled attachment"
         );
+    }
+
+    #[test]
+    fn attached_event_source_preserves_unbound_primary_audience_and_flags() {
+        let mut conn = crate::test_support::connection();
+        let mut context = conn.new_page_target_fixture_for_test("BID-audience", "TID-audience");
+        assert!(
+            context.assign_attached_session_to_target("TID-audience", "SID-emitter".to_owned())
+        );
+        context.set_active_document_fixture_for_test(41);
+        conn.install_browser_context_fixture_for_test(context);
+        let emitter = CommandOwnerScope::for_session("SID-emitter");
+        assert_eq!(
+            conn.page_event_session_ids_for_owner(&emitter),
+            vec![None, Some("SID-emitter".to_owned())]
+        );
+        conn.with_target_devtools_session_state_for_owner_mut(&emitter, |state| {
+            state.page_session_state.page_domain_enabled = true;
+            state.runtime_session_state.runtime_frontend_enabled = true;
+        })
+        .unwrap();
+        assert_eq!(
+            conn.subscribed_page_event_session_ids_for_owner(&emitter),
+            vec![Some("SID-emitter".to_owned())]
+        );
+        let primary = emitter.for_target_event_session(&conn, None);
+        conn.with_target_devtools_session_state_for_owner_mut(&primary, |state| {
+            state.page_session_state.page_domain_enabled = true;
+            state.runtime_session_state.runtime_frontend_enabled = true;
+        })
+        .unwrap();
+        for audience in [
+            conn.page_event_protocol_attachments_for_owner(&emitter),
+            conn.runtime_event_protocol_attachments_for_owner(&emitter),
+        ] {
+            let audience = audience.unwrap();
+            assert_eq!(
+                audience
+                    .iter()
+                    .map(|attachment| attachment.session_id())
+                    .collect::<Vec<_>>(),
+                vec![None, Some("SID-emitter")]
+            );
+            assert_eq!(audience[0].page_owner(), audience[1].page_owner());
+        }
     }
 
     #[test]

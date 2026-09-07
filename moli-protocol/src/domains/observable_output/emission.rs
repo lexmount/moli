@@ -7,8 +7,10 @@ use super::output_queue::{
     ObservableConsoleLogPreparedRange, ObservablePreparedOutputs,
     ObservableSessionAuditsPreparedRange,
 };
-use super::runtime_emission::mark_runtime_observable_emission_cursor_for_session_owner;
-use crate::conn::{BackgroundProtocolEvent, CdpConnection, monotonic_timestamp_seconds};
+use super::runtime_emission::mark_runtime_observable_emission_cursor_for_owner;
+use crate::conn::{
+    BackgroundProtocolEvent, CdpConnection, CommandOwnerScope, monotonic_timestamp_seconds,
+};
 use crate::devtools_runtime::DevToolsTargetId;
 use crate::domains::activity::{
     ProtocolOutputPayloads, ProtocolOutputProjectionContext, ProtocolOutputSlot,
@@ -183,16 +185,14 @@ impl ObservableActivityEmissionPlan {
         self,
         conn: &mut CdpConnection,
         out: &mut Vec<BackgroundProtocolEvent>,
-        session_id: Option<&str>,
+        owner: &CommandOwnerScope,
     ) {
         let base_timestamp = monotonic_timestamp_seconds();
-        // `session_id == None` is routed through a temporary exact Page-owner
-        // scope while a concrete renderer publication is projected. Freeze
-        // that target into the typed automation sidecar now: downstream BiDi
-        // delivery happens after the scope is restored and must not infer the
-        // source from whichever tab is active by then.
+        // Keep the prepared Page owner even when its primary session has no
+        // wire id; None must never resolve to another context's current Page.
+        let session_id = owner.session_id();
         let target_id = conn
-            .target_owner_identity_for_session(session_id)
+            .target_owner_identity_for_owner(owner)
             .and_then(|(_, target_id)| target_id)
             .map(DevToolsTargetId::from);
         let mut output_index = 0;
@@ -207,13 +207,14 @@ impl ObservableActivityEmissionPlan {
                 base_timestamp + (output_index as f64 * 0.000_001),
             ));
         }
-        self.cursor.mark_emitted(conn, session_id);
+        self.cursor.mark_emitted(conn, owner);
     }
 
     #[cfg(test)]
     fn emit(self, conn: &mut CdpConnection, out: &mut Vec<Value>, session_id: Option<&str>) {
         let mut events = Vec::new();
-        self.emit_background_events(conn, &mut events, session_id);
+        let owner = CommandOwnerScope::capture(conn, session_id);
+        self.emit_background_events(conn, &mut events, &owner);
         out.extend(
             events
                 .into_iter()
@@ -255,17 +256,16 @@ impl ObservableEmissionCursor {
         }
     }
 
-    fn mark_emitted(self, conn: &mut CdpConnection, session_id: Option<&str>) {
+    fn mark_emitted(self, conn: &mut CdpConnection, owner: &CommandOwnerScope) {
         match self {
             Self::Audits(cursor) => {
-                let _ = conn
-                    .with_target_devtools_session_state_for_session_mut(session_id, |state| {
-                        state.page_session_state.audits.mark_emitted(cursor)
-                    });
+                let _ = conn.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+                    state.page_session_state.audits.mark_emitted(cursor)
+                });
             }
-            Self::ConsoleLog(cursor) => cursor.mark_emitted_for_owner(conn, session_id),
+            Self::ConsoleLog(cursor) => cursor.mark_emitted_for_owner(conn, owner),
             Self::RuntimeObservable(cursor) => {
-                mark_runtime_observable_emission_cursor_for_session_owner(conn, session_id, cursor)
+                mark_runtime_observable_emission_cursor_for_owner(conn, owner, cursor)
             }
         }
     }
@@ -293,7 +293,8 @@ pub(crate) async fn emit_pending_observable_activity_background_events_async(
             else {
                 continue;
             };
-            plan.emit_background_events(conn, out, event_session_id.as_deref());
+            let owner = CommandOwnerScope::capture(conn, event_session_id.as_deref());
+            plan.emit_background_events(conn, out, &owner);
         }
         return;
     }
@@ -310,7 +311,8 @@ pub(crate) async fn emit_pending_observable_activity_background_events_async(
             else {
                 continue;
             };
-            plan.emit_background_events(conn, out, event_session_id.as_deref());
+            let owner = CommandOwnerScope::capture(conn, event_session_id.as_deref());
+            plan.emit_background_events(conn, out, &owner);
         }
         return;
     }
@@ -319,11 +321,11 @@ pub(crate) async fn emit_pending_observable_activity_background_events_async(
             return;
         };
         for prepared in prepared_outputs.take_runtime_observable_items() {
-            let Some((event_session_id, items)) = prepared.materialize_for_owner(conn) else {
+            let Some((owner, items)) = prepared.materialize_for_owner(conn) else {
                 continue;
             };
             ObservableActivityEmissionPlan::from_runtime_prepared_items(items)
-                .emit_background_events(conn, out, event_session_id.as_deref());
+                .emit_background_events(conn, out, &owner);
         }
         return;
     }
@@ -331,7 +333,8 @@ pub(crate) async fn emit_pending_observable_activity_background_events_async(
         ObservableActivityEmissionPlan::prepare_async(step, conn, session_id, prepared_outputs)
             .await
     {
-        plan.emit_background_events(conn, out, session_id);
+        let owner = CommandOwnerScope::capture(conn, session_id);
+        plan.emit_background_events(conn, out, &owner);
     }
 }
 
@@ -1352,7 +1355,9 @@ mod tests {
     #[tokio::test]
     async fn observable_emission_plan_prepares_runtime_payloads_and_advances_cursors() {
         let mut conn = crate::test_support::connection();
-        conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
+        let mut context = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
+        context.attach_active_session("SID-1");
+        conn.install_browser_context_fixture_for_test(context);
         let runtime_plan = ObservableActivityEmissionPlan::from_runtime_prepared_items(
             ObservableRuntimePreparedItems::for_test(
                 vec![
@@ -1380,6 +1385,10 @@ mod tests {
         );
         let mut out = Vec::new();
         runtime_plan.emit(&mut conn, &mut out, Some("SID-1"));
+        assert!(
+            out.iter()
+                .all(|message| message["sessionId"] == json!("SID-1"))
+        );
         assert!(
             out.iter().any(|message| {
                 message["method"] == json!("Runtime.consoleAPICalled")
@@ -1423,7 +1432,9 @@ mod tests {
     #[tokio::test]
     async fn observable_runtime_plan_advances_lifecycle_cursor_without_emittable_items() {
         let mut conn = crate::test_support::connection();
-        conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
+        let mut context = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
+        context.attach_active_session("SID-1");
+        conn.install_browser_context_fixture_for_test(context);
         let runtime_plan = ObservableActivityEmissionPlan::from_runtime_prepared_items(
             ObservableRuntimePreparedItems::for_test(
                 Vec::new(),

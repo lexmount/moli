@@ -2,8 +2,9 @@
 use moli_core::page::RendererPendingJavaScriptDialog;
 
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, TargetPageProtocolAttachmentIdentity,
-    TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
+    BackgroundProtocolEvent, CdpConnection, CommandOwnerScope,
+    TargetPageProtocolAttachmentIdentity, TargetPreparedJavaScriptDialog,
+    TargetPreparedJavaScriptDialogRoute,
 };
 #[cfg(test)]
 use crate::conn::{TargetJavaScriptDialogScopeObserver, TargetPageResidenceIdentity};
@@ -69,7 +70,9 @@ fn emit_one(
 fn source_is_current(conn: &CdpConnection, dialog: &PreparedJavaScriptDialog) -> bool {
     conn.target_page_protocol_attachment_identity_is_current(dialog.source_attachment())
         && conn
-            .runtime_session_owner_slot(dialog.source_attachment().session_id())
+            .runtime_session_owner_slot_for_owner(&CommandOwnerScope::for_page_attachment(
+                dialog.source_attachment(),
+            ))
             .is_ok_and(|slot| slot.observes_javascript_dialog_scope(dialog.source_dialog_scope()))
 }
 

@@ -4,6 +4,7 @@ use crate::domains::log::{SessionOwnerLogControlResult, SessionOwnerLogEnableRes
 use serde_json::Value;
 
 mod dialog_owner;
+mod document_commit;
 mod emulation_owner;
 mod fetch_owner;
 mod lifecycle;
@@ -14,6 +15,7 @@ mod runtime_owner;
 mod session_owner;
 mod target_session_owner;
 
+pub(crate) use lifecycle::PageCloseNotifications;
 pub(crate) use page_owner::PageLifecycleEventsEnableResult;
 pub(crate) use runtime_owner::{
     SessionOwnerInspectorEnableResult, SessionOwnerRuntimeFrontendEnableResult,

@@ -1235,41 +1235,12 @@ impl std::fmt::Debug for MainDocumentLiveNetworkProgressSource {
     }
 }
 
-fn emit_main_document_initial_request_will_be_sent_for_sessions_into(
-    output: &mut MainDocumentProgressOutputTarget<'_>,
-    session_ids: &[Option<String>],
-    state: &NavigationDispatchState,
-    cookie_access_report: Option<&StoredCookieQueryReport>,
-) -> bool {
-    let Some(request_id) = state.request_id.clone() else {
-        return false;
-    };
-    let target = MainDocumentProgressEventTarget {
-        session_ids: session_ids.to_vec(),
-        request_id,
-        loader_id: state.loader_id.clone(),
-        frame_id: state.frame_id.clone(),
-        timestamp: state.timestamp,
-    };
-    output.emit_event(MainDocumentNavigationProgressEvent::RequestWillBeSent {
-        target,
-        url: state.requested_url.clone(),
-        method: state.request_method.clone(),
-        request_body: state.request_body.clone(),
-        request_headers: state.request_headers.to_byte_strings(),
-        request_initiator_type: SubresourceRequestInitiatorType::Other,
-        redirect_response: Box::new(None),
-        redirect_has_extra_info: false,
-        cookie_access_report: cookie_access_report.cloned(),
-    });
-    true
-}
-
 pub(crate) fn emit_fetch_navigation_initial_request_for_pause_background_events(
     conn: &CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     state: &NavigationDispatchState,
     cookie_access_report: Option<&StoredCookieQueryReport>,
+    fetch_request_id: Option<&str>,
 ) -> bool {
     let mut session_ids =
         main_document_network_event_session_ids(conn, state.session_id.as_deref());
@@ -1277,18 +1248,62 @@ pub(crate) fn emit_fetch_navigation_initial_request_for_pause_background_events(
         session_ids.push(state.session_id.clone());
     }
     let mut output = MainDocumentProgressOutputTarget::background_events(out);
+    let blocked_intercepts = fetch_request_id
+        .and_then(|_| conn.target_fetch_subresource_interception_snapshot_for_owner(&state.owner))
+        .map(|snapshot| {
+            snapshot.matching_network_intercepts(
+                crate::conn::FetchRequestStage::Request,
+                crate::devtools_runtime::DevToolsNetworkResourceType::Document,
+                &state.requested_url,
+            )
+        })
+        .unwrap_or_default();
     emit_main_document_initial_request_will_be_sent_for_sessions_into(
         &mut output,
         &session_ids,
         state,
         cookie_access_report,
+        fetch_request_id.map(|id| (id, blocked_intercepts.as_slice())),
     )
+}
+
+fn emit_main_document_initial_request_will_be_sent_for_sessions_into(
+    output: &mut MainDocumentProgressOutputTarget<'_>,
+    session_ids: &[Option<String>],
+    state: &NavigationDispatchState,
+    cookie_access_report: Option<&StoredCookieQueryReport>,
+    request_pause: Option<(&str, &[crate::devtools_runtime::DevToolsNetworkInterceptId])>,
+) -> bool {
+    let Some(request_id) = state.request_id.as_deref() else {
+        return false;
+    };
+    let request_headers = state.request_headers.to_byte_strings();
+    for session_id in session_ids {
+        emit::emit_main_document_request_will_be_sent(
+            output,
+            session_id.as_deref(),
+            request_id,
+            &state.frame_id,
+            &state.loader_id,
+            state.timestamp,
+            &state.requested_url,
+            &state.request_method,
+            state.request_body.as_deref(),
+            &request_headers,
+            SubresourceRequestInitiatorType::Other,
+            None,
+            false,
+            cookie_access_report,
+            request_pause,
+        );
+    }
+    true
 }
 
 pub(crate) fn emit_child_document_navigation_network_background_events(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    session_id: Option<&str>,
+    owner: &crate::conn::CommandOwnerScope,
     frame_id: &str,
     loader_id: &str,
     request_id: &str,
@@ -1301,7 +1316,7 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
     let Ok(final_url) = Url::parse(&network.final_url) else {
         return;
     };
-    let session_ids = conn.network_event_session_ids_for_session_owner(session_id);
+    let session_ids = conn.network_event_session_ids_for_owner(owner);
     if session_ids.is_empty() {
         return;
     }
@@ -1341,7 +1356,7 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
     });
     record_child_document_response_body(
         conn,
-        session_id,
+        owner,
         request_id,
         &session_ids,
         network.response_body.as_ref(),
@@ -1354,18 +1369,15 @@ pub(crate) fn emit_child_document_navigation_network_background_events(
 
 fn record_child_document_response_body(
     conn: &mut CdpConnection,
-    owner_session_id: Option<&str>,
+    owner: &crate::conn::CommandOwnerScope,
     request_id: &str,
     session_ids: &[Option<String>],
     response_body: Option<&moli_core::page::SubresourceResponseBody>,
 ) {
     let data_type = crate::devtools_runtime::DevToolsNetworkDataType::Response;
     let encoded_data_length = response_body.map_or(0, |body| body.len());
-    let collector_ids = conn.network_data_collector_ids_for_session_owner_body(
-        owner_session_id,
-        data_type,
-        encoded_data_length,
-    );
+    let collector_ids =
+        conn.network_data_collector_ids_for_owner_body(owner, data_type, encoded_data_length);
     let collection_was_gated = conn.network_data_collection_is_gated_for_body(data_type);
     let captured_body =
         response_body.map(crate::conn::CapturedBody::from_subresource_response_body);
@@ -1378,7 +1390,7 @@ fn record_child_document_response_body(
             collection_was_gated,
         );
     }
-    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut(owner_session_id) else {
+    let Ok(runtime_slot) = conn.runtime_session_owner_slot_mut_for_owner(owner) else {
         return;
     };
     if let Some(captured_body) = captured_body {
@@ -1436,6 +1448,7 @@ pub(crate) fn start_observed_main_document_navigation_progress_background_events
         &session_ids,
         state,
         cookie_access_report,
+        None,
     );
     MainDocumentBodyProgressSource::default()
 }
@@ -1993,6 +2006,7 @@ impl MainDocumentNavigationProgressEvent {
                         redirect_response,
                         redirect_has_extra_info,
                         cookie_access_report.as_ref(),
+                        None,
                     );
                 }
             }

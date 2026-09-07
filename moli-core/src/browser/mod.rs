@@ -10,6 +10,7 @@ mod document_lifecycle;
 mod document_lifetime;
 mod downloads;
 mod emulation;
+mod events;
 mod navigation_error;
 mod owner;
 pub use navigation_error::{
@@ -35,13 +36,17 @@ pub use emulation::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
     EmulatedMediaOverrides, EmulatedNetworkConditions, EmulatedViewportSurface,
 };
+pub use events::{
+    BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot, WebContentsSelection,
+    WebContentsSnapshot,
+};
 pub use owner::{
     BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserContextHandle,
     BrowserDocumentMaterialization, BrowserDocumentNavigationCommit, BrowserHandle,
     BrowserInitialDocumentAdmission, BrowserInitialDocumentBuild, BrowserInterceptedNavigationLoad,
     BrowserInterceptedNavigationResponse, BrowserNavigationLoad, BrowserPreparedDocumentNavigation,
     BrowserPreparedNavigationResponse, BrowserService, PendingDocumentRetirement,
-    PendingWebContentsClose, WebContentsCreation,
+    PendingWebContentsActivation, PendingWebContentsClose, WebContentsCreation,
 };
 pub use permissions::{PermissionDefaults, PermissionOverrides};
 pub use renderer_residence::RendererPageResidenceIdentity;

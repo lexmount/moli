@@ -12,7 +12,6 @@ mod transaction;
 mod worker_auto_attach;
 mod worker_session;
 
-pub(crate) use activation::TargetActivationTransition;
 pub(crate) use agent_host_registry::DevToolsAgentHostRegistry;
 pub(crate) use default_target::{DEFAULT_BROWSER_CONTEXT_ID, DefaultTargetLifecycle};
 pub(crate) use graph::{TargetClosurePlan, TargetHostDelta};

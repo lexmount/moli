@@ -18,7 +18,9 @@ impl BrowserContext {
         renderer_output_transport_sender: Option<crate::RendererOutputTransportSender>,
     ) {
         self.page_navigation_runtime_config = Some(config.clone());
-        self.renderer_output_transport_sender = renderer_output_transport_sender;
+        if let Some(sender) = renderer_output_transport_sender {
+            self.set_renderer_output_transport_sender(sender);
+        }
 
         let sender = self.renderer_output_transport_sender.clone();
         let runtime = self.renderer_runtime_owner_access();
@@ -72,8 +74,17 @@ impl BrowserContext {
         self.web_contents.len()
     }
 
+    pub(in crate::browser) fn web_contents_handles(
+        &self,
+    ) -> impl Iterator<Item = WebContentsHandle> + '_ {
+        self.web_contents
+            .keys()
+            .map(|id| WebContentsHandle::new(self.id, *id))
+    }
+
     pub fn selected_web_contents_handle(&self) -> Option<WebContentsHandle> {
-        Some(WebContentsHandle::new(self.id, self.selected_web_contents?))
+        self.selected_web_contents
+            .map(|selection| selection.web_contents)
     }
 
     pub fn web_contents_handle_for_window_id(&self, window_id: u64) -> Option<WebContentsHandle> {

@@ -12,50 +12,24 @@ use crate::devtools_runtime::{
 use moli_core::browser::{WebContentsCreation, WebContentsHandle};
 use moli_core::network::SharedWebStorageStore;
 
-pub(crate) struct PendingWebContentsSelection {
-    admission_error: Option<String>,
-    surface_updates: Vec<moli_core::browser::PendingDocumentPolicyBatch>,
-}
-
-pub(crate) struct CompletedWebContentsSelection {
-    admission_error: Option<String>,
-    surface_updates: Vec<moli_core::browser::CompletedDocumentPolicyBatch>,
-}
-
-impl PendingWebContentsSelection {
-    pub(crate) async fn wait(self) -> CompletedWebContentsSelection {
-        let mut surface_updates = Vec::with_capacity(self.surface_updates.len());
-        for update in self.surface_updates {
-            surface_updates.push(update.wait().await);
-        }
-        CompletedWebContentsSelection {
-            admission_error: self.admission_error,
-            surface_updates,
-        }
-    }
-}
-
 impl BrowserContext {
-    pub(in crate::conn) fn begin_web_contents_close(
+    pub(in crate::conn) fn take_closed_web_contents_projection(
         &mut self,
         handle: WebContentsHandle,
-    ) -> Result<(PageAgentHost, moli_core::browser::PendingWebContentsClose), String> {
+    ) -> Option<PageAgentHost> {
+        if handle.context() != self.browser_context.id()
+            || self.browser_context.contains_web_contents(handle)
+        {
+            return None;
+        }
         let target_id = self
             .page_targets
-            .get_for_web_contents(handle.id())
-            .map(PageAgentHost::target_id)
-            .ok_or_else(|| "WebContents projection unavailable".to_owned())?
+            .get_for_web_contents(handle.id())?
+            .target_id()
             .to_owned();
-        let closing = self.browser_context.close_web_contents(handle)?;
-        let mut target = self
-            .page_targets
-            .remove(&target_id)
-            .expect("retired WebContents must retain its resolved projection until removal");
-        target.runtime_slot.retire_for_target_close();
         self.forget_target_popup_id_for_target(&target_id);
-        Ok((target, closing))
+        self.page_targets.remove(&target_id)
     }
-
     pub(crate) fn stage_background_target(
         &mut self,
         target_id: String,
@@ -146,7 +120,7 @@ impl BrowserContext {
         session_id: Option<String>,
         url: String,
         initial_empty_document_url: Option<String>,
-    ) {
+    ) -> moli_core::browser::PendingWebContentsActivation {
         let creation = WebContentsCreation::with_initial_document(
             initial_empty_document_url.unwrap_or_else(|| url.clone()),
             None,
@@ -163,8 +137,9 @@ impl BrowserContext {
         let handle = self
             .web_contents_handle_for_target(&target_id)
             .expect("newly inserted target must have WebContents");
-        self.select_registered_web_contents(handle)
-            .expect("newly inserted WebContents must be selectable");
+        self.browser_context
+            .activate_web_contents(handle)
+            .expect("newly inserted WebContents must be selectable")
     }
 
     pub(crate) fn reusable_window_open_target_name(target_name: &str) -> Option<&str> {
@@ -442,78 +417,6 @@ impl BrowserContext {
         )
     }
 
-    pub(crate) fn last_selectable_background_target_id(&self) -> Option<String> {
-        self.background_targets()
-            .rev()
-            .find(|target| self.target_has_loaded_page(target.target_id()))
-            .map(|target| target.target_id().to_owned())
-            .or_else(|| {
-                self.background_targets()
-                    .next_back()
-                    .map(|target| target.target_id().to_owned())
-            })
-    }
-
-    pub(crate) fn start_select_web_contents(
-        &mut self,
-        selected: WebContentsHandle,
-        browser_globals: &crate::conn::BrowserGlobalOverrides,
-    ) -> Result<PendingWebContentsSelection, String> {
-        let selected_has_dialog = self.web_contents_has_pending_javascript_dialog(selected)?;
-        let previous = self.selected_web_contents_handle();
-        if previous == Some(selected) {
-            return Ok(PendingWebContentsSelection {
-                admission_error: None,
-                surface_updates: Vec::new(),
-            });
-        }
-        let previous_has_dialog = previous
-            .map(|handle| self.web_contents_has_pending_javascript_dialog(handle))
-            .transpose()?
-            .unwrap_or(false);
-        self.select_registered_web_contents(selected)?;
-
-        let mut admission_error = None;
-        let mut surface_updates = Vec::new();
-        if !selected_has_dialog && !previous_has_dialog {
-            for (handle, foreground) in
-                std::iter::once((selected, true)).chain(previous.map(|handle| (handle, false)))
-            {
-                let Some(document) = self.document_handle_for_web_contents(handle)? else {
-                    continue;
-                };
-                match self.start_document_page_surface_update(
-                    document,
-                    foreground,
-                    browser_globals.network_conditions,
-                    browser_globals.geolocation.as_ref(),
-                ) {
-                    Ok(update) => surface_updates.push(update),
-                    Err(error) => {
-                        admission_error.get_or_insert(error);
-                    }
-                }
-            }
-        }
-        Ok(PendingWebContentsSelection {
-            admission_error,
-            surface_updates,
-        })
-    }
-
-    pub(crate) fn finish_select_web_contents(
-        &mut self,
-        completed: CompletedWebContentsSelection,
-    ) -> Result<(), String> {
-        let mut first_error = completed.admission_error;
-        for update in completed.surface_updates {
-            if let Err(error) = self.browser_context.finish_document_policy_batch(update) {
-                first_error.get_or_insert(error);
-            }
-        }
-        first_error.map_or(Ok(()), Err)
-    }
-
     pub(crate) fn begin_active_target_initial_empty_document(&mut self, initial_url: String) {
         self.begin_active_target_initial_empty_document_with_storage_key(initial_url, None);
     }
@@ -635,10 +538,7 @@ impl BrowserContext {
     pub(crate) fn devtools_target_infos(&self) -> Vec<DevToolsTargetInfo> {
         let mut infos = Vec::new();
         if let Some(target_id) = self.active_target_id() {
-            infos.push(
-                self.devtools_target_info(target_id)
-                    .expect("active target must remain addressable"),
-            );
+            infos.extend(self.devtools_target_info(target_id));
         }
         infos.extend(
             self.background_targets()
@@ -660,6 +560,62 @@ impl BrowserContext {
                 .map(|target| self.service_worker_devtools_target_info(target)),
         );
         infos
+    }
+
+    /// Terminal projection data must not query a Context already retired by
+    /// the Browser. Destruction uses the last projected URL/title and identity.
+    pub(crate) fn retired_devtools_target_infos(&self) -> Vec<DevToolsTargetInfo> {
+        let mut infos = self
+            .page_targets
+            .iter()
+            .map(|target| self.retired_page_target_info(target))
+            .collect::<Vec<_>>();
+        infos.extend(
+            self.shared_worker_targets
+                .values()
+                .map(|target| self.shared_worker_devtools_target_info(target)),
+        );
+        infos.extend(
+            self.dedicated_worker_targets
+                .values()
+                .map(|target| self.dedicated_worker_devtools_target_info(target)),
+        );
+        infos.extend(
+            self.service_worker_targets
+                .values()
+                .map(|target| self.service_worker_devtools_target_info(target)),
+        );
+        infos
+    }
+
+    pub(in crate::conn) fn retired_page_target_info(
+        &self,
+        target: &PageAgentHost,
+    ) -> DevToolsTargetInfo {
+        DevToolsTargetInfo {
+            target_id: Some(DevToolsTargetId::from(target.target_id())),
+            kind: DevToolsTargetKind::Page,
+            title: target
+                .owner_state
+                .committed_document_title()
+                .unwrap_or_default()
+                .to_owned(),
+            url: target.target_url().to_owned(),
+            attached: target.has_session()
+                || target
+                    .devtools_sessions
+                    .attached_session_ids()
+                    .next()
+                    .is_some(),
+            opener_id: None,
+            opener_frame_id: target
+                .opener_frame_id
+                .as_deref()
+                .map(crate::devtools_runtime::DevToolsFrameId::from),
+            can_access_opener: false,
+            browser_context_id: Some(DevToolsBrowserContextId::from(self.id.as_str())),
+            moli_popup_id: None,
+        }
     }
 
     pub(crate) fn shared_worker_target(&self, target_id: &str) -> Option<&SharedWorkerTargetState> {
@@ -1210,7 +1166,17 @@ mod tests {
         let renamed_opener = context
             .web_contents_handle_for_target("TID-renamed-opener")
             .unwrap();
-        drop(context.begin_web_contents_close(renamed_opener).unwrap());
+        drop(
+            context
+                .browser_context
+                .close_web_contents(renamed_opener)
+                .unwrap(),
+        );
+        drop(
+            context
+                .take_closed_web_contents_projection(renamed_opener)
+                .unwrap(),
+        );
         context.stage_background_target(
             "TID-orphan-popup".into(),
             None,
@@ -1301,12 +1267,32 @@ mod tests {
         let replacement_opener = context
             .web_contents_handle_for_target("TID-opener")
             .unwrap();
-        drop(context.begin_web_contents_close(replacement_opener));
+        drop(
+            context
+                .browser_context
+                .close_web_contents(replacement_opener)
+                .unwrap(),
+        );
+        drop(
+            context
+                .take_closed_web_contents_projection(replacement_opener)
+                .unwrap(),
+        );
         let popup = context.target_info("TID-popup").unwrap();
         assert_eq!(popup["openerId"], "TID-renamed");
         assert_eq!(popup["canAccessOpener"], true);
 
-        drop(context.begin_web_contents_close(opener_handle));
+        drop(
+            context
+                .browser_context
+                .close_web_contents(opener_handle)
+                .unwrap(),
+        );
+        drop(
+            context
+                .take_closed_web_contents_projection(opener_handle)
+                .unwrap(),
+        );
         context.set_active_target_id("TID-renamed");
         let popup = context.target_info("TID-popup").unwrap();
         assert!(popup.get("openerId").is_none());
@@ -1339,7 +1325,17 @@ mod tests {
         let replacement = context
             .web_contents_handle_for_target("TID-window")
             .unwrap();
-        drop(context.begin_web_contents_close(replacement));
+        drop(
+            context
+                .browser_context
+                .close_web_contents(replacement)
+                .unwrap(),
+        );
+        drop(
+            context
+                .take_closed_web_contents_projection(replacement)
+                .unwrap(),
+        );
         assert_eq!(
             context.target_id_for_window_name("report"),
             Some("TID-renamed")
@@ -1353,7 +1349,8 @@ mod tests {
             context.target_id_for_window_name("renamed-report"),
             Some("TID-renamed")
         );
-        drop(context.begin_web_contents_close(handle));
+        drop(context.browser_context.close_web_contents(handle).unwrap());
+        drop(context.take_closed_web_contents_projection(handle).unwrap());
         context.set_active_target_id("TID-renamed");
         assert_eq!(context.target_id_for_window_name("renamed-report"), None);
     }
@@ -1547,12 +1544,13 @@ mod tests {
         let handle = context
             .web_contents_handle_for_target("TID-selected")
             .unwrap();
-        let completed = context
-            .start_select_web_contents(handle, &Default::default())
+        context
+            .browser_context
+            .activate_web_contents(handle)
             .unwrap()
             .wait()
-            .await;
-        context.finish_select_web_contents(completed).unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(context.active_target_id(), Some("TID-selected"));
         assert!(
@@ -1761,12 +1759,13 @@ mod tests {
         let handle = context
             .web_contents_handle_for_target("TID-pending-bg")
             .expect("pending background target should remain selectable");
-        let completed = context
-            .start_select_web_contents(handle, &Default::default())
+        context
+            .browser_context
+            .activate_web_contents(handle)
             .unwrap()
             .wait()
-            .await;
-        context.finish_select_web_contents(completed).unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(
             context.runtime_slot_diagnostics_for_target(context.active_target_id().unwrap())["loadedPageAbsenceReason"],
@@ -1814,7 +1813,7 @@ mod tests {
             Some("SID-second-loaded"),
         )
         .await;
-        let mut context = ctx.conn.browser_context.take().unwrap();
+        let context = ctx.conn.browser_context.take().unwrap();
         let first_attachment = context
             .background_targets()
             .nth(1)
@@ -1836,12 +1835,13 @@ mod tests {
             .map(|target| target.target_id().to_owned())
             .expect("loaded background target should be selectable");
         let handle = context.web_contents_handle_for_target(&selected).unwrap();
-        let completed = context
-            .start_select_web_contents(handle, &Default::default())
+        context
+            .browser_context
+            .activate_web_contents(handle)
             .unwrap()
             .wait()
-            .await;
-        context.finish_select_web_contents(completed).unwrap();
+            .await
+            .unwrap();
 
         assert_eq!(selected, "TID-first-loaded");
         assert_eq!(context.active_target_id(), Some("TID-first-loaded"));
@@ -1899,7 +1899,7 @@ mod tests {
             Some("SID-background-route"),
         )
         .await;
-        let mut context = ctx.conn.browser_context.take().unwrap();
+        let context = ctx.conn.browser_context.take().unwrap();
         let active_attachment = context
             .active_page_target()
             .runtime_slot
@@ -1913,13 +1913,12 @@ mod tests {
         let handle = context
             .web_contents_handle_for_target("TID-background-route")
             .unwrap();
-        let completed = context
-            .start_select_web_contents(handle, &Default::default())
+        context
+            .browser_context
+            .activate_web_contents(handle)
             .unwrap()
             .wait()
-            .await;
-        context
-            .finish_select_web_contents(completed)
+            .await
             .expect("target selection should succeed");
 
         assert_eq!(
@@ -1980,13 +1979,12 @@ mod tests {
             .set_session_observation_cursor_at_counts_for_test(None, 4, 5);
 
         let handle = context.web_contents_handle_for_target("TID-bg").unwrap();
-        let completed = context
-            .start_select_web_contents(handle, &Default::default())
+        context
+            .browser_context
+            .activate_web_contents(handle)
             .unwrap()
             .wait()
-            .await;
-        context
-            .finish_select_web_contents(completed)
+            .await
             .expect("target selection should not fail");
 
         assert_eq!(context.active_target_id(), Some("TID-bg"));

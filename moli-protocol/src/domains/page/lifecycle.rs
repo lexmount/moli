@@ -196,10 +196,7 @@ pub(crate) fn emit_bound_renderer_document_lifecycle_background_events(
                 RendererDocumentLifecycleMilestone::DomContentLoaded,
             ) => {
                 for session_id in &session_ids {
-                    let event_owner = session_id
-                        .as_deref()
-                        .map(CommandOwnerScope::for_session)
-                        .unwrap_or_else(|| owner.clone());
+                    let event_owner = owner.for_target_event_session(conn, session_id.as_deref());
                     if crate::domains::dom::dom_agent_enabled_for_owner(conn, &event_owner) {
                         emit_cdp_page_background_automation_event(
                             out,
@@ -228,10 +225,7 @@ pub(crate) fn emit_bound_renderer_document_lifecycle_background_events(
                 RendererDocumentLifecycleMilestone::Load,
             ) => {
                 for session_id in &session_ids {
-                    let event_owner = session_id
-                        .as_deref()
-                        .map(CommandOwnerScope::for_session)
-                        .unwrap_or_else(|| owner.clone());
+                    let event_owner = owner.for_target_event_session(conn, session_id.as_deref());
                     let lifecycle_enabled =
                         page_lifecycle_events_enabled_for_owner(conn, &event_owner);
                     emit_renderer_navigation_load_background_events(
@@ -257,10 +251,7 @@ pub(crate) fn emit_bound_renderer_document_lifecycle_background_events(
                         (url, security_origin, secure_context_type)
                     });
                 for session_id in &session_ids {
-                    let event_owner = session_id
-                        .as_deref()
-                        .map(CommandOwnerScope::for_session)
-                        .unwrap_or_else(|| owner.clone());
+                    let event_owner = owner.for_target_event_session(conn, session_id.as_deref());
                     if let Some((url, security_origin, secure_context_type)) =
                         frame_identity.as_ref()
                     {

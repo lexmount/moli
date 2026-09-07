@@ -158,9 +158,7 @@ pub(in crate::domains) fn inspector_issue_prepared_outputs(
     // rediscovering the issue from a later Page snapshot.
     for event_session_id in conn.page_event_session_ids_for_owner(owner) {
         let event_session_id = event_session_id.as_deref();
-        let event_owner = event_session_id
-            .map(CommandOwnerScope::for_session)
-            .unwrap_or_else(|| owner.clone());
+        let event_owner = owner.for_target_event_session(conn, event_session_id);
         let Some(cursor) = conn
             .target_page_session_state_for_owner(&event_owner)
             .and_then(|state| state.audits.pending_cursor(&storage))
@@ -252,10 +250,7 @@ fn push_runtime_observable_tail_prepared_outputs(
             .unwrap_or_default(),
     };
     for attachment in attachments {
-        let event_session_id = attachment.session_id();
-        let event_owner = event_session_id
-            .map(CommandOwnerScope::for_session)
-            .unwrap_or_else(|| owner.clone());
+        let event_owner = CommandOwnerScope::for_page_attachment(&attachment);
         if !conn
             .target_runtime_session_state_for_owner(&event_owner)
             .is_some_and(|state| state.runtime_frontend_enabled)

@@ -159,6 +159,7 @@ impl CdpFrontendControlState {
                 true
             }
             CdpFrontendControlRequest::TargetDestroyed { target_id } => {
+                scheduler.retire_bidi_target_event_sources(&target_id);
                 frontend_router.unregister_frontends_for_target(&target_id);
                 true
             }
@@ -221,7 +222,7 @@ impl CdpFrontendControlState {
     }
 }
 
-fn send_cookie_checkpoint(
+pub(super) fn send_cookie_checkpoint(
     scheduler: &mut CdpScheduler,
     owner_lifecycle: Option<&CdpOwnerActorLifecycle>,
 ) {

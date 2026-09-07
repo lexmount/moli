@@ -303,6 +303,7 @@ impl JsContextHost {
                     task_loader.request_client(),
                     Some(&document_character_set),
                     None,
+                    task_loader.task_runner(),
                 )
                 .await;
             let _ = completion_tx.send_child_classic_script(ChildClassicScriptLoadCompletion {
@@ -716,6 +717,7 @@ impl JsContextHost {
                     task_loader.request_client(),
                     Some(&document_character_set),
                     None,
+                    task_loader.task_runner(),
                 )
                 .await;
             let _ = completion_tx.send_child_classic_script(ChildClassicScriptLoadCompletion {

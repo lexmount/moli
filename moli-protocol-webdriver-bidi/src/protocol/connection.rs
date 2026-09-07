@@ -855,14 +855,6 @@ impl BidiConnectionState {
             .record_runtime_context_closed(context);
     }
 
-    pub fn record_bidi_runtime_events_opened(&mut self) {
-        self.event_source_ownership.record_runtime_global_opened();
-    }
-
-    pub fn record_bidi_runtime_events_closed(&mut self) {
-        self.event_source_ownership.record_runtime_global_closed();
-    }
-
     pub fn record_bidi_network_event_source_opened(&mut self, context: &str) {
         self.event_source_ownership
             .record_network_context_opened(context);
@@ -916,13 +908,8 @@ impl BidiConnectionState {
             .any(|event| is_bidi_runtime_source_event_name(event))
             && let Some(scope) = self.new_runtime_hook_scope_for_subscription(&requested_scope)
         {
-            let is_global = matches!(scope, BidiEventSourceHookScope::Global);
             plan.set_runtime_scope(scope);
-            if is_global {
-                plan.enable_runtime_events();
-            } else {
-                plan.record_runtime_context_ownership();
-            }
+            plan.record_runtime_context_ownership();
         }
         if events.iter().any(|event| is_bidi_network_event_name(event))
             && let Some(scope) = self.new_network_hook_scope_for_subscription(&requested_scope)
@@ -968,16 +955,6 @@ impl BidiConnectionState {
             .collect::<BTreeSet<_>>();
         if !runtime_contexts.is_empty() {
             plan.set_runtime_disable_scope(BidiEventSourceHookScope::Contexts(runtime_contexts));
-        }
-        if self.event_source_ownership.runtime_global_opened()
-            && !self.has_any_runtime_source_subscription()
-            && !removed_log_subscriptions.iter().any(|subscription| {
-                subscription.events.contains("log.entryAdded")
-                    && subscription.contexts.is_empty()
-                    && subscription.user_contexts.is_empty()
-            })
-        {
-            plan.disable_runtime_events();
         }
         let network_contexts = self
             .event_source_ownership
@@ -1038,9 +1015,6 @@ impl BidiConnectionState {
         let runtime_contexts = self.event_source_ownership.opened_runtime_contexts();
         if !runtime_contexts.is_empty() {
             plan.set_runtime_disable_scope(BidiEventSourceHookScope::Contexts(runtime_contexts));
-        }
-        if self.event_source_ownership.runtime_global_opened() {
-            plan.disable_runtime_events();
         }
         let network_contexts = self.event_source_ownership.opened_network_contexts();
         if !network_contexts.is_empty() {
@@ -1265,9 +1239,7 @@ impl BidiConnectionState {
     }
 
     fn new_global_runtime_hook_scope(&self) -> Option<BidiEventSourceHookScope> {
-        if self.event_source_ownership.runtime_global_opened()
-            || self.has_global_runtime_source_subscription()
-        {
+        if self.has_global_runtime_source_subscription() {
             return None;
         }
         let known_contexts = self.known_top_level_contexts();
@@ -1336,15 +1308,6 @@ impl BidiConnectionState {
                     .events
                     .iter()
                     .any(|event| is_bidi_runtime_source_event_name(event))
-        })
-    }
-
-    fn has_any_runtime_source_subscription(&self) -> bool {
-        self.subscriptions.iter().any(|subscription| {
-            subscription
-                .events
-                .iter()
-                .any(|event| is_bidi_runtime_source_event_name(event))
         })
     }
 

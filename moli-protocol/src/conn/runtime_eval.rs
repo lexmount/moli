@@ -1469,10 +1469,10 @@ impl CdpConnection {
         )
     }
 
-    pub(crate) fn next_internal_runtime_command_id(&mut self) -> u64 {
-        let id = self.next_internal_runtime_command_id;
-        self.next_internal_runtime_command_id = self
-            .next_internal_runtime_command_id
+    pub fn next_internal_devtools_command_id(&mut self) -> u64 {
+        let id = self.next_internal_devtools_command_id;
+        self.next_internal_devtools_command_id = self
+            .next_internal_devtools_command_id
             .checked_add(1)
             .expect("internal Runtime command id space exhausted");
         id
@@ -1481,7 +1481,7 @@ impl CdpConnection {
     pub(crate) fn next_bidi_channel_object_group(&mut self) -> String {
         format!(
             "{BIDI_CHANNEL_OBJECT_GROUP_PREFIX}{}",
-            self.next_internal_runtime_command_id()
+            self.next_internal_devtools_command_id()
         )
     }
 
@@ -1886,6 +1886,111 @@ impl CdpConnection {
         }
         self.target_devtools_session_state_for_session(session_id)
             .is_some_and(DevToolsSessionState::has_pending_inspector_awaits)
+    }
+
+    /// Drain the removed projection directly. Resolving a session through the
+    /// current Browser would either fail or select a different surviving page.
+    pub(crate) fn retire_browser_context_pending_calls(
+        context: &mut crate::conn::BrowserContext,
+        out: &mut Vec<BackgroundProtocolEvent>,
+    ) {
+        const REASON: &str = "Render process gone.";
+        let mut claimed = Vec::new();
+        for target in context.page_targets.iter_mut() {
+            Self::retire_page_pending_calls(&context.id, target, out, REASON);
+        }
+        for target in context.shared_worker_targets.values_mut().chain(
+            context
+                .dedicated_worker_targets
+                .values_mut()
+                .map(|target| &mut target.inner),
+        ) {
+            for session in target.session_ids() {
+                Self::fail_pending_inspector_awaits_from_shared_worker_target_session_background_events_into(
+                    out, &mut claimed, target, &session, REASON,
+                );
+            }
+        }
+        for target in context.service_worker_targets.values_mut() {
+            Self::fail_pending_inspector_awaits_from_service_worker_target_state_background_events_into(
+                out, &mut claimed, target, REASON,
+            );
+        }
+        out.extend(claimed);
+    }
+
+    pub(crate) fn retire_page_pending_calls(
+        context_id: &str,
+        target: &mut crate::conn::PageAgentHost,
+        out: &mut Vec<BackgroundProtocolEvent>,
+        reason: &'static str,
+    ) {
+        // The Browser already canceled the physical interception. Consume the
+        // retained command metadata without resolving a current Page/permit.
+        let (requests, auth, responses, _, _, _) = target.fetch_owner.drain_pending_requests();
+        for navigation in requests
+            .into_iter()
+            .map(|pending| pending.navigation)
+            .chain(auth.into_iter().map(|pending| pending.navigation))
+            .chain(responses.into_iter().map(|pending| pending.navigation))
+        {
+            if let Some(id) = navigation.navigate_id {
+                out.extend(
+                    crate::domains::command_output::CommandOutputPlan::error(-32000, reason)
+                        .into_background_events(Some(id), navigation.owner.session_id()),
+                );
+            }
+        }
+        let primary_owner =
+            CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+                browser_context_id: context_id.to_owned(),
+                target_id: target.target_id().to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            });
+        let sessions = std::iter::once((
+            target.session_id().map(str::to_owned),
+            moli_page_types::DevToolsSessionKey::Primary,
+        ))
+        .chain(
+            target
+                .devtools_sessions
+                .attached_session_ids()
+                .map(|session| {
+                    (
+                        Some(session.to_owned()),
+                        moli_page_types::DevToolsSessionKey::Attached(session.to_owned()),
+                    )
+                }),
+        )
+        .collect::<Vec<_>>();
+        let mut claimed = Vec::new();
+        for (session_id, key) in sessions {
+            let state = target.devtools_sessions.ensure_session(&key);
+            for (id, entry) in state.drain_pending_inspector_awaits() {
+                if entry.bidi_channel_listener().is_some() {
+                    continue;
+                }
+                let owner = entry
+                    .session_id()
+                    .map(CommandOwnerScope::for_session)
+                    .unwrap_or_else(|| primary_owner.clone());
+                push_drained_pending_inspector_await_error(
+                    out,
+                    &mut claimed,
+                    id,
+                    &owner,
+                    &entry,
+                    reason,
+                );
+            }
+            push_terminated_renderer_call_error_background_events(
+                out,
+                state.terminate_all_renderer_calls(reason),
+                session_id.as_deref(),
+                reason,
+            );
+        }
+        out.extend(claimed);
     }
 
     pub(crate) fn fail_pending_inspector_awaits_from_shared_worker_target_session_background_events_into(
@@ -5639,7 +5744,7 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         object_group: &str,
     ) {
-        let command_id = self.next_internal_runtime_command_id();
+        let command_id = self.next_internal_devtools_command_id();
         let raw_json = json!({
             "id": command_id,
             "method": "Runtime.releaseObjectGroup",
@@ -5776,7 +5881,7 @@ impl CdpConnection {
             .await;
             return;
         }
-        let command_id = self.next_internal_runtime_command_id();
+        let command_id = self.next_internal_devtools_command_id();
         let raw_json = bidi_channel_listener_call_function_json(command_id, listener);
         let descriptor = match RendererCommandDescriptor::from_synthesized_payload(raw_json) {
             Ok(descriptor) => descriptor,
