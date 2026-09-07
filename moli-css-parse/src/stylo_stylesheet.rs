@@ -234,7 +234,7 @@ fn declaration_block_css_text(block: &PropertyDeclarationBlock) -> String {
     css_text.trim_end().to_owned()
 }
 
-fn with_descriptor_declaration_context<R>(
+pub(crate) fn with_descriptor_declaration_context<R>(
     rule_type: CssRuleType,
     f: impl FnOnce(&ParserContext) -> Option<R>,
 ) -> Option<R> {

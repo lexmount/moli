@@ -271,6 +271,7 @@ fn font_face_attribute_setter_callback<'s>(
         value
     };
     set_font_face_slot_value(scope, args.this(), descriptor.slot, value.into());
+    super::loading::sync_owners(scope, args.this());
     rv.set_undefined();
 }
 
@@ -305,26 +306,19 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
         size_adjust,
     ] = descriptors;
     let this = args.this();
-    let (source, status, loaded) = if invalid_descriptors {
-        let source = match parsed.source {
-            FontFaceConstructorSource::Css(source) => source,
-            FontFaceConstructorSource::Binary(_) => String::new(),
-        };
-        let loaded = super::query::make_rejected_dom_exception_promise(
-            scope,
-            "SyntaxError",
-            "Invalid FontFace descriptor.",
-        );
-        (source, "error", Some(loaded))
-    } else {
-        match parsed.source {
-            FontFaceConstructorSource::Css(source) => {
-                let loaded = resolved_promise(scope, this.into());
-                (source, "loaded", loaded)
-            }
-            FontFaceConstructorSource::Binary(value) => {
-                // Retain the native buffer during union conversion. Descriptor
-                // getters may mutate or detach it before the operation copies it.
+    let (source, terminal) = match parsed.source {
+        FontFaceConstructorSource::Css(source) => {
+            let terminal = moli_css_parse::parse_font_face_sources(&source)
+                .is_none()
+                .then_some(Err(("SyntaxError", "Invalid FontFace source.")));
+            (source, terminal)
+        }
+        FontFaceConstructorSource::Binary(value) => {
+            // Descriptor getters may mutate or detach the retained buffer.
+            // Invalid descriptors reject before copying the binary source.
+            let terminal = if invalid_descriptors {
+                None
+            } else {
                 let bytes = match webidl::convert::<webidl::BufferSource>(
                     scope,
                     value,
@@ -336,23 +330,14 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
                         return;
                     }
                 };
-                if moli_layout::validate_web_font_bytes(&bytes).is_ok() {
-                    let backing = v8::ArrayBuffer::new_backing_store_from_vec(bytes).make_shared();
-                    let data = v8::ArrayBuffer::with_backing_store(scope, &backing);
-                    set_private_value(scope, this, "__moliFontFaceData", data.into());
-                    let loaded = resolved_promise(scope, this.into());
-                    (String::new(), "loaded", loaded)
-                } else {
-                    let loaded = super::query::make_rejected_dom_exception_promise(
-                        scope,
-                        "SyntaxError",
-                        "Invalid font data in ArrayBuffer.",
-                    );
-                    (String::new(), "error", Some(loaded))
-                }
-            }
+                Some(moli_layout::FontFaceData::from_bytes(&bytes)
+                    .map_err(|_| ("SyntaxError", "Invalid font data in ArrayBuffer.")))
+            };
+            (String::new(), terminal)
         }
     };
+    let resolver = v8::PromiseResolver::new(scope).expect("FontFace loaded resolver");
+    let loaded = Some(resolver.get_promise(scope));
     FontFaceObjectDeclaration::new(
         parsed.family,
         source,
@@ -368,11 +353,21 @@ pub(in crate::context_bootstrap) fn font_face_constructor_callback<'s>(
         descent_override,
         line_gap_override,
         size_adjust,
-        status,
+        "unloaded",
         loaded,
     )
     .initialize(scope, this)
     .expect("FontFace declaration should initialize object");
+    super::loading::initialize_resolver(scope, this, resolver);
+    if invalid_descriptors {
+        super::loading::settle_font(
+            scope,
+            this,
+            Err(("SyntaxError", "Invalid FontFace descriptor.")),
+        );
+    } else if let Some(terminal) = terminal {
+        super::loading::settle_font(scope, this, terminal);
+    }
     rv.set(this.into());
 }
 
@@ -416,13 +411,7 @@ pub(in crate::context_bootstrap) fn font_face_load_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let this = args.this();
-    super::events::notify_font_face_set_owners_of_load(scope, this);
-    if let Some(loaded) = font_face_slot_value(scope, this, FONT_FACE_LOADED_SLOT) {
-        rv.set(loaded);
-        return;
-    }
-    match resolved_promise(scope, this.into()) {
+    match super::loading::load_font(scope, args.this()) {
         Some(promise) => rv.set(v8::Local::<v8::Value>::from(promise)),
         None => rv.set(v8::undefined(scope).into()),
     }

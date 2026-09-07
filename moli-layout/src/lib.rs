@@ -102,7 +102,7 @@ pub use style::{
     LayoutPosition, ResolvedLayoutStyle,
 };
 pub use text::{
-    DocumentLayoutServices, SystemFontPolicy, WebFontFace, WebFontRegistration,
+    DocumentLayoutServices, FontFaceData, SystemFontPolicy, WebFontFace, WebFontRegistration,
     WebFontRegistrationError, WebFontRegistrationOutcome, WebFontStyle, WebFontUnicodeRange,
     validate_web_font_bytes,
 };
