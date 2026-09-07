@@ -170,7 +170,7 @@ fn put_image_data_translucent_over_opaque_is_a_raw_overwrite_not_a_blend() {
     // A translucent source pixel (alpha ~= 128) for putImageData. Spec: the
     // destination is replaced exactly with the premultiplied source value --
     // it MUST NOT source-over composite over the red background.
-    let mut img_pixels = vec![0u8; 1 * 1 * 4];
+    let mut img_pixels = vec![0u8; 4];
     img_pixels[0] = 0; // blue, alpha 128 (straight)
     img_pixels[1] = 0;
     img_pixels[2] = 255;
