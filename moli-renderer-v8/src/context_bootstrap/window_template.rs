@@ -374,6 +374,7 @@ pub(crate) fn install_window_own_template_bindings<'s>(
         v8::IndexedPropertyHandlerConfiguration::new()
             .getter(window_indexed_property_getter)
             .query(window_indexed_property_query)
+            .deleter(window_indexed_property_deleter)
             .enumerator(window_indexed_property_enumerator)
             .descriptor(window_indexed_property_descriptor),
     );
