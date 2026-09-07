@@ -370,6 +370,130 @@ async fn websocket_bidi_existing_classic_session_shares_classic_runtime_context(
 }
 
 #[tokio::test]
+async fn classic_delete_session_retires_browser_work_after_bidi_detach() {
+    assert_classic_delete_session_retires_browser_work(true).await;
+}
+
+#[tokio::test]
+async fn classic_delete_session_retires_browser_work_with_bidi_attached() {
+    assert_classic_delete_session_retires_browser_work(false).await;
+}
+
+async fn assert_classic_delete_session_retires_browser_work(detach_bidi: bool) {
+    let (addr, protocol_server) = spawn_test_protocol_server().await;
+    let session_id = classic_new_session_on_server(addr).await;
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let pending_url = format!("http://{}/pending", listener.local_addr().unwrap());
+    let pending_request = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.unwrap();
+        let mut request = Vec::new();
+        let mut byte = [0];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream.read_exact(&mut byte).await.unwrap();
+            request.push(byte[0]);
+        }
+        assert!(request.starts_with(b"GET /pending HTTP/1.1\r\n"));
+        stream
+    });
+    let started = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session_id}/execute/sync"),
+        json!({
+            "script": "globalThis.sessionMarker = 41; void fetch(arguments[0]); return sessionMarker;",
+            "args": [pending_url]
+        }),
+    )
+    .await;
+    assert_eq!(started["value"], json!(41));
+    let mut pending_stream = timeout(Duration::from_secs(2), pending_request)
+        .await
+        .expect("session fetch must reach the fixture before teardown")
+        .unwrap();
+
+    let mut bidi = connect_classic_session_bidi_socket(addr, &session_id).await;
+    let tree = send_bidi_command(&mut bidi, 1, "browsingContext.getTree", json!({})).await;
+    let context_id = tree["result"]["contexts"][0]["context"]
+        .as_str()
+        .expect("Classic-owned BiDi context")
+        .to_owned();
+    if detach_bidi {
+        bidi.close(None).await.unwrap();
+    }
+    let marker = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &format!("/session/{session_id}/execute/sync"),
+        json!({"script": "return sessionMarker;", "args": []}),
+    )
+    .await;
+    assert_eq!(
+        marker["value"],
+        json!(41),
+        "BiDi detach must not close the page"
+    );
+
+    let (mut peer, _) = connect_async(format!("ws://{addr}/devtools/page/moli-default"))
+        .await
+        .unwrap();
+    send_cdp_command(
+        &mut peer,
+        1,
+        "Runtime.evaluate",
+        None,
+        json!({"expression": "globalThis.peerMarker = 73"}),
+    )
+    .await;
+    let mut byte = [0];
+    assert!(matches!(
+        pending_stream.try_read(&mut byte),
+        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock
+    ));
+    let deleted = classic_request_on_server_with_body(
+        addr,
+        "DELETE",
+        &format!("/session/{session_id}"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(deleted, json!({"value": null}));
+    assert_eq!(
+        timeout(Duration::from_secs(2), pending_stream.read(&mut byte))
+            .await
+            .expect("DeleteSession must cancel the Browser-owned fetch before replying")
+            .unwrap(),
+        0
+    );
+    if !detach_bidi {
+        let closed = timeout(Duration::from_secs(2), bidi.next())
+            .await
+            .expect("DeleteSession must close its attached BiDi socket");
+        assert!(matches!(
+            closed,
+            Some(Ok(WsMessage::Close(_))) | None | Some(Err(_))
+        ));
+    }
+    let peer_marker = send_cdp_command(
+        &mut peer,
+        2,
+        "Runtime.evaluate",
+        None,
+        json!({"expression": "peerMarker"}),
+    )
+    .await;
+    assert_eq!(
+        peer_marker
+            .iter()
+            .find(|message| message["id"] == json!(2))
+            .unwrap()["result"]["result"]["value"],
+        json!(73),
+        "deleting Classic context {context_id} must not shut down the shared BrowserService"
+    );
+    peer.close(None).await.unwrap();
+    protocol_server.abort();
+}
+
+#[tokio::test]
 async fn websocket_bidi_navigation_stales_classic_element_from_replaced_page() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let session_id = classic_new_session_on_server(cdp_addr).await;

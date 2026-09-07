@@ -947,13 +947,12 @@ enum ClassicSessionRuntimeRequestOutcome {
     Continue,
     AttachedBidi(Box<ClassicAttachedBidiSocket>),
     DetachBidi,
-    Shutdown(CookieProfileCommit),
+    Shutdown(oneshot::Sender<CookieProfileCommit>),
 }
 
 async fn handle_classic_session_runtime_request(
     scheduler: &mut CdpScheduler,
     receivers: &mut CdpSchedulerEventReceivers,
-    initial_cookie_snapshot: &[StoredCookie],
     request: ClassicSessionRuntimeRequest,
     mut attached_bidi: Option<&mut ClassicAttachedBidiSocket>,
 ) -> ClassicSessionRuntimeRequestOutcome {
@@ -1194,12 +1193,7 @@ async fn handle_classic_session_runtime_request(
             ClassicSessionRuntimeRequestOutcome::Continue
         }
         ClassicSessionRuntimeRequest::Shutdown { response_tx } => {
-            let cookie_commit = CookieProfileCommit::from_optional_profile_backed_snapshot(
-                initial_cookie_snapshot.to_vec(),
-                scheduler.snapshot_profile_backed_cookies(),
-            );
-            let _ = response_tx.send(cookie_commit.clone());
-            ClassicSessionRuntimeRequestOutcome::Shutdown(cookie_commit)
+            ClassicSessionRuntimeRequestOutcome::Shutdown(response_tx)
         }
     }
 }
@@ -1356,13 +1350,13 @@ async fn classic_session_runtime_loop(
     );
     let mut attached_bidi: Option<ClassicAttachedBidiSocket> = None;
     let mut adapter_scheduler = ProtocolAdapterScheduler::default();
+    let mut shutdown_response = None;
     loop {
         if receivers.renderer_publication_rx.is_closed() {
             break;
         }
         if attached_bidi.is_some() {
             let mut detach_bidi = false;
-            let mut shutdown_cookies = None;
             {
                 let attached = attached_bidi.as_mut().expect("attached BiDi socket");
                 let page_javascript_blocked = scheduler.has_pending_javascript_dialog();
@@ -1466,7 +1460,6 @@ async fn classic_session_runtime_loop(
                         match handle_classic_session_runtime_request(
                             &mut scheduler,
                             &mut receivers,
-                            &initial_cookie_snapshot,
                             request,
                             Some(attached),
                         )
@@ -1481,18 +1474,15 @@ async fn classic_session_runtime_loop(
                             ClassicSessionRuntimeRequestOutcome::DetachBidi => {
                                 detach_bidi = true;
                             }
-                            ClassicSessionRuntimeRequestOutcome::Shutdown(cookies) => {
-                                attached
-                                    .release_session(&mut scheduler, &mut receivers)
-                                    .await;
-                                shutdown_cookies = Some(cookies);
+                            ClassicSessionRuntimeRequestOutcome::Shutdown(response_tx) => {
+                                shutdown_response = Some(response_tx);
                             }
                         }
                     }
                 }
             }
-            if let Some(cookies) = shutdown_cookies {
-                return cookies;
+            if shutdown_response.is_some() {
+                break;
             }
             if detach_bidi && let Some(mut attached) = attached_bidi.take() {
                 attached
@@ -1549,7 +1539,6 @@ async fn classic_session_runtime_loop(
                     match handle_classic_session_runtime_request(
                         &mut scheduler,
                         &mut receivers,
-                        &initial_cookie_snapshot,
                         request,
                         None,
                     )
@@ -1560,7 +1549,10 @@ async fn classic_session_runtime_loop(
                             attached_bidi = Some(*attached);
                         }
                         ClassicSessionRuntimeRequestOutcome::DetachBidi => {}
-                        ClassicSessionRuntimeRequestOutcome::Shutdown(cookies) => return cookies,
+                        ClassicSessionRuntimeRequestOutcome::Shutdown(response_tx) => {
+                            shutdown_response = Some(response_tx);
+                            break;
+                        }
                     }
                     if attached_bidi.is_none() {
                         classic_session_ingest_ready_renderer_publications(
@@ -1574,10 +1566,24 @@ async fn classic_session_runtime_loop(
             }
         }
     }
-    CookieProfileCommit::from_optional_profile_backed_snapshot(
+    if let Some(mut attached) = attached_bidi {
+        attached
+            .release_session(&mut scheduler, &mut receivers)
+            .await;
+    }
+    let cookie_commit = CookieProfileCommit::from_optional_profile_backed_snapshot(
         initial_cookie_snapshot,
         scheduler.snapshot_profile_backed_cookies(),
-    )
+    );
+    if let Some(response_tx) = shutdown_response {
+        if let Err(error) = scheduler.end_webdriver_session() {
+            tracing::warn!(%error, "failed to retire ended Classic session contexts");
+        }
+        // DeleteSession must not acknowledge completion while the Browser
+        // still owns this session's pages, workers, or network requests.
+        let _ = response_tx.send(cookie_commit.clone());
+    }
+    cookie_commit
 }
 
 async fn resolve_classic_frame_id_for_index(

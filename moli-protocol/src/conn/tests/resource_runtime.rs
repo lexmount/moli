@@ -13,6 +13,48 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 
+#[test]
+fn session_end_removes_only_its_contexts_but_connection_drop_does_not() {
+    let service = moli_core::browser::BrowserService::start().unwrap();
+    let browser = service.handle();
+    let mut conn = CdpConnection::new(
+        browser.clone(),
+        CdpInitialStoragePartition::memory(),
+        Default::default(),
+    );
+    let mut ending_contexts = Vec::new();
+    for id in ["BID-ending-active", "BID-ending-inactive"] {
+        let context = conn.new_browser_context(id.to_owned());
+        ending_contexts.push(context.browser_context_id());
+        conn.insert_browser_context(context);
+    }
+    let mut peer = CdpConnection::new(
+        browser.clone(),
+        CdpInitialStoragePartition::memory(),
+        Default::default(),
+    );
+    let context = peer.new_browser_context("BID-surviving-peer".to_owned());
+    let peer_context = context.browser_context_id();
+    peer.insert_browser_context(context);
+    drop(peer);
+    assert!(browser.contains_context(peer_context));
+    assert!(
+        ending_contexts
+            .iter()
+            .all(|id| browser.contains_context(*id))
+    );
+
+    conn.end_webdriver_session().unwrap();
+
+    assert!(
+        ending_contexts
+            .iter()
+            .all(|id| !browser.contains_context(*id))
+    );
+    assert!(browser.contains_context(peer_context));
+    service.shutdown();
+}
+
 #[tokio::test]
 async fn resource_defaults_without_a_page_do_not_materialize_a_fallback_engine() {
     let mut conn = crate::test_support::connection_with_config(
