@@ -1,0 +1,443 @@
+name: Export Moli community interactions
+
+concurrency:
+  group: moli-community-export
+  cancel-in-progress: true
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - ".github/workflows/export-moli-stargazers.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    if: github.head_ref == 'codex/export-moli-stargazers'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      GH_EXPORT_TOKEN: ${{ secrets.GH_TOKEN }}
+
+    steps:
+      - name: Verify token is configured
+        shell: bash
+        run: |
+          if [ -z "$GH_EXPORT_TOKEN" ]; then
+            echo "::error::Repository secret GH_TOKEN is not configured or unavailable."
+            exit 1
+          fi
+
+      - name: Export public community interactions
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import csv
+          import json
+          import math
+          import os
+          import time
+          import urllib.error
+          import urllib.parse
+          import urllib.request
+          from collections import defaultdict
+          from datetime import datetime, timezone
+
+          token = os.environ["GH_EXPORT_TOKEN"]
+          repo = "lexmount/moli"
+          api = f"https://api.github.com/repos/{repo}"
+          headers = {
+              "Accept": "application/vnd.github+json",
+              "Authorization": f"Bearer {token}",
+              "X-GitHub-Api-Version": "2022-11-28",
+              "User-Agent": "lexmount-moli-community-export",
+          }
+
+          def request_json(url, data=None, attempts=6, extra_headers=None):
+              request_headers = dict(headers)
+              if extra_headers:
+                  request_headers.update(extra_headers)
+              request = urllib.request.Request(
+                  url,
+                  data=data,
+                  method="POST" if data is not None else "GET",
+                  headers=request_headers,
+              )
+              for attempt in range(attempts):
+                  try:
+                      with urllib.request.urlopen(request, timeout=60) as response:
+                          return json.load(response)
+                  except urllib.error.HTTPError as exc:
+                      if exc.code not in (403, 429) and not 500 <= exc.code < 600:
+                          body = exc.read().decode("utf-8", errors="replace")
+                          raise RuntimeError(f"GitHub API error {exc.code}: {body}")
+                      if attempt == attempts - 1:
+                          raise
+                      retry_after = exc.headers.get("Retry-After")
+                      reset_at = exc.headers.get("X-RateLimit-Reset")
+                      if retry_after:
+                          delay = min(float(retry_after), 120)
+                      elif reset_at:
+                          delay = max(2, min(int(reset_at) - int(time.time()) + 2, 120))
+                      else:
+                          delay = min(2 ** attempt, 60)
+                      print(f"GitHub API returned {exc.code}; retrying in {delay:.0f}s")
+                      time.sleep(delay)
+                  except (urllib.error.URLError, TimeoutError):
+                      if attempt == attempts - 1:
+                          raise
+                      time.sleep(min(2 ** attempt, 30))
+              raise RuntimeError(f"Request failed after retries: {url}")
+
+          def paginate(url):
+              rows = []
+              page = 1
+              separator = "&" if "?" in url else "?"
+              while True:
+                  batch = request_json(f"{url}{separator}per_page=100&page={page}")
+                  if not batch:
+                      break
+                  rows.extend(batch)
+                  print(f"Fetched {url}: page {page}, {len(batch)} records")
+                  if len(batch) < 100:
+                      break
+                  page += 1
+              return rows
+
+          repository = request_json(api)
+          print("Repository:", repository.get("full_name"), repository.get("visibility"))
+
+          forks = paginate(f"{api}/forks?sort=newest")
+          contributors = paginate(f"{api}/contributors?anon=1")
+          all_issues = paginate(f"{api}/issues?state=all&sort=created&direction=desc")
+          issue_comments = paginate(f"{api}/issues/comments?sort=created&direction=desc")
+          issues = [item for item in all_issues if "pull_request" not in item]
+          pulls = [item for item in all_issues if "pull_request" in item]
+
+          pr_reviews = []
+          pr_review_comments = []
+
+          def login_of(value):
+              if not value:
+                  return None
+              if isinstance(value, dict):
+                  return value.get("login")
+              return None
+
+          logins = set()
+          for fork in forks:
+              login = login_of(fork.get("owner"))
+              if login:
+                  logins.add(login)
+          for contributor in contributors:
+              login = contributor.get("login")
+              if login:
+                  logins.add(login)
+          for item in issues + pulls:
+              login = login_of(item.get("user"))
+              if login:
+                  logins.add(login)
+          for item in issue_comments + pr_reviews + pr_review_comments:
+              login = login_of(item.get("user"))
+              if login:
+                  logins.add(login)
+
+          profile_fields = """
+            login name url company location bio websiteUrl twitterUsername
+            repositories { totalCount }
+            followers { totalCount }
+            following { totalCount }
+            isHireable createdAt updatedAt
+          """
+          profiles = {}
+          ordered_logins = sorted(logins, key=str.lower)
+          for start in range(0, len(ordered_logins), 50):
+              chunk = ordered_logins[start:start + 50]
+              aliases = [
+                  f'u{index}: user(login: {json.dumps(login)}) {{ {profile_fields} }}'
+                  for index, login in enumerate(chunk)
+              ]
+              payload = json.dumps({"query": "query { " + " ".join(aliases) + " }"}).encode()
+              result = request_json(
+                  "https://api.github.com/graphql",
+                  data=payload,
+                  extra_headers={"Content-Type": "application/json"},
+              )
+              data = result.get("data") or {}
+              for index, login in enumerate(chunk):
+                  profiles[login] = data.get(f"u{index}") or {}
+              print(f"Enriched {min(start + len(chunk), len(ordered_logins))}/{len(ordered_logins)} profiles")
+
+          people = defaultdict(lambda: {
+              "fork_count": 0,
+              "fork_latest_at": None,
+              "contributions": 0,
+              "issue_opened": 0,
+              "issue_commented": 0,
+              "pr_opened": 0,
+              "pr_merged": 0,
+              "pr_reviewed": 0,
+              "pr_review_commented": 0,
+              "last_interaction_at": None,
+              "interaction_types": set(),
+              "source_urls": set(),
+          })
+
+          def touch(login, kind, when=None, url=None):
+              if not login:
+                  return
+              row = people[login]
+              row["interaction_types"].add(kind)
+              if url:
+                  row["source_urls"].add(url)
+              if when and (not row["last_interaction_at"] or when > row["last_interaction_at"]):
+                  row["last_interaction_at"] = when
+
+          for fork in forks:
+              login = login_of(fork.get("owner"))
+              if not login:
+                  continue
+              row = people[login]
+              row["fork_count"] += 1
+              when = fork.get("created_at") or fork.get("updated_at")
+              if when and (not row["fork_latest_at"] or when > row["fork_latest_at"]):
+                  row["fork_latest_at"] = when
+              touch(login, "Fork", when, fork.get("html_url"))
+
+          for contributor in contributors:
+              login = contributor.get("login")
+              if not login:
+                  continue
+              people[login]["contributions"] += int(contributor.get("contributions") or 0)
+              touch(login, "Contributor", None, f"https://github.com/{repo}/commits?author={urllib.parse.quote(login)}")
+
+          for issue in issues:
+              login = login_of(issue.get("user"))
+              if not login:
+                  continue
+              people[login]["issue_opened"] += 1
+              touch(login, "Issue author", issue.get("created_at"), issue.get("html_url"))
+
+          for comment in issue_comments:
+              login = login_of(comment.get("user"))
+              issue_url = comment.get("issue_url") or ""
+              number = issue_url.rstrip("/").split("/")[-1] if issue_url else ""
+              url = f"https://github.com/{repo}/issues/{number}#issuecomment-{comment.get('id')}" if number else None
+              if not login:
+                  continue
+              people[login]["issue_commented"] += 1
+              touch(login, "Issue/PR comment", comment.get("created_at"), url)
+
+          for pull in pulls:
+              login = login_of(pull.get("user"))
+              if not login:
+                  continue
+              people[login]["pr_opened"] += 1
+              if pull.get("pull_request", {}).get("merged_at"):
+                  people[login]["pr_merged"] += 1
+              touch(login, "PR author", pull.get("created_at"), pull.get("html_url"))
+
+          for review in pr_reviews:
+              login = login_of(review.get("user"))
+              if not login:
+                  continue
+              people[login]["pr_reviewed"] += 1
+              number = review.get("_pull_number")
+              touch(login, "PR reviewer", review.get("submitted_at"), f"https://github.com/{repo}/pull/{number}")
+
+          for comment in pr_review_comments:
+              login = login_of(comment.get("user"))
+              if not login:
+                  continue
+              people[login]["pr_review_commented"] += 1
+              number = comment.get("_pull_number")
+              url = comment.get("html_url") or f"https://github.com/{repo}/pull/{number}"
+              touch(login, "PR review comment", comment.get("created_at"), url)
+
+          def interaction_score(row):
+              score = 0
+              if row["fork_count"]:
+                  score += 1
+              contributions = row["contributions"]
+              if contributions >= 10:
+                  score += 5
+              elif contributions >= 3:
+                  score += 4
+              elif contributions >= 1:
+                  score += 3
+              score += min(6, row["issue_opened"] * 3)
+              score += min(4, row["issue_commented"] * 2)
+              score += min(7, row["pr_opened"] * 4 + row["pr_merged"] * 2)
+              score += min(4, row["pr_reviewed"] * 3)
+              score += min(3, row["pr_review_commented"] * 2)
+              return score
+
+          output_rows = []
+          for login, interaction in people.items():
+              profile = profiles.get(login) or {}
+              score = interaction_score(interaction)
+              if score >= 7:
+                  tier = "A"
+              elif score >= 3:
+                  tier = "B"
+              else:
+                  tier = "C"
+              if interaction["issue_opened"] or interaction["issue_commented"]:
+                  angle = "Issue follow-up / technical interview"
+              elif interaction["pr_opened"] or interaction["pr_reviewed"] or interaction["contributions"]:
+                  angle = "Contributor interview / ecosystem collaboration"
+              elif interaction["fork_count"]:
+                  angle = "Fork use-case validation"
+              else:
+                  angle = "Manual review"
+              types = sorted(interaction["interaction_types"])
+              urls = sorted(interaction["source_urls"])
+              total = (
+                  interaction["fork_count"] + interaction["issue_opened"] +
+                  interaction["issue_commented"] + interaction["pr_opened"] +
+                  interaction["pr_reviewed"] + interaction["pr_review_commented"]
+              )
+              output_rows.append({
+                  "login": login,
+                  "name": profile.get("name"),
+                  "profile_url": profile.get("url") or f"https://github.com/{login}",
+                  "company": profile.get("company"),
+                  "location": profile.get("location"),
+                  "bio": profile.get("bio"),
+                  "blog": profile.get("websiteUrl"),
+                  "twitter_username": profile.get("twitterUsername"),
+                  "followers": (profile.get("followers") or {}).get("totalCount"),
+                  "public_repos": (profile.get("repositories") or {}).get("totalCount"),
+                  "fork_count": interaction["fork_count"],
+                  "fork_latest_at": interaction["fork_latest_at"],
+                  "contributions": interaction["contributions"],
+                  "issue_opened": interaction["issue_opened"],
+                  "issue_commented": interaction["issue_commented"],
+                  "pr_opened": interaction["pr_opened"],
+                  "pr_merged": interaction["pr_merged"],
+                  "pr_reviewed": interaction["pr_reviewed"],
+                  "pr_review_commented": interaction["pr_review_commented"],
+                  "total_interactions": total,
+                  "last_interaction_at": interaction["last_interaction_at"],
+                  "interaction_types": "; ".join(types),
+                  "interaction_score": score,
+                  "interaction_tier": tier,
+                  "recommended_angle": angle,
+                  "source_urls": "; ".join(urls),
+                  "is_bot": login.lower().endswith("[bot]") or login.lower().endswith("-bot"),
+              })
+
+          output_rows.sort(
+              key=lambda row: (
+                  row["is_bot"],
+                  -row["interaction_score"],
+                  -(row["followers"] or 0),
+                  row["login"].lower(),
+              )
+          )
+
+          fields = [
+              "login", "name", "profile_url", "company", "location", "bio", "blog",
+              "twitter_username", "followers", "public_repos", "fork_count",
+              "fork_latest_at", "contributions", "issue_opened", "issue_commented",
+              "pr_opened", "pr_merged", "pr_reviewed", "pr_review_commented",
+              "total_interactions", "last_interaction_at", "interaction_types",
+              "interaction_score", "interaction_tier", "recommended_angle",
+              "source_urls", "is_bot",
+          ]
+          with open("moli-community-interactions.csv", "w", newline="", encoding="utf-8-sig") as handle:
+              writer = csv.DictWriter(handle, fieldnames=fields)
+              writer.writeheader()
+              writer.writerows(output_rows)
+
+          def slim_user(user):
+              if not user:
+                  return None
+              return {"login": user.get("login"), "type": user.get("type"), "html_url": user.get("html_url")}
+
+          raw = {
+              "forks": [
+                  {
+                      "owner": slim_user(item.get("owner")),
+                      "full_name": item.get("full_name"),
+                      "html_url": item.get("html_url"),
+                      "created_at": item.get("created_at"),
+                      "updated_at": item.get("updated_at"),
+                      "pushed_at": item.get("pushed_at"),
+                  } for item in forks
+              ],
+              "contributors": [
+                  {
+                      "login": item.get("login"),
+                      "type": item.get("type"),
+                      "contributions": item.get("contributions"),
+                      "html_url": item.get("html_url"),
+                  } for item in contributors
+              ],
+              "issues": [
+                  {
+                      "number": item.get("number"),
+                      "title": item.get("title"),
+                      "state": item.get("state"),
+                      "user": slim_user(item.get("user")),
+                      "comments": item.get("comments"),
+                      "created_at": item.get("created_at"),
+                      "updated_at": item.get("updated_at"),
+                      "html_url": item.get("html_url"),
+                  } for item in issues
+              ],
+              "pull_requests": [
+                  {
+                      "number": item.get("number"),
+                      "title": item.get("title"),
+                      "state": item.get("state"),
+                      "user": slim_user(item.get("user")),
+                      "comments": item.get("comments"),
+                      "created_at": item.get("created_at"),
+                      "updated_at": item.get("updated_at"),
+                      "html_url": item.get("html_url"),
+                  } for item in pulls
+              ],
+          }
+          summary = {
+              "repository": repo,
+              "exported_at": datetime.now(timezone.utc).isoformat(),
+              "forks": len(forks),
+              "contributors": len(contributors),
+              "issues": len(issues),
+              "issue_comments": len(issue_comments),
+              "pull_requests": len(pulls),
+              "pull_request_reviews": len(pr_reviews),
+              "pull_request_review_comments": len(pr_review_comments),
+              "unique_people": len(output_rows),
+              "tier_counts": {
+                  tier: sum(row["interaction_tier"] == tier for row in output_rows)
+                  for tier in ("A", "B", "C")
+              },
+              "method_note": "Public GitHub activity only. Bots are marked. Internal/team accounts should be excluded during manual outreach review.",
+          }
+          with open("moli-community-interactions.json", "w", encoding="utf-8") as handle:
+              json.dump({"summary": summary, "people": output_rows, "raw": raw}, handle, ensure_ascii=False, indent=2)
+          with open("moli-community-summary.json", "w", encoding="utf-8") as handle:
+              json.dump(summary, handle, ensure_ascii=False, indent=2)
+
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as handle:
+              handle.write("## Moli community interaction export\n\n")
+              for key, value in summary.items():
+                  if key not in ("tier_counts", "method_note"):
+                      handle.write(f"- {key}: {value}\n")
+              handle.write(f"- tiers: {summary['tier_counts']}\n")
+          PY
+
+      - name: Upload export
+        uses: actions/upload-artifact@v4
+        with:
+          name: moli-community-interactions
+          path: |
+            moli-community-interactions.csv
+            moli-community-interactions.json
+            moli-community-summary.json
+          if-no-files-found: error
+          retention-days: 7
