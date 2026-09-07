@@ -4,6 +4,7 @@ mod base64;
 mod date_locale;
 mod dialogs;
 mod navigator;
+mod obsolete;
 mod performance;
 mod service_worker;
 mod structured_clone;
@@ -47,6 +48,7 @@ pub(super) use navigator::{
     storage_bucket_persist_callback, storage_bucket_persisted_callback,
     storage_bucket_set_expires_callback,
 };
+pub(super) use obsolete::window_obsolete_noop_callback;
 pub(super) use performance::performance_now_callback;
 pub(crate) use service_worker::{
     ServiceWorkerClientMessageCallbackDispatchEffect, ServiceWorkerClientMessageDispatchEffect,

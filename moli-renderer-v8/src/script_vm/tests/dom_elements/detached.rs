@@ -124,6 +124,69 @@ fn detached_document_write_preserves_existing_noscript_text() {
 }
 
 #[test]
+fn obsolete_document_and_window_event_methods_are_branded_noops() {
+    let mut vm = new_storage_test_vm("https://obsolete-noop-methods.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const html = document.implementation.createHTMLDocument("");
+  const xml = document.implementation.createDocument("urn:test", "root");
+  const marker = document.createElement("p");
+  const markerParent = document.body || document.documentElement || document;
+  markerParent.append(marker);
+  const error = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (exception) {
+      return exception.name;
+    }
+  };
+  const shape = (prototype, name) => {
+    const descriptor = Object.getOwnPropertyDescriptor(prototype, name);
+    return [
+      typeof descriptor?.value,
+      descriptor?.value?.name,
+      descriptor?.value?.length,
+      descriptor?.writable,
+      descriptor?.enumerable,
+      descriptor?.configurable
+    ].join(":");
+  };
+
+  const values = [];
+  for (const name of ["clear", "captureEvents", "releaseEvents"]) {
+    values.push(shape(Document.prototype, name));
+    values.push(String(Document.prototype[name].call(document)));
+    values.push(String(Document.prototype[name].call(html, { ignored: true })));
+    values.push(String(Document.prototype[name].call(xml)));
+    values.push(error(() => Document.prototype[name].call({})));
+  }
+  for (const name of ["captureEvents", "releaseEvents"]) {
+    values.push(shape(window, name));
+    values.push(String(window[name].call(window, { ignored: true })));
+    values.push(error(() => window[name].call({})));
+    values.push(error(() => window[name].call(document)));
+    const forged = document.createElement("div");
+    Object.setPrototypeOf(forged, Window.prototype);
+    values.push(error(() => window[name].call(forged)));
+  }
+  values.push(String(marker.isConnected), String(markerParent.contains(marker)));
+  return values.join("|");
+})()
+"#,
+        )
+        .expect("obsolete Document and Window no-op methods should evaluate");
+
+    assert_eq!(
+        result,
+        "function:clear:0:true:true:true|undefined|undefined|undefined|TypeError|function:captureEvents:0:true:true:true|undefined|undefined|undefined|TypeError|function:releaseEvents:0:true:true:true|undefined|undefined|undefined|TypeError|function:captureEvents:0:true:true:true|undefined|TypeError|TypeError|TypeError|function:releaseEvents:0:true:true:true|undefined|TypeError|TypeError|TypeError|true|true"
+    );
+}
+
+#[test]
 fn detached_domparser_query_and_element_collections_use_native_handles() {
     let mut vm = new_storage_test_vm("https://detached-domparser-query.test/");
 
