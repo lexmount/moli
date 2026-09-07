@@ -74,8 +74,16 @@ fn dialog_projection_for_test(
 ) -> crate::conn::TargetJavaScriptDialog {
     // Subscription-only fixture. Actual modal work is installed through the
     // Browser bridge in dialog tests, never stored in this session projection.
+    let document = moli_core::browser::DocumentHandle::new(
+        moli_core::browser::WebContentsHandle::new(
+            moli_core::browser::BrowserContextId::allocate(),
+            moli_core::browser::WebContentsId::allocate(),
+        ),
+        page_owner.document_id(),
+    );
     crate::conn::TargetJavaScriptDialog::new(
         frame_id.to_owned(),
+        document,
         crate::conn::JavaScriptDialogKey::new(
             page_owner.document_id(),
             &renderer_dialog_for_test(Some(frame_id), "alert", "pending", "", None),

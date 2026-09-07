@@ -53,6 +53,7 @@ pub(crate) use javascript_dialog::{
 };
 pub(in crate::conn) use network_request_policy::NetworkRequestPolicy;
 pub(in crate::conn) use network_request_policy::merge_extra_header_layers;
+pub(crate) use page_surface::LIVE_DEVICE_METRICS_CLEAR_SCRIPT;
 pub(in crate::conn) use page_surface::PageSurface;
 pub(crate) use session_storage::SessionStorageNamespace;
 pub(in crate::conn) use window::{Window, WindowOpener};

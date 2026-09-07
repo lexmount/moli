@@ -55,6 +55,7 @@ impl BrowserContext {
             permissions,
             &self.global_extra_headers,
             self.global_network_conditions,
+            self.global_geolocation_override.as_ref(),
         );
         let load = self
             .physical
@@ -85,6 +86,7 @@ impl BrowserContext {
             permissions,
             &self.global_extra_headers,
             self.global_network_conditions,
+            self.global_geolocation_override.as_ref(),
         );
         let load = self
             .physical

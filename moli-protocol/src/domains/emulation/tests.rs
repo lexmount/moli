@@ -434,9 +434,9 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
         !super::pending_emulation_page_configuration_will_be_replayed(
             &ctx.conn,
             &target,
-            &super::PendingEmulationPageOperation::Policy(
-                crate::conn::PagePolicyUpdateKind::SetTimezoneOverride
-            ),
+            &super::PendingEmulationPageOperation::DocumentPolicy {
+                replay_on_replacement: true,
+            },
             super::EmulationPageCommandSource::Browser(Some(dispatched_page)),
         ),
         "changing foreground selection must not make an error from the same Page look stale"
@@ -454,9 +454,9 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
         super::pending_emulation_page_configuration_will_be_replayed(
             &ctx.conn,
             &target,
-            &super::PendingEmulationPageOperation::Policy(
-                crate::conn::PagePolicyUpdateKind::SetTimezoneOverride
-            ),
+            &super::PendingEmulationPageOperation::DocumentPolicy {
+                replay_on_replacement: true,
+            },
             super::EmulationPageCommandSource::Browser(Some(dispatched_page)),
         ),
         "only replacement of the exact target attachment may retire its renderer error"
@@ -465,9 +465,9 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
         !super::pending_emulation_page_configuration_will_be_replayed(
             &ctx.conn,
             &target,
-            &super::PendingEmulationPageOperation::Policy(
-                crate::conn::PagePolicyUpdateKind::SetIdleOverride
-            ),
+            &super::PendingEmulationPageOperation::DocumentPolicy {
+                replay_on_replacement: false,
+            },
             super::EmulationPageCommandSource::Browser(Some(dispatched_page)),
         ),
         "frame-host idle state must not use the target-policy replay path",
@@ -481,11 +481,11 @@ async fn pending_emulation_completion_follows_the_exact_target_across_activation
             completed: super::CompletedEmulationRendererDispatch::Pages(vec![
                 super::CompletedEmulationPageCommand {
                     target,
-                    operation: super::PendingEmulationPageOperation::Policy(
-                        crate::conn::PagePolicyUpdateKind::SetTimezoneOverride,
-                    ),
+                    operation: super::PendingEmulationPageOperation::RebuildResourceRuntime,
                     source: super::EmulationPageCommandSource::Browser(Some(dispatched_page)),
-                    completed: Err("renderer attachment retired".to_owned()),
+                    completed: super::CompletedEmulationPageWork::Renderer(Err(
+                        "renderer attachment retired".to_owned(),
+                    )),
                 },
             ]),
         },
@@ -581,9 +581,9 @@ async fn inspection_reattach_does_not_retire_outgoing_browser_policy_commands() 
         !super::pending_emulation_page_configuration_will_be_replayed(
             &ctx.conn,
             &target,
-            &super::PendingEmulationPageOperation::Policy(
-                crate::conn::PagePolicyUpdateKind::SetTimezoneOverride
-            ),
+            &super::PendingEmulationPageOperation::DocumentPolicy {
+                replay_on_replacement: true,
+            },
             page_source,
         ),
         "an inspection reattach must not hide a Browser error on the still-current Page"
@@ -3423,11 +3423,9 @@ async fn generated_surface_refresh_does_not_freeze_match_media_override() {
     .await;
     ctx.expect_result(187, json!({}), Some("SID-1"));
 
+    let handle = ctx.conn.browser_web_contents_for_target("TID-1").unwrap();
     ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .apply_surface_overrides_to_loaded_page_async()
+        .apply_browser_page_surface_async(handle, true)
         .await
         .expect("surface refresh should succeed");
 

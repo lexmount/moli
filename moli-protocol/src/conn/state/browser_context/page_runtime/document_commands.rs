@@ -245,19 +245,28 @@ impl BrowserContext {
     }
 
     pub(crate) fn document_handle_for_target(&self, target_id: &str) -> Option<DocumentHandle> {
-        let contents_id = self.page_targets.get(target_id)?.web_contents_id();
-        let document_id = self
+        self.document_handle_for_web_contents(self.web_contents_handle_for_target(target_id)?)
+            .ok()
+            .flatten()
+    }
+
+    pub(crate) fn document_handle_for_web_contents(
+        &self,
+        handle: WebContentsHandle,
+    ) -> Result<Option<DocumentHandle>, String> {
+        let document = self
             .physical
-            .web_contents
-            .get(&contents_id)?
+            .web_contents(handle)?
             .main_frame
             .current_document
-            .as_ref()?
-            .id;
-        Some(DocumentHandle::new(
-            WebContentsHandle::new(self.physical.id, contents_id),
-            document_id,
-        ))
+            .as_ref()
+            .map(|document| document.id);
+        #[cfg(test)]
+        let document = document.or_else(|| {
+            let target = self.page_targets.get_for_web_contents(handle.id())?;
+            self.target_document_id(target.target_id())
+        });
+        Ok(document.map(|document| DocumentHandle::new(handle, document)))
     }
 
     pub(crate) fn start_set_document_content(
@@ -531,13 +540,14 @@ impl BrowserContext {
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_set_javascript_dialog_handler_enabled_for_target(
+    pub(crate) fn start_document_javascript_dialog_handler_enabled(
         &self,
-        target_id: &str,
+        document: DocumentHandle,
         enabled: bool,
     ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+        self.physical
+            .document(document)?
+            .page
             .start_set_javascript_dialog_handler_enabled(enabled)
             .map_err(|error| error.to_string())
     }

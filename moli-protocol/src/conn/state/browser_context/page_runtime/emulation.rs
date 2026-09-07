@@ -1,11 +1,39 @@
 use super::BrowserContext;
+use crate::conn::state::LIVE_DEVICE_METRICS_CLEAR_SCRIPT;
+use moli_core::browser::DocumentHandle;
 use moli_core::page::{
     CompletedPageCommand, EmulatedIdleOverride, EmulatedMediaOverrides, PendingPageCommand,
     ViewportSurface,
 };
 
-pub(crate) enum PagePolicyUpdateKind {
+pub(crate) enum DocumentPolicyUpdate {
+    NetworkRequestPolicy {
+        extra_headers: Vec<(String, String)>,
+        bypass_service_worker: bool,
+        cache_disabled: bool,
+        blocked_url_patterns: Vec<String>,
+    },
+    ExtraHttpHeaders(Vec<(String, String)>),
+    BlockedUrls(Vec<String>),
+    BypassServiceWorker(bool),
+    LocaleOverride(Option<String>),
+    NetworkOffline(bool),
+    CpuThrottlingRate(f64),
+    IdleOverride(Option<EmulatedIdleOverride>),
+    NavigatorOverrides(moli_page_types::NavigatorOverrides),
+    TimezoneOverride(Option<String>),
+    EmulatedMedia(EmulatedMediaOverrides),
+    ViewportSurface(Option<ViewportSurface>),
+    ScriptExecutionDisabled(bool),
+    ClearDeviceMetricsSurface,
+}
+
+#[derive(Clone, Copy)]
+enum DocumentPolicyUpdateKind {
+    SetNetworkRequestPolicy,
     SetExtraHttpHeaders,
+    SetBlockedUrls,
+    SetBypassServiceWorker,
     SetLocaleOverride,
     SetNetworkConditions,
     SetCpuThrottlingRate,
@@ -14,194 +42,335 @@ pub(crate) enum PagePolicyUpdateKind {
     SetTimezoneOverride,
     SetEmulatedMedia,
     SetViewportSurface,
+    SetScriptExecutionDisabled,
+    PageSurfaceOverride,
+}
+
+pub(crate) struct PendingDocumentPolicyUpdate {
+    document: DocumentHandle,
+    kind: DocumentPolicyUpdateKind,
+    pending: PendingPageCommand,
+}
+
+pub(crate) struct CompletedDocumentPolicyUpdate {
+    document: DocumentHandle,
+    kind: DocumentPolicyUpdateKind,
+    completed: Result<CompletedPageCommand, String>,
+}
+
+pub(crate) struct PendingDocumentPolicyBatch {
+    context: moli_core::browser::BrowserContextId,
+    document: DocumentHandle,
+    admission_error: Option<String>,
+    updates: Vec<PendingDocumentPolicyUpdate>,
+}
+
+pub(crate) struct CompletedDocumentPolicyBatch {
+    context: moli_core::browser::BrowserContextId,
+    document: DocumentHandle,
+    admission_error: Option<String>,
+    updates: Vec<CompletedDocumentPolicyUpdate>,
+}
+
+pub(crate) struct DocumentRuntimePolicyReconciliation {
+    pub(crate) script_execution_disabled: bool,
+    pub(crate) emulated_media: EmulatedMediaOverrides,
+    pub(crate) cpu_throttling_rate: f64,
+    pub(crate) network_offline: bool,
+    pub(crate) viewport_surface: Option<ViewportSurface>,
+    pub(crate) clear_device_metrics_surface: bool,
+}
+
+impl PendingDocumentPolicyUpdate {
+    pub(crate) async fn wait(self) -> CompletedDocumentPolicyUpdate {
+        CompletedDocumentPolicyUpdate {
+            document: self.document,
+            kind: self.kind,
+            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+        }
+    }
+}
+
+impl CompletedDocumentPolicyUpdate {
+    pub(crate) fn document(&self) -> DocumentHandle {
+        self.document
+    }
+}
+
+impl PendingDocumentPolicyBatch {
+    pub(crate) async fn wait(self) -> CompletedDocumentPolicyBatch {
+        let mut updates = Vec::with_capacity(self.updates.len());
+        for update in self.updates {
+            updates.push(update.wait().await);
+        }
+        CompletedDocumentPolicyBatch {
+            context: self.context,
+            document: self.document,
+            admission_error: self.admission_error,
+            updates,
+        }
+    }
+}
+
+impl CompletedDocumentPolicyBatch {
+    pub(crate) fn context(&self) -> moli_core::browser::BrowserContextId {
+        self.context
+    }
+
+    pub(crate) fn document(&self) -> DocumentHandle {
+        self.document
+    }
 }
 
 impl BrowserContext {
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) async fn reconcile_target_runtime_policy_async(
+    pub(crate) fn start_document_runtime_policy_reconciliation(
         &mut self,
-        target_id: &str,
-        script_execution_disabled: bool,
-        media: &EmulatedMediaOverrides,
-        cpu_throttling_rate: f64,
-        network_offline: bool,
-        viewport: Option<ViewportSurface>,
-        viewport_script: &str,
-    ) -> anyhow::Result<()> {
-        let Some(page) = self.loaded_page_for_target_mut(target_id) else {
-            return Ok(());
+        document: DocumentHandle,
+        policy: DocumentRuntimePolicyReconciliation,
+    ) -> PendingDocumentPolicyBatch {
+        let mut updates = vec![
+            DocumentPolicyUpdate::ScriptExecutionDisabled(policy.script_execution_disabled),
+            DocumentPolicyUpdate::EmulatedMedia(policy.emulated_media),
+            DocumentPolicyUpdate::CpuThrottlingRate(policy.cpu_throttling_rate),
+            DocumentPolicyUpdate::NetworkOffline(policy.network_offline),
+            DocumentPolicyUpdate::ViewportSurface(policy.viewport_surface),
+        ];
+        if policy.clear_device_metrics_surface {
+            updates.push(DocumentPolicyUpdate::ClearDeviceMetricsSurface);
+        }
+        self.start_document_policy_batch(document, updates)
+    }
+
+    pub(crate) fn start_document_policy_batch(
+        &mut self,
+        document: DocumentHandle,
+        updates: Vec<DocumentPolicyUpdate>,
+    ) -> PendingDocumentPolicyBatch {
+        let mut pending = Vec::with_capacity(updates.len());
+        let mut admission_error = None;
+        for update in updates {
+            match self.start_document_policy_update(document, update) {
+                Ok(update) => pending.push(update),
+                Err(error) => {
+                    admission_error.get_or_insert(error);
+                }
+            }
+        }
+        PendingDocumentPolicyBatch {
+            context: document.web_contents().context(),
+            document,
+            admission_error,
+            updates: pending,
+        }
+    }
+
+    pub(crate) fn start_document_policy_batch_with_surface(
+        &mut self,
+        document: DocumentHandle,
+        updates: Vec<DocumentPolicyUpdate>,
+        foreground: bool,
+    ) -> PendingDocumentPolicyBatch {
+        let mut batch = self.start_document_policy_batch(document, updates);
+        match self.start_document_page_surface_update(document, foreground) {
+            Ok(surface) => {
+                batch.updates.extend(surface.updates);
+                if let Some(error) = surface.admission_error {
+                    batch.admission_error.get_or_insert(error);
+                }
+            }
+            Err(error) => {
+                batch.admission_error.get_or_insert(error);
+            }
+        }
+        batch
+    }
+
+    pub(crate) fn start_document_policy_update(
+        &mut self,
+        document: DocumentHandle,
+        update: DocumentPolicyUpdate,
+    ) -> Result<PendingDocumentPolicyUpdate, String> {
+        let page = &mut self.physical.document_mut(document)?.page;
+        let (kind, pending) = match update {
+            DocumentPolicyUpdate::NetworkRequestPolicy {
+                extra_headers,
+                bypass_service_worker,
+                cache_disabled,
+                blocked_url_patterns,
+            } => (
+                DocumentPolicyUpdateKind::SetNetworkRequestPolicy,
+                page.start_set_network_request_policy(
+                    &extra_headers,
+                    bypass_service_worker,
+                    cache_disabled,
+                    &blocked_url_patterns,
+                ),
+            ),
+            DocumentPolicyUpdate::ExtraHttpHeaders(headers) => (
+                DocumentPolicyUpdateKind::SetExtraHttpHeaders,
+                page.start_set_extra_http_headers(&headers),
+            ),
+            DocumentPolicyUpdate::BlockedUrls(patterns) => (
+                DocumentPolicyUpdateKind::SetBlockedUrls,
+                page.start_set_blocked_url_patterns(&patterns),
+            ),
+            DocumentPolicyUpdate::BypassServiceWorker(bypass) => (
+                DocumentPolicyUpdateKind::SetBypassServiceWorker,
+                page.start_set_bypass_service_worker(bypass),
+            ),
+            DocumentPolicyUpdate::LocaleOverride(locale) => (
+                DocumentPolicyUpdateKind::SetLocaleOverride,
+                page.start_set_locale_override(locale.as_deref()),
+            ),
+            DocumentPolicyUpdate::NetworkOffline(offline) => (
+                DocumentPolicyUpdateKind::SetNetworkConditions,
+                page.start_set_network_offline(offline),
+            ),
+            DocumentPolicyUpdate::CpuThrottlingRate(rate) => (
+                DocumentPolicyUpdateKind::SetCpuThrottlingRate,
+                page.start_set_cpu_throttling_rate(rate),
+            ),
+            DocumentPolicyUpdate::IdleOverride(override_) => (
+                DocumentPolicyUpdateKind::SetIdleOverride,
+                page.start_set_idle_override(override_),
+            ),
+            DocumentPolicyUpdate::NavigatorOverrides(overrides) => (
+                DocumentPolicyUpdateKind::SetNavigatorOverrides,
+                page.start_set_navigator_overrides(&overrides),
+            ),
+            DocumentPolicyUpdate::TimezoneOverride(timezone) => (
+                DocumentPolicyUpdateKind::SetTimezoneOverride,
+                page.start_set_timezone_override(timezone.as_deref()),
+            ),
+            DocumentPolicyUpdate::EmulatedMedia(overrides) => (
+                DocumentPolicyUpdateKind::SetEmulatedMedia,
+                page.start_set_emulated_media(&overrides),
+            ),
+            DocumentPolicyUpdate::ViewportSurface(surface) => (
+                DocumentPolicyUpdateKind::SetViewportSurface,
+                page.start_set_viewport_surface(surface),
+            ),
+            DocumentPolicyUpdate::ScriptExecutionDisabled(disabled) => (
+                DocumentPolicyUpdateKind::SetScriptExecutionDisabled,
+                page.start_set_script_execution_disabled(disabled),
+            ),
+            DocumentPolicyUpdate::ClearDeviceMetricsSurface => (
+                DocumentPolicyUpdateKind::PageSurfaceOverride,
+                page.start_page_surface_override_script(LIVE_DEVICE_METRICS_CLEAR_SCRIPT),
+            ),
         };
-        let mut first_error = None;
-        let mut record = |surface: &str, result: anyhow::Result<()>| {
-            if let Err(error) = result {
-                first_error.get_or_insert_with(|| anyhow::anyhow!("{surface}: {error}"));
+        Ok(PendingDocumentPolicyUpdate {
+            document,
+            kind,
+            pending: pending.map_err(|error| error.to_string())?,
+        })
+    }
+
+    pub(crate) fn finish_document_policy_update(
+        &mut self,
+        completed: CompletedDocumentPolicyUpdate,
+    ) -> Result<(), String> {
+        let completion = completed.completed?;
+        let page = match self.physical.document_mut(completed.document) {
+            Ok(document) => &mut document.page,
+            Err(error) => {
+                completion
+                    .into_unit_page_command_turn()
+                    .map(drop)
+                    .map_err(|unexpected| {
+                        format!(
+                            "retired Document policy command returned an unexpected reply: {unexpected}"
+                        )
+                    })?;
+                return Err(error);
             }
         };
-        // Each effective policy receives an attempt, even after an earlier admission failure.
-        record(
-            "script execution",
-            page.set_script_execution_disabled_async(script_execution_disabled)
-                .await,
-        );
-        record("emulated media", page.set_emulated_media_async(media).await);
-        record(
-            "CPU throttling",
-            page.set_cpu_throttling_rate_async(cpu_throttling_rate)
-                .await,
-        );
-        record(
-            "network conditions",
-            page.set_network_offline_async(network_offline).await,
-        );
-        record(
-            "device metrics viewport",
-            page.set_viewport_surface_async(viewport).await,
-        );
-        record(
-            "device metrics script",
-            page.run_page_surface_override_script_async(viewport_script)
-                .await,
-        );
+        match completed.kind {
+            DocumentPolicyUpdateKind::SetNetworkRequestPolicy => {
+                page.finish_set_network_request_policy(completion)
+            }
+            DocumentPolicyUpdateKind::SetExtraHttpHeaders => {
+                page.finish_set_extra_http_headers(completion)
+            }
+            DocumentPolicyUpdateKind::SetBlockedUrls => {
+                page.finish_set_blocked_url_patterns(completion)
+            }
+            DocumentPolicyUpdateKind::SetBypassServiceWorker => {
+                page.finish_set_bypass_service_worker(completion)
+            }
+            DocumentPolicyUpdateKind::SetLocaleOverride => {
+                page.finish_set_locale_override(completion)
+            }
+            DocumentPolicyUpdateKind::SetNetworkConditions => {
+                page.finish_set_network_offline(completion)
+            }
+            DocumentPolicyUpdateKind::SetCpuThrottlingRate => {
+                page.finish_set_cpu_throttling_rate(completion)
+            }
+            DocumentPolicyUpdateKind::SetIdleOverride => page.finish_set_idle_override(completion),
+            DocumentPolicyUpdateKind::SetNavigatorOverrides => {
+                page.finish_set_navigator_overrides(completion)
+            }
+            DocumentPolicyUpdateKind::SetTimezoneOverride => {
+                page.finish_set_timezone_override(completion)
+            }
+            DocumentPolicyUpdateKind::SetEmulatedMedia => {
+                page.finish_set_emulated_media(completion)
+            }
+            DocumentPolicyUpdateKind::SetViewportSurface => {
+                page.finish_set_viewport_surface(completion)
+            }
+            DocumentPolicyUpdateKind::SetScriptExecutionDisabled => {
+                page.finish_set_script_execution_disabled(completion)
+            }
+            DocumentPolicyUpdateKind::PageSurfaceOverride => {
+                page.finish_page_surface_override_script(completion)
+            }
+        }
+        .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn finish_document_policy_batch(
+        &mut self,
+        completed: CompletedDocumentPolicyBatch,
+    ) -> Result<(), String> {
+        let mut first_error = completed.admission_error;
+        for update in completed.updates {
+            if let Err(error) = self.finish_document_policy_update(update) {
+                first_error.get_or_insert(error);
+            }
+        }
         first_error.map_or(Ok(()), Err)
     }
 
-    pub(crate) fn start_set_cpu_throttling_rate_for_target(
-        &self,
-        target_id: &str,
-        rate: f64,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_set_cpu_throttling_rate(rate)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn start_set_navigator_overrides_for_target(
-        &self,
-        target_id: &str,
-        overrides: &moli_page_types::NavigatorOverrides,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_set_navigator_overrides(overrides)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn start_set_idle_override_for_target(
+    pub(crate) fn start_document_page_surface_update(
         &mut self,
-        target_id: &str,
-        idle_override: Option<EmulatedIdleOverride>,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_set_idle_override(idle_override)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn start_set_timezone_override_for_target(
-        &self,
-        target_id: &str,
-        timezone: Option<&str>,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_set_timezone_override(timezone)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn start_set_locale_override_for_target(
-        &self,
-        target_id: &str,
-        locale: Option<&str>,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_set_locale_override(locale)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn start_set_emulated_media_for_target(
-        &self,
-        target_id: &str,
-        overrides: &EmulatedMediaOverrides,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_set_emulated_media(overrides)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn start_set_viewport_surface_for_target(
-        &self,
-        target_id: &str,
-        viewport_surface: Option<ViewportSurface>,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_set_viewport_surface(viewport_surface)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn start_set_extra_http_headers_for_target(
-        &self,
-        target_id: &str,
-        headers: &[(String, String)],
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_set_extra_http_headers(headers)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn finish_target_page_policy_update(
-        &mut self,
-        target_id: &str,
-        kind: PagePolicyUpdateKind,
-        completion: CompletedPageCommand,
-    ) -> Result<(), String> {
-        if let Some(page) = self.loaded_page_for_target_mut(target_id)
-            && completion.is_from_page(page)
-        {
-            return match kind {
-                PagePolicyUpdateKind::SetExtraHttpHeaders => {
-                    page.finish_set_extra_http_headers(completion)
-                }
-                PagePolicyUpdateKind::SetLocaleOverride => {
-                    page.finish_set_locale_override(completion)
-                }
-                PagePolicyUpdateKind::SetNetworkConditions => {
-                    page.finish_set_network_offline(completion)
-                }
-                PagePolicyUpdateKind::SetCpuThrottlingRate => {
-                    page.finish_set_cpu_throttling_rate(completion)
-                }
-                PagePolicyUpdateKind::SetIdleOverride => page.finish_set_idle_override(completion),
-                PagePolicyUpdateKind::SetNavigatorOverrides => {
-                    page.finish_set_navigator_overrides(completion)
-                }
-                PagePolicyUpdateKind::SetTimezoneOverride => {
-                    page.finish_set_timezone_override(completion)
-                }
-                PagePolicyUpdateKind::SetEmulatedMedia => {
-                    page.finish_set_emulated_media(completion)
-                }
-                PagePolicyUpdateKind::SetViewportSurface => {
-                    page.finish_set_viewport_surface(completion)
-                }
+        document: DocumentHandle,
+        foreground: bool,
+    ) -> Result<PendingDocumentPolicyBatch, String> {
+        let surface = self.page_surface_for_web_contents(document.web_contents(), foreground)?;
+        let mut batch = self.start_document_policy_batch(
+            document,
+            vec![DocumentPolicyUpdate::NavigatorOverrides(
+                surface.navigator_overrides(),
+            )],
+        );
+        let pending = self.physical.document(document).and_then(|document| {
+            document
+                .page
+                .start_page_surface_override_script(&surface.script())
+                .map_err(|error| error.to_string())
+        });
+        match pending {
+            Ok(pending) => batch.updates.push(PendingDocumentPolicyUpdate {
+                document,
+                kind: DocumentPolicyUpdateKind::PageSurfaceOverride,
+                pending,
+            }),
+            Err(error) => {
+                batch.admission_error.get_or_insert(error);
             }
-            .map_err(|error| error.to_string());
         }
-        Self::finish_unobserved_page_policy_update(completion)
-    }
-
-    pub(crate) fn finish_unobserved_page_policy_update(
-        completion: CompletedPageCommand,
-    ) -> Result<(), String> {
-        completion
-            .into_unit_page_command_turn()
-            .map(drop)
-            .map_err(|error| {
-                format!("stale Emulation command returned an unexpected reply: {error}")
-            })
+        Ok(batch)
     }
 }

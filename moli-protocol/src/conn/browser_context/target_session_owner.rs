@@ -1201,8 +1201,16 @@ impl CdpConnection {
         let closed = self
             .close_page_target_for_target_close_async(&target_id, out, reason)
             .await?;
-        let selected_target_id = if let Some(browser_context) = self.browser_context.as_mut() {
-            browser_context.select_last_background_target_async().await
+        let selected = self.browser_context.as_ref().and_then(|browser_context| {
+            let target_id = browser_context.last_selectable_background_target_id()?;
+            let handle = browser_context.web_contents_handle_for_target(&target_id)?;
+            Some((target_id, handle))
+        });
+        let selected_target_id = if let Some((target_id, handle)) = selected {
+            if let Err(error) = self.select_browser_web_contents_async(handle).await {
+                tracing::warn!(%error, "failed to update selected WebContents surface after close");
+            }
+            Some(target_id)
         } else {
             None
         };
@@ -1386,11 +1394,9 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
         state: WindowSurfaceState,
     ) -> Option<()> {
-        let owner = self.target_session_owner_mut_for_owner(owner)?;
-        owner
-            .browser_context
-            .set_target_window_surface_state(&owner.target_id, state);
-        Some(())
+        let handle = self.browser_web_contents_for_owner(owner).ok()?;
+        self.update_browser_window_surface(handle, Some(state), None, None, None, None)
+            .ok()
     }
 
     pub(crate) fn set_window_surface_geometry_for_owner(
@@ -1401,15 +1407,9 @@ impl CdpConnection {
         x: Option<i32>,
         y: Option<i32>,
     ) -> Option<()> {
-        let owner = self.target_session_owner_mut_for_owner(owner)?;
-        owner.browser_context.set_target_window_surface_geometry(
-            &owner.target_id,
-            width,
-            height,
-            x,
-            y,
-        );
-        Some(())
+        let handle = self.browser_web_contents_for_owner(owner).ok()?;
+        self.update_browser_window_surface(handle, None, width, height, x, y)
+            .ok()
     }
 
     pub(crate) fn target_owner_state_for_owner(

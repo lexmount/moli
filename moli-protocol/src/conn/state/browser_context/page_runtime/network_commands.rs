@@ -4,62 +4,6 @@ use moli_core::page::{
     RendererSyntheticResponseBody, SubresourceAuthCredentials,
 };
 use url::Url;
-#[derive(Clone, Copy)]
-pub(crate) enum NetworkPolicyUpdateKind {
-    RequestPolicy,
-    ExtraHttpHeaders,
-    BlockedUrls,
-    BypassServiceWorker,
-    NetworkOffline,
-}
-
-impl BrowserContext {
-    pub(crate) fn finish_target_network_policy_update(
-        &mut self,
-        target_id: &str,
-        finish: NetworkPolicyUpdateKind,
-        completion: CompletedPageCommand,
-    ) -> Result<(), String> {
-        if let Some(page) = self.loaded_page_for_target_mut(target_id)
-            && completion.is_from_page(page)
-        {
-            let result = match finish {
-                NetworkPolicyUpdateKind::RequestPolicy => {
-                    page.finish_set_network_request_policy(completion)
-                }
-                NetworkPolicyUpdateKind::ExtraHttpHeaders => {
-                    page.finish_set_extra_http_headers(completion)
-                }
-                NetworkPolicyUpdateKind::BlockedUrls => {
-                    page.finish_set_blocked_url_patterns(completion)
-                }
-                NetworkPolicyUpdateKind::BypassServiceWorker => {
-                    page.finish_set_bypass_service_worker(completion)
-                }
-                NetworkPolicyUpdateKind::NetworkOffline => {
-                    page.finish_set_network_offline(completion)
-                }
-            };
-            return result.map_err(|error| error.to_string());
-        }
-
-        Self::finish_unobserved_network_policy_update(completion)
-    }
-
-    pub(crate) fn finish_unobserved_network_policy_update(
-        completion: CompletedPageCommand,
-    ) -> Result<(), String> {
-        // Target/session policy was committed before renderer dispatch. If a
-        // navigation installs another attachment before this frozen unit reply is
-        // decoded, consume the old turn without applying its PageState snapshot
-        // to the replacement. Prepared-document commit configuration carries the
-        // authoritative policy into that replacement.
-        completion
-            .into_unit_page_command_turn()
-            .map(drop)
-            .map_err(|error| format!("stale Network command returned an unexpected reply: {error}"))
-    }
-}
 
 impl BrowserContext {
     pub(crate) fn start_continue_pending_subresource_fetch_for_target(

@@ -4421,7 +4421,7 @@ async fn devtools_command_applies_window_state_to_document_surface() {
         {
             let context = &conn.browser_context.as_ref().expect("browser context");
             context
-                .target_window_surface(context.active_target_id().unwrap())
+                .web_contents_window_surface(context.selected_web_contents_handle().unwrap())
                 .expect("registered WebContents")
         }
         .state
@@ -4456,7 +4456,7 @@ async fn devtools_command_applies_window_state_to_document_surface() {
         {
             let context = conn.browser_context.as_ref().expect("browser context");
             context
-                .target_window_surface(context.active_target_id().unwrap())
+                .web_contents_window_surface(context.selected_web_contents_handle().unwrap())
                 .expect("registered WebContents")
         }
         .state,
@@ -6845,6 +6845,14 @@ fn command_dispatch_completes_console_log_and_inspector_owner_commands() {
 #[test]
 fn command_dispatch_completes_browser_sync_commands() {
     let mut conn = CdpConnection::new();
+    let mut browser_context = BrowserContext::new("BID-browser-sync".to_owned());
+    browser_context.set_active_target_id("TID-browser-sync");
+    conn.install_browser_context_fixture_for_test(browser_context);
+    let window_id = conn
+        .browser_web_contents_for_target("TID-browser-sync")
+        .unwrap()
+        .id()
+        .get();
     for (id, method) in [
         (20, "Browser.getVersion"),
         (21, "Browser.getWindowForTarget"),
@@ -6853,7 +6861,7 @@ fn command_dispatch_completes_browser_sync_commands() {
     ] {
         let params = match method {
             "Browser.setWindowBounds" => json!({
-                "windowId": 1_923_710_101_i64,
+                "windowId": window_id,
                 "bounds": { "windowState": "normal", "width": 800, "height": 600 }
             }),
             "Browser.setDownloadBehavior" => json!({
@@ -6874,6 +6882,51 @@ fn command_dispatch_completes_browser_sync_commands() {
             messages[0]
         );
     }
+}
+
+#[test]
+fn browser_window_bounds_are_owned_by_exact_web_contents() {
+    let mut conn = CdpConnection::new();
+    let mut browser_context = BrowserContext::new("BID-window-owner".to_owned());
+    browser_context.set_active_target_id("TID-window-first");
+    browser_context.stage_background_target(
+        "TID-window-second".to_owned(),
+        None,
+        "about:blank".to_owned(),
+        None,
+        None,
+    );
+    conn.install_browser_context_fixture_for_test(browser_context);
+    let first = conn
+        .browser_web_contents_for_target("TID-window-first")
+        .unwrap();
+    let second = conn
+        .browser_web_contents_for_target("TID-window-second")
+        .unwrap();
+    assert_ne!(first, second);
+
+    let raw = json!({
+        "id": 221,
+        "method": "Browser.setWindowBounds",
+        "params": {
+            "windowId": second.id().get(),
+            "bounds": { "windowState": "maximized", "left": -12, "top": 34 }
+        }
+    })
+    .to_string();
+    assert_eq!(
+        complete_messages(conn.start_command_dispatch(&raw)),
+        vec![json!({ "id": 221, "result": {} })]
+    );
+
+    let first_surface = conn.browser_window_surface(first).unwrap();
+    let second_surface = conn.browser_window_surface(second).unwrap();
+    assert_eq!(first_surface.state, crate::conn::WindowSurfaceState::Normal);
+    assert_eq!(
+        second_surface.state,
+        crate::conn::WindowSurfaceState::Maximized
+    );
+    assert_eq!((second_surface.x, second_surface.y), (-12, 34));
 }
 
 #[test]

@@ -6,7 +6,7 @@ use crate::conn::state::{
         EmulationPolicy, EmulationPolicyChange, WebContents, WindowSurface, WindowSurfaceState,
     },
 };
-use moli_core::browser::WebContentsId;
+use moli_core::browser::{WebContentsHandle, WebContentsId};
 
 #[cfg(test)]
 mod tests;
@@ -114,19 +114,48 @@ impl BrowserContext {
         true
     }
 
-    pub(super) fn select_registered_page_target(&mut self, target_id: &str) -> bool {
-        let Some(id) = self
-            .page_targets
-            .get(target_id)
-            .map(PageAgentHost::web_contents_id)
-        else {
-            return false;
-        };
-        self.physical.select_web_contents(id)
+    pub(super) fn select_registered_web_contents(
+        &mut self,
+        handle: WebContentsHandle,
+    ) -> Result<(), String> {
+        self.physical.web_contents(handle)?;
+        let selected = self.physical.select_web_contents(handle.id());
+        debug_assert!(selected, "registered WebContents must be selectable");
+        Ok(())
     }
 
     pub(crate) fn selected_web_contents_id(&self) -> Option<WebContentsId> {
         self.physical.selected_web_contents_id()
+    }
+
+    pub(crate) fn selected_web_contents_handle(&self) -> Option<WebContentsHandle> {
+        Some(WebContentsHandle::new(
+            self.physical.id,
+            self.physical.selected_web_contents_id()?,
+        ))
+    }
+
+    pub(crate) fn web_contents_handle_for_target(
+        &self,
+        target_id: &str,
+    ) -> Option<WebContentsHandle> {
+        Some(WebContentsHandle::new(
+            self.physical.id,
+            self.page_targets.get(target_id)?.web_contents_id(),
+        ))
+    }
+
+    pub(crate) fn web_contents_handle_for_window_id(
+        &self,
+        window_id: u64,
+    ) -> Option<WebContentsHandle> {
+        let id = self
+            .physical
+            .web_contents
+            .keys()
+            .copied()
+            .find(|id| id.get() == window_id)?;
+        Some(WebContentsHandle::new(self.physical.id, id))
     }
 
     pub(crate) fn target_is_crashed(&self, target_id: &str) -> bool {
@@ -173,31 +202,75 @@ impl BrowserContext {
         }
     }
 
-    pub(crate) fn target_window_surface(&self, target_id: &str) -> Option<WindowSurface> {
-        Some(self.web_contents_for_target(target_id)?.window.surface)
+    pub(crate) fn web_contents_window_surface(
+        &self,
+        handle: WebContentsHandle,
+    ) -> Result<WindowSurface, String> {
+        Ok(self.physical.web_contents(handle)?.window.surface)
     }
 
-    pub(crate) fn set_target_window_surface_state(
+    pub(crate) fn update_web_contents_window_surface(
         &mut self,
-        target_id: &str,
-        state: WindowSurfaceState,
-    ) {
-        if let Some(contents) = self.web_contents_for_target_mut(target_id) {
-            contents.window.surface.state = state;
-        }
-    }
-
-    pub(crate) fn set_target_window_surface_geometry(
-        &mut self,
-        target_id: &str,
+        handle: WebContentsHandle,
+        state: Option<WindowSurfaceState>,
         width: Option<u32>,
         height: Option<u32>,
         x: Option<i32>,
         y: Option<i32>,
-    ) {
-        if let Some(contents) = self.web_contents_for_target_mut(target_id) {
-            contents.window.surface.set_geometry(width, height, x, y);
+    ) -> Result<(), String> {
+        self.physical
+            .web_contents_mut(handle)?
+            .window
+            .surface
+            .update(state, width, height, x, y);
+        Ok(())
+    }
+
+    pub(crate) fn set_web_contents_window_name(
+        &mut self,
+        handle: WebContentsHandle,
+        name: Option<String>,
+    ) -> Result<(), String> {
+        self.physical.web_contents(handle)?;
+        for contents in self.physical.web_contents.values_mut() {
+            if contents.id() == handle.id() {
+                contents.window.name = name.clone();
+            } else if name.is_some() && contents.window.name == name {
+                // Preserve the existing last-assignment-wins lookup rule.
+                contents.window.name = None;
+            }
         }
+        Ok(())
+    }
+
+    pub(crate) fn set_web_contents_opener(
+        &mut self,
+        handle: WebContentsHandle,
+        opener: Option<WebContentsHandle>,
+        can_access: bool,
+    ) -> Result<(), String> {
+        if let Some(opener) = opener {
+            self.physical.web_contents(opener)?;
+            self.physical.web_contents_mut(handle)?.window.opener =
+                Some(crate::conn::state::web_contents::WindowOpener {
+                    web_contents_id: opener.id(),
+                    can_access,
+                });
+        } else {
+            self.physical.web_contents_mut(handle)?.window.opener = None;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn set_web_contents_network_offline(
+        &mut self,
+        handle: WebContentsHandle,
+        offline: bool,
+    ) -> Result<(), String> {
+        self.physical
+            .web_contents_mut(handle)?
+            .set_network_offline(offline);
+        Ok(())
     }
 
     pub(crate) fn target_emulation_policy(&self, target_id: &str) -> Option<&EmulationPolicy> {

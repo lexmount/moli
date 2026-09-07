@@ -3057,7 +3057,12 @@ async fn incomplete_popup_rollback_clears_tab_page_sessions_and_target_graph() {
             page_target_id,
             "SID-popup-page-attached".to_owned()
         ));
-        browser_context.remember_target_window_name("popupName", page_target_id);
+        let handle = browser_context
+            .web_contents_handle_for_target(page_target_id)
+            .unwrap();
+        browser_context
+            .set_web_contents_window_name(handle, Some("popupName".into()))
+            .unwrap();
         browser_context.remember_target_popup_id(Some(42), page_target_id);
     }
     ctx.conn

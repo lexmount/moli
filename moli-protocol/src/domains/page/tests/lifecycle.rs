@@ -2997,14 +2997,11 @@ async fn close_clears_loaded_page_state_and_emits_detached_events() {
         .runtime_slot
         .set_next_subresource_fetch_request_id_for_test(5);
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
-    bc.remember_target_window_name("close-me", "TID-1");
-    // An unknown popup cannot retain an orphaned opener side record.
-    bc.remember_target_opener(
-        "TID-popup-after-close",
-        "TID-1".into(),
-        "FRAME-1".into(),
-        false,
-    );
+    let handle = bc.web_contents_handle_for_target("TID-1").unwrap();
+    bc.set_web_contents_window_name(handle, Some("close-me".into()))
+        .unwrap();
+    // An unknown popup has no WebContents capability on which opener state
+    // could be installed.
     bc.record_captured_response_body("REQ-old".into(), "body".into(), [Some("SID-1".into())]);
     bc.insert_io_stream("STREAM-old".into(), b"body".to_vec(), 0);
 

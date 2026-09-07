@@ -1,4 +1,3 @@
-mod bounds;
 mod browser_context;
 mod browser_identity;
 mod dedicated_worker_target;
@@ -69,8 +68,6 @@ pub(crate) use document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
 };
 
-pub use bounds::BrowserWindowBounds;
-
 pub(crate) use page_resource::MainDocumentResourceSnapshot;
 #[cfg(test)]
 pub(crate) use page_slot::TargetPageSlot;
@@ -116,7 +113,11 @@ pub(crate) use shared_worker_attachment::{
 pub(crate) use shared_worker_target::SharedWorkerTargetState;
 #[cfg(test)]
 pub(crate) use web_contents::JavaScriptDialogKey;
+pub(crate) use web_contents::LIVE_DEVICE_METRICS_CLEAR_SCRIPT;
+pub(in crate::conn) use web_contents::PageSurface;
 pub(crate) use web_contents::SameDocumentNavigationCommitted;
+#[cfg(test)]
+pub(in crate::conn) use web_contents::WindowOpener;
 pub(crate) use web_contents::{
     CommittedDocumentLifecycle, DocumentLifecycleEvent, DocumentNavigationDestination,
     PreparedDocumentNavigation,
@@ -128,7 +129,6 @@ pub(crate) use web_contents::{
 pub(crate) use web_contents::{
     JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogSnapshot,
 };
-pub(in crate::conn) use web_contents::{PageSurface, WindowOpener};
 
 pub use browser_context::BrowserContext;
 #[cfg(test)]
@@ -139,18 +139,20 @@ pub(crate) use browser_context::{
     CompletedCaptureDocumentScreencastFrame, CompletedCaptureDocumentSnapshot,
     CompletedChildFrameNavigation, CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
+    CompletedDocumentPolicyBatch, CompletedDocumentPolicyUpdate,
     CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
     CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
     CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
-    CompletedTopLevelSameDocumentNavigation, DocumentSnapshot, PendingAppManifestLoadPreparation,
+    CompletedTopLevelSameDocumentNavigation, DocumentPolicyUpdate,
+    DocumentRuntimePolicyReconciliation, DocumentSnapshot, PendingAppManifestLoadPreparation,
     PendingAppManifestPublication, PendingCaptureDocumentImage,
     PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
     PendingChildFrameNavigation, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
-    PendingDocumentCookieOwnerSnapshot, PendingDocumentCspBypassUpdate,
-    PendingDocumentResourceTextSearch, PendingDocumentStorageKeySnapshot,
-    PendingNavigationHistoryReset, PendingNetworkResourceLoadPreparation,
-    PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
-    PendingTopLevelSameDocumentNavigation,
+    PendingDocumentCookieOwnerSnapshot, PendingDocumentCspBypassUpdate, PendingDocumentPolicyBatch,
+    PendingDocumentPolicyUpdate, PendingDocumentResourceTextSearch,
+    PendingDocumentStorageKeySnapshot, PendingNavigationHistoryReset,
+    PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
+    PendingTopLevelHistoryTraversal, PendingTopLevelSameDocumentNavigation,
 };
 pub(crate) use browser_context::{
     BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles, ContextNetworkPolicy,
@@ -159,9 +161,7 @@ pub(crate) use browser_context::{
 pub(crate) use browser_context::{
     CompletedContextPermissionUpdate, PendingContextPermissionUpdate,
 };
-pub(crate) use browser_context::{
-    LoadedNavigationPageCommit, NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind,
-};
+pub(crate) use browser_context::{LoadedNavigationPageCommit, PageInputCommand};
 
 pub use web_contents::PageNavigationHistoryEntry;
 pub(crate) use web_contents::{

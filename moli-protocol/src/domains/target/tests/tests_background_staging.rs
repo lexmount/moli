@@ -5379,11 +5379,13 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
     )
     .await;
     ctx.enable_background_navigation_scheduler_for_test();
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .remember_target_window_name("reportWindow", &owner.target_id);
+    let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
+    let handle = browser_context
+        .web_contents_handle_for_target(&owner.target_id)
+        .unwrap();
+    browser_context
+        .set_web_contents_window_name(handle, Some("reportWindow".into()))
+        .unwrap();
 
     ctx.process_async(json!({
         "id": 1041949446,

@@ -1422,16 +1422,14 @@ async fn set_auto_attach_prefers_existing_background_target_with_background_load
         None,
     )
     .await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .select_page_target_async("TID-000000000E")
-            .await
-            .expect("restoring the original active target should succeed"),
-        "the original active target should remain background during fixture setup"
-    );
+    let handle = ctx
+        .conn
+        .browser_web_contents_for_target("TID-000000000E")
+        .expect("the original active target should remain background during fixture setup");
+    ctx.conn
+        .select_browser_web_contents_async(handle)
+        .await
+        .expect("restoring the original active target should succeed");
 
     ctx.process_async(json!({
         "id": 17023,

@@ -221,7 +221,9 @@ pub(in crate::domains) fn devtools_client_window_info_for_target(
         .as_ref()
         .map(|context| context.id.as_str());
     for browser_context in conn.browser_contexts() {
-        if let Some(surface) = browser_context.target_window_surface(target_id.as_str()) {
+        if let Some(handle) = browser_context.web_contents_handle_for_target(target_id.as_str())
+            && let Ok(surface) = browser_context.web_contents_window_surface(handle)
+        {
             return Some(devtools_client_window_info_from_surface(
                 target_id.clone(),
                 active_browser_context_id == Some(browser_context.id.as_str())
