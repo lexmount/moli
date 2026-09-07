@@ -9,7 +9,11 @@ use super::{
 
 pub(crate) const DEFAULT_NAVIGATION_PRELOAD_HEADER_VALUE: &str = "true";
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, crate::webidl::WebIdlEnum)]
+#[webidl(
+    name = "ServiceWorkerUpdateViaCache",
+    parse_with = Self::parse_webidl_token
+)]
 pub(crate) enum ServiceWorkerUpdateViaCache {
     #[default]
     Imports,
