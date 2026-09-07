@@ -755,7 +755,7 @@ impl PageScriptHost {
                 request_mode,
                 network_partition_key,
                 policy_context,
-                continuation: PendingSubresourceContinuation::Fetch(
+                continuation: PendingSubresourceContinuation::Fetch(Box::new(
                     crate::types::PendingWindowFetchContinuation::new(
                         resolver,
                         resource_timing,
@@ -765,7 +765,7 @@ impl PageScriptHost {
                         csp_report_context,
                     )
                     .with_intercepted_request(request),
-                ),
+                )),
                 deferred_request_started: false,
             },
         );
@@ -820,7 +820,7 @@ impl PageScriptHost {
                 request_mode,
                 network_partition_key,
                 policy_context,
-                continuation: PendingSubresourceContinuation::Fetch(
+                continuation: PendingSubresourceContinuation::Fetch(Box::new(
                     crate::types::PendingWindowFetchContinuation::new(
                         resolver,
                         resource_timing,
@@ -829,7 +829,7 @@ impl PageScriptHost {
                         connect_policy,
                         csp_report_context,
                     ),
-                ),
+                )),
                 deferred_request_started: defer_request_started,
             },
         );
@@ -1488,7 +1488,7 @@ impl PageScriptHost {
                 policy_context: Default::default(),
                 continuation: PendingSubresourceContinuation::WebSocket(
                     #[cfg(any(test, feature = "devtools"))]
-                    connection,
+                    Box::new(connection),
                 ),
                 deferred_request_started: false,
             },
