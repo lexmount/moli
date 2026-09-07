@@ -7,6 +7,7 @@
 mod dom;
 mod metadata;
 mod runtime;
+mod scheduling;
 mod target;
 mod time;
 mod wire;
@@ -17,6 +18,9 @@ pub use dom::{
 };
 pub use metadata::CDP_PROTOCOL_JSON;
 pub use runtime::remote_object_from_json_value;
+pub use scheduling::{
+    CdpCommandCompletionSemantics, CdpCommandDispatchLane, CdpCommandSchedulingPolicy,
+};
 pub use target::{CdpTargetKindWire, CdpTargetType, cdp_target_type_wire_value};
 pub use time::{DEFAULT_LOADER_ID, monotonic_timestamp_seconds};
 pub use wire::{

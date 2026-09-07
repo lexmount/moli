@@ -116,6 +116,7 @@ pub use fetch_support::{
     fetch_subresource_interception_config, fetch_subresource_interception_config_for_patterns,
 };
 pub use moli_protocol_cdp::{
+    CdpCommandCompletionSemantics, CdpCommandDispatchLane, CdpCommandSchedulingPolicy,
     CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpRendererCommandReplacement,
     CdpRendererCommandReplayDispatch, CdpRequest, ParsedCdpCommand,
 };
