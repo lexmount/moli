@@ -1,104 +1,141 @@
-use super::BrowserContext;
+use super::{
+    BrowserContext,
+    document_commands::{
+        CompletedAppManifestLoadPreparation, CompletedAppManifestPublication,
+        CompletedDocumentBlobRead, CompletedNetworkResourceLoadPreparation,
+        PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingDocumentBlobRead,
+        PendingNetworkResourceLoadPreparation,
+    },
+};
+use moli_core::browser::DocumentHandle;
 use moli_core::page::{
-    CompletedPageCommand, PendingPageCommand, RendererAppManifestLoadPreparation,
-    RendererAppManifestLoadPublication, RendererCommandTurnOutput,
-    RendererNetworkResourceLoadPreparation,
+    RendererAppManifestLoadPreparation, RendererAppManifestLoadPublication,
+    RendererCommandTurnOutput, RendererNetworkResourceLoadPreparation,
 };
 use std::sync::Arc;
 use url::Url;
 
+pub(crate) struct BrowserAppManifestLoadPreparation {
+    pub(crate) document: DocumentHandle,
+    pub(crate) preparation: RendererAppManifestLoadPreparation,
+}
+
 impl BrowserContext {
-    pub(crate) fn start_target_blob_read(
+    pub(crate) fn start_document_blob_read(
         &self,
-        target_id: &str,
+        document: DocumentHandle,
         uuid: String,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+    ) -> Result<PendingDocumentBlobRead, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_blob_bytes_for_uuid(uuid)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingDocumentBlobRead::new(document, pending))
     }
 
-    pub(crate) fn finish_target_blob_read(
+    pub(crate) fn finish_document_blob_read(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedDocumentBlobRead,
     ) -> Result<Option<Arc<[u8]>>, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_blob_bytes_for_uuid(completion)
+        let (document, completion) = completed.into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_blob_bytes_for_uuid(completion?)
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_target_network_resource_load(
+    pub(crate) fn start_network_resource_load_preparation(
         &self,
-        target_id: &str,
+        document: DocumentHandle,
         frame_id: String,
         url: Url,
         disable_cache: bool,
         include_credentials: bool,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+    ) -> Result<PendingNetworkResourceLoadPreparation, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_prepare_network_resource_load(frame_id, url, disable_cache, include_credentials)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingNetworkResourceLoadPreparation::new(
+            document, pending,
+        ))
     }
 
-    pub(crate) fn finish_target_network_resource_load_preparation(
+    pub(crate) fn finish_network_resource_load_preparation(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedNetworkResourceLoadPreparation,
     ) -> Result<RendererNetworkResourceLoadPreparation, String> {
-        let page = self
-            .loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?;
-        if !completion.is_from_page(page) {
-            return Err("Document changed while preparing the network resource load".to_owned());
-        }
-        page.finish_prepare_network_resource_load(completion)
+        let (document, completion) = completed.into_parts();
+        let page = self.physical.document_mut(document).map_err(|error| {
+            if error == "Document changed" {
+                "Document changed while preparing the network resource load".to_owned()
+            } else {
+                error
+            }
+        })?;
+        page.page
+            .finish_prepare_network_resource_load(completion?)
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_target_app_manifest_load(
+    pub(crate) fn start_app_manifest_load_preparation(
         &self,
-        target_id: &str,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+        document: DocumentHandle,
+    ) -> Result<PendingAppManifestLoadPreparation, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_prepare_app_manifest_load()
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingAppManifestLoadPreparation::new(document, pending))
     }
 
-    pub(crate) fn finish_target_app_manifest_load_preparation(
+    pub(crate) fn finish_app_manifest_load_preparation(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererAppManifestLoadPreparation, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_prepare_app_manifest_load(completion)
-            .map_err(|error| error.to_string())
+        completed: CompletedAppManifestLoadPreparation,
+    ) -> Result<BrowserAppManifestLoadPreparation, String> {
+        let (document, completion) = completed.into_parts();
+        let preparation = self
+            .physical
+            .document_mut(document)?
+            .page
+            .finish_prepare_app_manifest_load(completion?)
+            .map_err(|error| error.to_string())?;
+        Ok(BrowserAppManifestLoadPreparation {
+            document,
+            preparation,
+        })
     }
 
-    pub(crate) fn start_target_app_manifest_publication(
+    pub(crate) fn start_app_manifest_publication(
         &self,
-        target_id: &str,
+        document: DocumentHandle,
         publication: RendererAppManifestLoadPublication,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+    ) -> Result<PendingAppManifestPublication, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_publish_app_manifest_load(publication)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingAppManifestPublication::new(document, pending))
     }
 
-    pub(crate) fn finish_target_app_manifest_publication(
+    pub(crate) fn finish_app_manifest_publication(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedAppManifestPublication,
     ) -> Result<RendererCommandTurnOutput, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_publish_app_manifest_load(completion)
+        let (document, completion) = completed.into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_publish_app_manifest_load(completion?)
             .map_err(|error| error.to_string())
     }
 }

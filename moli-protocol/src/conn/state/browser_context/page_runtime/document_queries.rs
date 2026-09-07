@@ -1,69 +1,87 @@
-use super::BrowserContext;
-use moli_core::page::{
-    ChildFrameTreeSnapshot, CompletedPageCommand, DocumentCookieOwnerSnapshot, PendingPageCommand,
+use super::{
+    BrowserContext,
+    document_commands::{
+        CompletedChildFrameTreeSnapshot, CompletedDocumentCookieOwnerSnapshot,
+        CompletedDocumentStorageKeySnapshot, PendingChildFrameTreeSnapshot,
+        PendingDocumentCookieOwnerSnapshot, PendingDocumentStorageKeySnapshot,
+    },
 };
+use moli_core::browser::DocumentHandle;
+use moli_core::page::{ChildFrameTreeSnapshot, DocumentCookieOwnerSnapshot};
 
 impl BrowserContext {
-    pub(crate) fn start_document_storage_key_snapshot_for_target(
+    pub(crate) fn start_document_storage_key_snapshot(
         &self,
-        target_id: &str,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+        document: DocumentHandle,
+    ) -> Result<PendingDocumentStorageKeySnapshot, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_document_storage_key_snapshot()
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingDocumentStorageKeySnapshot::new(document, pending))
     }
 
-    pub(crate) fn finish_document_storage_key_snapshot_for_target(
+    pub(crate) fn finish_document_storage_key_snapshot(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedDocumentStorageKeySnapshot,
     ) -> Result<String, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_document_storage_key_snapshot(completion)
+        let (document, completion) = completed.into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_document_storage_key_snapshot(completion?)
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_child_frame_tree_snapshot_for_target(
+    pub(crate) fn start_child_frame_tree_snapshot(
         &self,
-        target_id: &str,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+        document: DocumentHandle,
+    ) -> Result<PendingChildFrameTreeSnapshot, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_child_frame_tree_snapshot()
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingChildFrameTreeSnapshot::new(document, pending))
     }
 
-    pub(crate) fn finish_child_frame_tree_snapshot_for_target(
+    pub(crate) fn finish_child_frame_tree_snapshot(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedChildFrameTreeSnapshot,
     ) -> Result<Vec<ChildFrameTreeSnapshot>, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_child_frame_tree_snapshot(completion)
+        let (document, completion) = completed.into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_child_frame_tree_snapshot(completion?)
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_document_cookie_owner_snapshot_for_target(
+    pub(crate) fn start_document_cookie_owner_snapshot(
         &self,
-        target_id: &str,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+        document: DocumentHandle,
+    ) -> Result<PendingDocumentCookieOwnerSnapshot, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_document_cookie_owner_snapshot()
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingDocumentCookieOwnerSnapshot::new(document, pending))
     }
 
-    pub(crate) fn finish_document_cookie_owner_snapshot_for_target(
+    pub(crate) fn finish_document_cookie_owner_snapshot(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedDocumentCookieOwnerSnapshot,
     ) -> Result<DocumentCookieOwnerSnapshot, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_document_cookie_owner_snapshot(completion)
+        let (document, completion) = completed.into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_document_cookie_owner_snapshot(completion?)
             .map_err(|error| error.to_string())
     }
 }

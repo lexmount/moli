@@ -5,8 +5,8 @@ use serde_json::json;
 
 use crate::{
     conn::{
-        CapturedBody, CdpConnection, Cmd, CommandOwnerScope,
-        CompletedFetchResponseBodyStreamReadDispatch, IoStreamState,
+        CapturedBody, CdpConnection, Cmd, CommandOwnerScope, CompletedDocumentBlobRead,
+        CompletedFetchResponseBodyStreamReadDispatch, IoStreamState, PendingDocumentBlobRead,
         PendingFetchResponseBodyStreamRead, PendingFetchResponseBodyStreamReadDispatch,
         PendingFetchResponseBodyStreamReadStart,
     },
@@ -36,7 +36,7 @@ enum PendingIoCommandKind {
         pending: PendingPageCommand,
     },
     ReadBlob {
-        pending: PendingPageCommand,
+        pending: PendingDocumentBlobRead,
         handle: String,
         offset: Option<usize>,
         size: Option<usize>,
@@ -50,7 +50,7 @@ enum CompletedIoCommandKind {
         completed: Result<CompletedPageCommand, String>,
     },
     ReadBlob {
-        completed: Result<CompletedPageCommand, String>,
+        completed: CompletedDocumentBlobRead,
         handle: String,
         offset: Option<usize>,
         size: Option<usize>,
@@ -80,7 +80,7 @@ impl PendingIoCommandDispatch {
                 offset,
                 size,
             } => CompletedIoCommandKind::ReadBlob {
-                completed: pending.wait().await.map_err(|error| error.to_string()),
+                completed: pending.wait().await,
                 handle,
                 offset,
                 size,
@@ -215,13 +215,10 @@ fn start_read_blob_command(
     offset: Option<usize>,
     size: Option<usize>,
 ) -> IoCommandTaskStep {
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
     let pending = conn
-        .resolve_document_command_owner(&CommandOwnerScope::capture(conn, cmd.session_id))
-        .and_then(|(context_id, target_id)| {
-            conn.browser_context_by_id(&context_id)
-                .ok_or("NoDocumentLoaded")?
-                .start_target_blob_read(&target_id, uuid.to_owned())
-        });
+        .resolve_browser_document_for_owner(&owner)
+        .and_then(|document| conn.start_document_blob_read(document, uuid.to_owned()));
     match pending {
         Ok(pending) => IoCommandTaskStep::Pending(Box::new(PendingIoCommandDispatch {
             command_id: cmd.id,
@@ -257,22 +254,12 @@ fn complete_resolve_blob_command(
 fn complete_read_blob_command(
     conn: &mut CdpConnection,
     session_id: Option<&str>,
-    completed: Result<CompletedPageCommand, String>,
+    completed: CompletedDocumentBlobRead,
     handle: String,
     offset: Option<usize>,
     size: Option<usize>,
 ) -> CommandOutputPlan {
-    let bytes = completed
-        .and_then(|completed| {
-            conn.resolve_document_command_owner(&CommandOwnerScope::capture(conn, session_id))
-                .and_then(|(context_id, target_id)| {
-                    conn.browser_context_by_id_mut(&context_id)
-                        .ok_or("NoDocumentLoaded")?
-                        .finish_target_blob_read(&target_id, completed)
-                })
-        })
-        .ok()
-        .flatten();
+    let bytes = conn.finish_document_blob_read(completed).ok().flatten();
     let Some(bytes) = bytes else {
         return CommandOutputPlan::error(-32000, "Read failed");
     };

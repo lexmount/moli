@@ -73,13 +73,19 @@ mod settings;
 mod site_data_manager_surface;
 mod state;
 pub(crate) use state::{
-    ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
-    NavigationRequestInterception,
+    BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
+    CompletedAppManifestPublication, CompletedCaptureDocumentImage,
+    CompletedCaptureDocumentSnapshot, CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
+    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentStorageKeySnapshot,
+    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent, DocumentSnapshot,
+    PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
+    PendingCaptureDocumentSnapshot, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
+    PendingDocumentCookieOwnerSnapshot, PendingDocumentStorageKeySnapshot,
+    PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
 };
 pub(crate) use state::{
-    CompletedCaptureDocumentImage, CompletedCaptureDocumentSnapshot, CompletedSetDocumentContent,
-    DocumentSnapshot, PendingCaptureDocumentImage, PendingCaptureDocumentSnapshot,
-    PendingSetDocumentContent,
+    ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
+    NavigationRequestInterception,
 };
 pub(crate) use state::{CompletedContextPermissionUpdate, PendingContextPermissionUpdate};
 pub(crate) use state::{NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind};

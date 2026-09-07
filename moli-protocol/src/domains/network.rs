@@ -149,6 +149,7 @@ enum PendingNetworkCommandWork {
         document: Option<moli_core::browser::DocumentId>,
         pending: moli_core::page::PendingPageCommand,
     },
+    NetworkResourcePreparation(crate::conn::PendingNetworkResourceLoadPreparation),
     Resource(Box<moli_core::page::RendererPreparedNetworkResourceLoad>),
 }
 
@@ -157,6 +158,7 @@ enum CompletedNetworkCommandWork {
         document: Option<moli_core::browser::DocumentId>,
         completed: Result<Box<moli_core::page::CompletedPageCommand>, String>,
     },
+    NetworkResourcePreparation(Box<crate::conn::CompletedNetworkResourceLoadPreparation>),
     Resource(moli_core::page::RendererNetworkResourceLoadOutcome),
 }
 
@@ -203,6 +205,11 @@ impl PendingNetworkCommandDispatch {
                         .map(Box::new)
                         .map_err(|error| error.to_string()),
                 }
+            }
+            PendingNetworkCommandWork::NetworkResourcePreparation(pending) => {
+                CompletedNetworkCommandWork::NetworkResourcePreparation(Box::new(
+                    pending.wait().await,
+                ))
             }
             PendingNetworkCommandWork::Resource(pending) => {
                 CompletedNetworkCommandWork::Resource((*pending).execute().await)
@@ -728,7 +735,8 @@ fn complete_network_policy_refresh(
             }
             return CommandOutputPlan::error(-32000, error);
         }
-        CompletedNetworkCommandWork::Resource(_) => {
+        CompletedNetworkCommandWork::NetworkResourcePreparation(_)
+        | CompletedNetworkCommandWork::Resource(_) => {
             return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
         }
     };
@@ -767,7 +775,8 @@ fn complete_unit_page_network_command(
             }
             return CommandOutputPlan::error(-32000, error);
         }
-        CompletedNetworkCommandWork::Resource(_) => {
+        CompletedNetworkCommandWork::NetworkResourcePreparation(_)
+        | CompletedNetworkCommandWork::Resource(_) => {
             return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
         }
     };
@@ -815,7 +824,8 @@ fn complete_rebuild_loader_network_command(
             }
             return CommandOutputPlan::error(-32000, error);
         }
-        CompletedNetworkCommandWork::Resource(_) => {
+        CompletedNetworkCommandWork::NetworkResourcePreparation(_)
+        | CompletedNetworkCommandWork::Resource(_) => {
             return CommandOutputPlan::error(-32000, "InvalidNetworkCommandCompletion");
         }
     };

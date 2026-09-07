@@ -1,15 +1,26 @@
 use moli_core::{
     browser::{BrowserContextId, DocumentHandle},
     page::{
+        ChildFrameTreeSnapshot, DocumentCookieOwnerSnapshot, RendererAppManifestLoadPublication,
         RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
-        RendererCommandTurnOutput, RendererSetDocumentContentResult,
+        RendererCommandTurnOutput, RendererNetworkResourceLoadPreparation,
+        RendererSetDocumentContentResult,
     },
 };
+use std::sync::Arc;
+use url::Url;
 
 use super::{
-    CdpConnection, CommandOwnerScope, CompletedCaptureDocumentImage,
-    CompletedCaptureDocumentSnapshot, CompletedSetDocumentContent, DocumentSnapshot,
-    PendingCaptureDocumentImage, PendingCaptureDocumentSnapshot, PendingSetDocumentContent,
+    BrowserAppManifestLoadPreparation, CdpConnection, CommandOwnerScope,
+    CompletedAppManifestLoadPreparation, CompletedAppManifestPublication,
+    CompletedCaptureDocumentImage, CompletedCaptureDocumentSnapshot,
+    CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
+    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentStorageKeySnapshot,
+    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent, DocumentSnapshot,
+    PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
+    PendingCaptureDocumentSnapshot, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
+    PendingDocumentCookieOwnerSnapshot, PendingDocumentStorageKeySnapshot,
+    PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
 };
 use crate::conn::state::BrowserContext;
 
@@ -110,5 +121,150 @@ impl CdpConnection {
         self.browser_context_by_browser_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_capture_document_image(completed)
+    }
+
+    pub(crate) fn start_document_storage_key_snapshot(
+        &self,
+        document: DocumentHandle,
+    ) -> Result<PendingDocumentStorageKeySnapshot, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_storage_key_snapshot(document)
+    }
+
+    pub(crate) fn finish_document_storage_key_snapshot(
+        &mut self,
+        completed: CompletedDocumentStorageKeySnapshot,
+    ) -> Result<String, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_document_storage_key_snapshot(completed)
+    }
+
+    pub(crate) fn start_child_frame_tree_snapshot(
+        &self,
+        document: DocumentHandle,
+    ) -> Result<PendingChildFrameTreeSnapshot, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_child_frame_tree_snapshot(document)
+    }
+
+    pub(crate) fn finish_child_frame_tree_snapshot(
+        &mut self,
+        completed: CompletedChildFrameTreeSnapshot,
+    ) -> Result<Vec<ChildFrameTreeSnapshot>, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_child_frame_tree_snapshot(completed)
+    }
+
+    pub(crate) fn start_document_cookie_owner_snapshot(
+        &self,
+        document: DocumentHandle,
+    ) -> Result<PendingDocumentCookieOwnerSnapshot, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_cookie_owner_snapshot(document)
+    }
+
+    pub(crate) fn finish_document_cookie_owner_snapshot(
+        &mut self,
+        completed: CompletedDocumentCookieOwnerSnapshot,
+    ) -> Result<DocumentCookieOwnerSnapshot, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_document_cookie_owner_snapshot(completed)
+    }
+
+    pub(crate) fn start_document_blob_read(
+        &self,
+        document: DocumentHandle,
+        uuid: String,
+    ) -> Result<PendingDocumentBlobRead, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_blob_read(document, uuid)
+    }
+
+    pub(crate) fn finish_document_blob_read(
+        &mut self,
+        completed: CompletedDocumentBlobRead,
+    ) -> Result<Option<Arc<[u8]>>, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_document_blob_read(completed)
+    }
+
+    pub(crate) fn start_network_resource_load_preparation(
+        &self,
+        document: DocumentHandle,
+        frame_id: String,
+        url: Url,
+        disable_cache: bool,
+        include_credentials: bool,
+    ) -> Result<PendingNetworkResourceLoadPreparation, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_network_resource_load_preparation(
+                document,
+                frame_id,
+                url,
+                disable_cache,
+                include_credentials,
+            )
+    }
+
+    pub(crate) fn finish_network_resource_load_preparation(
+        &mut self,
+        completed: CompletedNetworkResourceLoadPreparation,
+    ) -> Result<RendererNetworkResourceLoadPreparation, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_network_resource_load_preparation(completed)
+    }
+
+    pub(crate) fn start_app_manifest_load_preparation(
+        &self,
+        document: DocumentHandle,
+    ) -> Result<PendingAppManifestLoadPreparation, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_app_manifest_load_preparation(document)
+    }
+
+    pub(crate) fn finish_app_manifest_load_preparation(
+        &mut self,
+        completed: CompletedAppManifestLoadPreparation,
+    ) -> Result<BrowserAppManifestLoadPreparation, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_app_manifest_load_preparation(completed)
+    }
+
+    pub(crate) fn start_app_manifest_publication(
+        &self,
+        document: DocumentHandle,
+        publication: RendererAppManifestLoadPublication,
+    ) -> Result<PendingAppManifestPublication, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_app_manifest_publication(document, publication)
+    }
+
+    pub(crate) fn finish_app_manifest_publication(
+        &mut self,
+        completed: CompletedAppManifestPublication,
+    ) -> Result<RendererCommandTurnOutput, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_app_manifest_publication(completed)
     }
 }

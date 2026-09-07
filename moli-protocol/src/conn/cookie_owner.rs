@@ -546,12 +546,13 @@ impl BrowserContext {
         &mut self,
     ) -> Option<DocumentCookieOwnerSnapshot> {
         let target_id = self.active_target_id_owned()?;
-        let pending = self
-            .start_document_cookie_owner_snapshot_for_target(&target_id)
-            .ok()?;
-        let completion = pending.wait().await.ok()?;
-        self.finish_document_cookie_owner_snapshot_for_target(&target_id, completion)
-            .ok()
+        let document = self.document_handle_for_target(&target_id)?;
+        let completion = self
+            .start_document_cookie_owner_snapshot(document)
+            .ok()?
+            .wait()
+            .await;
+        self.finish_document_cookie_owner_snapshot(completion).ok()
     }
 
     pub(super) fn default_cookie_write_url_with_source(

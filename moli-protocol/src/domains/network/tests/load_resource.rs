@@ -214,6 +214,51 @@ async fn load_network_resource_matches_chromium_validation_order() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn load_network_resource_preparation_cannot_finish_on_a_replacement_document() {
+    let mut ctx = TestContext::new();
+    install_loaded_page(&mut ctx, "data:text/html,<title>resource-owner</title>").await;
+    let raw = json!({
+        "id": 81_015,
+        "method": "Network.loadNetworkResource",
+        "sessionId": SESSION_ID,
+        "params": {
+            "frameId": TARGET_ID,
+            "url": "https://resource.example/data",
+            "options": { "disableCache": false, "includeCredentials": false }
+        }
+    })
+    .to_string();
+    let crate::conn::CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw)
+    else {
+        panic!("network resource preparation must start on the original document");
+    };
+    let completed = pending.wait().await;
+
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<title>replacement-resource-owner</title>",
+        Some(SESSION_ID),
+    )
+    .await;
+
+    let crate::conn::CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("stale preparation must not start the browser resource fetch");
+    };
+    let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+    let response = messages
+        .iter()
+        .find(|message| message["id"] == json!(81_015))
+        .expect("loadNetworkResource response");
+    assert_eq!(response["error"]["code"], json!(-32000), "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        json!("Document changed while preparing the network resource load"),
+        "the preparation must retain its originating Browser Document: {response}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn load_network_resource_enforces_document_connect_src_before_fetch() {
     async fn csp_page() -> impl IntoResponse {
         (

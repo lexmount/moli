@@ -4,9 +4,15 @@ use std::time::Duration;
 
 mod document_commands;
 pub(crate) use document_commands::{
-    CompletedCaptureDocumentImage, CompletedCaptureDocumentSnapshot, CompletedSetDocumentContent,
-    DocumentSnapshot, PendingCaptureDocumentImage, PendingCaptureDocumentSnapshot,
-    PendingSetDocumentContent,
+    CompletedAppManifestLoadPreparation, CompletedAppManifestPublication,
+    CompletedCaptureDocumentImage, CompletedCaptureDocumentSnapshot,
+    CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
+    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentStorageKeySnapshot,
+    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent, DocumentSnapshot,
+    PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
+    PendingCaptureDocumentSnapshot, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
+    PendingDocumentCookieOwnerSnapshot, PendingDocumentStorageKeySnapshot,
+    PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
 };
 mod document_queries;
 mod emulation;
@@ -16,6 +22,7 @@ mod network_commands;
 mod resource_commands;
 pub(crate) use input::PageInputCommand;
 pub(crate) use network_commands::NetworkPolicyUpdateKind;
+pub(crate) use resource_commands::BrowserAppManifestLoadPreparation;
 
 impl BrowserContext {
     pub(in crate::conn) fn observe_renderer_page_state(
