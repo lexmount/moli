@@ -114,8 +114,8 @@ pub(super) fn handle_navigation_navigate_cross_document<'s>(
         next_url.as_str(),
         entry_seed,
         matches!(mutation, NavigationHistoryMutation::Push),
+        None,
     );
-    host.sync_existing_child_browsing_context_window_state(scope, child_handle);
     navigation_signal
         .map(|(navigation, signal)| {
             navigation_cross_document_pending_result(scope, navigation, signal, next_url.as_str())

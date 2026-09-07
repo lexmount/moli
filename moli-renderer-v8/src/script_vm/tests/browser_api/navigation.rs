@@ -3468,6 +3468,275 @@ async fn same_document_navigation_precommit_added_handler_delays_finished() {
     assert_eq!(after_timeout, "handler|added|finished");
 }
 #[tokio::test]
+async fn window_stop_cancels_child_location_navigation_without_committing_history() {
+    for action in [
+        "child.location.search = '?blocked'",
+        "child.location.assign('/blocked')",
+        "child.location.replace('/blocked')",
+        "child.location.reload()",
+        "const result = child.navigation.navigate('/blocked'); result.committed.catch(() => {}); result.finished.catch(() => {})",
+    ] {
+        let server = StaticHttpServer::spawn(3).await;
+        let parent_url = server.url_for_host("window-stop.test", "/page.html");
+        let loader = static_http_loader([server.resolve_entry("window-stop.test")]);
+        let mut vm =
+            new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+        vm.eval(
+            r#"
+globalThis.__stopFrame = document.createElement('iframe');
+globalThis.__stopLoads = 0;
+__stopFrame.onload = () => ++__stopLoads;
+__stopFrame.src = '/child.html';
+(document.body || document.documentElement || document).appendChild(__stopFrame);
+"#,
+        )
+        .expect("window.stop child setup should evaluate");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(__stopLoads)",
+            "1",
+            "initial child should load before the canceled navigation",
+        )
+        .await;
+
+        let snapshot = vm
+            .eval(&format!(
+                r#"
+(() => {{
+  globalThis.__stopSibling = document.createElement('iframe');
+  globalThis.__stopSiblingLoaded = false;
+  __stopSibling.onload = () => {{ __stopSiblingLoaded = true; }};
+  __stopSibling.src = '/sibling.html';
+  (document.body || document.documentElement || document).appendChild(__stopSibling);
+  const child = __stopFrame.contentWindow;
+  child.history.replaceState({{ retained: true }}, '', '#original');
+  const documentBefore = child.document;
+  const entryBefore = child.navigation.currentEntry;
+  const lengthBefore = child.history.length;
+  const hrefBefore = child.location.href;
+  const changes = [];
+  child.navigation.oncurrententrychange = () => changes.push('change');
+  globalThis.__stopSnapshot = () => [
+    child.document === documentBefore,
+    child.location.href === hrefBefore,
+    child.document.URL === hrefBefore,
+    child.navigation.currentEntry === entryBefore,
+    child.history.length === lengthBefore,
+    child.history.state?.retained === true,
+    changes.length,
+    __stopLoads
+  ].join('|');
+  {action};
+  const beforeStop = __stopSnapshot();
+  child.stop();
+  child.stop();
+  return beforeStop + ';' + __stopSnapshot();
+}})()
+"#,
+            ))
+            .expect("stopping a child navigation should evaluate");
+        const UNCHANGED: &str = "true|true|true|true|true|true|0|1";
+        assert_eq!(snapshot, format!("{UNCHANGED};{UNCHANGED}"), "{action}");
+
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(__stopSiblingLoaded)",
+            "true",
+            "a sibling should load while the stopped child remains unchanged",
+        )
+        .await;
+        assert_eq!(
+            vm.eval("__stopSnapshot()")
+                .expect("stopped child snapshot should evaluate"),
+            UNCHANGED,
+            "{action} must not commit from a queued navigation task"
+        );
+
+        vm.eval("__stopFrame.contentWindow.location.assign('/after-stop.html')")
+            .expect("navigation after stop should schedule");
+        advance_page_task_executor_until_eval_equals(
+            &mut vm,
+            &loader,
+            "String(__stopLoads)",
+            "2",
+            "stopping a navigation must not disable later navigations",
+        )
+        .await;
+        assert_eq!(
+            vm.eval("__stopFrame.contentWindow.location.pathname")
+                .expect("resumed child URL should evaluate"),
+            "/after-stop.html"
+        );
+        assert_eq!(
+            server.finish_targets().await,
+            ["/child.html", "/sibling.html", "/after-stop.html"],
+            "{action} must not start the canceled request"
+        );
+    }
+}
+
+#[test]
+fn window_stop_in_child_does_not_cancel_the_top_level_navigation() {
+    let mut vm = new_storage_test_vm("https://window-stop.test/page.html");
+    vm.eval(
+        r#"
+globalThis.__stopFrame = document.createElement('iframe');
+__stopFrame.srcdoc = '<body>child</body>';
+(document.body || document.documentElement || document).appendChild(__stopFrame);
+"#,
+    )
+    .expect("child setup should evaluate");
+    vm.drain_pending_child_frame_work_for_test();
+    vm.eval(
+        r#"
+const child = __stopFrame.contentWindow;
+const childResult = child.navigation.navigate('/child-next.html');
+childResult.committed.catch(() => {});
+childResult.finished.catch(() => {});
+const topResult = navigation.navigate('/top-next.html');
+topResult.committed.catch(() => {});
+topResult.finished.catch(() => {});
+child.stop();
+"#,
+    )
+    .expect("stopping the child should leave the parent navigation alone");
+    assert_eq!(
+        vm.take_pending_location_navigation_with_seed()
+            .expect("the top-level navigation must remain pending")
+            .url
+            .as_str(),
+        "https://window-stop.test/top-next.html"
+    );
+}
+
+#[tokio::test]
+async fn window_stop_discards_in_flight_child_navigation_completions() {
+    let (child_url, request_rx, release_tx, server) =
+        spawn_gated_child_document_resource_server(200).await;
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        &child_url.replace("/child.html", "/page.html"),
+        &loader,
+    );
+    vm.eval(
+        r#"
+globalThis.__stopFrame = document.createElement('iframe');
+globalThis.__stopLoads = 0;
+__stopFrame.onload = () => ++__stopLoads;
+__stopFrame.srcdoc = '<body>original</body>';
+(document.body || document.documentElement || document).appendChild(__stopFrame);
+"#,
+    )
+    .expect("in-flight navigation child setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__stopLoads)",
+        "1",
+        "srcdoc should finish before starting the blocked response",
+    )
+    .await;
+    vm.eval(&format!(
+        "globalThis.__stopDocument = __stopFrame.contentDocument; __stopFrame.contentWindow.location.assign({child_url:?});"
+    ))
+    .expect("child navigation should queue");
+    run_page_realm_prerequisite_then_expected_child_frame_semantic_turn(
+        &mut vm,
+        &loader,
+        ChildFrameSemanticTurnKind::NavigationCommit,
+        "navigation commit task should start the child request",
+    )
+    .await;
+    request_rx.await.expect("the child request should arrive");
+    assert_eq!(
+        vm.eval("__stopFrame.contentWindow.location.href")
+            .expect("in-flight child URL should evaluate"),
+        "about:srcdoc"
+    );
+    vm.eval("__stopFrame.contentWindow.stop()")
+        .expect("in-flight child navigation should stop");
+    release_tx.send(()).expect("release the canceled response");
+    server.await.expect("the gated server should finish");
+    wait_for_one_page_resource_completion_selected_task_executor_test_turn(
+        &mut vm,
+        &loader,
+        "late navigation completion should be discarded",
+    )
+    .await;
+    assert_eq!(
+        vm.eval(
+            "[__stopFrame.contentDocument === __stopDocument, __stopFrame.contentWindow.location.href, __stopLoads].join('|')"
+        )
+        .expect("late response must not replace the stopped child"),
+        "true|about:srcdoc|1"
+    );
+}
+
+#[tokio::test]
+async fn window_stop_preserves_child_cross_document_history_traversal() {
+    let server = StaticHttpServer::spawn(3).await;
+    let parent_url = server.url_for_host("window-stop-traversal.test", "/page.html");
+    let loader = static_http_loader([server.resolve_entry("window-stop-traversal.test")]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+    vm.eval(
+        r#"
+globalThis.__stopFrame = document.createElement('iframe');
+globalThis.__stopLoads = 0;
+__stopFrame.onload = () => ++__stopLoads;
+__stopFrame.src = '/one.html';
+(document.body || document.documentElement || document).appendChild(__stopFrame);
+"#,
+    )
+    .expect("traversal child setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__stopLoads)",
+        "1",
+        "first child document should load",
+    )
+    .await;
+    vm.eval("__stopFrame.contentWindow.location.assign('/two.html')")
+        .expect("second child navigation should schedule");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__stopLoads)",
+        "2",
+        "second child document should load",
+    )
+    .await;
+    vm.eval("__stopFrame.contentWindow.history.back()")
+        .expect("child history traversal should schedule");
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .expect("the history task should prepare the cross-document traversal")
+    );
+    vm.eval("__stopFrame.contentWindow.stop()")
+        .expect("stop during traversal should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__stopLoads)",
+        "3",
+        "window.stop must not cancel a session history traversal",
+    )
+    .await;
+    assert_eq!(
+        vm.eval("__stopFrame.contentWindow.location.pathname")
+            .expect("traversed URL should evaluate"),
+        "/one.html"
+    );
+    assert_eq!(
+        server.finish_targets().await,
+        ["/one.html", "/two.html", "/one.html"]
+    );
+}
+
+#[tokio::test]
 async fn window_stop_cancels_pending_precommit_before_commit() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm = new_storage_test_vm_with_loader("https://example.com/base", &loader);

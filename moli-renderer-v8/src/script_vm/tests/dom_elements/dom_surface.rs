@@ -12635,13 +12635,21 @@ async fn child_sandbox_blocks_meta_refresh_when_it_is_created() {
 
 #[tokio::test]
 async fn child_meta_refresh_remains_scheduled_when_sandbox_is_added_later() {
-    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
-    let mut vm = new_storage_test_vm_with_loader("https://child-meta-refresh.test/", &loader);
+    let server = StaticHttpServer::spawn(1).await;
+    let parent_url = server.url_for_host("child-meta-refresh.test", "/");
+    let loader = static_http_loader([server.resolve_entry("child-meta-refresh.test")]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
 
     vm.eval(
         r#"
 (() => {
   const frame = document.createElement('iframe');
+  globalThis.__childMetaRefreshLoads = 0;
+  frame.onload = () => {
+    if (++__childMetaRefreshLoads === 1) {
+      frame.setAttribute('sandbox', 'allow-same-origin');
+    }
+  };
   frame.srcdoc = '<meta http-equiv="refresh" content="0;url=#allowed"><p>source</p>';
   (document.body || document.documentElement || document).appendChild(frame);
   return 'ready';
@@ -12649,21 +12657,22 @@ async fn child_meta_refresh_remains_scheduled_when_sandbox_is_added_later() {
 "#,
     )
     .expect("unsandboxed child refresh setup should evaluate");
-    vm.drain_pending_child_frame_work_for_test();
-    vm.eval(
-        "document.querySelector('iframe').setAttribute('sandbox', 'allow-same-origin'); 'added'",
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__childMetaRefreshLoads)",
+        "2",
+        "the scheduled refresh should load after the sandbox is added",
     )
-    .expect("sandbox addition should evaluate");
-    vm.advance_timers_until_deadline_for_test(&loader)
-        .await
-        .expect("scheduled child refresh should run");
+    .await;
 
     assert_eq!(
         vm.eval("document.querySelector('iframe').contentWindow.location.href")
             .expect("child URL should remain observable"),
-        "https://child-meta-refresh.test/#allowed",
+        format!("{parent_url}#allowed"),
         "the sandbox policy is checked when the refresh is created, not again when it becomes due"
     );
+    assert_eq!(server.finish_targets().await, ["/"]);
 }
 
 #[tokio::test]
