@@ -48,8 +48,8 @@ pub use inspector_identity::{
 };
 pub use layout::LayoutPolicy;
 pub use navigator_overrides::{
-    GeolocationPositionOverride, NavigatorEmulationSessions, NavigatorOverrides,
-    NavigatorQueryOverrides,
+    GeolocationOverride, GeolocationPositionOverride, NavigatorEmulationSessions,
+    NavigatorOverrides, NavigatorQueryOverrides,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

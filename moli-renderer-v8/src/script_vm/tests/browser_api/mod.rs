@@ -35,6 +35,7 @@ mod message_port_events;
 mod message_port_lifecycle;
 mod misc;
 mod navigation;
+mod navigator_overrides;
 mod performance;
 mod performance_memory;
 mod platform_identity;

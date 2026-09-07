@@ -346,9 +346,14 @@ fn queue_geolocation_result<'s>(
             unsafe { &*host_ptr }
                 .navigator_overrides()
                 .geolocation
-                .clone()
+                .as_ref()
+                .and_then(moli_page_types::GeolocationOverride::position)
+                .cloned()
         })
         .filter(|_| code == POSITION_UNAVAILABLE);
+    // Without an override Moli has no native location provider yet, so clearing
+    // and explicitly simulating an unavailable position both deliver this error.
+    // Keep them distinct in host state so source changes still notify watches.
     let callback = if position.is_some() {
         success_callback
     } else if let Some(callback) = error_callback {
