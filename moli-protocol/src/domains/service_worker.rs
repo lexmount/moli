@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use moli_core::browser::ServiceWorkerCommand;
 use serde::Deserialize;
 use url::Url;
 
@@ -53,17 +54,23 @@ fn disable_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan
     let Ok(browser_context_id) = browser_context_id_for_command(conn, cmd.session_id) else {
         return CommandOutputPlan::error(-32001, "Unknown sessionId");
     };
-    if let Some(context) = conn.browser_context_by_id_mut(&browser_context_id) {
+    let reset_context = if let Some(context) = conn.browser_context_by_id_mut(&browser_context_id) {
         let was_enabled = context
             .service_worker_domain_enabled_sessions()
             .iter()
             .any(|session_id| session_id.as_deref() == cmd.session_id);
         context.set_service_worker_domain_enabled(cmd.session_id, false);
-        if was_enabled {
-            context
-                .renderer_runtime()
-                .set_service_worker_force_update_on_page_load_for_devtools(false);
-        }
+        was_enabled.then(|| context.browser_context_id())
+    } else {
+        None
+    };
+    if let Some(context) = reset_context
+        && let Err(message) = conn.execute_browser_service_worker_command(
+            context,
+            ServiceWorkerCommand::SetForceUpdateOnPageLoad(false),
+        )
+    {
+        return CommandOutputPlan::error(-32000, message);
     }
     CommandOutputPlan::success()
 }
@@ -75,7 +82,7 @@ fn set_force_update_on_page_load_command(
     let Ok(browser_context_id) = browser_context_id_for_command(conn, cmd.session_id) else {
         return CommandOutputPlan::error(-32001, "Unknown sessionId");
     };
-    let Some(context) = conn.browser_context_by_id(&browser_context_id) else {
+    let Ok(context) = conn.browser_context_handle_for_devtools_id(&browser_context_id) else {
         return CommandOutputPlan::error(-32000, "No browser context");
     };
     let Some(force_update) = force_update_on_page_load_param(cmd) else {
@@ -84,10 +91,13 @@ fn set_force_update_on_page_load_command(
             "Invalid ServiceWorker setForceUpdateOnPageLoad params",
         );
     };
-    context
-        .renderer_runtime()
-        .set_service_worker_force_update_on_page_load_for_devtools(force_update);
-    CommandOutputPlan::success()
+    match conn.execute_browser_service_worker_command(
+        context,
+        ServiceWorkerCommand::SetForceUpdateOnPageLoad(force_update),
+    ) {
+        Ok(()) => CommandOutputPlan::success(),
+        Err(message) => CommandOutputPlan::error(-32000, message),
+    }
 }
 
 fn lifecycle_command(
@@ -98,60 +108,50 @@ fn lifecycle_command(
     let Ok(browser_context_id) = browser_context_id_for_command(conn, cmd.session_id) else {
         return CommandOutputPlan::error(-32001, "Unknown sessionId");
     };
-    let Some(context) = conn.browser_context_by_id(&browser_context_id) else {
+    let Some(context_projection) = conn.browser_context_by_id(&browser_context_id) else {
         return CommandOutputPlan::error(-32000, "No browser context");
     };
-    if !context
+    if !context_projection
         .service_worker_domain_enabled_sessions()
         .iter()
         .any(|session_id| session_id.as_deref() == cmd.session_id)
     {
         return CommandOutputPlan::error(-32000, "ServiceWorker domain is not enabled");
     }
-    let renderer_runtime = context.renderer_runtime();
-    let result = match action {
+    let Ok(context) = conn.browser_context_handle_for_devtools_id(&browser_context_id) else {
+        return CommandOutputPlan::error(-32000, "No browser context");
+    };
+    let command = match action {
         ServiceWorkerAction::Unregister => {
             let Some(scope_url) = scope_url_param(cmd) else {
                 return CommandOutputPlan::error(-32602, "Invalid ServiceWorker scopeURL");
             };
-            renderer_runtime
-                .unregister_service_worker_scope_for_devtools(&scope_url)
-                .map(|_| ())
+            ServiceWorkerCommand::Unregister { scope: scope_url }
         }
         ServiceWorkerAction::StartWorker => {
             let Some(scope_url) = scope_url_param(cmd) else {
                 return CommandOutputPlan::error(-32602, "Invalid ServiceWorker scopeURL");
             };
-            renderer_runtime
-                .start_service_worker_for_devtools(&scope_url)
-                .map(|_| ())
+            ServiceWorkerCommand::Start { scope: scope_url }
         }
         ServiceWorkerAction::StopWorker => {
             let Some(version_id) = version_id_param(cmd) else {
                 return CommandOutputPlan::error(-32602, "Invalid ServiceWorker versionId");
             };
-            renderer_runtime
-                .stop_service_worker_for_devtools(version_id)
-                .map(|_| ())
+            ServiceWorkerCommand::StopVersion { version_id }
         }
-        ServiceWorkerAction::StopAllWorkers => renderer_runtime
-            .stop_all_service_workers_for_devtools()
-            .map(|_| ()),
+        ServiceWorkerAction::StopAllWorkers => ServiceWorkerCommand::StopAll,
         ServiceWorkerAction::SkipWaiting => {
             let Some(scope_url) = scope_url_param(cmd) else {
                 return CommandOutputPlan::error(-32602, "Invalid ServiceWorker scopeURL");
             };
-            renderer_runtime
-                .skip_waiting_service_worker_for_devtools(&scope_url)
-                .map(|_| ())
+            ServiceWorkerCommand::SkipWaiting { scope: scope_url }
         }
         ServiceWorkerAction::UpdateRegistration => {
             let Some(scope_url) = scope_url_param(cmd) else {
                 return CommandOutputPlan::error(-32602, "Invalid ServiceWorker scopeURL");
             };
-            renderer_runtime
-                .update_service_worker_registration_for_devtools(&scope_url)
-                .map(|_| ())
+            ServiceWorkerCommand::UpdateRegistration { scope: scope_url }
         }
         ServiceWorkerAction::DeliverPushMessage => {
             let Some(params) = deliver_push_message_params(cmd) else {
@@ -160,13 +160,11 @@ fn lifecycle_command(
                     "Invalid ServiceWorker deliverPushMessage params",
                 );
             };
-            renderer_runtime
-                .deliver_push_message_for_devtools(
-                    &params.origin,
-                    params.registration_id,
-                    params.data,
-                )
-                .map(|_| ())
+            ServiceWorkerCommand::DeliverPushMessage {
+                origin: params.origin,
+                registration_id: params.registration_id,
+                data: params.data,
+            }
         }
         ServiceWorkerAction::DispatchSyncEvent => {
             let Some(params) = sync_event_params(cmd) else {
@@ -175,14 +173,12 @@ fn lifecycle_command(
                     "Invalid ServiceWorker dispatchSyncEvent params",
                 );
             };
-            renderer_runtime
-                .dispatch_sync_event_for_devtools(
-                    &params.origin,
-                    params.registration_id,
-                    params.tag,
-                    params.last_chance,
-                )
-                .map(|_| ())
+            ServiceWorkerCommand::DispatchSyncEvent {
+                origin: params.origin,
+                registration_id: params.registration_id,
+                tag: params.tag,
+                last_chance: params.last_chance,
+            }
         }
         ServiceWorkerAction::DispatchPeriodicSyncEvent => {
             let Some(params) = periodic_sync_event_params(cmd) else {
@@ -191,21 +187,22 @@ fn lifecycle_command(
                     "Invalid ServiceWorker dispatchPeriodicSyncEvent params",
                 );
             };
-            renderer_runtime
-                .dispatch_periodic_sync_event_for_devtools(
-                    &params.origin,
-                    params.registration_id,
-                    params.tag,
-                )
-                .map(|_| ())
+            ServiceWorkerCommand::DispatchPeriodicSyncEvent {
+                origin: params.origin,
+                registration_id: params.registration_id,
+                tag: params.tag,
+            }
         }
         ServiceWorkerAction::Enable
         | ServiceWorkerAction::Disable
         | ServiceWorkerAction::SetForceUpdateOnPageLoad => {
-            Err(format!("ServiceWorker.{} is not implemented", cmd.action))
+            return CommandOutputPlan::error(
+                -32000,
+                format!("ServiceWorker.{} is not implemented", cmd.action),
+            );
         }
     };
-    match result {
+    match conn.execute_browser_service_worker_command(context, command) {
         Ok(()) => CommandOutputPlan::success(),
         Err(message) => CommandOutputPlan::error(-32000, message),
     }
@@ -542,12 +539,10 @@ fn controlled_client_target_ids_for_target(
     context: &BrowserContext,
     target: &ServiceWorkerTargetState,
 ) -> Vec<String> {
-    let controlled_client_ids = context
-        .renderer_runtime()
-        .controlled_service_worker_window_client_ids_for_devtools(
-            target.renderer_registration_id,
-            target.renderer_version_id,
-        );
+    let controlled_client_ids = context.controlled_service_worker_window_client_ids(
+        target.renderer_registration_id,
+        target.renderer_version_id,
+    );
     page_target_ids_for_controlled_client_ids(context, &controlled_client_ids)
 }
 
@@ -858,8 +853,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .unwrap()
-                .renderer_runtime()
-                .service_worker_force_update_on_page_load_for_devtools()
+                .service_worker_force_update_on_page_load()
         );
 
         ctx.process_async(json!({
@@ -883,8 +877,7 @@ mod tests {
                 .browser_context
                 .as_ref()
                 .unwrap()
-                .renderer_runtime()
-                .service_worker_force_update_on_page_load_for_devtools()
+                .service_worker_force_update_on_page_load()
         );
     }
 

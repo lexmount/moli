@@ -825,12 +825,8 @@ impl BrowserContext {
         // binding observable so normal target retirement can detach it, while
         // best-effort registering the live renderer session before the attach
         // event is published.
-        let _ = self
-            .renderer_runtime()
-            .attach_dedicated_worker_runtime_inspector_session(
-                renderer_instance_id,
-                Some(session_id),
-            );
+        let _ =
+            self.attach_dedicated_worker_inspector_session(renderer_instance_id, Some(session_id));
         true
     }
 
@@ -933,8 +929,7 @@ impl BrowserContext {
             (!was_attached).then_some(target.renderer_version_id)
         };
         if let Some(version_id) = attached_version_id {
-            self.renderer_runtime()
-                .set_service_worker_devtools_attached(version_id, true);
+            self.set_service_worker_devtools_attached(version_id, true);
         };
         true
     }
@@ -955,8 +950,7 @@ impl BrowserContext {
             (target_id, detached_version_id)
         };
         if let Some(version_id) = detached_version_id {
-            self.renderer_runtime()
-                .set_service_worker_devtools_attached(version_id, false);
+            self.set_service_worker_devtools_attached(version_id, false);
         }
         Some(target_id)
     }

@@ -41,15 +41,10 @@ impl CdpConnection {
 
     pub fn insert_browser_context(&mut self, mut browser_context: BrowserContext) {
         browser_context
-            .renderer_runtime()
-            .set_service_worker_pause_on_start_for_devtools(
-                self.service_worker_pause_on_start_for_devtools(),
-            );
-        browser_context
-            .renderer_runtime()
-            .set_dedicated_worker_pause_on_start_for_devtools(
-                self.dedicated_worker_pause_on_start_for_devtools(),
-            );
+            .set_service_worker_pause_on_start(self.service_worker_pause_on_start_for_devtools());
+        browser_context.set_dedicated_worker_pause_on_start(
+            self.dedicated_worker_pause_on_start_for_devtools(),
+        );
         browser_context.bind_page_navigation_engines(
             self.standalone_navigation_engine.runtime_config(),
             self.scheduler_hooks.renderer_publication_sender(),

@@ -3180,8 +3180,8 @@ onconnect = event => {
             .browser_context
             .as_ref()
             .expect("browser context should exist")
-            .renderer_runtime()
-            .shared_worker_running_worker_isolate_count_for_diagnostics(),
+            .shared_worker_runtime_diagnostics_for_diagnostics()
+            .running_worker_isolate_count,
         1,
         "same-origin pages with the same SharedWorker key should share one running worker isolate"
     );

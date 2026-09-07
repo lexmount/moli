@@ -9149,9 +9149,7 @@ fn release_service_worker_if_waiting_for_debugger(
     else {
         return false;
     };
-    browser_context
-        .renderer_runtime()
-        .run_service_worker_if_waiting_for_debugger_for_devtools(version_id)
+    browser_context.run_service_worker_if_waiting_for_debugger(version_id)
 }
 
 fn is_bidi_runtime_listener_session(session_id: Option<&str>) -> bool {

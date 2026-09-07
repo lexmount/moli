@@ -9,6 +9,7 @@ mod document_lifetime;
 mod downloads;
 mod permissions;
 mod renderer_residence;
+mod service_workers;
 
 pub use document_lifecycle::DocumentLifecycle;
 pub use document_lifetime::{DocumentLifetime, DocumentLifetimeObserver, DocumentRetirement};
@@ -18,6 +19,7 @@ pub use downloads::{
 };
 pub use permissions::{PermissionDefaults, PermissionOverrides};
 pub use renderer_residence::RendererPageResidenceIdentity;
+pub use service_workers::ServiceWorkerCommand;
 
 /// Navigation semantics, independent of the protocol that requested the load.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

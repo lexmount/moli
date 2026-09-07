@@ -378,7 +378,7 @@ fn physical_context_storage_and_runtime_outlive_protocol_projection() {
         projection.bind_page_navigation_engines(NavigationRuntimeConfig::default(), None);
         projection.set_storage_quota_override("https://example.test".into(), 123.0);
         let id = projection.browser_context_id();
-        let runtime_id = projection.renderer_runtime().id();
+        let runtime_id = projection.physical.renderer_runtime().id();
         let local_storage = projection.web_storage_store_for_test().clone();
         // Moving the sole Browser owner out lets the protocol shell and its
         // legacy embedded page/engine go away without retiring the context.
