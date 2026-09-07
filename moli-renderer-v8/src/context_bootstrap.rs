@@ -11,6 +11,7 @@ mod chrome_runtime;
 mod constructors;
 mod crypto;
 mod css_fontface_runtime;
+pub(crate) use css_fontface_runtime::finish_font_face_url_load;
 mod css_runtime;
 pub(crate) mod css_stylesheet_runtime;
 mod dom_rect;

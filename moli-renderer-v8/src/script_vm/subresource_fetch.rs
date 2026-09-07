@@ -737,6 +737,7 @@ fn pending_subresource_continuation_kind(
         PendingSubresourceContinuation::Image { .. } => "image",
         PendingSubresourceContinuation::Media { .. } => "media",
         PendingSubresourceContinuation::TextTrack { .. } => "text_track",
+        PendingSubresourceContinuation::FontFace(_) => "font_face",
         PendingSubresourceContinuation::StylesheetSubresource { .. } => "stylesheet_subresource",
         PendingSubresourceContinuation::Beacon => "beacon",
         PendingSubresourceContinuation::CspReport { .. } => "csp_report",

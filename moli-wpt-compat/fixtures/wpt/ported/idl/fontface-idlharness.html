@@ -6,6 +6,8 @@
 <script src="/wpt/resources/WebIDLParser.js"></script>
 <script src="/wpt/resources/idlharness.js"></script>
 <script>
+  // Real project-generated font: moli-layout/tests/fixtures/moli-ahem.woff2.
+  const FONT_FIXTURE_SOURCE = "url(data:font/woff2;base64,d09GMgABAAAAAAKMAAoAAAAAEewAAAI9AAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAABmAARAqSGIlCATYCJAOBRguBRgAEIAWDDweHZhsaDBEVjE2QrxO4OaB11Uo4KkNFQmQIgNrHOq+V6mgnvY2fvSQ/uF+9N7PdNFuXpclV2mkpdFaAC3aRoEdFB3L8iVa3NRGchB7CA+kvmysBs3ExDyF+2La9iSrRM8x/YMEH4+YNnI6ADDhw44HnsPGNf2vg8Vh2oEcLbcza3qYp3gsXSOBToI2cQC+UhHthpAFIuk0EVfwGmbm3vt4jtOf5c3NBuwr0P4kB5kvBCdDgYzQftZAtCfcwRbHKu3S8ycdHAOfu8OUAmLjP+bEQEov+i78AFoAP+AEAxAAAAbQvPfKjw6g3kr+bmM88bAz4CAIItbXF3xu9/n2qfwCnW7usCnIKG0p4i7hd9+SA9QzCt8+eB2LUsMiFeojjkCtwessPXvTy47FKi+3KLnHVsltY375HzLDkOf6NhCkpi4iVsmpyVHYpuS67Fdw/4GE+R/a2N2xwfWXnu79JZ8nsauts62iP3v/+6UJH9FXrZ8WIPds2mEHrVuyYtGLNiW0L8jSL6zWd2nTMNs9acejIxsou80QHe+KtWi8h8LdYBGgJlS666aGXPvoZYJAhhhlhlDHGmbAhTCjjQiptrAMfhFGcpFlelFXdtF0/jNO8rNt+nNf9vB8AQjCCYjhBUjTDcrwgSrKiarphWrbjcb2+/jc6gLBCmFDGhVTaWBf+NANEmFDGhVTaWBf+tABEmFDGhVTaWBf+tAJEmFDGhVTaWBf+tAFEmFDGhVTaWBf+tANEmFDGhVTa2PClCtb3AQAAAA==)";
 idl_test([`
 enum FontFaceLoadStatus { "unloaded", "loading", "loaded", "error" };
 enum FontFaceSetLoadStatus { "loading", "loaded" };
@@ -58,13 +60,13 @@ dictionary FontFaceDescriptors {
   idlArray.enable_attribute_descriptor_assertions();
   idlArray.enable_object_brand_assertions();
   idlArray.add_objects({
-    FontFace: ["new FontFace('FixtureFace', 'url(fixture.woff2)')"],
+    FontFace: ["new FontFace('FixtureFace', FONT_FIXTURE_SOURCE)"],
     FontFaceSet: ["document.fonts"]
   });
 });
 
 promise_test(async function () {
-  const face = new FontFace("FixtureFace", "url(fixture.woff2)", {
+  const face = new FontFace("FixtureFace", FONT_FIXTURE_SOURCE, {
     style: "italic",
     weight: "700",
     stretch: "condensed",
@@ -86,9 +88,10 @@ promise_test(async function () {
   assert_equals(face.loaded, face.loaded);
   assert_equals(fonts.ready, fonts.ready);
   assert_equals(face.family, "FixtureFace");
-  assert_equals(face.source, "url(fixture.woff2)");
-  assert_equals(face.status, "loaded");
+  assert_equals(face.source, FONT_FIXTURE_SOURCE);
+  assert_equals(face.status, "unloaded");
   assert_equals(await face.load(), face);
+  assert_equals(face.status, "loaded");
   assert_equals(await face.loaded, face);
 
   fonts.clear();

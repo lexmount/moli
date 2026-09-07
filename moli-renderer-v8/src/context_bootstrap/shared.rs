@@ -3,6 +3,7 @@ mod clone;
 mod console;
 mod definition;
 mod dom;
+mod fonts;
 mod object;
 mod slots;
 mod time;
@@ -24,6 +25,7 @@ pub(crate) use console::{
 };
 pub(in crate::context_bootstrap) use definition::*;
 pub(in crate::context_bootstrap) use dom::*;
+pub(in crate::context_bootstrap) use fonts::with_font_services;
 pub(in crate::context_bootstrap) use moli_browser_profile::{
     DEFAULT_CONNECTION_DOWNLINK, DEFAULT_CONNECTION_DOWNLINK_MAX,
     DEFAULT_CONNECTION_EFFECTIVE_TYPE, DEFAULT_CONNECTION_RTT, DEFAULT_CONNECTION_SAVE_DATA,

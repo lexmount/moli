@@ -712,6 +712,10 @@ impl ScriptVm {
                         started.internal_id,
                         Err(error_text.clone()),
                     ),
+                    PendingSubresourceContinuation::FontFace(face) => {
+                        let face = v8::Local::new(scope, face);
+                        crate::context_bootstrap::finish_font_face_url_load(scope, face, None);
+                    }
                     PendingSubresourceContinuation::StylesheetSubresource { binding, .. } => {
                         apply_stylesheet_subresource_terminal(&self._context_host, *binding);
                     }
@@ -947,6 +951,10 @@ impl ScriptVm {
                     started.internal_id,
                     Err("text-track response unexpectedly used streaming transport".to_owned()),
                 ),
+                PendingSubresourceContinuation::FontFace(face) => {
+                    let face = v8::Local::new(scope, face);
+                    crate::context_bootstrap::finish_font_face_url_load(scope, face, None);
+                }
                 PendingSubresourceContinuation::StylesheetSubresource { binding, .. } => {
                     apply_stylesheet_subresource_terminal(&self._context_host, *binding);
                 }

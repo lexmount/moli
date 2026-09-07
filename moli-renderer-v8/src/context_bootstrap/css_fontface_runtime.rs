@@ -37,6 +37,7 @@ const FONT_FACE_SET_LISTENERS_SLOT: &str = "__moliFontFaceSetListeners";
 mod events;
 mod font_face;
 mod font_face_set;
+mod loading;
 mod query;
 mod storage;
 
@@ -53,6 +54,7 @@ pub(super) use font_face_set::{
     font_face_set_has_callback, font_face_set_keys_callback, font_face_set_load_callback,
     font_face_set_values_callback,
 };
+pub(crate) use loading::finish_font_face_url_load;
 pub(super) use storage::install_font_face_set_template_accessors;
 pub(crate) use storage::new_font_face_set;
 pub(crate) use storage::rebuild_font_face_set_faces;

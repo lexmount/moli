@@ -1,12 +1,7 @@
-use super::events::dispatch_font_face_set_event;
-use super::query::{
-    font_face_set_matching_faces_array, font_load_query_is_valid,
-    make_rejected_dom_exception_promise,
-};
+use super::query::{font_face_set_matching_faces_array, make_rejected_dom_exception_promise};
 use super::storage::{
     array_contains_value, font_face_set_faces_array, font_face_set_manual_faces_array,
-    is_font_face_value, rebuild_font_face_set_faces, replace_font_face_set_ready_promise,
-    set_font_face_set_slot_value, set_font_face_set_status,
+    is_font_face_value, rebuild_font_face_set_faces, set_font_face_set_slot_value,
 };
 use super::*;
 
