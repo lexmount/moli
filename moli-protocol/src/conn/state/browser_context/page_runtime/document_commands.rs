@@ -96,6 +96,20 @@ define_document_command!(
     renderer_output_predecessor
 );
 define_document_command!(
+    PendingCaptureDocumentScreencastFrame,
+    CompletedCaptureDocumentScreencastFrame
+);
+define_document_command!(
+    PendingDocumentResourceTextSearch,
+    CompletedDocumentResourceTextSearch,
+    renderer_output_predecessor
+);
+define_document_command!(
+    PendingDocumentCspBypassUpdate,
+    CompletedDocumentCspBypassUpdate,
+    renderer_output_predecessor
+);
+define_document_command!(
     PendingDocumentStorageKeySnapshot,
     CompletedDocumentStorageKeySnapshot
 );
@@ -265,25 +279,31 @@ impl BrowserContext {
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_capture_screencast_frame_for_target(
+    pub(crate) fn start_capture_document_screencast_frame(
         &self,
-        target_id: &str,
+        document: DocumentHandle,
         request: RendererCaptureScreencastFrameRequest,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+    ) -> Result<PendingCaptureDocumentScreencastFrame, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_capture_screencast_frame(request)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingCaptureDocumentScreencastFrame::new(
+            document, pending,
+        ))
     }
 
-    pub(crate) fn finish_capture_screencast_frame_for_target(
+    pub(crate) fn finish_capture_document_screencast_frame(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedCaptureDocumentScreencastFrame,
     ) -> Result<RendererCaptureScreencastFrameReply, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_capture_screencast_frame(completion)
+        let (document, completion) = completed.into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_capture_screencast_frame(completion?)
             .map_err(|error| error.to_string())
     }
 
@@ -406,17 +426,19 @@ impl BrowserContext {
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_child_frame_resource_search_by_lines_for_target(
+    pub(crate) fn start_child_frame_document_resource_text_search(
         &self,
-        target_id: &str,
+        document: DocumentHandle,
         frame_id: String,
         url: String,
         query: String,
         case_sensitive: bool,
         is_regex: bool,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+    ) -> Result<PendingDocumentResourceTextSearch, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_child_frame_resource_search_by_lines(
                 frame_id,
                 url,
@@ -424,31 +446,36 @@ impl BrowserContext {
                 case_sensitive,
                 is_regex,
             )
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingDocumentResourceTextSearch::new(document, pending))
     }
 
-    pub(crate) fn start_text_search_by_lines_for_target(
+    pub(crate) fn start_document_text_search(
         &self,
-        target_id: &str,
+        document: DocumentHandle,
         text: String,
         query: String,
         case_sensitive: bool,
         is_regex: bool,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+    ) -> Result<PendingDocumentResourceTextSearch, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_text_search_by_lines(text, query, case_sensitive, is_regex)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingDocumentResourceTextSearch::new(document, pending))
     }
 
-    pub(crate) fn finish_resource_search_by_lines_for_target(
+    pub(crate) fn finish_document_resource_text_search(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedDocumentResourceTextSearch,
     ) -> Result<RendererResourceTextSearchOutcome, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_resource_search_by_lines(completion)
+        let (document, completion) = completed.into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_resource_search_by_lines(completion?)
             .map_err(|error| error.to_string())
     }
 
@@ -463,26 +490,42 @@ impl BrowserContext {
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_set_bypass_content_security_policy_for_target(
+    pub(crate) fn start_document_csp_bypass_update(
         &self,
-        target_id: &str,
+        document: DocumentHandle,
         bypass: bool,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+    ) -> Result<PendingDocumentCspBypassUpdate, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_set_bypass_content_security_policy(bypass)
+            .map_err(|error| error.to_string())?;
+        Ok(PendingDocumentCspBypassUpdate::new(document, pending))
+    }
+
+    pub(crate) fn finish_document_csp_bypass_update(
+        &mut self,
+        completed: CompletedDocumentCspBypassUpdate,
+    ) -> Result<(), String> {
+        let (document, completion) = completed.into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_set_bypass_content_security_policy(completion?)
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn finish_set_bypass_content_security_policy_for_target(
-        &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
-    ) -> Result<(), String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_set_bypass_content_security_policy(completion)
-            .map_err(|error| error.to_string())
+    pub(crate) fn document_subresource_network_records(
+        &self,
+        document: DocumentHandle,
+    ) -> Result<Vec<SubresourceNetworkRecord>, String> {
+        Ok(self
+            .physical
+            .document(document)?
+            .page
+            .subresource_network_records()
+            .to_vec())
     }
 
     pub(crate) fn target_response_headers(&self, target_id: &str) -> Option<&[(String, String)]> {

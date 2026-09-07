@@ -136,13 +136,17 @@ pub(crate) use browser_context::BrowserContextResourceStorageHandles;
 pub(crate) use browser_context::{
     BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
     CompletedAppManifestPublication, CompletedCaptureDocumentImage,
-    CompletedCaptureDocumentSnapshot, CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
-    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentStorageKeySnapshot,
+    CompletedCaptureDocumentScreencastFrame, CompletedCaptureDocumentSnapshot,
+    CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
+    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
+    CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
     CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent, DocumentSnapshot,
     PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
-    PendingCaptureDocumentSnapshot, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
-    PendingDocumentCookieOwnerSnapshot, PendingDocumentStorageKeySnapshot,
-    PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
+    PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
+    PendingChildFrameTreeSnapshot, PendingDocumentBlobRead, PendingDocumentCookieOwnerSnapshot,
+    PendingDocumentCspBypassUpdate, PendingDocumentResourceTextSearch,
+    PendingDocumentStorageKeySnapshot, PendingNetworkResourceLoadPreparation,
+    PendingSetDocumentContent,
 };
 pub(crate) use browser_context::{
     BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles, ContextNetworkPolicy,
