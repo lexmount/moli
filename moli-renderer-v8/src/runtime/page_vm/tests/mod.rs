@@ -227,6 +227,7 @@ async fn page_resource_completion_rejects_stale_document_before_application() {
                     source_result: Ok("globalThis.__staleDeferRan = true".to_owned()),
                     source_bytes: None,
                     network_result: network_error.map(|error| Arc::new(Err(error.to_owned()))),
+                    muted_errors: false,
                 },
             )
         };
