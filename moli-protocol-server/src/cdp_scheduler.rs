@@ -11,9 +11,9 @@ use moli_core::{
     runtime::NavigationRuntimeConfig,
 };
 use moli_protocol::{
-    BackgroundNavigationCompletion, BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection,
-    CdpInitialStoragePartition, CdpRendererDispatchLane, CdpSchedulerEvent,
-    CdpTargetHostLifecycleObserver, CommandDispatchContext, CompletedCdpCommandDispatch,
+    AgentHostDispatchResult, BackgroundNavigationCompletion, BackgroundProtocolEvent,
+    CdpConnection, CdpInitialStoragePartition, CdpSchedulerEvent, CdpTargetHostLifecycleObserver,
+    CommandDispatchContext, CompletedCdpCommandDispatch,
     CompletedDeferredMainDocumentLoadCompletion, DeferredMainDocumentLoadCompletionOutputAction,
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
     DeferredMainDocumentLoadPredecessorCandidate, DevToolsPageResidenceIdentity,
@@ -842,12 +842,18 @@ impl CdpScheduler {
         let output_release_permit =
             CommandOutputReleasePermit::new(response_flush_permit, runtime_output_barrier);
         let step = match dispatch_step {
-            CdpCommandTaskStep::Pending(mut pending) => {
+            AgentHostDispatchResult::PendingService(mut pending) => {
                 let scheduler_events = pending.take_scheduler_events();
                 self.apply_scheduler_events(scheduler_events);
                 CommandTaskStep::Pending(pending)
             }
-            CdpCommandTaskStep::Complete(result) => {
+            AgentHostDispatchResult::FallThrough(dispatch) => {
+                let mut pending = dispatch.into_pending();
+                let scheduler_events = pending.take_scheduler_events();
+                self.apply_scheduler_events(scheduler_events);
+                CommandTaskStep::Pending(pending)
+            }
+            AgentHostDispatchResult::Complete(result) => {
                 let (
                     events,
                     post_renderer_output_events,
@@ -888,12 +894,18 @@ impl CdpScheduler {
             .complete_pending_command_dispatch_with_context(completed, command_context)
             .await
         {
-            CdpCommandTaskStep::Pending(mut pending) => {
+            AgentHostDispatchResult::PendingService(mut pending) => {
                 let scheduler_events = pending.take_scheduler_events();
                 self.apply_scheduler_events(scheduler_events);
                 CommandTaskStep::Pending(pending)
             }
-            CdpCommandTaskStep::Complete(result) => {
+            AgentHostDispatchResult::FallThrough(dispatch) => {
+                let mut pending = dispatch.into_pending();
+                let scheduler_events = pending.take_scheduler_events();
+                self.apply_scheduler_events(scheduler_events);
+                CommandTaskStep::Pending(pending)
+            }
+            AgentHostDispatchResult::Complete(result) => {
                 let (
                     events,
                     post_renderer_output_events,
@@ -2015,10 +2027,7 @@ impl CdpScheduler {
     }
 
     pub(crate) fn command_waits_for_navigation_flush(&self, command: &ParsedCdpCommand) -> bool {
-        command.renderer_lane() == Some(CdpRendererDispatchLane::Main)
-            && self
-                .conn
-                .renderer_document_navigation_is_suspended_for_session_owner(command.session_id())
+        self.conn.command_waits_for_document_projection(command)
     }
 
     pub(crate) fn route_background_event_around_inflight_navigation(

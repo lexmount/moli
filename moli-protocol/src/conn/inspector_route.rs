@@ -21,10 +21,17 @@ impl CdpConnection {
         &self,
         owner: &CommandOwnerScope,
     ) -> Option<RendererAgentAttachmentId> {
+        self.current_renderer_agent_attachment_for_owner(owner)
+            .map(RendererAgentAttachment::id)
+    }
+
+    pub(crate) fn current_renderer_agent_attachment_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<RendererAgentAttachment> {
         self.runtime_session_owner_slot_for_owner(owner)
             .ok()
             .and_then(|slot| slot.current_renderer_attachment())
-            .map(RendererAgentAttachment::id)
     }
 
     pub(crate) fn route_current_renderer_inspector_output_for_owner(

@@ -172,18 +172,20 @@ impl TargetRuntimeSlot {
     pub(in crate::conn::state) fn project_committed_document_inspection(
         &mut self,
         navigation: NavigationId,
+        document: DocumentId,
         endpoint: moli_renderer_v8::RendererInspectionEndpoint,
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
         self.devtools_renderer_channel
-            .document_committed(navigation, endpoint)
+            .document_committed(navigation, document, endpoint)
     }
 
     pub(in crate::conn::state) fn project_initial_document_inspection(
         &mut self,
+        document: DocumentId,
         endpoint: moli_renderer_v8::RendererInspectionEndpoint,
     ) -> Result<(), DevToolsRendererChannelError> {
         self.devtools_renderer_channel
-            .attach_current(endpoint)
+            .attach_current(document, endpoint)
             .map(|_| ())
     }
 
@@ -235,8 +237,13 @@ impl TargetRuntimeSlot {
         &mut self,
         endpoint: moli_renderer_v8::RendererInspectionEndpoint,
     ) {
+        let document = self
+            .devtools_renderer_channel
+            .current()
+            .expect("reattachment requires a current renderer binding")
+            .document();
         self.devtools_renderer_channel
-            .attach_current(endpoint)
+            .attach_current(document, endpoint)
             .unwrap();
     }
 
@@ -344,19 +351,21 @@ impl TargetRuntimeSlot {
     }
 
     #[cfg(test)]
-    fn ensure_renderer_attachment_for_replacement(&mut self, page: Option<&mut Page>) {
-        let Some(page) = page else {
-            return;
-        };
+    fn ensure_renderer_attachment_for_replacement(
+        &mut self,
+        document: DocumentId,
+        agent_token: moli_core::page::RendererDevToolsAgentToken,
+        endpoint: moli_renderer_v8::RendererInspectionEndpoint,
+    ) {
         if !self
             .devtools_renderer_channel
             .current()
             .is_some_and(|attachment| {
-                attachment.agent_token() == page.renderer_devtools_agent_token()
+                attachment.agent_token() == agent_token && attachment.document() == document
             })
         {
             self.devtools_renderer_channel
-                .attach_current(page.renderer_inspection_endpoint())
+                .attach_current(document, endpoint)
                 .expect("a loaded page cannot be installed into a closed renderer channel");
         }
     }
@@ -883,20 +892,31 @@ impl BrowserContext {
     pub(super) fn replace_loaded_page_for_target(
         &mut self,
         target_id: &str,
-        mut page: Option<Page>,
+        page: Option<Page>,
     ) -> Option<Page> {
+        let inspection = page.as_ref().map(|page| {
+            (
+                page.renderer_devtools_agent_token(),
+                page.renderer_inspection_endpoint(),
+            )
+        });
         let previous_document = self.target_document_id(target_id).zip(
             self.loaded_page_for_target(target_id)
                 .map(RendererPageResidenceIdentity::from_page),
         );
         let retiring =
             self.begin_document_projection_replacement_for_target(target_id, previous_document);
-        self.page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection")
-            .runtime_slot
-            .ensure_renderer_attachment_for_replacement(page.as_mut());
         let previous = self.replace_target_document(target_id, page);
+        if let Some((agent_token, endpoint)) = inspection {
+            let document = self
+                .target_document_id(target_id)
+                .expect("a replacement Page must install a Document");
+            self.page_targets
+                .get_mut(target_id)
+                .expect("resolved target projection")
+                .runtime_slot
+                .ensure_renderer_attachment_for_replacement(document, agent_token, endpoint);
+        }
         self.finish_document_projection_replacement_for_target(target_id, retiring);
         previous
     }

@@ -360,7 +360,44 @@ pub(crate) enum PageCommandTaskStep {
     Complete(CommandOutputPlan),
 }
 
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    matches!(
+        cmd.parse_action::<PageAction>(),
+        Some(PageAction::GetFrameTree | PageAction::GetResourceTree | PageAction::GetLayoutMetrics)
+    )
+}
+
 impl PendingPageCommandDispatch {
+    pub(crate) fn renderer_dispatch_lane(&self) -> Option<crate::conn::RendererDispatchLane> {
+        match self.kind.as_ref() {
+            PendingPageCommandKind::GetFrameTree { .. }
+            | PendingPageCommandKind::GetLayoutMetrics { .. } => {
+                Some(crate::conn::RendererDispatchLane::Main)
+            }
+            PendingPageCommandKind::BringToFront { .. }
+            | PendingPageCommandKind::AppendDefaultDocumentStartScript { .. }
+            | PendingPageCommandKind::RemoveDocumentStartScript { .. }
+            | PendingPageCommandKind::AddScriptToEvaluateOnNewDocument(_)
+            | PendingPageCommandKind::SearchInResource(_)
+            | PendingPageCommandKind::GetAppManifest(_)
+            | PendingPageCommandKind::ResetNavigationHistory { .. }
+            | PendingPageCommandKind::SetDocumentContent { .. }
+            | PendingPageCommandKind::SetBypassContentSecurityPolicy { .. }
+            | PendingPageCommandKind::SameDocumentNavigate(_)
+            | PendingPageCommandKind::CaptureSnapshot { .. }
+            | PendingPageCommandKind::CaptureScreenshot { .. }
+            | PendingPageCommandKind::PrintToPdf { .. }
+            | PendingPageCommandKind::Navigate(_)
+            | PendingPageCommandKind::TraverseSameDocumentHistory(_)
+            | PendingPageCommandKind::ChildFrameNavigate(_)
+            | PendingPageCommandKind::ContinueNavigationWithoutRequestPause(_)
+            | PendingPageCommandKind::StopLoading
+            | PendingPageCommandKind::Crash
+            | PendingPageCommandKind::Close
+            | PendingPageCommandKind::CreateIsolatedWorld(_) => None,
+        }
+    }
+
     pub async fn wait(self) -> CompletedPageCommandDispatch {
         let kind = match *self.kind {
             PendingPageCommandKind::BringToFront {

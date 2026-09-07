@@ -3,6 +3,10 @@ use serde_json::{Map, Value};
 use crate::conn::{CdpConnection, Cmd};
 use crate::domains::runtime::{RuntimeCommandTaskStep, start_debugger_inspector_command_dispatch};
 
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    crate::domains::runtime::debugger_command_waits_for_document_projection(cmd)
+}
+
 pub(crate) fn try_start_debugger_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,

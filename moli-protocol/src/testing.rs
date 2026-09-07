@@ -573,7 +573,8 @@ impl TestContext {
         let mut command_context = CommandDispatchContext::new(response_flush_context);
         let step = self
             .conn
-            .start_parsed_command_dispatch_with_context(&command, &mut command_context);
+            .start_parsed_command_dispatch_with_context(&command, &mut command_context)
+            .into();
         let mut runtime_output_barrier = self.admit_runtime_output_barrier(&command);
         let mut protocol_events = Vec::new();
         let mut scheduler_events = Vec::new();
@@ -741,7 +742,8 @@ impl TestContext {
         let mut command_context = crate::conn::CommandDispatchContext::default();
         let step = self
             .conn
-            .start_parsed_command_dispatch_with_context(command, &mut command_context);
+            .start_parsed_command_dispatch_with_context(command, &mut command_context)
+            .into();
         let mut runtime_output_barrier = self.admit_runtime_output_barrier(command);
         let completed = Box::pin(self.complete_command_step_like_scheduler(
             step,
@@ -920,7 +922,8 @@ impl TestContext {
                         completed,
                         command_context,
                     ))
-                    .await;
+                    .await
+                    .into();
                 }
             }
         }
@@ -1738,7 +1741,8 @@ impl TestContext {
         let step = self
             .conn
             .complete_pending_command_dispatch_with_context(completed, &mut pending.command_context)
-            .await;
+            .await
+            .into();
         let mut protocol_events = Vec::new();
         let mut scheduler_events = Vec::new();
         let completed = Box::pin(self.complete_command_step_like_scheduler(

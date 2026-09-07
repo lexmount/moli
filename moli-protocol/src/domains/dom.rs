@@ -44,6 +44,11 @@ pub(crate) enum DomCommandDispatchStep {
     Complete(CommandOutputPlan),
 }
 
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    cmd.parse_action::<DomAction>()
+        .is_some_and(|action| action != DomAction::Enable)
+}
+
 pub(crate) fn try_start_dom_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,

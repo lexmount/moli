@@ -4,6 +4,10 @@ use crate::domains::actions::ConsoleAction;
 use crate::domains::command_output::CommandOutputPlan;
 use crate::domains::runtime::{RuntimeCommandTaskStep, start_console_inspector_command_dispatch};
 
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    cmd.parse_action::<ConsoleAction>().is_some()
+}
+
 pub(crate) fn try_start_console_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,

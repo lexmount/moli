@@ -1,6 +1,6 @@
 use super::super::tests_cdp_smoke_fixture::SmokeFixtureServer;
 use super::super::*;
-use crate::{CdpCommandTaskStep, CommandDispatchContext, ParsedCdpCommand};
+use crate::{AgentHostDispatchResult, CommandDispatchContext, ParsedCdpCommand};
 use serde_json::{Value, json};
 
 fn event<'a>(messages: &'a [Value], method: &str) -> &'a Value {
@@ -280,7 +280,7 @@ async fn create_isolated_world_restart_does_not_inherit_the_stale_renderer_strea
     }))
     .expect("createIsolatedWorld command should parse");
     let mut command_context = CommandDispatchContext::default();
-    let CdpCommandTaskStep::Pending(first_pending) = ctx
+    let AgentHostDispatchResult::PendingService(first_pending) = ctx
         .conn
         .start_parsed_command_dispatch_with_context(&command, &mut command_context)
     else {
@@ -298,7 +298,7 @@ async fn create_isolated_world_restart_does_not_inherit_the_stale_renderer_strea
     assert_eq!(navigation["result"]["frameId"], json!(target_id));
 
     let first_completed = first_pending.wait().await;
-    let CdpCommandTaskStep::Pending(restarted) = ctx
+    let AgentHostDispatchResult::PendingService(restarted) = ctx
         .conn
         .complete_pending_command_dispatch_with_context(first_completed, &mut command_context)
         .await
@@ -311,7 +311,7 @@ async fn create_isolated_world_restart_does_not_inherit_the_stale_renderer_strea
     );
 
     let replacement_completed = restarted.wait().await;
-    let CdpCommandTaskStep::Complete(outcome) = ctx
+    let AgentHostDispatchResult::Complete(outcome) = ctx
         .conn
         .complete_pending_command_dispatch_with_context(replacement_completed, &mut command_context)
         .await

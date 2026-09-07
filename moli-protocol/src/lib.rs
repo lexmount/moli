@@ -18,9 +18,9 @@ pub mod version;
 pub use devtools_runtime::*;
 
 pub use conn::{
-    BackgroundCommandResponsePayload, BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection,
-    CdpInitialStoragePartition, CdpRendererCommandReplacement, CdpRendererCommandReplayDispatch,
-    CdpRendererDispatchLane, CdpRendererOwnerTurnOutcome, CdpSchedulerEvent,
+    AgentHostDispatchResult, BackgroundCommandResponsePayload, BackgroundProtocolEvent,
+    CdpCommandTaskStep, CdpConnection, CdpInitialStoragePartition, CdpRendererCommandReplacement,
+    CdpRendererCommandReplayDispatch, CdpRendererOwnerTurnOutcome, CdpSchedulerEvent,
     CdpTargetHostLifecycleDelta, CdpTargetHostLifecycleObserver, CdpTurnOutcome,
     CommandDispatchContext, CommandResponseFlushContext, CommandResponseFlushPermit,
     CompletedCdpCommandDispatch, CompletedDeferredMainDocumentLoadCompletion,
@@ -31,7 +31,8 @@ pub use conn::{
     DevToolsDocumentLifecycleWaitKey, DevToolsDocumentLifecycleWaitState,
     DevToolsDocumentNavigationState, DevToolsPageResidenceIdentity, ParsedCdpCommand,
     PendingCdpCommandDispatch, PendingDeferredMainDocumentLoadCompletion,
-    PendingRuntimeProtocolMessageDispatch,
+    PendingRuntimeProtocolMessageDispatch, RendererDispatch, RendererDispatchBinding,
+    RendererDispatchLane, RendererPageDispatchBinding,
 };
 pub use domains::activity::{
     ProtocolSchedulerWork, ProtocolSchedulerWorkKind, ProtocolWorkPublishSequence,

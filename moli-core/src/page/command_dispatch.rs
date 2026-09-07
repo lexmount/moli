@@ -1,8 +1,8 @@
 use super::{
-    Page, RendererAgentAttachmentId, RendererCommandTurnOutput, RendererPageCommand,
-    RendererPageCommandPending, RendererPageReply, RendererRuntimeInspectorIoCommandClaim,
-    RendererRuntimeInspectorIoCommandRoute, RendererRuntimeInspectorMainCommandCompletion,
-    RendererRuntimeInspectorMainCommandRoute,
+    Page, RendererAgentAttachmentId, RendererCommandTurnOutput, RendererInspectorCommandRoute,
+    RendererPageCommand, RendererPageCommandPending, RendererPageReply,
+    RendererRuntimeInspectorIoCommandClaim, RendererRuntimeInspectorIoCommandRoute,
+    RendererRuntimeInspectorMainCommandCompletion, RendererRuntimeInspectorMainCommandRoute,
 };
 use crate::RendererOutputFence;
 use anyhow::{Result, bail};
@@ -41,6 +41,26 @@ impl PendingRuntimeInspectorCommandDispatch {
             kind: PendingRuntimeInspectorCommandDispatchKind::Io(
                 PendingDevToolsIoCommandDispatch { route },
             ),
+        }
+    }
+
+    pub fn renderer_route(&self) -> RendererInspectorCommandRoute {
+        match &self.kind {
+            PendingRuntimeInspectorCommandDispatchKind::MainIngress(_) => {
+                RendererInspectorCommandRoute::MainThread
+            }
+            PendingRuntimeInspectorCommandDispatchKind::Io(_) => RendererInspectorCommandRoute::Io,
+        }
+    }
+
+    pub fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
+        match &self.kind {
+            PendingRuntimeInspectorCommandDispatchKind::MainIngress(route) => {
+                route.ticket().attachment()
+            }
+            PendingRuntimeInspectorCommandDispatchKind::Io(pending) => {
+                pending.renderer_agent_attachment_id()
+            }
         }
     }
 }
@@ -482,6 +502,10 @@ impl PendingRuntimeInspectorCommandDispatch {
 impl PendingDevToolsIoCommandDispatch {
     pub fn from_route(route: RendererRuntimeInspectorIoCommandRoute) -> Self {
         Self { route }
+    }
+
+    pub fn renderer_agent_attachment_id(&self) -> Option<RendererAgentAttachmentId> {
+        self.route.ticket().attachment()
     }
 
     pub async fn wait(self) -> Result<CompletedDevToolsIoCommandDispatch> {

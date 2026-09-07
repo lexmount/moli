@@ -24,8 +24,8 @@ use moli_page_types::RendererInspectorResponseDelivery;
 use crate::conn::{
     BackgroundCommandResponsePayload, BackgroundCommandResponsePayloadRef, BackgroundProtocolEvent,
     BidiChannelListenerResidence, BidiChannelOwnerAction, BidiChannelPageOwner, CdpConnection,
-    CdpRendererCommandPolicy, CdpRendererDispatchLane, CdpSchedulerEvent, CdpSessionRoute,
-    ClaimedPendingInspectorAwait, Cmd, CommandOwnerScope, CompletedMoliDiagnosticsDispatch,
+    CdpRendererCommandPolicy, CdpSchedulerEvent, CdpSessionRoute, ClaimedPendingInspectorAwait,
+    Cmd, CommandOwnerScope, CompletedMoliDiagnosticsDispatch,
     CompletedRuntimeBindingPageCommandDispatch, CompletedRuntimeChildDefaultContextLookupDispatch,
     CompletedRuntimeEnableEventsDispatch, CompletedRuntimeProtocolMessageDispatch,
     CompletedServiceWorkerRuntimeProtocolMessageDispatch,
@@ -36,11 +36,11 @@ use crate::conn::{
     PendingRuntimeEnableEventsDispatch, PendingRuntimeProtocolMessageDispatch,
     PendingServiceWorkerRuntimeProtocolMessageDispatch,
     PendingSharedWorkerRuntimeProtocolMessageDispatch, ProfilerInspectorCommand,
-    RendererCommandDescriptor, RuntimeBindingDefinition, RuntimeEnableReplayEvent,
-    RuntimeInspectorAsyncCompletionReceiver, RuntimeInspectorResponseReady,
-    ServiceWorkerRuntimeExceptionSnapshot, SessionOwnerRuntimeFrontendEnableResult,
-    monotonic_timestamp_seconds, renderer_command_turn_frontend_protocol_response,
-    runtime_remote_object_ids_in_map,
+    RendererCommandDescriptor, RendererDispatchLane, RuntimeBindingDefinition,
+    RuntimeEnableReplayEvent, RuntimeInspectorAsyncCompletionReceiver,
+    RuntimeInspectorResponseReady, ServiceWorkerRuntimeExceptionSnapshot,
+    SessionOwnerRuntimeFrontendEnableResult, monotonic_timestamp_seconds,
+    renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
 };
 use crate::domains::actions::{ConsoleAction, HeapProfilerAction, RuntimeAction};
 use crate::domains::command_output::{
@@ -521,6 +521,26 @@ impl RuntimeCommandCompletionMeta {
 }
 
 impl PendingRuntimeCommandDispatch {
+    pub(crate) fn renderer_dispatch_lane(&self) -> Option<RendererDispatchLane> {
+        match &self.pending {
+            PendingRuntimeCommandKind::Inspector { pending }
+            | PendingRuntimeCommandKind::BindingInspector { pending, .. } => {
+                Some(renderer_dispatch_lane(pending.renderer_route()))
+            }
+            PendingRuntimeCommandKind::SharedWorkerInspector { .. }
+            | PendingRuntimeCommandKind::ServiceWorkerInspector { .. } => {
+                Some(RendererDispatchLane::Io)
+            }
+            PendingRuntimeCommandKind::Enable(_)
+            | PendingRuntimeCommandKind::BindingContextLookup { .. } => {
+                Some(RendererDispatchLane::Main)
+            }
+            PendingRuntimeCommandKind::InspectorDeferredReply { .. }
+            | PendingRuntimeCommandKind::MoliDiagnostics(_)
+            | PendingRuntimeCommandKind::BindingPage { .. } => None,
+        }
+    }
+
     pub(crate) fn command_id(&self) -> Option<u64> {
         self.command_id
     }
@@ -965,6 +985,21 @@ pub(crate) fn try_start_runtime_command_dispatch(
     }
 }
 
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    !matches!(
+        cmd.parse_action::<RuntimeAction>(),
+        None | Some(
+            RuntimeAction::AddBinding
+                | RuntimeAction::RemoveBinding
+                | RuntimeAction::TerminateExecution
+        )
+    )
+}
+
+pub(crate) fn debugger_command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    debugger_renderer_dispatch_lane(cmd.action) == RendererDispatchLane::Main && can_dispatch(cmd)
+}
+
 fn start_main_runtime_inspector_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
@@ -1024,10 +1059,16 @@ fn start_main_runtime_inspector_command_for_owner(
             ));
         }
     };
+    let renderer_lane = if action == RuntimeAction::TerminateExecution {
+        RendererDispatchLane::Io
+    } else {
+        RendererDispatchLane::Main
+    };
     let pending = match start_pending_runtime_routable_inspector_dispatch(
         conn,
         cmd,
         &owner_scope,
+        renderer_lane,
         inspector_json,
         cmd.terminal_response_delivery(),
     ) {
@@ -1225,26 +1266,20 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
     }
 
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let pending = match cmd.renderer_policy().renderer_lane() {
-        Some(CdpRendererDispatchLane::Main) => {
-            start_pending_runtime_inspector_dispatch_with_delivery(
-                conn,
-                cmd,
-                &owner_scope,
-                inspector_json,
-                cmd.terminal_response_delivery(),
-            )
-        }
-        Some(CdpRendererDispatchLane::Io) => start_pending_runtime_io_inspector_dispatch(
+    let pending = match debugger_renderer_dispatch_lane(cmd.action) {
+        RendererDispatchLane::Main => start_pending_runtime_inspector_dispatch_with_delivery(
             conn,
             cmd,
             &owner_scope,
             inspector_json,
             cmd.terminal_response_delivery(),
         ),
-        None => Err(
-            "a command without renderer fallthrough cannot enter the Debugger Inspector dispatcher"
-                .to_owned(),
+        RendererDispatchLane::Io => start_pending_runtime_io_inspector_dispatch(
+            conn,
+            cmd,
+            &owner_scope,
+            inspector_json,
+            cmd.terminal_response_delivery(),
         ),
     };
     let pending = match pending {
@@ -1882,30 +1917,49 @@ fn start_pending_runtime_routable_inspector_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
     owner: &CommandOwnerScope,
+    lane: RendererDispatchLane,
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
-    match cmd.renderer_policy().renderer_lane() {
-        Some(CdpRendererDispatchLane::Main) => {
-            start_pending_runtime_inspector_dispatch_with_delivery(
-                conn,
-                cmd,
-                owner,
-                inspector_json,
-                response_delivery,
-            )
-        }
-        Some(CdpRendererDispatchLane::Io) => start_pending_runtime_io_inspector_dispatch(
+    match lane {
+        RendererDispatchLane::Main => start_pending_runtime_inspector_dispatch_with_delivery(
             conn,
             cmd,
             owner,
             inspector_json,
             response_delivery,
         ),
-        None => Err(
-            "a command without renderer fallthrough cannot enter the Runtime Inspector dispatcher"
-                .to_owned(),
+        RendererDispatchLane::Io => start_pending_runtime_io_inspector_dispatch(
+            conn,
+            cmd,
+            owner,
+            inspector_json,
+            response_delivery,
         ),
+    }
+}
+
+fn renderer_dispatch_lane(
+    route: moli_core::page::RendererInspectorCommandRoute,
+) -> RendererDispatchLane {
+    match route {
+        moli_core::page::RendererInspectorCommandRoute::MainThread => RendererDispatchLane::Main,
+        moli_core::page::RendererInspectorCommandRoute::Io => RendererDispatchLane::Io,
+    }
+}
+
+fn debugger_renderer_dispatch_lane(action: &str) -> RendererDispatchLane {
+    match action {
+        "getPossibleBreakpoints"
+        | "getScriptSource"
+        | "getStackTrace"
+        | "pause"
+        | "removeBreakpoint"
+        | "resume"
+        | "setBreakpoint"
+        | "setBreakpointByUrl"
+        | "setBreakpointsActive" => RendererDispatchLane::Io,
+        _ => RendererDispatchLane::Main,
     }
 }
 

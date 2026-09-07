@@ -128,6 +128,16 @@ impl PendingEmulationPageOperation {
 }
 
 impl PendingEmulationCommandDispatch {
+    pub(crate) const fn renderer_dispatch_lane(&self) -> Option<crate::conn::RendererDispatchLane> {
+        match self.pending {
+            PendingEmulationRendererDispatch::IoAdapterReply(_)
+            | PendingEmulationRendererDispatch::IoSessionOutput { .. } => {
+                Some(crate::conn::RendererDispatchLane::Io)
+            }
+            PendingEmulationRendererDispatch::Pages(_) => None,
+        }
+    }
+
     pub(crate) async fn wait(self) -> CompletedEmulationCommandDispatch {
         let completed = match self.pending {
             PendingEmulationRendererDispatch::Pages(pending_pages) => {

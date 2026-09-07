@@ -9109,3 +9109,202 @@ fn command_dispatch_completes_additional_sync_domain_unknown_methods_without_leg
         );
     }
 }
+
+async fn loaded_agent_host_dispatch_connection_for_test() -> CdpConnection {
+    let mut conn = CdpConnection::new();
+    let mut browser_context = BrowserContext::new("BID-agent-host-dispatch".to_owned());
+    browser_context.set_active_target_id("TID-agent-host-dispatch".to_owned());
+    conn.install_browser_context_fixture_for_test(browser_context);
+    let page = conn
+        .load_page_via_runtime_async("data:text/html,<p>agent host dispatch</p>")
+        .await
+        .expect("agent host dispatch page should load");
+    conn.browser_context
+        .as_mut()
+        .expect("browser context")
+        .replace_active_page_for_test(Some(page));
+    conn
+}
+
+fn parsed_agent_host_command(id: u64, method: &str, params: Value) -> ParsedCdpCommand {
+    ParsedCdpCommand::parse_str(
+        serde_json::to_string(&json!({
+            "id": id,
+            "method": method,
+            "params": params,
+        }))
+        .expect("agent host command should serialize"),
+    )
+    .expect("agent host command should parse")
+}
+
+#[tokio::test]
+async fn agent_host_dispatch_exposes_only_actual_renderer_fallthrough_binding() {
+    let mut conn = loaded_agent_host_dispatch_connection_for_test().await;
+    let owner = CommandOwnerScope::capture(&conn, None);
+    let expected_document = conn
+        .current_document_id_for_owner(&owner)
+        .expect("loaded page should have a current Document");
+    let expected_attachment = conn
+        .current_renderer_agent_attachment_id_for_owner(&owner)
+        .expect("loaded page should have a renderer attachment");
+
+    let evaluate =
+        parsed_agent_host_command(20_001, "Runtime.evaluate", json!({"expression": "1 + 1"}));
+    let mut command_context = CommandDispatchContext::default();
+    let dispatch = conn.start_parsed_command_dispatch_with_context(&evaluate, &mut command_context);
+    let AgentHostDispatchResult::FallThrough(dispatch) = dispatch else {
+        panic!("Runtime.evaluate should fall through to the renderer");
+    };
+    assert_eq!(dispatch.lane(), RendererDispatchLane::Main);
+    assert_eq!(
+        dispatch.binding(),
+        &RendererDispatchBinding::Page(RendererPageDispatchBinding {
+            document: expected_document,
+            attachment: expected_attachment,
+        })
+    );
+    let completed = dispatch.into_pending().wait().await;
+    assert!(matches!(
+        conn.complete_pending_command_dispatch_with_context(completed, &mut command_context)
+            .await,
+        AgentHostDispatchResult::Complete(_)
+    ));
+
+    let terminate = parsed_agent_host_command(20_002, "Runtime.terminateExecution", json!({}));
+    let mut command_context = CommandDispatchContext::default();
+    let dispatch =
+        conn.start_parsed_command_dispatch_with_context(&terminate, &mut command_context);
+    let AgentHostDispatchResult::FallThrough(dispatch) = dispatch else {
+        panic!("Runtime.terminateExecution should fall through to renderer IO");
+    };
+    assert_eq!(dispatch.lane(), RendererDispatchLane::Io);
+    assert_eq!(
+        dispatch.binding(),
+        &RendererDispatchBinding::Page(RendererPageDispatchBinding {
+            document: expected_document,
+            attachment: expected_attachment,
+        })
+    );
+    let completed = dispatch.into_pending().wait().await;
+    assert!(matches!(
+        conn.complete_pending_command_dispatch_with_context(completed, &mut command_context)
+            .await,
+        AgentHostDispatchResult::Complete(_)
+    ));
+
+    let screenshot = parsed_agent_host_command(20_003, "Page.captureScreenshot", json!({}));
+    let mut command_context = CommandDispatchContext::default();
+    let dispatch =
+        conn.start_parsed_command_dispatch_with_context(&screenshot, &mut command_context);
+    match dispatch {
+        AgentHostDispatchResult::PendingService(pending) => {
+            let completed = pending.wait().await;
+            assert!(matches!(
+                conn.complete_pending_command_dispatch_with_context(
+                    completed,
+                    &mut command_context,
+                )
+                .await,
+                AgentHostDispatchResult::Complete(_)
+            ));
+        }
+        AgentHostDispatchResult::Complete(_) => {}
+        AgentHostDispatchResult::FallThrough(_) => {
+            panic!("native Page.captureScreenshot must not become renderer fallthrough")
+        }
+    }
+
+    let permission = parsed_agent_host_command(
+        20_004,
+        "Browser.setPermission",
+        json!({
+            "permission": {"name": "geolocation"},
+            "setting": "denied"
+        }),
+    );
+    let mut command_context = CommandDispatchContext::default();
+    let dispatch =
+        conn.start_parsed_command_dispatch_with_context(&permission, &mut command_context);
+    let AgentHostDispatchResult::PendingService(pending) = dispatch else {
+        panic!("live Browser.setPermission should be a service continuation");
+    };
+    let completed = pending.wait().await;
+    assert!(matches!(
+        conn.complete_pending_command_dispatch_with_context(completed, &mut command_context)
+            .await,
+        AgentHostDispatchResult::Complete(_)
+    ));
+}
+
+#[tokio::test]
+async fn document_projection_gate_uses_handler_disposition_not_wire_method_lane() {
+    let mut conn = loaded_agent_host_dispatch_connection_for_test().await;
+    let owner = CommandOwnerScope::capture(&conn, None);
+    let navigation = conn
+        .start_document_navigation_for_owner(&owner, "LOADER-agent-host-gate".to_owned())
+        .expect("cross-Document navigation should start");
+
+    for (id, method, params) in [
+        (20_101, "Runtime.evaluate", json!({"expression": "1"})),
+        (20_102, "Debugger.enable", json!({})),
+        (20_103, "Console.enable", json!({})),
+        (20_104, "Profiler.enable", json!({})),
+        (20_105, "HeapProfiler.enable", json!({})),
+        (20_106, "Accessibility.getFullAXTree", json!({})),
+        (20_107, "CSS.enable", json!({})),
+        (20_108, "DOM.getDocument", json!({})),
+        (
+            20_109,
+            "DOMDebugger.getEventListeners",
+            json!({"objectId": "1"}),
+        ),
+        (20_110, "DOMSnapshot.captureSnapshot", json!({})),
+        (20_111, "Page.getFrameTree", json!({})),
+        (20_112, "Page.getLayoutMetrics", json!({})),
+    ] {
+        let command = parsed_agent_host_command(id, method, params);
+        assert!(
+            conn.command_waits_for_document_projection(&command),
+            "{method} must bind only after the replacement Document is projected"
+        );
+    }
+
+    for (id, method, params) in [
+        (20_201, "Runtime.terminateExecution", json!({})),
+        (
+            20_202,
+            "Runtime.addBinding",
+            json!({"name": "duringNavigation"}),
+        ),
+        (20_203, "Debugger.pause", json!({})),
+        (20_204, "Performance.getMetrics", json!({})),
+        (
+            20_205,
+            "Emulation.setScriptExecutionDisabled",
+            json!({"value": true}),
+        ),
+        (20_206, "Page.captureScreenshot", json!({})),
+        (20_207, "Page.printToPDF", json!({})),
+        (20_208, "Page.searchInResource", json!({})),
+        (
+            20_209,
+            "Input.dispatchKeyEvent",
+            json!({"type": "keyDown", "key": "a"}),
+        ),
+        (20_210, "Browser.setPermission", json!({})),
+        (20_211, "HeapProfiler.moliDiagnostics", json!({})),
+        (20_212, "Accessibility.enable", json!({})),
+        (20_213, "DOM.enable", json!({})),
+        (20_214, "DOMSnapshot.enable", json!({})),
+    ] {
+        let command = parsed_agent_host_command(id, method, params);
+        assert!(
+            !conn.command_waits_for_document_projection(&command),
+            "{method} must remain service/native/IO-dispatchable during projection"
+        );
+    }
+
+    let _ = conn.finish_renderer_document_navigation_for_owner(&owner, &navigation);
+    conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &navigation);
+}

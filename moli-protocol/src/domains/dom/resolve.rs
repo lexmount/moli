@@ -380,6 +380,12 @@ pub(super) enum PendingSetChildNodesAfter {
 }
 
 impl PendingDomCommandDispatch {
+    pub(crate) fn renderer_dispatch_lane(&self) -> Option<crate::conn::RendererDispatchLane> {
+        self.pending
+            .renderer_agent_attachment_id()
+            .map(|_| crate::conn::RendererDispatchLane::Main)
+    }
+
     pub(crate) async fn wait(self) -> CompletedDomCommandDispatch {
         let completed = Box::pin(self.pending.wait())
             .await
