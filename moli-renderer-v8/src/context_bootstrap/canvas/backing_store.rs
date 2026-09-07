@@ -1,18 +1,48 @@
-use super::super::image_data::new_uint8_clamped_array_from_bytes;
-use super::{OFFSCREEN_CANVAS_HEIGHT_SLOT, OFFSCREEN_CANVAS_WIDTH_SLOT};
+//! Authoritative per-canvas native pixel surface, replacing the V8 backing
+//! array.
+//!
+//! A Canvas with a 2D context owns one [`moli_canvas::CanvasSurface`] that
+//! holds its pixels as its single writable owner (premultiplied RGBA8, with
+//! straight-alpha handled at the observation/`ImageData`/publication boundary).
+//! The native surface is keyed by the canvas-like JS object through a
+//! weak-keyed per-context registry, so its lifetime is reclaimed with the canvas
+//! (GC) and with the isolate, mirroring `state.rs`.
+//!
+//! The existing immediate-execution draw helpers operate on straight RGBA8, so
+//! they run through [`CanvasSurface::with_straight_pixels_mut`] — a transitional
+//! adapter that yields byte-identical results while the surface stays the single
+//! owner. M4's ordered recorder replaces this per-call conversion with batched
+//! Vello rendering.
+
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
 use crate::util::{get_private_object, get_private_value, set_private_value};
 use crate::webidl;
 use crate::{
     document_runtime::DomHandle,
     native_bridge::{JsContextHost, node_runtime_and_handle_from_object_or_detached},
 };
-use moli_canvas::{byte_len as canvas_byte_len, encode_data_url};
+use moli_canvas::{CanvasSurface, encode_data_url};
 use moli_webapi_declare::WebApiObject;
 
-const CANVAS_BACKING_STORE_SLOT: &str = "__moliCanvasBackingStore";
+const CANVAS_SURFACE_ID_SLOT: &str = "__moliCanvasLiveSurfaceId";
 const CANVAS_OWNER_SLOT: &str = "__moliCanvasOwner";
 const CANVAS_HAS_CONTEXT_SLOT: &str = "__moliCanvasHasContext";
 const CANVAS_2D_CONTEXT_SLOT: &str = "__moliCanvas2DContext";
+
+type SurfaceCell = Rc<RefCell<Option<CanvasSurface>>>;
+type SurfaceStore = Rc<RefCell<SurfaceRegistry>>;
+
+#[derive(Default)]
+struct SurfaceRegistry {
+    next_id: u64,
+    entries: HashMap<u64, SurfaceRegistryEntry>,
+}
+
+struct SurfaceRegistryEntry {
+    _context: v8::Weak<v8::Object>,
+    surface: SurfaceCell,
+}
 
 #[derive(WebApiObject)]
 #[webapi(interface = "Object")]
@@ -37,7 +67,7 @@ pub(crate) fn attach_canvas_like_context_object<'s>(
         CANVAS_HAS_CONTEXT_SLOT,
         v8::Boolean::new(scope, true).into(),
     );
-    let _ = ensure_canvas_like_backing_store(scope, canvas);
+    let _ = canvas_surface_cell(scope, canvas);
 }
 
 pub(super) fn canvas_like_has_context<'s>(
@@ -56,26 +86,20 @@ pub(crate) fn reset_canvas_like_backing_store<'s>(
         super::context2d::reset_canvas_context_state(scope, context);
     }
     let Some((width, height)) = canvas_like_dimensions(scope, canvas) else {
-        remove_html_canvas_pixels(scope, canvas);
+        remove_canvas_surface(scope, canvas);
         return;
     };
-    let Some(len) = canvas_byte_len(width, height) else {
-        remove_html_canvas_pixels(scope, canvas);
+    let cell = canvas_surface_cell(scope, canvas);
+    let too_large = !materialize_surface(&cell, width, height);
+    if too_large {
+        remove_canvas_surface(scope, canvas);
         return;
-    };
-    let Some(bytes) = new_uint8_clamped_array_from_bytes(scope, vec![0; len]) else {
-        remove_html_canvas_pixels(scope, canvas);
-        return;
-    };
-    set_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT, bytes.into());
-    replace_html_canvas_pixels(scope, canvas, width, height, vec![0; len]);
-}
-
-pub(super) fn canvas_2d_context<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    canvas: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Object>> {
-    get_private_object(scope, canvas, CANVAS_2D_CONTEXT_SLOT)
+    }
+    cell.borrow_mut()
+        .as_mut()
+        .expect("surface materialized")
+        .reset();
+    publish_canvas_snapshot(scope, canvas);
 }
 
 pub(crate) fn reset_html_canvas_backing_store_for_dimension_assignment<'s>(
@@ -97,7 +121,7 @@ pub(crate) fn reset_html_canvas_backing_store_for_dimension_assignment<'s>(
         let _ = unsafe { &mut *runtime_ptr }.remove_canvas_pixels(handle);
         return;
     };
-    if get_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT).is_none() {
+    if !canvas_like_has_context(scope, canvas) {
         let _ = unsafe { &mut *runtime_ptr }.remove_canvas_pixels(handle);
         return;
     }
@@ -127,17 +151,23 @@ pub(super) fn with_canvas_like_pixels_mut<'s, F>(
 where
     F: FnOnce(&mut [u8], u32, u32),
 {
-    let Some((view, width, height)) = canvas_like_pixel_view(scope, canvas) else {
+    let Some((width, height)) = canvas_like_dimensions(scope, canvas) else {
         return false;
     };
-    let mut bytes = vec![0; view.byte_length()];
-    let written = view.copy_contents(&mut bytes);
-    bytes.truncate(written);
-    mutate(&mut bytes, width, height);
-    if write_bytes_to_view(scope, view, &bytes).is_none() {
+    let cell = canvas_surface_cell(scope, canvas);
+    if !materialize_surface(&cell, width, height) {
         return false;
     }
-    replace_html_canvas_pixels(scope, canvas, width, height, bytes);
+    {
+        let mut surface = cell.borrow_mut();
+        let Some(surface) = surface.as_mut() else {
+            return false;
+        };
+        if surface.with_straight_pixels_mut(mutate).is_none() {
+            return false;
+        }
+    }
+    publish_canvas_snapshot(scope, canvas);
     true
 }
 
@@ -145,38 +175,115 @@ pub(super) fn canvas_like_pixels_copy<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) -> Option<(Vec<u8>, u32, u32)> {
-    let (view, width, height) = canvas_like_pixel_view(scope, canvas)?;
-    let mut bytes = vec![0; view.byte_length()];
-    let written = view.copy_contents(&mut bytes);
-    bytes.truncate(written);
-    Some((bytes, width, height))
-}
-
-fn canvas_like_pixel_view<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    canvas: v8::Local<'s, v8::Object>,
-) -> Option<(v8::Local<'s, v8::Uint8ClampedArray>, u32, u32)> {
     let (width, height) = canvas_like_dimensions(scope, canvas)?;
-    let view = ensure_canvas_like_backing_store(scope, canvas)?;
-    Some((view, width, height))
-}
-
-fn ensure_canvas_like_backing_store<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    canvas: v8::Local<'s, v8::Object>,
-) -> Option<v8::Local<'s, v8::Uint8ClampedArray>> {
-    let (width, height) = canvas_like_dimensions(scope, canvas)?;
-    let expected_len = canvas_byte_len(width, height)?;
-    if let Some(existing) = get_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT)
-        .and_then(|value| v8::Local::<v8::Uint8ClampedArray>::try_from(value).ok())
-        && existing.byte_length() == expected_len
-    {
-        return Some(existing);
+    let cell = canvas_surface_cell(scope, canvas);
+    if !materialize_surface(&cell, width, height) {
+        return None;
     }
-    let bytes = new_uint8_clamped_array_from_bytes(scope, vec![0; expected_len])?;
-    set_private_value(scope, canvas, CANVAS_BACKING_STORE_SLOT, bytes.into());
-    replace_html_canvas_pixels(scope, canvas, width, height, vec![0; expected_len]);
-    Some(bytes)
+    let mut surface = cell.borrow_mut();
+    let surface = surface.as_mut()?;
+    let snapshot = surface.snapshot().ok()?;
+    Some((snapshot.rgba.clone(), snapshot.width, snapshot.height))
+}
+
+pub(super) fn canvas_2d_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    get_private_object(scope, canvas, CANVAS_2D_CONTEXT_SLOT)
+}
+
+fn surface_store<'s>(scope: &mut v8::PinScope<'s, '_>) -> SurfaceStore {
+    if let Some(store) = scope.get_slot::<SurfaceStore>() {
+        return store.clone();
+    }
+    let store = SurfaceStore::default();
+    scope.set_slot(store.clone());
+    store
+}
+
+/// Returns (or creates, once per canvas lifetime) the per-canvas surface cell.
+fn canvas_surface_cell<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) -> SurfaceCell {
+    let store = surface_store(scope);
+    if let Some(id) = get_private_value(scope, canvas, CANVAS_SURFACE_ID_SLOT)
+        .and_then(|value| v8::Local::<v8::BigInt>::try_from(value).ok())
+        .map(|value| value.u64_value().0)
+    {
+        return store
+            .borrow()
+            .entries
+            .get(&id)
+            .expect("a live canvas must retain its native surface")
+            .surface
+            .clone();
+    }
+    let id = {
+        let mut store = store.borrow_mut();
+        store.next_id = store
+            .next_id
+            .checked_add(1)
+            .expect("canvas surface identity exhausted");
+        store.next_id
+    };
+    let weak_store = Rc::downgrade(&store);
+    let owner = v8::Weak::with_finalizer(
+        scope,
+        canvas,
+        Box::new(move |_| {
+            if let Some(store) = weak_store.upgrade() {
+                store.borrow_mut().entries.remove(&id);
+            }
+        }),
+    );
+    let surface: SurfaceCell = Rc::new(RefCell::new(None));
+    store.borrow_mut().entries.insert(
+        id,
+        SurfaceRegistryEntry {
+            _context: owner,
+            surface: surface.clone(),
+        },
+    );
+    let id = v8::BigInt::new_from_u64(scope, id);
+    set_private_value(scope, canvas, CANVAS_SURFACE_ID_SLOT, id.into());
+    surface
+}
+
+/// Materializes the surface cell at `width` x `height`, resizing (and resetting
+/// content) only when the dimensions change. Same-size access preserves content.
+/// Returns `false` when the dimensions exceed the budget, leaving no surface.
+fn materialize_surface(cell: &SurfaceCell, width: u32, height: u32) -> bool {
+    let mut guard = cell.borrow_mut();
+    match guard.as_mut() {
+        Some(surface) => {
+            if surface.width() == width && surface.height() == height {
+                true
+            } else {
+                match surface.resize(width, height) {
+                    Ok(()) => true,
+                    Err(_) => {
+                        *guard = None;
+                        false
+                    }
+                }
+            }
+        }
+        None => match CanvasSurface::new(width, height) {
+            Ok(surface) => {
+                *guard = Some(surface);
+                true
+            }
+            Err(_) => false,
+        },
+    }
+}
+
+fn remove_canvas_surface<'s>(scope: &mut v8::PinScope<'s, '_>, canvas: v8::Local<'s, v8::Object>) {
+    let cell = canvas_surface_cell(scope, canvas);
+    *cell.borrow_mut() = None;
+    remove_html_canvas_pixels(scope, canvas);
 }
 
 fn html_canvas_identity<'s>(
@@ -191,17 +298,27 @@ fn html_canvas_identity<'s>(
         .then_some((runtime_ptr, handle))
 }
 
-fn replace_html_canvas_pixels<'s>(
+fn publish_canvas_snapshot<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
-    width: u32,
-    height: u32,
-    rgba: Vec<u8>,
 ) {
     let Some((runtime_ptr, handle)) = html_canvas_identity(scope, canvas) else {
         return;
     };
-    let _ = unsafe { &mut *runtime_ptr }.replace_canvas_pixels(handle, width, height, rgba);
+    let cell = canvas_surface_cell(scope, canvas);
+    let Some(snapshot) = cell
+        .borrow_mut()
+        .as_mut()
+        .and_then(|surface| surface.snapshot().ok())
+    else {
+        return;
+    };
+    let _ = unsafe { &mut *runtime_ptr }.replace_canvas_pixels(
+        handle,
+        snapshot.width,
+        snapshot.height,
+        snapshot.rgba.clone(),
+    );
 }
 
 fn remove_html_canvas_pixels<'s>(
@@ -218,8 +335,9 @@ fn canvas_like_dimensions<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) -> Option<(u32, u32)> {
-    let width = canvas_like_dimension(scope, canvas, OFFSCREEN_CANVAS_WIDTH_SLOT, "width")?;
-    let height = canvas_like_dimension(scope, canvas, OFFSCREEN_CANVAS_HEIGHT_SLOT, "height")?;
+    let width = canvas_like_dimension(scope, canvas, super::OFFSCREEN_CANVAS_WIDTH_SLOT, "width")?;
+    let height =
+        canvas_like_dimension(scope, canvas, super::OFFSCREEN_CANVAS_HEIGHT_SLOT, "height")?;
     Some((width, height))
 }
 
@@ -236,20 +354,57 @@ fn canvas_like_dimension<'s>(
     Some(value.max(0.0).trunc() as u32)
 }
 
-fn write_bytes_to_view<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    view: v8::Local<'s, v8::Uint8ClampedArray>,
-    bytes: &[u8],
-) -> Option<()> {
-    if view.byte_length() != bytes.len() {
-        return None;
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Native surface ownership is reclaimed with the canvas (GC) and with the
+    /// isolate, matching the path-state lifecycle in `state.rs`.
+    #[test]
+    fn canvas_surfaces_are_reclaimed_with_canvas_gc_and_isolate_destruction() {
+        moli_v8_test_util::ensure_v8();
+        let mut isolate = v8::Isolate::new(Default::default());
+
+        let live_surface = {
+            let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+            let scope = &mut scope.init();
+            let context = v8::Context::new(scope, Default::default());
+            let scope = &mut v8::ContextScope::new(scope, context);
+            // Two canvases own two independent native surfaces in one registry,
+            // with stable per-canvas identity.
+            let canvas_a = v8::Object::new(scope);
+            let cell_a = canvas_surface_cell(scope, canvas_a);
+            let canvas_b = v8::Object::new(scope);
+            let cell_b = canvas_surface_cell(scope, canvas_b);
+            assert_eq!(surface_store(scope).borrow().entries.len(), 2);
+            assert!(Rc::ptr_eq(&cell_a, &canvas_surface_cell(scope, canvas_a)));
+            assert!(
+                !Rc::ptr_eq(&cell_a, &cell_b),
+                "distinct canvases own distinct surfaces"
+            );
+            Rc::downgrade(&cell_a)
+        };
+
+        // Both canvases went out of scope; a GC must drop their native surfaces.
+        isolate.low_memory_notification();
+        assert!(
+            live_surface.upgrade().is_none(),
+            "GC must drop the unreachable canvas native surface"
+        );
+        {
+            let scope = std::pin::pin!(v8::HandleScope::new(&mut isolate));
+            let scope = &mut scope.init();
+            let store = scope
+                .get_slot::<SurfaceStore>()
+                .expect("isolate slot retains registry");
+            assert_eq!(
+                store.borrow().entries.len(),
+                0,
+                "GC releases the native surface registry entries"
+            );
+        }
+
+        // Isolate teardown needs no explicit cleanup.
+        let _ = isolate;
     }
-    let backing_store = view.buffer(scope)?;
-    let data = backing_store.data()?;
-    let ptr = data.as_ptr() as *mut u8;
-    let byte_offset = view.byte_offset();
-    unsafe {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr.add(byte_offset), bytes.len());
-    }
-    Some(())
 }

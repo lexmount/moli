@@ -17,7 +17,7 @@ use moli_image::RgbaImage;
 use vello_cpu::CompositeMode;
 
 use crate::backend::VelloCpuBackend;
-use crate::pixel::unpremultiply_rgba8_in_place;
+use crate::pixel::{premultiply_rgba8_in_place, unpremultiply_rgba8_in_place};
 use crate::types::byte_len;
 
 /// Largest edge dimension Vello CPU can address (its contexts use `u16`).
@@ -228,6 +228,26 @@ impl CanvasSurface {
         self.published = None;
         self.dirty = true;
         self.flush_count = self.flush_count.saturating_add(1);
+    }
+
+    /// Transitional adapter for the existing straight-RGBA8 draw helpers.
+    ///
+    /// Runs `f` against the whole surface as straight (non-premultiplied) RGBA8,
+    /// then converts back to the authoritative premultiplied store. This keeps
+    /// the immediate-execution draw paths producing byte-identical results while
+    /// the surface remains the single owner; M4's ordered recorder replaces this
+    /// per-call full-plane conversion with batched Vello rendering. The cached
+    /// snapshot is invalidated.
+    pub fn with_straight_pixels_mut(&mut self, f: impl FnOnce(&mut [u8], u32, u32)) -> Option<()> {
+        if self.is_empty() {
+            return None;
+        }
+        unpremultiply_rgba8_in_place(&mut self.pixels)?;
+        f(&mut self.pixels, self.width, self.height);
+        premultiply_rgba8_in_place(&mut self.pixels)?;
+        self.published = None;
+        self.dirty = true;
+        Some(())
     }
 
     /// An immutable straight-alpha snapshot of the whole surface, cached so

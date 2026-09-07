@@ -276,6 +276,29 @@ M2 delivered the independently tested canvas surface and reusable backend in
   and independence, low-alpha round-trip, oversized/invalid failure without
   mutation, and deterministic scheduling counters.
 
+### M3 status (single native pixel owner connected)
+
+M3 replaced the mutable V8 `Uint8ClampedArray` backing store with a single,
+per-context, weak-keyed native `CanvasSurface` owner:
+
+- `canvas/backing_store.rs` now keeps each canvas's authoritative pixels in a
+  `moli_canvas::CanvasSurface` held in a weak-keyed per-context registry (the
+  same GC-finalizer/isolation pattern as `canvas/state.rs`), so surface
+  lifetime is reclaimed with the canvas (GC) and with the isolate.
+- The existing straight-RGBA8 draw helpers run against the surface through the
+  transitional `CanvasSurface::with_straight_pixels_mut` adapter, keeping output
+  byte-identical while the surface stays the single owner; M4's recorder
+  replaces this with batched Vello rendering.
+- `getImageData`, `toDataURL`, `createImageBitmap` sources, and every draw path
+  read/write the native owner; HTML page publication (`CanvasResourceStore`) is
+  driven from the surface snapshot.
+- A native GC/reclamation test (`canvas_surfaces_are_reclaimed_with_canvas_gc_and_isolate_destruction`)
+  proves lifecycle release.
+
+All 115 canvas JS regressions (including the `__moliCanvasBackingStore`
+reflection/spoofing robustness test) and the moli-canvas native surface tests
+pass against the native owner.
+
 ---
 
 ## 8. Checklist for final review (routed against this inventory)
