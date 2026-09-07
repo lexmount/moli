@@ -2,7 +2,8 @@ use super::{FrameDocumentLoadDeliveryTask, JsContextHost};
 use crate::{
     context_bootstrap::{
         LocationNavigationKind, construct_original_event, construct_original_page_transition_event,
-        meta_refresh_navigation_kind, navigate_location_object_with_child_navigate_event,
+        meta_refresh_navigation_kind,
+        navigate_location_object_with_child_navigate_event_and_initiator_url,
         record_performance_load_event_end_for_window,
         record_performance_load_event_start_for_window,
     },
@@ -794,6 +795,9 @@ fn child_meta_refresh_callback<'s>(
     if host.current_child_document_task_owner(handle) != Some(task.owner) {
         return;
     }
+    let Some(initiator_url) = host.child_browsing_context_current_url(handle) else {
+        return;
+    };
     let Some(window) = host.child_browsing_context_window_wrapper(scope, handle) else {
         return;
     };
@@ -803,11 +807,12 @@ fn child_meta_refresh_callback<'s>(
     else {
         return;
     };
-    navigate_location_object_with_child_navigate_event(
+    navigate_location_object_with_child_navigate_event_and_initiator_url(
         scope,
         location,
         task.navigation_kind,
         Some(task.target_url.to_string()),
+        initiator_url,
     );
 }
 

@@ -133,7 +133,7 @@ pub(crate) use css_fontface_runtime::{load_font_faces_for_family, rebuild_font_f
 pub(crate) use location_navigation::{
     LocationNavigationKind, dispatch_top_level_form_navigation_event,
     dispatch_top_level_navigation_event_with_source_element, meta_refresh_navigation_kind,
-    navigate_location_object_with_child_navigate_event,
+    navigate_location_object_with_child_navigate_event_and_initiator_url,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser,
 };

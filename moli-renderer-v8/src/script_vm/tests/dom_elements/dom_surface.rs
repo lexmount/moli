@@ -11333,6 +11333,79 @@ async fn child_location_function_uses_executing_document_as_navigation_referrer(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn child_meta_refresh_after_same_document_navigation_uses_child_referrer() {
+    const HOST: &str = "child-meta-refresh-referrer.test";
+
+    let server = StaticHttpServer::spawn_with_bodies(vec![
+        r#"<!doctype html>
+<script>location.hash = '#section'</script>
+<meta http-equiv="refresh" content="0; url=/refresh/target.html">"#
+            .to_owned(),
+        "<!doctype html><body>refresh target</body>".to_owned(),
+    ])
+    .await;
+    let top_url = server.url_for_host(HOST, "/refresh/parent.html");
+    let child_url = server.url_for_host(HOST, "/refresh/source.html");
+    let target_url = server.url_for_host(HOST, "/refresh/target.html");
+    let loader = static_http_loader([server.resolve_entry(HOST)]);
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(top_url.as_str(), &loader);
+
+    vm.eval(&format!(
+        r#"
+(() => {{
+  globalThis.__childMetaRefreshReferrerLoadCount = 0;
+  const frame = document.createElement('iframe');
+  frame.src = {};
+  frame.onload = () => {{
+    globalThis.__childMetaRefreshReferrerLoadCount++;
+  }};
+  (document.body || document.documentElement || document).appendChild(frame);
+}})()
+"#,
+        serde_json::to_string(child_url.as_str()).expect("serialize meta refresh child URL")
+    ))
+    .expect("child meta refresh referrer setup should evaluate");
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__childMetaRefreshReferrerLoadCount)",
+        "1",
+        "initial meta refresh child document should load",
+    )
+    .await;
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(__childMetaRefreshReferrerLoadCount)",
+        "2",
+        "child meta refresh navigation should load",
+    )
+    .await;
+
+    let state = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.querySelector('iframe');
+  return [frame.contentWindow.location.href, frame.contentDocument.referrer].join('|');
+})()
+"#,
+        )
+        .expect("child meta refresh referrer state should evaluate");
+    assert_eq!(state, format!("{target_url}|{child_url}"));
+
+    let requests = server.finish().await;
+    assert_eq!(requests[0].target, "/refresh/source.html");
+    assert_eq!(requests[0].header_value("referer"), Some(top_url.as_str()));
+    assert_eq!(requests[1].target, "/refresh/target.html");
+    assert_eq!(
+        requests[1].header_value("referer"),
+        Some(child_url.as_str())
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn parent_location_assignment_uses_parent_document_as_navigation_referrer() {
     const HOST: &str = "parent-location-referrer.test";
 
