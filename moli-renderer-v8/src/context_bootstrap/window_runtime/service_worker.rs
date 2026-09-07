@@ -456,6 +456,9 @@ pub(in crate::context_bootstrap) fn navigator_service_worker_register_callback<'
     ) else {
         return;
     };
+    let Some(options) = service_worker_registration_options(scope, &args) else {
+        return;
+    };
     let Some(resolver) = v8::PromiseResolver::new(scope) else {
         return;
     };
