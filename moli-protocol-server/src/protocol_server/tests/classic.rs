@@ -14254,7 +14254,7 @@ async fn webdriver_classic_window_state_routes_use_headless_viewport_contract() 
         Method::POST,
         &execute_path,
         json!({
-            "script": "return JSON.stringify({ innerWidth, innerHeight, outerWidth, outerHeight, screenWidth: screen.width, screenHeight: screen.height, availWidth: screen.availWidth, availHeight: screen.availHeight, hasFocus: document.hasFocus(), hidden: document.hidden, visibilityState: document.visibilityState, fullScreen: window.fullScreen, webkitIsFullScreen: document.webkitIsFullScreen });",
+            "script": "return JSON.stringify({ innerWidth, innerHeight, outerWidth, outerHeight, screenWidth: screen.width, screenHeight: screen.height, availWidth: screen.availWidth, availHeight: screen.availHeight, hasFocus: document.hasFocus(), hidden: document.hidden, visibilityState: document.visibilityState, hasFullScreen: 'fullScreen' in window, hasWebkitIsFullScreen: 'webkitIsFullScreen' in document });",
             "args": []
         }),
     )
@@ -14279,8 +14279,8 @@ async fn webdriver_classic_window_state_routes_use_headless_viewport_contract() 
             "hasFocus": true,
             "hidden": false,
             "visibilityState": "visible",
-            "fullScreen": false,
-            "webkitIsFullScreen": false,
+            "hasFullScreen": false,
+            "hasWebkitIsFullScreen": false,
         })
     );
 
@@ -14294,7 +14294,7 @@ async fn webdriver_classic_window_state_routes_use_headless_viewport_contract() 
         Method::POST,
         &execute_path,
         json!({
-            "script": "return JSON.stringify({ hasFocus: document.hasFocus(), hidden: document.hidden, visibilityState: document.visibilityState, fullScreen: window.fullScreen, webkitIsFullScreen: document.webkitIsFullScreen });",
+            "script": "return JSON.stringify({ hasFocus: document.hasFocus(), hidden: document.hidden, visibilityState: document.visibilityState, hasFullScreen: 'fullScreen' in window, hasWebkitIsFullScreen: 'webkitIsFullScreen' in document });",
             "args": []
         }),
     )
@@ -14311,8 +14311,8 @@ async fn webdriver_classic_window_state_routes_use_headless_viewport_contract() 
             "hasFocus": false,
             "hidden": true,
             "visibilityState": "hidden",
-            "fullScreen": false,
-            "webkitIsFullScreen": false,
+            "hasFullScreen": false,
+            "hasWebkitIsFullScreen": false,
         })
     );
 
@@ -14335,7 +14335,7 @@ async fn webdriver_classic_window_state_routes_use_headless_viewport_contract() 
         Method::POST,
         &execute_path,
         json!({
-            "script": "return JSON.stringify({ innerWidth, innerHeight, outerWidth, outerHeight, screenWidth: screen.width, screenHeight: screen.height, availWidth: screen.availWidth, availHeight: screen.availHeight, hasFocus: document.hasFocus(), hidden: document.hidden, visibilityState: document.visibilityState, fullScreen: window.fullScreen, webkitIsFullScreen: document.webkitIsFullScreen });",
+            "script": "return JSON.stringify({ innerWidth, innerHeight, outerWidth, outerHeight, screenWidth: screen.width, screenHeight: screen.height, availWidth: screen.availWidth, availHeight: screen.availHeight, hasFocus: document.hasFocus(), hidden: document.hidden, visibilityState: document.visibilityState, hasFullScreen: 'fullScreen' in window, hasWebkitIsFullScreen: 'webkitIsFullScreen' in document });",
             "args": []
         }),
     )
@@ -14360,8 +14360,8 @@ async fn webdriver_classic_window_state_routes_use_headless_viewport_contract() 
             "hasFocus": true,
             "hidden": false,
             "visibilityState": "visible",
-            "fullScreen": true,
-            "webkitIsFullScreen": true,
+            "hasFullScreen": false,
+            "hasWebkitIsFullScreen": false,
         })
     );
 
@@ -14391,7 +14391,7 @@ async fn webdriver_classic_window_state_routes_use_headless_viewport_contract() 
         Method::POST,
         &execute_path,
         json!({
-            "script": "return JSON.stringify({ innerWidth, innerHeight, outerWidth, outerHeight, hasFocus: document.hasFocus(), hidden: document.hidden, visibilityState: document.visibilityState, fullScreen: window.fullScreen, webkitIsFullScreen: document.webkitIsFullScreen });",
+            "script": "return JSON.stringify({ innerWidth, innerHeight, outerWidth, outerHeight, hasFocus: document.hasFocus(), hidden: document.hidden, visibilityState: document.visibilityState, hasFullScreen: 'fullScreen' in window, hasWebkitIsFullScreen: 'webkitIsFullScreen' in document });",
             "args": []
         }),
     )
@@ -14412,8 +14412,8 @@ async fn webdriver_classic_window_state_routes_use_headless_viewport_contract() 
             "hasFocus": true,
             "hidden": false,
             "visibilityState": "visible",
-            "fullScreen": false,
-            "webkitIsFullScreen": false,
+            "hasFullScreen": false,
+            "hasWebkitIsFullScreen": false,
         })
     );
 
@@ -14489,32 +14489,32 @@ impl WindowPromptCommand {
                 "innerHeight": 480,
                 "hidden": true,
                 "visibilityState": "hidden",
-                "fullScreen": false,
-                "webkitIsFullScreen": false,
+                "hasFullScreen": false,
+                "hasWebkitIsFullScreen": false,
             }),
             Self::Fullscreen => json!({
                 "innerWidth": moli_protocol_webdriver_classic::CLASSIC_HEADLESS_SCREEN_WIDTH,
                 "innerHeight": moli_protocol_webdriver_classic::CLASSIC_HEADLESS_SCREEN_HEIGHT,
                 "hidden": false,
                 "visibilityState": "visible",
-                "fullScreen": true,
-                "webkitIsFullScreen": true,
+                "hasFullScreen": false,
+                "hasWebkitIsFullScreen": false,
             }),
             Self::Maximize => json!({
                 "innerWidth": moli_protocol_webdriver_classic::CLASSIC_HEADLESS_SCREEN_WIDTH,
                 "innerHeight": moli_protocol_webdriver_classic::CLASSIC_HEADLESS_AVAILABLE_HEIGHT,
                 "hidden": false,
                 "visibilityState": "visible",
-                "fullScreen": false,
-                "webkitIsFullScreen": false,
+                "hasFullScreen": false,
+                "hasWebkitIsFullScreen": false,
             }),
             Self::GetRect | Self::SetRect => json!({
                 "innerWidth": self.expected_success_value()["width"],
                 "innerHeight": self.expected_success_value()["height"],
                 "hidden": false,
                 "visibilityState": "visible",
-                "fullScreen": false,
-                "webkitIsFullScreen": false,
+                "hasFullScreen": false,
+                "hasWebkitIsFullScreen": false,
             }),
         }
     }
@@ -14611,7 +14611,7 @@ async fn assert_window_prompt_command_matches_chromium_wpt(command: WindowPrompt
             Method::POST,
             &format!("/session/{session_id}/execute/sync"),
             json!({
-                "script": "return JSON.stringify({ innerWidth, innerHeight, hidden: document.hidden, visibilityState: document.visibilityState, fullScreen: window.fullScreen, webkitIsFullScreen: document.webkitIsFullScreen });",
+                "script": "return JSON.stringify({ innerWidth, innerHeight, hidden: document.hidden, visibilityState: document.visibilityState, hasFullScreen: 'fullScreen' in window, hasWebkitIsFullScreen: 'webkitIsFullScreen' in document });",
                 "args": []
             }),
         )

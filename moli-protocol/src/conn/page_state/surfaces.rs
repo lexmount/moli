@@ -16,7 +16,6 @@ struct SurfaceOverrideInputs {
     focus_emulation_enabled: bool,
     active_target_surface: bool,
     window_document_hidden: bool,
-    window_fullscreen: bool,
 }
 
 impl SurfaceOverrideInputs {
@@ -38,10 +37,6 @@ impl SurfaceOverrideInputs {
                 .active_page_target()
                 .owner_state
                 .window_document_hidden(),
-            window_fullscreen: browser_context
-                .active_page_target()
-                .owner_state
-                .window_fullscreen(),
         }
     }
 
@@ -70,7 +65,6 @@ impl SurfaceOverrideInputs {
             focus_emulation_enabled: state.effective_emulation_state.focus_emulation_enabled,
             active_target_surface: false,
             window_document_hidden: false,
-            window_fullscreen: false,
         }
     }
 
@@ -92,10 +86,6 @@ impl SurfaceOverrideInputs {
         } else {
             "hidden"
         }
-    }
-
-    fn window_fullscreen(&self) -> bool {
-        self.window_fullscreen
     }
 
     fn navigator_online(&self) -> bool {
@@ -438,7 +428,6 @@ impl BrowserContext {
         let document_has_focus = inputs.document_has_focus();
         let document_hidden = inputs.document_hidden();
         let document_visibility_state = inputs.document_visibility_state();
-        let window_fullscreen = inputs.window_fullscreen();
 
         let source = format!(
             "(function() {{
@@ -462,7 +451,6 @@ impl BrowserContext {
                         return navigatorOnline;
                     }}
                 }};
-                defineGetter(globalThis, 'fullScreen', () => {window_fullscreen});
                 try {{
                     const geoState = globalThis.__moliGeolocationState || {{
                         nextWatchId: 1,
@@ -575,7 +563,6 @@ impl BrowserContext {
                     // overrides to win in the same realm.
                     defineGetter(document, 'hidden', () => {document_hidden});
                     defineGetter(document, 'visibilityState', () => {document_visibility_state});
-                    defineGetter(document, 'webkitIsFullScreen', () => {window_fullscreen});
                     try {{
                         Object.defineProperty(document, 'hasFocus', {{
                             configurable: true,
@@ -604,7 +591,6 @@ impl BrowserContext {
             document_hidden = document_hidden,
             document_visibility_state = json!(document_visibility_state),
             document_has_focus = document_has_focus,
-            window_fullscreen = window_fullscreen,
         );
 
         Some(DocumentStartScript {

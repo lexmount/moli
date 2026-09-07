@@ -326,10 +326,6 @@ impl TargetWindowSurfaceState {
         matches!(self, Self::Minimized)
     }
 
-    pub(crate) fn is_fullscreen(self) -> bool {
-        matches!(self, Self::Fullscreen)
-    }
-
     pub(crate) fn label(self) -> &'static str {
         match self {
             Self::Normal => "normal",
@@ -837,10 +833,6 @@ impl TargetOwnerState {
 
     pub(crate) fn window_document_hidden(&self) -> bool {
         self.window_surface_state.document_hidden()
-    }
-
-    pub(crate) fn window_fullscreen(&self) -> bool {
-        self.window_surface_state.is_fullscreen()
     }
 
     pub(crate) fn is_default(&self) -> bool {

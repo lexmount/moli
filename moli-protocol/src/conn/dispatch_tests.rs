@@ -4446,10 +4446,8 @@ async fn devtools_command_applies_window_state_to_document_surface() {
             "hasFocus": false,
             "hidden": true,
             "visibilityState": "hidden",
-            "fullScreen": false,
-            "fullScreenType": "boolean",
-            "webkitIsFullScreen": false,
-            "webkitIsFullScreenType": "boolean"
+            "hasFullScreen": false,
+            "hasWebkitIsFullScreen": false
         })
     );
 
@@ -4466,14 +4464,15 @@ async fn devtools_command_applies_window_state_to_document_surface() {
         fullscreen_result.expect("fullscreen surface state should succeed"),
         DevToolsCommandResult::Empty
     );
-    assert!(
+    assert_eq!(
         conn.browser_context
             .as_ref()
             .expect("browser context")
             .active_page_target()
             .owner_state
-            .window_fullscreen(),
-        "SetWindowState fullscreen must update the target owner before applying document surfaces"
+            .window_surface_state,
+        TargetWindowSurfaceState::Fullscreen,
+        "SetWindowState fullscreen must update the target owner before applying document surfaces",
     );
     assert_eq!(
         evaluate_document_surface_payload(&mut conn, target_context.clone()).await,
@@ -4481,10 +4480,8 @@ async fn devtools_command_applies_window_state_to_document_surface() {
             "hasFocus": true,
             "hidden": false,
             "visibilityState": "visible",
-            "fullScreen": true,
-            "fullScreenType": "boolean",
-            "webkitIsFullScreen": true,
-            "webkitIsFullScreenType": "boolean"
+            "hasFullScreen": false,
+            "hasWebkitIsFullScreen": false
         })
     );
 
@@ -4507,10 +4504,8 @@ async fn devtools_command_applies_window_state_to_document_surface() {
             "hasFocus": true,
             "hidden": false,
             "visibilityState": "visible",
-            "fullScreen": false,
-            "fullScreenType": "boolean",
-            "webkitIsFullScreen": false,
-            "webkitIsFullScreenType": "boolean"
+            "hasFullScreen": false,
+            "hasWebkitIsFullScreen": false
         })
     );
 }
@@ -4525,7 +4520,7 @@ async fn evaluate_document_surface_payload(
                 context,
                 realm_id: None,
                 world_name: None,
-                expression: "JSON.stringify({ hasFocus: document.hasFocus(), hidden: document.hidden, visibilityState: document.visibilityState, fullScreen: window.fullScreen, fullScreenType: typeof window.fullScreen, webkitIsFullScreen: document.webkitIsFullScreen, webkitIsFullScreenType: typeof document.webkitIsFullScreen })"
+                expression: "JSON.stringify({ hasFocus: document.hasFocus(), hidden: document.hidden, visibilityState: document.visibilityState, hasFullScreen: 'fullScreen' in window, hasWebkitIsFullScreen: 'webkitIsFullScreen' in document })"
                     .to_owned(),
                 await_promise: true,
             user_gesture: false,
