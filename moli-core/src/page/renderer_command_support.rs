@@ -86,6 +86,30 @@ impl TestingOutcome {
     }
 }
 
+impl CompletedPageCommand {
+    /// Decodes a native Page-agent reply already frozen on an exact DevTools
+    /// attachment. The caller validates that attachment before consuming it.
+    pub fn finish_layout_metrics(self) -> Result<RendererLayoutMetrics> {
+        expect_page_reply!(
+            self.into_reply(),
+            "layout metrics inspection command",
+            "a layout metrics reply",
+            RendererPageReply::LayoutMetrics(metrics) => Ok(metrics),
+        )
+    }
+
+    /// Decodes a native Page-agent reply already frozen on an exact DevTools
+    /// attachment. The caller validates that attachment before consuming it.
+    pub fn finish_child_frame_tree_snapshot(self) -> Result<Vec<ChildFrameTreeSnapshot>> {
+        expect_page_reply!(
+            self.into_reply(),
+            "child frame tree inspection command",
+            "child frame tree snapshots",
+            RendererPageReply::ChildFrameTreeSnapshots(snapshots) => Ok(snapshots),
+        )
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Page state accessor methods
 // ---------------------------------------------------------------------------
@@ -255,23 +279,6 @@ impl Page {
 
     pub fn start_serialize_html(&self) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::SerializeHtml)
-    }
-
-    pub fn start_layout_metrics(&self) -> Result<PendingPageCommand> {
-        self.start_page_command(RendererPageCommand::LayoutMetrics)
-    }
-
-    pub fn finish_layout_metrics(
-        &mut self,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererLayoutMetrics> {
-        let reply = self.finish_page_command(completion);
-        expect_page_reply!(
-            reply,
-            "layout metrics page command",
-            "a layout metrics reply",
-            RendererPageReply::LayoutMetrics(metrics) => Ok(metrics),
-        )
     }
 
     pub fn start_capture_screenshot(&self) -> Result<PendingPageCommand> {

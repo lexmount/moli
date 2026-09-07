@@ -306,6 +306,76 @@ async fn continue_with_auth_retries_navigation_with_basic_credentials() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn disable_uses_default_decision_for_paused_navigation_auth() {
+    async fn handler() -> impl IntoResponse {
+        (
+            StatusCode::UNAUTHORIZED,
+            [
+                (WWW_AUTHENTICATE.as_str(), r#"Basic realm="neutral""#),
+                (CONTENT_TYPE.as_str(), "text/plain"),
+            ],
+            "auth required",
+        )
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(listener, Router::new().route("/auth", get(handler)))
+            .await
+            .unwrap();
+    });
+    let mut ctx = TestContext::new();
+    ctx.conn
+        .install_browser_context_fixture_for_test(attached_browser_context());
+    let url = format!("http://{addr}/auth");
+    ctx.process_async(json!({
+        "id": 680, "method": "Fetch.enable", "sessionId": "SID-1",
+        "params": { "handleAuthRequests": true }
+    }))
+    .await;
+    ctx.expect_result(680, json!({}), Some("SID-1"));
+    ctx.process_async(json!({
+        "id": 690, "method": "Page.navigate", "sessionId": "SID-1",
+        "params": { "url": url }
+    }))
+    .await;
+    let paused = take_main_document_request_pause(&mut ctx).await;
+    ctx.process_async(json!({
+        "id": 700, "method": "Fetch.continueRequest", "sessionId": "SID-1",
+        "params": { "requestId": paused["params"]["requestId"] }
+    }))
+    .await;
+    ctx.expect_result(700, json!({}), Some("SID-1"));
+    assert_eq!(ctx.take_one()["method"], "Fetch.authRequired");
+
+    ctx.process_async(json!({
+        "id": 710, "method": "Fetch.disable", "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(710, json!({}), Some("SID-1"));
+    let navigation = ctx.take_response_by_id(690);
+    assert_eq!(
+        navigation["error"]["message"],
+        "Fetch auth challenge aborted"
+    );
+    assert_ne!(
+        navigation["error"]["message"],
+        "Fetch interception disabled"
+    );
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    assert!(!context.has_paused_navigation_auth_for_test("TID-1"));
+    assert!(
+        !context
+            .active_page_target()
+            .fetch_owner
+            .has_pending_fetch_state_for_test()
+    );
+
+    server.abort();
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn devtools_continue_response_credentials_retries_auth_navigation() {
     async fn handler(headers: HeaderMap) -> impl IntoResponse {
         let authorization = headers

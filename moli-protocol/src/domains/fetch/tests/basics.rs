@@ -1161,7 +1161,7 @@ async fn disable_clears_fetch_state() {
         .register_pending_fetch_navigation_request(PendingFetchNavigation {
             fetch_request_id: "INT-1".to_owned(),
             interception_session_id: Some("SID-1".to_owned()),
-            document_navigation_token: None,
+            navigation_permit: PendingFetchNavigation::test_navigation_permit(),
             navigation: crate::conn::NavigationDispatchState {
                 navigate_id: Some(1),
                 owner: crate::conn::CommandOwnerScope::for_route(
@@ -1665,7 +1665,7 @@ fn emit_auth_required_preserves_request_headers_and_post_data_shape() {
     let pending = PendingFetchNavigation {
         fetch_request_id: "INT-11".to_owned(),
         interception_session_id: Some("SID-1".to_owned()),
-        document_navigation_token: None,
+        navigation_permit: PendingFetchNavigation::test_navigation_permit(),
         navigation: crate::conn::NavigationDispatchState {
             navigate_id: Some(1),
             owner: crate::conn::CommandOwnerScope::for_session("SID-1"),

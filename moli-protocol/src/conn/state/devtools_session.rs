@@ -640,6 +640,7 @@ pub(crate) struct DevToolsEmulationSessionState {
     // Consumed on handler disable. Retrying failed renderer cleanup must not
     // reset policy subsequently installed by another session.
     pub(crate) overrides: Option<super::EmulationPolicy>,
+    renderer_cleanup_pending: bool,
 }
 
 impl Default for DevToolsEmulationSessionState {
@@ -649,11 +650,44 @@ impl Default for DevToolsEmulationSessionState {
             locale_override: None,
             timezone_override: None,
             overrides: Some(super::EmulationPolicy::default()),
+            renderer_cleanup_pending: false,
         }
     }
 }
 
 impl DevToolsEmulationSessionState {
+    pub(in crate::conn) fn disposal_is_effectively_noop(
+        &self,
+        effective: &super::EmulationPolicy,
+    ) -> bool {
+        if self.renderer_cleanup_pending {
+            return false;
+        }
+        if self.browser_identity_override.is_some()
+            || self.locale_override.is_some()
+            || self.timezone_override.is_some()
+        {
+            return false;
+        }
+        let Some(raw) = self.overrides.as_ref() else {
+            return true;
+        };
+        effective.emulated_media == super::EmulatedMediaOverrides::default()
+            && !effective.script_execution_disabled
+            && (raw.network_conditions.is_none() || effective.network_conditions.is_none())
+            && (raw.geolocation_override.is_none() || effective.geolocation_override.is_none())
+            && (raw.emulated_device_metrics.is_none()
+                || effective.emulated_device_metrics.is_none())
+            && (raw.cpu_throttling_rate == 1.0 || effective.cpu_throttling_rate == 1.0)
+            && (!raw.touch_emulation_enabled || !effective.touch_emulation_enabled)
+            && (!raw.emit_touch_events_for_mouse || !effective.emit_touch_events_for_mouse)
+            && (!raw.focus_emulation_enabled || !effective.focus_emulation_enabled)
+    }
+
+    pub(in crate::conn) fn set_renderer_cleanup_pending(&mut self, pending: bool) {
+        self.renderer_cleanup_pending = pending;
+    }
+
     /// Handler-disable semantics belong to DevTools. Browser receives only
     /// source-free changes, without learning which session caused a reset or
     /// requiring a read-modify-write round trip through Browser state.

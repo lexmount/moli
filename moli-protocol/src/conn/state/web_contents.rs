@@ -27,7 +27,8 @@ pub(in crate::conn) use navigation_commit::AdmittedDocumentMaterialization;
 mod navigation_history;
 mod navigation_interception;
 pub(crate) use navigation_interception::{
-    InterceptedNavigationLoad, InterceptedNavigationResponse, NavigationInterceptionPermit,
+    ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
+    NavigationInterceptionPermit, NavigationRequestInterception,
 };
 mod navigation_load;
 pub(crate) use navigation_history::SameDocumentNavigationCommitted;
@@ -125,7 +126,7 @@ impl WebContents {
     ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
         // Install effective Browser policy even before the first Document, and
         // retain it if the outgoing renderer has already stopped accepting work.
-        self.fetch_subresource_interception = (enabled, resource_type);
+        self.install_fetch_interception_policy(enabled, resource_type);
         self.main_frame
             .current_document
             .as_ref()
@@ -136,6 +137,14 @@ impl WebContents {
             })
             .transpose()
             .map_err(|error| error.to_string())
+    }
+
+    pub(in crate::conn::state) fn install_fetch_interception_policy(
+        &mut self,
+        enabled: bool,
+        resource_type: Option<moli_core::page::SubresourceResourceType>,
+    ) {
+        self.fetch_subresource_interception = (enabled, resource_type);
     }
 
     /// Retire Browser authority synchronously, then close the renderer without

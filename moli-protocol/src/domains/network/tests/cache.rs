@@ -709,7 +709,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
     assert!(
         bc.active_page_target()
             .fetch_owner
-            .pending_fetch_response_transfer_is_pending_for_test("INT-1")
+            .has_pending_fetch_response_navigation_for_test("INT-1")
     );
 }
 #[tokio::test(flavor = "multi_thread")]

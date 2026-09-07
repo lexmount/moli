@@ -2848,7 +2848,7 @@ async fn detach_from_target_invalid_session_errors() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn detach_from_target_aborts_paused_request_stage_navigation() {
+async fn detach_from_target_neutrally_resumes_paused_request_stage_navigation() {
     async fn page() -> impl axum::response::IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -2891,11 +2891,12 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(40, json!({}), Some("SID-1"));
 
+    let url = format!("http://{addr}/page");
     ctx.process_async(json!({
         "id": 41,
         "method": "Page.navigate",
         "sessionId": "SID-1",
-        "params": { "url": format!("http://{addr}/page") }
+        "params": { "url": url }
     }))
     .await;
 
@@ -2911,18 +2912,21 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(42, json!({}), None);
 
-    let failed = ctx.take_one();
-    assert_eq!(failed["method"], "Network.loadingFailed");
-    assert_eq!(failed["sessionId"], "SID-1");
-    assert_eq!(failed["params"]["requestId"], network_id);
-    assert_eq!(failed["params"]["errorText"], "Target detached");
+    assert!(ctx.take_response_by_id(41)["result"].is_object());
+    assert!(
+        !ctx.sent.iter().any(|message| {
+            message["method"] == json!("Network.loadingFailed")
+                && message["params"]["requestId"] == network_id
+        }),
+        "session detach must not fail the Browser navigation"
+    );
 
-    let error = ctx.take_one();
-    assert_eq!(error["id"], 41);
-    assert_eq!(error["error"]["code"], -32000);
-    assert_eq!(error["error"]["message"], "Target detached");
-
-    let detached = ctx.take_one();
+    let detached = ctx
+        .sent
+        .iter()
+        .find(|message| message["method"] == json!("Target.detachedFromTarget"))
+        .cloned()
+        .expect("target detached event");
     assert_eq!(detached["method"], "Target.detachedFromTarget");
     assert_eq!(detached["params"]["targetId"], "TID-000000000A");
     assert_eq!(detached["params"]["sessionId"], "SID-1");
@@ -2930,6 +2934,11 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(!bc.has_active_session());
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
+    assert_eq!(
+        bc.target_document_url("TID-000000000A")
+            .map(url::Url::as_str),
+        Some(url.as_str())
+    );
     assert!(
         !bc.active_page_target()
             .fetch_owner

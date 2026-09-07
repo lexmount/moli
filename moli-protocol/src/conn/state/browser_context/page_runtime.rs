@@ -34,6 +34,18 @@ impl BrowserContext {
             .start_fetch_interception_update(enabled, resource_type)
     }
 
+    pub(crate) fn install_target_fetch_interception_policy(
+        &mut self,
+        target_id: &str,
+        enabled: bool,
+        resource_type: Option<moli_core::page::SubresourceResourceType>,
+    ) -> Result<(), String> {
+        self.web_contents_for_target_mut(target_id)
+            .ok_or_else(|| "WebContents unavailable".to_owned())?
+            .install_fetch_interception_policy(enabled, resource_type);
+        Ok(())
+    }
+
     #[cfg(test)]
     pub(in crate::conn) fn target_fetch_interception_policy(
         &self,

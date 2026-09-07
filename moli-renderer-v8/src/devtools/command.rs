@@ -1,10 +1,13 @@
 //! Typed metadata and payloads crossing the renderer DevTools ingress boundary.
 
 use crate::runtime::{
-    RendererInspectorPageCommand, RendererPageCommand, RendererRuntimeInspectorResponseSender,
+    RendererInspectorPageCommand, RendererPageCommand, RendererPageToken,
+    RendererRuntimeInspectorResponseSender, RendererRuntimeInspectorSessionDetachGuard,
 };
 use crate::script_execution_control::RendererScriptExecutionControl;
-use moli_page_types::{DevToolsSessionKey, RendererAgentAttachmentId, RendererCommandId};
+use moli_page_types::{
+    DevToolsSessionKey, RendererAgentAttachmentId, RendererCommandId, SubresourceResourceType,
+};
 use serde_json::Value;
 
 /// Chromium routes Page DevTools work through separate main-thread and IO
@@ -136,6 +139,13 @@ pub struct RendererDevToolsIoCommandEnvelope {
 
 pub(crate) enum RendererDevToolsIoCommandPayload {
     Inspector(RendererInspectorCommandEnvelope),
+    FinalizeSessionDetach {
+        token: RendererPageToken,
+        inspector_session_id: Option<String>,
+        fetch_subresource_interception: Option<(bool, Option<SubresourceResourceType>)>,
+        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
+        reply: tokio::sync::oneshot::Sender<Result<bool, String>>,
+    },
     PerformanceGetMetrics {
         result: Value,
         response: Option<RendererRuntimeInspectorResponseSender>,
@@ -150,6 +160,7 @@ pub(crate) enum RendererDevToolsIoCommandPayload {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererDevToolsIoCommandKind {
     Inspector,
+    SessionLifecycle,
     Performance,
     Emulation,
 }
@@ -173,6 +184,26 @@ impl RendererDevToolsIoCommandEnvelope {
             RendererDevToolsIoCommandPayload::PerformanceGetMetrics {
                 result: Value::Null,
                 response: None,
+            },
+        )
+    }
+
+    pub(crate) fn finalize_session_detach(
+        ticket: RendererInspectorIngressTicket,
+        token: RendererPageToken,
+        inspector_session_id: Option<String>,
+        fetch_subresource_interception: Option<(bool, Option<SubresourceResourceType>)>,
+        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
+        reply: tokio::sync::oneshot::Sender<Result<bool, String>>,
+    ) -> Self {
+        Self::new_agent_command(
+            ticket,
+            RendererDevToolsIoCommandPayload::FinalizeSessionDetach {
+                token,
+                inspector_session_id,
+                fetch_subresource_interception,
+                pause_guard,
+                reply,
             },
         )
     }
@@ -243,6 +274,9 @@ impl RendererDevToolsIoCommandEnvelope {
             RendererDevToolsIoCommandPayload::Inspector(_) => {
                 RendererDevToolsIoCommandKind::Inspector
             }
+            RendererDevToolsIoCommandPayload::FinalizeSessionDetach { .. } => {
+                RendererDevToolsIoCommandKind::SessionLifecycle
+            }
             RendererDevToolsIoCommandPayload::PerformanceGetMetrics { .. } => {
                 RendererDevToolsIoCommandKind::Performance
             }
@@ -271,6 +305,7 @@ impl RendererDevToolsIoCommandEnvelope {
     pub(crate) fn response(&self) -> Option<&RendererRuntimeInspectorResponseSender> {
         match &self.payload {
             RendererDevToolsIoCommandPayload::Inspector(envelope) => envelope.response(),
+            RendererDevToolsIoCommandPayload::FinalizeSessionDetach { .. } => None,
             RendererDevToolsIoCommandPayload::PerformanceGetMetrics { response, .. }
             | RendererDevToolsIoCommandPayload::SetScriptExecutionDisabled { response, .. } => {
                 response.as_ref()
@@ -683,9 +718,6 @@ impl RendererInspectorCommandEnvelope {
             RendererInspectorPageCommand::RuntimeEnableEvents => Some("RuntimeEnableEvents"),
             RendererInspectorPageCommand::ApplyRuntimeProtocolState { .. } => {
                 Some("ApplyRuntimeProtocolState")
-            }
-            RendererInspectorPageCommand::DetachRuntimeInspectorSession { .. } => {
-                Some("DetachRuntimeInspectorSession")
             }
             RendererInspectorPageCommand::DocumentNodeSnapshotForObjectId { .. } => {
                 Some("DocumentNodeSnapshotForObjectId")

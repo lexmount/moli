@@ -24,7 +24,7 @@ use moli_page_types::RendererInspectorResponseDelivery;
 use crate::conn::{
     BackgroundCommandResponsePayload, BackgroundCommandResponsePayloadRef, BackgroundProtocolEvent,
     BidiChannelListenerResidence, BidiChannelOwnerAction, BidiChannelPageOwner, CdpConnection,
-    CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpSchedulerEvent, CdpSessionRoute,
+    CdpRendererCommandPolicy, CdpRendererDispatchLane, CdpSchedulerEvent, CdpSessionRoute,
     ClaimedPendingInspectorAwait, Cmd, CommandOwnerScope, CompletedMoliDiagnosticsDispatch,
     CompletedRuntimeBindingPageCommandDispatch, CompletedRuntimeChildDefaultContextLookupDispatch,
     CompletedRuntimeEnableEventsDispatch, CompletedRuntimeProtocolMessageDispatch,
@@ -1225,8 +1225,8 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
     }
 
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let pending = match cmd.renderer_policy().access() {
-        CdpRendererCommandAccess::MainThread => {
+    let pending = match cmd.renderer_policy().renderer_lane() {
+        Some(CdpRendererDispatchLane::Main) => {
             start_pending_runtime_inspector_dispatch_with_delivery(
                 conn,
                 cmd,
@@ -1235,15 +1235,15 @@ pub(crate) fn start_debugger_inspector_command_dispatch(
                 cmd.terminal_response_delivery(),
             )
         }
-        CdpRendererCommandAccess::Io => start_pending_runtime_io_inspector_dispatch(
+        Some(CdpRendererDispatchLane::Io) => start_pending_runtime_io_inspector_dispatch(
             conn,
             cmd,
             &owner_scope,
             inspector_json,
             cmd.terminal_response_delivery(),
         ),
-        CdpRendererCommandAccess::OwnerIndependent => Err(
-            "an owner-independent command cannot enter the Debugger Inspector dispatcher"
+        None => Err(
+            "a command without renderer fallthrough cannot enter the Debugger Inspector dispatcher"
                 .to_owned(),
         ),
     };
@@ -1885,8 +1885,8 @@ fn start_pending_runtime_routable_inspector_dispatch(
     inspector_json: String,
     response_delivery: RendererInspectorResponseDelivery,
 ) -> Result<PendingRuntimeProtocolMessageDispatch, String> {
-    match cmd.renderer_policy().access() {
-        CdpRendererCommandAccess::MainThread => {
+    match cmd.renderer_policy().renderer_lane() {
+        Some(CdpRendererDispatchLane::Main) => {
             start_pending_runtime_inspector_dispatch_with_delivery(
                 conn,
                 cmd,
@@ -1895,15 +1895,16 @@ fn start_pending_runtime_routable_inspector_dispatch(
                 response_delivery,
             )
         }
-        CdpRendererCommandAccess::Io => start_pending_runtime_io_inspector_dispatch(
+        Some(CdpRendererDispatchLane::Io) => start_pending_runtime_io_inspector_dispatch(
             conn,
             cmd,
             owner,
             inspector_json,
             response_delivery,
         ),
-        CdpRendererCommandAccess::OwnerIndependent => Err(
-            "an owner-independent command cannot enter the Runtime Inspector dispatcher".to_owned(),
+        None => Err(
+            "a command without renderer fallthrough cannot enter the Runtime Inspector dispatcher"
+                .to_owned(),
         ),
     }
 }

@@ -11,8 +11,8 @@ use crate::conn::state::{
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
     EmulatedDeviceMetrics, FetchInterceptionPattern, FetchRequestStage, LoadedNavigationPageCommit,
-    NETWORK_ERROR_PAGE_URL, NetworkErrorPageNavigation, PausedDocumentTransfer,
-    PendingFetchAuthNavigation, PendingFetchNavigation, PendingSubresourceFetchAuthRequest,
+    NETWORK_ERROR_PAGE_URL, NetworkErrorPageNavigation, PendingFetchAuthNavigation,
+    PendingFetchNavigation, PendingFetchResponseNavigation, PendingSubresourceFetchAuthRequest,
     PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
     RuntimeBindingDefinition,
 };
@@ -52,6 +52,7 @@ pub(super) struct TargetSessionOwnerRef<'a> {
 type FetchDisableStateWithSubresourceConfig = (
     super::fetch_owner::SessionOwnerPendingFetchState,
     (bool, Option<SubresourceResourceType>),
+    bool,
 );
 
 fn empty_pending_fetch_state() -> super::fetch_owner::SessionOwnerPendingFetchState {
@@ -779,7 +780,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         } else {
             empty_pending_fetch_state()
         };
-        (pending, subresource_config)
+        (pending, subresource_config, removed)
     }
 
     pub(super) fn drain_fetch_pending_state(
@@ -787,7 +788,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
     ) -> (
         Vec<PendingFetchNavigation>,
         Vec<PendingFetchAuthNavigation>,
-        Vec<PausedDocumentTransfer>,
+        Vec<PendingFetchResponseNavigation>,
         Vec<(String, PendingSubresourceFetchRequest)>,
         Vec<(String, PendingSubresourceFetchAuthRequest)>,
         Vec<(String, PendingSubresourceFetchResponseRequest)>,
@@ -2649,9 +2650,10 @@ mod tests {
                 "FETCH-active".to_owned(),
                 pending_subresource_fetch(11),
             ));
-            let (pending, subresource_config) =
+            let (pending, subresource_config, removed) =
                 owner.reset_fetch_config_for_session_and_drain_pending_state(Some("SID-active"));
             assert_eq!(subresource_config, (false, None));
+            assert!(removed);
             assert_eq!(pending.3.len(), 1);
         }
         assert!(
@@ -2684,9 +2686,10 @@ mod tests {
                 "FETCH-background".to_owned(),
                 pending_subresource_fetch(22),
             ));
-            let (pending, subresource_config) = owner
+            let (pending, subresource_config, removed) = owner
                 .reset_fetch_config_for_session_and_drain_pending_state(Some("SID-background"));
             assert_eq!(subresource_config, (false, None));
+            assert!(removed);
             assert_eq!(pending.3.len(), 1);
         }
         assert!(

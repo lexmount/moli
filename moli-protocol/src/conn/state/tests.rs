@@ -803,7 +803,7 @@ fn pending_navigation_rejects_generic_request_action_without_consuming_id() {
     state.register_pending_fetch_navigation_request(PendingFetchNavigation {
         fetch_request_id: "FETCH-NAV".to_owned(),
         interception_session_id: Some("SID-fetch".to_owned()),
-        document_navigation_token: None,
+        navigation_permit: PendingFetchNavigation::test_navigation_permit(),
         navigation: test_navigation_dispatch_state("FETCH-NAV"),
         request_cookie_report: None,
         intercept_response: false,

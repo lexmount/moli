@@ -258,15 +258,6 @@ pub enum RendererOwnerCommand {
         token: RendererPageToken,
         command: RendererPageCommand,
     },
-    /// Renderer-side cleanup after the browser/protocol owner has already
-    /// disconnected a DevTools session and suspended both of its ingress lanes.
-    /// Replacement frontend work remains queued behind this lifecycle task so
-    /// it cannot reuse the V8 session before destruction completes.
-    FinalizeRuntimeInspectorSessionDetach {
-        token: RendererPageToken,
-        inspector_session_id: Option<String>,
-        pause_guard: RendererRuntimeInspectorSessionDetachGuard,
-    },
     WaitForNetworkIdle {
         token: RendererPageToken,
         timeout_ms: u64,
@@ -312,7 +303,6 @@ pub enum RendererOwnerReply {
         response_succeeded: bool,
     },
     RuntimeInspectorSessionErrorSettled(RendererOutputFence),
-    RuntimeInspectorSessionDetachFinalized(bool),
     PageRemoved,
     TestingCurrentPageState(Arc<RendererPageState>),
     TestingRendererPageView(RendererPageView),
@@ -2507,42 +2497,6 @@ impl RendererOwnerHandle {
                         capture_policy: super::RendererPageStateCapturePolicy::FullReport,
                     },
                 ))
-            }
-            RendererOwnerCommand::FinalizeRuntimeInspectorSessionDetach {
-                token,
-                inspector_session_id,
-                mut pause_guard,
-            } => {
-                let mut entry = match checkout_entry_for_owner_turn_on_bound_owner_local_store(
-                    token,
-                ) {
-                    Ok(entry) => entry,
-                    Err(
-                        LivePageEntryCheckoutError::Retired | LivePageEntryCheckoutError::Missing,
-                    ) => {
-                        pause_guard.complete();
-                        return Ok(RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(
-                            false,
-                        ))
-                        .into();
-                    }
-                    Err(LivePageEntryCheckoutError::Busy) => {
-                        return Err(anyhow!(
-                            "renderer page {} remained checked out while finalizing Inspector session detach",
-                            token.page_id.as_u64()
-                        ))
-                        .into();
-                    }
-                };
-                let detached = entry
-                    .page_vm_mut()
-                    .detach_runtime_inspector_session(inspector_session_id.as_deref());
-                restore_entry_after_command_on_bound_owner_local_store(token, entry);
-                pause_guard.complete();
-                Ok(RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(
-                    detached,
-                ))
-                .into()
             }
             RendererOwnerCommand::WaitForNetworkIdle {
                 token,

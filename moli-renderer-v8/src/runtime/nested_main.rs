@@ -4,7 +4,13 @@ use anyhow::{Result, anyhow};
 
 use super::{
     RendererCommandTurnOutput, RendererPageCommand, RendererPageReply,
-    RendererRuntimeCommandOutput, owner_local_store::LivePageEntry, page_vm::PageVm,
+    RendererRuntimeCommandOutput,
+    owner_local_store::{
+        LivePageEntry, LivePageEntryCheckoutError,
+        checkout_entry_for_owner_turn_on_bound_owner_local_store,
+        restore_entry_after_command_on_bound_owner_local_store,
+    },
+    page_vm::PageVm,
 };
 use crate::devtools::ingress::main::RendererInspectorMainFirstDispatchGuard;
 
@@ -85,4 +91,56 @@ pub(crate) fn dispatch_nested_main_page_command(
     // actor cannot observe a later renderer publication before it has handled
     // this handoff.
     Ok(output.hold_until_protocol_handoff(first_dispatch))
+}
+
+/// Finalizes one frontend session through the IO receiver. An interrupt uses
+/// the active Page stack; an idle-owner wake checks out the same exact Page.
+pub(crate) fn detach_session_from_page(
+    token: super::RendererPageToken,
+    inspector_session_id: Option<&str>,
+    fetch_subresource_interception: Option<(
+        bool,
+        Option<moli_page_types::SubresourceResourceType>,
+    )>,
+) -> Result<bool> {
+    let active = ACTIVE_NESTED_MAIN_PAGE
+        .try_with(|active| active.borrow().clone())
+        .ok()
+        .flatten();
+
+    if let Some(active) = active {
+        anyhow::ensure!(
+            active.entry_slot.page_id() == token.page_id(),
+            "session detach interrupt targeted a different active Page"
+        );
+        // SAFETY: this uses the same dynamic Page binding as nested Main
+        // dispatch. A V8 interrupt runs synchronously on the owner thread
+        // while the outer Page call is suspended, and this borrow ends before
+        // that call resumes.
+        let page_vm = unsafe { active.page_vm.as_ptr().as_mut() }
+            .ok_or_else(|| anyhow!("active Page pointer was unexpectedly null"))?;
+        if let Some((enabled, resource_type)) = fetch_subresource_interception {
+            page_vm.set_fetch_subresource_interception(enabled, resource_type);
+        }
+        return Ok(page_vm.detach_runtime_inspector_session(inspector_session_id));
+    }
+
+    let mut entry = match checkout_entry_for_owner_turn_on_bound_owner_local_store(token) {
+        Ok(entry) => entry,
+        Err(LivePageEntryCheckoutError::Retired | LivePageEntryCheckoutError::Missing) => {
+            return Ok(false);
+        }
+        Err(LivePageEntryCheckoutError::Busy) => {
+            return Err(anyhow!(
+                "renderer Page remained checked out without an active IO interrupt stack"
+            ));
+        }
+    };
+    let page_vm = entry.page_vm_mut();
+    if let Some((enabled, resource_type)) = fetch_subresource_interception {
+        page_vm.set_fetch_subresource_interception(enabled, resource_type);
+    }
+    let detached = page_vm.detach_runtime_inspector_session(inspector_session_id);
+    restore_entry_after_command_on_bound_owner_local_store(token, entry);
+    Ok(detached)
 }

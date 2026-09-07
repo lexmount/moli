@@ -6482,10 +6482,12 @@ impl CdpConnection {
         let owner = CommandOwnerScope::capture(self, session_id);
         let inspector_session_id =
             self.target_renderer_runtime_inspector_session_id_for_owner(&owner);
+        let fetch_subresource_interception =
+            self.target_fetch_interception_config_after_session_disposal(&owner);
         let slot = self.runtime_session_owner_slot_for_owner(&owner)?;
         if let Some(binding) = slot.current_renderer_inspection_binding() {
             binding
-                .detach_session(inspector_session_id.clone())
+                .detach_session(inspector_session_id.clone(), fetch_subresource_interception)
                 .await
                 .map_err(|error| format!("runtime inspector session detach failed: {error}"))?;
         } else if self.has_loaded_page_for_owner(&owner) {
@@ -8047,8 +8049,8 @@ mod tests {
                             devtools_session_renderer_command_descriptor_for_test(id)
                         } else {
                             assert_eq!(
-                                frontend.renderer_access(),
-                                moli_protocol_cdp::CdpRendererCommandAccess::Io
+                                frontend.renderer_lane(),
+                                Some(moli_protocol_cdp::CdpRendererDispatchLane::Io)
                             );
                             RendererCommandDescriptor::set_script_execution_disabled(
                                 payload.clone(),

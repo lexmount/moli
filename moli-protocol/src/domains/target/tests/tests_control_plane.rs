@@ -770,7 +770,7 @@ async fn detach_from_inactive_context_cleans_exact_session_without_activating_co
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn detach_from_target_aborts_paused_request_stage_navigation() {
+async fn detach_from_target_neutrally_resumes_paused_request_stage_navigation() {
     async fn page() -> impl axum::response::IntoResponse {
         (
             [(axum::http::header::CONTENT_TYPE.as_str(), "text/html")],
@@ -811,11 +811,12 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(40, json!({}), Some(&session_id));
 
+    let url = format!("http://{addr}/page");
     ctx.process_async(json!({
         "id": 41,
         "method": "Page.navigate",
         "sessionId": session_id,
-        "params": { "url": format!("http://{addr}/page") }
+        "params": { "url": url }
     }))
     .await;
 
@@ -831,28 +832,14 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     .await;
     ctx.expect_result(42, json!({}), None);
 
-    let failed = ctx
-        .sent
-        .iter()
-        .find(|message| {
+    assert!(ctx.take_response_by_id(41)["result"].is_object());
+    assert!(
+        !ctx.sent.iter().any(|message| {
             message["method"] == json!("Network.loadingFailed")
                 && message["params"]["requestId"] == network_id
-        })
-        .cloned()
-        .expect("network loadingFailed event");
-    assert_eq!(failed["sessionId"], json!(session_id));
-    assert_eq!(failed["params"]["requestId"], network_id);
-    assert_eq!(failed["params"]["errorText"], "Target detached");
-
-    let error = ctx
-        .sent
-        .iter()
-        .find(|message| message["id"] == json!(41))
-        .cloned()
-        .expect("navigation error response");
-    assert_eq!(error["id"], 41);
-    assert_eq!(error["error"]["code"], -32000);
-    assert_eq!(error["error"]["message"], "Target detached");
+        }),
+        "session detach must not fail the Browser navigation"
+    );
 
     let detached = ctx
         .sent
@@ -870,6 +857,10 @@ async fn detach_from_target_aborts_paused_request_stage_navigation() {
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     assert!(!bc.has_active_session());
     assert_eq!(bc.active_target_id(), Some(target_id.as_str()));
+    assert_eq!(
+        bc.target_document_url(&target_id).map(url::Url::as_str),
+        Some(url.as_str())
+    );
     assert!(
         !bc.active_page_target()
             .fetch_owner

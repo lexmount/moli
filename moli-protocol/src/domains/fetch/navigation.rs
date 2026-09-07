@@ -58,11 +58,12 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
     out: &mut CommandOutputBuffer,
     mut pending: PendingFetchNavigation,
     auth: Option<SubresourceAuthCredentials>,
-    resumed: Option<crate::conn::InterceptedNavigationLoad>,
+    work: crate::conn::InterceptedNavigationLoad,
+    auth_retry: bool,
 ) {
     let navigate_owner = pending.navigation.owner.clone();
     network::record_main_document_request_body(conn, &pending.navigation);
-    let should_handle_auth = (resumed.is_some()
+    let should_handle_auth = (auth_retry
         || conn.target_fetch_matches_auth_required_for_owner(
             &navigate_owner,
             &pending.navigation.requested_url,
@@ -70,24 +71,6 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
         && pending.navigation.requested_url.scheme() != "data";
 
     if should_handle_auth {
-        // A retry consumes the Browser-owned admitted work. Only the original
-        // start resolves the frontend route; retries never re-admit by loader.
-        let work = match resumed
-            .map(Ok)
-            .unwrap_or_else(|| conn.start_intercepted_navigation_load(&pending.navigation))
-        {
-            Ok(work) => work,
-            Err(message) => {
-                complete_pending_fetch_navigation_result_into_buffer_async(
-                    conn,
-                    out,
-                    pending,
-                    Err(message),
-                )
-                .await;
-                return;
-            }
-        };
         if pending.intercept_response && navigation_response_stage_auth_can_stream(auth.as_ref()) {
             match work.fetch_streaming(auth).await {
                 Ok(response) => {
@@ -187,10 +170,7 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
     }
 
     if pending.intercept_response && pending.navigation.requested_url.scheme() != "data" {
-        let response = match conn.start_intercepted_navigation_load(&pending.navigation) {
-            Ok(work) => work.fetch_streaming(None).await,
-            Err(message) => Err(message),
-        };
+        let response = work.fetch_streaming(None).await;
         match response {
             Ok(response) => {
                 handle_streaming_response_head_for_navigation_into_buffer_async(
@@ -217,8 +197,9 @@ pub(crate) async fn load_or_pause_navigation_for_auth_into_buffer_async(
     }
 
     let navigation = conn
-        .load_navigation_request_via_runtime_with_network_events_for_navigation_async(
+        .load_intercepted_navigation_request_via_runtime_with_network_events_async(
             &pending.navigation,
+            work,
             network::MainDocumentBodyProgressSource::default(),
         )
         .await;
@@ -231,7 +212,7 @@ pub(super) async fn load_or_pause_navigation_for_auth_as_background_events_async
     out: &mut FetchCommandOutput,
     pending: PendingFetchNavigation,
     auth: Option<SubresourceAuthCredentials>,
-    resumed: Option<crate::conn::InterceptedNavigationLoad>,
+    resumed: crate::conn::InterceptedNavigationLoad,
 ) {
     let command_id = pending.navigation.navigate_id;
     let command_session_id = pending.navigation.owner.session_id().map(str::to_owned);
@@ -242,6 +223,7 @@ pub(super) async fn load_or_pause_navigation_for_auth_as_background_events_async
         pending,
         auth,
         resumed,
+        true,
     ))
     .await;
     out.extend_plan_as_background_events(
@@ -260,7 +242,7 @@ pub(super) async fn cancel_navigation_auth_as_background_events_async(
     let mut pending = PendingFetchNavigation {
         fetch_request_id: pending_auth.response_stage_request_id,
         interception_session_id: pending_auth.interception_session_id.clone(),
-        document_navigation_token: Some(pending_auth.auth_permit.navigation()),
+        navigation_permit: pending_auth.auth_permit,
         navigation: pending_auth.navigation,
         request_cookie_report: pending_auth.request_cookie_report,
         intercept_response: pending_auth.intercept_response,
@@ -415,7 +397,7 @@ pub(super) async fn complete_pending_fetch_navigation_result_into_buffer_async(
     pending: PendingFetchNavigation,
     navigation: Result<NavigationLoadOutcome, String>,
 ) {
-    let token = pending.document_navigation_token;
+    let token = Some(pending.navigation_permit.navigation());
     let navigation_state = pending.navigation;
     let navigation =
         network::materialize_navigation_load_result(conn, &navigation_state, navigation);
@@ -569,7 +551,7 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
     conn.register_pending_fetch_response_navigation_for_owner(
         &pending.navigation.owner,
         pending.fetch_request_id.clone(),
-        pending.document_navigation_token,
+        Some(pending.navigation_permit.navigation()),
         pending.navigation.clone(),
         DocumentBodySource::StreamingRaw {
             requested_url: pending.navigation.requested_url.clone(),
@@ -640,7 +622,7 @@ fn pause_buffered_raw_response_stage_navigation_into_buffer(
     conn.register_pending_fetch_response_navigation_for_owner(
         &pending.navigation.owner,
         pending.fetch_request_id.clone(),
-        pending.document_navigation_token,
+        Some(pending.navigation_permit.navigation()),
         pending.navigation.clone(),
         DocumentBodySource::BufferedRaw {
             requested_url: pending.navigation.requested_url.clone(),
@@ -664,11 +646,84 @@ fn pause_buffered_raw_response_stage_navigation_into_buffer(
 pub(crate) async fn continue_navigation_without_request_pause_into_buffer_async(
     conn: &mut CdpConnection,
     out: &mut CommandOutputBuffer,
-    pending: PendingFetchNavigation,
+    claimed: crate::conn::ClaimedFetchNavigation,
 ) {
+    let (pending, request) = claimed.into_parts();
+    let Some(request) = request else {
+        complete_pending_fetch_navigation_result_into_buffer_async(
+            conn,
+            out,
+            pending,
+            Err("renderer channel navigation was superseded by a newer navigation".to_owned()),
+        )
+        .await;
+        return;
+    };
+    let work = match conn.start_claimed_intercepted_navigation_load(request) {
+        Ok(work) => work,
+        Err(message) => {
+            complete_pending_fetch_navigation_result_into_buffer_async(
+                conn,
+                out,
+                pending,
+                Err(message),
+            )
+            .await;
+            return;
+        }
+    };
     Box::pin(load_or_pause_navigation_for_auth_into_buffer_async(
-        conn, out, pending, None, None,
+        conn, out, pending, None, work, false,
     ))
+    .await;
+}
+
+pub(super) async fn continue_navigation_request_as_background_events_async(
+    conn: &mut CdpConnection,
+    out: &mut FetchCommandOutput,
+    claimed: crate::conn::ClaimedFetchNavigation,
+) {
+    let command_id = claimed.pending.navigation.navigate_id;
+    let command_session_id = claimed
+        .pending
+        .navigation
+        .owner
+        .session_id()
+        .map(str::to_owned);
+    let mut output = CommandOutputBuffer::default();
+    continue_navigation_without_request_pause_into_buffer_async(conn, &mut output, claimed).await;
+    out.extend_plan_as_background_events(
+        output.into_plan(),
+        command_id,
+        command_session_id.as_deref(),
+    );
+}
+
+pub(super) async fn continue_navigation_response_neutrally_as_background_events_async(
+    conn: &mut CdpConnection,
+    out: &mut FetchCommandOutput,
+    pending: crate::conn::PendingFetchResponseNavigation,
+    transfer: Option<crate::conn::PausedDocumentTransfer>,
+) {
+    let token = Some(pending.permit.navigation());
+    let navigation_state = pending.navigation;
+    let navigation = match transfer {
+        Some(transfer) => {
+            transfer
+                .continue_response_neutrally_async(conn, pending.permit, &navigation_state)
+                .await
+        }
+        None => Err("renderer channel navigation was superseded by a newer navigation".to_owned()),
+    };
+    let navigation =
+        network::materialize_navigation_load_result(conn, &navigation_state, navigation);
+    complete_tokened_materialized_navigation_as_background_events_async(
+        conn,
+        out,
+        token,
+        navigation_state,
+        navigation,
+    )
     .await;
 }
 

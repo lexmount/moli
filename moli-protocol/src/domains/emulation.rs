@@ -2588,6 +2588,12 @@ pub(crate) async fn dispose_page_session_async(
     conn: &mut CdpConnection,
     session_id: &str,
 ) -> anyhow::Result<()> {
+    if conn.emulation_disposal_is_effectively_noop_for_session_owner(session_id)
+        && conn.disable_emulation_session_handler_for_session_owner(session_id)
+    {
+        return Ok(());
+    }
+    conn.set_emulation_renderer_cleanup_pending_for_session_owner(session_id, true);
     let mut first_error = conn
         .clear_devtools_emulation_session_policy_async(session_id)
         .await
@@ -2620,7 +2626,11 @@ pub(crate) async fn dispose_page_session_async(
         "page surfaces",
         apply_session_surface_state_async(conn, session_id).await,
     );
-    first_error.map_or(Ok(()), Err)
+    if let Some(error) = first_error {
+        return Err(error);
+    }
+    conn.set_emulation_renderer_cleanup_pending_for_session_owner(session_id, false);
+    Ok(())
 }
 
 async fn apply_session_surface_state_async(

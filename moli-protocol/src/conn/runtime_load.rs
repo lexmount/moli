@@ -20,7 +20,9 @@ use url::Url;
 
 use super::*;
 use crate::conn::state::InitialDocumentPageBuildWaiter;
-use crate::conn::state::{AdmittedNavigationLoad, PreparedNavigationResponse};
+use crate::conn::state::{
+    AdmittedNavigationLoad, NavigationInterceptionPermit, PreparedNavigationResponse,
+};
 use crate::domains::network::{
     CompletedDocumentProgressTransfer, CompletedDownloadProgressTransfer,
     CompletedMainDocumentNetworkEvents, MainDocumentBodyNetworkProgress,
@@ -1351,6 +1353,82 @@ async fn build_navigation_from_streaming_raw_response_with_load_async(
 }
 
 impl CdpConnection {
+    fn admit_navigation_load_for_interception(
+        &mut self,
+        permit: NavigationInterceptionPermit,
+        policy: NavigationRequestLoadPolicy,
+    ) -> Result<AdmittedNavigationLoad, String> {
+        let web_contents = permit.web_contents();
+        let defaults = self.document_fetch_defaults();
+        let (context_id, target_id, load) = {
+            let context = self
+                .browser_context
+                .iter_mut()
+                .chain(self.inactive_browser_contexts.iter_mut())
+                .find(|context| context.owns_web_contents(web_contents))
+                .ok_or("navigation BrowserContext unavailable")?;
+            let context_id = context.id.clone();
+            let (target_id, load) = context.start_navigation_load_for_interception(
+                permit,
+                policy,
+                defaults,
+                &self.permission_defaults,
+            )?;
+            (context_id, target_id, load)
+        };
+        self.bind_renderer_page_output_owner(
+            load.renderer_page(),
+            TargetPageResidenceIdentity::new(context_id, Some(target_id), load.document_id()),
+        );
+        Ok(load)
+    }
+
+    pub(crate) fn start_intercepted_navigation_load_for_response(
+        &mut self,
+        permit: NavigationInterceptionPermit,
+        policy: NavigationRequestLoadPolicy,
+        requested_url: Url,
+        method: String,
+        headers: Vec<(String, String)>,
+    ) -> Result<InterceptedNavigationLoad, String> {
+        let load = self.admit_navigation_load_for_interception(permit, policy)?;
+        Ok(InterceptedNavigationLoad::new(
+            load,
+            requested_url,
+            method,
+            None,
+            headers,
+        ))
+    }
+
+    pub(crate) fn start_claimed_intercepted_navigation_load(
+        &mut self,
+        request: ClaimedNavigationRequest,
+    ) -> Result<InterceptedNavigationLoad, String> {
+        let web_contents = request.permit().web_contents();
+        let defaults = self.document_fetch_defaults();
+        let (context_id, target_id, load) = {
+            let context = self
+                .browser_context
+                .iter_mut()
+                .chain(self.inactive_browser_contexts.iter_mut())
+                .find(|context| context.owns_web_contents(web_contents))
+                .ok_or("navigation BrowserContext unavailable")?;
+            let context_id = context.id.clone();
+            let (target_id, load) = context.start_claimed_navigation_request(
+                request,
+                defaults,
+                &self.permission_defaults,
+            )?;
+            (context_id, target_id, load)
+        };
+        self.bind_renderer_page_output_owner(
+            load.load.renderer_page(),
+            TargetPageResidenceIdentity::new(context_id, Some(target_id), load.load.document_id()),
+        );
+        Ok(load)
+    }
+
     fn navigation_admission_identity(
         &self,
         navigation: &NavigationDispatchState,
@@ -1993,24 +2071,27 @@ impl CdpConnection {
         .await
     }
 
-    pub(crate) async fn load_navigation_request_via_runtime_with_network_events_for_navigation_async(
+    pub(crate) async fn load_intercepted_navigation_request_via_runtime_with_network_events_async(
         &mut self,
         navigation: &NavigationDispatchState,
+        work: InterceptedNavigationLoad,
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> Result<NavigationLoadOutcome, String> {
-        let load = self.admit_navigation_load(navigation)?;
-        let job = BackgroundNavigationLoadJob {
+        let (load, requested_url, method, body, request_headers) = work.into_request_parts();
+        BackgroundNavigationLoadJob {
             load,
             reply_boundary: RendererReplyBoundary::Stage,
             early_result: None,
             load_inputs: self.navigation_load_inputs_for_navigation(navigation),
-            method: navigation.request_method.clone(),
-            raw_url: navigation.requested_url.to_string(),
-            body: navigation.clone_request_body_bytes(),
-            request_headers: navigation.request_headers.clone(),
+            method,
+            raw_url: requested_url.to_string(),
+            body,
+            request_headers,
             body_progress_source,
-        };
-        job.run(None).await.0
+        }
+        .run(None)
+        .await
+        .0
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -2085,6 +2166,8 @@ impl CdpConnection {
 
     pub(crate) fn background_streaming_response_navigation_load_job_for_navigation(
         &mut self,
+        permit: NavigationInterceptionPermit,
+        request_load_policy: NavigationRequestLoadPolicy,
         navigation: &NavigationDispatchState,
         response: StreamingRawResponse,
         network_observation_journal: NetworkObservationJournal,
@@ -2093,7 +2176,7 @@ impl CdpConnection {
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> Result<BackgroundStreamingResponseNavigationLoadJob, String> {
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
-        let load = self.admit_navigation_load(navigation)?;
+        let load = self.admit_navigation_load_for_interception(permit, request_load_policy)?;
         Ok(BackgroundStreamingResponseNavigationLoadJob {
             load,
             load_inputs,
@@ -2290,6 +2373,7 @@ impl CdpConnection {
         .await
     }
 
+    #[cfg(test)]
     pub(crate) async fn build_navigation_from_buffered_body_source_for_navigation_async(
         &mut self,
         navigation: &NavigationDispatchState,
@@ -2310,6 +2394,39 @@ impl CdpConnection {
             final_url,
             navigation.request_method.clone(),
             navigation.request_headers.clone(),
+            response_status,
+            response_headers,
+            response_body,
+            initial_request_cookie_report,
+            network_observation_journal,
+            body_progress_source,
+        )
+        .await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) async fn build_navigation_from_buffered_body_source_for_intercepted_request_async(
+        &mut self,
+        navigation: &NavigationDispatchState,
+        work: InterceptedNavigationLoad,
+        final_url: Url,
+        response_status: u16,
+        response_headers: Vec<(String, String)>,
+        response_body: CapturedBody,
+        initial_request_cookie_report: Option<StoredCookieQueryReport>,
+        network_observation_journal: NetworkObservationJournal,
+        body_progress_source: MainDocumentBodyProgressSource,
+    ) -> Result<NavigationLoadOutcome, String> {
+        let (mut load, requested_url, request_method, _, request_headers) =
+            work.into_request_parts();
+        let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
+        self.build_navigation_from_buffered_body_source_with_load_inputs_async(
+            &mut load,
+            &load_inputs,
+            requested_url,
+            final_url,
+            request_method,
+            request_headers,
             response_status,
             response_headers,
             response_body,
@@ -2465,20 +2582,6 @@ impl CdpConnection {
         })
     }
 
-    pub(crate) fn start_intercepted_navigation_load(
-        &mut self,
-        navigation: &NavigationDispatchState,
-    ) -> Result<InterceptedNavigationLoad, String> {
-        let load = self.admit_navigation_load(navigation)?;
-        Ok(InterceptedNavigationLoad::new(
-            load,
-            navigation.requested_url.clone(),
-            navigation.request_method.clone(),
-            navigation.clone_request_body_bytes(),
-            navigation.request_headers.clone(),
-        ))
-    }
-
     #[cfg(test)]
     pub async fn build_navigation_from_network_response_async(
         &mut self,
@@ -2614,29 +2717,6 @@ impl CdpConnection {
         })
     }
 
-    /// Builds navigation from raw bytes that are already fully buffered.
-    ///
-    /// This keeps buffered/synthetic cases explicit. It is not the main network
-    /// document path; true network responses should use the streaming raw
-    /// builders so parser work can start before body EOF.
-    pub(crate) async fn build_navigation_from_buffered_raw_response_for_navigation_async(
-        &mut self,
-        navigation: &NavigationDispatchState,
-        response: NetworkFetchResult<RawResponse>,
-    ) -> Result<NavigationLoadOutcome, String> {
-        let mut load = self.admit_navigation_load(navigation)?;
-        let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
-        self.build_navigation_from_buffered_raw_response_with_load_inputs_async(
-            &mut load,
-            &load_inputs,
-            navigation.requested_url.clone(),
-            navigation.request_method.clone(),
-            navigation.request_headers.clone(),
-            response,
-        )
-        .await
-    }
-
     pub(crate) async fn build_intercepted_navigation_response_async(
         &mut self,
         navigation: &NavigationDispatchState,
@@ -2693,22 +2773,24 @@ impl CdpConnection {
         .await
     }
 
-    pub(crate) async fn build_navigation_from_captured_raw_response_for_navigation_async(
+    pub(crate) async fn build_navigation_from_captured_raw_response_for_intercepted_request_async(
         &mut self,
         navigation: &NavigationDispatchState,
+        work: InterceptedNavigationLoad,
         head: ResponseHead,
         body: CapturedBody,
         network_observation_journal: NetworkObservationJournal,
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> Result<NavigationLoadOutcome, String> {
-        let mut load = self.admit_navigation_load(navigation)?;
+        let (mut load, requested_url, request_method, _, request_headers) =
+            work.into_request_parts();
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.build_navigation_from_captured_raw_response_with_load_inputs_async(
             &mut load,
             &load_inputs,
-            navigation.requested_url.clone(),
-            navigation.request_method.clone(),
-            navigation.request_headers.clone(),
+            requested_url,
+            request_method,
+            request_headers,
             head,
             body,
             network_observation_journal,
@@ -2768,14 +2850,8 @@ impl CdpConnection {
         response: InterceptedNavigationResponse<StreamingRawResponse>,
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> Result<NavigationLoadOutcome, String> {
-        let (mut work, response) = response.into_parts();
-        let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
-        self.build_navigation_from_streaming_raw_response_with_load_inputs_async(
-            &mut work.load,
-            &load_inputs,
-            work.requested_url,
-            work.method,
-            work.headers,
+        self.build_navigation_from_intercepted_streaming_response_with_override_async(
+            navigation,
             response,
             None,
             Vec::new(),
@@ -2784,22 +2860,22 @@ impl CdpConnection {
         .await
     }
 
-    pub(crate) async fn build_navigation_from_streaming_raw_response_with_response_override_for_navigation_async(
+    pub(crate) async fn build_navigation_from_intercepted_streaming_response_with_override_async(
         &mut self,
         navigation: &NavigationDispatchState,
-        response: NetworkFetchResult<StreamingRawResponse>,
+        response: InterceptedNavigationResponse<StreamingRawResponse>,
         response_code: Option<u16>,
         response_headers_override: Vec<(String, String)>,
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> Result<NavigationLoadOutcome, String> {
-        let mut load = self.admit_navigation_load(navigation)?;
+        let (mut work, response) = response.into_parts();
         let load_inputs = self.navigation_load_inputs_for_navigation(navigation);
         self.build_navigation_from_streaming_raw_response_with_load_inputs_async(
-            &mut load,
+            &mut work.load,
             &load_inputs,
-            navigation.requested_url.clone(),
-            navigation.request_method.clone(),
-            navigation.request_headers.clone(),
+            work.requested_url,
+            work.method,
+            work.headers,
             response,
             response_code,
             response_headers_override,

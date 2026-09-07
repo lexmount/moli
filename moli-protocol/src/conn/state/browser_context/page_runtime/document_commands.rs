@@ -2,8 +2,8 @@ use super::BrowserContext;
 use moli_core::page::{
     CompletedPageCommand, PendingPageCommand, RendererCaptureScreencastFrameReply,
     RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
-    RendererCaptureScreenshotRequest, RendererCommandTurnOutput, RendererLayoutMetrics,
-    RendererResourceTextSearchOutcome, RendererSetDocumentContentResult, SubresourceNetworkRecord,
+    RendererCaptureScreenshotRequest, RendererCommandTurnOutput, RendererResourceTextSearchOutcome,
+    RendererSetDocumentContentResult, SubresourceNetworkRecord,
 };
 
 impl BrowserContext {
@@ -164,27 +164,6 @@ impl BrowserContext {
         self.loaded_page_for_target_mut(target_id)
             .ok_or("NoDocumentLoaded")?
             .finish_serialize_html(completion)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn start_layout_metrics_for_target(
-        &self,
-        target_id: &str,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_layout_metrics()
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn finish_layout_metrics_for_target(
-        &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
-    ) -> Result<RendererLayoutMetrics, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_layout_metrics(completion)
             .map_err(|error| error.to_string())
     }
 

@@ -12,7 +12,7 @@ use moli_core::{
 };
 use moli_protocol::{
     BackgroundNavigationCompletion, BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection,
-    CdpInitialStoragePartition, CdpRendererCommandAccess, CdpSchedulerEvent,
+    CdpInitialStoragePartition, CdpRendererDispatchLane, CdpSchedulerEvent,
     CdpTargetHostLifecycleObserver, CommandDispatchContext, CompletedCdpCommandDispatch,
     CompletedDeferredMainDocumentLoadCompletion, DeferredMainDocumentLoadCompletionOutputAction,
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
@@ -2015,7 +2015,7 @@ impl CdpScheduler {
     }
 
     pub(crate) fn command_waits_for_navigation_flush(&self, command: &ParsedCdpCommand) -> bool {
-        command.renderer_access() == CdpRendererCommandAccess::MainThread
+        command.renderer_lane() == Some(CdpRendererDispatchLane::Main)
             && self
                 .conn
                 .renderer_document_navigation_is_suspended_for_session_owner(command.session_id())

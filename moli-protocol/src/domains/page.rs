@@ -23,8 +23,8 @@ use moli_core::page::{
     RendererCaptureScreenshotRequest, RendererDocumentLifecycleIdentity,
     RendererDocumentLifecycleMilestone, RendererDocumentLifecycleWaitOutcome,
     RendererDocumentLifecycleWaiter, RendererDocumentSourcedSameDocumentNavigation,
-    RendererDocumentSourcedTopLevelLocationNavigation, RendererLayoutMetrics,
-    RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
+    RendererDocumentSourcedTopLevelLocationNavigation, RendererInspectorCommandRoute,
+    RendererLayoutMetrics, RendererPendingTopLevelHistoryTraversal, RendererPendingWindowOpenEvent,
     RendererScreenshotClip, RendererScreenshotFormat, RendererScreenshotPurpose,
     RendererScreenshotRegion, RendererSetDocumentContentResult, RendererVisualStateToken,
 };
@@ -5908,32 +5908,32 @@ async fn execute_devtools_get_layout_metrics_for_current_owner(
 ) -> Result<DevToolsLayoutMetricsResult, DevToolsError> {
     let fallback =
         layout_metrics_result_from_surface(current_viewport_surface_for_owner(conn, owner));
-    let Some((page_context_id, page_target_id)) =
-        conn.loaded_document_owner_identity_for_owner(owner)
-    else {
+    if conn
+        .loaded_document_owner_identity_for_owner(owner)
+        .is_none()
+    {
         return Ok(fallback);
-    };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("resolved document context remains registered");
-    let pending = page_context
-        .start_layout_metrics_for_target(&page_target_id)
+    }
+    let inspector_session_id = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let pending = conn
+        .renderer_inspection_binding_for_owner(owner, RendererInspectorCommandRoute::MainThread)
+        .and_then(|binding| {
+            binding
+                .page_inspection(inspector_session_id)
+                .start_layout_metrics()
+                .map(PendingPageCommand::from_inspector_main_route)
+                .map_err(|error| error.to_string())
+        })
         .map_err(|error| {
             devtools_layout_metrics_error(format!("Failed to start layout metrics: {error}"))
         })?;
     let completed = pending.wait().await.map_err(|error| {
         devtools_layout_metrics_error(format!("Failed to produce layout metrics: {error}"))
     })?;
-    let Some((page_context_id, page_target_id)) =
-        conn.loaded_document_owner_identity_for_owner(owner)
-    else {
-        return Err(devtools_layout_metrics_error("NoDocumentLoaded"));
-    };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("resolved document context remains registered");
-    page_context
-        .finish_layout_metrics_for_target(&page_target_id, completed)
+    conn.observe_renderer_inspection_completion(owner, &completed)
+        .map_err(devtools_layout_metrics_error)?;
+    completed
+        .finish_layout_metrics()
         .map(layout_metrics_result_from_renderer)
         .map_err(|error| {
             devtools_layout_metrics_error(format!("Failed to finish layout metrics: {error}"))
@@ -6311,16 +6311,22 @@ async fn devtools_frame_tree_for_current_owner_async(
             Vec::new(),
         ));
     };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("resolved document context remains registered");
     let target_mime_type = main_document_mime_type(
-        page_context
+        conn.browser_context_by_id(&page_context_id)
+            .expect("resolved document context remains registered")
             .target_response_headers(&page_target_id)
             .expect("loaded document headers"),
     );
-    let pending = page_context
-        .start_child_frame_tree_snapshot_for_target(&page_target_id)
+    let inspector_session_id = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
+    let pending = conn
+        .renderer_inspection_binding_for_owner(owner, RendererInspectorCommandRoute::MainThread)
+        .and_then(|binding| {
+            binding
+                .page_inspection(inspector_session_id)
+                .start_child_frame_tree_snapshot()
+                .map(PendingPageCommand::from_inspector_main_route)
+                .map_err(|error| error.to_string())
+        })
         .map_err(|error| {
             devtools_frame_tree_error(format!("Failed to snapshot child frame tree: {error}"))
         })?;
@@ -6339,25 +6345,10 @@ async fn devtools_frame_tree_for_current_owner_async(
             Vec::new(),
         ));
     }
-    let Some((page_context_id, page_target_id)) =
-        conn.loaded_document_owner_identity_for_owner(owner)
-    else {
-        return Ok(frame_tree_payload(
-            target_id,
-            target_loader_id,
-            target_url,
-            target_unreachable_url,
-            target_security_origin,
-            target_secure_context_type,
-            target_mime_type,
-            Vec::new(),
-        ));
-    };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("resolved document context remains registered");
-    let child_frames = page_context
-        .finish_child_frame_tree_snapshot_for_target(&page_target_id, completed)
+    conn.observe_renderer_inspection_completion(owner, &completed)
+        .map_err(devtools_frame_tree_error)?;
+    let child_frames = completed
+        .finish_child_frame_tree_snapshot()
         .map_err(|error| {
             devtools_frame_tree_error(format!("Failed to snapshot child frame tree: {error}"))
         })?;
@@ -6654,7 +6645,7 @@ fn try_start_page_set_document_content_command(
         ));
     };
     let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
+        .browser_context_by_id(&page_context_id)
         .expect("resolved document context remains registered");
     match page_context.start_set_document_content_for_target(
         &page_target_id,
@@ -6977,10 +6968,20 @@ fn start_devtools_get_frame_tree_command(
             .target_response_headers(&page_target_id)
             .expect("loaded document headers"),
     );
-    match page_context.start_child_frame_tree_snapshot_for_target(&page_target_id) {
+    let inspector_session_id = conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
+    let pending = conn
+        .renderer_inspection_binding_for_owner(&owner, RendererInspectorCommandRoute::MainThread)
+        .and_then(|binding| {
+            binding
+                .page_inspection(inspector_session_id)
+                .start_child_frame_tree_snapshot()
+                .map(PendingPageCommand::from_inspector_main_route)
+                .map_err(|error| error.to_string())
+        });
+    match pending {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
-            owner_scope: CommandOwnerScope::capture(conn, command_session_id),
+            owner_scope: owner,
             kind: Box::new(PendingPageCommandKind::GetFrameTree {
                 output_kind,
                 target_id,
@@ -7491,17 +7492,29 @@ fn start_devtools_get_layout_metrics_command(
     let fallback =
         layout_metrics_result_from_surface(current_viewport_surface(conn, command_session_id));
     let owner_scope = CommandOwnerScope::capture(conn, command_session_id);
-    let Some((page_context_id, page_target_id)) = conn.loaded_document_owner_identity_for_owner(
-        &CommandOwnerScope::capture(conn, command_session_id),
-    ) else {
+    if conn
+        .loaded_document_owner_identity_for_owner(&owner_scope)
+        .is_none()
+    {
         return PageCommandTaskStep::Complete(CommandOutputPlan::from_devtools_result(
             DevToolsCommandResult::LayoutMetrics(fallback),
         ));
-    };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("resolved document context remains registered");
-    match page_context.start_layout_metrics_for_target(&page_target_id) {
+    }
+    let inspector_session_id =
+        conn.target_renderer_runtime_inspector_session_id_for_owner(&owner_scope);
+    let pending = conn
+        .renderer_inspection_binding_for_owner(
+            &owner_scope,
+            RendererInspectorCommandRoute::MainThread,
+        )
+        .and_then(|binding| {
+            binding
+                .page_inspection(inspector_session_id)
+                .start_layout_metrics()
+                .map(PendingPageCommand::from_inspector_main_route)
+                .map_err(|error| error.to_string())
+        });
+    match pending {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
             owner_scope,
@@ -7767,21 +7780,25 @@ pub(crate) async fn complete_pending_page_command(
                     &[],
                 ));
             };
-            let page_context = conn
-                .browser_context_by_id_mut(&page_context_id)
-                .expect("resolved document context remains registered");
             let child_frames = match *completed {
-                Ok(completion) => match page_context
-                    .finish_child_frame_tree_snapshot_for_target(&page_target_id, completion)
-                {
-                    Ok(frames) => frames,
-                    Err(error) => {
+                Ok(completion) => {
+                    if let Err(message) =
+                        conn.observe_renderer_inspection_completion(&owner_scope, &completion)
+                    {
                         return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                            -32000,
-                            format!("Failed to snapshot child frame tree: {error}"),
+                            -32000, message,
                         ));
                     }
-                },
+                    match completion.finish_child_frame_tree_snapshot() {
+                        Ok(frames) => frames,
+                        Err(error) => {
+                            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                                -32000,
+                                format!("Failed to snapshot child frame tree: {error}"),
+                            ));
+                        }
+                    }
+                }
                 Err(message) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
@@ -7789,6 +7806,9 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
+            let page_context = conn
+                .browser_context_by_id(&page_context_id)
+                .expect("resolved document context remains registered");
             get_frame_tree_command_output_plan(
                 output_kind,
                 target_id,
@@ -7852,19 +7872,12 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let (page_context_id, page_target_id) =
-                match conn.resolve_document_command_owner(&owner_scope) {
-                    Ok(route) => route,
-                    Err(message) => {
-                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                            -32000, message,
-                        ));
-                    }
-                };
-            let page_context = conn
-                .browser_context_by_id_mut(&page_context_id)
-                .expect("admitted document context remains registered");
-            match page_context.finish_layout_metrics_for_target(&page_target_id, completion) {
+            if let Err(message) =
+                conn.observe_renderer_inspection_completion(&owner_scope, &completion)
+            {
+                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+            }
+            match completion.finish_layout_metrics() {
                 Ok(metrics) => {
                     CommandOutputPlan::from_devtools_result(DevToolsCommandResult::LayoutMetrics(
                         layout_metrics_result_from_renderer(metrics),

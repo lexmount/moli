@@ -713,7 +713,7 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
         PendingFetchNavigation {
             fetch_request_id: "FETCH-background".to_owned(),
             interception_session_id: Some("bidi-session-1".to_owned()),
-            document_navigation_token: None,
+            navigation_permit: PendingFetchNavigation::test_navigation_permit(),
             navigation: NavigationDispatchState {
                 navigate_id: None,
                 owner: CommandOwnerScope::for_session("SID-background"),

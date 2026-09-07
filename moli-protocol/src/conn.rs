@@ -71,8 +71,11 @@ mod settings;
 #[cfg(test)]
 mod site_data_manager_surface;
 mod state;
+pub(crate) use state::{
+    ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
+    NavigationRequestInterception,
+};
 pub(crate) use state::{CompletedContextPermissionUpdate, PendingContextPermissionUpdate};
-pub(crate) use state::{InterceptedNavigationLoad, InterceptedNavigationResponse};
 pub(crate) use state::{NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind};
 mod target;
 mod top_level_navigation_work;
@@ -108,25 +111,26 @@ pub(crate) use devtools_command::DevToolsCommandExecutionOutput;
 pub use dispatch::{CdpCommandTaskStep, CompletedCdpCommandDispatch, PendingCdpCommandDispatch};
 pub(crate) use fetch_support::PendingStreamingDocumentResponseNavigation;
 pub(crate) use fetch_support::{
-    ClaimedSubresourceContinueRequest, CompletedFetchResponseBodyStreamReadDispatch,
-    PendingFetchResponseBodyStreamRead, PendingFetchResponseBodyStreamReadDispatch,
-    PendingFetchResponseBodyStreamReadStart, PendingSubresourceFetchResidence,
+    ClaimedFetchNavigation, ClaimedFetchResponseNavigation, ClaimedSubresourceContinueRequest,
+    CompletedFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamRead,
+    PendingFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamReadStart,
+    PendingFetchResponseNavigation, PendingSubresourceFetchResidence,
 };
 pub use fetch_support::{
     DocumentBodySource, FetchAuthChallenge, FetchInterceptionPattern, FetchRequestStage,
     FetchResourceTypeFilter, InFlightSubresourceFetchRequest, PausedDocumentTransfer,
-    PausedDocumentTransfers, PendingFetchAuthNavigation, PendingFetchNavigation,
-    PendingFetchResponseOpenedBodyStream, PendingSubresourceFetchAuthRequest,
-    PendingSubresourceFetchAuthStage, PendingSubresourceFetchAuthStageChain,
-    PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
-    PendingSubresourceFetchRequestStage, PendingSubresourceFetchRequestStageChain,
-    PendingSubresourceFetchResponseRequest, PendingSubresourceFetchResponseStage,
-    PendingSubresourceFetchResponseStageChain, ResponseStageUrlMatchPolicy,
-    fetch_subresource_interception_config, fetch_subresource_interception_config_for_patterns,
+    PendingFetchAuthNavigation, PendingFetchNavigation, PendingFetchResponseOpenedBodyStream,
+    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchAuthStage,
+    PendingSubresourceFetchAuthStageChain, PendingSubresourceFetchOwnerKind,
+    PendingSubresourceFetchRequest, PendingSubresourceFetchRequestStage,
+    PendingSubresourceFetchRequestStageChain, PendingSubresourceFetchResponseRequest,
+    PendingSubresourceFetchResponseStage, PendingSubresourceFetchResponseStageChain,
+    ResponseStageUrlMatchPolicy, fetch_subresource_interception_config,
+    fetch_subresource_interception_config_for_patterns,
 };
 pub use moli_protocol_cdp::{
-    CdpRendererCommandAccess, CdpRendererCommandPolicy, CdpRendererCommandReplacement,
-    CdpRendererCommandReplayDispatch, CdpRequest, ParsedCdpCommand,
+    CdpRendererCommandPolicy, CdpRendererCommandReplacement, CdpRendererCommandReplayDispatch,
+    CdpRendererDispatchLane, CdpRequest, ParsedCdpCommand,
 };
 use target::DEFAULT_BROWSER_CONTEXT_ID;
 pub(crate) use target::{
