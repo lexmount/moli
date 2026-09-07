@@ -24,9 +24,10 @@ pub(super) use helpers::{
     window_child_context_handle, window_has_discarded_child_browsing_context,
 };
 pub(super) use interceptors::{
-    window_indexed_property_deleter, window_indexed_property_descriptor,
-    window_indexed_property_enumerator, window_indexed_property_getter,
-    window_indexed_property_query, window_named_properties_indexed_property_getter,
+    window_indexed_property_definer, window_indexed_property_deleter,
+    window_indexed_property_descriptor, window_indexed_property_enumerator,
+    window_indexed_property_getter, window_indexed_property_query, window_indexed_property_setter,
+    window_named_properties_indexed_property_getter,
     window_named_properties_indexed_property_query, window_named_property_getter,
     window_named_property_query,
 };
