@@ -15,8 +15,8 @@ use super::super::{
 };
 use super::geometry::observable_client_rects;
 use super::{
-    html_element_getter_receiver, html_element_setter_receiver, observable_sources_with_fragments,
-    property_string_value,
+    fresh_observable_sources_with_fragments, html_element_getter_receiver,
+    html_element_setter_receiver, observable_sources_with_fragments, property_string_value,
     rendered_state::{
         ElementBoxState, ElementContentVisibility, ElementRenderedState, ElementRenderedStyle,
         rendered_child_participates_in_flat_tree,
@@ -803,12 +803,21 @@ fn node_inner_text(
     }
     let sources = inner_text_source_handles(runtime, handle);
     let rendered_text_sources = if let Some(document) = runtime.layout_document_for_source(handle) {
-        observable_sources_with_fragments(
-            runtime,
-            document,
-            &sources,
-            moli_layout::LayoutFlushReason::SynchronousGeometry,
-        )?
+        if runtime.has_active_parser_write_insertion_point() {
+            fresh_observable_sources_with_fragments(
+                runtime,
+                document,
+                &sources,
+                moli_layout::LayoutFlushReason::SynchronousGeometry,
+            )?
+        } else {
+            observable_sources_with_fragments(
+                runtime,
+                document,
+                &sources,
+                moli_layout::LayoutFlushReason::SynchronousGeometry,
+            )?
+        }
     } else {
         HashSet::new()
     };

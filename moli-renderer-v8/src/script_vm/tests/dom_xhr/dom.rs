@@ -8687,6 +8687,59 @@ fn inner_text_new_sources_wait_for_a_fresh_paint_layout() {
 }
 
 #[test]
+fn parser_connected_inner_text_bypasses_a_stale_layout_snapshot() {
+    let mut vm = new_parsed_test_vm(
+        "https://parser-inner-text-layout.test/",
+        "<!doctype html><html><body><div id=target><span>a</span></div></body></html>",
+    );
+    assert_eq!(
+        vm.eval("document.getElementById('target').innerText")
+            .expect("the initial innerText read should evaluate"),
+        "a"
+    );
+    let passes_after_initial_read = vm.layout_pass_observability_for_test().1;
+
+    let stream = std::rc::Rc::new(std::cell::RefCell::new(
+        HtmlParser::SCRIPTING_ENABLED.start_document(
+            Url::parse("https://parser-inner-text-layout.test/").expect("parser URL should parse"),
+        ),
+    ));
+    vm._context_host
+        .borrow_mut()
+        .set_current_script_context(CurrentScriptContextSpec {
+            handle: None,
+            parser_write_insertion_point_active: true,
+            parser_bridge: Some(ParserConnectedScriptBridge::for_stream(&stream)),
+        });
+    assert_eq!(
+        vm.eval(
+            "const added = document.createElement('span'); added.textContent = 'b'; target.append(added); target.innerText",
+        )
+        .expect("parser-connected innerText should evaluate"),
+        "ab"
+    );
+    vm._context_host.borrow_mut().clear_current_script_handle();
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        passes_after_initial_read + 1,
+        "an active parser insertion point must bypass the stale snapshot"
+    );
+
+    assert_eq!(
+        vm.eval(
+            "const addedAfterParser = document.createElement('span'); addedAfterParser.textContent = 'c'; target.append(addedAfterParser); target.innerText",
+        )
+        .expect("post-parse innerText should evaluate"),
+        "ab",
+        "ordinary post-parse reads should keep the demand-driven snapshot contract"
+    );
+    assert_eq!(
+        vm.layout_pass_observability_for_test().1,
+        passes_after_initial_read + 1
+    );
+}
+
+#[test]
 fn inner_text_updates_device_in_place_without_full_style_world_snapshots() {
     let mut vm = new_parsed_test_vm(
         "https://inner-text-emulated-media-style-world.test/",
