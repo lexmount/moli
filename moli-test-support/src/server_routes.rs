@@ -235,8 +235,8 @@ pub(super) fn build_router() -> Router {
             get(history_back_ignores_page_tampered_queue_microtask_page),
         )
         .route(
-            "/compat/history-back-forward-same-turn-coalesces",
-            get(history_back_forward_same_turn_coalesces_page),
+            "/compat/history-back-forward-same-turn-queues",
+            get(history_back_forward_same_turn_queues_page),
         )
         .route(
             "/compat/history-state-mutation-does-not-mutate-stored-snapshot",

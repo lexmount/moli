@@ -5308,6 +5308,8 @@ html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-docum
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-nav-stop.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-traversal-cross-document-traversal.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-traversal-same-document-nav.html
+html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-traversal-same-document-traversal-hashchange.html
+html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-traversal-same-document-traversal-pushstate.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-traversal-stop.html
 html/browsers/browsing-the-web/read-text/load-text-plain.html
 html/browsers/browsing-the-web/unloading-documents/beforeunload-canceling.html

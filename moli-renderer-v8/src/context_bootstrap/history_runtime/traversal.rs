@@ -213,6 +213,7 @@ pub(in crate::context_bootstrap) fn route_history_traversal_task(
         return;
     };
     let results = match &queued.action {
+        crate::native_bridge::PendingHistoryTraversalAction::ByDelta { .. } => &[],
         crate::native_bridge::PendingHistoryTraversalAction::SameDocument(traversal) => {
             traversal.results.as_slice()
         }
@@ -425,7 +426,7 @@ pub(in crate::context_bootstrap) fn apply_pending_history_traversal(
     resolve_pending_navigation_results(scope, results, resolved_entry);
 }
 
-fn history_traversal_target_window<'s>(
+pub(in crate::context_bootstrap) fn history_traversal_target_window<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     host: &mut JsContextHost,
     target: crate::native_bridge::WindowTaskTarget,

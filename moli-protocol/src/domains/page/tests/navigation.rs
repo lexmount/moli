@@ -520,6 +520,12 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
 
     let response = take_response_by_id(&mut ctx, 12);
     assert_eq!(response["result"]["result"]["value"], json!("queued"));
+    ctx.wait_until_scheduler_state("renderer history.back() commit", |conn| {
+        conn.browser_context
+            .as_ref()
+            .is_some_and(|context| context.target_url() == first_url)
+    })
+    .await;
     assert_eq!(
         ctx.conn.browser_context.as_ref().unwrap().target_url(),
         first_url
@@ -554,6 +560,12 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
         response["result"]["result"]["value"],
         json!("to-initial-empty-document")
     );
+    ctx.wait_until_scheduler_state("renderer history.back() to initial document", |conn| {
+        conn.browser_context
+            .as_ref()
+            .is_some_and(|context| context.target_url() == "about:blank")
+    })
+    .await;
     assert_eq!(
         ctx.conn.browser_context.as_ref().unwrap().target_url(),
         "about:blank"
@@ -576,15 +588,7 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
         ctx.conn.browser_context.as_ref().unwrap().target_url(),
         "about:blank"
     );
-    assert!(
-        ctx.sent
-            .iter()
-            .all(|message| message.get("id").is_none_or(|id| !id.is_null())),
-        "an out-of-range page traversal must not emit an id:null command response: {:?}",
-        ctx.sent
-    );
 
-    ctx.sent.clear();
     ctx.process_async(json!({
         "id": 16,
         "method": "Runtime.evaluate",
@@ -597,9 +601,23 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
     .await;
     let response = take_response_by_id(&mut ctx, 16);
     assert_eq!(response["result"]["result"]["value"], json!("queued"));
+    ctx.wait_until_scheduler_state("renderer history.forward() commit", |conn| {
+        conn.browser_context
+            .as_ref()
+            .is_some_and(|context| context.target_url() == first_url)
+    })
+    .await;
     assert_eq!(
         ctx.conn.browser_context.as_ref().unwrap().target_url(),
         first_url
+    );
+    // The forward commit also drains the earlier out-of-range traversal.
+    assert!(
+        ctx.sent
+            .iter()
+            .all(|message| message.get("id").is_none_or(|id| !id.is_null())),
+        "an out-of-range page traversal must not emit an id:null command response: {:?}",
+        ctx.sent
     );
 }
 

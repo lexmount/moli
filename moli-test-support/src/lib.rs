@@ -172,8 +172,8 @@ const HISTORY_BACK_SAME_TURN_TRAVERSES_ASYNCHRONOUSLY_HTML: &str = include_str!(
 const HISTORY_BACK_IGNORES_PAGE_TAMPERED_QUEUE_MICROTASK_HTML: &str = include_str!(
     "../../moli-core/tests/fixtures/runtime/history_back_ignores_page_tampered_queue_microtask.html"
 );
-const HISTORY_BACK_FORWARD_SAME_TURN_COALESCES_HTML: &str = include_str!(
-    "../../moli-core/tests/fixtures/runtime/history_back_forward_same_turn_coalesces.html"
+const HISTORY_BACK_FORWARD_SAME_TURN_QUEUES_HTML: &str = include_str!(
+    "../../moli-core/tests/fixtures/runtime/history_back_forward_same_turn_queues.html"
 );
 const HISTORY_STATE_MUTATION_DOES_NOT_MUTATE_STORED_SNAPSHOT_HTML: &str = include_str!(
     "../../moli-core/tests/fixtures/runtime/history_state_mutation_does_not_mutate_stored_snapshot.html"
