@@ -334,7 +334,7 @@ async fn assert_child_location_navigation_stays_window_local(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains(&format!("data-child-current-entry-url=\"{}\"", final_url)),
+            .contains(&format!("data-child-current-entry-url=\"{}\"", initial_url)),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -342,7 +342,7 @@ async fn assert_child_location_navigation_stays_window_local(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains(&format!("data-child-location-href=\"{}\"", final_url)),
+            .contains(&format!("data-child-location-href=\"{}\"", initial_url)),
         "{}",
         page.serialize_html_async().await.unwrap()
     );
@@ -352,7 +352,7 @@ async fn assert_child_location_navigation_stays_window_local(
             .unwrap()
             .contains(&format!(
                 "data-child-document-location-immediate=\"{}\"",
-                final_url
+                initial_url
             )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -438,7 +438,7 @@ async fn assert_child_location_navigation_stays_window_local(
         page.serialize_html_async()
             .await
             .unwrap()
-            .contains("data-child-location-target-pending-microtask=\"true\"")
+            .contains("data-child-location-target-pending-microtask=\"false\"")
     );
     assert!(
         page.serialize_html_async()
@@ -446,7 +446,7 @@ async fn assert_child_location_navigation_stays_window_local(
             .unwrap()
             .contains(&format!(
                 "data-child-document-location-pending-microtask=\"{}\"",
-                final_url
+                initial_url
             )),
         "{}",
         page.serialize_html_async().await.unwrap()
@@ -525,6 +525,15 @@ async fn assert_child_location_navigation_stays_window_local(
             .await
             .unwrap()
             .contains("data-child-document-text-after-load=\"delayed\"")
+    );
+    assert_eq!(
+        evaluated_string(
+            page.evaluate_runtime_expression_async(
+                "document.getElementById('child').contentWindow.navigation.currentEntry.url",
+            )
+            .await?
+        ),
+        Some(final_url)
     );
 
     Ok(())
@@ -700,14 +709,14 @@ async fn assert_child_location_component_keeps_committed_document_until_load(
         "data-document-default-view-same-immediate=\"true\"",
         "data-default-view-document-same-immediate=\"true\"",
         "data-child-document-still-committed-immediate=\"true\"",
-        "data-child-location-target-immediate=\"true\"",
+        "data-child-location-target-immediate=\"false\"",
         "data-window-same-pending-microtask=\"true\"",
         "data-document-same-pending-microtask=\"true\"",
         "data-window-document-same-pending-microtask=\"true\"",
         "data-document-default-view-same-pending-microtask=\"true\"",
         "data-default-view-document-same-pending-microtask=\"true\"",
         "data-child-document-still-committed-pending-microtask=\"true\"",
-        "data-child-location-target-pending-microtask=\"true\"",
+        "data-child-location-target-pending-microtask=\"false\"",
         "data-document-replaced-after-load=\"true\"",
     ] {
         assert!(html.contains(attr), "{attr}\n{html}");
@@ -738,8 +747,11 @@ async fn assert_child_location_component_keeps_committed_document_until_load(
         assert_html_contains_attr(&html, "data-child-document-text-after-load", final_text);
     }
     for attr in [
-        ("data-child-location-immediate", final_url),
-        ("data-child-location-pending-microtask", final_url),
+        ("data-child-location-immediate", initial_url.as_str()),
+        (
+            "data-child-location-pending-microtask",
+            initial_url.as_str(),
+        ),
         ("data-child-location-after-load", final_url),
         ("data-child-document-url-immediate", &initial_url),
         ("data-child-document-url-pending-microtask", &initial_url),
@@ -749,19 +761,19 @@ async fn assert_child_location_component_keeps_committed_document_until_load(
     if !final_is_cross_origin {
         assert_html_contains_attr(&html, "data-child-document-url-after-load", final_url);
     }
-    for attr in [
-        "data-child-pathname-immediate",
-        "data-child-pathname-pending-microtask",
-        "data-child-pathname-after-load",
+    let initial_pathname = Url::parse(&initial_url)?.path().to_owned();
+    for (attr, value) in [
+        ("data-child-pathname-immediate", initial_pathname.as_str()),
+        (
+            "data-child-pathname-pending-microtask",
+            initial_pathname.as_str(),
+        ),
+        ("data-child-pathname-after-load", final_pathname),
+        ("data-child-search-immediate", ""),
+        ("data-child-search-pending-microtask", ""),
+        ("data-child-search-after-load", final_search),
     ] {
-        assert_html_contains_attr(&html, attr, final_pathname);
-    }
-    for attr in [
-        "data-child-search-immediate",
-        "data-child-search-pending-microtask",
-        "data-child-search-after-load",
-    ] {
-        assert_html_contains_attr(&html, attr, final_search);
+        assert_html_contains_attr(&html, attr, value);
     }
 
     Ok(())
