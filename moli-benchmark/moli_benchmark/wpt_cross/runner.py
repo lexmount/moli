@@ -610,7 +610,11 @@ async def _run_one_case(
             )
             response, eval_seen = await client.recv_until_id(
                 eval_id,
-                timeout=max(0.01, min(5.0, deadline - time.perf_counter())),
+                # A synchronous test can keep the renderer busy for longer than
+                # an ordinary CDP command timeout.  Once the probe is in flight,
+                # let it use the case's remaining budget instead of turning a
+                # progressing test into an infrastructure error after 5 seconds.
+                timeout=max(0.01, deadline - time.perf_counter()),
             )
             seen_messages.extend(eval_seen)
         except (RawCdpError, asyncio.TimeoutError) as error:

@@ -439,6 +439,94 @@ class WptCrossTests(unittest.TestCase):
             2,
         )
 
+    def test_run_one_case_gives_in_flight_probe_the_remaining_case_budget(self) -> None:
+        class FakeClient:
+            def __init__(self) -> None:
+                self.commands: list[tuple[str, dict | None, str | None]] = []
+                self.probe_timeout: float | None = None
+
+            async def send(
+                self,
+                method: str,
+                params: dict | None = None,
+                *,
+                session_id: str | None = None,
+            ) -> int:
+                self.commands.append((method, params, session_id))
+                return len(self.commands)
+
+            async def recv_until_id(
+                self, command_id: int, *, timeout: float
+            ) -> tuple[dict, list[dict]]:
+                method = self.commands[command_id - 1][0]
+                if method == "Page.navigate":
+                    return (
+                        {
+                            "sessionId": "SESSION-1",
+                            "result": {
+                                "frameId": "FRAME-1",
+                                "loaderId": "LOADER-1",
+                            },
+                        },
+                        [
+                            {
+                                "method": "Page.frameNavigated",
+                                "sessionId": "SESSION-1",
+                                "params": {
+                                    "frame": {
+                                        "id": "FRAME-1",
+                                        "loaderId": "LOADER-1",
+                                        "url": "http://localhost/slow.html",
+                                    }
+                                },
+                            }
+                        ],
+                    )
+
+                self.probe_timeout = timeout
+                # Model a renderer-bound command that needs more than the old
+                # five-second receive cap without making this test actually wait.
+                if timeout <= 5.0:
+                    raise asyncio.TimeoutError()
+                return (
+                    {
+                        "result": {
+                            "result": {
+                                "value": {
+                                    "href": "http://localhost/slow.html",
+                                    "casePath": "/slow.html",
+                                    "bridgeInstalled": True,
+                                    "payload": {
+                                        "case_path": "/slow.html",
+                                        "source": "completion-callback",
+                                        "harness": {"status": 0},
+                                        "tests": [
+                                            {"name": "slow result", "status": 0}
+                                        ],
+                                    },
+                                }
+                            }
+                        }
+                    },
+                    [],
+                )
+
+        client = FakeClient()
+        result = asyncio.run(
+            _run_one_case(
+                client=client,  # type: ignore[arg-type]
+                session_id="SESSION-1",
+                case_path="slow.html",
+                url="http://localhost/slow.html",
+                timeout_seconds=30.0,
+            )
+        )
+
+        self.assertEqual(result.status, "pass")
+        self.assertEqual(result.subtests_pass, 1)
+        self.assertIsNotNone(client.probe_timeout)
+        self.assertGreater(client.probe_timeout or 0.0, 25.0)
+
     def test_close_page_disposes_context_with_all_auxiliary_targets(self) -> None:
         class FakeClient:
             def __init__(self) -> None:
