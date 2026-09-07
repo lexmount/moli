@@ -6,7 +6,6 @@ edition = "2024"
 
 [dependencies]
 base64 = "0.22"
-font8x8 = "0.3"
 moli-image = { path = "../moli-image" }
 moli-web-mime = { path = "../moli-web-mime" }
 

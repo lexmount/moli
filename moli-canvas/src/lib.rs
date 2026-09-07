@@ -2,7 +2,6 @@ mod blit;
 mod encode;
 mod pixel;
 mod rect;
-mod text;
 mod types;
 
 pub use blit::{blit_draw_image, blit_draw_image_filtered, blit_image_data, extract_image_data};
@@ -15,7 +14,6 @@ pub use pixel::{
     scale_rgba8, scale_rgba8_bilinear, scale_rgba8_nearest,
 };
 pub use rect::{canonicalize_fill_style, fill_style_rgba, normalize_rect, paint_rect};
-pub use text::{draw_text, measure_text_width};
 pub use types::{
     CanvasRect, DEFAULT_FILL_STYLE, DEFAULT_FONT, DrawImageBlit, MAX_RGBA8_BYTE_LENGTH, Rgba8Rect,
     ScaleFilter, byte_len,
@@ -349,26 +347,6 @@ mod tests {
             .filter(|px| px[0] == 255 && px[3] == 255)
             .count();
         assert_eq!(hot, 4);
-    }
-
-    #[test]
-    fn measure_text_scales_with_font_size_and_draw_text_changes_pixels() {
-        let small = measure_text_width("Hi", "10px sans-serif");
-        let large = measure_text_width("Hi", "24px sans-serif");
-        assert!(large > small);
-
-        let mut pixels = vec![0; byte_len(96, 48).expect("buffer len")];
-        draw_text(
-            &mut pixels,
-            96,
-            48,
-            "Moli",
-            4.0,
-            24.0,
-            "16px sans-serif",
-            fill_style_rgba("#ff0000"),
-        );
-        assert!(pixels.iter().any(|&value| value != 0));
     }
 
     #[test]

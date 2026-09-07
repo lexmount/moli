@@ -97,8 +97,9 @@ pub use style::{
     LayoutPosition, ResolvedLayoutStyle,
 };
 pub use text::{
-    DocumentLayoutServices, FontFaceData, SystemFontPolicy, WebFontFace, WebFontRegistration,
-    WebFontRegistrationError, WebFontRegistrationOutcome, WebFontStyle, WebFontUnicodeRange,
+    CanvasFont, DocumentLayoutServices, FontFaceData, ShapedCanvasText, SystemFontPolicy,
+    WebFontFace, WebFontRegistration, WebFontRegistrationError, WebFontRegistrationOutcome,
+    WebFontStyle, WebFontUnicodeRange,
 };
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,
