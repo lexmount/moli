@@ -157,6 +157,7 @@ pub(crate) use location_navigation::{
     dispatch_top_level_navigation_event_with_source_element, is_native_location,
     meta_refresh_navigation_kind, navigate_borrowed_location,
     navigate_location_object_with_child_navigate_event,
+    navigate_location_object_with_child_navigate_event_and_initiator_url,
     navigate_location_object_with_source_element, navigate_top_level_meta_refresh,
     navigate_top_level_same_document_from_browser, resolve_cross_window_location_target,
     sandbox_blocks_ancestor_or_top_navigation_from_source,
