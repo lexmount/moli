@@ -22,13 +22,14 @@ impl BrowserContext {
         target_id: &str,
         fetch_defaults: moli_fetch::FetchConfig,
         permissions: &moli_core::browser::PermissionDefaults,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Result<crate::conn::state::web_contents::InitialDocumentAdmission, String> {
         let inherited = self.physical.inherited_document_policy(
             fetch_defaults,
             permissions,
-            &self.global_extra_headers,
-            self.global_network_conditions,
-            self.global_geolocation_override.as_ref(),
+            &browser_globals.extra_headers,
+            browser_globals.network_conditions,
+            browser_globals.geolocation.as_ref(),
         );
         self.web_contents_for_target_mut(target_id)
             .ok_or("initial WebContents unavailable")?
@@ -273,13 +274,14 @@ impl BrowserContext {
         destination: DocumentNavigationDestination,
         fetch_defaults: moli_fetch::FetchConfig,
         permissions: &moli_core::browser::PermissionDefaults,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Result<crate::conn::state::web_contents::AdmittedDocumentMaterialization, String> {
         let inherited = self.physical.inherited_document_policy(
             fetch_defaults,
             permissions,
-            &self.global_extra_headers,
-            self.global_network_conditions,
-            self.global_geolocation_override.as_ref(),
+            &browser_globals.extra_headers,
+            browser_globals.network_conditions,
+            browser_globals.geolocation.as_ref(),
         );
         self.web_contents_for_target_mut(target_id)
             .ok_or("navigation WebContents unavailable")?
@@ -293,13 +295,14 @@ impl BrowserContext {
         policy: moli_core::browser::NavigationRequestLoadPolicy,
         fetch_defaults: moli_fetch::FetchConfig,
         permissions: &moli_core::browser::PermissionDefaults,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Result<crate::conn::state::web_contents::AdmittedNavigationLoad, String> {
         let inherited = self.physical.inherited_document_policy(
             fetch_defaults,
             permissions,
-            &self.global_extra_headers,
-            self.global_network_conditions,
-            self.global_geolocation_override.as_ref(),
+            &browser_globals.extra_headers,
+            browser_globals.network_conditions,
+            browser_globals.geolocation.as_ref(),
         );
         self.web_contents_for_target_mut(target_id)
             .ok_or("navigation WebContents unavailable")?
@@ -313,13 +316,14 @@ impl BrowserContext {
         final_url: &url::Url,
         fetch_defaults: moli_fetch::FetchConfig,
         permissions: &moli_core::browser::PermissionDefaults,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Result<moli_core::runtime::PreparedDocumentPagePolicy, String> {
         let inherited = self.physical.inherited_document_policy(
             fetch_defaults,
             permissions,
-            &self.global_extra_headers,
-            self.global_network_conditions,
-            self.global_geolocation_override.as_ref(),
+            &browser_globals.extra_headers,
+            browser_globals.network_conditions,
+            browser_globals.geolocation.as_ref(),
         );
         self.web_contents_for_target_mut(target_id)
             .ok_or("navigation WebContents unavailable")?

@@ -1360,6 +1360,7 @@ impl CdpConnection {
     ) -> Result<AdmittedNavigationLoad, String> {
         let web_contents = permit.web_contents();
         let defaults = self.document_fetch_defaults();
+        let browser_globals = self.browser_global_overrides.clone();
         let (context_id, target_id, load) = {
             let context = self
                 .browser_context
@@ -1373,6 +1374,7 @@ impl CdpConnection {
                 policy,
                 defaults,
                 &self.permission_defaults,
+                &browser_globals,
             )?;
             (context_id, target_id, load)
         };
@@ -1407,6 +1409,7 @@ impl CdpConnection {
     ) -> Result<InterceptedNavigationLoad, String> {
         let web_contents = request.permit().web_contents();
         let defaults = self.document_fetch_defaults();
+        let browser_globals = self.browser_global_overrides.clone();
         let (context_id, target_id, load) = {
             let context = self
                 .browser_context
@@ -1419,6 +1422,7 @@ impl CdpConnection {
                 request,
                 defaults,
                 &self.permission_defaults,
+                &browser_globals,
             )?;
             (context_id, target_id, load)
         };
@@ -1454,6 +1458,7 @@ impl CdpConnection {
         self.ensure_page_navigation_engine_for_target(&context_id, &target_id)
             .ok_or("navigation WebContents engine unavailable")?;
         let defaults = self.document_fetch_defaults();
+        let browser_globals = self.browser_global_overrides.clone();
         let context = self
             .browser_context
             .iter_mut()
@@ -1466,6 +1471,7 @@ impl CdpConnection {
             navigation.request_load_policy,
             defaults,
             &self.permission_defaults,
+            &browser_globals,
         )?;
         // Projection binds the native reservation before prepare can publish.
         // It does not allocate or select a Browser Document identity.
@@ -1516,6 +1522,7 @@ impl CdpConnection {
         self.ensure_page_navigation_engine_for_target(&context_id, &target_id)
             .ok_or("navigation WebContents engine unavailable")?;
         let defaults = self.document_fetch_defaults();
+        let browser_globals = self.browser_global_overrides.clone();
         self.browser_context
             .iter_mut()
             .chain(self.inactive_browser_contexts.iter_mut())
@@ -1526,6 +1533,7 @@ impl CdpConnection {
                 final_url,
                 defaults,
                 &self.permission_defaults,
+                &browser_globals,
             )
             .map(Some)
     }
@@ -1562,6 +1570,7 @@ impl CdpConnection {
             .expect("response must retain its prepared Document");
         let endpoint = page.inspection_configuration_endpoint();
         let defaults = self.document_fetch_defaults();
+        let browser_globals = self.browser_global_overrides.clone();
         let materialization = self
             .browser_context
             .iter_mut()
@@ -1575,6 +1584,7 @@ impl CdpConnection {
                 destination,
                 defaults,
                 &self.permission_defaults,
+                &browser_globals,
             )
             .map_err(|error| match error.as_str() {
                 "stale navigation document candidate"
@@ -1841,13 +1851,19 @@ impl CdpConnection {
             return Ok(None);
         };
         let defaults = self.document_fetch_defaults();
+        let browser_globals = self.browser_global_overrides.clone();
         let admission = self
             .browser_context
             .iter_mut()
             .chain(self.inactive_browser_contexts.iter_mut())
             .find(|context| context.id == context_id)
             .ok_or("TargetNotLoaded")?
-            .start_initial_document_for_target(&target_id, defaults, &self.permission_defaults)?;
+            .start_initial_document_for_target(
+                &target_id,
+                defaults,
+                &self.permission_defaults,
+                &browser_globals,
+            )?;
         let kind = match admission {
             InitialDocumentAdmission::Present => return Ok(None),
             InitialDocumentAdmission::Join(waiter) => {

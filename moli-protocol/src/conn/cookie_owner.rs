@@ -368,9 +368,7 @@ impl BrowserContext {
             return report;
         }
 
-        self.with_cookie_store_mut(|store| {
-            store.upsert_with_request_url_report(cookie, request_url.as_ref(), CookieSource::Cdp)
-        })
+        self.store_cookie(cookie, request_url.as_ref(), CookieSource::Cdp)
     }
 
     #[cfg(test)]

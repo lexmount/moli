@@ -7199,8 +7199,10 @@ mod tests {
         // Navigator emulation uses native Browser state. Exercise an actual
         // inspector script here while its physical Page is owned elsewhere.
         let context = ctx.conn.browser_context.as_ref().unwrap();
-        let source = context
-            .generated_surface_override_script_for_background_state(context.active_page_target());
+        let source = context.generated_surface_override_script_for_background_state(
+            context.active_page_target(),
+            &ctx.conn.browser_global_overrides,
+        );
         let raw = json!({
             "id": 41,
             "method": "Runtime.evaluate",

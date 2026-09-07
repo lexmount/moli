@@ -326,6 +326,7 @@ pub(super) fn execute_devtools_create_target_command(
     let activation = activating_created_target
         .then(|| TargetActivationTransition::new(target_id.clone(), previous_active_target_id));
     let initial_empty_document_url = create_target_initial_empty_document_url(&command.url);
+    let browser_cache_disabled = conn.browser_global_overrides.cache_disabled;
     {
         let bc = conn.browser_context.as_mut().unwrap();
         if creating_background_target {
@@ -353,6 +354,7 @@ pub(super) fn execute_devtools_create_target_command(
             bc.begin_active_target_initial_empty_document(initial_empty_document_url.clone());
             bc.set_target_crash_state(&target_id, false);
         }
+        bc.set_base_cache_disabled_for_target(&target_id, browser_cache_disabled);
         if command.url != initial_empty_document_url {
             // Chromium gives Target.createTarget(url) one initial
             // auto_toplevel history entry for url. The implementation still

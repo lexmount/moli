@@ -354,6 +354,7 @@ impl BrowserContext {
         &mut self,
         target_id: &str,
         session_id: &str,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> (bool, Option<crate::conn::PendingDocumentPolicyBatch>) {
         let is_active = self.is_active_target(target_id);
         let Some(target) = self.page_target_mut(target_id) else {
@@ -364,7 +365,8 @@ impl BrowserContext {
         }
         self.reset_primary_session_target_state_fields_for_target(target_id);
 
-        let effective_headers = self.effective_extra_headers_for_target(target_id);
+        let effective_headers =
+            self.effective_extra_headers_for_target(target_id, &browser_globals.extra_headers);
         let effective_policy = self.effective_policy_for_target(target_id);
         let script_execution_disabled = self
             .target_emulation_policy(target_id)
@@ -398,6 +400,7 @@ impl BrowserContext {
                 crate::conn::DocumentPolicyUpdate::TimezoneOverride(effective_timezone),
             ],
             is_active,
+            browser_globals,
         );
         (true, Some(pending))
     }
@@ -481,6 +484,7 @@ impl BrowserContext {
     pub(crate) fn start_select_web_contents(
         &mut self,
         selected: WebContentsHandle,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Result<PendingWebContentsSelection, String> {
         let selected_has_dialog = self.web_contents_has_pending_javascript_dialog(selected)?;
         let previous = self.selected_web_contents_handle();
@@ -505,7 +509,8 @@ impl BrowserContext {
                 let Some(document) = self.document_handle_for_web_contents(handle)? else {
                     continue;
                 };
-                match self.start_document_page_surface_update(document, foreground) {
+                match self.start_document_page_surface_update(document, foreground, browser_globals)
+                {
                     Ok(update) => surface_updates.push(update),
                     Err(error) => {
                         admission_error.get_or_insert(error);
@@ -1555,7 +1560,7 @@ mod tests {
             .web_contents_handle_for_target("TID-selected")
             .unwrap();
         let completed = context
-            .start_select_web_contents(handle)
+            .start_select_web_contents(handle, &Default::default())
             .unwrap()
             .wait()
             .await;
@@ -1771,7 +1776,7 @@ mod tests {
             .web_contents_handle_for_target("TID-pending-bg")
             .expect("pending background target should remain selectable");
         let completed = context
-            .start_select_web_contents(handle)
+            .start_select_web_contents(handle, &Default::default())
             .unwrap()
             .wait()
             .await;
@@ -1844,7 +1849,7 @@ mod tests {
             .expect("loaded background target should be selectable");
         let handle = context.web_contents_handle_for_target(&selected).unwrap();
         let completed = context
-            .start_select_web_contents(handle)
+            .start_select_web_contents(handle, &Default::default())
             .unwrap()
             .wait()
             .await;
@@ -1919,7 +1924,7 @@ mod tests {
             .web_contents_handle_for_target("TID-background-route")
             .unwrap();
         let completed = context
-            .start_select_web_contents(handle)
+            .start_select_web_contents(handle, &Default::default())
             .unwrap()
             .wait()
             .await;
@@ -1986,7 +1991,7 @@ mod tests {
 
         let handle = context.web_contents_handle_for_target("TID-bg").unwrap();
         let completed = context
-            .start_select_web_contents(handle)
+            .start_select_web_contents(handle, &Default::default())
             .unwrap()
             .wait()
             .await;

@@ -169,9 +169,10 @@ impl BrowserContext {
         document: DocumentHandle,
         updates: Vec<DocumentPolicyUpdate>,
         foreground: bool,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> PendingDocumentPolicyBatch {
         let mut batch = self.start_document_policy_batch(document, updates);
-        match self.start_document_page_surface_update(document, foreground) {
+        match self.start_document_page_surface_update(document, foreground, browser_globals) {
             Ok(surface) => {
                 batch.updates.extend(surface.updates);
                 if let Some(error) = surface.admission_error {
@@ -347,8 +348,14 @@ impl BrowserContext {
         &mut self,
         document: DocumentHandle,
         foreground: bool,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Result<PendingDocumentPolicyBatch, String> {
-        let surface = self.page_surface_for_web_contents(document.web_contents(), foreground)?;
+        let surface = self.page_surface_for_web_contents(
+            document.web_contents(),
+            foreground,
+            browser_globals.network_conditions,
+            browser_globals.geolocation.as_ref(),
+        )?;
         let mut batch = self.start_document_policy_batch(
             document,
             vec![DocumentPolicyUpdate::NavigatorOverrides(

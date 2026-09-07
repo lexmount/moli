@@ -73,7 +73,10 @@ impl CdpConnection {
         let frame_id = context
             .download_frame_id_for_web_contents(web_contents)?
             .to_owned();
-        let request_headers = context.effective_extra_headers_for_target(&frame_id);
+        let request_headers = context.effective_extra_headers_for_target(
+            &frame_id,
+            &self.browser_global_overrides.extra_headers,
+        );
         let initiator_url = context.target_document_url(&frame_id).cloned();
         let (policy, automation_events_enabled) =
             self.download_configuration_for_browser_context(web_contents.context())?;
@@ -176,6 +179,7 @@ impl CdpConnection {
                     request = request.with_initiator_url(initiator_url);
                 }
                 let fetch_defaults = self.document_fetch_defaults();
+                let browser_globals = self.browser_global_overrides.clone();
                 self.browser_context_by_browser_id_mut(web_contents.context())
                     .expect("exact download Context was resolved without yielding")
                     .start_download_request(
@@ -184,6 +188,7 @@ impl CdpConnection {
                         &policy,
                         request,
                         activation.suggested_filename,
+                        &browser_globals,
                     )?
             }
         };
@@ -633,8 +638,8 @@ mod tests {
             "X-Context-Default".to_owned(),
             "default".to_owned(),
         )]);
-        browser_context.global_extra_headers =
-            vec![("X-Context-Global".to_owned(), "global".to_owned())];
+        connection
+            .set_global_extra_headers(vec![("X-Context-Global".to_owned(), "global".to_owned())]);
 
         assert!(browser_context.register_page_target_url_fixture(
             "TID-background".to_owned(),

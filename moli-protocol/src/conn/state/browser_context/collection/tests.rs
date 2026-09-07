@@ -177,13 +177,23 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     context.attach_active_session("SID-close");
     context.target_popup_ids.insert("TID-close".into(), 7);
     let InitialDocumentAdmission::Build(build) = context
-        .start_initial_document_for_target("TID-close", Default::default(), &Default::default())
+        .start_initial_document_for_target(
+            "TID-close",
+            Default::default(),
+            &Default::default(),
+            &Default::default(),
+        )
         .unwrap()
     else {
         panic!("expected build");
     };
     let InitialDocumentAdmission::Join(waiter) = context
-        .start_initial_document_for_target("TID-close", Default::default(), &Default::default())
+        .start_initial_document_for_target(
+            "TID-close",
+            Default::default(),
+            &Default::default(),
+            &Default::default(),
+        )
         .unwrap()
     else {
         panic!("expected join");
@@ -236,14 +246,24 @@ async fn close_all_retires_background_builds_and_removes_every_projection() {
             TargetPageSlot::empty_for_initial_document_page_build(),
         ));
         let InitialDocumentAdmission::Build(build) = context
-            .start_initial_document_for_target(id, Default::default(), &Default::default())
+            .start_initial_document_for_target(
+                id,
+                Default::default(),
+                &Default::default(),
+                &Default::default(),
+            )
             .unwrap()
         else {
             panic!("expected build");
         };
         builds.push(build);
         let InitialDocumentAdmission::Join(waiter) = context
-            .start_initial_document_for_target(id, Default::default(), &Default::default())
+            .start_initial_document_for_target(
+                id,
+                Default::default(),
+                &Default::default(),
+                &Default::default(),
+            )
             .unwrap()
         else {
             panic!("expected join");

@@ -12,8 +12,11 @@ impl CdpConnection {
             self.ensure_page_navigation_engine_for_target(&context_id, &target_id);
         }
         let defaults = self.document_fetch_defaults();
+        let browser_globals = self.browser_global_overrides.clone();
         if let Some(context) = self.browser_context.as_mut() {
-            if let Err(error) = context.configure_selected_navigation_policy(defaults) {
+            if let Err(error) =
+                context.configure_selected_navigation_policy(defaults, &browser_globals)
+            {
                 tracing::warn!(%error, "Browser navigation policy configuration failed");
             }
         } else {
@@ -87,26 +90,14 @@ impl CdpConnection {
         &mut self,
         conditions: Option<EmulatedNetworkConditions>,
     ) {
-        self.global_network_conditions = conditions;
-        if let Some(browser_context) = self.browser_context.as_mut() {
-            browser_context.global_network_conditions = conditions;
-        }
-        for browser_context in &mut self.inactive_browser_contexts {
-            browser_context.global_network_conditions = conditions;
-        }
+        self.browser_global_overrides.network_conditions = conditions;
     }
 
     pub(crate) fn set_global_geolocation_override(
         &mut self,
         override_state: Option<EmulatedGeolocationOverrideState>,
     ) {
-        self.global_geolocation_override = override_state.clone();
-        if let Some(browser_context) = self.browser_context.as_mut() {
-            browser_context.global_geolocation_override = override_state.clone();
-        }
-        for browser_context in &mut self.inactive_browser_contexts {
-            browser_context.global_geolocation_override = override_state.clone();
-        }
+        self.browser_global_overrides.geolocation = override_state;
     }
 
     #[cfg(test)]

@@ -1503,7 +1503,10 @@ fn start_network_conditions_update_for_current_route(
         } => conn
             .browser_context_by_id(browser_context_id)
             .is_some_and(|browser_context| {
-                browser_context.effective_network_offline_for_target(target_id)
+                browser_context.effective_network_offline_for_target(
+                    target_id,
+                    conn.browser_global_overrides.network_conditions,
+                )
             }),
         PendingEmulationPageTarget::SessionOwner { .. } => false,
     };
@@ -1578,7 +1581,12 @@ fn start_extra_headers_update_for_route(
             target_id,
         } => conn
             .browser_context_by_id(browser_context_id)
-            .map(|browser_context| browser_context.effective_extra_headers_for_target(target_id)),
+            .map(|browser_context| {
+                browser_context.effective_extra_headers_for_target(
+                    target_id,
+                    &conn.browser_global_overrides.extra_headers,
+                )
+            }),
         PendingEmulationPageTarget::SessionOwner { .. } => None,
     };
     let Some(headers) = headers else {
@@ -2963,11 +2971,13 @@ fn start_geolocation_surface_override_page_commands(
         return start_session_surface_override_page_command(conn, cmd.session_id);
     }
     let runtime_call_id = conn.next_internal_runtime_command_id();
-    let Some(browser_context) = conn.browser_context.as_mut() else {
+    let Some(browser_context) = conn.browser_context.as_ref() else {
         return Ok(Vec::new());
     };
-    let script = browser_context.generated_surface_override_script_for_active_target();
-    let navigator_overrides = browser_context.active_navigator_overrides();
+    let script = browser_context
+        .generated_surface_override_script_for_active_target(&conn.browser_global_overrides);
+    let navigator_overrides =
+        browser_context.active_navigator_overrides(&conn.browser_global_overrides);
     let browser_context_id = browser_context.id.clone();
     let Some(target_id) = browser_context.active_target_id_owned() else {
         return Ok(Vec::new());
@@ -2975,6 +2985,9 @@ fn start_geolocation_surface_override_page_commands(
     if !browser_context.target_has_loaded_page(&target_id) {
         return Ok(Vec::new());
     }
+    let browser_context = conn
+        .browser_context_by_id_mut(&browser_context_id)
+        .expect("resolved context remains registered");
     start_surface_override_page_command(
         PendingEmulationPageTarget::BrowserContextTarget {
             browser_context_id,
@@ -3013,15 +3026,22 @@ fn start_session_surface_override_page_command_for_owner(
             && browser_context.background_target(target_id).is_some()
         {
             (
-                browser_context.generated_surface_override_script_for_background_target(target_id),
+                browser_context.generated_surface_override_script_for_background_target(
+                    target_id,
+                    &conn.browser_global_overrides,
+                ),
                 browser_context
-                    .navigator_overrides_for_target(target_id)
+                    .navigator_overrides_for_target(target_id, &conn.browser_global_overrides)
                     .expect("resolved target"),
             )
         } else {
             (
-                Some(browser_context.generated_surface_override_script_for_active_target()),
-                browser_context.active_navigator_overrides(),
+                Some(
+                    browser_context.generated_surface_override_script_for_active_target(
+                        &conn.browser_global_overrides,
+                    ),
+                ),
+                browser_context.active_navigator_overrides(&conn.browser_global_overrides),
             )
         }
     };
@@ -3061,14 +3081,21 @@ fn start_surface_override_for_route(
                 return Err("BrowserContextNotLoaded".to_owned());
             };
             let script = if browser_context.is_active_target(target_id) {
-                Some(browser_context.generated_surface_override_script_for_active_target())
+                Some(
+                    browser_context.generated_surface_override_script_for_active_target(
+                        &conn.browser_global_overrides,
+                    ),
+                )
             } else {
-                browser_context.generated_surface_override_script_for_background_target(target_id)
+                browser_context.generated_surface_override_script_for_background_target(
+                    target_id,
+                    &conn.browser_global_overrides,
+                )
             };
             (
                 script,
                 browser_context
-                    .navigator_overrides_for_target(target_id)
+                    .navigator_overrides_for_target(target_id, &conn.browser_global_overrides)
                     .unwrap_or_default(),
             )
         }

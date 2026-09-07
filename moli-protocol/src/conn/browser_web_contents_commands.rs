@@ -99,10 +99,11 @@ impl CdpConnection {
         &mut self,
         handle: WebContentsHandle,
     ) -> Result<(), String> {
+        let browser_globals = self.browser_global_overrides.clone();
         let pending = self
             .browser_context_by_browser_id_mut(handle.context())
             .ok_or_else(|| "WebContents unavailable".to_owned())?
-            .start_select_web_contents(handle)?;
+            .start_select_web_contents(handle, &browser_globals)?;
         let completed = pending.wait().await;
         self.browser_context_by_browser_id_mut(handle.context())
             .ok_or_else(|| "WebContents unavailable".to_owned())?
@@ -114,6 +115,7 @@ impl CdpConnection {
         handle: WebContentsHandle,
         foreground: bool,
     ) -> Result<bool, String> {
+        let browser_globals = self.browser_global_overrides.clone();
         let pending = {
             let context = self
                 .browser_context_by_browser_id_mut(handle.context())
@@ -121,7 +123,7 @@ impl CdpConnection {
             let Some(document) = context.document_handle_for_web_contents(handle)? else {
                 return Ok(false);
             };
-            context.start_document_page_surface_update(document, foreground)?
+            context.start_document_page_surface_update(document, foreground, &browser_globals)?
         };
         let completed = pending.wait().await;
         self.finish_document_policy_batch(completed)?;

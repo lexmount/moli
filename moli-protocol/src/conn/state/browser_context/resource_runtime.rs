@@ -53,11 +53,12 @@ impl BrowserContext {
     pub(in crate::conn) fn configure_selected_navigation_policy(
         &mut self,
         defaults: FetchConfig,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Result<(), String> {
         let inherited = self.physical.inherited_resource_policy(
             defaults,
-            &self.global_extra_headers,
-            self.global_network_conditions,
+            &browser_globals.extra_headers,
+            browser_globals.network_conditions,
         );
         let Some(contents) = self
             .physical
@@ -75,11 +76,12 @@ impl BrowserContext {
         &mut self,
         web_contents: moli_core::browser::WebContentsHandle,
         defaults: FetchConfig,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Result<ResourceRequestClient, String> {
         let inherited = self.physical.inherited_resource_policy(
             defaults,
-            &self.global_extra_headers,
-            self.global_network_conditions,
+            &browser_globals.extra_headers,
+            browser_globals.network_conditions,
         );
         self.physical
             .web_contents_mut(web_contents)?
@@ -91,23 +93,25 @@ impl BrowserContext {
         &mut self,
         target: &str,
         defaults: FetchConfig,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Result<ResourceRequestClient, String> {
         let web_contents = self
             .web_contents_handle_for_target(target)
             .ok_or("WebContents unavailable")?;
-        self.ensure_web_contents_resource_request_client(web_contents, defaults)
+        self.ensure_web_contents_resource_request_client(web_contents, defaults, browser_globals)
     }
 
     pub(in crate::conn) fn start_web_contents_resource_runtime_rebuild(
         &mut self,
         web_contents: moli_core::browser::WebContentsHandle,
         defaults: FetchConfig,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Result<Option<PendingDocumentResourceRuntimeUpdate>, String> {
         let document = self.document_handle_for_web_contents(web_contents)?;
         let inherited = self.physical.inherited_resource_policy(
             defaults,
-            &self.global_extra_headers,
-            self.global_network_conditions,
+            &browser_globals.extra_headers,
+            browser_globals.network_conditions,
         );
         let pending = self
             .physical

@@ -192,14 +192,15 @@ pub(crate) struct TargetNavigationLoadInputs {
 fn prepared_document_inspection(
     context: &BrowserContext,
     target_id: &str,
+    browser_globals: &crate::conn::BrowserGlobalOverrides,
 ) -> moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
     let target = context
         .page_target(target_id)
         .expect("resolved Page target must remain live");
     let surface = if context.is_active_target(target_id) {
-        context.generated_surface_override_script_for_active_target()
+        context.generated_surface_override_script_for_active_target(browser_globals)
     } else {
-        context.generated_surface_override_script_for_background_state(target)
+        context.generated_surface_override_script_for_background_state(target, browser_globals)
     };
     let mut document_start_scripts = vec![BrowserContext::surface_preload_descriptor(surface)];
     document_start_scripts.extend(context.default_document_start_script_descriptors());
@@ -287,16 +288,20 @@ impl TargetNavigationLoadInputs {
             .then_some(report)
     }
 
-    fn from_browser_context_target(browser_context: &BrowserContext, target_id: &str) -> Self {
+    fn from_browser_context_target(
+        browser_context: &BrowserContext,
+        target_id: &str,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
+    ) -> Self {
         #[cfg(test)]
-        let inspection = prepared_document_inspection(browser_context, target_id);
+        let inspection = prepared_document_inspection(browser_context, target_id, browser_globals);
 
         let effective_network_conditions = browser_context
             .target_emulation_policy(target_id)
             .expect("live WebContents")
             .network_conditions
             .or(browser_context.emulation_defaults().network_conditions)
-            .or(browser_context.global_network_conditions);
+            .or(browser_globals.network_conditions);
         let emulated_device_metrics = browser_context
             .target_emulation_policy(target_id)
             .expect("live WebContents")
@@ -335,8 +340,10 @@ impl TargetNavigationLoadInputs {
             #[cfg(test)]
             runtime_inspector_session_restore_snapshots: inspection
                 .runtime_inspector_session_restore_snapshots,
-            extra_http_headers: browser_context
-                .merged_extra_headers_for_target_policy(effective_policy.extra_headers()),
+            extra_http_headers: browser_context.merged_extra_headers_for_target_policy(
+                &browser_globals.extra_headers,
+                effective_policy.extra_headers(),
+            ),
             #[cfg(test)]
             locale_override: effective_policy
                 .locale_override()
@@ -369,7 +376,7 @@ impl TargetNavigationLoadInputs {
                 || effective_network_conditions
                     .is_some_and(|conditions| !conditions.navigator_online()),
             navigator_overrides: browser_context
-                .navigator_overrides_for_target(target_id)
+                .navigator_overrides_for_target(target_id, browser_globals)
                 .expect("resolved Page target retains its navigator state"),
             #[cfg(test)]
             bypass_service_worker: effective_policy.bypass_service_worker(),
@@ -387,7 +394,10 @@ impl TargetNavigationLoadInputs {
         }
     }
 
-    fn from_browser_context_fallback(browser_context: &BrowserContext) -> Self {
+    fn from_browser_context_fallback(
+        browser_context: &BrowserContext,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
+    ) -> Self {
         let mut inputs = TargetNavigationLoadInputs::no_loaded_browser_context(
             browser_context.page_storage_handles(),
             browser_context.renderer_runtime_owner_access(),
@@ -405,14 +415,16 @@ impl TargetNavigationLoadInputs {
                 browser_context.default_document_start_script_descriptors();
             inputs.locale_override = browser_context.effective_active_locale_override_owned();
         }
-        inputs.extra_http_headers = browser_context.effective_extra_headers();
+        inputs.extra_http_headers =
+            browser_context.effective_extra_headers(&browser_globals.extra_headers);
         inputs.timezone_override = browser_context.effective_active_timezone_override_owned();
         inputs.viewport_surface = browser_context
             .emulation_defaults()
             .device_metrics
             .as_ref()
             .map(|metrics| metrics.viewport_surface().to_page_viewport_surface());
-        inputs.network_offline = browser_context.effective_active_network_offline();
+        inputs.network_offline =
+            browser_context.effective_active_network_offline(browser_globals.network_conditions);
         inputs
     }
 
@@ -645,10 +657,14 @@ impl<'a> TargetSessionOwnerRef<'a> {
             })
     }
 
-    pub(super) fn navigation_load_inputs(&self) -> TargetNavigationLoadInputs {
+    pub(super) fn navigation_load_inputs(
+        &self,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
+    ) -> TargetNavigationLoadInputs {
         TargetNavigationLoadInputs::from_browser_context_target(
             self.browser_context,
             &self.target_id,
+            browser_globals,
         )
     }
 }
@@ -844,6 +860,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
         referrer: Option<&str>,
         is_data_url: bool,
         fallback_browser_identity: &moli_browser_profile::BrowserIdentityProfile,
+        global_extra_headers: &[(String, String)],
         network_request_id_allocator: &mut ConnectionNetworkRequestIdAllocator,
     ) -> Option<TargetNavigationRequestPreflight> {
         let web_contents = self
@@ -861,9 +878,10 @@ impl<'a> TargetSessionOwnerMut<'a> {
             let effective_policy = self
                 .browser_context
                 .effective_policy_for_target(&self.target_id);
-            let mut request_headers = self
-                .browser_context
-                .merged_extra_headers_for_target_policy(effective_policy.extra_headers());
+            let mut request_headers = self.browser_context.merged_extra_headers_for_target_policy(
+                global_extra_headers,
+                effective_policy.extra_headers(),
+            );
             let user_agent = effective_policy
                 .browser_identity_override()
                 .or_else(|| self.browser_context.default_browser_identity_override())
@@ -984,7 +1002,12 @@ impl CdpConnection {
             None => self
                 .browser_context
                 .as_ref()
-                .map(TargetNavigationLoadInputs::from_browser_context_fallback)
+                .map(|context| {
+                    TargetNavigationLoadInputs::from_browser_context_fallback(
+                        context,
+                        &self.browser_global_overrides,
+                    )
+                })
                 .unwrap_or_else(|| {
                     TargetNavigationLoadInputs::no_loaded_browser_context(
                         self.initial_storage_partition.page_storage_handles(),
@@ -993,7 +1016,7 @@ impl CdpConnection {
                             .browser_context_owner_access(),
                     )
                 }),
-            Some(owner) => owner.navigation_load_inputs(),
+            Some(owner) => owner.navigation_load_inputs(&self.browser_global_overrides),
         };
         #[cfg(test)]
         let inputs = {
@@ -1012,7 +1035,11 @@ impl CdpConnection {
         owner: &CommandOwnerScope,
     ) -> moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
         match self.target_session_owner_ref_for_owner(owner) {
-            Some(owner) => prepared_document_inspection(owner.browser_context, &owner.target_id),
+            Some(owner) => prepared_document_inspection(
+                owner.browser_context,
+                &owner.target_id,
+                &self.browser_global_overrides,
+            ),
             None => moli_renderer_v8::RendererPreparedDocumentInspectionConfiguration {
                 document_start_scripts: self
                     .browser_context
@@ -1043,6 +1070,7 @@ impl CdpConnection {
             .global_browser_identity_override
             .clone()
             .unwrap_or_else(|| self.base_browser_identity.clone());
+        let global_extra_headers = self.browser_global_overrides.extra_headers.clone();
         let mut network_request_id_allocator =
             std::mem::take(&mut self.network_request_id_allocator);
         let result = self
@@ -1053,6 +1081,7 @@ impl CdpConnection {
                     referrer,
                     is_data_url,
                     &fallback_browser_identity,
+                    &global_extra_headers,
                     &mut network_request_id_allocator,
                 )
             });
@@ -2791,6 +2820,7 @@ mod tests {
                 Some("https://referrer.example/"),
                 false,
                 &test_browser_identity("Moli/Test-UA"),
+                &[],
                 &mut network_request_id_allocator,
             )
             .expect("active preflight should prepare");
@@ -2836,6 +2866,7 @@ mod tests {
                 None,
                 true,
                 &test_browser_identity("Moli/Test-UA"),
+                &[],
                 &mut network_request_id_allocator,
             )
             .expect("active data URL preflight should prepare");
@@ -2937,6 +2968,7 @@ mod tests {
                 Some("https://referrer.example/"),
                 false,
                 &test_browser_identity("Moli/Test-UA"),
+                &[],
                 &mut network_request_id_allocator,
             )
             .expect("background preflight should prepare");
@@ -3018,6 +3050,7 @@ mod tests {
                 None,
                 true,
                 &test_browser_identity("Moli/Test-UA"),
+                &[],
                 &mut network_request_id_allocator,
             )
             .expect("background data URL preflight should prepare");
@@ -3147,7 +3180,7 @@ mod tests {
             target_id: "TID-background".to_owned(),
             session_key: DevToolsSessionKey::Primary,
         };
-        let inputs = owner.navigation_load_inputs();
+        let inputs = owner.navigation_load_inputs(&Default::default());
 
         assert_eq!(inputs.browser_context_id.as_deref(), Some("BID-background"));
         assert!(
@@ -3246,7 +3279,8 @@ mod tests {
             "https://peer.example/".to_owned(),
         );
         background.set_active_target_id("TID-peer");
-        let inspection = prepared_document_inspection(&background, "TID-background");
+        let inspection =
+            prepared_document_inspection(&background, "TID-background", &Default::default());
         assert_eq!(
             inspection.root_frame_projection_id.as_deref(),
             Some("TID-background")
@@ -3256,7 +3290,7 @@ mod tests {
         assert!(sessions[0].protocol_configuration.runtime_frontend_enabled);
         assert_eq!(background.active_target_id(), Some("TID-peer"));
         assert!(
-            prepared_document_inspection(&background, "TID-peer")
+            prepared_document_inspection(&background, "TID-peer", &Default::default())
                 .runtime_inspector_session_restore_snapshots
                 .iter()
                 .all(|session| !session.protocol_configuration.runtime_frontend_enabled),

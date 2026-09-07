@@ -31,7 +31,7 @@ fn context_download_policy_outlives_the_devtools_projection() {
 fn context_header_defaults_preserve_layer_order_and_clear_fallback() {
     let header = |name: &str, value: &str| (name.to_owned(), value.to_owned());
     let mut context = BrowserContext::new("CTX-headers".into());
-    context.global_extra_headers = vec![header("X-Order", "global"), header("X-Global", "1")];
+    let global_headers = vec![header("X-Order", "global"), header("X-Global", "1")];
     context.set_default_extra_headers(vec![
         header("X-Order", "context"),
         header("x-order", "case-distinct"),
@@ -39,7 +39,7 @@ fn context_header_defaults_preserve_layer_order_and_clear_fallback() {
     ]);
     let page_headers = vec![header("X-Order", "page"), header("X-Page", "1")];
     assert_eq!(
-        context.merged_extra_headers_for_target_policy(&page_headers),
+        context.merged_extra_headers_for_target_policy(&global_headers, &page_headers),
         vec![
             header("X-Global", "1"),
             header("x-order", "case-distinct"),
@@ -50,7 +50,7 @@ fn context_header_defaults_preserve_layer_order_and_clear_fallback() {
     );
     context.set_default_extra_headers(Vec::new());
     assert_eq!(
-        context.merged_extra_headers_for_target_policy(&page_headers),
+        context.merged_extra_headers_for_target_policy(&global_headers, &page_headers),
         vec![
             header("X-Global", "1"),
             header("X-Order", "page"),
@@ -58,8 +58,8 @@ fn context_header_defaults_preserve_layer_order_and_clear_fallback() {
         ]
     );
     assert_eq!(
-        context.effective_extra_headers(),
-        context.global_extra_headers
+        context.effective_extra_headers(&global_headers),
+        global_headers
     );
     assert!(!context.has_active_target());
 }
@@ -67,6 +67,7 @@ fn context_header_defaults_preserve_layer_order_and_clear_fallback() {
 #[test]
 fn context_header_defaults_outlive_projection_without_replacing_network_policy() {
     let headers = vec![("X-Context".to_owned(), "context".to_owned())];
+    let global_headers = vec![("X-Global".into(), "global".into())];
     let expected = ContextNetworkPolicy {
         http_proxy: Some("http://proxy.example:8080".into()),
         http_no_proxy: Some(String::new()),
@@ -76,7 +77,6 @@ fn context_header_defaults_outlive_projection_without_replacing_network_policy()
     let physical = {
         let mut projection = BrowserContext::new_with_page_for_test("CTX-headers", "page-headers");
         projection.attach_active_session("session-headers");
-        projection.global_extra_headers = vec![("X-Global".into(), "global".into())];
         projection.set_network_policy(ContextNetworkPolicy {
             extra_headers: Vec::new(),
             ..expected.clone()
@@ -94,8 +94,8 @@ fn context_header_defaults_outlive_projection_without_replacing_network_policy()
             expected.tls_verify_host
         );
         assert_eq!(
-            projection.effective_extra_headers(),
-            projection.global_extra_headers
+            projection.effective_extra_headers(&global_headers),
+            global_headers
         );
         assert_eq!(snapshot, expected);
         projection.set_default_extra_headers(headers);
@@ -234,8 +234,9 @@ fn context_emulation_defaults_outlive_projection_without_inherited_mirrors() {
 
         projection.set_default_timezone_override(None);
         projection.set_default_network_conditions(None);
-        projection.global_network_conditions = Some(EmulatedNetworkConditions::offline());
-        assert!(projection.effective_active_network_offline());
+        assert!(
+            projection.effective_active_network_offline(Some(EmulatedNetworkConditions::offline()))
+        );
         assert!(projection.set_default_device_metrics(resized.clone()));
         assert_eq!(
             projection.detach_active_session().as_deref(),

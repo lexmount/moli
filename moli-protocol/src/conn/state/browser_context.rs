@@ -3,9 +3,11 @@ use std::{
     path::PathBuf,
 };
 
+#[cfg(test)]
+use moli_cookie_jar::BrowserCookieStore;
 use moli_cookie_jar::{
-    BrowserCookieStore, CookieSource, NetworkCookieRequestContext, SharedBrowserCookieStore,
-    StoredCookie, StoredCookieQueryReport, new_shared_browser_cookie_store,
+    CookieSource, NetworkCookieRequestContext, SharedBrowserCookieStore, StoredCookie,
+    StoredCookieQueryReport, new_shared_browser_cookie_store,
 };
 use moli_core::browser::{BrowserContextId, NavigationId};
 use moli_core::network::{SharedWebStorageStore, new_shared_web_storage_store};
@@ -106,11 +108,7 @@ pub struct BrowserContext {
     pub(crate) dedicated_worker_targets: BTreeMap<u64, DedicatedWorkerTargetState>,
     pub(crate) service_worker_targets: BTreeMap<u64, ServiceWorkerTargetState>,
     pub(crate) service_worker_domain_sessions: BTreeSet<Option<String>>,
-    pub(crate) global_extra_headers: Vec<(String, String)>,
     browser_identity_inputs: BrowserIdentityOverrideInputs,
-    pub(crate) global_network_conditions: Option<EmulatedNetworkConditions>,
-    pub(crate) global_geolocation_override: Option<EmulatedGeolocationOverrideState>,
-    pub(crate) global_cache_disabled: bool,
     pub(crate) next_default_document_start_script_id: u32,
     pub(crate) default_document_start_scripts: Vec<(String, DocumentStartScript)>,
     renderer_output_transport_sender: Option<moli_core::RendererOutputTransportSender>,
@@ -462,11 +460,7 @@ impl BrowserContext {
             dedicated_worker_targets: BTreeMap::new(),
             service_worker_targets: BTreeMap::new(),
             service_worker_domain_sessions: BTreeSet::new(),
-            global_extra_headers: Vec::new(),
             browser_identity_inputs: BrowserIdentityOverrideInputs::default(),
-            global_network_conditions: None,
-            global_geolocation_override: None,
-            global_cache_disabled: false,
             next_default_document_start_script_id: 0,
             default_document_start_scripts: Vec::new(),
             renderer_output_transport_sender: None,
@@ -603,6 +597,7 @@ impl BrowserContext {
         f(&cookie_store)
     }
 
+    #[cfg(test)]
     pub(crate) fn with_cookie_store_mut<R>(
         &self,
         f: impl FnOnce(&mut BrowserCookieStore) -> R,
@@ -1247,6 +1242,19 @@ impl BrowserContext {
             .cookies()
     }
 
+    pub(crate) fn store_cookie(
+        &self,
+        cookie: StoredCookie,
+        request_url: Option<&url::Url>,
+        source: CookieSource,
+    ) -> moli_cookie_jar::StoredCookieSetReport {
+        self.physical
+            .storage_partition
+            .cookie_store()
+            .lock()
+            .upsert_with_request_url_report(cookie, request_url, source)
+    }
+
     #[cfg(test)]
     pub(crate) fn store_response_cookie_headers_for_test(
         &self,
@@ -1308,9 +1316,7 @@ impl BrowserContext {
         &self,
         cookie: StoredCookie,
     ) -> moli_cookie_jar::StoredCookieSetReport {
-        self.with_cookie_store_mut(|store| {
-            store.upsert_with_request_url_report(cookie, None, CookieSource::Cdp)
-        })
+        self.store_cookie(cookie, None, CookieSource::Cdp)
     }
 
     #[cfg(test)]
@@ -1440,18 +1446,6 @@ impl BrowserContext {
             .or_else(|| self.emulation_defaults().timezone.clone())
     }
 
-    pub(crate) fn effective_active_network_conditions(&self) -> Option<EmulatedNetworkConditions> {
-        self.page_targets
-            .active(self.physical.selected_web_contents_id())
-            .and_then(|host| {
-                self.target_emulation_policy(host.target_id())
-                    .expect("live WebContents")
-                    .network_conditions
-            })
-            .or(self.emulation_defaults().network_conditions)
-            .or(self.global_network_conditions)
-    }
-
     pub(crate) fn effective_active_tls_verify_host_override(&self) -> Option<bool> {
         self.page_targets
             .active(self.physical.selected_web_contents_id())
@@ -1512,15 +1506,27 @@ impl BrowserContext {
         self.physical.network_policy.http_proxy = proxy;
     }
 
-    pub(crate) fn effective_active_network_offline(&self) -> bool {
-        self.effective_active_network_conditions()
+    pub(crate) fn effective_active_network_offline(
+        &self,
+        global_network_conditions: Option<EmulatedNetworkConditions>,
+    ) -> bool {
+        self.page_targets
+            .active(self.physical.selected_web_contents_id())
+            .and_then(|host| {
+                self.target_emulation_policy(host.target_id())
+                    .expect("live WebContents")
+                    .network_conditions
+            })
+            .or(self.emulation_defaults().network_conditions)
+            .or(global_network_conditions)
             .is_some_and(|conditions| !conditions.navigator_online())
     }
 
-    pub(crate) fn effective_network_conditions_for_target(
+    pub(crate) fn effective_network_offline_for_target(
         &self,
         target_id: &str,
-    ) -> Option<EmulatedNetworkConditions> {
+        global_network_conditions: Option<EmulatedNetworkConditions>,
+    ) -> bool {
         self.page_target(target_id)
             .and_then(|state| {
                 self.target_emulation_policy(state.target_id())
@@ -1528,11 +1534,7 @@ impl BrowserContext {
                     .network_conditions
             })
             .or(self.emulation_defaults().network_conditions)
-            .or(self.global_network_conditions)
-    }
-
-    pub(crate) fn effective_network_offline_for_target(&self, target_id: &str) -> bool {
-        self.effective_network_conditions_for_target(target_id)
+            .or(global_network_conditions)
             .is_some_and(|conditions| !conditions.navigator_online())
     }
 

@@ -928,7 +928,7 @@ async fn document_policy_completion_rejects_replacement_document() {
         .wait()
         .await;
     let surface_completed = owner
-        .start_document_page_surface_update(document, false)
+        .start_document_page_surface_update(document, false, &Default::default())
         .unwrap()
         .wait()
         .await;
