@@ -3,6 +3,7 @@ mod blit;
 mod encode;
 pub mod path;
 mod pixel;
+pub mod recording;
 mod rect;
 mod surface;
 mod text;
@@ -19,6 +20,7 @@ pub use pixel::{
     copy_rgba8_rect, flip_y_rgba8_in_place, multiply_u8_color, premultiply_rgba8_in_place,
     scale_rgba8, scale_rgba8_bilinear, scale_rgba8_nearest, unpremultiply_rgba8_in_place,
 };
+pub use recording::{DrawOp, DrawRecording, ExecutionStats, StrokeSpec};
 pub use rect::{canonicalize_fill_style, fill_style_rgba, normalize_rect, paint_rect};
 pub use surface::{CanvasSurface, CanvasSurfaceError};
 pub use text::{draw_text, measure_text_width};

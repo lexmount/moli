@@ -299,6 +299,27 @@ All 115 canvas JS regressions (including the `__moliCanvasBackingStore`
 reflection/spoofing robustness test) and the moli-canvas native surface tests
 pass against the native owner.
 
+### M4 status (ordered recording core implemented)
+
+M4 delivered the reusable ordered recording engine in `moli-canvas/src/recording.rs`:
+
+- `DrawRecording` captures every ordinary 2D draw operation as a frozen `DrawOp` in
+  call order: `FillPath`, `StrokePath`, `FillRect`, `StrokeRect`, `ClearRect`,
+  `DrawImage`, `Text` (fill/stroke), `PutImageData`.
+- Scene-expressible ops (`FillPath`, `StrokePath`, `FillRect`, `StrokeRect`) are
+  batched into a single `surface.render` (SrcOver) flush, minimizing backend
+  submissions. `ClearRect` forces a flush boundary and executes with `Replace` mode.
+- Direct-ordered ops (`DrawImage`, `Text`, `PutImageData`) execute against the
+  surface via `with_straight_pixels_mut` between scene batches, preserving call order.
+- `StrokeSpec` carries frozen `peniko::Stroke` metrics across the recording boundary;
+  `to_stroke` converts `kurbo::Stroke` via peniko's `Stroke`/`Dashes` APIs.
+- `DrawImage` holds a source snapshot (`Arc<Vec<u8>>`) so later source mutation does
+  not affect replay.
+- `reset` discards all pending ops; `snapshot` on the underlying surface is immutable.
+- Native tests (`tests/recording.rs`, 6 tests, V8-free): batched flush count,
+  ClearRect segmentation, source immutability, reset, PutImageData ordering, stroke
+  metrics carry.
+
 ---
 
 ## 8. Checklist for final review (routed against this inventory)
