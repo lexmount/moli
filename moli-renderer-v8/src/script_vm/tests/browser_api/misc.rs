@@ -4007,6 +4007,265 @@ fn clipboard_event_constructor_applies_event_init_and_clipboard_data() {
 }
 
 #[test]
+fn clipboard_event_uses_a_branded_prototype_accessor_and_webidl_dictionary() {
+    let mut vm = new_storage_test_vm("https://clipboard-event-webidl.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const transfer = new DataTransfer();
+  const defaults = new ClipboardEvent("copy");
+  const descriptor = Object.getOwnPropertyDescriptor(
+    ClipboardEvent.prototype,
+    "clipboardData"
+  );
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+
+  const order = [];
+  const init = {};
+  for (const [name, value] of [
+    ["bubbles", true],
+    ["cancelable", true],
+    ["clipboardData", transfer],
+    ["composed", true]
+  ]) {
+    Object.defineProperty(init, name, {
+      get() {
+        order.push(name);
+        return value;
+      }
+    });
+  }
+  const initialized = new ClipboardEvent("paste", init);
+
+  const sentinel = {};
+  let preservesGetterException = false;
+  try {
+    new ClipboardEvent("copy", {
+      get clipboardData() {
+        throw sentinel;
+      }
+    });
+  } catch (error) {
+    preservesGetterException = error === sentinel;
+  }
+
+  return JSON.stringify({
+    defaults: [
+      defaults.clipboardData === null,
+      Object.hasOwn(defaults, "clipboardData")
+    ],
+    initialized: [
+      initialized.clipboardData === transfer,
+      initialized.bubbles,
+      initialized.cancelable,
+      initialized.composed,
+      Object.hasOwn(initialized, "clipboardData")
+    ],
+    descriptor: [
+      typeof descriptor.get,
+      descriptor.get.name,
+      descriptor.get.length,
+      typeof descriptor.set,
+      descriptor.enumerable,
+      descriptor.configurable
+    ],
+    order,
+    errors: [
+      errorName(() => descriptor.get.call({})),
+      errorName(() => new ClipboardEvent("copy", {clipboardData: {}})),
+      errorName(() => new ClipboardEvent("copy", 1))
+    ],
+    preservesGetterException
+  });
+})()
+"#,
+        )
+        .expect("ClipboardEvent WebIDL probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"defaults":[true,false],"initialized":[true,true,true,true,false],"descriptor":["function","get clipboardData",0,"undefined",true,true],"order":["bubbles","cancelable","composed","clipboardData"],"errors":["TypeError","TypeError","TypeError"],"preservesGetterException":true}"#
+    );
+}
+
+#[test]
+fn clipboard_change_event_exposes_frozen_types_and_bigint_change_id() {
+    let mut vm = new_storage_test_vm("http://clipboard-change-event.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const defaults = new ClipboardChangeEvent("clipboardchange");
+  const order = [];
+  const sourceTypes = [
+    {
+      toString() {
+        order.push("type item");
+        return "text/plain";
+      }
+    },
+    "text/html",
+    "\uD800"
+  ];
+  const expectedChangeId = -(1n << 100n) + 123n;
+  const init = {};
+  for (const [name, value] of [
+    ["bubbles", true],
+    ["cancelable", true],
+    ["changeId", expectedChangeId],
+    ["composed", true],
+    ["types", sourceTypes]
+  ]) {
+    Object.defineProperty(init, name, {
+      get() {
+        order.push(name);
+        return value;
+      }
+    });
+  }
+  const initialized = new ClipboardChangeEvent("clipboardchange", init);
+  sourceTypes[0] = "changed";
+  sourceTypes.push("image/png");
+
+  const typesDescriptor = Object.getOwnPropertyDescriptor(
+    ClipboardChangeEvent.prototype,
+    "types"
+  );
+  const changeIdDescriptor = Object.getOwnPropertyDescriptor(
+    ClipboardChangeEvent.prototype,
+    "changeId"
+  );
+  const accessor = descriptor => [
+    typeof descriptor.get,
+    descriptor.get.name,
+    descriptor.get.length,
+    typeof descriptor.set,
+    descriptor.enumerable,
+    descriptor.configurable
+  ];
+  const errorName = callback => {
+    try {
+      callback();
+      return "none";
+    } catch (error) {
+      return error && error.name;
+    }
+  };
+
+  return JSON.stringify({
+    constructor: [
+      typeof ClipboardChangeEvent,
+      ClipboardChangeEvent.name,
+      ClipboardChangeEvent.length,
+      ClipboardChangeEvent.prototype instanceof Event,
+      isSecureContext
+    ],
+    defaults: [
+      defaults instanceof ClipboardChangeEvent,
+      defaults instanceof Event,
+      defaults.types.length,
+      Object.isFrozen(defaults.types),
+      defaults.types === defaults.types,
+      defaults.changeId === 0n,
+      Object.hasOwn(defaults, "types"),
+      Object.hasOwn(defaults, "changeId"),
+      Object.prototype.toString.call(defaults)
+    ],
+    initialized: [
+      initialized.bubbles,
+      initialized.cancelable,
+      initialized.composed,
+      initialized.types.slice(0, 2).join(","),
+      initialized.types.length,
+      initialized.types[2].charCodeAt(0) === 0xD800,
+      initialized.types === initialized.types,
+      Object.isFrozen(initialized.types),
+      String(initialized.changeId),
+      initialized.changeId === expectedChangeId
+    ],
+    accessors: [accessor(typesDescriptor), accessor(changeIdDescriptor)],
+    keys: Object.keys(ClipboardChangeEvent.prototype),
+    order,
+    booleanBigInt: new ClipboardChangeEvent("x", {changeId: true}).changeId === 1n,
+    errors: [
+      errorName(() => ClipboardChangeEvent("x")),
+      errorName(() => new ClipboardChangeEvent()),
+      errorName(() => new ClipboardChangeEvent("x", 1)),
+      errorName(() => new ClipboardChangeEvent("x", {changeId: 1})),
+      errorName(() => new ClipboardChangeEvent("x", {types: null})),
+      errorName(() => typesDescriptor.get.call({})),
+      errorName(() => changeIdDescriptor.get.call({}))
+    ]
+  });
+})()
+"#,
+        )
+        .expect("ClipboardChangeEvent WebIDL probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"constructor":["function","ClipboardChangeEvent",1,true,false],"defaults":[true,true,0,true,true,true,false,false,"[object ClipboardChangeEvent]"],"initialized":[true,true,true,"text/plain,text/html",3,true,true,true,"-1267650600228229401496703205253",true],"accessors":[["function","get types",0,"undefined",true,true],["function","get changeId",0,"undefined",true,true]],"keys":["types","changeId"],"order":["bubbles","cancelable","composed","changeId","types","type item"],"booleanBigInt":true,"errors":["TypeError","TypeError","TypeError","TypeError","TypeError","TypeError","TypeError"]}"#
+    );
+}
+
+#[test]
+fn clipboard_event_dictionaries_convert_event_init_before_derived_members() {
+    let mut vm = new_storage_test_vm("https://clipboard-event-dictionary-order.test/");
+    let result = vm.eval(r#"
+      (() => {
+        const checks = [];
+        for (const [Ctor, derivedMember] of [
+          [ClipboardEvent, 'clipboardData'], [ClipboardChangeEvent, 'changeId']
+        ]) {
+          for (const baseMember of ['bubbles', 'cancelable', 'composed']) {
+            const baseError = new RangeError('base getter');
+            const derivedError = new TypeError('derived getter');
+            const reads = [];
+            const init = {};
+            Object.defineProperty(init, baseMember, {get() {
+              reads.push(baseMember);
+              throw baseError;
+            }});
+            Object.defineProperty(init, derivedMember, {get() {
+              reads.push(derivedMember);
+              throw derivedError;
+            }});
+            try { new Ctor('change', init); checks.push(false); }
+            catch (error) { checks.push(error === baseError); }
+            checks.push(reads.length === 1, reads[0] === baseMember);
+          }
+        }
+        const transfer = new DataTransfer();
+        const clipboardInit = {
+          clipboardData: {},
+          get composed() { this.clipboardData = transfer; return true; }
+        };
+        const clipboard = new ClipboardEvent('copy', clipboardInit);
+        checks.push(clipboard.composed, clipboard.clipboardData === transfer);
+        const changeInit = {
+          changeId: 1,
+          get composed() { this.changeId = 42n; return true; },
+          types: ['text/plain']
+        };
+        const change = new ClipboardChangeEvent('clipboardchange', changeInit);
+        checks.push(change.composed, change.changeId === 42n, change.types[0] === 'text/plain');
+        return checks.every(Boolean) || JSON.stringify(checks);
+      })()
+    "#).expect("Clipboard dictionary conversion should stop on base errors and observe base getter mutations first");
+    assert_eq!(result, "true");
+}
+
+#[test]
 fn eval_csp_checks_string_sources_after_type_discrimination() {
     let mut blocked = new_storage_test_vm("https://eval-csp-blocked.test/");
     blocked.set_response_content_security_policies(&["script-src 'nonce-test'".to_owned()]);
@@ -4740,7 +4999,7 @@ fn web_platform_surface_stubs_are_present_and_brand_correctly() {
                 "CompressionStream","DecompressionStream",
                 "ReadableStreamBYOBReader","ReadableStreamBYOBRequest","ReadableByteStreamController",
                 "Geolocation","GeolocationPosition","GeolocationCoordinates","GeolocationPositionError",
-                "MediaCapabilities","Clipboard","ClipboardItem",
+                "MediaCapabilities","Clipboard","ClipboardItem","ClipboardChangeEvent",
               ];
               const out = [];
               for (const name of names) {
@@ -4752,6 +5011,7 @@ fn web_platform_surface_stubs_are_present_and_brand_correctly() {
               out.push(`DOMRect<DOMRectReadOnly:${DOMRect.prototype instanceof DOMRectReadOnly}`);
               out.push(`DOMPoint<DOMPointReadOnly:${DOMPoint.prototype instanceof DOMPointReadOnly}`);
               out.push(`Clipboard<EventTarget:${Clipboard.prototype instanceof EventTarget}`);
+              out.push(`ClipboardChangeEvent<Event:${ClipboardChangeEvent.prototype instanceof Event}`);
               return out.join("|");
             })()
             "#,
@@ -4789,11 +5049,13 @@ fn web_platform_surface_stubs_are_present_and_brand_correctly() {
         "MediaCapabilities:function:true",
         "Clipboard:function:true",
         "ClipboardItem:function:true",
+        "ClipboardChangeEvent:function:true",
         "ToggleEvent<Event:true",
         "HashChangeEvent<Event:true",
         "DOMRect<DOMRectReadOnly:true",
         "DOMPoint<DOMPointReadOnly:true",
         "Clipboard<EventTarget:true",
+        "ClipboardChangeEvent<Event:true",
     ];
     assert_eq!(result, expected_parts.join("|"));
 }

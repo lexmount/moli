@@ -17,6 +17,9 @@ const TRACK_EVENT_TRACK_SLOT: &str = "__moliTrackEventTrack";
 const COMMAND_EVENT_SOURCE_SLOT: &str = "__moliCommandEventSource";
 const COMMAND_EVENT_COMMAND_SLOT: &str = "__moliCommandEventCommand";
 const TOGGLE_EVENT_SOURCE_SLOT: &str = "__moliToggleEventSource";
+const CLIPBOARD_EVENT_CLIPBOARD_DATA_SLOT: &str = "__moliClipboardEventClipboardData";
+const CLIPBOARD_CHANGE_EVENT_TYPES_SLOT: &str = "__moliClipboardChangeEventTypes";
+const CLIPBOARD_CHANGE_EVENT_CHANGE_ID_SLOT: &str = "__moliClipboardChangeEventChangeId";
 const EVENT_SUBCLASS_KIND_SLOT: &str = "__moliEventSubclassKind";
 const BEFORE_UNLOAD_EVENT_RETURN_VALUE_SLOT: &str = "__moliBeforeUnloadEventReturnValue";
 #[derive(WebApiObject)]
@@ -457,6 +460,54 @@ pub(super) fn mouse_event_related_target_getter_function<'s>(
         return;
     }
     rv.set(event_related_target_value(scope, args.this()));
+}
+
+pub(super) fn clipboard_event_clipboard_data_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if event_subclass_kind(scope, args.this()) != Some(EventSubclassKind::ClipboardEvent) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let value = get_private_value(scope, args.this(), CLIPBOARD_EVENT_CLIPBOARD_DATA_SLOT)
+        .unwrap_or_else(|| v8::null(scope).into());
+    rv.set(value);
+}
+
+pub(super) fn clipboard_change_event_types_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if event_subclass_kind(scope, args.this()) != Some(EventSubclassKind::ClipboardChangeEvent) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let Some(value) = get_private_value(scope, args.this(), CLIPBOARD_CHANGE_EVENT_TYPES_SLOT)
+    else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    rv.set(value);
+}
+
+pub(super) fn clipboard_change_event_change_id_getter_function<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if event_subclass_kind(scope, args.this()) != Some(EventSubclassKind::ClipboardChangeEvent) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let Some(value) = get_private_value(scope, args.this(), CLIPBOARD_CHANGE_EVENT_CHANGE_ID_SLOT)
+    else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    rv.set(value);
 }
 
 pub(super) use base::{

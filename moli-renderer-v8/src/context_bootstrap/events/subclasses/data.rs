@@ -133,10 +133,67 @@ struct DragEventInitDeclaration<'scope> {
     data_transfer: v8::Local<'scope, v8::Value>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(plain, data_properties, enumerable)]
-struct ClipboardEventInitDeclaration<'scope> {
+/// Web IDL converts inherited `EventInit` members before the derived members,
+/// with each dictionary's members in lexicographic order. Keeping them in one
+/// conversion also ensures each init getter is read only once.
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "ClipboardEventInit")]
+pub(super) struct ClipboardEventInitMembers<'scope> {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+    #[webidl(name = "clipboardData", with = clipboard_event_clipboard_data_member)]
     clipboard_data: v8::Local<'scope, v8::Value>,
+}
+
+/// Convert inherited `EventInit` members first, then this dictionary's own
+/// members in lexicographic order.
+#[derive(webidl::WebIdlDictionary)]
+#[webidl(prefix = "ClipboardChangeEventInit")]
+pub(super) struct ClipboardChangeEventInitMembers<'scope> {
+    #[webidl(default = false)]
+    bubbles: bool,
+    #[webidl(default = false)]
+    cancelable: bool,
+    #[webidl(default = false)]
+    composed: bool,
+    #[webidl(name = "changeId", with = clipboard_change_event_change_id_member)]
+    change_id: v8::Local<'scope, v8::BigInt>,
+    #[webidl(with = clipboard_change_event_types_member)]
+    types: Vec<v8::Local<'scope, v8::String>>,
+}
+
+struct ClipboardChangeEventType<'scope>(v8::Local<'scope, v8::String>);
+
+impl<'scope> webidl::WebIdlConverter<'scope> for ClipboardChangeEventType<'scope> {
+    type Options = ();
+
+    fn convert(
+        scope: &mut v8::PinScope<'scope, '_>,
+        value: v8::Local<'scope, v8::Value>,
+        context: webidl::Context,
+        _options: &Self::Options,
+    ) -> Result<Self, webidl::WebIdlError> {
+        value
+            .to_string(scope)
+            .map(Self)
+            .ok_or_else(|| webidl::WebIdlError::pending_exception(context))
+    }
+}
+
+impl ClipboardEventInitMembers<'_> {
+    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
+        (self.bubbles, self.cancelable, self.composed)
+    }
+}
+
+impl ClipboardChangeEventInitMembers<'_> {
+    pub(super) fn event_flags(&self) -> (bool, bool, bool) {
+        (self.bubbles, self.cancelable, self.composed)
+    }
 }
 
 #[derive(WebApiObject)]
@@ -348,6 +405,123 @@ fn toggle_event_source_member<'s>(
     }
 }
 
+fn clipboard_event_clipboard_data_member<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &'static str,
+) -> Result<v8::Local<'s, v8::Value>, webidl::WebIdlError> {
+    let context = webidl::Context::member("ClipboardEventInit", name);
+    let Some(value) = webidl::property_result(scope, object, name, context)? else {
+        return Ok(v8::null(scope).into());
+    };
+    if value.is_null_or_undefined() {
+        return Ok(v8::null(scope).into());
+    }
+    let Ok(object) = v8::Local::<v8::Object>::try_from(value) else {
+        return Err(webidl::WebIdlError::custom_message(
+            "ClipboardEventInit.clipboardData must be a DataTransfer object or null.",
+        ));
+    };
+    if !is_branded_data_transfer_object(scope, object) {
+        return Err(webidl::WebIdlError::custom_message(
+            "ClipboardEventInit.clipboardData must be a DataTransfer object or null.",
+        ));
+    }
+    Ok(value)
+}
+
+fn clipboard_change_event_change_id_member<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &'static str,
+) -> Result<v8::Local<'s, v8::BigInt>, webidl::WebIdlError> {
+    let context = webidl::Context::member("ClipboardChangeEventInit", name);
+    let Some(value) = webidl::property_result(scope, object, name, context)? else {
+        return Ok(v8::BigInt::new_from_u64(scope, 0));
+    };
+    if value.is_undefined() {
+        return Ok(v8::BigInt::new_from_u64(scope, 0));
+    }
+    value
+        .to_big_int(scope)
+        .ok_or_else(|| webidl::WebIdlError::pending_exception(context))
+}
+
+fn clipboard_change_event_types_member<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+    name: &'static str,
+) -> Result<Vec<v8::Local<'s, v8::String>>, webidl::WebIdlError> {
+    let context = webidl::Context::member("ClipboardChangeEventInit", name);
+    let Some(value) = webidl::property_result(scope, object, name, context)? else {
+        return Ok(Vec::new());
+    };
+    if value.is_undefined() {
+        return Ok(Vec::new());
+    }
+    webidl::convert::<webidl::Sequence<ClipboardChangeEventType<'s>>>(scope, value, context)
+        .map(|sequence| sequence.0.into_iter().map(|value| value.0).collect())
+}
+
+pub(super) fn parse_clipboard_event_init<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<ClipboardEventInitMembers<'s>> {
+    let context = webidl::Context::argument("ClipboardEvent", 2);
+    let object = match webidl::dictionary_arg(args, 1, context) {
+        Ok(object) => object,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return None;
+        }
+    };
+    let Some(object) = object else {
+        return Some(ClipboardEventInitMembers {
+            bubbles: false,
+            cancelable: false,
+            clipboard_data: v8::null(scope).into(),
+            composed: false,
+        });
+    };
+    match webidl::parse_dictionary_object(scope, object) {
+        Ok(init) => Some(init),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            None
+        }
+    }
+}
+
+pub(super) fn parse_clipboard_change_event_init<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+) -> Option<ClipboardChangeEventInitMembers<'s>> {
+    let context = webidl::Context::argument("ClipboardChangeEvent", 2);
+    let object = match webidl::dictionary_arg(args, 1, context) {
+        Ok(object) => object,
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            return None;
+        }
+    };
+    let Some(object) = object else {
+        return Some(ClipboardChangeEventInitMembers {
+            bubbles: false,
+            cancelable: false,
+            change_id: v8::BigInt::new_from_u64(scope, 0),
+            composed: false,
+            types: Vec::new(),
+        });
+    };
+    match webidl::parse_dictionary_object(scope, object) {
+        Ok(init) => Some(init),
+        Err(error) => {
+            webidl::throw_error(scope, &error);
+            None
+        }
+    }
+}
+
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_drag_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
@@ -398,13 +572,42 @@ pub(in crate::context_bootstrap::events::subclasses) fn initialize_drag_event<'s
 pub(in crate::context_bootstrap::events::subclasses) fn initialize_clipboard_event<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     event: v8::Local<'s, v8::Object>,
-    init: Option<v8::Local<'s, v8::Object>>,
+    init: ClipboardEventInitMembers<'s>,
 ) {
-    let clipboard_data =
-        init_value_property(scope, init, "clipboardData").unwrap_or_else(|| v8::null(scope).into());
-    ClipboardEventInitDeclaration::new(clipboard_data)
-        .initialize(scope, event)
-        .expect("ClipboardEvent init declaration should initialize");
+    set_private_value(
+        scope,
+        event,
+        CLIPBOARD_EVENT_CLIPBOARD_DATA_SLOT,
+        init.clipboard_data,
+    );
+}
+
+pub(in crate::context_bootstrap::events::subclasses) fn initialize_clipboard_change_event<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    event: v8::Local<'s, v8::Object>,
+    init: ClipboardChangeEventInitMembers<'s>,
+) -> bool {
+    let mut elements = Vec::with_capacity(init.types.len());
+    for event_type in init.types {
+        elements.push(event_type.into());
+    }
+    let types = v8::Array::new_with_elements(scope, &elements);
+    if types.set_integrity_level(scope, v8::IntegrityLevel::Frozen) != Some(true) {
+        return false;
+    }
+    set_private_value(
+        scope,
+        event,
+        CLIPBOARD_CHANGE_EVENT_TYPES_SLOT,
+        types.into(),
+    );
+    set_private_value(
+        scope,
+        event,
+        CLIPBOARD_CHANGE_EVENT_CHANGE_ID_SLOT,
+        init.change_id.into(),
+    );
+    true
 }
 
 fn captured_mouse_coordinate<'s>(

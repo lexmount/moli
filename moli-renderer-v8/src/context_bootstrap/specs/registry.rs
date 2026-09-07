@@ -269,6 +269,10 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::ClipboardEvent,
     },
     ConstructorSpec {
+        interface: web_api_interfaces::ClipboardChangeEvent::DESCRIPTOR,
+        kind: ConstructorKind::ClipboardChangeEvent,
+    },
+    ConstructorSpec {
         interface: web_api_interfaces::KeyboardEvent::DESCRIPTOR,
         kind: ConstructorKind::KeyboardEvent,
     },
