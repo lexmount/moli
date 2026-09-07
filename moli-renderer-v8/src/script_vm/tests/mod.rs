@@ -15163,6 +15163,7 @@ mod script_terminal_completion;
 mod streams;
 mod webidl_collections;
 mod webidl_fetch;
+mod webidl_receivers;
 mod webidl_trusted_types;
 mod websocket;
 mod window_execution_context;

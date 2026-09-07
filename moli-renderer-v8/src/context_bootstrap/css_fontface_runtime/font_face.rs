@@ -1,6 +1,8 @@
 use super::*;
 use crate::{
-    util::{callback_data_index_value, callback_data_item, get_private_value, set_private_value},
+    util::{
+        callback_data_index_value, callback_data_item, get_private_value, set_private_value, v8str,
+    },
     webidl,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -153,6 +155,9 @@ fn font_face_writable_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !require_font_face_receiver(scope, args.this()) {
+        return;
+    }
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -172,6 +177,9 @@ fn font_face_readonly_attribute_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !require_font_face_receiver(scope, args.this()) {
+        return;
+    }
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -191,6 +199,9 @@ fn font_face_attribute_setter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !require_font_face_receiver(scope, args.this()) {
+        return;
+    }
     let Some(slot) = callback_data_item(
         scope,
         &args,
@@ -332,6 +343,14 @@ pub(in crate::context_bootstrap) fn font_face_load_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if get_private_value(scope, args.this(), FONT_FACE_STATUS_SLOT).is_none() {
+        let resolver = v8::PromiseResolver::new(scope).expect("FontFace.load resolver");
+        let message = v8str(scope, "Illegal invocation");
+        let error = v8::Exception::type_error(scope, message);
+        let _ = resolver.reject(scope, error);
+        rv.set(resolver.get_promise(scope).into());
+        return;
+    }
     let this = args.this();
     super::events::notify_font_face_set_owners_of_load(scope, this);
     if let Some(loaded) = font_face_slot_value(scope, this, FONT_FACE_LOADED_SLOT) {
@@ -342,6 +361,17 @@ pub(in crate::context_bootstrap) fn font_face_load_callback<'s>(
         Some(promise) => rv.set(v8::Local::<v8::Value>::from(promise)),
         None => rv.set(v8::undefined(scope).into()),
     }
+}
+
+fn require_font_face_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    if get_private_value(scope, receiver, FONT_FACE_STATUS_SLOT).is_some() {
+        return true;
+    }
+    throw_type_error(scope, "Illegal invocation");
+    false
 }
 
 fn descriptor_string_property(
