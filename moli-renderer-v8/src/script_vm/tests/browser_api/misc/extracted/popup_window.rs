@@ -80,7 +80,9 @@ fn window_open_parent_target_uses_the_receiver_browsing_context() {
                                 expected !== window,
                                 opened === expected,
                                 opened === window,
-                                expected.location.href === ({url:?} || parentHref),
+                                // Selecting a Window is synchronous; committing its
+                                // cross-document navigation requires a later Page task.
+                                expected.location.href === parentHref,
                                 receiver.location.href === receiverHref,
                                 location.href === 'https://window-open-parent.test/source',
                                 seen

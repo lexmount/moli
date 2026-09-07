@@ -3560,7 +3560,9 @@ async fn borrowed_cross_origin_window_accessors_follow_the_receiver() {
   } catch (error) {
     plain = error instanceof TypeError ? "type-error" : String(error && error.name);
   }
-  setLocation.call(window, "#pr957-receiver");
+  const target = new URL(location.href);
+  target.hash = "#pr957-receiver";
+  setLocation.call(window, target.href);
   return JSON.stringify({
     plain,
     normalParentIsSelf: w.parent === w,

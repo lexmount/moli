@@ -20,8 +20,8 @@ use super::navigation_events::{
 };
 use super::navigation_lifecycle::finish_navigation_error_events;
 use super::navigation_mutation::{
-    apply_local_window_location_navigation, apply_navigation_navigate_same_document,
-    sync_local_document_front_from_window, update_navigation_current_entry_for_same_document,
+    apply_navigation_navigate_same_document, sync_local_document_front_from_window,
+    update_navigation_current_entry_for_same_document,
 };
 use super::navigation_reload::{NavigationReloadAdmission, navigation_reload_admission};
 use super::navigation_result::{
@@ -42,7 +42,11 @@ use super::navigation_window::{
 use super::*;
 use crate::native_bridge::{LocationNavigationSource, NavigationHistoryEntrySeed};
 use crate::util::context_host_ptr_for_navigation_owner;
-use moli_page_types::{NavigationHistoryMutation, cross_document_navigation_seed};
+use moli_page_types::{
+    NavigationHistoryMutation, apply_child_browsing_context_navigation_to_entry_seed,
+    cross_document_navigation_seed, reload_navigation_seed,
+    replace_child_browsing_context_navigation_in_entry_seed,
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LocationNavigationKind {
@@ -734,28 +738,32 @@ fn navigate_location_object_with_options<'s>(
         {
             return;
         }
-        if !is_javascript_url {
-            sync_location_object(scope, location, resolved.as_str());
-            apply_local_window_location_navigation(scope, owner, &resolved, kind);
-        }
         if let Some(host_ptr) = host_ptr {
             let host = unsafe { &mut *host_ptr };
             let initiator_url =
                 explicit_initiator_url.or_else(|| location_navigation_initiator_url(scope, host));
-            if matches!(kind, LocationNavigationKind::Reload) {
-                host.queue_child_browsing_context_reload_from_existing_seed(
-                    scope,
-                    handle,
-                    resolved.as_str(),
-                    initiator_url,
-                );
-            } else {
+            if is_javascript_url {
                 host.queue_child_browsing_context_navigation_without_seed_update(
                     scope,
                     handle,
                     resolved.as_str(),
                     initiator_url,
                 );
+            } else {
+                // A cross-document navigation only prepares the next history
+                // entry. The old Document's Location, history state and entry
+                // identity remain visible until the replacement commits.
+                let entry_seed =
+                    child_history_entry_seed_for_location(host, handle, &resolved, kind);
+                if let Some(entry_seed) = entry_seed {
+                    host.queue_deferred_child_browsing_context_navigation_from_entry_seed(
+                        scope,
+                        handle,
+                        resolved.as_str(),
+                        entry_seed,
+                        initiator_url,
+                    );
+                }
             }
         }
         return;
@@ -1261,6 +1269,29 @@ fn settle_location_intercepted_same_document_navigation<'s>(
         resolved_value,
         filename,
     );
+}
+
+fn child_history_entry_seed_for_location(
+    host: &PageScriptHost,
+    handle: crate::document_runtime::DomHandle,
+    destination: &url::Url,
+    kind: LocationNavigationKind,
+) -> Option<NavigationHistoryEntrySeed> {
+    let mut seed = host
+        .child_browsing_context_navigation_seed_snapshot(handle)?
+        .committed_navigation_entry_seed;
+    match kind {
+        LocationNavigationKind::Assign => {
+            apply_child_browsing_context_navigation_to_entry_seed(&mut seed, destination);
+        }
+        LocationNavigationKind::Replace => {
+            replace_child_browsing_context_navigation_in_entry_seed(&mut seed, destination);
+        }
+        LocationNavigationKind::Reload => {
+            return reload_navigation_seed(seed.entries, seed.current_index);
+        }
+    }
+    Some(seed)
 }
 
 pub(crate) fn history_entry_seed_for_cross_document_location<'s>(

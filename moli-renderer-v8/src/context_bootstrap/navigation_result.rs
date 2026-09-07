@@ -344,15 +344,16 @@ pub(super) fn cancel_active_cross_document_navigation<'s>(
         v8::Boolean::new(scope, false).into(),
     );
     clear_active_cross_document_navigation(scope, navigation);
+    let owner = super::navigation_window::runtime_window_owner(scope, navigation);
+    super::navigation_cancellation::clear_pending_cross_document_navigation_for_window(
+        scope, owner, false,
+    );
     let error = navigation_dom_exception(scope, "Navigation was canceled", "AbortError");
-    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        // Remove the old load before abort listeners can start a successor.
-        unsafe { &mut *host_ptr }.clear_pending_location_navigation();
-        if let Some(signal) = get_private_value(scope, data, CROSS_DOCUMENT_PENDING_SIGNAL_SLOT)
+    if context_host_ptr_from_global_bridge(scope).is_some()
+        && let Some(signal) = get_private_value(scope, data, CROSS_DOCUMENT_PENDING_SIGNAL_SLOT)
             .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
-        {
-            crate::native_bridge::abort::abort_signal(scope, signal, error);
-        }
+    {
+        crate::native_bridge::abort::abort_signal(scope, signal, error);
     }
     finish_navigation_error_events(scope, navigation, error, &href);
     let receiver = v8::undefined(scope).into();
