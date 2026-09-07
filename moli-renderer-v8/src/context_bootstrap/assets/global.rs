@@ -1,7 +1,7 @@
 use super::super::shared::define_global_template_value;
 use super::super::{
     exposed_interfaces::{
-        ExposedInterfaceTemplateRegistry, TemplateBuildProfile, constructor_spec_is_lazy,
+        ExposedInterfaceTemplateRegistry, TemplateBuildProfile, constructor_spec_is_eager,
         install_window_exposed_interfaces,
     },
     specs::constructor_specs,
@@ -59,7 +59,7 @@ impl ContextBootstrapAssets {
 
         install_window_exposed_interfaces(scope, global_template, &registry)?;
         for spec in &constructor_specs {
-            if constructor_spec_is_lazy(*spec) {
+            if !constructor_spec_is_eager(*spec) {
                 continue;
             }
             let id = registry

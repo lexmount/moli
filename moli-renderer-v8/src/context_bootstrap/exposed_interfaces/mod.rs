@@ -25,7 +25,7 @@ pub(crate) use materialize::{
 };
 pub(crate) use metadata::RealmKind;
 pub(in crate::context_bootstrap) use metadata::TemplateBuildProfile;
-pub(super) use metadata::constructor_spec_is_lazy;
+pub(super) use metadata::constructor_spec_is_eager;
 #[cfg(test)]
 pub(crate) use metadata::dedicated_worker_lazy_interface_names_for_test;
 pub(in crate::context_bootstrap) use template_registry::ExposedInterfaceTemplateRegistry;

@@ -1678,7 +1678,6 @@ pub(crate) fn finish_context_bootstrap(
         ("NamedNodeMap", "NamedNodeMap"),
         ("HTMLAllCollection", "HTMLAllCollection"),
         ("DOMException", "DOMException"),
-        ("DOMError", "DOMError"),
         ("DocumentType", "DocumentType"),
         ("DOMImplementation", "DOMImplementation"),
         ("DOMTokenList", "DOMTokenList"),

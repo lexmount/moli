@@ -390,18 +390,15 @@ async fn deprecated_storage_quota_reports_opaque_origin_errors_asynchronously() 
             page_vm.vm_mut().eval(
                 r#"
 {
-  const error = new DOMError("LegacyName", "legacy message");
   [
-    Object.prototype.toString.call(error),
-    error.name,
-    error.message,
-    error instanceof DOMError,
+    "DOMError" in globalThis,
+    typeof DOMError,
   ].join("|")
 }
 "#,
             )?,
-            "[object DOMError]|LegacyName|legacy message|true",
-            "the legacy callback error type must retain its Chromium-compatible interface identity"
+            "false|undefined",
+            "the removed DOMError interface must not remain globally exposed"
         );
         assert_eq!(
             page_vm.vm_mut().eval(
@@ -415,8 +412,8 @@ navigator.webkitTemporaryStorage.queryUsageAndQuota(
       __legacyQuotaOpaqueEvents.push(
         `error:${this === undefined}:${arguments.length}:` +
         `${error.name}:${Object.prototype.toString.call(error)}:` +
-        `${error instanceof DOMError}:${error instanceof DOMException}:` +
-        `${error.constructor === DOMError}:${error.message}`
+        `${error instanceof DOMException}:${error.constructor.name}:` +
+        `${error.message}:${"DOMError" in globalThis}:${typeof DOMError}`
       );
       Promise.resolve().then(() => {
         __legacyQuotaOpaqueEvents.push("microtask:error");
@@ -459,7 +456,7 @@ JSON.stringify(__legacyQuotaOpaqueEvents)
             page_vm
                 .vm_mut()
                 .eval("__legacyQuotaOpaqueEvents.join('|')")?,
-            "apply:true:1|error:true:1:NotSupportedError:[object DOMError]:true:false:true:The implementation did not support the requested type of object or operation.|microtask:error"
+            "apply:true:1|error:true:1:NotSupportedError:[object DOMError]:false:DOMError:The implementation did not support the requested type of object or operation.:false:undefined|microtask:error"
         );
         Ok::<_, anyhow::Error>(())
     })
