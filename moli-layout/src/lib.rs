@@ -102,9 +102,10 @@ pub use style::{
     LayoutPosition, ResolvedLayoutStyle,
 };
 pub use text::{
-    DocumentLayoutServices, FontFaceData, SystemFontPolicy, WebFontDeclaration, WebFontFace,
-    WebFontRegistration, WebFontRegistrationError, WebFontRegistrationOutcome,
-    WebFontRegistrationScope, WebFontStyle, WebFontUnicodeRange, validate_web_font_bytes,
+    CanvasFont, DocumentLayoutServices, FontFaceData, ShapedCanvasText, SystemFontPolicy,
+    WebFontDeclaration, WebFontFace, WebFontRegistration, WebFontRegistrationError,
+    WebFontRegistrationOutcome, WebFontRegistrationScope, WebFontStyle, WebFontUnicodeRange,
+    validate_web_font_bytes,
 };
 pub use world::{
     LayoutAnonymousReason, LayoutBox, LayoutBoxId, LayoutBoxKind, LayoutCapabilityDiagnostic,
