@@ -5195,6 +5195,33 @@ impl ScriptVm {
         self._context_host.borrow_mut().set_network_offline(offline);
     }
 
+    pub(super) fn set_navigator_overrides(
+        &mut self,
+        overrides: &moli_page_types::NavigatorOverrides,
+    ) {
+        self._context_host
+            .borrow_mut()
+            .set_navigator_overrides(overrides);
+    }
+
+    pub(super) fn set_navigator_overrides_and_sync_surface(
+        &mut self,
+        overrides: &moli_page_types::NavigatorOverrides,
+    ) -> Result<()> {
+        let changed = self
+            ._context_host
+            .borrow_mut()
+            .set_navigator_overrides(overrides);
+        if changed {
+            let context_ptr: *const v8::Global<v8::Context> = &self.page_default_context;
+            self.with_context_scope_by_ptr(context_ptr, |scope, _| {
+                crate::context_bootstrap::notify_geolocation_override_changed(scope);
+                Ok(())
+            })?;
+        }
+        Ok(())
+    }
+
     pub(super) fn set_bypass_service_worker(&mut self, bypass: bool) {
         self._context_host
             .borrow_mut()

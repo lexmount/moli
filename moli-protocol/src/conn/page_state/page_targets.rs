@@ -453,6 +453,9 @@ impl BrowserContext {
             return Ok(false);
         }
         target.reset_primary_session_target_state_fields();
+        let navigator_overrides = self
+            .navigator_overrides_for_target(target_id)
+            .expect("disposing target retains navigator state");
 
         let effective_headers = self.effective_extra_headers_for_target(target_id);
         let target = self
@@ -514,6 +517,14 @@ impl BrowserContext {
             {
                 first_error.get_or_insert_with(|| {
                     anyhow::anyhow!("failed to restore page timezone: {error}")
+                });
+            }
+            if let Err(error) = page
+                .set_navigator_overrides_async(&navigator_overrides)
+                .await
+            {
+                first_error.get_or_insert_with(|| {
+                    anyhow::anyhow!("failed to restore native navigator state: {error}")
                 });
             }
             if let Some(surface_script) = surface_script

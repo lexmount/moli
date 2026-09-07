@@ -88,9 +88,26 @@ impl SurfaceOverrideInputs {
         }
     }
 
-    fn navigator_online(&self) -> bool {
-        self.network_conditions
-            .is_none_or(|conditions| conditions.navigator_online())
+    fn navigator_overrides(&self) -> moli_page_types::NavigatorOverrides {
+        moli_page_types::NavigatorOverrides {
+            online: self
+                .network_conditions
+                .map(|conditions| conditions.navigator_online()),
+            max_touch_points: self.max_touch_points(),
+            geolocation: self
+                .geolocation_override
+                .as_ref()
+                .and_then(EmulatedGeolocationOverrideState::position)
+                .map(|position| moli_page_types::GeolocationPositionOverride {
+                    latitude: position.latitude,
+                    longitude: position.longitude,
+                    accuracy: position.accuracy,
+                    altitude: position.altitude,
+                    altitude_accuracy: position.altitude_accuracy,
+                    heading: position.heading,
+                    speed: position.speed,
+                }),
+        }
     }
 
     fn document_is_visible(&self) -> bool {
@@ -108,6 +125,28 @@ impl SurfaceOverrideInputs {
 }
 
 impl BrowserContext {
+    pub(crate) fn navigator_overrides_for_target(
+        &self,
+        target_id: &str,
+    ) -> Option<moli_page_types::NavigatorOverrides> {
+        let target = self.page_target(target_id)?;
+        Some(
+            SurfaceOverrideInputs::from_background(
+                target,
+                self.default_network_conditions
+                    .or(self.global_network_conditions),
+                self.default_geolocation_override
+                    .clone()
+                    .or_else(|| self.global_geolocation_override.clone()),
+                self.default_emulated_device_metrics.clone(),
+            )
+            .navigator_overrides(),
+        )
+    }
+
+    pub(crate) fn active_navigator_overrides(&self) -> moli_page_types::NavigatorOverrides {
+        SurfaceOverrideInputs::from_active(self).navigator_overrides()
+    }
     #[cfg(test)]
     async fn mutate_document_cookie_manager_surface_async(
         &mut self,
@@ -390,12 +429,16 @@ impl BrowserContext {
         else {
             return Ok(false);
         };
+        let overrides = self
+            .navigator_overrides_for_target(target_id)
+            .expect("resolved background target retains navigator state");
         let Some(page) = self
             .background_target_mut(target_id)
             .and_then(|target| target.runtime_slot.loaded_page_mut())
         else {
             return Ok(false);
         };
+        page.set_navigator_overrides_async(&overrides).await?;
         page.run_page_surface_override_script_async(&script.source)
             .await
             .map_err(|error| anyhow::anyhow!("failed to hide background page surface: {error}"))?;
@@ -411,8 +454,6 @@ impl BrowserContext {
     fn generated_surface_override_script_from_inputs(
         inputs: &SurfaceOverrideInputs,
     ) -> Option<DocumentStartScript> {
-        let geolocation_override = inputs.geolocation_override.as_ref();
-        let navigator_online = inputs.navigator_online();
         // Preserve the renderer's native Window/Screen descriptors unless a
         // client explicitly enabled device emulation. Installing the default
         // profile as JS getters makes otherwise native attributes observable
@@ -424,7 +465,6 @@ impl BrowserContext {
             .as_ref()
             .map(|metrics| viewport_surface_install_script(&metrics.viewport_surface(), true))
             .unwrap_or_default();
-        let max_touch_points = inputs.max_touch_points();
         let document_has_focus = inputs.document_has_focus();
         let document_hidden = inputs.document_hidden();
         let document_visibility_state = inputs.document_visibility_state();
@@ -437,125 +477,7 @@ impl BrowserContext {
                         Object.defineProperty(obj, key, {{ configurable: true, get: getter }});
                     }} catch (_error) {{}}
                 }};
-                const geolocationOverride = {geolocation_override};
-                const navigatorOnline = {navigator_online};
-                const maxTouchPoints = {max_touch_points};
                 {viewport_surface_script}
-                try {{
-                    globalThis.__moliNavigatorOnline = navigatorOnline;
-                }} catch (_error) {{}}
-                const currentNavigatorOnline = () => {{
-                    try {{
-                        return globalThis.__moliNavigatorOnline !== false;
-                    }} catch (_error) {{
-                        return navigatorOnline;
-                    }}
-                }};
-                try {{
-                    const geoState = globalThis.__moliGeolocationState || {{
-                        nextWatchId: 1,
-                        watchers: new Map(),
-                        object: null
-                    }};
-                    globalThis.__moliGeolocationState = geoState;
-                    const previousOverrideKey = geoState.overrideKey || null;
-                    geoState.override = geolocationOverride && typeof geolocationOverride === 'object'
-                        ? geolocationOverride
-                        : null;
-                    geoState.overrideKey = JSON.stringify(geoState.override);
-                    if (!(geoState.watchers instanceof Map)) {{
-                        geoState.watchers = new Map();
-                    }}
-                    const queue = typeof queueMicrotask === 'function'
-                        ? queueMicrotask
-                        : (callback) => Promise.resolve().then(callback);
-                    const makeError = (code, message) => {{
-                        const error = {{ code, message }};
-                        try {{
-                            Object.defineProperty(error, 'PERMISSION_DENIED', {{ value: 1 }});
-                            Object.defineProperty(error, 'POSITION_UNAVAILABLE', {{ value: 2 }});
-                            Object.defineProperty(error, 'TIMEOUT', {{ value: 3 }});
-                        }} catch (_error) {{}}
-                        return error;
-                    }};
-                    const makePosition = () => {{
-                        const override = geoState.override;
-                        return {{
-                            coords: {{
-                                latitude: override.latitude,
-                                longitude: override.longitude,
-                                accuracy: override.accuracy,
-                                altitude: override.altitude ?? null,
-                                altitudeAccuracy: override.altitudeAccuracy ?? null,
-                                heading: override.heading ?? null,
-                                speed: override.speed ?? null
-                            }},
-                            timestamp: Date.now()
-                        }};
-                    }};
-                    const deliverGeolocation = (success, error) => {{
-                        queue(() => {{
-                            const fail = (code, message) => {{
-                                if (typeof error === 'function') {{
-                                    error.call(geoState.object, makeError(code, message));
-                                }}
-                            }};
-                            const succeed = () => {{
-                                if (typeof success === 'function') {{
-                                    success.call(geoState.object, makePosition());
-                                }}
-                            }};
-                            const finish = () => {{
-                                if (!geoState.override) {{
-                                    fail(2, 'Position unavailable');
-                                }} else {{
-                                    succeed();
-                                }}
-                            }};
-                            try {{
-                                const permissions = navigator && navigator.permissions;
-                                if (permissions && typeof permissions.query === 'function') {{
-                                    const queried = permissions.query({{ name: 'geolocation' }});
-                                    if (queried && typeof queried.then === 'function') {{
-                                        queried.then((status) => {{
-                                            if (status && status.state === 'denied') {{
-                                                fail(1, 'User denied Geolocation');
-                                            }} else {{
-                                                finish();
-                                            }}
-                                        }}, finish);
-                                        return;
-                                    }}
-                                }}
-                            }} catch (_error) {{}}
-                            finish();
-                        }});
-                    }};
-                    if (!geoState.object) {{
-                        geoState.object = {{
-                            getCurrentPosition(success, error, _options) {{
-                                deliverGeolocation(success, error);
-                            }},
-                            watchPosition(success, error, _options) {{
-                                const id = geoState.nextWatchId++;
-                                geoState.watchers.set(id, {{ success, error }});
-                                deliverGeolocation(success, error);
-                                return id;
-                            }},
-                            clearWatch(id) {{
-                                geoState.watchers.delete(id);
-                            }}
-                        }};
-                    }}
-                    if (previousOverrideKey !== null && previousOverrideKey !== geoState.overrideKey) {{
-                        for (const watcher of geoState.watchers.values()) {{
-                            deliverGeolocation(watcher.success, watcher.error);
-                        }}
-                    }}
-                    defineGetter(navigator, 'geolocation', () => geoState.object);
-                }} catch (_error) {{}}
-                defineGetter(navigator, 'onLine', () => currentNavigatorOnline());
-                defineGetter(navigator, 'maxTouchPoints', () => maxTouchPoints);
                 if (document) {{
                     // The renderer's Document bridge currently installs these
                     // surfaces as own accessors, so CDP emulation must shadow
@@ -571,23 +493,7 @@ impl BrowserContext {
                     }} catch (_error) {{}}
                 }}
             }})();",
-            geolocation_override = geolocation_override
-                .and_then(EmulatedGeolocationOverrideState::position)
-                .map(|position| {
-                    json!({
-                        "latitude": position.latitude,
-                        "longitude": position.longitude,
-                        "accuracy": position.accuracy,
-                        "altitude": position.altitude,
-                        "altitudeAccuracy": position.altitude_accuracy,
-                        "heading": position.heading,
-                        "speed": position.speed,
-                    })
-                    .to_string()
-                })
-                .unwrap_or_else(|| "null".to_owned()),
             viewport_surface_script = viewport_surface_script,
-            max_touch_points = max_touch_points,
             document_hidden = document_hidden,
             document_visibility_state = json!(document_visibility_state),
             document_has_focus = document_has_focus,
@@ -609,9 +515,11 @@ impl BrowserContext {
         let Some(script) = self.generated_surface_override_script() else {
             return Ok(());
         };
+        let overrides = self.active_navigator_overrides();
         let Some(page) = self.active_page_target_mut().runtime_slot.loaded_page_mut() else {
             return Ok(());
         };
+        page.set_navigator_overrides_async(&overrides).await?;
         page.run_page_surface_override_script_async(&script.source)
             .await
             .map_err(|error| anyhow::anyhow!("failed to apply page surface overrides: {error}"))

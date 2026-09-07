@@ -951,6 +951,7 @@ mod tests {
             cpu_throttling_rate: 1.0,
             emulated_media: crate::protocol_types::EmulatedMediaOverrides::default(),
             idle_override: None,
+            navigator_overrides: Default::default(),
             viewport_surface: None,
             network_offline: false,
             blocked_url_patterns: Vec::new(),

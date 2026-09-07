@@ -918,6 +918,7 @@ impl RendererOwnerLocalStore {
                 request.cpu_throttling_rate = configuration.cpu_throttling_rate;
                 request.emulated_media = configuration.emulated_media;
                 request.idle_override = configuration.idle_override;
+                request.navigator_overrides = configuration.navigator_overrides;
                 request.viewport_surface = configuration.viewport_surface;
                 request
                     .loader

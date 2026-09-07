@@ -273,6 +273,8 @@ impl JsContextHost {
             viewport_surface: None,
             wpt_extensions_enabled: false,
             network_offline: false,
+            navigator_overrides: Default::default(),
+            geolocation_objects: Vec::new(),
             blocked_url_patterns: Vec::new(),
             service_worker_client_id,
             service_worker_control: None,

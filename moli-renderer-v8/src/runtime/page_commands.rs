@@ -1112,6 +1112,10 @@ impl PageVm {
                 self.set_idle_override(idle_override)?;
                 Ok(RendererPageReply::Unit)
             }
+            RendererPageCommand::SetNavigatorOverrides(overrides) => {
+                self.set_navigator_overrides(&overrides)?;
+                Ok(RendererPageReply::Unit)
+            }
             RendererPageCommand::SetLocaleOverride(locale) => {
                 self.set_locale_override(locale.as_deref())?;
                 Ok(RendererPageReply::Unit)

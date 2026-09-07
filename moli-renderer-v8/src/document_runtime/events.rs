@@ -168,20 +168,20 @@ impl DocumentRuntime {
         )
     }
 
-    pub(crate) fn queue_window_geolocation_error_callback<'s>(
+    pub(crate) fn queue_window_geolocation_callback<'s>(
         &mut self,
         scope: &mut v8::PinScope<'s, '_>,
         callback: moli_webidl_callback::WebIdlCallbackFunction,
         geolocation: v8::Local<'s, v8::Object>,
-        error: v8::Global<v8::Value>,
+        result: v8::Global<v8::Value>,
         owner: HostTimerOwner,
         watch_id: Option<i32>,
     ) -> u32 {
-        self.timeouts.queue_window_geolocation_error_callback(
+        self.timeouts.queue_window_geolocation_callback(
             scope,
             callback,
             geolocation,
-            error,
+            result,
             owner,
             watch_id,
         )

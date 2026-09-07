@@ -5307,6 +5307,7 @@ pub enum RendererPageCommand {
     },
     SetPermissionOverrides(Vec<crate::protocol_types::PermissionOverrideRegistration>),
     SetIdleOverride(Option<crate::protocol_types::EmulatedIdleOverride>),
+    SetNavigatorOverrides(moli_page_types::NavigatorOverrides),
     SetLocaleOverride(Option<String>),
     SetTimezoneOverride(Option<String>),
     SetScriptExecutionDisabled(bool),

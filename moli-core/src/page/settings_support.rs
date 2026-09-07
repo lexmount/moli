@@ -543,6 +543,39 @@ impl Page {
         .await
     }
 
+    pub async fn set_navigator_overrides_async(
+        &mut self,
+        overrides: &moli_page_types::NavigatorOverrides,
+    ) -> Result<()> {
+        self.dispatch_unit_page_command_async(
+            RendererPageCommand::SetNavigatorOverrides(overrides.clone()),
+            "set navigator overrides",
+        )
+        .await
+    }
+
+    pub fn start_set_navigator_overrides(
+        &self,
+        overrides: &moli_page_types::NavigatorOverrides,
+    ) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::SetNavigatorOverrides(
+            overrides.clone(),
+        ))
+    }
+
+    pub fn finish_set_navigator_overrides(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<()> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(
+            reply,
+            "set navigator overrides",
+            "a unit reply",
+            RendererPageReply::Unit => Ok(()),
+        )
+    }
+
     pub fn start_set_network_offline(&self, offline: bool) -> Result<PendingPageCommand> {
         self.start_page_command(RendererPageCommand::SetNetworkOffline(offline))
     }

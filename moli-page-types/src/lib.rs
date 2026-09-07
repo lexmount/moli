@@ -8,6 +8,7 @@ mod inspector_identity;
 mod inspector_state;
 mod layout;
 mod navigation_history;
+mod navigator_overrides;
 mod renderer_transport_memory;
 
 use std::{
@@ -49,6 +50,7 @@ pub use inspector_identity::{
     RendererInspectorResponseDelivery,
 };
 pub use layout::LayoutPolicy;
+pub use navigator_overrides::{GeolocationPositionOverride, NavigatorOverrides};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DocumentNodeAttributeSnapshot {

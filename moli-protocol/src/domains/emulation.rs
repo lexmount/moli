@@ -98,6 +98,7 @@ enum PendingEmulationPageOperation {
     SetNetworkConditions,
     SetCpuThrottlingRate,
     SetIdleOverride,
+    SetNavigatorOverrides,
     SetTimezoneOverride,
     SetEmulatedMedia,
     SetViewportSurface,
@@ -110,6 +111,7 @@ impl PendingEmulationPageOperation {
     fn has_authoritative_replay_state(&self) -> bool {
         match self {
             Self::SetExtraHttpHeaders
+            | Self::SetNavigatorOverrides
             | Self::SetLocaleOverride
             | Self::SetNetworkConditions
             | Self::SetCpuThrottlingRate
@@ -209,9 +211,7 @@ pub(crate) fn try_start_emulation_command_dispatch(
             Some(start_cpu_throttling_rate_command(conn, cmd))
         }
         Some(EmulationAction::SetTouchEmulationEnabled) => {
-            Some(EmulationCommandTaskStep::Complete(
-                touch_emulation_enabled_command_output_plan(conn, cmd),
-            ))
+            Some(start_touch_emulation_enabled_command(conn, cmd))
         }
         Some(EmulationAction::SetEmitTouchEventsForMouse) => {
             Some(EmulationCommandTaskStep::Complete(
@@ -267,26 +267,57 @@ fn focus_emulation_enabled_command_output_plan(
     }
 }
 
-fn touch_emulation_enabled_command_output_plan(
+fn start_touch_emulation_enabled_command(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
-) -> CommandOutputPlan {
+) -> EmulationCommandTaskStep {
     let params: params::SetTouchEmulationEnabledParams = match cmd.get_params() {
         Ok(Some(params)) => params,
-        _ => return CommandOutputPlan::error(-32602, "InvalidParams"),
+        _ => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32602,
+                "InvalidParams",
+            ));
+        }
     };
     if conn.browser_context.is_none() {
-        return CommandOutputPlan::result(json!({}));
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
     }
-    match page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
-        state.set_touch_emulation_enabled(params.enabled);
-    }) {
-        Ok(()) => CommandOutputPlan::result(json!({})),
-        Err(message) if message == "BrowserContextNotLoaded" => {
-            CommandOutputPlan::error(-31998, "BrowserContextNotLoaded")
+    if let Err(message) =
+        page_session::update_page_emulation_state(conn, cmd.session_id, |mut state| {
+            state.set_touch_emulation_enabled(params.enabled);
+        })
+    {
+        let code = if message == "BrowserContextNotLoaded" {
+            -31998
+        } else {
+            -32000
+        };
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(code, message));
+    }
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
+    let overrides = conn
+        .navigation_load_inputs_for_owner(&owner_scope)
+        .navigator_overrides;
+    let Some(page) = loaded_page_mut_for_target_configuration(conn, cmd.session_id) else {
+        return EmulationCommandTaskStep::Complete(CommandOutputPlan::result(json!({})));
+    };
+    let pending = match page.start_set_navigator_overrides(&overrides) {
+        Ok(pending) => pending,
+        Err(error) => {
+            return EmulationCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32000,
+                error.to_string(),
+            ));
         }
-        Err(message) => CommandOutputPlan::error(-32000, message),
-    }
+    };
+    EmulationCommandTaskStep::Pending(single_pending_emulation_dispatch(
+        cmd.id,
+        owner_scope,
+        PendingEmulationPageOperation::SetNavigatorOverrides,
+        pending,
+        None,
+    ))
 }
 
 fn start_cpu_throttling_rate_command(
@@ -2826,6 +2857,7 @@ fn start_geolocation_surface_override_page_commands(
     let Some(script) = browser_context.generated_surface_override_script_for_active_target() else {
         return Ok(Vec::new());
     };
+    let navigator_overrides = browser_context.active_navigator_overrides();
     let browser_context_id = browser_context.id.clone();
     let Some(target_id) = browser_context.active_target_id_owned() else {
         return Ok(Vec::new());
@@ -2844,9 +2876,9 @@ fn start_geolocation_surface_override_page_commands(
         },
         page,
         script,
+        navigator_overrides,
         runtime_call_id,
     )
-    .map(|pending| vec![pending])
 }
 
 fn start_session_surface_override_page_command(
@@ -2861,7 +2893,7 @@ fn start_session_surface_override_page_command_for_owner(
     conn: &mut CdpConnection,
     owner_scope: &CommandOwnerScope,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let script = {
+    let (script, navigator_overrides) = {
         let Some((browser_context_id, target_id)) =
             conn.target_owner_identity_for_owner(owner_scope)
         else {
@@ -2873,9 +2905,17 @@ fn start_session_surface_override_page_command_for_owner(
         if let Some(target_id) = target_id.as_deref()
             && browser_context.background_target(target_id).is_some()
         {
-            browser_context.generated_surface_override_script_for_background_target(target_id)
+            (
+                browser_context.generated_surface_override_script_for_background_target(target_id),
+                browser_context
+                    .navigator_overrides_for_target(target_id)
+                    .expect("resolved target"),
+            )
         } else {
-            browser_context.generated_surface_override_script_for_active_target()
+            (
+                browser_context.generated_surface_override_script_for_active_target(),
+                browser_context.active_navigator_overrides(),
+            )
         }
     };
     let Some(script) = script else {
@@ -2894,9 +2934,9 @@ fn start_session_surface_override_page_command_for_owner(
         },
         page,
         script,
+        navigator_overrides,
         runtime_call_id,
     )
-    .map(|pending| vec![pending])
 }
 
 fn start_surface_override_for_route(
@@ -2904,7 +2944,7 @@ fn start_surface_override_for_route(
     target: PendingEmulationPageTarget,
     route: &CdpSessionRoute,
 ) -> Result<Vec<PendingEmulationPageCommand>, String> {
-    let script = match &target {
+    let (script, navigator_overrides) = match &target {
         PendingEmulationPageTarget::BrowserContextTarget {
             browser_context_id,
             target_id,
@@ -2912,11 +2952,17 @@ fn start_surface_override_for_route(
             let Some(browser_context) = conn.browser_context_by_id(browser_context_id) else {
                 return Err("BrowserContextNotLoaded".to_owned());
             };
-            if browser_context.is_active_target(target_id) {
+            let script = if browser_context.is_active_target(target_id) {
                 browser_context.generated_surface_override_script_for_active_target()
             } else {
                 browser_context.generated_surface_override_script_for_background_target(target_id)
-            }
+            };
+            (
+                script,
+                browser_context
+                    .navigator_overrides_for_target(target_id)
+                    .unwrap_or_default(),
+            )
         }
         PendingEmulationPageTarget::SessionOwner { owner_scope } => {
             return start_session_surface_override_page_command_for_owner(conn, owner_scope);
@@ -2933,24 +2979,35 @@ fn start_surface_override_for_route(
     else {
         return Ok(Vec::new());
     };
-    start_surface_override_page_command(target, page, script, runtime_call_id)
-        .map(|pending| vec![pending])
+    start_surface_override_page_command(target, page, script, navigator_overrides, runtime_call_id)
 }
 
 fn start_surface_override_page_command(
     target: PendingEmulationPageTarget,
     page: &moli_core::page::Page,
     script: crate::conn::DocumentStartScript,
+    navigator_overrides: moli_page_types::NavigatorOverrides,
     runtime_call_id: u64,
-) -> Result<PendingEmulationPageCommand, String> {
+) -> Result<Vec<PendingEmulationPageCommand>, String> {
+    let native_update = page
+        .start_set_navigator_overrides(&navigator_overrides)
+        .map_err(|error| error.to_string())?;
     let (pending, runtime_response_rx) =
         start_runtime_emulation_protocol_message(page, runtime_call_id, script.source)?;
-    Ok(PendingEmulationPageCommand {
-        target,
-        operation: PendingEmulationPageOperation::RuntimeProtocolMessage,
-        pending,
-        runtime_response_rx,
-    })
+    Ok(vec![
+        PendingEmulationPageCommand {
+            target: target.clone(),
+            operation: PendingEmulationPageOperation::SetNavigatorOverrides,
+            pending: native_update,
+            runtime_response_rx: None,
+        },
+        PendingEmulationPageCommand {
+            target,
+            operation: PendingEmulationPageOperation::RuntimeProtocolMessage,
+            pending,
+            runtime_response_rx,
+        },
+    ])
 }
 
 fn start_locale_override_page_command(
@@ -3066,6 +3123,9 @@ fn finish_emulation_page_operation(
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetIdleOverride => page
             .finish_set_idle_override(completion)
+            .map_err(|error| error.to_string()),
+        PendingEmulationPageOperation::SetNavigatorOverrides => page
+            .finish_set_navigator_overrides(completion)
             .map_err(|error| error.to_string()),
         PendingEmulationPageOperation::SetTimezoneOverride => page
             .finish_set_timezone_override(completion)
