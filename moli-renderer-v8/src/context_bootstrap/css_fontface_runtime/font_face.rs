@@ -37,7 +37,7 @@ struct FontFaceObjectDeclaration<'s> {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "FontFace")]
+#[webapi(name = "FontFace", receiver = is_font_face)]
 struct FontFacePrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
@@ -121,6 +121,7 @@ struct FontFacePrototypeAccessorsDeclaration {
         accessor_property,
         getter = font_face_readonly_attribute_getter_callback,
         data = callback_data_index_value(scope, 2),
+        returns_promise,
         enumerable
     )]
     loaded: (),
@@ -342,6 +343,13 @@ pub(in crate::context_bootstrap) fn font_face_load_callback<'s>(
         Some(promise) => rv.set(v8::Local::<v8::Value>::from(promise)),
         None => rv.set(v8::undefined(scope).into()),
     }
+}
+
+pub(in crate::context_bootstrap) fn is_font_face<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    get_private_value(scope, receiver, FONT_FACE_STATUS_SLOT).is_some()
 }
 
 fn descriptor_string_property(

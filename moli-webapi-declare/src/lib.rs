@@ -98,6 +98,28 @@
 //! `#[webapi(no_dynamic_constructor)]` when the declaration already has a
 //! hand-written constructor with narrower semantics.
 //!
+//! # Receiver checks and Promise-returning members
+//!
+//! `receiver = path` on a method or `accessor_property` declares a native brand
+//! predicate with signature `fn(&mut v8::PinScope, v8::Local<v8::Object>) -> bool`.
+//! The generated callback checks it before running the implementation, throwing
+//! `TypeError("Illegal invocation")` on failure. The predicate must inspect native
+//! identity or private slots, not public constructors, prototypes, or properties;
+//! it must not execute JavaScript or throw. This preserves cross-realm receivers
+//! without accepting forged prototypes or Proxy wrappers.
+//!
+//! Struct-level `receiver = path` supplies the default for instance methods and
+//! accessor properties in all three derives; a field can override it. Static
+//! methods, data properties, and holder-based native data properties do not
+//! inherit this policy. Already-built `getter_value` functions cannot use it.
+//!
+//! `returns_promise` on a method (including a static method) or accessor getter
+//! converts synchronous exceptions from both the receiver check and the callback
+//! into rejected Promises in the callback's realm. Successful return values are
+//! unchanged, so cached Promise identity is preserved. An accessor setter still
+//! throws synchronously. Callback data and native function descriptors are
+//! unchanged: these adapters are Rust callbacks, not JavaScript wrappers.
+//!
 //! # Function-template declaration model
 //!
 //! A `#[derive(WebApiFunctionTemplate)]` struct describes a constructor-backed
@@ -141,6 +163,7 @@
 
 extern crate self as moli_webapi_declare;
 
+mod callback;
 mod declaration;
 mod error;
 mod property;

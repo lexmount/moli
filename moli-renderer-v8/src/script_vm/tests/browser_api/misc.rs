@@ -1397,6 +1397,7 @@ fn font_face_declared_slots_ignore_prototype_spoofing() {
   face.__moliFontFaceStatus = 'error';
   face.__moliFontFaceLoaded = Promise.resolve('ownBad');
   const fake = Object.create(FontFace.prototype);
+  globalThis.fakeLoadedResult = 'not called';
   return JSON.stringify({
     values: [
       face.family,
@@ -1410,13 +1411,19 @@ fn font_face_declared_slots_ignore_prototype_spoofing() {
       face.status,
       typeof face.loaded.then
     ].join('|'),
-    fake: [
-      fake.family,
-      fake.source,
-      fake.style,
-      fake.status,
-      fake.loaded
-    ].map(value => value === undefined ? 'undefined' : String(value)).join('|'),
+    fake: ['family', 'source', 'style', 'status', 'loaded'].map(name => {
+      try {
+        const value = fake[name];
+        if (name === 'loaded' && value instanceof Promise) {
+          value.then(
+            () => fakeLoadedResult = 'resolved',
+            error => fakeLoadedResult = error instanceof TypeError ? 'rejected:TypeError' : error.name
+          );
+          return 'Promise';
+        }
+        return String(value);
+      } catch (error) { return error.name; }
+    }).join('|'),
     descriptors: [
       'family',
       'style',
@@ -1438,8 +1445,9 @@ fn font_face_declared_slots_ignore_prototype_spoofing() {
 
     assert_eq!(
         result,
-        r#"{"values":"Changed|url(demo.woff)|italic|700|condensed|small-caps|\"kern\"|swap|loaded|function","fake":"undefined|undefined|undefined|undefined|undefined","descriptors":["family:function:get family:0:function:set family:1:true:true:false","style:function:get style:0:function:set style:1:true:true:false","weight:function:get weight:0:function:set weight:1:true:true:false","stretch:function:get stretch:0:function:set stretch:1:true:true:false","variant:function:get variant:0:function:set variant:1:true:true:false","featureSettings:function:get featureSettings:0:function:set featureSettings:1:true:true:false","display:function:get display:0:function:set display:1:true:true:false","source:function:get source:0:undefined:undefined:undefined:true:true:false","status:function:get status:0:undefined:undefined:undefined:true:true:false","loaded:function:get loaded:0:undefined:undefined:undefined:true:true:false"],"ownSlots":[]}"#
+        r#"{"values":"Changed|url(demo.woff)|italic|700|condensed|small-caps|\"kern\"|swap|loaded|function","fake":"TypeError|TypeError|TypeError|TypeError|Promise","descriptors":["family:function:get family:0:function:set family:1:true:true:false","style:function:get style:0:function:set style:1:true:true:false","weight:function:get weight:0:function:set weight:1:true:true:false","stretch:function:get stretch:0:function:set stretch:1:true:true:false","variant:function:get variant:0:function:set variant:1:true:true:false","featureSettings:function:get featureSettings:0:function:set featureSettings:1:true:true:false","display:function:get display:0:function:set display:1:true:true:false","source:function:get source:0:undefined:undefined:undefined:true:true:false","status:function:get status:0:undefined:undefined:undefined:true:true:false","loaded:function:get loaded:0:undefined:undefined:undefined:true:true:false"],"ownSlots":[]}"#
     );
+    assert_eq!(vm.eval("fakeLoadedResult").unwrap(), "rejected:TypeError");
 }
 
 #[test]

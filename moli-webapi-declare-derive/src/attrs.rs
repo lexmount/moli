@@ -3,6 +3,7 @@ use syn::{Error, Expr, ExprLit, Field, Lit, LitInt, LitStr, Path, Token};
 
 #[derive(Default)]
 pub(crate) struct InterfaceAttrs {
+    pub(crate) receiver: Option<Path>,
     pub(crate) name: Option<LitStr>,
     pub(crate) parent: Option<LitStr>,
     pub(crate) constructor: Option<ConstructorAttr>,
@@ -45,6 +46,7 @@ pub(crate) enum RenameRule {
 
 #[derive(Default)]
 pub(crate) struct ObjectAttrs {
+    pub(crate) receiver: Option<Path>,
     pub(crate) interface: Option<LitStr>,
     pub(crate) prototype: Option<LitStr>,
     pub(crate) own_to_string_tag: Option<LitStr>,
@@ -61,6 +63,7 @@ pub(crate) struct ObjectAttrs {
 
 #[derive(Default)]
 pub(crate) struct FunctionTemplateAttrs {
+    pub(crate) receiver: Option<Path>,
     pub(crate) name: Option<LitStr>,
     pub(crate) constructor: Option<ConstructorAttr>,
     pub(crate) constructor_length: Option<i32>,
@@ -73,6 +76,8 @@ pub(crate) struct FunctionTemplateAttrs {
 
 #[derive(Clone, Default)]
 pub(crate) struct FieldAttrs {
+    pub(crate) receiver: Option<Path>,
+    pub(crate) returns_promise: bool,
     pub(crate) method: bool,
     pub(crate) static_method: bool,
     pub(crate) constant: bool,
@@ -104,6 +109,21 @@ pub(crate) struct FieldAttrs {
 }
 
 impl FieldAttrs {
+    pub(crate) fn inherit_receiver(&mut self, receiver: Option<&Path>) -> Result<(), Error> {
+        if self.method || self.accessor_property {
+            self.receiver = self.receiver.take().or_else(|| receiver.cloned());
+        }
+        if (self.receiver.is_some() || self.returns_promise)
+            && let Some(getter_value) = &self.getter_value
+        {
+            return Err(Error::new(
+                getter_value.span(),
+                "receiver and returns_promise require a Rust callback, not getter_value",
+            ));
+        }
+        Ok(())
+    }
+
     pub(crate) fn has_installation_kind(&self) -> bool {
         self.method
             || self.static_method
@@ -120,7 +140,9 @@ impl FieldAttrs {
     }
 
     pub(crate) fn has_installation_attribute(&self) -> bool {
-        self.enumerable
+        self.receiver.is_some()
+            || self.returns_promise
+            || self.enumerable
             || self.readonly
             || self.dont_delete
             || self.alias.is_some()
@@ -143,6 +165,10 @@ pub(crate) fn parse_interface_attrs(attrs: &[syn::Attribute]) -> Result<Interfac
     let mut parsed = InterfaceAttrs::default();
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("webapi")) {
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("receiver") {
+                parsed.receiver = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
             if meta.path.is_ident("name") {
                 parsed.name = Some(meta.value()?.parse()?);
                 return Ok(());
@@ -183,6 +209,10 @@ pub(crate) fn parse_object_attrs(attrs: &[syn::Attribute]) -> Result<ObjectAttrs
     let mut parsed = ObjectAttrs::default();
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("webapi")) {
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("receiver") {
+                parsed.receiver = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
             if meta.path.is_ident("interface") {
                 parsed.interface = Some(meta.value()?.parse()?);
                 return Ok(());
@@ -244,6 +274,10 @@ pub(crate) fn parse_function_template_attrs(
     let mut parsed = FunctionTemplateAttrs::default();
     for attr in attrs.iter().filter(|attr| attr.path().is_ident("webapi")) {
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("receiver") {
+                parsed.receiver = Some(meta.value()?.parse()?);
+                return Ok(());
+            }
             if meta.path.is_ident("name") {
                 parsed.name = Some(meta.value()?.parse()?);
                 return Ok(());
@@ -328,6 +362,16 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
         .filter(|attr| attr.path().is_ident("webapi"))
     {
         attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("receiver") {
+                if parsed.receiver.replace(meta.value()?.parse()?).is_some() {
+                    return Err(meta.error("field receiver can only be specified once"));
+                }
+                return Ok(());
+            }
+            if meta.path.is_ident("returns_promise") {
+                parsed.returns_promise = true;
+                return Ok(());
+            }
             if meta.path.is_ident("method") {
                 parsed.method = true;
                 if meta.input.peek(Token![=]) {
@@ -514,6 +558,24 @@ pub(crate) fn parse_field_attrs(field: &Field) -> Result<FieldAttrs, Error> {
             Err(meta.error("unsupported #[webapi(...)] field attribute"))
         })?;
     }
+
+    if parsed.receiver.is_some() && !parsed.method && !parsed.accessor_property {
+        return Err(Error::new(
+            field.span(),
+            "receiver is only supported on instance methods and accessor_property fields",
+        ));
+    }
+    if parsed.returns_promise
+        && !parsed.method
+        && !parsed.static_method
+        && !parsed.accessor_property
+    {
+        return Err(Error::new(
+            field.span(),
+            "returns_promise is only supported on methods and accessor_property getters",
+        ));
+    }
+    parsed.inherit_receiver(None)?;
 
     let kinds = [
         parsed.method,

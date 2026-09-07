@@ -119,7 +119,7 @@ const WEBGL_SUPPORTED_EXTENSIONS: &[&str] = &[
 ];
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "HTMLCanvasElement")]
+#[webapi(name = "HTMLCanvasElement", receiver = crate::native_bridge::receivers::html_canvas_element)]
 struct HtmlCanvasElementPrototypeAccessorsDeclaration {
     #[webapi(
         accessor_property,
