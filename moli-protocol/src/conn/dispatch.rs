@@ -27,16 +27,22 @@ pub enum RendererDispatchLane {
 
 /// Exact Page AgentHost binding that admitted one renderer command.
 ///
-/// `RendererAgentAttachmentId` is the existing binding generation. Keeping it
-/// next to the Browser-owned `DocumentId` prevents a completion from being
-/// rebound to whichever Document happens to be current later.
+/// `MainFrameSlotId` remains stable across cross-document navigation while
+/// `DocumentId` and `RendererAgentAttachmentId` identify the admitted binding
+/// generation. A completion cannot be rebound to whichever Document is current
+/// later.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RendererPageDispatchBinding {
+    main_frame_slot: moli_core::browser::MainFrameSlotId,
     document: moli_core::browser::DocumentId,
     attachment: moli_core::page::RendererAgentAttachmentId,
 }
 
 impl RendererPageDispatchBinding {
+    pub const fn main_frame_slot(self) -> moli_core::browser::MainFrameSlotId {
+        self.main_frame_slot
+    }
+
     pub const fn document(self) -> moli_core::browser::DocumentId {
         self.document
     }
@@ -616,6 +622,7 @@ impl CdpConnection {
             CdpSessionRoute::PageTarget { .. } => {
                 let attachment = self.current_renderer_agent_attachment_for_owner(owner)?;
                 Some(RendererDispatchBinding::Page(RendererPageDispatchBinding {
+                    main_frame_slot: self.page_agent_host_main_frame_slot_for_owner(owner)?,
                     document: attachment.document(),
                     attachment: attachment.id(),
                 }))

@@ -2,12 +2,36 @@ use std::collections::{HashMap, HashSet};
 
 use crate::conn::CdpSessionRoute;
 
+/// Browser-side domain handlers installed for one attached DevTools session.
+/// The attachment registry freezes this class at commit and disposal carries
+/// it forward instead of reconstructing ownership from teardown state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DevToolsSessionHandlerSet {
+    Connection,
+    Page,
+    Worker,
+}
+
+impl DevToolsSessionHandlerSet {
+    pub(crate) fn for_route(route: &CdpSessionRoute) -> Option<Self> {
+        match route {
+            CdpSessionRoute::Browser | CdpSessionRoute::TabTarget { .. } => Some(Self::Connection),
+            CdpSessionRoute::PageTarget { .. } => Some(Self::Page),
+            CdpSessionRoute::SharedWorkerTarget { .. }
+            | CdpSessionRoute::DedicatedWorkerTarget { .. }
+            | CdpSessionRoute::ServiceWorkerTarget { .. } => Some(Self::Worker),
+            CdpSessionRoute::BrowserContext { .. } => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PreparedAttachSession {
     session_id: String,
     owner_session_id: Option<String>,
     target_id: String,
     route: CdpSessionRoute,
+    handler_set: DevToolsSessionHandlerSet,
     auto_attached: bool,
     waiting_for_debugger: bool,
 }
@@ -21,11 +45,14 @@ impl PreparedAttachSession {
         auto_attached: bool,
         waiting_for_debugger: bool,
     ) -> Self {
+        let handler_set = DevToolsSessionHandlerSet::for_route(&route)
+            .expect("attached DevTools session must have a disposable route");
         Self {
             session_id,
             owner_session_id: owner_session_id.map(str::to_owned),
             target_id: target_id.to_owned(),
             route,
+            handler_set,
             auto_attached,
             waiting_for_debugger,
         }
@@ -38,6 +65,7 @@ pub(crate) struct CommittedAttachSession {
     owner_session_id: Option<String>,
     target_id: String,
     route: CdpSessionRoute,
+    handler_set: DevToolsSessionHandlerSet,
     auto_attached: bool,
     waiting_for_debugger: bool,
 }
@@ -154,11 +182,12 @@ struct AttachedTargetSession {
     owner_session_id: Option<String>,
     target_id: String,
     route: CdpSessionRoute,
+    handler_set: DevToolsSessionHandlerSet,
     auto_attached: bool,
     waiting_for_debugger: bool,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct TargetSessionRegistry {
     attached_sessions: HashMap<String, AttachedTargetSession>,
     attached_sessions_by_target: HashMap<String, HashSet<String>>,
@@ -177,6 +206,7 @@ impl TargetSessionRegistry {
         let owner_session_id = prepared.owner_session_id;
         let target_id = prepared.target_id;
         let route = prepared.route;
+        let handler_set = prepared.handler_set;
         let auto_attached = prepared.auto_attached;
         let waiting_for_debugger = prepared.waiting_for_debugger;
 
@@ -187,6 +217,7 @@ impl TargetSessionRegistry {
                 owner_session_id: owner_session_id.clone(),
                 target_id: target_id.clone(),
                 route: route.clone(),
+                handler_set,
                 auto_attached,
                 waiting_for_debugger,
             },
@@ -213,6 +244,7 @@ impl TargetSessionRegistry {
             owner_session_id,
             target_id,
             route,
+            handler_set,
             auto_attached,
             waiting_for_debugger,
         }
@@ -341,6 +373,15 @@ impl TargetSessionRegistry {
         self.attached_sessions
             .get(session_id)
             .map(|session| &session.route)
+    }
+
+    pub(crate) fn attached_session_handler_set(
+        &self,
+        session_id: &str,
+    ) -> Option<DevToolsSessionHandlerSet> {
+        self.attached_sessions
+            .get(session_id)
+            .map(|session| session.handler_set)
     }
 
     pub(crate) fn browser_session_count(&self) -> usize {
@@ -562,8 +603,8 @@ fn test_route_for_target(session_id: &str, target_id: &str) -> CdpSessionRoute {
 #[cfg(test)]
 mod tests {
     use super::{
-        PreparedAttachSession, PreparedAutoAttachSession, TargetSessionRegistry,
-        test_route_for_target,
+        DevToolsSessionHandlerSet, PreparedAttachSession, PreparedAutoAttachSession,
+        TargetSessionRegistry, test_route_for_target,
     };
     use crate::conn::CdpSessionRoute;
 
@@ -731,11 +772,13 @@ mod tests {
             false,
             false,
         ));
+        let expected_handlers = DevToolsSessionHandlerSet::Connection;
 
         assert_eq!(committed.session_id, "SID-tab");
         assert_eq!(committed.owner_session_id.as_deref(), Some("SID-browser"));
         assert_eq!(committed.target_id, "TAB-TID-page");
         assert_eq!(committed.route, route);
+        assert_eq!(committed.handler_set, expected_handlers);
         assert!(!committed.auto_attached);
         assert!(!committed.waiting_for_debugger);
         assert_eq!(
@@ -743,6 +786,10 @@ mod tests {
             vec!["SID-tab".to_owned()]
         );
         assert_eq!(registry.attached_session_route("SID-tab"), Some(&route));
+        assert_eq!(
+            registry.attached_session_handler_set("SID-tab"),
+            Some(expected_handlers)
+        );
         assert!(
             registry
                 .auto_attached_sessions_for_owner(Some("SID-browser"))

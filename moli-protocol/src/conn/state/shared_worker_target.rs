@@ -700,8 +700,25 @@ impl SharedWorkerTargetState {
         cdp_request_id: u64,
     ) -> Option<PendingInspectorAwait> {
         self.session_state_mut(owner_session_id)?
-            .pending_inspector_awaits
-            .remove(cdp_request_id)
+            .remove_pending_inspector_await(cdp_request_id)
+    }
+
+    pub(crate) fn claim_pending_inspector_await(
+        &mut self,
+        owner_session_id: &str,
+        cdp_request_id: u64,
+    ) -> bool {
+        self.session_state_mut(owner_session_id)
+            .is_some_and(|state| state.claim_pending_inspector_await(cdp_request_id))
+    }
+
+    pub(crate) fn take_claimed_pending_inspector_await(
+        &mut self,
+        owner_session_id: &str,
+        cdp_request_id: u64,
+    ) -> Option<PendingInspectorAwait> {
+        self.session_state_mut(owner_session_id)?
+            .take_claimed_pending_inspector_await(cdp_request_id)
     }
 
     pub(crate) fn has_pending_inspector_awaits(&self) -> bool {
@@ -713,6 +730,24 @@ impl SharedWorkerTargetState {
     pub(crate) fn has_pending_inspector_awaits_for_session(&self, session_id: &str) -> bool {
         self.session_state(session_id)
             .is_some_and(|state| !state.pending_inspector_awaits.is_empty())
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_claimed_pending_inspector_awaits_for_session(
+        &self,
+        session_id: &str,
+    ) -> bool {
+        self.session_state(session_id)
+            .is_some_and(DevToolsSessionState::has_claimed_pending_inspector_awaits)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_unclaimed_pending_inspector_awaits_for_session(
+        &self,
+        session_id: &str,
+    ) -> bool {
+        self.session_state(session_id)
+            .is_some_and(DevToolsSessionState::has_unclaimed_pending_inspector_awaits)
     }
 
     pub(crate) fn pending_inspector_await_count_all_sessions(&self) -> usize {

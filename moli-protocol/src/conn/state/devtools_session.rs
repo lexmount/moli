@@ -30,7 +30,7 @@ use moli_page_types::{
 ///
 /// Browser-side policy and renderer-inspector state live together here so
 /// attachment, replay, and disposal all address the same session object.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Debug, Default, PartialEq)]
 pub(crate) struct DevToolsSessionState {
     pub(crate) dom_session_state: DevToolsDomSessionState,
     pub(crate) dom_debugger_event_listener_breakpoints:
@@ -59,7 +59,7 @@ pub(crate) struct DevToolsSessionState {
 /// target sessions use `Attached(session_id)`. Keeping both in one ordered map
 /// gives attachment, disposal, replay, and effective-domain aggregation one
 /// source of truth.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub(crate) struct DevToolsSessionRegistry {
     primary_session_id: Option<String>,
     states: BTreeMap<DevToolsSessionKey, DevToolsSessionState>,
@@ -958,6 +958,30 @@ impl DevToolsSessionState {
         cdp_request_id: u64,
     ) -> Option<PendingInspectorAwait> {
         self.pending_inspector_awaits.remove(cdp_request_id)
+    }
+
+    pub(crate) fn claim_pending_inspector_await(&mut self, cdp_request_id: u64) -> bool {
+        self.pending_inspector_awaits
+            .claim_scheduler_deferred_reply(cdp_request_id)
+    }
+
+    pub(crate) fn take_claimed_pending_inspector_await(
+        &mut self,
+        cdp_request_id: u64,
+    ) -> Option<PendingInspectorAwait> {
+        self.pending_inspector_awaits
+            .take_claimed_scheduler_deferred_reply(cdp_request_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_claimed_pending_inspector_awaits(&self) -> bool {
+        self.pending_inspector_awaits
+            .has_claimed_scheduler_deferred_reply()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_unclaimed_pending_inspector_awaits(&self) -> bool {
+        self.pending_inspector_awaits.has_unclaimed_await()
     }
 
     pub(crate) fn has_pending_inspector_awaits(&self) -> bool {

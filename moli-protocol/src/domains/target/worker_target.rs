@@ -2052,6 +2052,7 @@ fn remove_shared_worker_target_with_reason(
         );
         CdpConnection::fail_pending_inspector_awaits_from_shared_worker_target_session_background_events_into(
             &mut pending_await_direct_events,
+            &mut pending_await_claimed_events,
             &mut target,
             session_id,
             reason,
@@ -2220,11 +2221,14 @@ fn remove_service_worker_target_with_reason(
         );
     }
     let mut target_pending_await_events = Vec::new();
+    let mut target_claimed_await_events = Vec::new();
     CdpConnection::fail_pending_inspector_awaits_from_service_worker_target_state_background_events_into(
         &mut target_pending_await_events,
+        &mut target_claimed_await_events,
         &mut target,
         reason,
     );
+    target_pending_await_events.extend(target_claimed_await_events);
     push_service_worker_version_events(&mut outputs, version.clone(), target_pending_await_events);
     if let Some(retirement) = run_retirement {
         outputs.push(WorkerTargetLifecycleOutput::ServiceWorkerRunRetired { retirement });

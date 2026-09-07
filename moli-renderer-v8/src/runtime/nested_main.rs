@@ -56,6 +56,18 @@ pub(super) fn bind_active_nested_main_page(entry: &mut LivePageEntry) -> ActiveN
     }
 }
 
+pub(crate) fn active_nested_main_page_id() -> Option<super::PageId> {
+    ACTIVE_NESTED_MAIN_PAGE
+        .try_with(|active| {
+            active
+                .borrow()
+                .as_ref()
+                .map(|active| active.entry_slot.page_id())
+        })
+        .ok()
+        .flatten()
+}
+
 pub(crate) fn dispatch_nested_main_page_command(
     command: RendererPageCommand,
     first_dispatch: RendererInspectorMainFirstDispatchGuard,

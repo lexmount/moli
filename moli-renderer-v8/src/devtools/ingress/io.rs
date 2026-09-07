@@ -108,10 +108,24 @@ impl RendererInspectorIoCommand {
         self.envelope.into_payload()
     }
 
+    fn can_be_claimed_by_interrupt(&self, active_page: Option<crate::runtime::PageId>) -> bool {
+        interrupt_can_claim_command(
+            self.envelope.required_active_page_for_interrupt(),
+            active_page,
+        )
+    }
+
     #[cfg(test)]
     pub(crate) fn claimed_by(&self) -> Option<RendererInspectorIoCommandConsumer> {
         self.claimed_by
     }
+}
+
+fn interrupt_can_claim_command(
+    required_active_page: Option<crate::runtime::PageId>,
+    active_page: Option<crate::runtime::PageId>,
+) -> bool {
+    required_active_page.is_none_or(|required_page| Some(required_page) == active_page)
 }
 
 pub struct RendererRuntimeInspectorIoCommandRoute {
@@ -251,17 +265,33 @@ struct RendererInspectorIoState {
 }
 
 impl RendererInspectorIoState {
+    fn command_is_ready(&self, command: &RendererInspectorIoCommand) -> bool {
+        command.kind() == RendererDevToolsIoCommandKind::SessionLifecycle
+            || !self
+                .session_detaches
+                .contains_key(&RendererDevToolsSessionLaneKey::new(
+                    command.agent_token,
+                    command.ticket().session().clone(),
+                ))
+    }
+
+    fn next_ready_position(&self) -> Option<usize> {
+        self.commands
+            .iter()
+            .position(|command| self.command_is_ready(command))
+    }
+
     fn has_ready(&self) -> bool {
-        !self.closed
-            && self.active_command_id.is_none()
-            && self.commands.iter().any(|command| {
-                command.kind() == RendererDevToolsIoCommandKind::SessionLifecycle
-                    || !self
-                        .session_detaches
-                        .contains_key(&RendererDevToolsSessionLaneKey::new(
-                            command.agent_token,
-                            command.ticket().session().clone(),
-                        ))
+        !self.closed && self.active_command_id.is_none() && self.next_ready_position().is_some()
+    }
+
+    fn has_ready_for_interrupt(&self, active_page: Option<crate::runtime::PageId>) -> bool {
+        // Inspect only the first generally ready command. A lifecycle command
+        // that must wait for owner residence remains a target-FIFO barrier;
+        // the interrupt must not overtake it with a later command.
+        self.has_ready()
+            && self.next_ready_position().is_some_and(|position| {
+                self.commands[position].can_be_claimed_by_interrupt(active_page)
             })
     }
 
@@ -474,18 +504,25 @@ impl RendererInspectorIoIngress {
 
     pub(crate) fn claim_for_owner(&self) -> Option<RendererInspectorIoCommand> {
         self.shared.owner_wake_armed.store(false, Ordering::Release);
-        let command = self.claim_next(RendererInspectorIoCommandConsumer::Owner);
+        let command = self.claim_next(RendererInspectorIoCommandConsumer::Owner, None);
         if command.is_none() && self.shared.state.lock().has_ready() {
             self.notify_execution_opportunities();
         }
         command
     }
 
-    pub(crate) fn claim_for_interrupt(&self) -> Option<RendererInspectorIoCommand> {
-        let command = self.claim_next(RendererInspectorIoCommandConsumer::Interrupt);
+    pub(crate) fn claim_for_interrupt_on_active_page(
+        &self,
+        active_page: Option<crate::runtime::PageId>,
+    ) -> Option<RendererInspectorIoCommand> {
+        let command = self.claim_next(RendererInspectorIoCommandConsumer::Interrupt, active_page);
         if command.is_none() {
             self.shared.interrupt_armed.store(false, Ordering::Release);
-            let has_ready = self.shared.state.lock().has_ready();
+            let has_ready = self
+                .shared
+                .state
+                .lock()
+                .has_ready_for_interrupt(active_page);
             if has_ready {
                 self.request_interrupt();
             }
@@ -493,8 +530,13 @@ impl RendererInspectorIoIngress {
         command
     }
 
+    #[cfg(test)]
+    pub(crate) fn claim_for_interrupt(&self) -> Option<RendererInspectorIoCommand> {
+        self.claim_for_interrupt_on_active_page(None)
+    }
+
     pub(crate) fn claim_for_pause(&self) -> Option<RendererInspectorIoCommand> {
-        self.claim_next(RendererInspectorIoCommandConsumer::Pause)
+        self.claim_next(RendererInspectorIoCommandConsumer::Pause, None)
     }
 
     #[cfg(test)]
@@ -508,24 +550,20 @@ impl RendererInspectorIoIngress {
     fn claim_next(
         &self,
         consumer: RendererInspectorIoCommandConsumer,
+        active_page: Option<crate::runtime::PageId>,
     ) -> Option<RendererInspectorIoCommand> {
         let mut state = self.shared.state.lock();
         if !state.has_ready() {
             return None;
         }
         let position = state
-            .commands
-            .iter()
-            .position(|command| {
-                command.kind() == RendererDevToolsIoCommandKind::SessionLifecycle
-                    || !state
-                        .session_detaches
-                        .contains_key(&RendererDevToolsSessionLaneKey::new(
-                            command.agent_token,
-                            command.ticket().session().clone(),
-                        ))
-            })
+            .next_ready_position()
             .expect("a ready Inspector task runner must have an eligible command");
+        if consumer == RendererInspectorIoCommandConsumer::Interrupt
+            && !state.commands[position].can_be_claimed_by_interrupt(active_page)
+        {
+            return None;
+        }
         let mut command = state
             .commands
             .remove(position)
@@ -815,6 +853,18 @@ mod tests {
             owner.and_then(|command| command.claimed_by()),
             Some(RendererInspectorIoCommandConsumer::Owner)
         );
+    }
+
+    #[test]
+    fn session_lifecycle_interrupt_requires_the_exact_active_page() {
+        let first = crate::runtime::PageId::new_for_testing(1);
+        let second = crate::runtime::PageId::new_for_testing(2);
+
+        assert!(interrupt_can_claim_command(None, None));
+        assert!(interrupt_can_claim_command(None, Some(first)));
+        assert!(interrupt_can_claim_command(Some(first), Some(first)));
+        assert!(!interrupt_can_claim_command(Some(first), None));
+        assert!(!interrupt_can_claim_command(Some(first), Some(second)));
     }
 
     #[test]

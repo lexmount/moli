@@ -4,7 +4,7 @@ use crate::conn::state::web_contents::{
     DocumentNavigationDestination, PreparedDocumentNavigation, RetiringDocument,
 };
 use crate::conn::state::{DevToolsRendererChannelError, DocumentId, DocumentProjectionFence};
-use crate::conn::{BrowserContext, PageTargetHost, TargetRuntimeSlot};
+use crate::conn::{BrowserContext, PageAgentHost, TargetRuntimeSlot};
 use moli_core::page::{Page, RendererPageCommandPostResponseContinuation};
 
 pub(crate) struct LoadedNavigationPageCommit {
@@ -439,7 +439,7 @@ impl BrowserContext {
     }
 }
 
-impl PageTargetHost {
+impl PageAgentHost {
     pub(crate) fn target_url(&self) -> &str {
         self.target_identity.url()
     }

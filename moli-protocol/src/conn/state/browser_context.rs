@@ -33,8 +33,8 @@ use super::{
         EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedNetworkConditions,
     },
     javascript_dialog::TargetPreparedJavaScriptDialog,
+    page_agent_host::{PageAgentHost, PageAgentHostRegistry},
     page_slot::DocumentStartScript,
-    page_target_host::{PageTargetHost, PageTargetRegistry},
     service_worker_target::ServiceWorkerTargetState,
     shared_worker_target::SharedWorkerTargetState,
     web_contents::WebContents,
@@ -68,7 +68,7 @@ pub(crate) use storage_partition::{OriginStorageUsage, SiteDataClearOptions};
 /// This migration wrapper is removed at Commits 24b/30.
 pub struct BrowserContext {
     pub id: String,
-    pub(crate) page_targets: PageTargetRegistry,
+    pub(crate) page_targets: PageAgentHostRegistry,
     /// Test-only cookie overrides, inherited by the first page fixture.
     #[cfg(test)]
     pub(crate) default_document_cookie_manager_surface: BrowserContextCookieManagerSurface,
@@ -286,13 +286,13 @@ impl BrowserContext {
         self.physical.id
     }
 
-    pub(crate) fn active_page_target(&self) -> &PageTargetHost {
+    pub(crate) fn active_page_target(&self) -> &PageAgentHost {
         self.page_targets
             .active(self.physical.selected_web_contents_id())
             .expect("BrowserContext has no active page target")
     }
 
-    pub(crate) fn active_page_target_mut(&mut self) -> &mut PageTargetHost {
+    pub(crate) fn active_page_target_mut(&mut self) -> &mut PageAgentHost {
         self.page_targets
             .active_mut(self.physical.selected_web_contents_id())
             .expect("BrowserContext has no active page target")
@@ -425,7 +425,7 @@ impl BrowserContext {
 
         Self {
             id,
-            page_targets: PageTargetRegistry::default(),
+            page_targets: PageAgentHostRegistry::default(),
             #[cfg(test)]
             default_document_cookie_manager_surface: BrowserContextCookieManagerSurface::default(),
             target_popup_ids: HashMap::new(),
@@ -820,7 +820,7 @@ impl BrowserContext {
         })
     }
 
-    fn target_owner_diagnostics(&self, target: &PageTargetHost) -> Value {
+    fn target_owner_diagnostics(&self, target: &PageAgentHost) -> Value {
         let navigation = self
             .web_contents_for_target(target.target_id())
             .expect("live WebContents")
@@ -829,7 +829,7 @@ impl BrowserContext {
             let creator = document.creator().map(|creator| json!({
                 "targetId": self.page_targets.iter()
                     .find(|target| target.web_contents_id() == creator.web_contents_id())
-                    .map(PageTargetHost::target_id),
+                    .map(PageAgentHost::target_id),
                 "securityOrigin": creator.security_origin(),
                 "secureContextType": creator.secure_context_type(),
             }));
@@ -1314,7 +1314,7 @@ impl BrowserContext {
     pub(crate) fn active_target_id(&self) -> Option<&str> {
         self.page_targets
             .get_for_web_contents(self.physical.selected_web_contents_id()?)
-            .map(PageTargetHost::target_id)
+            .map(PageAgentHost::target_id)
     }
 
     pub(crate) fn active_target_id_owned(&self) -> Option<String> {
@@ -1336,7 +1336,7 @@ impl BrowserContext {
     pub(crate) fn reported_active_user_agent_override(&self) -> Option<&str> {
         self.page_targets
             .active(self.physical.selected_web_contents_id())
-            .and_then(PageTargetHost::reported_user_agent_override)
+            .and_then(PageAgentHost::reported_user_agent_override)
             .or_else(|| {
                 self.default_browser_identity_override()
                     .map(moli_browser_profile::BrowserIdentityProfile::user_agent)

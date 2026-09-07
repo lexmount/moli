@@ -1,4 +1,4 @@
-use std::{collections::hash_map::Entry, future::Future, pin::Pin};
+use std::{future::Future, pin::Pin};
 
 use moli_page_types::{FrontendCommandId, RendererCallId, RendererInspectorResponseDelivery};
 use moli_protocol_cdp::CdpRendererCommandReplayDispatch;
@@ -242,41 +242,6 @@ pub(crate) struct OwnerRuntimeResponse {
 pub(crate) struct ClaimedPendingInspectorAwait {
     command_id: u64,
     owner: CommandOwnerScope,
-    entry: PendingInspectorAwait,
-}
-
-#[derive(Debug)]
-pub(crate) struct ClaimedPendingInspectorAwaitOwner {
-    command_id: u64,
-    owner: CommandOwnerScope,
-    bidi_channel_object_group: Option<String>,
-    renderer_correlation: Option<RendererCommandCorrelation>,
-}
-
-impl ClaimedPendingInspectorAwaitOwner {
-    fn from_claimed(claimed: &ClaimedPendingInspectorAwait) -> Self {
-        Self {
-            command_id: claimed.command_id,
-            owner: claimed.owner.clone(),
-            bidi_channel_object_group: claimed
-                .entry
-                .bidi_channel_listener()
-                .map(|listener| listener.channel_object_group().to_owned()),
-            renderer_correlation: claimed.entry.renderer_correlation(),
-        }
-    }
-
-    fn session_id(&self) -> Option<&str> {
-        self.owner.session_id()
-    }
-
-    fn matches_session_owner(&self, session_id: Option<&str>) -> bool {
-        self.session_id() == session_id
-    }
-
-    fn matches_owner(&self, owner: &CommandOwnerScope) -> bool {
-        &self.owner == owner
-    }
 }
 
 impl OwnerRuntimeResponse {
@@ -800,6 +765,33 @@ fn push_pending_inspector_await_error_background_event(
         reason.to_owned(),
         None,
     ));
+}
+
+fn push_drained_pending_inspector_await_error(
+    direct_events: &mut Vec<BackgroundProtocolEvent>,
+    claimed_events: &mut Vec<BackgroundProtocolEvent>,
+    cdp_id: u64,
+    owner: &CommandOwnerScope,
+    entry: &PendingInspectorAwait,
+    reason: &'static str,
+) {
+    if entry.scheduler_deferred_reply_claimed() {
+        let mut response =
+            RuntimeInspectorResponseReady::for_owner(cdp_id, owner, Err(reason.to_owned()));
+        if let Some(correlation) = entry.renderer_correlation() {
+            response.bind_renderer_call_id(correlation.renderer_call_id());
+        }
+        claimed_events.push(BackgroundProtocolEvent::runtime_inspector_response_ready(
+            response,
+        ));
+        return;
+    }
+    push_pending_inspector_await_error_background_event(
+        direct_events,
+        cdp_id,
+        entry.session_id(),
+        reason,
+    );
 }
 
 fn push_terminated_renderer_call_error_background_events(
@@ -1396,35 +1388,22 @@ impl CdpConnection {
         )
     }
 
-    pub(crate) fn register_runtime_await_job_for_owner(
+    pub(crate) fn trace_runtime_await_started(
         &mut self,
         cdp_request_id: u64,
         owner: &CommandOwnerScope,
         object_group: Option<&str>,
         action: &'static str,
     ) {
-        let session_id = owner.session_id();
-        let job = RuntimeAwaitJob::new(cdp_request_id, owner, object_group, action);
-        let trace_fields = job.trace_fields();
-        let key = PendingRendererCommandKey::new(session_id, cdp_request_id);
-        match self.pending_runtime_await_jobs.entry(key) {
-            Entry::Vacant(entry) => {
-                entry.insert(job);
-            }
-            Entry::Occupied(_) => {
-                tracing::error!(
-                    cdp_request_id,
-                    session_id,
-                    "runtime await trace job already exists for frontend command"
-                );
-                return;
-            }
-        }
         self.record_runtime_await_trace(
-            "runtime_await_job_start",
+            "runtime_await_started",
             Some(cdp_request_id),
-            session_id,
-            trace_fields,
+            owner.session_id(),
+            json!({
+                "ownerRoute": owner.explicit_route().map(|route| format!("{route:?}")),
+                "objectGroup": object_group,
+                "action": action,
+            }),
         );
     }
 
@@ -1437,7 +1416,7 @@ impl CdpConnection {
             "runtime_await_pending_registered",
             Some(cdp_request_id),
             session_id,
-            self.runtime_await_job_trace_fields(cdp_request_id, session_id),
+            json!({}),
         );
     }
 
@@ -1455,64 +1434,35 @@ impl CdpConnection {
             json!({
                 "messages": messages,
                 "matchingResponseSeen": saw_current_response,
-                "job": cdp_request_id
-                    .map(|id| self.runtime_await_job_trace_fields(id, session_id)),
             }),
         );
     }
 
-    pub(crate) fn complete_runtime_await_job(
+    pub(crate) fn trace_runtime_await_completed(
         &mut self,
         cdp_request_id: u64,
         session_id: Option<&str>,
     ) {
-        let key = PendingRendererCommandKey::new(session_id, cdp_request_id);
-        let Some(job) = self.pending_runtime_await_jobs.remove(&key) else {
-            return;
-        };
-        let session_id = job.session_id();
-        let fields = job.trace_fields();
         self.record_runtime_await_trace(
             "runtime_await_completed",
             Some(cdp_request_id),
-            session_id.as_deref(),
-            fields,
+            session_id,
+            json!({}),
         );
     }
 
-    pub(crate) fn cancel_runtime_await_job(
+    pub(crate) fn trace_runtime_await_cancelled(
         &mut self,
         cdp_request_id: u64,
         session_id: Option<&str>,
         reason: &'static str,
     ) {
-        let key = PendingRendererCommandKey::new(session_id, cdp_request_id);
-        let Some(job) = self.pending_runtime_await_jobs.remove(&key) else {
-            return;
-        };
-        let session_id = job.session_id();
-        let mut fields = job.trace_fields();
-        if let Some(object) = fields.as_object_mut() {
-            object.insert("reason".to_owned(), json!(reason));
-        }
         self.record_runtime_await_trace(
             "runtime_await_cancelled",
             Some(cdp_request_id),
-            session_id.as_deref(),
-            fields,
+            session_id,
+            json!({ "reason": reason }),
         );
-    }
-
-    fn runtime_await_job_trace_fields(
-        &self,
-        cdp_request_id: u64,
-        session_id: Option<&str>,
-    ) -> Value {
-        let key = PendingRendererCommandKey::new(session_id, cdp_request_id);
-        self.pending_runtime_await_jobs
-            .get(&key)
-            .map(RuntimeAwaitJob::trace_fields)
-            .unwrap_or_else(|| json!({}))
     }
 
     pub(crate) fn runtime_await_owner_route_for_session(
@@ -1627,8 +1577,12 @@ impl CdpConnection {
         cdp_request_id: u64,
         session_id: Option<&str>,
     ) {
-        self.cancel_runtime_await_job(cdp_request_id, session_id, "forgotten");
-        let _ = self.remove_pending_inspector_await_for_cancellation(cdp_request_id, session_id);
+        if self
+            .remove_pending_inspector_await_for_cancellation(cdp_request_id, session_id)
+            .is_some()
+        {
+            self.trace_runtime_await_cancelled(cdp_request_id, session_id, "forgotten");
+        }
     }
 
     pub(crate) fn forget_pending_inspector_await_for_owner(
@@ -1636,9 +1590,12 @@ impl CdpConnection {
         cdp_request_id: u64,
         owner: &CommandOwnerScope,
     ) {
-        self.cancel_runtime_await_job(cdp_request_id, owner.session_id(), "forgotten");
-        let _ =
-            self.remove_pending_inspector_await_for_cancellation_for_owner(cdp_request_id, owner);
+        if self
+            .remove_pending_inspector_await_for_cancellation_for_owner(cdp_request_id, owner)
+            .is_some()
+        {
+            self.trace_runtime_await_cancelled(cdp_request_id, owner.session_id(), "forgotten");
+        }
     }
 
     pub(crate) fn claim_pending_inspector_await_for_scheduler_deferred_reply(
@@ -1646,100 +1603,11 @@ impl CdpConnection {
         cdp_request_id: u64,
         owner: &CommandOwnerScope,
     ) -> Option<ClaimedPendingInspectorAwait> {
-        let claimed = self
-            .remove_pending_inspector_await_for_owner(cdp_request_id, owner)
-            .map(|entry| ClaimedPendingInspectorAwait {
+        self.claim_pending_inspector_await_for_owner(cdp_request_id, owner)
+            .then(|| ClaimedPendingInspectorAwait {
                 command_id: cdp_request_id,
                 owner: owner.clone(),
-                entry,
-            })?;
-        let key = PendingRendererCommandKey::new(owner.session_id(), cdp_request_id);
-        match self.claimed_pending_inspector_await_owners.entry(key) {
-            Entry::Vacant(entry) => {
-                entry.insert(ClaimedPendingInspectorAwaitOwner::from_claimed(&claimed));
-            }
-            Entry::Occupied(_) => {
-                panic!("claimed pending Inspector await owner must be unique per session");
-            }
-        }
-        Some(claimed)
-    }
-
-    fn remove_claimed_pending_inspector_await_owner(
-        &mut self,
-        cdp_request_id: u64,
-        session_id: Option<&str>,
-    ) -> Option<ClaimedPendingInspectorAwaitOwner> {
-        let key = PendingRendererCommandKey::new(session_id, cdp_request_id);
-        self.claimed_pending_inspector_await_owners.remove(&key)
-    }
-
-    fn drain_claimed_pending_inspector_await_owners_for_session(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Vec<ClaimedPendingInspectorAwaitOwner> {
-        let to_remove = self
-            .claimed_pending_inspector_await_owners
-            .iter()
-            .filter_map(|(key, owner)| {
-                owner
-                    .matches_session_owner(session_id)
-                    .then_some(key.clone())
             })
-            .collect::<Vec<_>>();
-        to_remove
-            .into_iter()
-            .filter_map(|key| self.claimed_pending_inspector_await_owners.remove(&key))
-            .collect()
-    }
-
-    fn drain_claimed_pending_inspector_await_owners_for_owner(
-        &mut self,
-        owner: &CommandOwnerScope,
-    ) -> Vec<ClaimedPendingInspectorAwaitOwner> {
-        let to_remove = self
-            .claimed_pending_inspector_await_owners
-            .iter()
-            .filter_map(|(key, claimed)| claimed.matches_owner(owner).then_some(key.clone()))
-            .collect::<Vec<_>>();
-        to_remove
-            .into_iter()
-            .filter_map(|key| self.claimed_pending_inspector_await_owners.remove(&key))
-            .collect()
-    }
-
-    fn push_claimed_pending_inspector_await_owner_errors(
-        &mut self,
-        background_events: &mut Vec<BackgroundProtocolEvent>,
-        owners: Vec<ClaimedPendingInspectorAwaitOwner>,
-        reason: &'static str,
-    ) {
-        for owner in owners {
-            self.cancel_runtime_await_job(owner.command_id, owner.session_id(), reason);
-            if let Some(correlation) = owner.renderer_correlation {
-                let _ = self.take_renderer_call_for_frontend_if_matches_for_owner(
-                    &owner.owner,
-                    correlation.frontend_command_id().get(),
-                    correlation.renderer_call_id(),
-                    correlation.dispatched_attachment_id(),
-                );
-            }
-            if let Some(object_group) = owner.bidi_channel_object_group.as_deref() {
-                self.unregister_runtime_remote_object_group_for_owner(&owner.owner, object_group);
-                continue;
-            }
-            let mut response = RuntimeInspectorResponseReady::for_owner(
-                owner.command_id,
-                &owner.owner,
-                Err(reason.to_owned()),
-            );
-            if let Some(correlation) = owner.renderer_correlation {
-                response.bind_renderer_call_id(correlation.renderer_call_id());
-            }
-            background_events.push(BackgroundProtocolEvent::runtime_inspector_response_ready(
-                response,
-            ));
-        }
     }
 
     #[cfg(test)]
@@ -1747,9 +1615,18 @@ impl CdpConnection {
         &self,
         session_id: Option<&str>,
     ) -> bool {
-        self.claimed_pending_inspector_await_owners
-            .values()
-            .any(|owner| owner.matches_session_owner(session_id))
+        if let Some(owner_session_id) = session_id
+            && let Some(target) = self.shared_worker_target_for_session(session_id)
+        {
+            return target.has_claimed_pending_inspector_awaits_for_session(owner_session_id);
+        }
+        if let Some(owner_session_id) = session_id
+            && let Some(target) = self.service_worker_target_for_session(session_id)
+        {
+            return target.has_claimed_pending_inspector_awaits_for_session(owner_session_id);
+        }
+        self.target_devtools_session_state_for_session(session_id)
+            .is_some_and(DevToolsSessionState::has_claimed_pending_inspector_awaits)
     }
 
     #[cfg(test)]
@@ -1760,15 +1637,15 @@ impl CdpConnection {
         if let Some(owner_session_id) = session_id
             && let Some(target) = self.shared_worker_target_for_session(session_id)
         {
-            return target.has_pending_inspector_awaits_for_session(owner_session_id);
+            return target.has_unclaimed_pending_inspector_awaits_for_session(owner_session_id);
         }
         if let Some(owner_session_id) = session_id
             && let Some(target) = self.service_worker_target_for_session(session_id)
         {
-            return target.has_pending_inspector_awaits_for_session(owner_session_id);
+            return target.has_unclaimed_pending_inspector_awaits_for_session(owner_session_id);
         }
         self.target_devtools_session_state_for_session(session_id)
-            .is_some_and(DevToolsSessionState::has_pending_inspector_awaits)
+            .is_some_and(DevToolsSessionState::has_unclaimed_pending_inspector_awaits)
     }
 
     pub(crate) fn complete_claimed_pending_inspector_await_for_scheduler_deferred_reply(
@@ -1779,14 +1656,12 @@ impl CdpConnection {
         let Some(claimed) = claimed else {
             return;
         };
-        let ClaimedPendingInspectorAwait {
-            command_id,
-            owner,
-            entry,
-        } = claimed;
-        let session_id = owner.session_id().map(str::to_owned);
-        self.remove_claimed_pending_inspector_await_owner(command_id, session_id.as_deref());
-        self.complete_runtime_await_job(command_id, session_id.as_deref());
+        let ClaimedPendingInspectorAwait { command_id, owner } = claimed;
+        let Some(entry) = self.take_claimed_pending_inspector_await_for_owner(command_id, &owner)
+        else {
+            return;
+        };
+        self.trace_runtime_await_completed(command_id, owner.session_id());
         self.apply_completed_pending_inspector_await_entry(&owner, entry, protocol_events);
     }
 
@@ -1798,14 +1673,12 @@ impl CdpConnection {
         let Some(claimed) = claimed else {
             return;
         };
-        let ClaimedPendingInspectorAwait {
-            command_id,
-            owner,
-            entry,
-        } = claimed;
-        let session_id = owner.session_id().map(str::to_owned);
-        self.remove_claimed_pending_inspector_await_owner(command_id, session_id.as_deref());
-        self.cancel_runtime_await_job(command_id, session_id.as_deref(), reason);
+        let ClaimedPendingInspectorAwait { command_id, owner } = claimed;
+        let Some(entry) = self.take_claimed_pending_inspector_await_for_owner(command_id, &owner)
+        else {
+            return;
+        };
+        self.trace_runtime_await_cancelled(command_id, owner.session_id(), reason);
         if let Some(correlation) = entry.renderer_correlation() {
             let _ = self.take_renderer_call_for_frontend_if_matches_for_owner(
                 &owner,
@@ -1900,6 +1773,46 @@ impl CdpConnection {
         .flatten()
     }
 
+    fn claim_pending_inspector_await_for_owner(
+        &mut self,
+        cdp_request_id: u64,
+        owner: &CommandOwnerScope,
+    ) -> bool {
+        if let Some(owner_session_id) = owner.session_id() {
+            if let Some(target) = self.shared_worker_target_for_session_mut(owner.session_id()) {
+                return target.claim_pending_inspector_await(owner_session_id, cdp_request_id);
+            }
+            if let Some(target) = self.service_worker_target_for_session_mut(owner.session_id()) {
+                return target.claim_pending_inspector_await(owner_session_id, cdp_request_id);
+            }
+        }
+        self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+            state.claim_pending_inspector_await(cdp_request_id)
+        })
+        .unwrap_or(false)
+    }
+
+    fn take_claimed_pending_inspector_await_for_owner(
+        &mut self,
+        cdp_request_id: u64,
+        owner: &CommandOwnerScope,
+    ) -> Option<PendingInspectorAwait> {
+        if let Some(owner_session_id) = owner.session_id() {
+            if let Some(target) = self.shared_worker_target_for_session_mut(owner.session_id()) {
+                return target
+                    .take_claimed_pending_inspector_await(owner_session_id, cdp_request_id);
+            }
+            if let Some(target) = self.service_worker_target_for_session_mut(owner.session_id()) {
+                return target
+                    .take_claimed_pending_inspector_await(owner_session_id, cdp_request_id);
+            }
+        }
+        self.with_target_devtools_session_state_for_owner_mut(owner, |state| {
+            state.take_claimed_pending_inspector_await(cdp_request_id)
+        })
+        .flatten()
+    }
+
     fn remove_pending_inspector_await_for_cancellation(
         &mut self,
         cdp_request_id: u64,
@@ -1954,9 +1867,6 @@ impl CdpConnection {
     }
 
     pub fn has_pending_inspector_awaits(&self) -> bool {
-        if !self.claimed_pending_inspector_await_owners.is_empty() {
-            return true;
-        }
         self.browser_contexts().any(|browser_context| {
             browser_context
                 .page_targets
@@ -1978,13 +1888,6 @@ impl CdpConnection {
     }
 
     pub fn has_pending_inspector_awaits_for_session_owner(&self, session_id: Option<&str>) -> bool {
-        if self
-            .claimed_pending_inspector_await_owners
-            .values()
-            .any(|owner| owner.matches_session_owner(session_id))
-        {
-            return true;
-        }
         if let Some(owner_session_id) = session_id
             && let Some(target) = self.shared_worker_target_for_session(session_id)
         {
@@ -2001,6 +1904,7 @@ impl CdpConnection {
 
     pub(crate) fn fail_pending_inspector_awaits_from_shared_worker_target_session_background_events_into(
         out: &mut Vec<BackgroundProtocolEvent>,
+        claimed_events: &mut Vec<BackgroundProtocolEvent>,
         target: &mut SharedWorkerTargetState,
         owner_session_id: &str,
         reason: &'static str,
@@ -2014,10 +1918,12 @@ impl CdpConnection {
                 );
                 continue;
             }
-            push_pending_inspector_await_error_background_event(
+            push_drained_pending_inspector_await_error(
                 out,
+                claimed_events,
                 cdp_id,
-                entry.session_id(),
+                &CommandOwnerScope::for_session(owner_session_id),
+                &entry,
                 reason,
             );
         }
@@ -2033,6 +1939,7 @@ impl CdpConnection {
 
     pub(crate) fn fail_pending_inspector_awaits_from_service_worker_target_state_background_events_into(
         out: &mut Vec<BackgroundProtocolEvent>,
+        claimed_events: &mut Vec<BackgroundProtocolEvent>,
         target: &mut ServiceWorkerTargetState,
         reason: &'static str,
     ) {
@@ -2046,10 +1953,17 @@ impl CdpConnection {
                 }
                 continue;
             }
-            push_pending_inspector_await_error_background_event(
+            let owner = CommandOwnerScope::for_session(
+                entry
+                    .session_id()
+                    .expect("service-worker await must belong to an attached session"),
+            );
+            push_drained_pending_inspector_await_error(
                 out,
+                claimed_events,
                 cdp_id,
-                entry.session_id(),
+                &owner,
+                &entry,
                 reason,
             );
         }
@@ -2070,12 +1984,9 @@ impl CdpConnection {
         session_id: Option<&str>,
         reason: &'static str,
     ) {
-        let claimed = self.drain_claimed_pending_inspector_await_owners_for_session(session_id);
-        self.push_claimed_pending_inspector_await_owner_errors(
-            claimed_background_events,
-            claimed,
-            reason,
-        );
+        let owner = session_id
+            .map(CommandOwnerScope::for_session)
+            .unwrap_or_else(|| CommandOwnerScope::capture(self, None));
         if let Some(owner_session_id) = session_id
             && self.shared_worker_target_for_session(session_id).is_some()
         {
@@ -2085,7 +1996,7 @@ impl CdpConnection {
                 .unwrap_or_default();
             let mut listener_groups_to_unregister = Vec::new();
             for (cdp_id, entry) in drained {
-                self.cancel_runtime_await_job(cdp_id, entry.session_id(), reason);
+                self.trace_runtime_await_cancelled(cdp_id, entry.session_id(), reason);
                 if let Some(listener) = entry.bidi_channel_listener() {
                     listener_groups_to_unregister.push((
                         entry.session_id().map(str::to_owned),
@@ -2093,10 +2004,12 @@ impl CdpConnection {
                     ));
                     continue;
                 }
-                push_pending_inspector_await_error_background_event(
+                push_drained_pending_inspector_await_error(
                     out,
+                    claimed_background_events,
                     cdp_id,
-                    entry.session_id(),
+                    &owner,
+                    &entry,
                     reason,
                 );
             }
@@ -2129,7 +2042,7 @@ impl CdpConnection {
                 .unwrap_or_default();
             let mut listener_groups_to_unregister = Vec::new();
             for (cdp_id, entry) in drained {
-                self.cancel_runtime_await_job(cdp_id, entry.session_id(), reason);
+                self.trace_runtime_await_cancelled(cdp_id, entry.session_id(), reason);
                 if let Some(listener) = entry.bidi_channel_listener() {
                     listener_groups_to_unregister.push((
                         entry.session_id().map(str::to_owned),
@@ -2137,10 +2050,12 @@ impl CdpConnection {
                     ));
                     continue;
                 }
-                push_pending_inspector_await_error_background_event(
+                push_drained_pending_inspector_await_error(
                     out,
+                    claimed_background_events,
                     cdp_id,
-                    entry.session_id(),
+                    &owner,
+                    &entry,
                     reason,
                 );
             }
@@ -2170,7 +2085,7 @@ impl CdpConnection {
             })
             .unwrap_or_default();
         for (cdp_id, entry) in drained {
-            self.cancel_runtime_await_job(cdp_id, entry.session_id(), reason);
+            self.trace_runtime_await_cancelled(cdp_id, entry.session_id(), reason);
             if let Some(listener) = entry.bidi_channel_listener() {
                 self.unregister_runtime_remote_object_group_for_session_owner(
                     entry.session_id(),
@@ -2178,10 +2093,12 @@ impl CdpConnection {
                 );
                 continue;
             }
-            push_pending_inspector_await_error_background_event(
+            push_drained_pending_inspector_await_error(
                 out,
+                claimed_background_events,
                 cdp_id,
-                entry.session_id(),
+                &owner,
+                &entry,
                 reason,
             );
         }
@@ -2210,19 +2127,13 @@ impl CdpConnection {
             return;
         }
 
-        let claimed = self.drain_claimed_pending_inspector_await_owners_for_owner(owner);
-        self.push_claimed_pending_inspector_await_owner_errors(
-            claimed_background_events,
-            claimed,
-            reason,
-        );
         let drained = self
             .with_target_devtools_session_state_for_owner_mut(owner, |state| {
                 state.drain_pending_inspector_awaits()
             })
             .unwrap_or_default();
         for (cdp_id, entry) in drained {
-            self.cancel_runtime_await_job(cdp_id, entry.session_id(), reason);
+            self.trace_runtime_await_cancelled(cdp_id, entry.session_id(), reason);
             if let Some(listener) = entry.bidi_channel_listener() {
                 self.unregister_runtime_remote_object_group_for_owner(
                     owner,
@@ -2230,10 +2141,12 @@ impl CdpConnection {
                 );
                 continue;
             }
-            push_pending_inspector_await_error_background_event(
+            push_drained_pending_inspector_await_error(
                 out,
+                claimed_background_events,
                 cdp_id,
-                entry.session_id(),
+                owner,
+                &entry,
                 reason,
             );
         }
@@ -3744,8 +3657,12 @@ impl CdpConnection {
                     );
                 }
             }
-            self.complete_runtime_await_job(frontend_command_id, session_id.as_deref());
-            let _ = self.remove_pending_inspector_await_for_owner(frontend_command_id, owner);
+            if self
+                .remove_pending_inspector_await_for_owner(frontend_command_id, owner)
+                .is_some()
+            {
+                self.trace_runtime_await_completed(frontend_command_id, session_id.as_deref());
+            }
             true
         });
     }
@@ -3846,7 +3763,7 @@ impl CdpConnection {
         background_events: &mut Vec<BackgroundProtocolEvent>,
     ) -> bool {
         let command_id = response.command_id;
-        self.complete_runtime_await_job(command_id, response.session_id());
+        self.trace_runtime_await_completed(command_id, response.session_id());
         self.trace_owner_runtime_response_route(&response);
         let current_seen = Some(command_id) == current_cmd_id;
         match self.route_bidi_channel_listener_owner_runtime_response(&response) {
@@ -5601,8 +5518,12 @@ impl CdpConnection {
         };
         debug_assert_eq!(resolved, correlation);
         let frontend_command_id = resolved.frontend_command_id().get();
-        self.complete_runtime_await_job(frontend_command_id, frontend_session_id);
-        let _ = self.remove_pending_inspector_await(frontend_command_id, frontend_session_id);
+        if self
+            .remove_pending_inspector_await(frontend_command_id, frontend_session_id)
+            .is_some()
+        {
+            self.trace_runtime_await_completed(frontend_command_id, frontend_session_id);
+        }
         let mut response = json!({
             "id": frontend_command_id,
             "error": {
@@ -9173,20 +9094,19 @@ mod tests {
 
         conn.register_pending_inspector_await(1, Some("SID-active"));
         conn.register_pending_inspector_await(1, Some("SID-bg"));
-        conn.register_runtime_await_job_for_owner(
+        conn.trace_runtime_await_started(
             1,
             &CommandOwnerScope::for_session("SID-active"),
             None,
             "evaluate",
         );
-        conn.register_runtime_await_job_for_owner(
+        conn.trace_runtime_await_started(
             1,
             &CommandOwnerScope::for_session("SID-bg"),
             None,
             "evaluate",
         );
 
-        assert_eq!(conn.pending_runtime_await_jobs.len(), 2);
         let claimed = conn
             .claim_pending_inspector_await_for_scheduler_deferred_reply(
                 1,
@@ -9203,11 +9123,6 @@ mod tests {
         );
         assert!(!conn.has_pending_inspector_awaits_for_session_owner(Some("SID-active")));
         assert!(conn.has_pending_inspector_awaits_for_session_owner(Some("SID-bg")));
-        assert_eq!(conn.pending_runtime_await_jobs.len(), 1);
-        assert_eq!(
-            conn.runtime_await_job_trace_fields(1, Some("SID-bg"))["sessionId"],
-            json!("SID-bg")
-        );
 
         let mut response_events = Vec::new();
         let mut background_events = Vec::new();
@@ -9225,7 +9140,6 @@ mod tests {
         assert!(response_events.is_empty());
         assert!(background_events.is_empty());
         assert!(conn.has_pending_inspector_awaits_for_session_owner(Some("SID-bg")));
-        assert_eq!(conn.pending_runtime_await_jobs.len(), 1);
 
         let background_seen = conn.route_inspector_messages_into(
             vec![json!({
@@ -9246,7 +9160,53 @@ mod tests {
         assert_eq!(message["id"], json!(1));
         assert_eq!(message["sessionId"], json!("SID-bg"));
         assert!(!conn.has_pending_inspector_awaits());
-        assert!(conn.pending_runtime_await_jobs.is_empty());
+    }
+
+    #[test]
+    fn session_detach_settles_claimed_await_before_late_scheduler_completion() {
+        let mut conn = CdpConnection::default();
+        let mut browser_context = BrowserContext::new("BID-claimed-detach".to_owned());
+        browser_context.set_active_target_id("TID-claimed-detach".to_owned());
+        browser_context.attach_active_session("SID-claimed-detach".to_owned());
+        conn.install_browser_context_fixture_for_test(browser_context);
+        let owner = CommandOwnerScope::for_session("SID-claimed-detach");
+        conn.try_register_pending_inspector_await_with_object_group_for_owner(
+            3,
+            &owner,
+            Some("claimed-group"),
+        )
+        .unwrap();
+        let claimed = conn
+            .claim_pending_inspector_await_for_scheduler_deferred_reply(3, &owner)
+            .expect("registered await should be claimable");
+
+        let mut direct_events = Vec::new();
+        let mut claimed_events = Vec::new();
+        conn.fail_pending_inspector_awaits_for_session_owner_background_events_into(
+            &mut direct_events,
+            &mut claimed_events,
+            Some("SID-claimed-detach"),
+            "Target detached",
+        );
+
+        assert!(direct_events.is_empty());
+        assert_eq!(claimed_events.len(), 1);
+        assert!(!conn.has_pending_inspector_awaits_for_session_owner(Some("SID-claimed-detach")));
+        conn.complete_claimed_pending_inspector_await_for_scheduler_deferred_reply(
+            Some(claimed),
+            &[BackgroundProtocolEvent::command_success(
+                Some(3),
+                Some("SID-claimed-detach"),
+                json!({ "result": { "objectId": "late-object" } }),
+            )],
+        );
+        assert!(
+            !conn.runtime_remote_object_id_known_for_session_owner(
+                Some("SID-claimed-detach"),
+                "late-object",
+            ),
+            "a late scheduler completion must not mutate a detached session"
+        );
     }
 
     #[test]
@@ -9465,7 +9425,7 @@ mod tests {
             Some("runtime-group"),
         )
         .unwrap();
-        conn.register_runtime_await_job_for_owner(
+        conn.trace_runtime_await_started(
             77,
             &CommandOwnerScope::for_session("SID-bg"),
             Some("runtime-group"),
