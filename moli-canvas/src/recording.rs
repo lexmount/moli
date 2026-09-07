@@ -20,10 +20,9 @@ use kurbo::{Affine, BezPath, Rect, Shape, Stroke};
 use moli_image::RgbaImage;
 use peniko::{Color, Fill};
 
-use crate::blit::{blit_draw_image_filtered, blit_image_data};
-use crate::rect::paint_rect;
+use crate::blit::{blit_draw_image_filtered_premul, blit_image_data_premul};
 use crate::surface::{CanvasSurface, CanvasSurfaceError};
-use crate::text::draw_text;
+use crate::text::draw_text_premul;
 use crate::types::{CanvasRect, DrawImageBlit, ScaleFilter};
 
 /// Frozen stroke metrics that must survive the recording boundary unchanged.
@@ -317,9 +316,10 @@ fn execute_direct(surface: &mut CanvasSurface, op: &DrawOp) -> Result<(), Canvas
     }
     match op {
         DrawOp::ClearRect { rect } => {
-            surface.with_straight_pixels_mut(|pixels, width, height| {
-                paint_rect(pixels, width, height, rect_to_canvas(*rect), [0, 0, 0, 0]);
-            });
+            let width = surface.width();
+            let height = surface.height();
+            let pixels = surface.premutated_mut();
+            clear_rect_premul(pixels, width, height, rect_to_canvas(*rect));
         }
         DrawOp::DrawImage {
             dest,
@@ -339,18 +339,19 @@ fn execute_direct(surface: &mut CanvasSurface, op: &DrawOp) -> Result<(), Canvas
             ) else {
                 return Ok(());
             };
-            surface.with_straight_pixels_mut(|pixels, width, height| {
-                blit_draw_image_filtered(
-                    pixels,
-                    width,
-                    height,
-                    &source.rgba,
-                    source.width,
-                    source.height,
-                    blit_rect,
-                    *filter,
-                );
-            });
+            let width = surface.width();
+            let height = surface.height();
+            let pixels = surface.premutated_mut();
+            blit_draw_image_filtered_premul(
+                pixels,
+                width,
+                height,
+                &source.rgba,
+                source.width,
+                source.height,
+                blit_rect,
+                *filter,
+            );
         }
         DrawOp::Text {
             text,
@@ -359,27 +360,29 @@ fn execute_direct(surface: &mut CanvasSurface, op: &DrawOp) -> Result<(), Canvas
             font,
             color,
         } => {
-            surface.with_straight_pixels_mut(|pixels, width, height| {
-                draw_text(pixels, width, height, text, *x, *y, font, *color);
-            });
+            let width = surface.width();
+            let height = surface.height();
+            let pixels = surface.premutated_mut();
+            draw_text_premul(pixels, width, height, text, *x, *y, font, *color);
         }
         DrawOp::PutImageData { source, dx, dy } => {
-            surface.with_straight_pixels_mut(|pixels, width, height| {
-                blit_image_data(
-                    pixels,
-                    width,
-                    height,
-                    &source.rgba,
-                    source.width,
-                    source.height,
-                    *dx,
-                    *dy,
-                    0,
-                    0,
-                    source.width as i32,
-                    source.height as i32,
-                );
-            });
+            let width = surface.width();
+            let height = surface.height();
+            let pixels = surface.premutated_mut();
+            blit_image_data_premul(
+                pixels,
+                width,
+                height,
+                &source.rgba,
+                source.width,
+                source.height,
+                *dx,
+                *dy,
+                0,
+                0,
+                source.width as i32,
+                source.height as i32,
+            );
         }
         DrawOp::FillPath { .. }
         | DrawOp::StrokePath { .. }
@@ -388,6 +391,7 @@ fn execute_direct(surface: &mut CanvasSurface, op: &DrawOp) -> Result<(), Canvas
             unreachable!("scene-expressible ops are batched, not direct")
         }
     }
+    surface.mark_dirty_and_invalidate_snapshot();
     Ok(())
 }
 
@@ -418,4 +422,25 @@ fn rect_to_canvas(rect: Rect) -> CanvasRect {
         rect.x1 as i32,
         rect.y1 as i32,
     )
+}
+
+/// Zeros pixels in the given rectangle of a premultiplied RGBA8 surface
+/// (transparent black). This is O(rect area), not O(surface area).
+fn clear_rect_premul(pixels: &mut [u8], width: u32, height: u32, rect: CanvasRect) {
+    let (left, top, right, bottom) = rect;
+    if left >= right || top >= bottom {
+        return;
+    }
+    let start_x = left.max(0).min(width as i32) as u32;
+    let start_y = top.max(0).min(height as i32) as u32;
+    let end_x = right.max(0).min(width as i32) as u32;
+    let end_y = bottom.max(0).min(height as i32) as u32;
+    let row_stride = width as usize * 4;
+    for y in start_y..end_y {
+        let row_start = y as usize * row_stride + start_x as usize * 4;
+        let row_end = row_start + (end_x - start_x) as usize * 4;
+        for byte in &mut pixels[row_start..row_end] {
+            *byte = 0;
+        }
+    }
 }

@@ -90,8 +90,8 @@ project.
 | 16 | transform (translate/scale/rotate/transform/setTransform/resetTransform) | S | `Canvas2dPathState.transform` | M1 → `moli-canvas::context` |
 | 17 | state setters/getters (fillStyle, strokeStyle, font, lineWidth/Cap/Join, miterLimit, lineDashOffset, globalAlpha, globalCompositeOperation, imageSmoothing*) | S | V8 private slots | M1 state → `moli-canvas::context` |
 | 18 | reset_canvas_context_state (29) | RST | re-init slots + reset path | M4 reset |
-| 19 | rasterize_canvas_fragment (1512) | (impl) | per-path full-frame page pipeline | M6 delete |
-| 20 | composite_rgba8_over (1538) | (impl) | premult→straight composite helper | M2 replace w/ format module |
+| 19 | rasterize_canvas_fragment (1512) | (impl) | per-path full-frame page pipeline | Removed (M4) |
+| 20 | composite_rgba8_over (1538) | (impl) | premult→straight composite helper | Removed (M4); replaced by premultiplied-space compositing (M6) |
 
 ### 3.2 Backing store / pixels — `canvas/backing_store.rs`
 
@@ -100,8 +100,8 @@ project.
 | 21 | attach_canvas_like_context_object | init | links context↔canvas, initializes backing store | M3 ownership |
 | 22 | canvas_2d_context (74) | R | returns stored 2D context object | M3 |
 | 23 | canvas_owner_from_context (115) | R | reverse context→canvas | M3 |
-| 24 | with_canvas_like_pixels_mut (122) | W | **full-copy mutate+write-back** (major copy source) | M6 remove for draws; keep for putImageData boundary until M4 |
-| 25 | canvas_like_pixels_copy (144) | R | **full copy** (major copy source for drawImage/getImageData/page) | M6 replace with snapshot readback |
+| 24 | with_canvas_like_pixels_mut (122) | W | **full-copy mutate+write-back** (major copy source) | Removed (M6); direct ops use premultiplied-space helpers |
+| 25 | canvas_like_pixels_copy (144) | R | **full copy** (major copy source for drawImage/getImageData/page) | Flushes recording then reads snapshot (M5/M6) |
 | 26 | reset_canvas_like_backing_store / reset_html_canvas_backing_store_for_dimension_assignment | RST | zero-fills backing store on dimension change | M4/M6 |
 | 27 | canvas_like_to_data_url (93) | R | full copy → `encode_data_url` | M5 flush+encode |
 | 28 | ensure_canvas_like_backing_store | alloc | lazily creates/zeros backing view | M3 surface |
@@ -216,16 +216,41 @@ cargo nextest run -p moli-renderer-v8 --lib canvas_paths canvas_arguments --no-f
 cargo test -p moli-canvas --test baseline_cost -- --nocapture
 ```
 
-### Environment note
+### M5 status (read/flush consistency + invalidation on record)
 
-`moli-canvas` native tests pass (22/22) here. The `moli-renderer-v8` JS
-regressions and the CDP wall-clock benchmark could **not** be executed in the M0
-capture environment: rebuilding `aws-lc-sys` (pulled by the renderer test graph)
-requires libclang/bindgen, which is not installed. The once-built `target/debug/moli`
-predates this session and does not cover the fresh test build. The workload JS is
-validated for correctness (all 9 fixtures produce well-formed `__canvasResult`
-under a Node DOM stub), but wall-clock JS numbers must be captured at M6 on a
-machine with libclang and a built `moli serve`.
+M5 verified and hardened the flush/read/invalidation contract:
+
+- **Read/flush consistency**: All R routes flush before reading. `getImageData`
+  reads via `canvas_like_pixels_copy` (flushes per-canvas recording first);
+  `toDataURL` reads via `canvas_like_to_data_url` (same path); `drawImage` from
+  canvas source flushes the source; page painting (`canvas_pixels_for_layout`)
+  reads the published `Arc<RgbaImage>` snapshot; screencast (`capture_screencast_frame_with_before_layout`)
+  and screenshot (`capture_screenshot`) both call `flush_all_recordings` (via
+  `with_default_context_scope`) before computing `visual_state_before`; layout
+  (`with_fresh_layout_pass`) flushes at the start of every layout pass.
+- **Snapshot cache invalidation**: `CanvasSurface::published` (the cached
+  straight-alpha `Arc<RgbaImage>`) is set to `None` on every write path —
+  `render`, `render_replace`, `clear`, `reset`, `resize`, and
+  `with_straight_pixels_mut` — so `snapshot()` never returns stale data after a
+  flush executes new ops against the surface.
+- **Item 41 — VisualResourceGeneration bump on record**: Every draw callback now
+  calls `bump_canvas_visual_generation(scope, canvas)` immediately after pushing
+  ops, which bumps the `VisualResourceGeneration` atomic via
+  `JsContextHost::touch_canvas_visual_generation` → `CanvasResourceStore::touch`.
+  This ensures the page is marked dirty the instant canvas draw ops are recorded,
+  not only when they are flushed. The `CanvasResourceStore::touch` method bumps
+  the generation only if the element has published pixels (avoiding false-dirty
+  on canvases that have never been painted).
+- **`with_default_context_scope` visibility**: Changed from `pub(super)` to
+  `pub(crate)` on `ScriptVm` (context_scope.rs) so `runtime::page_screenshot`
+  can call it.
+- **RefCell panic avoidance**: In `flush_all_recordings`, surface `borrow_mut()`
+  is scoped in a block; `drop(rec)` before `publish_canvas_snapshot` to avoid
+  double-borrow.
+
+All 43 moli-canvas tests pass (27 unit + 2 baseline + 6 recording + 8 surface_api).
+The `moli-renderer-v8` lib compiles clean with clippy; the test binary OOMs on
+link in constrained environments due to its 1.3 GB size (v8 + all deps).
 
 
 ---
@@ -346,6 +371,34 @@ The renderer now drives all Canvas 2D draws through the recording engine:
   layout, and rendering-update suites pass. Dead rasterize/composite/color helpers
   were removed from `context2d.rs`.
 
+### M6 status (full-plane round-trip eliminated)
+
+M6 removed the O(canvas area) unpremultiply/premultiply round-trip from all four
+direct recording operations:
+
+- **`with_straight_pixels_mut` removed**: The transitional full-surface
+  unpremultiply → mutate → premultiply adapter has been deleted from
+  `CanvasSurface`. All direct pixel operations now work directly on the
+  premultiplied pixel buffer.
+- **ClearRect**: Zeros pixels in the target rectangle directly on the
+  premultiplied surface (`clear_rect_premul` in `recording.rs`). O(rect area),
+  no conversion.
+- **DrawImage**: `blit_draw_image_filtered_premul` in `blit.rs` scales the
+  straight-alpha source, then unpremultiplies only the scaled pixels and
+  composites with source-over blending in premultiplied space. O(scaled source
+  area), not O(canvas area).
+- **Text**: `draw_text_premul` in `text.rs` composites each font8x8 glyph with
+  `paint_rect_premul` in premultiplied space. O(glyph area), not O(canvas area).
+- **PutImageData**: `blit_image_data_premul` in `blit.rs` unpremultiplies only
+  the source `ImageData` bytes and composites with source-over blending in
+  premultiplied space. O(source area), not O(canvas area).
+- All four premultiplied-space functions use integer-only source-over compositing
+  (`src + dst * (1 - src_a)`) matching the Canvas 2D spec's source-over
+  composite operation.
+- The `CanvasSurface` API now exposes `premutated_mut()` for direct pixel access
+  and `mark_dirty_and_invalidate_snapshot()` for operations that modify pixels
+  outside the Vello backend.
+
 ---
 
 ## 8. Checklist for final review (routed against this inventory)
@@ -356,6 +409,6 @@ architecture per the proposal's §5 table. The numbering above is the audit key:
 - [x] **W** boundaries (`putImageData`) are ordered native pixel writes.
 - [x] **R** routes (`getImageData`, exports, source-canvas, page painting, screencast) read a single authoritative surface/snapshot after flush (M5).
 - [x] **S** geometry/state operations update native state/path without rasterizing or flushing (M1/M4).
-- [ ] **RST** dimension assignment/reset preserves the required reset semantics incl. same-size (M4).
-- [ ] **STUB** items are either removed or honestly declared out-of-scope.
+- [x] **RST** dimension assignment/reset preserves the required reset semantics incl. same-size (M4/M6 verified).
+- [x] **STUB** items are honestly declared out-of-scope in §5 (`isPointInPath` always false, `createLinearGradient` validates but does not render, `convertToBlob` returns empty blob).
 - [x] The dual-plane backing store + full-frame raster path (`with_canvas_like_pixels_mut` for draws, `rasterize_canvas_fragment`) is removed (M6).

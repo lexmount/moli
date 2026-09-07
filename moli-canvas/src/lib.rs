@@ -10,7 +10,10 @@ mod text;
 mod types;
 
 pub use backend::VelloCpuBackend;
-pub use blit::{blit_draw_image, blit_draw_image_filtered, blit_image_data, extract_image_data};
+pub use blit::{
+    blit_draw_image, blit_draw_image_filtered, blit_draw_image_filtered_premul, blit_image_data,
+    blit_image_data_premul, extract_image_data,
+};
 pub use encode::{
     data_image_intrinsic_dimensions, data_image_rgba8_pixels, encode_data_url,
     image_dimensions_from_bytes, image_intrinsic_dimensions_from_bytes,
@@ -21,7 +24,9 @@ pub use pixel::{
     scale_rgba8, scale_rgba8_bilinear, scale_rgba8_nearest, unpremultiply_rgba8_in_place,
 };
 pub use recording::{DrawOp, DrawRecording, ExecutionStats, StrokeSpec};
-pub use rect::{canonicalize_fill_style, fill_style_rgba, normalize_rect, paint_rect};
+pub use rect::{
+    canonicalize_fill_style, fill_style_rgba, normalize_rect, paint_rect, paint_rect_premul,
+};
 pub use surface::{CanvasSurface, CanvasSurfaceError};
 pub use text::{draw_text, measure_text_width};
 pub use types::{

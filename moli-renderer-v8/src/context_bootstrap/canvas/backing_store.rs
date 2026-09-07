@@ -8,11 +8,11 @@
 //! weak-keyed per-context registry, so its lifetime is reclaimed with the canvas
 //! (GC) and with the isolate, mirroring `state.rs`.
 //!
-//! The existing immediate-execution draw helpers operate on straight RGBA8, so
-//! they run through [`CanvasSurface::with_straight_pixels_mut`] — a transitional
-//! adapter that yields byte-identical results while the surface stays the single
-//! owner. M4's ordered recorder replaces this per-call conversion with batched
-//! Vello rendering.
+//! M4's ordered recorder executes all draw operations against the surface.
+//! Scene-expressible ops (fills, strokes, rectangles) go through the Vello
+//! backend; direct ops (ClearRect, DrawImage, Text, PutImageData) operate
+//! directly on the premultiplied pixel buffer, avoiding the full-surface
+//! unpremultiply/premultiply round-trip.
 
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
