@@ -103,9 +103,17 @@ pub(crate) struct SourceOrigin {
 pub(crate) enum InlineObjectRole {
     Atomic,
     Float,
-    OutOfFlow,
+    OutOfFlow(OutOfFlowDisplay),
     StartEdge,
     EndEdge,
+}
+
+/// Positioning blockifies the used display. Inline layout must retain the
+/// hypothetical outer display to choose the current line or the next line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum OutOfFlowDisplay {
+    Inline,
+    Block,
 }
 
 #[derive(Clone, Debug)]
@@ -587,7 +595,7 @@ pub(crate) fn build_inline_fragments(
                 }
                 InlineObjectRole::Atomic
                 | InlineObjectRole::Float
-                | InlineObjectRole::OutOfFlow => {}
+                | InlineObjectRole::OutOfFlow(_) => {}
             }
         }
     }
@@ -898,7 +906,7 @@ fn resolve_inline_lines(
                                 .and_then(|index| structural_edge_contributions.get(index))
                                 .copied()
                                 .unwrap_or(false),
-                            InlineObjectRole::Float | InlineObjectRole::OutOfFlow => false,
+                            InlineObjectRole::Float | InlineObjectRole::OutOfFlow(_) => false,
                         }),
                         glyph_key: None,
                         anchor: LineVerticalAnchor::Root,
@@ -1074,13 +1082,57 @@ fn resolve_inline_lines(
                 states[state_index].global_offset = states[state_index].relative_offset
                     + anchor_global_offset(states[state_index].anchor, &states);
             }
+            // Static positions belong to the CSS line box, not an inline
+            // baseline or an ancestor's vertical-align state. Like Blink's
+            // PlaceOutOfFlowObjects, block-level placeholders move to the
+            // next line only when in-flow content logically precedes them.
+            // Parley exposes items in visual order, so RTL searches backwards.
+            let first_in_flow = if layout.is_rtl() {
+                geometries
+                    .iter()
+                    .rposition(|geometry| geometry.creates_line)
+            } else {
+                geometries.iter().position(|geometry| geometry.creates_line)
+            };
+            let line_top = raw_top + preceding_adjustment;
             let item_offsets = geometries
                 .iter()
-                .map(|geometry| {
-                    let desired_top = root_baseline
-                        + anchor_global_offset(geometry.anchor, &states)
-                        + geometry.relative_offset
-                        + geometry.bounds.top;
+                .zip(line.items())
+                .enumerate()
+                .map(|(index, (geometry, item))| {
+                    let static_display = match item {
+                        PositionedLayoutItem::InlineBox(positioned) => context
+                            .object(positioned.id)
+                            .and_then(|object| match object.role {
+                                InlineObjectRole::OutOfFlow(display) => Some(display),
+                                _ => None,
+                            }),
+                        PositionedLayoutItem::GlyphRun(_) => None,
+                    };
+                    let desired_top = match static_display {
+                        Some(OutOfFlowDisplay::Inline) => line_top,
+                        Some(OutOfFlowDisplay::Block) => {
+                            let has_preceding_content = first_in_flow.is_some_and(|first| {
+                                if layout.is_rtl() {
+                                    index < first
+                                } else {
+                                    index > first
+                                }
+                            });
+                            line_top
+                                + if has_preceding_content {
+                                    line_height
+                                } else {
+                                    0.0
+                                }
+                        }
+                        None => {
+                            root_baseline
+                                + anchor_global_offset(geometry.anchor, &states)
+                                + geometry.relative_offset
+                                + geometry.bounds.top
+                        }
+                    };
                     desired_top - geometry.initial_top
                 })
                 .collect::<Vec<_>>();
@@ -1928,9 +1980,17 @@ fn collect_box<N>(
 
     let out_of_flow = world.boxes[id.index()].style.is_out_of_flow();
     if out_of_flow {
+        let display = if world.boxes[id.index()]
+            .style
+            .hypothetical_display_is_inline_level()
+        {
+            OutOfFlowDisplay::Inline
+        } else {
+            OutOfFlowDisplay::Block
+        };
         normalizer.push_object(
             id,
-            InlineObjectRole::OutOfFlow,
+            InlineObjectRole::OutOfFlow(display),
             InlineBoxKind::OutOfFlow,
             ancestors,
             world.boxes[id.index()].style.vertical_align(),
@@ -2292,7 +2352,7 @@ impl InlineNormalizer {
         self.flush_pending_carriage_return();
         if matches!(
             role,
-            InlineObjectRole::Atomic | InlineObjectRole::Float | InlineObjectRole::OutOfFlow
+            InlineObjectRole::Atomic | InlineObjectRole::Float | InlineObjectRole::OutOfFlow(_)
         ) {
             self.flush_pending();
             self.line_has_content = true;
