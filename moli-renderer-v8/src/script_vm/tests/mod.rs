@@ -9,8 +9,8 @@ use super::{
 };
 use crate::document_runtime::{
     CurrentScriptContextSpec, DeferredPageTask, DeferredPageTaskLane, DeferredPageTaskState,
-    DocumentProcessingAction, DomHandle, FollowupPageTaskDisposition, PostParseOwnerDriverStep,
-    RuntimeScriptWorkPauseKind, RuntimeScriptWorkState,
+    DocumentProcessingAction, DomHandle, FollowupPageTaskDisposition, ParserConnectedScriptBridge,
+    PostParseOwnerDriverStep, RuntimeScriptWorkPauseKind, RuntimeScriptWorkState,
 };
 use crate::dom::{
     NodeId,

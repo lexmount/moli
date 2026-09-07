@@ -25,6 +25,19 @@ pub(crate) fn observable_geometry_batch(
     }
 }
 
+fn fresh_observable_geometry_batch(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    reason: LayoutFlushReason,
+    batch: &LayoutQueryBatch<DomHandle>,
+) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
+    if runtime.layout_policy().uses_real_layout() {
+        runtime.answer_fresh_layout_for_document(document, reason, batch)
+    } else {
+        Ok(answer_mock_queries(runtime, document, reason, batch))
+    }
+}
+
 pub(crate) fn observable_client_rects(
     runtime: &JsContextHost,
     source: DomHandle,
@@ -56,6 +69,25 @@ pub(crate) fn observable_sources_with_fragments(
     sources: &[DomHandle],
     reason: LayoutFlushReason,
 ) -> Result<HashSet<DomHandle>, LayoutError> {
+    sources_with_fragments(runtime, document, sources, reason, false)
+}
+
+pub(crate) fn fresh_observable_sources_with_fragments(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    sources: &[DomHandle],
+    reason: LayoutFlushReason,
+) -> Result<HashSet<DomHandle>, LayoutError> {
+    sources_with_fragments(runtime, document, sources, reason, true)
+}
+
+fn sources_with_fragments(
+    runtime: &JsContextHost,
+    document: DomHandle,
+    sources: &[DomHandle],
+    reason: LayoutFlushReason,
+    fresh: bool,
+) -> Result<HashSet<DomHandle>, LayoutError> {
     if sources.is_empty() {
         return Ok(HashSet::new());
     }
@@ -64,8 +96,12 @@ pub(crate) fn observable_sources_with_fragments(
         .copied()
         .map(|source| LayoutQuery::ContentQuads { source })
         .collect();
-    let answers =
-        observable_geometry_batch(runtime, document, reason, &LayoutQueryBatch::new(queries))?;
+    let batch = LayoutQueryBatch::new(queries);
+    let answers = if fresh {
+        fresh_observable_geometry_batch(runtime, document, reason, &batch)?
+    } else {
+        observable_geometry_batch(runtime, document, reason, &batch)?
+    };
     if answers.answers.len() != sources.len() {
         return Err(provider_contract_error("rendered source fragment"));
     }

@@ -5581,6 +5581,7 @@ html/dom/elements/global-attributes/translate-enumerated-ascii-case-insensitive.
 html/dom/elements/global-attributes/translate-inherit-no-parent-element.html
 html/dom/elements/global-attributes/translate-non-html-translation-mode.html
 html/dom/elements/name-content-attribute-and-property.html
+html/dom/elements/the-innertext-and-outertext-properties/dynamic-getter.html
 html/dom/elements/the-innertext-and-outertext-properties/getter-first-letter-marker-multicol.html
 html/dom/elements/the-innertext-and-outertext-properties/innertext-setter.html
 html/dom/elements/the-innertext-and-outertext-properties/innertext-whitespace-pre-line.html
@@ -8208,6 +8209,7 @@ trusted-types/DedicatedWorker-importScripts.html
 trusted-types/DedicatedWorker-setTimeout-setInterval.html
 trusted-types/Document-execCommand.html
 trusted-types/Document-write-appending-line-feed.html
+trusted-types/Document-write.html
 trusted-types/Element-insertAdjacentHTML.html
 trusted-types/Element-outerHTML.html
 trusted-types/Element-setAttribute.html

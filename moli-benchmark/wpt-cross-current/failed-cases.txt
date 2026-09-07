@@ -2766,7 +2766,6 @@ html/browsers/windows/document-domain-removed-iframe.html
 html/cross-origin-embedder-policy/coep-on-response-from-service-worker.https.html
 html/cross-origin-embedder-policy/service-worker-cache-storage.https.html
 html/dom/documents/dom-tree-accessors/nameditem-names.html
-html/dom/elements/the-innertext-and-outertext-properties/dynamic-getter.html
 html/dom/elements/the-innertext-and-outertext-properties/getter.html
 html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=normal
 html/dom/elements/the-innertext-and-outertext-properties/innertext-with-white-spaces.html?white-space=normal&contenteditable=plaintext-only
@@ -3278,7 +3277,6 @@ svg/types/scripted/SVGLength-px.html
 svg/types/scripted/SVGLength-rem.html
 svg/types/scripted/SVGLength-rlh.html
 svg/types/scripted/SVGLength-viewport.html
-trusted-types/Document-write.html
 trusted-types/Element-setAttribute-respects-Elements-node-documents-globals-CSP-after-adoption-from-TT-realm.html
 trusted-types/Element-setAttribute-respects-Elements-node-documents-globals-CSP-after-adoption-from-non-TT-realm.html
 trusted-types/ServiceWorkerContainer-register-from-DedicatedWorker.https.html
