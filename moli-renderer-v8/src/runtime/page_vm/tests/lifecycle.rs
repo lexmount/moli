@@ -3128,6 +3128,7 @@ document.body.appendChild(replacementFrame);
                                     ),
                                     source_bytes: None,
                                     network_result: None,
+                                    muted_errors: false,
                                 },
                             ),
                             MainParserDeferredClassicSourceNetworkAttribution::new(

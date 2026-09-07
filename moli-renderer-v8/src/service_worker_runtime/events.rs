@@ -708,6 +708,7 @@ pub(crate) enum ServiceWorkerDirectFetchResult {
 pub(crate) struct ServiceWorkerDirectFetchResponse {
     pub(crate) response: Box<crate::protocol_types::NavigationResponse>,
     pub(crate) response_filter: Option<crate::types::AsyncSubresourceFetchResponseFilter>,
+    pub(crate) from_network_fallback: bool,
 }
 
 #[derive(Clone, Debug)]

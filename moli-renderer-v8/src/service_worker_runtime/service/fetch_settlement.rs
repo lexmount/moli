@@ -360,6 +360,7 @@ impl ServiceWorkerRuntimeService {
                     ServiceWorkerDirectFetchResult::Response(ServiceWorkerDirectFetchResponse {
                         response: Box::new(navigation_response),
                         response_filter: None,
+                        from_network_fallback: true,
                     })
                 }
                 Err(error) => ServiceWorkerDirectFetchResult::Failure(error.to_string()),
@@ -644,6 +645,7 @@ impl ServiceWorkerRuntimeService {
                 ServiceWorkerDirectFetchResponse {
                     response: Box::new(navigation_response),
                     response_filter,
+                    from_network_fallback: false,
                 },
             ));
             return;

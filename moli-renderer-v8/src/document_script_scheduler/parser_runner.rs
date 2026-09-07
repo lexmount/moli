@@ -126,6 +126,7 @@ impl<Owner: Copy> ParserDeferredClassicSourceLoadRequest<Owner> {
                 source_result: Err(message.into()),
                 source_bytes: None,
                 network_result: None,
+                muted_errors: false,
             },
         )
     }

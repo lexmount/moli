@@ -8537,6 +8537,7 @@ impl ScriptVm {
                     Err(eval_exec::RawScriptExecutionError::Exception { report, .. }) => {
                         self.report_classic_script_exception_and_finish_evaluation_best_effort(
                             &report,
+                            fetch_metadata.muted_errors,
                         );
                         Ok(LoadedScriptExecutionOutcome::Completed(
                             PreparedScriptBodyActivity::Entered,

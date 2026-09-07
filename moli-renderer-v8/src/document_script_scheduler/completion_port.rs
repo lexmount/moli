@@ -43,6 +43,7 @@ mod tests {
             source_result: Ok("ready".to_owned()),
             source_bytes: None,
             network_result: None,
+            muted_errors: false,
         }
     }
 

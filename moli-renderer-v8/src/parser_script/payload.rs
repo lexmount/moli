@@ -121,10 +121,15 @@ impl ParserPreparedClassicScript {
             source_result,
             source_bytes,
             network_result,
+            muted_errors,
         } = outcome;
         let source = source_result?;
-        *self.script =
-            prepared_script_with_loaded_source((*self.script).clone(), source, source_bytes);
+        *self.script = prepared_script_with_loaded_source(
+            (*self.script).clone(),
+            source,
+            source_bytes,
+            muted_errors,
+        );
         Ok(network_result)
     }
 
@@ -269,6 +274,7 @@ impl ParserClassicScriptSourceResult {
                 source_result: result,
                 source_bytes: None,
                 network_result: None,
+                muted_errors: false,
             },
         )
     }
