@@ -287,6 +287,11 @@ pub struct ScriptFetchMetadata {
     /// not equivalent to whether the eventual fetch runs on a parser-owned
     /// scheduler lane.
     pub parser_inserted: bool,
+    /// Whether synchronous exceptions from this classic script must expose only
+    /// the cross-origin-safe `Script error.` surface. This is false while the
+    /// request is prepared and is populated from the response taint once an
+    /// external classic script has loaded.
+    pub muted_errors: bool,
 }
 
 impl ScriptFetchMetadata {
@@ -308,6 +313,7 @@ impl ScriptFetchMetadata {
             nonce: normalize_non_empty_attr(nonce),
             fetch_priority: FetchPriorityHint::from_attribute(fetch_priority),
             parser_inserted: false,
+            muted_errors: false,
         }
     }
 
