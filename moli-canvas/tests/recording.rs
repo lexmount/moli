@@ -162,6 +162,64 @@ fn put_image_data_is_an_ordered_raw_overwrite() {
 }
 
 #[test]
+fn put_image_data_translucent_over_opaque_is_a_raw_overwrite_not_a_blend() {
+    let mut surface = CanvasSurface::new(8, 8).unwrap();
+    // Solid red background fills the whole surface.
+    let mut rec = DrawRecording::new();
+    rec.push_fill_rect(Rect::new(0.0, 0.0, 8.0, 8.0), [255, 0, 0, 255]);
+    // A translucent source pixel (alpha ~= 128) for putImageData. Spec: the
+    // destination is replaced exactly with the premultiplied source value --
+    // it MUST NOT source-over composite over the red background.
+    let mut img_pixels = vec![0u8; 1 * 1 * 4];
+    img_pixels[0] = 0; // blue, alpha 128 (straight)
+    img_pixels[1] = 0;
+    img_pixels[2] = 255;
+    img_pixels[3] = 128;
+    let image = RgbaImage::try_new(1, 1, img_pixels).expect("valid image");
+    rec.push_put_image_data(image, 3, 3);
+
+    rec.execute(&mut surface).expect("recording executes");
+    // Recovered straight value must equal the source straight value exactly
+    // (128, not blended with red), proving raw overwrite semantics.
+    let px = pixel(&surface, 3, 3);
+    assert_eq!(px[3], 128, "source alpha preserved exactly");
+    assert_eq!(px[2], 255, "source blue preserved exactly (no red blend)");
+    assert_eq!(px[0], 0, "source red=0 preserved exactly (no red bg bleed)");
+    // A neighbouring pixel not covered by putImageData keeps the background.
+    assert_eq!(pixel(&surface, 6, 6), [255, 0, 0, 255]);
+}
+
+#[test]
+fn estimated_bytes_accounts_for_pending_ops_and_resets_on_clear() {
+    let mut rec = DrawRecording::new();
+    assert_eq!(rec.estimated_bytes(), 0, "empty recording retains nothing");
+
+    rec.push_fill_rect(Rect::new(0.0, 0.0, 8.0, 8.0), [255, 0, 0, 255]);
+    let after_fill = rec.estimated_bytes();
+    assert!(after_fill > 0, "a push grows the byte accounting");
+
+    // A captured source image (drawImage/putImageData) adds its full pixel
+    // bytes, so the recorded budget reflects pinned image resources.
+    let mut img_pixels = vec![0u8; 64 * 64 * 4];
+    img_pixels[3] = 255;
+    let image = RgbaImage::try_new(64, 64, img_pixels).expect("valid image");
+    rec.push_put_image_data(image, 0, 0);
+    let after_image = rec.estimated_bytes();
+    assert!(
+        after_image > after_fill,
+        "captured source bytes count toward the budget"
+    );
+
+    rec.clear();
+    assert_eq!(
+        rec.estimated_bytes(),
+        0,
+        "clear resets the recorded byte budget"
+    );
+    assert!(rec.is_empty());
+}
+
+#[test]
 fn stroke_path_carries_frozen_metrics_across_the_recording_boundary() {
     let mut surface = CanvasSurface::new(32, 32).unwrap();
     let mut rec = DrawRecording::new();

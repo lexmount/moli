@@ -339,9 +339,11 @@ pub fn blit_draw_image_filtered_premul(
     }
 }
 
-/// Copies straight-alpha source pixels onto a premultiplied RGBA8 surface,
-/// unpremultiplying only the source (not the entire destination surface) and
-/// compositing with source-over blending. This avoids the full-surface
+/// Copies straight-alpha source pixels onto a premultiplied RGBA8 surface as a
+/// **raw overwrite** (matching the `putImageData` contract, not a source-over
+/// composite). Each destination pixel becomes the premultiplied form of the
+/// source straight-alpha value, replacing prior content exactly and ignoring the
+/// ordinary paint state / composite operation. This avoids the full-surface
 /// unpremultiply/premultiply round-trip that [`blit_image_data`] requires.
 #[allow(clippy::too_many_arguments)]
 pub fn blit_image_data_premul(
@@ -399,25 +401,19 @@ pub fn blit_image_data_premul(
                 break;
             }
             let sa = source[si + 3] as u32;
+            // Raw overwrite: premultiply the straight source channel into the
+            // destination, replacing it without reading/compositing over it.
             if sa == 0 {
+                pixels[di] = 0;
+                pixels[di + 1] = 0;
+                pixels[di + 2] = 0;
+                pixels[di + 3] = 0;
                 continue;
             }
-            if sa == 255 {
-                pixels[di] = source[si];
-                pixels[di + 1] = source[si + 1];
-                pixels[di + 2] = source[si + 2];
-                pixels[di + 3] = 255;
-                continue;
-            }
-            let spr = (source[si] as u32 * sa + 128) / 255;
-            let spg = (source[si + 1] as u32 * sa + 128) / 255;
-            let spb = (source[si + 2] as u32 * sa + 128) / 255;
-            let inv_sa = 255 - sa;
-            let d = &mut pixels[di..di + 4];
-            d[0] = ((spr * 255 + d[0] as u32 * inv_sa + 128) / 255).min(255) as u8;
-            d[1] = ((spg * 255 + d[1] as u32 * inv_sa + 128) / 255).min(255) as u8;
-            d[2] = ((spb * 255 + d[2] as u32 * inv_sa + 128) / 255).min(255) as u8;
-            d[3] = ((sa * 255 + d[3] as u32 * inv_sa + 128) / 255).min(255) as u8;
+            pixels[di] = ((source[si] as u32 * sa + 128) / 255) as u8;
+            pixels[di + 1] = ((source[si + 1] as u32 * sa + 128) / 255) as u8;
+            pixels[di + 2] = ((source[si + 2] as u32 * sa + 128) / 255) as u8;
+            pixels[di + 3] = sa as u8;
         }
     }
 }

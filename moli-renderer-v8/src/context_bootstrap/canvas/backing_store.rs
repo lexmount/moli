@@ -333,6 +333,11 @@ pub(super) fn publish_canvas_snapshot<'s>(
     );
 }
 
+/// Marks a canvas dirty after a draw is recorded AND flushes its pending
+/// recording early once the recorded bytes (including captured source images)
+/// exceed the justified resource budget, mirroring Chromium's
+/// `FlushIfRecordingLimitExceeded`. Combined here so every draw callback that
+/// records an operation triggers both invalidation and the resource check.
 pub(super) fn bump_canvas_visual_generation<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
@@ -341,6 +346,13 @@ pub(super) fn bump_canvas_visual_generation<'s>(
         return;
     };
     unsafe { &mut *runtime_ptr }.touch_canvas_visual_generation(handle);
+    let Some(context) = canvas_2d_context(scope, canvas) else {
+        return;
+    };
+    let recording = super::recording_store::canvas_recording_state(scope, context);
+    if recording.borrow().estimated_bytes() > super::recording_store::MAX_PENDING_RECORDING_BYTES {
+        flush_canvas_recording(scope, canvas);
+    }
 }
 
 fn remove_html_canvas_pixels<'s>(

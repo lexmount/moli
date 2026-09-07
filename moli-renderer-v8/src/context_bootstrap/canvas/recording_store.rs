@@ -10,6 +10,13 @@ use crate::util::{get_private_value, set_private_value};
 use moli_canvas::DrawRecording;
 
 const RECORDING_STATE_SLOT: &str = "__moliCanvasRecordingState";
+
+/// Justified resource budget for one canvas's pending recording: when the
+/// recorded operations (including captured source image bytes) exceed this,
+/// the adapter flushes early so a long-running recording cannot retain
+/// unbounded pinned storage. Mirrors Chromium's `FlushIfRecordingLimitExceeded`.
+pub(super) const MAX_PENDING_RECORDING_BYTES: usize = 4 * 1024 * 1024;
+
 type RecordingStore = Rc<RefCell<Recordings>>;
 
 #[derive(Default)]
