@@ -84,6 +84,7 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     SharedWorker,
     WebSocket,
     RtcPeerConnection,
+    RtcIceCandidate,
     Navigator,
     WorkerNavigator,
     Permissions,

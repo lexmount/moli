@@ -1027,6 +1027,11 @@ const CONSTRUCTOR_SPECS_AFTER_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::RtcPeerConnection,
     },
     ConstructorSpec {
+        name: "RTCIceCandidate",
+        parent: None,
+        kind: ConstructorKind::RtcIceCandidate,
+    },
+    ConstructorSpec {
         name: "RTCRtpReceiver",
         parent: None,
         kind: ConstructorKind::Illegal,

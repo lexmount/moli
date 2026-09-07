@@ -4,6 +4,10 @@ use crate::util::{
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+mod ice_candidate;
+mod ice_candidate_parser;
+pub(in crate::context_bootstrap) use ice_candidate::rtc_ice_candidate_constructor_callback;
+
 const RTC_PEER_CONNECTION_BRAND_SLOT: &str = "__moliRtcPeerConnectionBrand";
 const RTC_PEER_CONNECTION_CONFIGURATION_SLOT: &str = "__moliRtcPeerConnectionConfiguration";
 const RTC_PEER_CONNECTION_SIGNALING_STATE_SLOT: &str = "__moliRtcPeerConnectionSignalingState";
@@ -202,6 +206,9 @@ pub(in crate::context_bootstrap) fn install_webrtc_template_bindings<'s>(
 ) {
     let prototype = template.prototype_template(scope);
     match interface_name {
+        "RTCIceCandidate" => {
+            ice_candidate::install_ice_candidate_template_bindings(scope, template)
+        }
         "RTCPeerConnection" => {
             RtcPeerConnectionPrototypeDeclaration::initialize_prototype_template(scope, prototype);
         }
