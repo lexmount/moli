@@ -3348,6 +3348,97 @@ fn autocorrect_reflects_boolean_and_inherits_from_form_owner() {
 }
 
 #[test]
+fn writing_suggestions_reflects_and_inherits_nearest_ancestor_state() {
+    let mut vm = new_parsed_test_vm(
+        "https://writing-suggestions.test/",
+        "<!doctype html><html><body></body></html>",
+    );
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const parent = document.createElement('section');
+  const child = document.createElement('div');
+  const grandchild = document.createElement('span');
+  parent.append(child);
+  child.append(grandchild);
+  parent.setAttribute('writingsuggestions', 'FaLsE');
+
+  const inherited = [
+    parent.writingSuggestions,
+    child.writingSuggestions,
+    grandchild.writingSuggestions
+  ];
+  child.setAttribute('writingsuggestions', '');
+  const emptyOverride = [child.writingSuggestions, grandchild.writingSuggestions];
+  child.setAttribute('writingsuggestions', 'invalid');
+  const invalidOverride = [child.writingSuggestions, grandchild.writingSuggestions];
+  child.removeAttribute('writingsuggestions');
+  const restoredInheritance = grandchild.writingSuggestions;
+
+  grandchild.writingSuggestions = false;
+  const booleanSetter = [
+    grandchild.writingSuggestions,
+    grandchild.getAttribute('writingsuggestions')
+  ];
+  grandchild.writingSuggestions = { toString() { return 'TrUe'; } };
+  const domStringSetter = [
+    grandchild.writingSuggestions,
+    grandchild.getAttribute('writingsuggestions')
+  ];
+
+  const namespaceOnly = document.createElement('div');
+  namespaceOnly.setAttributeNS('urn:test', 'writingsuggestions', 'false');
+
+  const detachedParent = document.createElement('div');
+  const detachedChild = document.createElement('span');
+  detachedParent.setAttribute('writingsuggestions', 'false');
+  detachedParent.append(detachedChild);
+
+  const descriptor = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    'writingSuggestions'
+  );
+  const incompatible = operation => {
+    try {
+      operation(document.createElementNS('urn:test', 'div'));
+      return 'none';
+    } catch (error) {
+      return error.name;
+    }
+  };
+
+  return JSON.stringify({
+    descriptor: [descriptor.enumerable, descriptor.configurable],
+    inherited,
+    emptyOverride,
+    invalidOverride,
+    restoredInheritance,
+    booleanSetter,
+    domStringSetter,
+    namespaceOnly: [
+      namespaceOnly.writingSuggestions,
+      namespaceOnly.getAttribute('writingsuggestions')
+    ],
+    detached: detachedChild.writingSuggestions,
+    incompatible: [
+      incompatible(receiver => descriptor.get.call(receiver)),
+      incompatible(receiver => descriptor.set.call(receiver, 'false'))
+    ]
+  });
+})()
+"#,
+        )
+        .expect("writingSuggestions semantics should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"descriptor":[true,true],"inherited":["false","false","false"],"emptyOverride":["true","true"],"invalidOverride":["true","true"],"restoredInheritance":"false","booleanSetter":["false","false"],"domStringSetter":["true","TrUe"],"namespaceOnly":["true","false"],"detached":"false","incompatible":["TypeError","TypeError"]}"#
+    );
+}
+
+#[test]
 fn set_range_text_preserve_mode_adjusts_selection_by_replacement_delta() {
     let mut vm = new_storage_test_vm("https://forms-selection-set-range-text.test/");
 

@@ -448,6 +448,7 @@ pub(super) use global_attributes::{
     node_spellcheck_setter_function, node_tab_index_getter_function,
     node_tab_index_setter_function, node_title_getter_function, node_title_setter_function,
     node_translate_getter_function, node_translate_setter_function,
+    node_writing_suggestions_getter_function, node_writing_suggestions_setter_function,
     null_to_empty_dom_string_reflection_setter_function, object_archive_getter_function,
     object_code_base_getter_function, object_code_getter_function,
     object_code_type_getter_function, object_data_getter_function, object_declare_getter_function,
@@ -1482,6 +1483,13 @@ struct HtmlElementStandardPrototypeDeclaration {
         setter = node_spellcheck_setter_function
     )]
     spellcheck: (),
+    #[webapi(
+        accessor_property = "writingSuggestions",
+        enumerable,
+        getter = node_writing_suggestions_getter_function,
+        setter = node_writing_suggestions_setter_function
+    )]
+    writing_suggestions: (),
     #[webapi(
         accessor_property = "contentEditable",
         enumerable,

@@ -718,6 +718,7 @@ fn htmlelement_standard_accessors_live_on_owner_prototypes() {
                 "accessKey",
                 "draggable",
                 "spellcheck",
+                "writingSuggestions",
                 "contentEditable",
                 "enterKeyHint",
                 "isContentEditable",
@@ -760,6 +761,7 @@ fn htmlelement_standard_accessors_live_on_owner_prototypes() {
               div.accessKey = "x";
               div.draggable = true;
               div.spellcheck = false;
+              div.writingSuggestions = false;
               div.contentEditable = "plaintext-only";
               div.enterKeyHint = "Go";
               div.inputMode = "NUMERIC";
@@ -778,6 +780,7 @@ fn htmlelement_standard_accessors_live_on_owner_prototypes() {
               assert(div.accessKey === "x", "accessKey behavior");
               assert(div.draggable === true && div.getAttribute("draggable") === "true", "draggable behavior");
               assert(div.spellcheck === false && div.getAttribute("spellcheck") === "false", "spellcheck behavior");
+              assert(div.writingSuggestions === "false" && div.getAttribute("writingsuggestions") === "false", "writingSuggestions behavior");
               assert(div.contentEditable === "plaintext-only" && div.isContentEditable === true, "contentEditable behavior");
               assert(div.enterKeyHint === "go", "enterKeyHint behavior");
               assert(div.inputMode === "numeric", "inputMode behavior");

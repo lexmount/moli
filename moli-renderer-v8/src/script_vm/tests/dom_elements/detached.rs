@@ -2676,6 +2676,7 @@ fn detached_global_html_attributes_use_html_element_prototype_accessors() {
     "accessKey",
     "draggable",
     "spellcheck",
+    "writingSuggestions",
     "enterKeyHint",
     "inputMode",
     "autofocus",
@@ -2702,6 +2703,7 @@ fn detached_global_html_attributes_use_html_element_prototype_accessors() {
     descriptors.translate.set.call(element, false);
     descriptors.draggable.set.call(element, true);
     descriptors.spellcheck.set.call(element, false);
+    descriptors.writingSuggestions.set.call(element, false);
     descriptors.tabIndex.set.call(element, 7);
 
     assert(descriptors.title.get.call(element) === "Title", `${label}.title`);
@@ -2717,10 +2719,12 @@ fn detached_global_html_attributes_use_html_element_prototype_accessors() {
     assert(descriptors.translate.get.call(element) === false, `${label}.translate`);
     assert(descriptors.draggable.get.call(element) === true, `${label}.draggable`);
     assert(descriptors.spellcheck.get.call(element) === false, `${label}.spellcheck`);
+    assert(descriptors.writingSuggestions.get.call(element) === "false", `${label}.writingSuggestions`);
     assert(descriptors.tabIndex.get.call(element) === 7, `${label}.tabIndex`);
     assert(element.getAttribute("translate") === "no", `${label}.translate attr`);
     assert(element.getAttribute("draggable") === "true", `${label}.draggable attr`);
     assert(element.getAttribute("spellcheck") === "false", `${label}.spellcheck attr`);
+    assert(element.getAttribute("writingsuggestions") === "false", `${label}.writingsuggestions attr`);
     assert(element.getAttribute("tabindex") === "7", `${label}.tabindex attr`);
 
     descriptors.hidden.set.call(element, false);
