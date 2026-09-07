@@ -2608,6 +2608,14 @@ async fn navigator_service_worker_url_arguments_follow_webidl_and_origin_rules()
                 () => "resolved",
                 error => error && error.name
               );
+              const synchronousErrorName = callback => {
+                try {
+                  callback();
+                  return "none";
+                } catch (error) {
+                  return error && error.name;
+                }
+              };
               globalThis.__serviceWorkerUrlArgumentProbe = { state: "pending" };
               (async () => {
                 const registration = await sw.register("/worker.js", { scope: "null" });
@@ -2621,17 +2629,17 @@ async fn navigator_service_worker_url_arguments_follow_webidl_and_origin_rules()
                 const nullScope = await rejectionName(
                   sw.register("/resources/worker.js", { scope: null })
                 );
-                const nullType = await rejectionName(
-                  sw.register("/worker.js", { type: null })
+                const nullType = synchronousErrorName(
+                  () => sw.register("/worker.js", { type: null })
                 );
-                const nullUpdateViaCache = await rejectionName(
-                  sw.register("/worker.js", { updateViaCache: null })
+                const nullUpdateViaCache = synchronousErrorName(
+                  () => sw.register("/worker.js", { updateViaCache: null })
                 );
-                const primitiveOptions = await rejectionName(
-                  sw.register("/worker.js", 1)
+                const primitiveOptions = synchronousErrorName(
+                  () => sw.register("/worker.js", 1)
                 );
-                const symbolClient = await rejectionName(
-                  sw.getRegistration(Symbol("client"))
+                const symbolClient = synchronousErrorName(
+                  () => sw.getRegistration(Symbol("client"))
                 );
                 const unregistered = await registration.unregister();
                 globalThis.__serviceWorkerUrlArgumentProbe = {
