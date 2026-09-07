@@ -2339,6 +2339,7 @@ mod tests {
                             crate::conn::CdpSessionRoute::Browser,
                         )
                     }),
+                web_contents: NavigationDispatchState::detached_web_contents_for_test(),
                 result_projection: NavigationResultProjection::Cdp(
                     json!({"frameId": "FRAME-1", "loaderId": "LOADER-1"}),
                 ),

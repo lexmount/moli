@@ -717,6 +717,7 @@ async fn bidi_fetch_control_resolves_background_request_owner() {
             navigation: NavigationDispatchState {
                 navigate_id: None,
                 owner: CommandOwnerScope::for_session("SID-background"),
+                web_contents: NavigationDispatchState::detached_web_contents_for_test(),
                 result_projection: NavigationResultProjection::WebDriverBidi(json!({})),
                 frame_id: "TID-background".to_owned(),
                 session_id: Some("SID-background".to_owned()),

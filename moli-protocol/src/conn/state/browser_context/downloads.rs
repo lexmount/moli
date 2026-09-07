@@ -1,26 +1,32 @@
-use moli_core::browser::{DownloadAccessError, DownloadBody, DownloadObservation, DownloadPolicy};
+use moli_core::browser::{
+    DownloadAccessError, DownloadBody, DownloadObservation, DownloadPolicy, WebContentsHandle,
+};
 use moli_fetch::{FetchConfig, Request};
 use url::Url;
 
 use super::BrowserContext;
 
 impl BrowserContext {
-    // Value-only migration bridge; admission and execution belong to the physical
-    // Context. Removed with the wrapper at the typed Browser API cutover (24b/30).
+    pub(in crate::conn) fn download_frame_id_for_web_contents(
+        &self,
+        web_contents: WebContentsHandle,
+    ) -> Option<&str> {
+        self.physical.web_contents(web_contents).ok()?;
+        self.page_targets
+            .get_for_web_contents(web_contents.id())
+            .map(crate::conn::PageAgentHost::target_id)
+    }
+
     pub(in crate::conn) fn start_download_request(
         &mut self,
-        target: &str,
+        web_contents: WebContentsHandle,
         fetch_defaults: FetchConfig,
-        default_policy: &DownloadPolicy,
+        policy: &DownloadPolicy,
         request: Request,
         suggested_filename: Option<String>,
     ) -> Result<Option<DownloadObservation>, String> {
-        let client = self.ensure_target_resource_request_client(target, fetch_defaults)?;
-        let policy = self
-            .physical
-            .download_policy
-            .as_ref()
-            .unwrap_or(default_policy);
+        let client =
+            self.ensure_web_contents_resource_request_client(web_contents, fetch_defaults)?;
         self.physical
             .downloads
             .start_request(policy, client, request, suggested_filename)
@@ -28,16 +34,13 @@ impl BrowserContext {
 
     pub(in crate::conn) fn start_download_response(
         &mut self,
-        default_policy: &DownloadPolicy,
+        web_contents: WebContentsHandle,
+        policy: &DownloadPolicy,
         url: Url,
         headers: Vec<(String, String)>,
         body: DownloadBody,
     ) -> Result<Option<DownloadObservation>, String> {
-        let policy = self
-            .physical
-            .download_policy
-            .as_ref()
-            .unwrap_or(default_policy);
+        self.physical.web_contents(web_contents)?;
         self.physical
             .downloads
             .start_response(policy, url, headers, body)

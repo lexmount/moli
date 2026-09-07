@@ -231,6 +231,7 @@ async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
     let navigation = NavigationDispatchState {
         navigate_id: Some(1),
         owner,
+        web_contents: NavigationDispatchState::detached_web_contents_for_test(),
         result_projection: NavigationResultProjection::Cdp(json!({
             "frameId": "TID-target",
             "loaderId": "LOADER-target",

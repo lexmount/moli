@@ -2537,6 +2537,15 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
         referrer,
         url.starts_with("data:"),
     );
+    let Some(web_contents) = navigation_preflight
+        .as_ref()
+        .map(|preflight| preflight.web_contents)
+    else {
+        return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
+            -31998,
+            "TargetNotLoaded",
+        ));
+    };
     let frame_id = navigation_preflight
         .as_ref()
         .map(|preflight| preflight.frame_id.clone())
@@ -2565,6 +2574,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
     let mut navigation_state = NavigationDispatchState {
         navigate_id: command_id,
         owner: owner.clone(),
+        web_contents,
         result_projection,
         frame_id: frame_id.clone(),
         session_id: None,

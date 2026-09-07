@@ -51,6 +51,7 @@ mod dispatch;
 mod download_policy;
 mod downloads;
 pub(crate) use download_policy::parse_download_behavior;
+pub(crate) use downloads::PreparedDownloadActivation;
 #[cfg(test)]
 mod download_policy_tests;
 mod fetch_support;

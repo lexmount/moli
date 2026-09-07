@@ -661,6 +661,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
         NavigationDispatchState {
             navigate_id: Some(1),
             owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
+            web_contents: NavigationDispatchState::detached_web_contents_for_test(),
             result_projection: crate::conn::NavigationResultProjection::Cdp(
                 json!({"frameId": "TID-1", "loaderId": LOADER_ID}),
             ),

@@ -1,7 +1,7 @@
 use crate::conn::{
     BackgroundProtocolEvent, CdpConnection, Cmd, CommandDispatchContext, CommandOwnerScope,
     CompletedDocumentInputCommand, PageInputCommand, PendingDocumentInputCommand,
-    TargetPageResidenceIdentity,
+    PreparedDownloadActivation, TargetPageResidenceIdentity,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
@@ -1472,7 +1472,7 @@ pub(crate) async fn complete_pending_input_command_output_plan(
 
 #[derive(Debug, Default, Eq, PartialEq)]
 pub(crate) struct InputPreparedOutputs {
-    download_activations: Vec<RendererPendingDownloadActivation>,
+    download_activations: Vec<PreparedDownloadActivation>,
     file_chooser_activations: Vec<file_chooser::PreparedFileChooserActivation>,
 }
 
@@ -1483,8 +1483,13 @@ pub(crate) struct InputPreparedOutputSlot {
 
 impl InputPreparedOutputs {
     pub(crate) fn from_renderer_download_activation(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
         activation: RendererPendingDownloadActivation,
     ) -> Self {
+        let Some(activation) = conn.prepare_download_activation_for_owner(owner, activation) else {
+            return Self::default();
+        };
         Self {
             download_activations: vec![activation],
             file_chooser_activations: Vec::new(),
@@ -1535,10 +1540,17 @@ impl InputPreparedOutputs {
 
     #[cfg(test)]
     pub(crate) fn from_download_activations_for_test(
+        conn: &CdpConnection,
+        owner: &CommandOwnerScope,
         activations: Vec<RendererPendingDownloadActivation>,
     ) -> Self {
         Self {
-            download_activations: activations,
+            download_activations: activations
+                .into_iter()
+                .filter_map(|activation| {
+                    conn.prepare_download_activation_for_owner(owner, activation)
+                })
+                .collect(),
             file_chooser_activations: Vec::new(),
         }
     }
@@ -1574,9 +1586,7 @@ impl InputPreparedOutputSlot {
         self.outputs.extend(other.outputs);
     }
 
-    pub(crate) fn take_download_activations(
-        &mut self,
-    ) -> Option<Vec<RendererPendingDownloadActivation>> {
+    pub(crate) fn take_download_activations(&mut self) -> Option<Vec<PreparedDownloadActivation>> {
         (!self.outputs.download_activations.is_empty())
             .then(|| std::mem::take(&mut self.outputs.download_activations))
     }
@@ -1601,15 +1611,19 @@ async fn handle_input_dispatch_outcome_async(
         .map(CommandOwnerScope::for_session)
         .unwrap_or_else(|| CommandOwnerScope::for_page_residence(owner));
     if let Some(download) = outcome.pending_download {
-        let mut events = Vec::new();
-        conn.handle_pending_download_activation_background_events_async(
-            &mut events,
-            &action_owner,
-            download,
-            command_context,
-        )
-        .await?;
-        out.extend_protocol_events(command_context, events);
+        let web_contents = conn.browser_web_contents_for_page_residence(owner).ok();
+        if let Some(download) = web_contents.and_then(|web_contents| {
+            conn.prepare_download_activation(&action_owner, web_contents, download)
+        }) {
+            let mut events = Vec::new();
+            conn.handle_prepared_download_activation_background_events_async(
+                &mut events,
+                download,
+                command_context,
+            )
+            .await?;
+            out.extend_protocol_events(command_context, events);
+        }
     }
     if let Some(file_chooser) = outcome.pending_file_chooser
         && let Some(file_chooser) = file_chooser::PreparedFileChooserActivation::capture(
@@ -1637,7 +1651,6 @@ async fn handle_input_dispatch_outcome_async(
 pub(in crate::domains) async fn emit_download_activity_background_events_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
     prepared_outputs: Option<&mut ProtocolOutputPayloads>,
     command_context: &mut CommandDispatchContext,
 ) {
@@ -1645,22 +1658,20 @@ pub(in crate::domains) async fn emit_download_activity_background_events_async(
         .and_then(ProtocolOutputPayloads::input_mut)
         .and_then(InputPreparedOutputSlot::take_download_activations)
     {
-        emit_download_activations(conn, out, owner, activations, command_context).await;
+        emit_download_activations(conn, out, activations, command_context).await;
     }
 }
 
 async fn emit_download_activations(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
-    owner: &CommandOwnerScope,
-    activations: Vec<RendererPendingDownloadActivation>,
+    activations: Vec<PreparedDownloadActivation>,
     command_context: &mut CommandDispatchContext,
 ) {
     for activation in activations {
         if let Err(error) = conn
-            .handle_pending_download_activation_background_events_async(
+            .handle_prepared_download_activation_background_events_async(
                 out,
-                owner,
                 activation,
                 command_context,
             )
@@ -2026,6 +2037,12 @@ mod producer_tests {
 
     #[test]
     fn input_prepared_slot_keeps_download_and_file_chooser_payloads_separate() {
+        let mut conn = CdpConnection::default();
+        let mut context = BrowserContext::new("BID-slot".to_owned());
+        context.set_active_target_id("TID-slot");
+        context.attach_active_session("SID-slot");
+        conn.install_browser_context_fixture_for_test(context);
+        let command_owner = CommandOwnerScope::for_session("SID-slot");
         let source_document = renderer_document_identity_for_test(1, 1);
         let owner = TargetPageResidenceIdentity::new_for_test(
             "BID-slot".to_owned(),
@@ -2033,11 +2050,17 @@ mod producer_tests {
             1,
         );
         let mut slot = super::InputPreparedOutputSlot::from_outputs(super::InputPreparedOutputs {
-            download_activations: vec![RendererPendingDownloadActivation {
-                url: "https://example.test/download".to_owned(),
-                suggested_filename: Some("download.txt".to_owned()),
-                response: None,
-            }],
+            download_activations: vec![
+                conn.prepare_download_activation_for_owner(
+                    &command_owner,
+                    RendererPendingDownloadActivation {
+                        url: "https://example.test/download".to_owned(),
+                        suggested_filename: Some("download.txt".to_owned()),
+                        response: None,
+                    },
+                )
+                .unwrap(),
+            ],
             file_chooser_activations: vec![
                 super::file_chooser::PreparedFileChooserActivation::from_renderer_for_test(
                     owner,
@@ -2387,21 +2410,23 @@ mod producer_tests {
         .unwrap();
         let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
         let mut command_context = CommandDispatchContext::default();
+        let owner = CommandOwnerScope::for_session("SID-download");
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::InputPreparedOutputSlot::from_outputs(
-                super::InputPreparedOutputs::from_download_activations_for_test(vec![
-                    RendererPendingDownloadActivation {
+                super::InputPreparedOutputs::from_download_activations_for_test(
+                    &conn,
+                    &owner,
+                    vec![RendererPendingDownloadActivation {
                         url: "https://example.test/report.txt".to_owned(),
                         suggested_filename: Some("report.txt".to_owned()),
                         response: None,
-                    },
-                ]),
+                    }],
+                ),
             ));
 
         super::emit_download_activity_background_events_async(
             &mut conn,
             &mut out,
-            &CommandOwnerScope::for_session("SID-download"),
             Some(&mut prepared),
             &mut command_context,
         )

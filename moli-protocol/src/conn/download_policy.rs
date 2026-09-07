@@ -1,5 +1,5 @@
 use super::CdpConnection;
-use moli_core::browser::{DownloadBehavior, DownloadPolicy};
+use moli_core::browser::{BrowserContextId, DownloadBehavior, DownloadPolicy};
 use std::collections::HashMap;
 
 pub(crate) fn parse_download_behavior(value: &str) -> Option<DownloadBehavior> {
@@ -114,6 +114,7 @@ impl CdpConnection {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) fn download_policy_for_browser_context(
         &self,
         context_id: Option<&str>,
@@ -124,6 +125,7 @@ impl CdpConnection {
             .unwrap_or(&self.download_policy)
     }
 
+    #[cfg(test)]
     pub(crate) fn automation_download_events_enabled_for_context(
         &self,
         context_id: Option<&str>,
@@ -132,6 +134,22 @@ impl CdpConnection {
             .and_then(|id| self.browser_context_by_id(id))
             .and_then(|context| context.automation_download_events_enabled)
             .unwrap_or(self.download_subscriptions.automation_events_enabled)
+    }
+
+    pub(crate) fn download_configuration_for_browser_context(
+        &self,
+        context: BrowserContextId,
+    ) -> Option<(DownloadPolicy, bool)> {
+        let context = self.browser_context_by_browser_id(context)?;
+        Some((
+            context
+                .download_policy()
+                .unwrap_or(&self.download_policy)
+                .clone(),
+            context
+                .automation_download_events_enabled
+                .unwrap_or(self.download_subscriptions.automation_events_enabled),
+        ))
     }
 
     pub(crate) fn set_browser_download_events_enabled_for_session(

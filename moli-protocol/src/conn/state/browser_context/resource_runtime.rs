@@ -71,9 +71,9 @@ impl BrowserContext {
             .map(drop)
     }
 
-    pub(super) fn ensure_target_resource_request_client(
+    pub(super) fn ensure_web_contents_resource_request_client(
         &mut self,
-        target: &str,
+        web_contents: moli_core::browser::WebContentsHandle,
         defaults: FetchConfig,
     ) -> Result<ResourceRequestClient, String> {
         let inherited = self.physical.inherited_resource_policy(
@@ -81,8 +81,8 @@ impl BrowserContext {
             &self.global_extra_headers,
             self.global_network_conditions,
         );
-        self.web_contents_for_target_mut(target)
-            .ok_or("WebContents unavailable")?
+        self.physical
+            .web_contents_mut(web_contents)?
             .ensure_resource_request_client(&inherited)
     }
 
@@ -92,7 +92,10 @@ impl BrowserContext {
         target: &str,
         defaults: FetchConfig,
     ) -> Result<ResourceRequestClient, String> {
-        self.ensure_target_resource_request_client(target, defaults)
+        let web_contents = self
+            .web_contents_handle_for_target(target)
+            .ok_or("WebContents unavailable")?;
+        self.ensure_web_contents_resource_request_client(web_contents, defaults)
     }
 
     pub(in crate::conn) fn start_web_contents_resource_runtime_rebuild(
