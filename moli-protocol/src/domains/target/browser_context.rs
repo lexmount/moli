@@ -344,6 +344,14 @@ pub(super) async fn execute_devtools_remove_browser_context_command_async(
         );
     }
 
+    let disposal = match super::browser_context_disposal::BrowserContextDisposal::prepare(
+        conn,
+        &browser_context_id,
+    ) {
+        Ok(disposal) => disposal,
+        Err(error) => return (Err(error), Vec::new()),
+    };
+
     let mut protocol_events = Vec::new();
     if should_emit_internal_lifecycle {
         protocol_events.extend(target_destroyed_automation_events_for_browser_context(
@@ -355,7 +363,7 @@ pub(super) async fn execute_devtools_remove_browser_context_command_async(
     let mut command_context = crate::conn::CommandDispatchContext::default();
     if let Err(error) = super::browser_context_disposal::execute_browser_context_disposal_async(
         conn,
-        browser_context_id,
+        disposal,
         &mut side_effects,
         &mut command_context,
     )
@@ -547,7 +555,10 @@ struct DisposeBcParams {
     browser_context_id: Option<String>,
 }
 
-pub(super) fn start_dispose_browser_context_command(cmd: &Cmd<'_>) -> TargetCommandTaskStep {
+pub(super) fn start_dispose_browser_context_command(
+    conn: &CdpConnection,
+    cmd: &Cmd<'_>,
+) -> TargetCommandTaskStep {
     let params: DisposeBcParams = match cmd.get_params() {
         Ok(Some(p)) => p,
         _ => {
@@ -560,18 +571,24 @@ pub(super) fn start_dispose_browser_context_command(cmd: &Cmd<'_>) -> TargetComm
             return super::target_command_error(-32602, "InvalidParams");
         }
     };
-    pending_dispose_browser_context_command(cmd.id, cmd.session_id, wanted_id)
+    let disposal =
+        super::browser_context_disposal::BrowserContextDisposal::prepare(conn, &wanted_id);
+    pending_dispose_browser_context_command(cmd.id, cmd.session_id, disposal)
 }
 
 pub(super) async fn complete_dispose_browser_context_command_async(
     conn: &mut CdpConnection,
-    wanted_id: String,
+    disposal: Result<super::browser_context_disposal::BrowserContextDisposal, DevToolsError>,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> CommandOutputPlan {
+    let disposal = match disposal {
+        Ok(disposal) => disposal,
+        Err(error) => return CommandOutputPlan::from_devtools_error(error),
+    };
     let mut side_effects = events::TargetProtocolSideEffects::default();
     match super::browser_context_disposal::execute_browser_context_disposal_async(
         conn,
-        wanted_id,
+        disposal,
         &mut side_effects,
         command_context,
     )

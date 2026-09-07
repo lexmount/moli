@@ -2261,10 +2261,12 @@ fn remove_service_worker_target_with_reason(
 pub(super) async fn close_browser_context_worker_targets_for_dispose_async(
     conn: &mut CdpConnection,
     browser_context_id: &str,
+    context: moli_core::browser::BrowserContextId,
     reason: &'static str,
 ) -> Vec<BackgroundProtocolEvent> {
     let Some((context, shared_worker_ids, service_worker_ids)) = conn
-        .browser_context_by_id(browser_context_id)
+        .browser_context_by_browser_id(context)
+        .filter(|candidate| candidate.id == browser_context_id)
         .map(|context| {
             (
                 context.browser_context_id(),

@@ -7747,6 +7747,46 @@ async fn command_dispatch_completes_target_dispose_browser_context_without_legac
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn pending_target_dispose_rejects_a_replaced_same_wire_browser_context() {
+    let mut conn = CdpConnection::new();
+    let mut original = BrowserContext::new("BID-target-dispose-stale".to_owned());
+    original.set_active_target_id("TID-target-dispose-original".to_owned());
+    conn.install_browser_context_fixture_for_test(original);
+
+    let raw = serde_json::to_string(&json!({
+        "id": 601,
+        "method": "Target.disposeBrowserContext",
+        "params": { "browserContextId": "BID-target-dispose-stale" }
+    }))
+    .unwrap();
+    let pending = match conn.start_command_dispatch(&raw) {
+        CdpCommandTaskStep::Pending(pending) => pending,
+        CdpCommandTaskStep::Complete(_) => {
+            panic!("Target.disposeBrowserContext should freeze its Context before completion")
+        }
+    };
+
+    let mut replacement = BrowserContext::new("BID-target-dispose-stale".to_owned());
+    replacement.set_active_target_id("TID-target-dispose-replacement".to_owned());
+    let replacement_id = replacement.browser_context_id();
+    conn.install_browser_context_fixture_for_test(replacement);
+
+    let messages = complete_command_task_for_test(&mut conn, *pending).await;
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["id"], json!(601));
+    assert!(messages[0].get("error").is_some());
+    let replacement = conn
+        .browser_context
+        .as_ref()
+        .expect("stale disposal must preserve the replacement Context");
+    assert_eq!(replacement.browser_context_id(), replacement_id);
+    assert_eq!(
+        replacement.active_target_id(),
+        Some("TID-target-dispose-replacement")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn command_dispatch_completes_target_send_message_without_legacy_fallback() {
     let mut conn = CdpConnection::new();
     let mut browser_context = BrowserContext::new("BID-target-send".to_owned());
