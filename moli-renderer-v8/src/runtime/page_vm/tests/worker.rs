@@ -7904,22 +7904,22 @@ async fn worker_messageport_close_preserves_same_task_queued_messages() {
                                       postMessage(messages.join('|'));
                                     }
                                   };
-                                  postMessage('ready');
                                 };
                                 `)
                             );
                             const channel = new MessageChannel();
                             worker.onmessage = (event) => {
-                                if (event.data === 'ready') {
-                                    channel.port1.postMessage('first');
-                                    channel.port1.postMessage('second');
-                                    return;
-                                }
                                 globalThis.__messagePortCloseRaceResult = event.data;
                                 worker.terminate();
                                 channel.port1.close();
                                 globalThis.__messagePortCloseRaceDone = true;
                             };
+                            // Queue both messages before transferring the receiving
+                            // port. One task on this agent does not stop the worker
+                            // from handling 'first' and closing an already-transferred
+                            // port before 'second' is enqueued.
+                            channel.port1.postMessage('first');
+                            channel.port1.postMessage('second');
                             worker.postMessage('connect', [channel.port2]);
                         })()
                         "#,
