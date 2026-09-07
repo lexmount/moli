@@ -1840,7 +1840,7 @@ fn try_start_pending_runtime_binding_command(
         || should_persist
             && conn
                 .runtime_session_owner_slot_for_owner(&owner_scope)
-                .is_ok_and(|slot| slot.renderer_document_navigation_is_suspended());
+                .is_ok_and(|slot| slot.document_projection_is_pending());
     if live_page_update_unavailable {
         task.command_response = Some(RuntimeBindingCommandResponse::empty_success());
         let meta = RuntimeCommandCompletionMeta {

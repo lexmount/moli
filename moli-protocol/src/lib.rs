@@ -36,8 +36,8 @@ pub use conn::{
 };
 pub use domains::activity::{
     ProtocolSchedulerWork, ProtocolSchedulerWorkKind, ProtocolWorkPublishSequence,
-    RuntimeCommandOutputBarrierCompletion, RuntimeCommandOutputBarrierPermit,
-    RuntimeCommandOutputBarrierTerminal, RuntimeCommandOutputBarriers,
+    RendererCommandResponseCompletion, RendererCommandResponseOrder, RendererCommandResponsePermit,
+    RendererCommandResponseTerminal,
 };
 pub use domains::page::{
     BackgroundNavigationCompletion, CompletedPageScreencastCapture,

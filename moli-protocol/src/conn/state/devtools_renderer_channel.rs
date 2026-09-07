@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::fmt;
 
+use moli_core::browser::BrowserSequence;
 use moli_core::page::{
     PendingDevToolsIoCommandDispatch, PendingPageCommand, PendingRuntimeInspectorCommandDispatch,
     RendererAgentAttachmentId, RendererDevToolsAgentToken, RendererInspectorCommandRoute,
@@ -18,14 +19,20 @@ pub(crate) struct RendererAgentAttachment {
     id: RendererAgentAttachmentId,
     agent_token: RendererDevToolsAgentToken,
     document: DocumentId,
+    browser_sequence: BrowserSequence,
 }
 
 impl RendererAgentAttachment {
-    fn new(document: DocumentId, agent_token: RendererDevToolsAgentToken) -> Self {
+    fn new(
+        document: DocumentId,
+        browser_sequence: BrowserSequence,
+        agent_token: RendererDevToolsAgentToken,
+    ) -> Self {
         Self {
             id: RendererAgentAttachmentId::allocate(),
             agent_token,
             document,
+            browser_sequence,
         }
     }
 
@@ -39,6 +46,48 @@ impl RendererAgentAttachment {
 
     pub(crate) fn document(self) -> DocumentId {
         self.document
+    }
+
+    pub(crate) fn browser_sequence(self) -> BrowserSequence {
+        self.browser_sequence
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct DocumentProjectionFenceKey {
+    document: DocumentId,
+    browser_sequence: BrowserSequence,
+    renderer_attachment: RendererAgentAttachmentId,
+}
+
+/// Move-only authority to expose output from one rebound renderer Document.
+#[derive(Debug, Eq, PartialEq)]
+#[must_use = "a Document projection fence must be published before its channel is retired"]
+pub(crate) struct DocumentProjectionFence {
+    key: DocumentProjectionFenceKey,
+}
+
+impl DocumentProjectionFence {
+    fn new(attachment: RendererAgentAttachment) -> Self {
+        Self {
+            key: DocumentProjectionFenceKey {
+                document: attachment.document(),
+                browser_sequence: attachment.browser_sequence(),
+                renderer_attachment: attachment.id(),
+            },
+        }
+    }
+
+    pub(crate) fn document(&self) -> DocumentId {
+        self.key.document
+    }
+
+    pub(crate) fn browser_sequence(&self) -> BrowserSequence {
+        self.key.browser_sequence
+    }
+
+    pub(crate) fn renderer_attachment(&self) -> RendererAgentAttachmentId {
+        self.key.renderer_attachment
     }
 }
 
@@ -276,25 +325,32 @@ enum DevToolsRendererChannelLifecycle {
 pub(crate) struct DevToolsRendererChannel {
     lifecycle: DevToolsRendererChannelLifecycle,
     current: Option<RendererAgentBinding>,
-    inflight_cross_document_navigations: HashSet<NavigationId>,
-    suspended_attachment: Option<RendererAgentAttachment>,
+    pending_document_navigations: HashSet<NavigationId>,
+    pending_document_projection: Option<PendingDocumentProjection>,
+    held_attachment: Option<RendererAgentAttachment>,
     buffered_output: Vec<BufferedRendererInspectorBatch>,
 }
 
+#[derive(Debug)]
+struct PendingDocumentProjection {
+    navigation: NavigationId,
+    fence: DocumentProjectionFenceKey,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) struct RendererChannelResume {
-    suspended_attachment: Option<RendererAgentAttachment>,
+pub(crate) struct RendererOutputHoldRelease {
+    held_attachment: Option<RendererAgentAttachment>,
     current_attachment: Option<RendererAgentAttachment>,
 }
 
-impl RendererChannelResume {
+impl RendererOutputHoldRelease {
     #[cfg(test)]
     pub(crate) fn replacement(
         self,
     ) -> Option<(RendererAgentAttachmentId, RendererAgentAttachmentId)> {
-        let suspended = self.suspended_attachment?;
+        let held = self.held_attachment?;
         let current = self.current_attachment?;
-        (suspended.id() != current.id()).then_some((suspended.id(), current.id()))
+        (held.id() != current.id()).then_some((held.id(), current.id()))
     }
 }
 
@@ -308,13 +364,18 @@ impl DevToolsRendererChannel {
     pub(crate) fn attach_current(
         &mut self,
         document: DocumentId,
+        browser_sequence: BrowserSequence,
         endpoint: RendererInspectionEndpoint,
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
         self.ensure_open()?;
         Ok(self
             .current
             .replace(RendererAgentBinding {
-                attachment: RendererAgentAttachment::new(document, endpoint.agent_token()),
+                attachment: RendererAgentAttachment::new(
+                    document,
+                    browser_sequence,
+                    endpoint.agent_token(),
+                ),
                 endpoint,
             })
             .map(|previous| previous.attachment()))
@@ -328,17 +389,17 @@ impl DevToolsRendererChannel {
         self.current.as_ref()
     }
 
-    pub(crate) fn navigation_started(
+    pub(crate) fn begin_document_projection(
         &mut self,
         navigation: NavigationId,
     ) -> Result<(), DevToolsRendererChannelError> {
         self.ensure_open()?;
-        let was_suspended = self.output_is_suspended();
-        if !self.inflight_cross_document_navigations.insert(navigation) {
+        let was_pending = self.document_projection_is_pending();
+        if !self.pending_document_navigations.insert(navigation) {
             return Err(DevToolsRendererChannelError::DuplicateNavigation);
         }
-        if !was_suspended {
-            self.suspended_attachment = self.current();
+        if !was_pending {
+            self.held_attachment = self.current();
         }
         Ok(())
     }
@@ -348,12 +409,31 @@ impl DevToolsRendererChannel {
         &mut self,
         navigation: NavigationId,
         document: DocumentId,
+        browser_sequence: BrowserSequence,
         endpoint: RendererInspectionEndpoint,
-    ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
-        let previous = self.attach_current(document, endpoint)?;
-        self.inflight_cross_document_navigations
+    ) -> Result<
+        (Option<RendererAgentAttachment>, DocumentProjectionFence),
+        DevToolsRendererChannelError,
+    > {
+        self.ensure_open()?;
+        if self.pending_document_projection.is_some() {
+            return Err(DevToolsRendererChannelError::ProjectionPending);
+        }
+        if !self.pending_document_navigations.contains(&navigation) {
+            return Err(DevToolsRendererChannelError::UnknownNavigation);
+        }
+        let previous = self.attach_current(document, browser_sequence, endpoint)?;
+        self.pending_document_navigations
             .retain(|pending| *pending == navigation);
-        Ok(previous)
+        let fence = DocumentProjectionFence::new(
+            self.current()
+                .expect("a successful renderer rebind must install its attachment"),
+        );
+        self.pending_document_projection = Some(PendingDocumentProjection {
+            navigation,
+            fence: fence.key,
+        });
+        Ok((previous, fence))
     }
 
     pub(crate) fn route_current_output(
@@ -371,37 +451,78 @@ impl DevToolsRendererChannel {
         self.route_validated_output(attachment_id, batches)
     }
 
-    pub(crate) fn navigation_finished(
+    pub(crate) fn finish_navigation_without_document_projection(
         &mut self,
         navigation: &NavigationId,
-    ) -> Result<Option<RendererChannelResume>, DevToolsRendererChannelError> {
+    ) -> Result<Option<RendererOutputHoldRelease>, DevToolsRendererChannelError> {
         self.ensure_open()?;
-        if !self.inflight_cross_document_navigations.remove(navigation)
-            || self.output_is_suspended()
+        if self
+            .pending_document_projection
+            .as_ref()
+            .is_some_and(|pending| &pending.navigation == navigation)
+        {
+            return Err(DevToolsRendererChannelError::ProjectionPending);
+        }
+        if !self.pending_document_navigations.remove(navigation)
+            || self.document_projection_is_pending()
         {
             return Ok(None);
         }
-        Ok(Some(RendererChannelResume {
-            suspended_attachment: self.suspended_attachment.take(),
+        Ok(Some(RendererOutputHoldRelease {
+            held_attachment: self.held_attachment.take(),
             current_attachment: self.current(),
         }))
     }
 
-    pub(crate) fn output_is_suspended(&self) -> bool {
-        !self.inflight_cross_document_navigations.is_empty()
+    pub(crate) fn publish_document_projection(
+        &mut self,
+        fence: DocumentProjectionFence,
+    ) -> Result<Option<RendererOutputHoldRelease>, DevToolsRendererChannelError> {
+        self.ensure_open()?;
+        let Some(pending) = self.pending_document_projection.as_ref() else {
+            return Err(DevToolsRendererChannelError::StaleProjectionFence);
+        };
+        if pending.fence != fence.key
+            || self.current().is_none_or(|current| {
+                current.document() != fence.document()
+                    || current.browser_sequence() != fence.browser_sequence()
+                    || current.id() != fence.renderer_attachment()
+            })
+        {
+            return Err(DevToolsRendererChannelError::StaleProjectionFence);
+        }
+        let pending = self
+            .pending_document_projection
+            .take()
+            .expect("validated pending Document projection");
+        assert!(
+            self.pending_document_navigations
+                .remove(&pending.navigation),
+            "a pending Document projection must retain its navigation hold"
+        );
+        if self.document_projection_is_pending() {
+            return Ok(None);
+        }
+        Ok(Some(RendererOutputHoldRelease {
+            held_attachment: self.held_attachment.take(),
+            current_attachment: self.current(),
+        }))
+    }
+
+    pub(crate) fn document_projection_is_pending(&self) -> bool {
+        !self.pending_document_navigations.is_empty()
     }
 
     pub(crate) fn has_navigation(&self, navigation: &NavigationId) -> bool {
-        self.inflight_cross_document_navigations
-            .contains(navigation)
+        self.pending_document_navigations.contains(navigation)
     }
 
-    pub(crate) fn inflight_navigation_count(&self) -> usize {
-        self.inflight_cross_document_navigations.len()
+    pub(crate) fn pending_navigation_count(&self) -> usize {
+        self.pending_document_navigations.len()
     }
 
     pub(crate) fn take_released_output(&mut self) -> Vec<RendererRuntimeInspectorMessageBatch> {
-        if self.output_is_suspended() {
+        if self.document_projection_is_pending() {
             return Vec::new();
         }
         let Some(current) = self.current() else {
@@ -418,6 +539,10 @@ impl DevToolsRendererChannel {
         _reason: RendererAgentDetachReason,
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
         self.ensure_open()?;
+        self.pending_document_navigations.clear();
+        self.pending_document_projection = None;
+        self.held_attachment = None;
+        self.buffered_output.clear();
         Ok(self.current.take().map(|current| current.attachment()))
     }
 
@@ -429,8 +554,9 @@ impl DevToolsRendererChannel {
             return None;
         }
         self.lifecycle = DevToolsRendererChannelLifecycle::Closed(reason);
-        self.inflight_cross_document_navigations.clear();
-        self.suspended_attachment = None;
+        self.pending_document_navigations.clear();
+        self.pending_document_projection = None;
+        self.held_attachment = None;
         self.buffered_output.clear();
         self.current.take().map(|current| current.attachment())
     }
@@ -471,10 +597,11 @@ impl DevToolsRendererChannel {
         {
             return Err(DevToolsRendererChannelError::MismatchedAgent);
         }
-        if self.output_is_suspended() {
-            let releases_current_prefix = batches
-                .iter()
-                .any(RendererRuntimeInspectorMessageBatch::has_renderer_protocol_response);
+        if self.document_projection_is_pending() {
+            let releases_current_prefix = self.pending_document_projection.is_none()
+                && batches
+                    .iter()
+                    .any(RendererRuntimeInspectorMessageBatch::has_renderer_protocol_response);
             self.buffer_output(attachment_id, batches);
             if releases_current_prefix {
                 // Main ingress remains suspended, but Chromium's existing
@@ -529,6 +656,9 @@ impl DevToolsRendererChannel {
 pub(crate) enum DevToolsRendererChannelError {
     Closed,
     DuplicateNavigation,
+    UnknownNavigation,
+    ProjectionPending,
+    StaleProjectionFence,
     StaleAttachment,
     MismatchedAgent,
 }
@@ -538,6 +668,9 @@ impl fmt::Display for DevToolsRendererChannelError {
         formatter.write_str(match self {
             Self::Closed => "renderer channel is closed",
             Self::DuplicateNavigation => "renderer channel navigation is already in flight",
+            Self::UnknownNavigation => "renderer channel navigation is not in flight",
+            Self::ProjectionPending => "renderer Document projection is still pending",
+            Self::StaleProjectionFence => "renderer Document projection fence is stale",
             Self::StaleAttachment => "renderer Inspector output belongs to a stale attachment",
             Self::MismatchedAgent => {
                 "renderer Inspector output agent does not match its attachment"
@@ -612,22 +745,22 @@ mod tests {
         channel
             .attach_current(
                 DocumentId::allocate(),
+                BrowserSequence::allocate(),
                 outgoing.renderer_inspection_endpoint(),
             )
             .unwrap();
         let original = channel.current().unwrap();
         let navigation = NavigationId::allocate();
-        channel.navigation_started(navigation).unwrap();
-        assert_eq!(
-            channel
-                .document_committed(
-                    navigation,
-                    DocumentId::allocate(),
-                    committed_page.renderer_inspection_endpoint(),
-                )
-                .unwrap(),
-            Some(original)
-        );
+        channel.begin_document_projection(navigation).unwrap();
+        let (previous, _fence) = channel
+            .document_committed(
+                navigation,
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                committed_page.renderer_inspection_endpoint(),
+            )
+            .unwrap();
+        assert_eq!(previous, Some(original));
         let attachment = channel.current().unwrap();
         let registration = moli_core::page::RuntimeBindingRegistration {
             devtools_session: None,
@@ -703,14 +836,22 @@ mod tests {
         let mut channel = DevToolsRendererChannel::default();
 
         assert_eq!(
-            channel.attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint()),
+            channel.attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint()
+            ),
             Ok(None)
         );
         let first = channel.current().expect("first attachment");
         assert_eq!(first.agent_token(), agent);
 
         let replaced = channel
-            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
+            .attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
             .expect("reattach")
             .expect("replaced attachment");
         let second = channel.current().expect("second attachment");
@@ -725,58 +866,73 @@ mod tests {
         let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
+            .attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
             .expect("initial attach");
         let current = channel.current();
 
         channel
-            .navigation_started(request)
+            .begin_document_projection(request)
             .expect("navigation start");
-        assert!(channel.output_is_suspended());
+        assert!(channel.document_projection_is_pending());
         assert!(
             channel
-                .navigation_finished(&request)
+                .finish_navigation_without_document_projection(&request)
                 .expect("navigation finish")
                 .is_some(),
             "a failed load finishes without committing its candidate"
         );
 
         assert_eq!(channel.current(), current);
-        assert!(!channel.output_is_suspended());
+        assert!(!channel.document_projection_is_pending());
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn browser_commit_retires_superseded_output_suspensions() {
+    async fn browser_commit_retires_superseded_projection_holds() {
         let (_browser, page) = inspection_page().await;
         let (_next_browser, next_page) = inspection_page().await;
         let first = NavigationId::allocate();
         let committed = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
+            .attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
             .unwrap();
         let original = channel.current().unwrap();
-        channel.navigation_started(first).unwrap();
-        channel.navigation_started(committed).unwrap();
+        channel.begin_document_projection(first).unwrap();
+        channel.begin_document_projection(committed).unwrap();
         // Browser has already selected the winning Document. This is projection,
         // not a second validation/commit state machine.
-        assert_eq!(
-            channel
-                .document_committed(
-                    committed,
-                    DocumentId::allocate(),
-                    next_page.renderer_inspection_endpoint(),
-                )
-                .unwrap(),
-            Some(original)
-        );
+        let (previous, fence) = channel
+            .document_committed(
+                committed,
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                next_page.renderer_inspection_endpoint(),
+            )
+            .unwrap();
+        assert_eq!(previous, Some(original));
         assert_eq!(
             channel.current().unwrap().agent_token(),
             next_page.renderer_devtools_agent_token()
         );
-        assert_eq!(channel.inflight_navigation_count(), 1);
-        assert!(channel.navigation_finished(&committed).unwrap().is_some());
-        assert_eq!(channel.navigation_finished(&first), Ok(None));
+        assert_eq!(channel.pending_navigation_count(), 1);
+        assert!(
+            channel
+                .publish_document_projection(fence)
+                .unwrap()
+                .is_some()
+        );
+        assert_eq!(
+            channel.finish_navigation_without_document_projection(&first),
+            Ok(None)
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -784,7 +940,11 @@ mod tests {
         let (_browser, page) = inspection_page().await;
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
+            .attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
             .unwrap();
         drop(page);
         let binding = channel.current_binding().unwrap();
@@ -812,7 +972,11 @@ mod tests {
         let (_browser, mut page) = inspection_page().await;
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
+            .attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
             .unwrap();
         channel
             .detach_current(RendererAgentDetachReason::ExplicitDetach)
@@ -828,41 +992,56 @@ mod tests {
     }
 
     #[test]
-    fn output_remains_suspended_until_all_overlapping_navigations_finish() {
+    fn output_remains_held_until_all_overlapping_navigations_finish() {
         let request_a = NavigationId::allocate();
         let request_b = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
 
-        channel.navigation_started(request_a).expect("navigation A");
-        channel.navigation_started(request_b).expect("navigation B");
-        assert_eq!(channel.inflight_navigation_count(), 2);
-        assert!(channel.output_is_suspended());
+        channel
+            .begin_document_projection(request_a)
+            .expect("navigation A");
+        channel
+            .begin_document_projection(request_b)
+            .expect("navigation B");
+        assert_eq!(channel.pending_navigation_count(), 2);
+        assert!(channel.document_projection_is_pending());
 
-        assert_eq!(channel.navigation_finished(&request_b), Ok(None));
-        assert!(channel.output_is_suspended());
+        assert_eq!(
+            channel.finish_navigation_without_document_projection(&request_b),
+            Ok(None)
+        );
+        assert!(channel.document_projection_is_pending());
         assert!(
             channel
-                .navigation_finished(&request_a)
+                .finish_navigation_without_document_projection(&request_a)
                 .expect("final overlapping navigation")
                 .is_some()
         );
-        assert!(!channel.output_is_suspended());
+        assert!(!channel.document_projection_is_pending());
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn output_suspension_rejects_duplicate_and_ignores_unknown_completion() {
+    async fn projection_hold_rejects_duplicate_and_ignores_unknown_completion() {
         let request = NavigationId::allocate();
         let unknown = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
-        channel.navigation_started(request).unwrap();
+        channel.begin_document_projection(request).unwrap();
         assert_eq!(
-            channel.navigation_started(request),
+            channel.begin_document_projection(request),
             Err(DevToolsRendererChannelError::DuplicateNavigation)
         );
-        assert_eq!(channel.navigation_finished(&unknown), Ok(None));
-        assert!(channel.output_is_suspended());
-        assert!(channel.navigation_finished(&request).unwrap().is_some());
-        assert!(!channel.output_is_suspended());
+        assert_eq!(
+            channel.finish_navigation_without_document_projection(&unknown),
+            Ok(None)
+        );
+        assert!(channel.document_projection_is_pending());
+        assert!(
+            channel
+                .finish_navigation_without_document_projection(&request)
+                .unwrap()
+                .is_some()
+        );
+        assert!(!channel.document_projection_is_pending());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -872,10 +1051,14 @@ mod tests {
         let agent = page.renderer_devtools_agent_token();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
+            .attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
             .expect("initial attach");
         channel
-            .navigation_started(request)
+            .begin_document_projection(request)
             .expect("navigation start");
 
         let detached = channel
@@ -883,19 +1066,24 @@ mod tests {
             .expect("current attachment");
         assert_eq!(detached.agent_token(), agent);
         assert!(channel.is_closed());
-        assert_eq!(channel.inflight_navigation_count(), 0);
+        assert_eq!(channel.pending_navigation_count(), 0);
         assert_eq!(
-            channel.attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint()),
+            channel.attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint()
+            ),
             Err(DevToolsRendererChannelError::Closed)
         );
         assert_eq!(
-            channel.navigation_started(NavigationId::allocate()),
+            channel.begin_document_projection(NavigationId::allocate()),
             Err(DevToolsRendererChannelError::Closed)
         );
         assert_eq!(
             channel.document_committed(
                 request,
                 DocumentId::allocate(),
+                BrowserSequence::allocate(),
                 page.renderer_inspection_endpoint(),
             ),
             Err(DevToolsRendererChannelError::Closed)
@@ -910,7 +1098,11 @@ mod tests {
         let agent = page.renderer_devtools_agent_token();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
+            .attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
             .expect("initial attach");
 
         let detached = channel
@@ -921,7 +1113,11 @@ mod tests {
         assert!(channel.reopen_after_target_crash());
         assert!(!channel.is_closed());
         assert!(!channel.reopen_after_target_crash());
-        assert!(channel.navigation_started(NavigationId::allocate()).is_ok());
+        assert!(
+            channel
+                .begin_document_projection(NavigationId::allocate())
+                .is_ok()
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -933,11 +1129,15 @@ mod tests {
         let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
+            .attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
             .expect("old attach");
         let old_attachment = channel.current().expect("old attachment");
         channel
-            .navigation_started(request)
+            .begin_document_projection(request)
             .expect("navigation start");
 
         assert!(
@@ -946,14 +1146,20 @@ mod tests {
                 .expect("route old output")
                 .is_empty()
         );
-        channel
+        let committed_document = DocumentId::allocate();
+        let committed_sequence = BrowserSequence::allocate();
+        let (_, fence) = channel
             .document_committed(
                 request,
-                DocumentId::allocate(),
+                committed_document,
+                committed_sequence,
                 candidate_page.renderer_inspection_endpoint(),
             )
             .unwrap();
         let current = channel.current().unwrap();
+        assert_eq!(fence.document(), committed_document);
+        assert_eq!(fence.browser_sequence(), committed_sequence);
+        assert_eq!(fence.renderer_attachment(), current.id());
         assert!(
             channel
                 .route_current_output(current.id(), vec![batch(new_agent, "new")])
@@ -961,9 +1167,33 @@ mod tests {
                 .is_empty(),
             "committing Browser state does not release new-generation output before projection finishes"
         );
+        assert_eq!(
+            channel.finish_navigation_without_document_projection(&request),
+            Err(DevToolsRendererChannelError::ProjectionPending),
+            "a generic navigation terminal must not bypass the committed projection fence"
+        );
+        assert!(
+            channel
+                .route_current_output(current.id(), vec![response_batch(new_agent, 18)])
+                .expect("route new-generation response")
+                .is_empty(),
+            "even an IO response from the rebound attachment must wait for frame projection"
+        );
+        let stale_fence = DocumentProjectionFence {
+            key: DocumentProjectionFenceKey {
+                document: fence.document(),
+                browser_sequence: BrowserSequence::allocate(),
+                renderer_attachment: fence.renderer_attachment(),
+            },
+        };
+        assert_eq!(
+            channel.publish_document_projection(stale_fence),
+            Err(DevToolsRendererChannelError::StaleProjectionFence),
+            "a mismatched Browser occurrence must not consume the exact projection fence"
+        );
         let resume = channel
-            .navigation_finished(&request)
-            .expect("navigation finish")
+            .publish_document_projection(fence)
+            .expect("publish projection fence")
             .expect("channel resume");
         assert_eq!(
             resume.replacement(),
@@ -971,8 +1201,9 @@ mod tests {
         );
 
         let released = channel.take_released_output();
-        assert_eq!(released.len(), 1);
+        assert_eq!(released.len(), 2);
         assert_eq!(batch_marker(&released[0]), Some("new"));
+        assert!(released[1].has_renderer_protocol_response());
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -982,11 +1213,15 @@ mod tests {
         let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
+            .attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
             .expect("current attach");
         let attachment = channel.current().expect("current attachment");
         channel
-            .navigation_started(request)
+            .begin_document_projection(request)
             .expect("navigation start");
         assert!(
             channel
@@ -996,7 +1231,7 @@ mod tests {
         );
 
         let resume = channel
-            .navigation_finished(&request)
+            .finish_navigation_without_document_projection(&request)
             .expect("navigation finish")
             .expect("channel resume");
         assert_eq!(resume.replacement(), None);
@@ -1012,11 +1247,15 @@ mod tests {
         let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
+            .attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
             .expect("current attach");
         let attachment = channel.current().expect("current attachment");
         channel
-            .navigation_started(request)
+            .begin_document_projection(request)
             .expect("navigation start");
 
         assert!(
@@ -1032,7 +1271,7 @@ mod tests {
         assert_eq!(released.len(), 2);
         assert_eq!(batch_marker(&released[0]), Some("before-response"));
         assert!(released[1].has_renderer_protocol_response());
-        assert!(channel.output_is_suspended());
+        assert!(channel.document_projection_is_pending());
         assert!(channel.take_released_output().is_empty());
     }
 
@@ -1043,11 +1282,19 @@ mod tests {
         let other_agent = RendererDevToolsAgentToken::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
+            .attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
             .expect("first attach");
         let stale = channel.current().expect("first attachment");
         channel
-            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
+            .attach_current(
+                DocumentId::allocate(),
+                BrowserSequence::allocate(),
+                page.renderer_inspection_endpoint(),
+            )
             .expect("reattach");
         let current = channel.current().expect("current attachment");
 

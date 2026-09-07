@@ -8,40 +8,40 @@ use crate::conn::{
     TargetPageResidenceIdentity,
 };
 
-/// The single-use authority for one Runtime command's causal output barrier.
+/// The single-use authority for one renderer command's response-order boundary.
 ///
 /// The permit is deliberately move-only. Releasing or canceling it removes
 /// exactly one command predecessor from held output; cloning it would make the
-/// barrier terminal ambiguous.
+/// response-order terminal ambiguous.
 #[derive(Debug)]
-#[must_use = "a Runtime command output barrier must be released or canceled exactly once"]
-pub struct RuntimeCommandOutputBarrierPermit {
-    id: RuntimeCommandOutputBarrierId,
+#[must_use = "a renderer command response permit must be released or canceled exactly once"]
+pub struct RendererCommandResponsePermit {
+    id: RendererCommandResponsePermitId,
     command_id: u64,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
-struct RuntimeCommandOutputBarrierId(u64);
+struct RendererCommandResponsePermitId(u64);
 
-impl RuntimeCommandOutputBarrierId {
+impl RendererCommandResponsePermitId {
     fn checked_next(self) -> Self {
         Self(
             self.0
                 .checked_add(1)
-                .expect("Runtime command output barrier id overflow"),
+                .expect("renderer command response ordering id overflow"),
         )
     }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct RuntimeCommandOutputHoldId(u64);
+struct RendererCommandOutputHoldId(u64);
 
-impl RuntimeCommandOutputHoldId {
+impl RendererCommandOutputHoldId {
     fn checked_next(self) -> Self {
         Self(
             self.0
                 .checked_add(1)
-                .expect("Runtime command held-output id overflow"),
+                .expect("renderer command held-output id overflow"),
         )
     }
 }
@@ -56,13 +56,13 @@ enum RuntimeCommandCausalOwner {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct RuntimeCommandOutputRoute {
+struct RendererCommandOutputRoute {
     delivery_scope: CommandOwnerScope,
     causal_owner: RuntimeCommandCausalOwner,
 }
 
 #[derive(Debug)]
-struct ActiveRuntimeCommandOutputBarrier {
+struct ActiveRendererCommandResponsePermit {
     command_id: u64,
     command_scope: CommandOwnerScope,
     causal_owner: RuntimeCommandCausalOwner,
@@ -76,21 +76,21 @@ enum HeldOutputReleaseMode {
 }
 
 #[derive(Debug)]
-struct HeldRuntimeCommandOutput {
-    id: RuntimeCommandOutputHoldId,
+struct HeldRendererCommandOutput {
+    id: RendererCommandOutputHoldId,
     renderer_output_cursor: Option<RendererOutputCursor>,
-    predecessors: BTreeSet<RuntimeCommandOutputBarrierId>,
+    predecessors: BTreeSet<RendererCommandResponsePermitId>,
     release_mode: HeldOutputReleaseMode,
     outputs: PreparedProtocolOutputs,
 }
 
 #[derive(Debug)]
-struct HeldRuntimeCommandOutputRoute {
-    route: RuntimeCommandOutputRoute,
-    outputs: VecDeque<HeldRuntimeCommandOutput>,
+struct HeldRendererCommandOutputRoute {
+    route: RendererCommandOutputRoute,
+    outputs: VecDeque<HeldRendererCommandOutput>,
 }
 
-/// Typed terminal for one command barrier.
+/// Typed terminal for one command permit.
 ///
 /// `Released` means the exact command owner still existed when its response
 /// entered the protocol output sequence. `Superseded` means the command's
@@ -99,28 +99,25 @@ struct HeldRuntimeCommandOutputRoute {
 /// canceled/superseded output performs only browser-owner cleanup and does not
 /// project protocol-only observations from the stale command.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RuntimeCommandOutputBarrierTerminal {
+pub enum RendererCommandResponseTerminal {
     Released,
     Canceled,
     Superseded,
 }
 
-/// One consumed barrier terminal plus the protocol/scheduler output produced
+/// One consumed permit terminal plus the protocol/scheduler output produced
 /// while releasing its held concrete work.
-pub struct RuntimeCommandOutputBarrierCompletion {
-    terminal: RuntimeCommandOutputBarrierTerminal,
+pub struct RendererCommandResponseCompletion {
+    terminal: RendererCommandResponseTerminal,
     outcome: CdpTurnOutcome,
 }
 
-impl RuntimeCommandOutputBarrierCompletion {
-    pub(crate) fn new(
-        terminal: RuntimeCommandOutputBarrierTerminal,
-        outcome: CdpTurnOutcome,
-    ) -> Self {
+impl RendererCommandResponseCompletion {
+    pub(crate) fn new(terminal: RendererCommandResponseTerminal, outcome: CdpTurnOutcome) -> Self {
         Self { terminal, outcome }
     }
 
-    pub fn terminal(&self) -> RuntimeCommandOutputBarrierTerminal {
+    pub fn terminal(&self) -> RendererCommandResponseTerminal {
         self.terminal
     }
 
@@ -129,19 +126,19 @@ impl RuntimeCommandOutputBarrierCompletion {
     }
 }
 
-/// Stable owner-local residence for concrete output held behind Runtime
-/// command responses.
+/// Stable owner-local residence for concrete output held until its renderer
+/// command response is ready for frontend publication.
 ///
 /// A held batch is frozen once by the renderer/protocol owner and is never
 /// reconstructed from current state. Batches stay FIFO within their exact
-/// delivery route. Each batch names the exact Runtime command that produced
+/// delivery route. Each batch names the exact renderer command that produced
 /// it; another pending command on the same Page is not a predecessor.
 #[derive(Debug, Default)]
-pub struct RuntimeCommandOutputBarriers {
-    next_barrier_id: RuntimeCommandOutputBarrierId,
-    next_hold_id: RuntimeCommandOutputHoldId,
-    active: BTreeMap<RuntimeCommandOutputBarrierId, ActiveRuntimeCommandOutputBarrier>,
-    held_routes: Vec<HeldRuntimeCommandOutputRoute>,
+pub struct RendererCommandResponseOrder {
+    next_permit_id: RendererCommandResponsePermitId,
+    next_hold_id: RendererCommandOutputHoldId,
+    active: BTreeMap<RendererCommandResponsePermitId, ActiveRendererCommandResponsePermit>,
+    held_routes: Vec<HeldRendererCommandOutputRoute>,
 }
 
 impl RuntimeCommandCausalOwner {
@@ -168,7 +165,7 @@ impl RuntimeCommandCausalOwner {
     }
 }
 
-impl RuntimeCommandOutputRoute {
+impl RendererCommandOutputRoute {
     fn capture_for_scope(conn: &CdpConnection, delivery_scope: CommandOwnerScope) -> Option<Self> {
         Some(Self {
             causal_owner: RuntimeCommandCausalOwner::capture_for_scope(conn, &delivery_scope)?,
@@ -177,13 +174,13 @@ impl RuntimeCommandOutputRoute {
     }
 }
 
-impl RuntimeCommandOutputBarriers {
+impl RendererCommandResponseOrder {
     pub fn admit(
         &mut self,
         conn: &CdpConnection,
         command_id: u64,
         session_id: Option<&str>,
-    ) -> Option<RuntimeCommandOutputBarrierPermit> {
+    ) -> Option<RendererCommandResponsePermit> {
         let command_scope = CommandOwnerScope::capture(conn, session_id);
         let causal_owner = RuntimeCommandCausalOwner::capture(conn, session_id)?;
         // V8 Inspector commands use a session-local renderer call id. It is
@@ -193,16 +190,16 @@ impl RuntimeCommandOutputBarriers {
         let renderer_cause =
             conn.renderer_runtime_command_cause_for_frontend(session_id, command_id)?;
         assert!(
-            !self.active.values().any(|barrier| {
-                barrier.causal_owner == causal_owner && barrier.renderer_cause == renderer_cause
+            !self.active.values().any(|permit| {
+                permit.causal_owner == causal_owner && permit.renderer_cause == renderer_cause
             }),
-            "an exact renderer Runtime command cause must have only one active response barrier"
+            "an exact renderer command cause must have only one active response permit"
         );
-        let id = self.next_barrier_id;
-        self.next_barrier_id = self.next_barrier_id.checked_next();
+        let id = self.next_permit_id;
+        self.next_permit_id = self.next_permit_id.checked_next();
         let replaced = self.active.insert(
             id,
-            ActiveRuntimeCommandOutputBarrier {
+            ActiveRendererCommandResponsePermit {
                 command_id,
                 command_scope,
                 causal_owner,
@@ -211,9 +208,9 @@ impl RuntimeCommandOutputBarriers {
         );
         assert!(
             replaced.is_none(),
-            "Runtime command barrier ids must not be reused while active"
+            "renderer command response permit ids must not be reused while active"
         );
-        Some(RuntimeCommandOutputBarrierPermit { id, command_id })
+        Some(RendererCommandResponsePermit { id, command_id })
     }
 
     pub(super) async fn route_publication_outputs(
@@ -226,7 +223,7 @@ impl RuntimeCommandOutputBarriers {
         command_context: &mut CommandDispatchContext,
     ) {
         let Some(route) =
-            RuntimeCommandOutputRoute::capture_for_scope(conn, delivery_scope.clone())
+            RendererCommandOutputRoute::capture_for_scope(conn, delivery_scope.clone())
         else {
             outputs
                 .project_async(conn, delivery_scope, command_context)
@@ -245,16 +242,16 @@ impl RuntimeCommandOutputBarriers {
         let matching: Vec<_> = self
             .active
             .iter()
-            .filter_map(|(id, barrier)| {
-                (barrier.causal_owner == route.causal_owner
-                    && &barrier.renderer_cause == renderer_cause)
+            .filter_map(|(id, permit)| {
+                (permit.causal_owner == route.causal_owner
+                    && &permit.renderer_cause == renderer_cause)
                     .then_some(*id)
             })
             .collect();
-        let [barrier_id] = matching.as_slice() else {
+        let [permit_id] = matching.as_slice() else {
             assert!(
                 matching.is_empty(),
-                "one renderer Runtime command cause cannot match multiple active barriers"
+                "one renderer command cause cannot match multiple active response permits"
             );
             outputs
                 .project_async(conn, delivery_scope, command_context)
@@ -272,10 +269,10 @@ impl RuntimeCommandOutputBarriers {
         } else {
             outputs
         };
-        self.hold_for_exact_barrier(
+        self.hold_for_exact_response(
             conn,
             route,
-            *barrier_id,
+            *permit_id,
             renderer_output_cursor,
             causal_outputs,
             command_context,
@@ -283,11 +280,11 @@ impl RuntimeCommandOutputBarriers {
         .await;
     }
 
-    async fn hold_for_exact_barrier(
+    async fn hold_for_exact_response(
         &mut self,
         conn: &mut CdpConnection,
-        route: RuntimeCommandOutputRoute,
-        barrier_id: RuntimeCommandOutputBarrierId,
+        route: RendererCommandOutputRoute,
+        permit_id: RendererCommandResponsePermitId,
         renderer_output_cursor: Option<RendererOutputCursor>,
         outputs: PreparedProtocolOutputs,
         command_context: &mut CommandDispatchContext,
@@ -304,10 +301,10 @@ impl RuntimeCommandOutputBarriers {
         };
         let id = self.next_hold_id;
         self.next_hold_id = self.next_hold_id.checked_next();
-        let held = HeldRuntimeCommandOutput {
+        let held = HeldRendererCommandOutput {
             id,
             renderer_output_cursor,
-            predecessors: BTreeSet::from([barrier_id]),
+            predecessors: BTreeSet::from([permit_id]),
             release_mode: HeldOutputReleaseMode::All,
             outputs,
         };
@@ -318,7 +315,7 @@ impl RuntimeCommandOutputBarriers {
         {
             existing.outputs.push_back(held);
         } else {
-            self.held_routes.push(HeldRuntimeCommandOutputRoute {
+            self.held_routes.push(HeldRendererCommandOutputRoute {
                 route,
                 outputs: VecDeque::from([held]),
             });
@@ -328,16 +325,16 @@ impl RuntimeCommandOutputBarriers {
     pub(crate) async fn release(
         &mut self,
         conn: &mut CdpConnection,
-        permit: RuntimeCommandOutputBarrierPermit,
+        permit: RendererCommandResponsePermit,
         command_context: &mut CommandDispatchContext,
-    ) -> RuntimeCommandOutputBarrierTerminal {
-        let (barrier_id, barrier) = self.consume_permit(permit);
-        let terminal = if self.command_owner_is_current(conn, &barrier) {
-            RuntimeCommandOutputBarrierTerminal::Released
+    ) -> RendererCommandResponseTerminal {
+        let (permit_id, permit) = self.consume_permit(permit);
+        let terminal = if self.command_owner_is_current(conn, &permit) {
+            RendererCommandResponseTerminal::Released
         } else {
-            RuntimeCommandOutputBarrierTerminal::Superseded
+            RendererCommandResponseTerminal::Superseded
         };
-        self.finish_predecessor(conn, barrier_id, barrier, terminal, command_context)
+        self.finish_predecessor(conn, permit_id, permit, terminal, command_context)
             .await;
         terminal
     }
@@ -345,58 +342,60 @@ impl RuntimeCommandOutputBarriers {
     pub(crate) async fn cancel(
         &mut self,
         conn: &mut CdpConnection,
-        permit: RuntimeCommandOutputBarrierPermit,
+        permit: RendererCommandResponsePermit,
         command_context: &mut CommandDispatchContext,
-    ) -> RuntimeCommandOutputBarrierTerminal {
-        let (barrier_id, barrier) = self.consume_permit(permit);
-        let terminal = RuntimeCommandOutputBarrierTerminal::Canceled;
-        self.finish_predecessor(conn, barrier_id, barrier, terminal, command_context)
+    ) -> RendererCommandResponseTerminal {
+        let (permit_id, permit) = self.consume_permit(permit);
+        let terminal = RendererCommandResponseTerminal::Canceled;
+        self.finish_predecessor(conn, permit_id, permit, terminal, command_context)
             .await;
         terminal
     }
 
     fn consume_permit(
         &mut self,
-        permit: RuntimeCommandOutputBarrierPermit,
+        permit: RendererCommandResponsePermit,
     ) -> (
-        RuntimeCommandOutputBarrierId,
-        ActiveRuntimeCommandOutputBarrier,
+        RendererCommandResponsePermitId,
+        ActiveRendererCommandResponsePermit,
     ) {
-        let barrier = self
+        let permit_id = permit.id;
+        let command_id = permit.command_id;
+        let active = self
             .active
-            .remove(&permit.id)
-            .expect("Runtime command output barrier permit must name one active barrier");
+            .remove(&permit_id)
+            .expect("renderer command response ordering permit must name one active permit");
         assert_eq!(
-            barrier.command_id, permit.command_id,
-            "Runtime command output barrier permit must retain its exact command identity"
+            active.command_id, command_id,
+            "renderer command response ordering permit must retain its exact command identity"
         );
-        (permit.id, barrier)
+        (permit_id, active)
     }
 
     fn command_owner_is_current(
         &self,
         conn: &CdpConnection,
-        barrier: &ActiveRuntimeCommandOutputBarrier,
+        permit: &ActiveRendererCommandResponsePermit,
     ) -> bool {
-        RuntimeCommandCausalOwner::capture_for_scope(conn, &barrier.command_scope).as_ref()
-            == Some(&barrier.causal_owner)
+        RuntimeCommandCausalOwner::capture_for_scope(conn, &permit.command_scope).as_ref()
+            == Some(&permit.causal_owner)
     }
 
     async fn finish_predecessor(
         &mut self,
         conn: &mut CdpConnection,
-        barrier_id: RuntimeCommandOutputBarrierId,
-        barrier: ActiveRuntimeCommandOutputBarrier,
-        terminal: RuntimeCommandOutputBarrierTerminal,
+        permit_id: RendererCommandResponsePermitId,
+        permit: ActiveRendererCommandResponsePermit,
+        terminal: RendererCommandResponseTerminal,
         command_context: &mut CommandDispatchContext,
     ) {
         for route in &mut self.held_routes {
-            if route.route.causal_owner != barrier.causal_owner {
+            if route.route.causal_owner != permit.causal_owner {
                 continue;
             }
             for held in &mut route.outputs {
-                let was_predecessor = held.predecessors.remove(&barrier_id);
-                if was_predecessor && terminal != RuntimeCommandOutputBarrierTerminal::Released {
+                let was_predecessor = held.predecessors.remove(&permit_id);
+                if was_predecessor && terminal != RendererCommandResponseTerminal::Released {
                     held.release_mode = HeldOutputReleaseMode::OwnerActionsOnly;
                 }
             }
@@ -427,7 +426,7 @@ impl RuntimeCommandOutputBarriers {
                 if moli_trace::cdp_runtime_trace_enabled() {
                     tracing::info!(
                         target: "moli_cdp_runtime",
-                        stage = "runtime_command_barrier_output_release",
+                        stage = "renderer_command_response_output_release",
                         hold_id = held.id.0,
                         renderer_output_stream_epoch = ?held.renderer_output_cursor.map(|cursor| cursor.stream().epoch().get()),
                         renderer_output_sequence = ?held.renderer_output_cursor.map(RendererOutputCursor::sequence),
@@ -495,20 +494,20 @@ mod tests {
     };
 
     use super::{
-        RuntimeCommandOutputBarrierPermit, RuntimeCommandOutputBarrierTerminal,
-        RuntimeCommandOutputBarriers,
+        RendererCommandResponseOrder, RendererCommandResponsePermit,
+        RendererCommandResponseTerminal,
     };
 
-    const SESSION_ID: &str = "SID-runtime-command-barrier";
+    const SESSION_ID: &str = "SID-runtime-command-permit";
 
     async fn connection_with_loaded_page() -> CdpConnection {
         let mut conn = CdpConnection::new();
         let page = conn
-            .load_page_via_runtime_async("data:text/html,<title>runtime-command-barrier</title>")
+            .load_page_via_runtime_async("data:text/html,<title>runtime-command-permit</title>")
             .await
-            .expect("barrier test page should load");
-        let mut browser_context = BrowserContext::new("BID-runtime-command-barrier".to_owned());
-        browser_context.set_active_target_id("TID-runtime-command-barrier");
+            .expect("permit test page should load");
+        let mut browser_context = BrowserContext::new("BID-runtime-command-permit".to_owned());
+        browser_context.set_active_target_id("TID-runtime-command-permit");
         browser_context.attach_active_session(SESSION_ID);
         browser_context.set_target_url(page.final_url().as_str().to_owned());
         let _ = browser_context.replace_active_page_for_test(Some(page));
@@ -537,9 +536,9 @@ mod tests {
 
     fn admit_registered_command(
         conn: &mut CdpConnection,
-        barriers: &mut RuntimeCommandOutputBarriers,
+        order: &mut RendererCommandResponseOrder,
         frontend_command_id: u64,
-    ) -> RuntimeCommandOutputBarrierPermit {
+    ) -> RendererCommandResponsePermit {
         let descriptor = RendererCommandDescriptor::from_synthesized_payload(
             serde_json::json!({
                 "id": frontend_command_id,
@@ -556,14 +555,14 @@ mod tests {
             descriptor,
         )
         .expect("test Runtime command should register its renderer call");
-        barriers
+        order
             .admit(conn, frontend_command_id, Some(SESSION_ID))
-            .expect("registered Runtime command should admit an exact output barrier")
+            .expect("registered Runtime command should admit an exact output permit")
     }
 
     fn renderer_cause_for_permit(
         conn: &CdpConnection,
-        permit: &RuntimeCommandOutputBarrierPermit,
+        permit: &RendererCommandResponsePermit,
     ) -> RendererRuntimeCommandCausalIdentity {
         conn.renderer_runtime_command_cause_for_frontend(Some(SESSION_ID), permit.command_id)
             .expect("active test command should retain its exact renderer call identity")
@@ -571,8 +570,8 @@ mod tests {
 
     async fn route_same_document_navigation(
         conn: &mut CdpConnection,
-        barriers: &mut RuntimeCommandOutputBarriers,
-        permit: Option<&super::RuntimeCommandOutputBarrierPermit>,
+        order: &mut RendererCommandResponseOrder,
+        permit: Option<&super::RendererCommandResponsePermit>,
         fragment: &str,
         command_context: &mut CommandDispatchContext,
     ) {
@@ -586,7 +585,7 @@ mod tests {
                     RendererDocumentSourcedSameDocumentNavigation::new(
                         source_document,
                         RendererPendingSameDocumentNavigation {
-                            url: format!("data:text/html,runtime-command-barrier#{fragment}"),
+                            url: format!("data:text/html,runtime-command-permit#{fragment}"),
                             navigation_type: "fragment".to_owned(),
                             history_update: SameDocumentHistoryUpdate::Push,
                         },
@@ -595,7 +594,7 @@ mod tests {
             )
             .await;
         let renderer_cause = permit.map(|permit| renderer_cause_for_permit(conn, permit));
-        barriers
+        order
             .route_publication_outputs(
                 conn,
                 &command_owner,
@@ -609,8 +608,8 @@ mod tests {
 
     async fn route_top_level_navigation_for_command(
         conn: &mut CdpConnection,
-        barriers: &mut RuntimeCommandOutputBarriers,
-        permit: &super::RuntimeCommandOutputBarrierPermit,
+        order: &mut RendererCommandResponseOrder,
+        permit: &super::RendererCommandResponsePermit,
         marker: &str,
         command_context: &mut CommandDispatchContext,
     ) {
@@ -630,7 +629,7 @@ mod tests {
                 ),
             );
 
-        barriers
+        order
             .route_publication_outputs(conn, &command_owner, None, None, outputs, command_context)
             .await;
     }
@@ -662,9 +661,9 @@ mod tests {
         let [event]: [crate::conn::CdpSchedulerEvent; 1] = conn
             .take_scheduler_events()
             .try_into()
-            .expect("barrier release should publish one concrete navigation action");
+            .expect("permit release should publish one concrete navigation action");
         let crate::conn::CdpSchedulerEvent::ProtocolWorkPublished { work } = event else {
-            panic!("barrier release must publish concrete protocol work");
+            panic!("permit release must publish concrete protocol work");
         };
         assert!(work.is_top_level_location_navigation_owner_action());
         let (events, nested_scheduler_events) = conn
@@ -687,44 +686,42 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn same_document_navigation_projects_before_exact_runtime_command_response() {
         let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 1);
+        let mut order = RendererCommandResponseOrder::default();
+        let permit = admit_registered_command(&mut conn, &mut order, 1);
         let mut command_context = CommandDispatchContext::default();
 
         route_same_document_navigation(
             &mut conn,
-            &mut barriers,
+            &mut order,
             Some(&permit),
             "held",
             &mut command_context,
         )
         .await;
 
-        assert_eq!(barriers.active_count(), 1);
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(order.active_count(), 1);
+        assert_eq!(order.held_output_count(), 0);
         assert!(
             contains_same_document_navigation(&protocol_messages(&mut command_context)),
             "the completed history mutation must be reported before the exact command response"
         );
 
-        let terminal = barriers
-            .release(&mut conn, permit, &mut command_context)
-            .await;
+        let terminal = order.release(&mut conn, permit, &mut command_context).await;
 
-        assert_eq!(terminal, RuntimeCommandOutputBarrierTerminal::Released);
-        assert_eq!(barriers.active_count(), 0);
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(terminal, RendererCommandResponseTerminal::Released);
+        assert_eq!(order.active_count(), 0);
+        assert_eq!(order.held_output_count(), 0);
         assert!(
             !contains_same_document_navigation(&protocol_messages(&mut command_context)),
-            "releasing the barrier must not deliver the same navigation twice"
+            "releasing the permit must not deliver the same navigation twice"
         );
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn debugger_transition_messages_wait_for_the_exact_command_response() {
         let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 2);
+        let mut order = RendererCommandResponseOrder::default();
+        let permit = admit_registered_command(&mut conn, &mut order, 2);
         let cause = renderer_cause_for_permit(&conn, &permit);
         let attachment = conn
             .runtime_session_owner_slot(Some(SESSION_ID))
@@ -770,7 +767,7 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let command_owner = CommandOwnerScope::for_session(SESSION_ID);
 
-        barriers
+        order
             .route_publication_outputs(
                 &mut conn,
                 &command_owner,
@@ -781,17 +778,15 @@ mod tests {
             )
             .await;
 
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(order.held_output_count(), 1);
         assert!(
             protocol_messages(&mut command_context).is_empty(),
             "Debugger transition output must not overtake the matching response"
         );
 
         assert_eq!(
-            barriers
-                .release(&mut conn, permit, &mut command_context)
-                .await,
-            RuntimeCommandOutputBarrierTerminal::Released
+            order.release(&mut conn, permit, &mut command_context).await,
+            RendererCommandResponseTerminal::Released
         );
         let messages = protocol_messages(&mut command_context);
         assert_eq!(
@@ -806,45 +801,41 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn output_is_owned_by_one_exact_command_not_every_command_on_the_page() {
         let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let first = admit_registered_command(&mut conn, &mut barriers, 11);
-        let second = admit_registered_command(&mut conn, &mut barriers, 12);
+        let mut order = RendererCommandResponseOrder::default();
+        let first = admit_registered_command(&mut conn, &mut order, 11);
+        let second = admit_registered_command(&mut conn, &mut order, 12);
         let mut command_context = CommandDispatchContext::default();
 
         route_top_level_navigation_for_command(
             &mut conn,
-            &mut barriers,
+            &mut order,
             &first,
             "exact-predecessor",
             &mut command_context,
         )
         .await;
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(order.held_output_count(), 1);
 
         assert_eq!(
-            barriers
-                .release(&mut conn, second, &mut command_context)
-                .await,
-            RuntimeCommandOutputBarrierTerminal::Released
+            order.release(&mut conn, second, &mut command_context).await,
+            RendererCommandResponseTerminal::Released
         );
-        assert_eq!(barriers.active_count(), 1);
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(order.active_count(), 1);
+        assert_eq!(order.held_output_count(), 1);
         assert!(
             !contains_top_level_navigation(&protocol_messages(&mut command_context)),
             "an unrelated command response must not release another command's output"
         );
 
         assert_eq!(
-            barriers
-                .release(&mut conn, first, &mut command_context)
-                .await,
-            RuntimeCommandOutputBarrierTerminal::Released
+            order.release(&mut conn, first, &mut command_context).await,
+            RendererCommandResponseTerminal::Released
         );
-        assert_eq!(barriers.active_count(), 0);
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(order.active_count(), 0);
+        assert_eq!(order.held_output_count(), 0);
         assert!(
             !contains_top_level_navigation(&protocol_messages(&mut command_context)),
-            "barrier release must publish, not execute, its concrete owner action"
+            "permit release must publish, not execute, its concrete owner action"
         );
         complete_published_top_level_navigation(&mut conn, &mut command_context).await;
         assert!(
@@ -856,45 +847,41 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn canceling_an_unrelated_command_does_not_downgrade_held_output() {
         let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let first = admit_registered_command(&mut conn, &mut barriers, 15);
-        let second = admit_registered_command(&mut conn, &mut barriers, 16);
+        let mut order = RendererCommandResponseOrder::default();
+        let first = admit_registered_command(&mut conn, &mut order, 15);
+        let second = admit_registered_command(&mut conn, &mut order, 16);
         let mut command_context = CommandDispatchContext::default();
 
         route_top_level_navigation_for_command(
             &mut conn,
-            &mut barriers,
+            &mut order,
             &first,
             "exact-predecessor-survives-unrelated-cancel",
             &mut command_context,
         )
         .await;
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(order.held_output_count(), 1);
 
         assert_eq!(
-            barriers
-                .cancel(&mut conn, second, &mut command_context)
-                .await,
-            RuntimeCommandOutputBarrierTerminal::Canceled
+            order.cancel(&mut conn, second, &mut command_context).await,
+            RendererCommandResponseTerminal::Canceled
         );
-        assert_eq!(barriers.active_count(), 1);
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(order.active_count(), 1);
+        assert_eq!(order.held_output_count(), 1);
         assert!(
             !contains_top_level_navigation(&protocol_messages(&mut command_context)),
             "canceling an unrelated command must neither release nor downgrade another command's output"
         );
 
         assert_eq!(
-            barriers
-                .release(&mut conn, first, &mut command_context)
-                .await,
-            RuntimeCommandOutputBarrierTerminal::Released
+            order.release(&mut conn, first, &mut command_context).await,
+            RendererCommandResponseTerminal::Released
         );
-        assert_eq!(barriers.active_count(), 0);
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(order.active_count(), 0);
+        assert_eq!(order.held_output_count(), 0);
         assert!(
             !contains_top_level_navigation(&protocol_messages(&mut command_context)),
-            "barrier release must publish, not execute, the retained owner action"
+            "permit release must publish, not execute, the retained owner action"
         );
         complete_published_top_level_navigation(&mut conn, &mut command_context).await;
         assert!(
@@ -906,37 +893,35 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn unattributed_same_page_output_is_not_held_by_a_pending_command() {
         let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 13);
+        let mut order = RendererCommandResponseOrder::default();
+        let permit = admit_registered_command(&mut conn, &mut order, 13);
         let mut command_context = CommandDispatchContext::default();
 
         route_same_document_navigation(
             &mut conn,
-            &mut barriers,
+            &mut order,
             None,
             "independent-page-task",
             &mut command_context,
         )
         .await;
 
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(order.held_output_count(), 0);
         assert!(
             contains_same_document_navigation(&protocol_messages(&mut command_context)),
             "output without the exact command identity must remain visible while that command awaits"
         );
         assert_eq!(
-            barriers
-                .release(&mut conn, permit, &mut command_context)
-                .await,
-            RuntimeCommandOutputBarrierTerminal::Released
+            order.release(&mut conn, permit, &mut command_context).await,
+            RendererCommandResponseTerminal::Released
         );
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn concrete_runtime_navigation_cause_survives_an_earlier_untagged_wake() {
         let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 14);
+        let mut order = RendererCommandResponseOrder::default();
+        let permit = admit_registered_command(&mut conn, &mut order, 14);
         let cause = renderer_cause_for_permit(&conn, &permit);
         let owner = conn
             .target_page_residence_identity_for_session(Some(SESSION_ID))
@@ -954,7 +939,7 @@ mod tests {
         let mut command_context = CommandDispatchContext::default();
         let command_owner = CommandOwnerScope::for_session(SESSION_ID);
 
-        barriers
+        order
             .route_publication_outputs(
                 &mut conn,
                 &command_owner,
@@ -965,21 +950,19 @@ mod tests {
             )
             .await;
 
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(order.held_output_count(), 1);
         assert!(
             !contains_top_level_navigation(&protocol_messages(&mut command_context)),
             "an older untagged wake must not release a concrete command-caused navigation"
         );
 
         assert_eq!(
-            barriers
-                .release(&mut conn, permit, &mut command_context)
-                .await,
-            RuntimeCommandOutputBarrierTerminal::Released
+            order.release(&mut conn, permit, &mut command_context).await,
+            RendererCommandResponseTerminal::Released
         );
         assert!(
             !contains_top_level_navigation(&protocol_messages(&mut command_context)),
-            "barrier release must publish, not execute, the concrete navigation action"
+            "permit release must publish, not execute, the concrete navigation action"
         );
         complete_published_top_level_navigation(&mut conn, &mut command_context).await;
         assert!(
@@ -989,10 +972,10 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn replacement_supersedes_old_barrier_without_holding_new_page_output() {
+    async fn replacement_supersedes_old_response_permit_without_holding_new_page_output() {
         let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 21);
+        let mut order = RendererCommandResponseOrder::default();
+        let permit = admit_registered_command(&mut conn, &mut order, 21);
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some(SESSION_ID),
@@ -1001,7 +984,7 @@ mod tests {
 
         route_same_document_navigation(
             &mut conn,
-            &mut barriers,
+            &mut order,
             Some(&permit),
             "replacement",
             &mut command_context,
@@ -1009,9 +992,9 @@ mod tests {
         .await;
 
         assert_eq!(
-            barriers.held_output_count(),
+            order.held_output_count(),
             0,
-            "output from the replacement Page must not be held by an old Page barrier"
+            "output from the replacement Page must not be held by an old Page permit"
         );
         assert!(
             contains_same_document_navigation(&protocol_messages(&mut command_context)),
@@ -1019,42 +1002,38 @@ mod tests {
              recaptured through the old command"
         );
         assert_eq!(
-            barriers
-                .release(&mut conn, permit, &mut command_context)
-                .await,
-            RuntimeCommandOutputBarrierTerminal::Superseded
+            order.release(&mut conn, permit, &mut command_context).await,
+            RendererCommandResponseTerminal::Superseded
         );
-        assert_eq!(barriers.active_count(), 0);
+        assert_eq!(order.active_count(), 0);
     }
 
     #[tokio::test(flavor = "multi_thread")]
     async fn replacement_after_capture_retires_held_old_page_output() {
         let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 30);
+        let mut order = RendererCommandResponseOrder::default();
+        let permit = admit_registered_command(&mut conn, &mut order, 30);
         let mut command_context = CommandDispatchContext::default();
 
         route_top_level_navigation_for_command(
             &mut conn,
-            &mut barriers,
+            &mut order,
             &permit,
             "retired-source-page",
             &mut command_context,
         )
         .await;
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(order.held_output_count(), 1);
 
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some(SESSION_ID),
         ));
         assert_eq!(
-            barriers
-                .release(&mut conn, permit, &mut command_context)
-                .await,
-            RuntimeCommandOutputBarrierTerminal::Superseded
+            order.release(&mut conn, permit, &mut command_context).await,
+            RendererCommandResponseTerminal::Superseded
         );
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(order.held_output_count(), 0);
         complete_published_top_level_navigation(&mut conn, &mut command_context).await;
         assert!(
             !contains_top_level_navigation(&protocol_messages(&mut command_context)),
@@ -1063,29 +1042,27 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread")]
-    async fn explicit_cancel_consumes_the_barrier_once() {
+    async fn explicit_cancel_consumes_the_response_permit_once() {
         let mut conn = connection_with_loaded_page().await;
-        let mut barriers = RuntimeCommandOutputBarriers::default();
-        let permit = admit_registered_command(&mut conn, &mut barriers, 31);
+        let mut order = RendererCommandResponseOrder::default();
+        let permit = admit_registered_command(&mut conn, &mut order, 31);
         let mut command_context = CommandDispatchContext::default();
 
         route_top_level_navigation_for_command(
             &mut conn,
-            &mut barriers,
+            &mut order,
             &permit,
             "canceled-protocol-command",
             &mut command_context,
         )
         .await;
-        assert_eq!(barriers.held_output_count(), 1);
+        assert_eq!(order.held_output_count(), 1);
         assert_eq!(
-            barriers
-                .cancel(&mut conn, permit, &mut command_context)
-                .await,
-            RuntimeCommandOutputBarrierTerminal::Canceled
+            order.cancel(&mut conn, permit, &mut command_context).await,
+            RendererCommandResponseTerminal::Canceled
         );
-        assert_eq!(barriers.active_count(), 0);
-        assert_eq!(barriers.held_output_count(), 0);
+        assert_eq!(order.active_count(), 0);
+        assert_eq!(order.held_output_count(), 0);
         assert!(
             !contains_top_level_navigation(&protocol_messages(&mut command_context)),
             "cancel must publish, not execute, the already-produced owner action"

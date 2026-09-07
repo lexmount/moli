@@ -322,7 +322,7 @@ async fn add_binding_during_document_navigation_persists_without_touching_retiri
     ctx.conn.commit_declared_session_fixtures_for_test();
     assert!(
         ctx.conn
-            .renderer_document_navigation_is_suspended_for_session_owner(Some("SID-1"))
+            .document_projection_is_pending_for_session_owner(Some("SID-1"))
     );
 
     ctx.process_async(json!({

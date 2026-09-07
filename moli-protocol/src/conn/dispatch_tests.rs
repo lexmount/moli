@@ -9305,6 +9305,6 @@ async fn document_projection_gate_uses_handler_disposition_not_wire_method_lane(
         );
     }
 
-    let _ = conn.finish_renderer_document_navigation_for_owner(&owner, &navigation);
+    let _ = conn.finish_navigation_without_document_projection_for_owner(&owner, &navigation);
     conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &navigation);
 }

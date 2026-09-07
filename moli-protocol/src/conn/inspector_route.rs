@@ -2,7 +2,10 @@ use moli_core::page::{
     DevToolsSessionKey, RendererAgentAttachmentId, RendererRuntimeInspectorMessageBatch,
 };
 
-use super::state::{FinishedRendererDocumentNavigation, RendererAgentAttachment};
+use super::state::{
+    CommittedRendererDocumentBinding, DocumentProjectionFence, DocumentProjectionOutputRelease,
+    RendererAgentAttachment,
+};
 use super::{CdpConnection, CommandOwnerScope, NavigationId};
 
 impl CdpConnection {
@@ -123,11 +126,11 @@ impl CdpConnection {
         }
     }
 
-    pub(crate) fn finish_renderer_document_navigation_for_owner(
+    pub(crate) fn finish_navigation_without_document_projection_for_owner(
         &mut self,
         owner: &CommandOwnerScope,
         token: &NavigationId,
-    ) -> Option<FinishedRendererDocumentNavigation> {
+    ) -> Option<DocumentProjectionOutputRelease> {
         if self
             .validate_navigation_target_owner_for_scope(owner, token)
             .is_err()
@@ -137,7 +140,7 @@ impl CdpConnection {
         match self
             .runtime_session_owner_slot_mut_for_owner(owner)
             .and_then(|slot| {
-                slot.finish_renderer_document_navigation(token)
+                slot.finish_navigation_without_document_projection(token)
                     .map_err(|error| error.to_string())
             }) {
             Ok(finish) => Some(finish),
@@ -151,6 +154,40 @@ impl CdpConnection {
                 None
             }
         }
+    }
+
+    pub(crate) fn publish_document_projection_fence_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        projected: &CommittedRendererDocumentBinding,
+        fence: DocumentProjectionFence,
+    ) -> DocumentProjectionOutputRelease {
+        let current_attachment = self
+            .current_renderer_agent_attachment_for_owner(owner)
+            .expect("a rebound Document projection must retain its renderer attachment");
+        assert_eq!(
+            (
+                projected.document_id,
+                projected.browser_sequence,
+                current_attachment.id(),
+                current_attachment.document(),
+                current_attachment.browser_sequence(),
+            ),
+            (
+                fence.document(),
+                fence.browser_sequence(),
+                fence.renderer_attachment(),
+                fence.document(),
+                fence.browser_sequence(),
+            ),
+            "a Document projection fence requires its exact frame and renderer binding"
+        );
+        self.runtime_session_owner_slot_mut_for_owner(owner)
+            .and_then(|slot| {
+                slot.publish_document_projection_fence(fence)
+                    .map_err(|error| error.to_string())
+            })
+            .expect("an exact Document projection fence must publish once")
     }
 
     fn filter_renderer_inspector_batches_for_target_owner(
@@ -396,11 +433,11 @@ mod tests {
         assert!(!conn.clear_pending_document_navigation_for_owner_if_matches(&owner, &first));
         assert!(conn.accepts_pending_document_navigation_for_owner(&owner, &second));
         assert!(
-            conn.finish_renderer_document_navigation_for_owner(&owner, &first)
+            conn.finish_navigation_without_document_projection_for_owner(&owner, &first)
                 .is_none()
         );
         assert!(
-            conn.finish_renderer_document_navigation_for_owner(&owner, &second)
+            conn.finish_navigation_without_document_projection_for_owner(&owner, &second)
                 .is_some()
         );
     }

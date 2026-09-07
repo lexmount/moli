@@ -3202,6 +3202,7 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
 ) {
     let navigation_owner = state.owner.clone();
     let navigation_session_id = navigation_owner.session_id().map(str::to_owned);
+    let mut document_projection_release = None;
     match navigation {
         network::MaterializedNavigationLoadOutcome::ResponseCommitReady(navigation) => {
             match conn.start_response_document_materialization_for_owner(
@@ -3216,7 +3217,7 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
                             network::materialize_loaded_navigation_progress(
                                 conn, &state, navigation,
                             );
-                        commit_loaded_navigation_async(
+                        document_projection_release = commit_loaded_navigation_async(
                             conn,
                             out,
                             &token,
@@ -3251,8 +3252,10 @@ async fn complete_materialized_navigation_into_buffer_inner_async(
     let primary_protocol_session_id = conn
         .runtime_session_owner_primary_session_id_for_owner(&navigation_owner)
         .or_else(|| navigation_session_id.clone());
-    let (routed_renderer_output, renderer_call_replacements) = conn
-        .finish_renderer_document_navigation_for_owner(&navigation_owner, &token)
+    let (routed_renderer_output, renderer_call_replacements) = document_projection_release
+        .or_else(|| {
+            conn.finish_navigation_without_document_projection_for_owner(&navigation_owner, &token)
+        })
         .map(|finish| (finish.released_output, finish.renderer_call_replacements))
         .unwrap_or_default();
     if !routed_renderer_output.is_empty() {
