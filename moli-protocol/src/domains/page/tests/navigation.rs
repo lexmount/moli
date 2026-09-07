@@ -360,6 +360,58 @@ async fn renderer_fragment_navigation_preserves_initial_document_residence() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn pending_same_document_navigation_cannot_finish_on_a_replacement_document() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(
+        &mut ctx,
+        "BID-stale-same-document",
+        "TID-stale-same-document",
+        "SID-stale-same-document",
+        "about:blank",
+    );
+    let original_url = "data:text/html,<title>navigation-owner</title>";
+    ctx.install_navigation_fixture_for_session_owner(original_url, Some("SID-stale-same-document"))
+        .await;
+
+    let raw = json!({
+        "id": 90_121,
+        "method": "Page.navigate",
+        "sessionId": "SID-stale-same-document",
+        "params": { "url": format!("{original_url}#fragment") }
+    })
+    .to_string();
+    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+        panic!("same-document navigation should start on the original Document");
+    };
+    let completed = pending.wait().await;
+
+    let replacement_url = "data:text/html,<title>replacement-navigation-owner</title>";
+    ctx.install_navigation_fixture_for_session_owner(
+        replacement_url,
+        Some("SID-stale-same-document"),
+    )
+    .await;
+
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("stale same-document navigation must not continue on the replacement Document");
+    };
+    let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+    let response = messages
+        .iter()
+        .find(|message| message["id"] == json!(90_121))
+        .expect("same-document navigation response");
+    assert_eq!(response["error"]["code"], json!(-32000), "{response}");
+    assert_eq!(response["error"]["message"], json!("Document changed"));
+    assert_eq!(
+        ctx.conn.browser_context.as_ref().unwrap().target_url(),
+        replacement_url,
+        "the outgoing navigation must not mutate its replacement",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn navigation_history_supports_playwright_back_forward_commands() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");

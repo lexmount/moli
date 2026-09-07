@@ -6,16 +6,21 @@ mod document_commands;
 pub(crate) use document_commands::{
     CompletedAppManifestLoadPreparation, CompletedAppManifestPublication,
     CompletedCaptureDocumentImage, CompletedCaptureDocumentScreencastFrame,
-    CompletedCaptureDocumentSnapshot, CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
+    CompletedCaptureDocumentSnapshot, CompletedChildFrameNavigation,
+    CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
     CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
-    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent, DocumentSnapshot,
-    PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
+    CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
+    CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
+    CompletedTopLevelSameDocumentNavigation, DocumentSnapshot, PendingAppManifestLoadPreparation,
+    PendingAppManifestPublication, PendingCaptureDocumentImage,
     PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
-    PendingChildFrameTreeSnapshot, PendingDocumentBlobRead, PendingDocumentCookieOwnerSnapshot,
-    PendingDocumentCspBypassUpdate, PendingDocumentResourceTextSearch,
-    PendingDocumentStorageKeySnapshot, PendingNetworkResourceLoadPreparation,
-    PendingSetDocumentContent,
+    PendingChildFrameNavigation, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
+    PendingDocumentCookieOwnerSnapshot, PendingDocumentCspBypassUpdate,
+    PendingDocumentResourceTextSearch, PendingDocumentStorageKeySnapshot,
+    PendingNavigationHistoryReset, PendingNetworkResourceLoadPreparation,
+    PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
+    PendingTopLevelSameDocumentNavigation,
 };
 mod document_queries;
 mod emulation;

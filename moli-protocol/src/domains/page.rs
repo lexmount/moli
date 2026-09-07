@@ -39,10 +39,11 @@ use crate::conn::{
     BackgroundProtocolEvent, CapturedBody, CdpSessionRoute, CommandDispatchContext,
     CommandOwnerScope, CompletedCaptureDocumentImage, CompletedCaptureDocumentScreencastFrame,
     CompletedCaptureDocumentSnapshot, CompletedDocumentCspBypassUpdate,
-    CompletedSetDocumentContent, NETWORK_ERROR_PAGE_URL, PageLifecycleEventsEnableResult,
-    PageScreencastConfig, PageScreencastFormat, PendingCaptureDocumentImage,
-    PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
-    PendingDocumentCspBypassUpdate, PendingSetDocumentContent,
+    CompletedNavigationHistoryReset, CompletedSetDocumentContent, NETWORK_ERROR_PAGE_URL,
+    PageLifecycleEventsEnableResult, PageScreencastConfig, PageScreencastFormat,
+    PendingCaptureDocumentImage, PendingCaptureDocumentScreencastFrame,
+    PendingCaptureDocumentSnapshot, PendingDocumentCspBypassUpdate, PendingNavigationHistoryReset,
+    PendingSetDocumentContent,
 };
 use crate::conn::{CdpConnection, Cmd, EmulatedViewportSurface};
 pub(crate) use crate::conn::{DEFAULT_LOADER_ID as LOADER_ID, monotonic_timestamp_seconds};
@@ -220,8 +221,7 @@ enum PendingPageCommandKind {
     SearchInResource(resource_search::PendingSearchInResourceCommand),
     GetAppManifest(app_manifest::PendingGetAppManifestCommand),
     ResetNavigationHistory {
-        page: crate::conn::TargetPageResidenceIdentity,
-        pending: PendingPageCommand,
+        pending: PendingNavigationHistoryReset,
     },
     SetDocumentContent {
         pending: PendingSetDocumentContent,
@@ -289,8 +289,7 @@ enum CompletedPageCommandKind {
     SearchInResource(Box<resource_search::CompletedSearchInResourceCommand>),
     GetAppManifest(Box<app_manifest::CompletedGetAppManifestCommand>),
     ResetNavigationHistory {
-        page: crate::conn::TargetPageResidenceIdentity,
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: CompletedNavigationHistoryReset,
     },
     SetDocumentContent {
         completed: CompletedSetDocumentContent,
@@ -340,9 +339,11 @@ impl CompletedPageCommandKind {
             Self::AppendDefaultDocumentStartScript { completed, .. }
             | Self::RemoveDocumentStartScript { completed }
             | Self::GetFrameTree { completed, .. }
-            | Self::ResetNavigationHistory { completed, .. }
             | Self::GetLayoutMetrics { completed }
             => direct(completed),
+            Self::ResetNavigationHistory { completed } => {
+                completed.renderer_output_predecessor()
+            }
             Self::SetBypassContentSecurityPolicy { completed } => {
                 completed.renderer_output_predecessor()
             }
@@ -464,10 +465,9 @@ impl PendingPageCommandDispatch {
             PendingPageCommandKind::GetAppManifest(pending) => {
                 CompletedPageCommandKind::GetAppManifest(Box::new(pending.wait().await))
             }
-            PendingPageCommandKind::ResetNavigationHistory { page, pending } => {
+            PendingPageCommandKind::ResetNavigationHistory { pending } => {
                 CompletedPageCommandKind::ResetNavigationHistory {
-                    page,
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: pending.wait().await,
                 }
             }
             PendingPageCommandKind::SetDocumentContent { pending } => {
@@ -7625,8 +7625,8 @@ pub(crate) async fn complete_pending_page_command(
                 command_context,
             );
         }
-        CompletedPageCommandKind::ResetNavigationHistory { page, completed } => {
-            return navigation::complete_reset_navigation_history_command(conn, &page, *completed);
+        CompletedPageCommandKind::ResetNavigationHistory { completed } => {
+            return navigation::complete_reset_navigation_history_command(conn, completed);
         }
         CompletedPageCommandKind::AddScriptToEvaluateOnNewDocument(completed) => {
             return preload::complete_pending_add_script_to_evaluate_on_new_document_command(
@@ -7673,7 +7673,6 @@ pub(crate) async fn complete_pending_page_command(
         CompletedPageCommandKind::SameDocumentNavigate(completed) => {
             return navigation::complete_pending_same_document_navigate_command(
                 conn,
-                &owner_scope,
                 *completed,
                 command_context,
             )

@@ -110,6 +110,26 @@ define_document_command!(
     renderer_output_predecessor
 );
 define_document_command!(
+    PendingTopLevelSameDocumentNavigation,
+    CompletedTopLevelSameDocumentNavigation,
+    renderer_output_predecessor
+);
+define_document_command!(
+    PendingTopLevelHistoryTraversal,
+    CompletedTopLevelHistoryTraversal,
+    renderer_output_predecessor
+);
+define_document_command!(
+    PendingNavigationHistoryReset,
+    CompletedNavigationHistoryReset,
+    renderer_output_predecessor
+);
+define_document_command!(
+    PendingChildFrameNavigation,
+    CompletedChildFrameNavigation,
+    renderer_output_predecessor
+);
+define_document_command!(
     PendingDocumentStorageKeySnapshot,
     CompletedDocumentStorageKeySnapshot
 );
@@ -136,6 +156,16 @@ define_document_command!(
     CompletedAppManifestPublication,
     renderer_output_predecessor
 );
+
+impl CompletedTopLevelHistoryTraversal {
+    pub(crate) fn renderer_accepted(&self) -> Option<bool> {
+        self.0
+            .completed
+            .as_ref()
+            .ok()
+            .and_then(CompletedPageCommand::bool_reply_value)
+    }
+}
 
 pub(crate) struct DocumentSnapshot {
     pub(crate) url: String,
@@ -257,25 +287,31 @@ impl BrowserContext {
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_top_level_same_document_navigation_for_target(
+    pub(crate) fn start_top_level_same_document_navigation(
         &self,
-        target_id: &str,
+        document: DocumentHandle,
         url: String,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+    ) -> Result<PendingTopLevelSameDocumentNavigation, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_top_level_same_document_navigation(url)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingTopLevelSameDocumentNavigation::new(
+            document, pending,
+        ))
     }
 
-    pub(crate) fn finish_top_level_same_document_navigation_command_turn_for_target(
+    pub(crate) fn finish_top_level_same_document_navigation(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedTopLevelSameDocumentNavigation,
     ) -> Result<(bool, RendererCommandTurnOutput), String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_top_level_same_document_navigation_command_turn(completion)
+        let (document, completion) = completed.into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_top_level_same_document_navigation_command_turn(completion?)
             .map_err(|error| error.to_string())
     }
 
@@ -362,67 +398,83 @@ impl BrowserContext {
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_top_level_history_traversal_by_delta_for_target(
+    pub(crate) fn start_top_level_history_traversal(
         &self,
-        target_id: &str,
+        document: DocumentHandle,
         delta: i64,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
+    ) -> Result<PendingTopLevelHistoryTraversal, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
             .start_top_level_history_traversal_by_delta(delta)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        Ok(PendingTopLevelHistoryTraversal::new(document, pending))
     }
 
-    pub(crate) fn finish_top_level_history_traversal_by_delta_for_target(
+    pub(crate) fn finish_top_level_history_traversal(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedTopLevelHistoryTraversal,
     ) -> Result<bool, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_top_level_history_traversal_by_delta(completion)
+        let (document, completion) = completed.into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_top_level_history_traversal_by_delta(completion?)
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_reset_navigation_history_for_target(
+    pub(crate) fn start_navigation_history_reset(
         &self,
-        target_id: &str,
-    ) -> Result<PendingPageCommand, String> {
-        self.web_contents_for_target(target_id)
+        document: DocumentHandle,
+    ) -> Result<PendingNavigationHistoryReset, String> {
+        self.physical.document(document)?;
+        let pending = self
+            .physical
+            .web_contents
+            .get(&document.web_contents().id())
             .ok_or("NoDocumentLoaded")?
-            .start_reset_navigation_history()
+            .start_reset_navigation_history()?;
+        Ok(PendingNavigationHistoryReset::new(document, pending))
     }
 
-    pub(crate) fn finish_reset_navigation_history_for_target(
+    pub(crate) fn finish_navigation_history_reset(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedNavigationHistoryReset,
     ) -> Result<bool, String> {
-        self.web_contents_for_target_mut(target_id)
+        let (document, completion) = completed.into_parts();
+        self.physical.document(document)?;
+        self.physical
+            .web_contents
+            .get_mut(&document.web_contents().id())
             .ok_or("NoDocumentLoaded")?
-            .finish_reset_navigation_history(completion)
+            .finish_reset_navigation_history(completion?)
     }
 
-    pub(crate) fn start_child_frame_navigation_to_url_for_target(
+    pub(crate) fn start_child_frame_navigation(
         &self,
-        target_id: &str,
-        frame_id: &str,
-        url: &str,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_child_frame_navigation_to_url(frame_id, url)
-            .map_err(|error| error.to_string())
+        document: DocumentHandle,
+        frame_id: String,
+        url: String,
+    ) -> Result<PendingChildFrameNavigation, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
+            .start_child_frame_navigation_to_url(&frame_id, &url)
+            .map_err(|error| error.to_string())?;
+        Ok(PendingChildFrameNavigation::new(document, pending))
     }
 
-    pub(crate) fn finish_child_frame_navigation_to_url_command_turn_for_target(
+    pub(crate) fn finish_child_frame_navigation(
         &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
+        completed: CompletedChildFrameNavigation,
     ) -> Result<(bool, RendererCommandTurnOutput), String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_child_frame_navigation_to_url_command_turn(completion)
+        let (document, completion) = completed.into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_child_frame_navigation_to_url_command_turn(completion?)
             .map_err(|error| error.to_string())
     }
 

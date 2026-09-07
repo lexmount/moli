@@ -16,16 +16,21 @@ use super::{
     BrowserAppManifestLoadPreparation, CdpConnection, CommandOwnerScope,
     CompletedAppManifestLoadPreparation, CompletedAppManifestPublication,
     CompletedCaptureDocumentImage, CompletedCaptureDocumentScreencastFrame,
-    CompletedCaptureDocumentSnapshot, CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
+    CompletedCaptureDocumentSnapshot, CompletedChildFrameNavigation,
+    CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
     CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
-    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent, DocumentSnapshot,
-    PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
+    CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
+    CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
+    CompletedTopLevelSameDocumentNavigation, DocumentSnapshot, PendingAppManifestLoadPreparation,
+    PendingAppManifestPublication, PendingCaptureDocumentImage,
     PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
-    PendingChildFrameTreeSnapshot, PendingDocumentBlobRead, PendingDocumentCookieOwnerSnapshot,
-    PendingDocumentCspBypassUpdate, PendingDocumentResourceTextSearch,
-    PendingDocumentStorageKeySnapshot, PendingNetworkResourceLoadPreparation,
-    PendingSetDocumentContent,
+    PendingChildFrameNavigation, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
+    PendingDocumentCookieOwnerSnapshot, PendingDocumentCspBypassUpdate,
+    PendingDocumentResourceTextSearch, PendingDocumentStorageKeySnapshot,
+    PendingNavigationHistoryReset, PendingNetworkResourceLoadPreparation,
+    PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
+    PendingTopLevelSameDocumentNavigation,
 };
 use crate::conn::state::BrowserContext;
 
@@ -87,6 +92,86 @@ impl CdpConnection {
         self.browser_context_by_browser_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_set_document_content(completed)
+    }
+
+    pub(crate) fn start_top_level_same_document_navigation(
+        &self,
+        document: DocumentHandle,
+        url: String,
+    ) -> Result<PendingTopLevelSameDocumentNavigation, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_top_level_same_document_navigation(document, url)
+    }
+
+    pub(crate) fn finish_top_level_same_document_navigation(
+        &mut self,
+        completed: CompletedTopLevelSameDocumentNavigation,
+    ) -> Result<(bool, RendererCommandTurnOutput), String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_top_level_same_document_navigation(completed)
+    }
+
+    pub(crate) fn start_top_level_history_traversal(
+        &self,
+        document: DocumentHandle,
+        delta: i64,
+    ) -> Result<PendingTopLevelHistoryTraversal, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_top_level_history_traversal(document, delta)
+    }
+
+    pub(crate) fn finish_top_level_history_traversal(
+        &mut self,
+        completed: CompletedTopLevelHistoryTraversal,
+    ) -> Result<bool, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_top_level_history_traversal(completed)
+    }
+
+    pub(crate) fn start_navigation_history_reset(
+        &self,
+        document: DocumentHandle,
+    ) -> Result<PendingNavigationHistoryReset, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_navigation_history_reset(document)
+    }
+
+    pub(crate) fn finish_navigation_history_reset(
+        &mut self,
+        completed: CompletedNavigationHistoryReset,
+    ) -> Result<bool, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_navigation_history_reset(completed)
+    }
+
+    pub(crate) fn start_child_frame_navigation(
+        &self,
+        document: DocumentHandle,
+        frame_id: String,
+        url: String,
+    ) -> Result<PendingChildFrameNavigation, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_child_frame_navigation(document, frame_id, url)
+    }
+
+    pub(crate) fn finish_child_frame_navigation(
+        &mut self,
+        completed: CompletedChildFrameNavigation,
+    ) -> Result<(bool, RendererCommandTurnOutput), String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_child_frame_navigation(completed)
     }
 
     pub(crate) fn start_capture_document_snapshot(
