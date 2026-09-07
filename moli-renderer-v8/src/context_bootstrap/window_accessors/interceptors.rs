@@ -64,6 +64,17 @@ pub(in crate::context_bootstrap) fn window_indexed_property_getter<'s>(
     v8::Intercepted::kYes
 }
 
+pub(in crate::context_bootstrap) fn window_indexed_property_setter(
+    _scope: &mut v8::PinScope<'_, '_>,
+    _index: u32,
+    _value: v8::Local<'_, v8::Value>,
+    _args: v8::PropertyCallbackArguments<'_>,
+    mut rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    rv.set_bool(false);
+    v8::Intercepted::kYes
+}
+
 pub(in crate::context_bootstrap) fn window_indexed_property_query<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     index: u32,
@@ -74,6 +85,17 @@ pub(in crate::context_bootstrap) fn window_indexed_property_query<'s>(
         return v8::Intercepted::kNo;
     }
     rv.set_int32(v8::PropertyAttribute::READ_ONLY.as_u32() as i32);
+    v8::Intercepted::kYes
+}
+
+pub(in crate::context_bootstrap) fn window_indexed_property_definer(
+    _scope: &mut v8::PinScope<'_, '_>,
+    _index: u32,
+    _descriptor: &v8::PropertyDescriptor,
+    _args: v8::PropertyCallbackArguments<'_>,
+    mut rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    rv.set_bool(false);
     v8::Intercepted::kYes
 }
 
