@@ -17,6 +17,10 @@ class CdpError(RuntimeError):
     pass
 
 
+class FixtureObservationError(CdpError):
+    """The page or fixture violated its deterministic observation contract."""
+
+
 class CdpCommandError(CdpError):
     def __init__(self, method: str, error: dict[str, Any]) -> None:
         super().__init__(f"{method} failed: {error}")
@@ -227,13 +231,13 @@ async def _capture_document(
         timeout=timeout,
     )
     if barrier.get("exceptionDetails"):
-        raise CdpError(
+        raise FixtureObservationError(
             "observable-tree materialization threw: "
             f"{barrier['exceptionDetails']}"
         )
     materialized = (barrier.get("result") or {}).get("value")
     if not isinstance(materialized, int) or materialized < 1:
-        raise CdpError(
+        raise FixtureObservationError(
             "observable-tree materialization returned invalid element count: "
             f"{materialized!r}"
         )
@@ -325,17 +329,19 @@ def _reconcile_expected_diagnostics(
 ) -> None:
     expected_container = ready_state.get("expectedDiagnostics") or {}
     if not isinstance(expected_container, dict):
-        raise CdpError("fixture expectedDiagnostics is not an object")
+        raise FixtureObservationError("fixture expectedDiagnostics is not an object")
     expected = expected_container.get("networkFailures") or []
     if not isinstance(expected, list):
-        raise CdpError("fixture expected network failures are not a list")
+        raise FixtureObservationError("fixture expected network failures are not a list")
     unmatched = list(diagnostics.get("networkFailures") or [])
     matched: list[dict[str, Any]] = []
     missing: list[dict[str, Any]] = []
     labels: set[str] = set()
     for position, item in enumerate(expected):
         if not isinstance(item, dict):
-            raise CdpError(f"expected network failure {position} is not an object")
+            raise FixtureObservationError(
+                f"expected network failure {position} is not an object"
+            )
         label = item.get("label")
         url = item.get("url")
         resource_type = item.get("type")
@@ -350,7 +356,9 @@ def _reconcile_expected_diagnostics(
             or not resource_type
             or not isinstance(canceled, bool)
         ):
-            raise CdpError(f"invalid expected network failure {position}: {item!r}")
+            raise FixtureObservationError(
+                f"invalid expected network failure {position}: {item!r}"
+            )
         labels.add(label)
         match_index = next(
             (
@@ -407,9 +415,10 @@ async def observe_case(
     case: SmokeCase,
     url: str,
     timeout_ms: int,
+    client: RawCdpClient | None = None,
 ) -> EngineObservation:
     started = time.perf_counter()
-    client: RawCdpClient | None = None
+    owns_client = client is None
     context_id: str | None = None
     session_id: str | None = None
     ready_state: dict[str, Any] | None = None
@@ -417,7 +426,10 @@ async def observe_case(
     final_root: dict[str, Any] | None = None
     diagnostics: dict[str, Any] = {}
     try:
-        client = await connect(endpoint)
+        if client is None:
+            client = await connect(endpoint)
+        else:
+            client.events.clear()
         context = await client.command("Target.createBrowserContext")
         context_id = context.get("browserContextId")
         if not isinstance(context_id, str) or not context_id:
@@ -471,29 +483,37 @@ async def observe_case(
                 timeout=command_timeout,
             )
             if evaluation.get("exceptionDetails"):
-                raise CdpError(
+                raise FixtureObservationError(
                     f"state Runtime.evaluate threw: {evaluation['exceptionDetails']}"
                 )
             state_value = (evaluation.get("result") or {}).get("value")
             if not isinstance(state_value, dict):
-                raise CdpError(f"fixture returned invalid state: {state_value!r}")
+                raise FixtureObservationError(
+                    f"fixture returned invalid state: {state_value!r}"
+                )
             ready_state = state_value
             if ready_state.get("id") != case.id:
-                raise CdpError(f"fixture state id mismatch: {ready_state!r}")
+                raise FixtureObservationError(
+                    f"fixture state id mismatch: {ready_state!r}"
+                )
             phase = ready_state.get("phase")
             if phase == "checkpoint":
                 pending = ready_state.get("pendingFrame")
                 if not isinstance(pending, dict):
-                    raise CdpError(f"checkpoint has no pending frame: {ready_state!r}")
+                    raise FixtureObservationError(
+                        f"checkpoint has no pending frame: {ready_state!r}"
+                    )
                 index = pending.get("index")
                 name = pending.get("name")
                 token = pending.get("token")
                 if index != len(frames) or not isinstance(name, str) or not isinstance(token, str):
-                    raise CdpError(
+                    raise FixtureObservationError(
                         f"invalid checkpoint sequence at frame {len(frames)}: {pending!r}"
                     )
                 if len(frames) >= 32:
-                    raise CdpError("fixture exceeded the 32-frame safety limit")
+                    raise FixtureObservationError(
+                        "fixture exceeded the 32-frame safety limit"
+                    )
                 root = await _capture_document(
                     client,
                     session_id=session_id,
@@ -512,21 +532,27 @@ async def observe_case(
                     timeout=command_timeout,
                 )
                 if resumed.get("exceptionDetails"):
-                    raise CdpError(
+                    raise FixtureObservationError(
                         f"frame resume Runtime.evaluate threw: {resumed['exceptionDetails']}"
                     )
                 if (resumed.get("result") or {}).get("value") is not True:
-                    raise CdpError(f"fixture refused frame resume token {token!r}")
+                    raise FixtureObservationError(
+                        f"fixture refused frame resume token {token!r}"
+                    )
                 after_token = token
                 continue
             if phase != "ready":
-                raise CdpError(f"fixture did not become ready: {ready_state!r}")
+                raise FixtureObservationError(
+                    f"fixture did not become ready: {ready_state!r}"
+                )
             if ready_state.get("errors"):
-                raise CdpError(f"fixture reported errors: {ready_state!r}")
+                raise FixtureObservationError(
+                    f"fixture reported errors: {ready_state!r}"
+                )
             reported_frames = ready_state.get("frames")
             observed_names = [frame.name for frame in frames]
             if reported_frames != observed_names:
-                raise CdpError(
+                raise FixtureObservationError(
                     "fixture frame history mismatch: "
                     f"reported {reported_frames!r}, observed {observed_names!r}"
                 )
@@ -548,7 +574,7 @@ async def observe_case(
         diagnostics = _diagnostics(client.events, session_id)
         _reconcile_expected_diagnostics(diagnostics, ready_state)
         if _diagnostics_have_errors(diagnostics):
-            raise CdpError(
+            raise FixtureObservationError(
                 "fixture emitted browser diagnostics: "
                 + json.dumps(diagnostics, ensure_ascii=False, separators=(",", ":"))
             )
@@ -574,6 +600,11 @@ async def observe_case(
             diagnostics=diagnostics,
             error_type=type(error).__name__,
             error=str(error),
+            failure_kind=(
+                "fixture"
+                if isinstance(error, FixtureObservationError)
+                else "infrastructure"
+            ),
         )
     finally:
         if client is not None:
@@ -586,4 +617,5 @@ async def observe_case(
                     )
                 except Exception:
                     pass
-            await client.websocket.close()
+            if owns_client:
+                await client.websocket.close()

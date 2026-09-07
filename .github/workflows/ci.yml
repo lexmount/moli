@@ -446,6 +446,7 @@ jobs:
           --chromium-bin "${{ steps.chromium.outputs.binary }}"
           --moli-bin "$PWD/target/ci-bin/moli-release-head/moli"
           --timeout-ms 30000
+          --reference-infrastructure-retries 1
           --output target/frontend-smoke
       - name: Validate frontend artifacts
         id: analysis

@@ -95,6 +95,11 @@ an explicit concurrency-boundary probe. Chromium-only baseline calibration can u
 concurrency, but a release conclusion should also repeat the reference run and compare every frame
 hash across scheduling modes.
 
+Each worker keeps one browser-level CDP connection and creates an isolated browser context per
+case. CI may pass `--reference-infrastructure-retries 1` to re-observe a case after a Chromium
+connection or protocol failure. The retry does not apply to fixture errors, normalization errors,
+Moli failures, or DOM differences, and the original failure remains recorded in `summary.json`.
+
 Run Chromium as a reference-only fixture gate:
 
 ```bash

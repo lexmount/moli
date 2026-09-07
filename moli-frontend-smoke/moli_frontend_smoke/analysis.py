@@ -1003,6 +1003,28 @@ def _validate_observation_contract(
     errors: list[str] = []
     if not isinstance(observation, dict) or observation.get("ok") is not True:
         return [f"{prefix}: {engine} observation is not successful"], 0
+    attempt_count = observation.get("attempt_count", 1)
+    previous_failures = observation.get("previous_failures", [])
+    if (
+        not isinstance(attempt_count, int)
+        or isinstance(attempt_count, bool)
+        or attempt_count < 1
+    ):
+        errors.append(f"{prefix}: attempt count is invalid")
+    if not isinstance(previous_failures, list):
+        errors.append(f"{prefix}: previous failures is not a list")
+    elif isinstance(attempt_count, int) and not isinstance(attempt_count, bool):
+        if attempt_count != len(previous_failures) + 1:
+            errors.append(f"{prefix}: attempt count does not match previous failures")
+        for index, failure in enumerate(previous_failures, start=1):
+            if (
+                not isinstance(failure, dict)
+                or failure.get("attempt") != index
+                or failure.get("kind") != "infrastructure"
+            ):
+                errors.append(
+                    f"{prefix}: previous failure[{index - 1}] is invalid"
+                )
     if not _is_nonempty_string(observation.get("dom_hash")):
         errors.append(f"{prefix}: final DOM hash is missing")
     if not _is_node_count(observation.get("node_count")):
@@ -1133,6 +1155,8 @@ def _validate_reference_summary(
 
     ids: set[str] = set()
     frame_total = 0
+    retried_cases = 0
+    recovered_cases = 0
     for position, result in enumerate(results):
         case_id = result.get("id")
         prefix = f"{label}: result[{position}]"
@@ -1151,14 +1175,35 @@ def _validate_reference_summary(
             None,
         }:
             errors.append(f"{prefix}: status invalidates the Chromium reference phase")
+        chromium_observation = result.get("chromium")
+        if isinstance(chromium_observation, dict):
+            attempt_count = chromium_observation.get("attempt_count", 1)
+            if (
+                isinstance(attempt_count, int)
+                and not isinstance(attempt_count, bool)
+                and attempt_count > 1
+            ):
+                retried_cases += 1
+            previous_failures = chromium_observation.get("previous_failures", [])
+            if (
+                chromium_observation.get("ok") is True
+                and isinstance(previous_failures, list)
+                and previous_failures
+            ):
+                recovered_cases += 1
         observation_errors, observation_frames = _validate_observation_contract(
             case_id=case_id,
-            observation=result.get("chromium"),
+            observation=chromium_observation,
             prefix=prefix,
             engine="Chromium",
         )
         errors.extend(observation_errors)
         frame_total += observation_frames
+
+    if "retriedCases" in gate and gate.get("retriedCases") != retried_cases:
+        errors.append(f"{label}: retried case count does not match results")
+    if "recoveredCases" in gate and gate.get("recoveredCases") != recovered_cases:
+        errors.append(f"{label}: recovered case count does not match results")
 
     counts = summary.get("counts")
     if mode == "reference" and counts != {"reference_ok": len(results)}:

@@ -355,9 +355,10 @@ function frontendOverview(section) {
   const total = summary.results.length;
   const matches = (count(summary.counts.match) ?? 0) + (count(summary.counts.reference_ok) ?? 0);
   const problems = Math.max(0, total - matches);
+  const recoveries = count(objectAt(summary, 'referenceGate').recoveredCases) ?? 0;
   return {
     status: summary.ok === true && problems === 0 ? '✅' : '❌',
-    signal: `${formatInteger(matches)}/${formatInteger(total)} cases matched; ${formatInteger(problems)} issues`,
+    signal: `${formatInteger(matches)}/${formatInteger(total)} cases matched; ${formatInteger(problems)} issues${recoveries ? `; ${formatInteger(recoveries)} Chromium reference recoveries` : ''}`,
   };
 }
 
@@ -375,6 +376,24 @@ function renderFrontend(section) {
     '| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |',
     `| ${formatInteger(count(summary.counts.match) ?? 0)} | ${formatInteger(count(summary.counts.dom_mismatch) ?? 0)} | ${formatInteger(count(summary.counts.diagnostic_mismatch) ?? 0)} | ${formatInteger(count(summary.counts.moli_error) ?? 0)} | ${formatInteger(count(summary.counts.reference_error) ?? 0)} | ${formatInteger(count(summary.counts.infrastructure_error) ?? 0)} | ${formatInteger(timeline.mismatchedFrames)} | ${formatDurationMilliseconds(summary.durationMs)} |`
   );
+  const recoveredReferences = summary.results
+    .filter((result) => {
+      const chromium = objectAt(result, 'chromium');
+      return Array.isArray(chromium.previous_failures) && chromium.previous_failures.length !== 0;
+    })
+    .slice(0, MAX_DETAIL_ROWS);
+  if (recoveredReferences.length !== 0) {
+    lines.push('', '**Recovered Chromium reference infrastructure failures**', '');
+    for (const result of recoveredReferences) {
+      const chromium = objectAt(result, 'chromium');
+      const failures = chromium.previous_failures;
+      const first = isObject(failures[0]) ? failures[0] : {};
+      const error = typeof first.error === 'string' ? first.error : 'unknown';
+      lines.push(
+        `- ${code(result.id, 160)} — ${formatInteger(failures.length)} failed attempt(s) before recovery · ${code(error, 160)}`
+      );
+    }
+  }
   const issues = summary.results
     .filter((result) => isObject(result) && !['match', 'reference_ok'].includes(result.status))
     .slice(0, MAX_DETAIL_ROWS);

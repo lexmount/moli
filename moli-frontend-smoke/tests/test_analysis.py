@@ -138,6 +138,41 @@ def test_reference_stability_ignores_endpoint_but_requires_every_frame_hash() ->
     ]
 
 
+def test_reference_contract_preserves_recovered_infrastructure_failures() -> None:
+    first = _reference_summary()
+    first["referenceGate"].update(  # type: ignore[union-attr]
+        {
+            "infrastructureRetryLimit": 1,
+            "retriedCases": 1,
+            "recoveredCases": 1,
+        }
+    )
+    first["results"][0]["chromium"].update(  # type: ignore[index,union-attr]
+        {
+            "attempt_count": 2,
+            "previous_failures": [
+                {
+                    "attempt": 1,
+                    "kind": "infrastructure",
+                    "duration_ms": 1.0,
+                    "error_type": "CdpCommandError",
+                    "error": "Target.createBrowserContext failed: unknown",
+                }
+            ],
+        }
+    )
+    second = deepcopy(first)
+
+    assert compare_reference_data(first, second)["ok"]  # type: ignore[arg-type]
+
+    second["referenceGate"]["recoveredCases"] = 0  # type: ignore[index]
+    result = compare_reference_data(first, second)  # type: ignore[arg-type]
+    assert not result["ok"]
+    assert result["secondValidationErrors"] == [
+        "second: recovered case count does not match results"
+    ]
+
+
 def test_projection_is_explicitly_non_gating_and_can_isolate_ua_edges() -> None:
     case = {"id": "react/family/case", "framework": "react"}
     chromium = {

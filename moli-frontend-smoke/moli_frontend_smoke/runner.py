@@ -21,7 +21,7 @@ from .browsers import (
     start_moli,
     wait_for_cdp_endpoint,
 )
-from .cdp import observe_case
+from .cdp import RawCdpClient, connect, observe_case
 from .config import (
     PROJECT_ROOT,
     REPO_ROOT,
@@ -33,7 +33,7 @@ from .config import (
 from .dom import dom_hash, first_difference, iter_nodes, normalize_dom_node, unified_dom_diff
 from .fixture_server import FixtureServer
 from .manifest import SmokeManifest, load_manifest, select_cases
-from .models import CaseResult, EngineObservation, SmokeCase
+from .models import CaseResult, EngineObservation, ObservationFailure, SmokeCase
 
 
 def _split_values(values: Iterable[str]) -> set[str]:
@@ -257,6 +257,25 @@ def _write_failure_artifact(
     return str(case_dir.relative_to(output_dir))
 
 
+async def _close_cdp_client(client: RawCdpClient | None) -> None:
+    if client is None:
+        return
+    try:
+        await client.websocket.close()
+    except Exception:
+        pass
+
+
+def _attempt_failure(attempt: int, observation: EngineObservation) -> ObservationFailure:
+    return ObservationFailure(
+        attempt=attempt,
+        kind=observation.failure_kind or "infrastructure",
+        duration_ms=observation.duration_ms,
+        error_type=observation.error_type,
+        error=observation.error,
+    )
+
+
 async def _observe_phase_case(
     *,
     engine: str,
@@ -264,33 +283,90 @@ async def _observe_phase_case(
     case: SmokeCase,
     fixture_url: str,
     timeout_ms: int,
-    semaphore: asyncio.Semaphore,
+    client: RawCdpClient | None,
+    infrastructure_retries: int,
     progress: dict[str, int],
     total: int,
-) -> EngineObservation:
-    async with semaphore:
-        url = fixture_url.rstrip("/") + case.path
-        observation = await observe_case(
-            engine=engine,
-            endpoint=endpoint,
-            case=case,
-            url=url,
-            timeout_ms=timeout_ms,
-        )
+) -> tuple[EngineObservation, RawCdpClient | None]:
+    url = fixture_url.rstrip("/") + case.path
+    previous_failures: list[ObservationFailure] = []
+    attempt = 0
+    while True:
+        attempt += 1
+        if client is None:
+            connect_started = time.perf_counter()
+            try:
+                client = await connect(endpoint)
+            except Exception as error:
+                observation = EngineObservation(
+                    engine=engine,
+                    ok=False,
+                    duration_ms=(time.perf_counter() - connect_started) * 1000,
+                    error_type=type(error).__name__,
+                    error=f"CDP connection failed: {error}",
+                    failure_kind="infrastructure",
+                )
+            else:
+                observation = await observe_case(
+                    engine=engine,
+                    endpoint=endpoint,
+                    case=case,
+                    url=url,
+                    timeout_ms=timeout_ms,
+                    client=client,
+                )
+        else:
+            observation = await observe_case(
+                engine=engine,
+                endpoint=endpoint,
+                case=case,
+                url=url,
+                timeout_ms=timeout_ms,
+                client=client,
+            )
         try:
             _normalize_observation(observation)
         except Exception as error:
             observation.ok = False
             observation.error_type = type(error).__name__
             observation.error = f"DOM normalization failed: {error}"
-        progress["completed"] += 1
-        state = "ok" if observation.ok else "error"
+            observation.failure_kind = "normalization"
+
+        if observation.failure_kind == "infrastructure":
+            await _close_cdp_client(client)
+            client = None
+
+        should_retry = (
+            engine == "chromium"
+            and observation.failure_kind == "infrastructure"
+            and attempt <= infrastructure_retries
+        )
+        if not should_retry:
+            break
+        previous_failures.append(_attempt_failure(attempt, observation))
+        error = (observation.error or observation.error_type or "unknown").replace(
+            "\n", " "
+        )
         print(
-            f"[{engine} {progress['completed']:>3}/{total}] {state:<5} {case.id}",
+            f"[{engine} retry {attempt}/{infrastructure_retries}] "
+            f"{case.id}: {error[:240]}",
             file=sys.stderr,
             flush=True,
         )
-        return observation
+
+    observation.duration_ms += sum(
+        failure.duration_ms for failure in previous_failures
+    )
+    observation.attempt_count = attempt
+    observation.previous_failures = previous_failures
+    progress["completed"] += 1
+    state = "ok" if observation.ok else "error"
+    print(
+        f"[{engine} {progress['completed']:>3}/{total}] {state:<5} {case.id}",
+        file=sys.stderr,
+        flush=True,
+    )
+    return observation, client
 
 
 async def _observe_phase(
@@ -301,27 +377,43 @@ async def _observe_phase(
     fixture_url: str,
     timeout_ms: int,
     jobs: int,
+    infrastructure_retries: int = 0,
 ) -> dict[str, EngineObservation]:
-    semaphore = asyncio.Semaphore(jobs)
+    if not cases:
+        return {}
+    queue: asyncio.Queue[SmokeCase] = asyncio.Queue()
+    for case in cases:
+        queue.put_nowait(case)
     progress = {"completed": 0}
-    observations = await asyncio.gather(
-        *[
-            asyncio.create_task(
-                _observe_phase_case(
+    observations: dict[str, EngineObservation] = {}
+
+    async def worker() -> None:
+        client: RawCdpClient | None = None
+        try:
+            while True:
+                try:
+                    case = queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    return
+                observation, client = await _observe_phase_case(
                     engine=engine,
                     endpoint=endpoint,
                     case=case,
                     fixture_url=fixture_url,
                     timeout_ms=timeout_ms,
-                    semaphore=semaphore,
+                    client=client,
+                    infrastructure_retries=infrastructure_retries,
                     progress=progress,
                     total=len(cases),
                 )
-            )
-            for case in cases
-        ]
+                observations[case.id] = observation
+        finally:
+            await _close_cdp_client(client)
+
+    await asyncio.gather(
+        *(asyncio.create_task(worker()) for _ in range(min(jobs, len(cases))))
     )
-    return {case.id: observation for case, observation in zip(cases, observations, strict=True)}
+    return {case.id: observations[case.id] for case in cases}
 
 
 def _case_result(
@@ -402,6 +494,9 @@ def _default_output_dir() -> Path:
 
 
 async def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
+    reference_infrastructure_retries = getattr(
+        args, "reference_infrastructure_retries", 0
+    )
     manifest_path = Path(args.manifest).expanduser().resolve()
     manifest = load_manifest(manifest_path)
     if not args.allow_partial_manifest:
@@ -452,6 +547,7 @@ async def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
             fixture_url=fixture.url,
             timeout_ms=args.timeout_ms,
             jobs=args.jobs,
+            infrastructure_retries=reference_infrastructure_retries,
         )
         reference_gate_ok = all(
             observation.ok for observation in chromium_observations.values()
@@ -479,6 +575,7 @@ async def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                 fixture_url=fixture.url,
                 timeout_ms=args.timeout_ms,
                 jobs=args.jobs,
+                infrastructure_retries=0,
             )
 
         effective_reference_only = args.reference_only or not reference_gate_ok
@@ -531,6 +628,15 @@ async def run(args: argparse.Namespace) -> tuple[int, dict[str, Any]]:
                     1 for observation in chromium_observations.values() if not observation.ok
                 ),
                 "moliPhaseStarted": bool(moli_observations),
+                "infrastructureRetryLimit": reference_infrastructure_retries,
+                "retriedCases": sum(
+                    observation.attempt_count > 1
+                    for observation in chromium_observations.values()
+                ),
+                "recoveredCases": sum(
+                    observation.ok and bool(observation.previous_failures)
+                    for observation in chromium_observations.values()
+                ),
             },
             "fixture": fixture.url,
             "engines": {
@@ -622,6 +728,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=15_000,
         help="Per-page fixture ready timeout.",
     )
+    parser.add_argument(
+        "--reference-infrastructure-retries",
+        type=int,
+        default=0,
+        help=(
+            "Retry only Chromium CDP/infrastructure observation failures; fixture, "
+            "normalization, and Moli failures remain single-attempt gates."
+        ),
+    )
     parser.add_argument("--output", help="Artifact output directory.")
     parser.add_argument("--chromium-bin", help="Chromium executable.")
     parser.add_argument("--moli-bin", help="Moli executable.")
@@ -643,6 +758,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         parser.error("--jobs must be between 1 and 32")
     if args.timeout_ms < 100 or args.timeout_ms > 120_000:
         parser.error("--timeout-ms must be between 100 and 120000")
+    if not 0 <= args.reference_infrastructure_retries <= 3:
+        parser.error("--reference-infrastructure-retries must be between 0 and 3")
     if args.reference_only and args.moli_endpoint:
         parser.error("--reference-only cannot be combined with --moli-endpoint")
     return args

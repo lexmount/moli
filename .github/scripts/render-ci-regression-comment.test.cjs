@@ -116,11 +116,21 @@ function createArtifacts(root) {
   const frontendRoot = path.join(root, 'frontend');
   writeJson(frontendRoot, 'summary.json', {
     ok: false,
+    referenceGate: { recoveredCases: 1 },
     counts: { match: 1, dom_mismatch: 1 },
     durationMs: 1_250,
     timeline: { chromiumFrames: 5, moliFrames: 5, mismatchedFrames: 1 },
     results: [
-      { id: 'safe', status: 'match', mismatchedFrames: [] },
+      {
+        id: 'safe',
+        status: 'match',
+        mismatchedFrames: [],
+        chromium: {
+          previous_failures: [
+            { error: 'Target.createBrowserContext failed: unknown' },
+          ],
+        },
+      },
       {
         id: 'bad|case<',
         status: 'dom_mismatch',
@@ -197,6 +207,9 @@ test('renders all five trusted artifact sections into one bounded report', (t) =
   assert.match(report, /artifacts: `5\/5`/);
   assert.match(report, /Raw binary \| 100 B \| 110 B \| \+10 B \| \+10\.000000%/);
   assert.match(report, /Frontend differential/);
+  assert.match(report, /1 Chromium reference recoveries/);
+  assert.match(report, /Recovered Chromium reference infrastructure failures/);
+  assert.match(report, /Target\.createBrowserContext failed: unknown/);
   assert.match(report, /`bad\\\|case&lt;`/);
   assert.match(report, /first difference `\$\.body\\\|&lt;`/);
   assert.match(report, /frames `ready\\\|&lt;`/);

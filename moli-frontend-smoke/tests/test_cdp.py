@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import asyncio
 
+import pytest
+
 from moli_frontend_smoke.cdp import (
+    CdpCommandError,
+    FixtureObservationError,
     _DOM_ENABLE_PARAMS,
     _OBSERVABLE_TREE_BARRIER_EXPRESSION,
     _capture_document,
@@ -11,7 +15,106 @@ from moli_frontend_smoke.cdp import (
     _reconcile_expected_diagnostics,
     _resume_expression,
     _state_expression,
+    observe_case,
 )
+from moli_frontend_smoke.models import SmokeCase
+
+
+def _case() -> SmokeCase:
+    return SmokeCase(
+        id="vue/web-platform-integration/formdata-searchparams-pipeline",
+        framework="vue",
+        family="web-platform-integration",
+        complexity="complex",
+        slug="formdata-searchparams-pipeline",
+        title="FormData and URLSearchParams pipeline",
+        variant=0,
+        seed=1,
+        size=4,
+        path="/cases/vue/web-platform-integration/formdata-searchparams-pipeline/index.html",
+    )
+
+
+class _FakeWebSocket:
+    def __init__(self) -> None:
+        self.close_count = 0
+
+    async def close(self) -> None:
+        self.close_count += 1
+
+
+class _FixtureFailureClient:
+    def __init__(self) -> None:
+        self.websocket = _FakeWebSocket()
+        self.events: list[dict[str, object]] = []
+        self.methods: list[str] = []
+
+    async def command(self, method, params=None, **_kwargs):
+        self.methods.append(method)
+        if method == "Target.createBrowserContext":
+            return {"browserContextId": "context"}
+        if method == "Target.createTarget":
+            return {"targetId": "target"}
+        if method == "Target.attachToTarget":
+            return {"sessionId": "session"}
+        if method == "Runtime.evaluate":
+            return {"exceptionDetails": {"text": "fixture failed"}}
+        return {}
+
+    async def wait_event(self, *_args, **_kwargs):
+        return {}
+
+
+def test_observe_case_distinguishes_fixture_failures_from_infrastructure() -> None:
+    client = _FixtureFailureClient()
+
+    observation = asyncio.run(
+        observe_case(
+            engine="chromium",
+            endpoint="http://127.0.0.1:9222",
+            case=_case(),
+            url="http://127.0.0.1:3000/case",
+            timeout_ms=1000,
+            client=client,  # type: ignore[arg-type]
+        )
+    )
+
+    assert not observation.ok
+    assert observation.failure_kind == "fixture"
+    assert observation.error_type == "FixtureObservationError"
+    assert "state Runtime.evaluate threw" in (observation.error or "")
+    assert client.methods[-1] == "Target.disposeBrowserContext"
+    assert client.websocket.close_count == 0
+
+
+class _InfrastructureFailureClient:
+    def __init__(self) -> None:
+        self.websocket = _FakeWebSocket()
+        self.events: list[dict[str, object]] = []
+
+    async def command(self, method, _params=None, **_kwargs):
+        raise CdpCommandError(method, {"code": -32000, "message": "unknown"})
+
+
+def test_observe_case_marks_cdp_command_errors_as_infrastructure() -> None:
+    client = _InfrastructureFailureClient()
+
+    observation = asyncio.run(
+        observe_case(
+            engine="chromium",
+            endpoint="http://127.0.0.1:9222",
+            case=_case(),
+            url="http://127.0.0.1:3000/case",
+            timeout_ms=1000,
+            client=client,  # type: ignore[arg-type]
+        )
+    )
+
+    assert not observation.ok
+    assert observation.failure_kind == "infrastructure"
+    assert observation.error_type == "CdpCommandError"
+    assert "unknown" in (observation.error or "")
+    assert client.websocket.close_count == 0
 
 
 def test_diagnostics_preserve_runtime_console_and_network_failures() -> None:
@@ -220,6 +323,21 @@ def test_missing_expected_network_failure_remains_a_diagnostic_error() -> None:
         }
     ]
     assert _diagnostics_have_errors(diagnostics)
+
+
+def test_invalid_expected_diagnostics_is_a_fixture_failure() -> None:
+    diagnostics = {
+        "exceptions": [],
+        "consoleErrors": [],
+        "networkFailures": [],
+        "httpErrors": [],
+    }
+
+    with pytest.raises(FixtureObservationError):
+        _reconcile_expected_diagnostics(
+            diagnostics,
+            {"expectedDiagnostics": {"networkFailures": "invalid"}},
+        )
 
 
 def test_state_expression_waits_for_a_new_checkpoint_or_terminal_state() -> None:

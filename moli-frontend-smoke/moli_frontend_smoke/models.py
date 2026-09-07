@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 FrameworkName = Literal["react", "vue", "angular"]
 Complexity = Literal["simple", "medium", "complex"]
+ObservationFailureKind = Literal["infrastructure", "fixture", "normalization"]
 CaseStatus = Literal[
     "match",
     "reference_ok",
@@ -61,6 +62,15 @@ class DomFrameObservation:
         return value
 
 
+@dataclass(frozen=True)
+class ObservationFailure:
+    attempt: int
+    kind: ObservationFailureKind
+    duration_ms: float
+    error_type: str | None
+    error: str | None
+
+
 @dataclass
 class EngineObservation:
     engine: str
@@ -74,6 +84,9 @@ class EngineObservation:
     diagnostics: dict[str, Any] = field(default_factory=dict)
     error_type: str | None = None
     error: str | None = None
+    failure_kind: ObservationFailureKind | None = None
+    attempt_count: int = 1
+    previous_failures: list[ObservationFailure] = field(default_factory=list)
 
     def summary_json(self) -> dict[str, Any]:
         value = asdict(self)

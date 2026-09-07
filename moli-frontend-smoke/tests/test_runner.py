@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections import deque
+from dataclasses import replace
 from types import SimpleNamespace
 
 import moli_frontend_smoke.runner as runner
@@ -14,6 +15,7 @@ from moli_frontend_smoke.models import (
 from moli_frontend_smoke.runner import (
     _case_result,
     _normalize_observation,
+    _observe_phase,
     parse_args,
 )
 
@@ -75,6 +77,191 @@ def _observation(engine: str, dom: dict[str, object]) -> EngineObservation:
 
 def test_default_differential_is_serial() -> None:
     assert parse_args([]).jobs == 1
+
+
+def test_reference_infrastructure_retry_is_opt_in() -> None:
+    assert parse_args([]).reference_infrastructure_retries == 0
+    assert (
+        parse_args(["--reference-infrastructure-retries", "1"])
+        .reference_infrastructure_retries
+        == 1
+    )
+
+
+class _FakeWebSocket:
+    def __init__(self) -> None:
+        self.close_count = 0
+
+    async def close(self) -> None:
+        self.close_count += 1
+
+
+class _FakeClient:
+    def __init__(self) -> None:
+        self.websocket = _FakeWebSocket()
+        self.events: list[dict[str, object]] = []
+
+
+def test_observation_worker_reuses_one_cdp_connection(monkeypatch) -> None:
+    clients: list[_FakeClient] = []
+    observed_clients: list[_FakeClient] = []
+
+    async def fake_connect(_endpoint):
+        client = _FakeClient()
+        clients.append(client)
+        return client
+
+    async def fake_observe_case(*, engine, client, **_kwargs):
+        observed_clients.append(client)
+        return _observation(engine, {"nodeType": 9, "nodeName": "#document"})
+
+    monkeypatch.setattr(runner, "connect", fake_connect)
+    monkeypatch.setattr(runner, "observe_case", fake_observe_case)
+    first = _case()
+    second = replace(first, id="react/family/second", slug="second")
+
+    observations = asyncio.run(
+        _observe_phase(
+            engine="chromium",
+            endpoint="http://127.0.0.1:9222",
+            cases=(first, second),
+            fixture_url="http://127.0.0.1:3000",
+            timeout_ms=1000,
+            jobs=1,
+        )
+    )
+
+    assert list(observations) == [first.id, second.id]
+    assert len(clients) == 1
+    assert observed_clients == [clients[0], clients[0]]
+    assert clients[0].websocket.close_count == 1
+
+
+def test_chromium_retries_only_infrastructure_failures(monkeypatch) -> None:
+    clients: list[_FakeClient] = []
+    attempts = 0
+
+    async def fake_connect(_endpoint):
+        client = _FakeClient()
+        clients.append(client)
+        return client
+
+    async def fake_observe_case(*, engine, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            return EngineObservation(
+                engine=engine,
+                ok=False,
+                duration_ms=2.0,
+                error_type="CdpCommandError",
+                error="Target.createBrowserContext failed: unknown",
+                failure_kind="infrastructure",
+            )
+        return _observation(engine, {"nodeType": 9, "nodeName": "#document"})
+
+    monkeypatch.setattr(runner, "connect", fake_connect)
+    monkeypatch.setattr(runner, "observe_case", fake_observe_case)
+
+    observation = asyncio.run(
+        _observe_phase(
+            engine="chromium",
+            endpoint="http://127.0.0.1:9222",
+            cases=(_case(),),
+            fixture_url="http://127.0.0.1:3000",
+            timeout_ms=1000,
+            jobs=1,
+            infrastructure_retries=1,
+        )
+    )[_case().id]
+
+    assert observation.ok
+    assert observation.attempt_count == 2
+    assert observation.duration_ms == 3.0
+    assert [failure.error for failure in observation.previous_failures] == [
+        "Target.createBrowserContext failed: unknown"
+    ]
+    assert len(clients) == 2
+    assert all(client.websocket.close_count == 1 for client in clients)
+
+
+def test_fixture_failure_is_never_retried(monkeypatch) -> None:
+    attempts = 0
+
+    async def fake_connect(_endpoint):
+        return _FakeClient()
+
+    async def fake_observe_case(*, engine, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return EngineObservation(
+            engine=engine,
+            ok=False,
+            duration_ms=1.0,
+            error_type="FixtureObservationError",
+            error="fixture assertion failed",
+            failure_kind="fixture",
+        )
+
+    monkeypatch.setattr(runner, "connect", fake_connect)
+    monkeypatch.setattr(runner, "observe_case", fake_observe_case)
+
+    observation = asyncio.run(
+        _observe_phase(
+            engine="chromium",
+            endpoint="http://127.0.0.1:9222",
+            cases=(_case(),),
+            fixture_url="http://127.0.0.1:3000",
+            timeout_ms=1000,
+            jobs=1,
+            infrastructure_retries=1,
+        )
+    )[_case().id]
+
+    assert not observation.ok
+    assert observation.failure_kind == "fixture"
+    assert observation.attempt_count == 1
+    assert observation.previous_failures == []
+    assert attempts == 1
+
+
+def test_moli_failure_is_never_retried(monkeypatch) -> None:
+    attempts = 0
+
+    async def fake_connect(_endpoint):
+        return _FakeClient()
+
+    async def fake_observe_case(*, engine, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        return EngineObservation(
+            engine=engine,
+            ok=False,
+            duration_ms=1.0,
+            error_type="CdpCommandError",
+            error="candidate connection failed",
+            failure_kind="infrastructure",
+        )
+
+    monkeypatch.setattr(runner, "connect", fake_connect)
+    monkeypatch.setattr(runner, "observe_case", fake_observe_case)
+
+    observation = asyncio.run(
+        _observe_phase(
+            engine="moli",
+            endpoint="http://127.0.0.1:9222",
+            cases=(_case(),),
+            fixture_url="http://127.0.0.1:3000",
+            timeout_ms=1000,
+            jobs=1,
+            infrastructure_retries=1,
+        )
+    )[_case().id]
+
+    assert not observation.ok
+    assert observation.attempt_count == 1
+    assert observation.previous_failures == []
+    assert attempts == 1
 
 
 def test_any_moli_tree_difference_is_a_failure(tmp_path) -> None:
@@ -378,4 +565,7 @@ def test_failed_reference_gate_never_starts_moli(monkeypatch, tmp_path) -> None:
         "cases": 1,
         "errors": 1,
         "moliPhaseStarted": False,
+        "infrastructureRetryLimit": 0,
+        "retriedCases": 0,
+        "recoveredCases": 0,
     }
