@@ -43,7 +43,7 @@ use super::{
 use crate::conn::state::BrowserContext;
 
 impl CdpConnection {
-    pub(super) fn browser_context_by_browser_id(
+    pub(crate) fn browser_context_by_browser_id(
         &self,
         context: BrowserContextId,
     ) -> Option<&BrowserContext> {

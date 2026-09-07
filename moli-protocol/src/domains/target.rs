@@ -263,7 +263,7 @@ enum PendingTargetCommandKind {
         command: DevToolsCloseTargetCommand,
     },
     DisposeBrowserContext {
-        browser_context_id: String,
+        disposal: Result<browser_context_disposal::BrowserContextDisposal, DevToolsError>,
     },
     SendMessageToTarget {
         message: String,
@@ -307,7 +307,7 @@ enum CompletedTargetCommandKind {
         command: DevToolsCloseTargetCommand,
     },
     DisposeBrowserContext {
-        browser_context_id: String,
+        disposal: Result<browser_context_disposal::BrowserContextDisposal, DevToolsError>,
     },
     SendMessageToTarget {
         message: String,
@@ -362,8 +362,8 @@ impl PendingTargetCommandDispatch {
             PendingTargetCommandKind::CloseTarget { command } => {
                 CompletedTargetCommandKind::CloseTarget { command }
             }
-            PendingTargetCommandKind::DisposeBrowserContext { browser_context_id } => {
-                CompletedTargetCommandKind::DisposeBrowserContext { browser_context_id }
+            PendingTargetCommandKind::DisposeBrowserContext { disposal } => {
+                CompletedTargetCommandKind::DisposeBrowserContext { disposal }
             }
             PendingTargetCommandKind::SendMessageToTarget {
                 message,
@@ -437,9 +437,9 @@ pub(crate) fn try_start_target_command_dispatch(
             Some(attachment::start_detach_from_target_command(cmd))
         }
         Some(TargetAction::CloseTarget) => Some(closing::start_close_target_command(conn, cmd)),
-        Some(TargetAction::DisposeBrowserContext) => {
-            Some(browser_context::start_dispose_browser_context_command(cmd))
-        }
+        Some(TargetAction::DisposeBrowserContext) => Some(
+            browser_context::start_dispose_browser_context_command(conn, cmd),
+        ),
         Some(TargetAction::SendMessageToTarget) => {
             Some(attachment::start_send_message_to_target_command(cmd))
         }
@@ -797,11 +797,11 @@ pub(crate) async fn complete_pending_target_command(
                 closing::complete_close_target_command_async(conn, command, command_context).await,
             );
         }
-        CompletedTargetCommandKind::DisposeBrowserContext { browser_context_id } => {
+        CompletedTargetCommandKind::DisposeBrowserContext { disposal } => {
             return TargetCommandTaskStep::Complete(
                 browser_context::complete_dispose_browser_context_command_async(
                     conn,
-                    browser_context_id,
+                    disposal,
                     command_context,
                 )
                 .await,
@@ -883,12 +883,12 @@ fn pending_close_target_command(
 fn pending_dispose_browser_context_command(
     command_id: Option<u64>,
     session_id: Option<&str>,
-    browser_context_id: String,
+    disposal: Result<browser_context_disposal::BrowserContextDisposal, DevToolsError>,
 ) -> TargetCommandTaskStep {
     TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
         command_id,
         session_id: session_id.map(str::to_owned),
-        kind: Box::new(PendingTargetCommandKind::DisposeBrowserContext { browser_context_id }),
+        kind: Box::new(PendingTargetCommandKind::DisposeBrowserContext { disposal }),
     })
 }
 

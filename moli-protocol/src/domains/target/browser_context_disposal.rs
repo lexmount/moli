@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use crate::conn::{CdpConnection, CommandDispatchContext, PreparedTargetHostClosure};
 use crate::devtools_runtime::{DevToolsError, DevToolsErrorKind, DevToolsTargetKind};
+use moli_core::browser::BrowserContextId;
 
 use super::{events, worker_target};
 
@@ -15,15 +16,19 @@ struct PageTargetDisposal {
     host_closure: PreparedTargetHostClosure,
 }
 
-struct BrowserContextDisposal {
+pub(super) struct BrowserContextDisposal {
     browser_context_id: String,
+    context: BrowserContextId,
     page_targets: Vec<PageTargetDisposal>,
     inspector_session_ids: Vec<String>,
     pending_inspector_session_owners: Vec<Option<String>>,
 }
 
 impl BrowserContextDisposal {
-    fn prepare(conn: &CdpConnection, browser_context_id: &str) -> Result<Self, DevToolsError> {
+    pub(super) fn prepare(
+        conn: &CdpConnection,
+        browser_context_id: &str,
+    ) -> Result<Self, DevToolsError> {
         let Some(browser_context) = conn.browser_context_by_id(browser_context_id) else {
             return Err(browser_context_not_found(browser_context_id));
         };
@@ -90,6 +95,7 @@ impl BrowserContextDisposal {
 
         Ok(Self {
             browser_context_id: browser_context_id.to_owned(),
+            context: browser_context.browser_context_id(),
             page_targets,
             inspector_session_ids,
             pending_inspector_session_owners,
@@ -126,22 +132,14 @@ fn page_fetch_owner_session_id(
 
 pub(super) async fn execute_browser_context_disposal_async(
     conn: &mut CdpConnection,
-    browser_context_id: String,
+    disposal: BrowserContextDisposal,
     out: &mut events::TargetProtocolSideEffects,
     command_context: &mut CommandDispatchContext,
 ) -> Result<(), DevToolsError> {
-    if !conn.has_browser_context_id(&browser_context_id) {
-        return Err(browser_context_not_found(&browser_context_id));
+    let restore_browser_context = conn.active_browser_context_id();
+    if !conn.activate_browser_context_by_browser_id(disposal.context) {
+        return Err(browser_context_not_found(&disposal.browser_context_id));
     }
-
-    let restore_browser_context_id = super::previously_active_browser_context_id(conn);
-    if !conn
-        .activate_browser_context_by_id_async(&browser_context_id)
-        .await
-    {
-        return Err(browser_context_not_found(&browser_context_id));
-    }
-    let disposal = BrowserContextDisposal::prepare(conn, &browser_context_id)?;
 
     fail_target_pending_work(conn, &disposal, out, command_context).await;
     out.extend_background_events(command_context.take_protocol_events());
@@ -158,6 +156,7 @@ pub(super) async fn execute_browser_context_disposal_async(
         worker_target::close_browser_context_worker_targets_for_dispose_async(
             conn,
             &disposal.browser_context_id,
+            disposal.context,
             DISPOSE_REASON,
         )
         .await,
@@ -167,15 +166,12 @@ pub(super) async fn execute_browser_context_disposal_async(
         close_page_target(conn, out, page_target).await;
     }
 
-    let removed = conn
-        .remove_browser_context_by_id_restoring_active_async(
-            &disposal.browser_context_id,
-            restore_browser_context_id.as_deref(),
-        )
-        .await;
-    if let Some(mut removed) = removed {
-        removed.close_all_pages_async().await;
-    }
+    let removed =
+        conn.remove_browser_context_restoring_active(disposal.context, restore_browser_context);
+    let Some(mut removed) = removed else {
+        return Err(browser_context_not_found(&disposal.browser_context_id));
+    };
+    removed.close_all_pages_async().await;
     conn.release_idle_navigation_engine_memory_after_target_close();
     Ok(())
 }
