@@ -14,8 +14,8 @@ use crate::web_api_interfaces;
 use crate::webidl;
 use moli_canvas::{
     DEFAULT_FILL_STYLE, DEFAULT_FONT, DrawImageBlit, ScaleFilter, blit_draw_image_filtered,
-    blit_image_data, byte_len, data_image_rgba8_pixels, draw_text, extract_image_data,
-    fill_style_rgba, measure_text_width, normalize_rect as canvas_normalize_rect, paint_rect,
+    blit_image_data, byte_len, data_image_rgba8_pixels, extract_image_data, fill_style_rgba,
+    normalize_rect as canvas_normalize_rect, paint_rect,
 };
 use moli_layout::{
     PaintBrush, PaintColor, PaintFragment, PaintLineCap, PaintLineJoin, PaintShape, PaintSnapshot,
@@ -23,6 +23,8 @@ use moli_layout::{
 };
 use moli_webapi_declare::WebApiObject;
 use std::str::FromStr;
+
+mod text;
 
 const DEFAULT_IMAGE_SMOOTHING_QUALITY: &str = "low";
 const CANVAS_CONTEXT_LINE_DASH_SLOT: &str = "__moliCanvasContextLineDash";
@@ -105,7 +107,7 @@ struct CanvasContextFillTextArgs {
     #[webidl(required)]
     y: f64,
     #[webidl(name = "maxWidth")]
-    _max_width: Option<f64>,
+    max_width: Option<f64>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -118,7 +120,7 @@ struct CanvasContextStrokeTextArgs {
     #[webidl(required)]
     y: f64,
     #[webidl(name = "maxWidth")]
-    _max_width: Option<f64>,
+    max_width: Option<f64>,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -398,7 +400,9 @@ pub(crate) fn canvas_context_font_setter_callback<'s>(
         rv.set_undefined();
         return;
     };
-    set_context_string_slot(scope, args.this(), CANVAS_CONTEXT_FONT_SLOT, &font);
+    if let Some(font) = text::resolve_font_css(scope, args.this(), &font) {
+        set_context_string_slot(scope, args.this(), CANVAS_CONTEXT_FONT_SLOT, &font);
+    }
     rv.set_undefined();
 }
 
@@ -1547,6 +1551,14 @@ fn rasterize_canvas_fragment<'s>(
     canvas: v8::Local<'s, v8::Object>,
     fragment: PaintFragment,
 ) {
+    rasterize_canvas_scene(scope, canvas, |snapshot| snapshot.push_fragment(fragment));
+}
+
+fn rasterize_canvas_scene<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+    prepare: impl FnOnce(&mut PaintSnapshot),
+) {
     let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
         if width == 0 || height == 0 {
             return;
@@ -1555,7 +1567,7 @@ fn rasterize_canvas_fragment<'s>(
             PaintViewport::new(width, height, 1.0),
             PaintColor::new(0.0, 0.0, 0.0, 0.0),
         );
-        snapshot.push_fragment(fragment);
+        prepare(&mut snapshot);
         if let Ok(raster) = moli_paint::raster_snapshot(&snapshot)
             && raster.width == width
             && raster.height == height
@@ -1607,13 +1619,27 @@ pub(crate) fn canvas_context_fill_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !require_canvas_context_receiver(scope, args.this(), "fillText") {
+        return;
+    }
     let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
         return;
     };
     let Some(parsed) = webidl::parse_args::<CanvasContextFillTextArgs>(scope, &args) else {
         return;
     };
-    draw_canvas_context_text(scope, args.this(), canvas, &parsed.text, parsed.x, parsed.y);
+    text::draw_text(
+        scope,
+        args.this(),
+        canvas,
+        text::TextDraw {
+            text: &parsed.text,
+            x: parsed.x,
+            y: parsed.y,
+            max_width: parsed.max_width,
+            paint: text::TextPaint::Fill,
+        },
+    );
 }
 
 pub(crate) fn canvas_context_stroke_text_callback<'s>(
@@ -1621,31 +1647,27 @@ pub(crate) fn canvas_context_stroke_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !require_canvas_context_receiver(scope, args.this(), "strokeText") {
+        return;
+    }
     let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
         return;
     };
     let Some(parsed) = webidl::parse_args::<CanvasContextStrokeTextArgs>(scope, &args) else {
         return;
     };
-    draw_canvas_context_text(scope, args.this(), canvas, &parsed.text, parsed.x, parsed.y);
-}
-
-fn draw_canvas_context_text<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    context: v8::Local<'s, v8::Object>,
-    canvas: v8::Local<'s, v8::Object>,
-    text: &str,
-    x: f64,
-    y: f64,
-) {
-    let fill_style = context_string_slot(scope, context, CANVAS_CONTEXT_FILL_STYLE_SLOT)
-        .unwrap_or_else(|| DEFAULT_FILL_STYLE.to_owned());
-    let font = context_string_slot(scope, context, CANVAS_CONTEXT_FONT_SLOT)
-        .unwrap_or_else(|| DEFAULT_FONT.to_owned());
-    let color = fill_style_rgba(&fill_style);
-    let _ = with_canvas_like_pixels_mut(scope, canvas, |pixels, width, height| {
-        draw_text(pixels, width, height, text, x, y, &font, color);
-    });
+    text::draw_text(
+        scope,
+        args.this(),
+        canvas,
+        text::TextDraw {
+            text: &parsed.text,
+            x: parsed.x,
+            y: parsed.y,
+            max_width: parsed.max_width,
+            paint: text::TextPaint::Stroke,
+        },
+    );
 }
 
 pub(crate) fn canvas_context_draw_image_callback<'s>(
@@ -1856,10 +1878,8 @@ pub(crate) fn canvas_context_measure_text_callback<'s>(
     let Some(parsed) = webidl::parse_args::<CanvasContextMeasureTextArgs>(scope, &args) else {
         return;
     };
-    let font = context_string_slot(scope, args.this(), CANVAS_CONTEXT_FONT_SLOT)
-        .unwrap_or_else(|| DEFAULT_FONT.to_owned());
     let declaration = CanvasTextMetricsDeclaration {
-        width: measure_text_width(&parsed.text, &font),
+        width: text::shape_text(scope, args.this(), &parsed.text).width,
     };
     let relevant_context = canvas_context_relevant_context(scope, args.this())
         .unwrap_or_else(|| scope.get_current_context());
