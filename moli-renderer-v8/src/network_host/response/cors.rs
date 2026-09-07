@@ -660,6 +660,34 @@ mod tests {
     }
 
     #[test]
+    fn opaque_request_origin_requires_null_cors_opt_in_for_same_url_origin() {
+        let response_url = url("https://example.test/data");
+        let response = header_response(response_url.clone(), Vec::new());
+
+        assert!(
+            validate_cors_response_chain(
+                &WebOrigin::Opaque,
+                &response,
+                RequestCredentialsMode::SameOrigin,
+            )
+            .is_err()
+        );
+
+        let allowed_response = header_response(
+            response_url,
+            vec![("Access-Control-Allow-Origin".to_owned(), "null".to_owned())],
+        );
+        assert!(
+            validate_cors_response_chain(
+                &WebOrigin::Opaque,
+                &allowed_response,
+                RequestCredentialsMode::SameOrigin,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
     fn validate_cors_preflight_response_checks_method_and_headers() {
         let request_headers = vec![
             ("X-Test".to_owned(), "yes".to_owned()),
