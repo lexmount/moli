@@ -168,6 +168,63 @@ async fn classic_script_exception_reports_window_error_then_completes() {
     );
 }
 
+#[tokio::test]
+async fn muted_classic_script_exceptions_expose_only_cross_origin_safe_details() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm_with_loader("https://example.com/", &loader);
+    vm.eval(
+        r#"
+        globalThis.__mutedClassicScriptErrors = [];
+        window.onerror = (message, source, line, column, error) => {
+          globalThis.__mutedClassicScriptErrors.push({
+            message,
+            source,
+            line,
+            column,
+            errorIsNull: error === null,
+          });
+          return true;
+        };
+        "installed";
+        "#,
+    )
+    .expect("window error observer should install");
+
+    for (position, source) in [
+        (8, "throw new Error('runtime secret');"),
+        (9, "function syntaxError( {"),
+    ] {
+        let mut script = ready_dynamic_runtime_script(position);
+        script.url = Url::parse(&format!("https://cross-origin.test/script-{position}.js"))
+            .expect("cross-origin script URL");
+        script.base_url = script.url.clone();
+        let script = crate::planning::prepared_script_with_loaded_source(
+            script,
+            source.to_owned(),
+            None,
+            true,
+        );
+
+        let outcome = vm
+            .execute_loaded_prepared_script_source(&script, source, None)
+            .await
+            .expect("a muted exception should still complete classic script evaluation");
+        assert!(matches!(
+            outcome,
+            crate::script_vm::LoadedScriptExecutionOutcome::Completed(
+                crate::script_vm::PreparedScriptBodyActivity::Entered
+            )
+        ));
+        assert_eq!(script.base_url.as_str(), "about:blank");
+    }
+
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__mutedClassicScriptErrors)")
+            .expect("muted classic script errors should remain observable"),
+        r#"[{"message":"Script error.","source":"","line":0,"column":0,"errorIsNull":true},{"message":"Script error.","source":"","line":0,"column":0,"errorIsNull":true}]"#,
+    );
+}
+
 fn is_document_script_execution_work(
     work: &PostParsePageOwnedWork,
     lane: crate::document_script_scheduler::DocumentScriptExecutionLane,
@@ -324,9 +381,11 @@ fn external_script_redirect_final_url_obeys_script_src_csp() {
     );
 }
 
-#[test]
-fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
-    let mut vm = new_storage_test_vm("https://app.test/page.html");
+#[tokio::test(flavor = "current_thread")]
+async fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).unwrap();
+    let mut vm =
+        new_storage_page_task_executor_test_vm_with_loader("https://app.test/page.html", &loader);
     vm.set_response_content_security_report_only_policies(&["script-src 'self'".to_owned()]);
     vm.set_response_content_security_policies(&["script-src 'self'".to_owned()]);
     vm.eval(
@@ -379,6 +438,7 @@ fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
             from_cache: true,
             cache_state: moli_fetch::ResponseCacheState::Local,
             negotiated_http_version: None,
+            preload_state: Default::default(),
         },
         "export default 1;".to_owned(),
     );
@@ -391,7 +451,7 @@ fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
     vm.dispatch_module_fetch_csp_violations(Some(&context));
     vm.dispatch_module_fetch_csp_violations(Some(&context));
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         2
     );
     assert_eq!(
@@ -406,7 +466,7 @@ fn module_csp_snapshot_checks_cached_middle_hop_and_dispatches_reports_once() {
     );
     vm.dispatch_module_fetch_csp_violations(Some(&context));
     assert_eq!(
-        drain_pre_domcontentloaded_non_script_page_tasks_for_test(&mut vm),
+        drain_content_security_policy_violation_tasks_for_test(&mut vm, &loader).await,
         0,
         "replaying a response must not report the same hop twice"
     );
@@ -454,6 +514,7 @@ fn module_csp_admission_reports_once_for_service_worker_response_alias() {
             from_cache: false,
             cache_state: moli_fetch::ResponseCacheState::None,
             negotiated_http_version: None,
+            preload_state: Default::default(),
         },
         "export default 42;".to_owned(),
     );

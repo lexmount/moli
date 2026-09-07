@@ -357,6 +357,7 @@ impl ServiceWorkerRuntimeService {
                     ServiceWorkerDirectFetchResult::Response(ServiceWorkerDirectFetchResponse {
                         response: Box::new(navigation_response),
                         response_filter,
+                        from_network_fallback: true,
                     })
                 }
                 Err(error) => ServiceWorkerDirectFetchResult::Failure(error.to_string()),
@@ -664,6 +665,7 @@ impl ServiceWorkerRuntimeService {
                 ServiceWorkerDirectFetchResponse {
                     response: Box::new(navigation_response),
                     response_filter,
+                    from_network_fallback: false,
                 },
             ));
             return;
@@ -1296,6 +1298,7 @@ mod tests {
                         timing_allow_passed: true,
                         url_list: (Some(final_url.clone())).into_iter().collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 202,
                     status_text: "Accepted".to_owned(),
@@ -1409,6 +1412,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: (Some(final_url.clone())).into_iter().collect(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 202,
                 status_text: "Accepted".to_owned(),
@@ -1451,6 +1455,7 @@ mod tests {
                         timing_allow_passed: true,
                         url_list: (Some(final_url)).into_iter().collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 202,
                     status_text: "Accepted".to_owned(),
@@ -1502,6 +1507,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: (Some(final_url)).into_iter().collect(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -1579,6 +1585,7 @@ mod tests {
                         timing_allow_passed: false,
                         url_list: (None).into_iter().collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 0,
                     status_text: String::new(),
@@ -1635,6 +1642,7 @@ mod tests {
                         timing_allow_passed: false,
                         url_list: (None).into_iter().collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 0,
                     status_text: String::new(),
@@ -1690,6 +1698,7 @@ mod tests {
                         timing_allow_passed: true,
                         url_list: (Some(final_url.clone())).into_iter().collect(),
                         redirected: true,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -1740,6 +1749,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: true,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -1793,6 +1803,7 @@ mod tests {
                         timing_allow_passed: true,
                         url_list: (None).into_iter().collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 302,
                     status_text: "Found".to_owned(),
@@ -1921,6 +1932,7 @@ mod tests {
                         timing_allow_passed: true,
                         url_list: (None).into_iter().collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 302,
                     status_text: "Found".to_owned(),
@@ -1993,6 +2005,7 @@ mod tests {
                         timing_allow_passed: true,
                         url_list: (None).into_iter().collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 302,
                     status_text: "Found".to_owned(),
@@ -2107,6 +2120,7 @@ mod tests {
                     timing_allow_passed: true,
                     url_list: (Some(request_url.clone())).into_iter().collect(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 303,
                 status_text: "See Other".to_owned(),
@@ -2212,6 +2226,7 @@ mod tests {
                         timing_allow_passed: true,
                         url_list: (None).into_iter().collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 302,
                     status_text: "Found".to_owned(),
@@ -2264,6 +2279,7 @@ mod tests {
                         timing_allow_passed: true,
                         url_list: (Some(response_url.clone())).into_iter().collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 302,
                     status_text: "Found".to_owned(),
@@ -2336,6 +2352,7 @@ mod tests {
                         timing_allow_passed: false,
                         url_list: (None).into_iter().collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 0,
                     status_text: String::new(),
@@ -2390,6 +2407,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -2441,6 +2459,7 @@ mod tests {
                         timing_allow_passed: false,
                         url_list: (None).into_iter().collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 0,
                     status_text: String::new(),
@@ -2508,6 +2527,7 @@ mod tests {
                             timing_allow_passed: false,
                             url_list: (None).into_iter().collect(),
                             redirected: false,
+                            cors_exposed_header_names: None,
                         },
                         status: 0,
                         status_text: String::new(),
@@ -2562,6 +2582,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -2622,6 +2643,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -2692,6 +2714,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -2758,6 +2781,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -2823,6 +2847,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -2888,6 +2913,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -2954,6 +2980,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -3014,6 +3041,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -3079,6 +3107,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -3143,6 +3172,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -3201,6 +3231,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -3266,6 +3297,7 @@ mod tests {
                         .into_iter()
                         .collect(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3339,6 +3371,7 @@ mod tests {
                         .into_iter()
                         .collect(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3409,6 +3442,7 @@ mod tests {
                         .into_iter()
                         .collect(),
                     redirected: false,
+                    cors_exposed_header_names: None,
                 },
                 status: 200,
                 status_text: "OK".to_owned(),
@@ -3466,6 +3500,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -3519,6 +3554,7 @@ mod tests {
                             .into_iter()
                             .collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 200,
                     status_text: "OK".to_owned(),
@@ -3577,6 +3613,7 @@ mod tests {
                         timing_allow_passed: false,
                         url_list: (None).into_iter().collect(),
                         redirected: false,
+                        cors_exposed_header_names: None,
                     },
                     status: 0,
                     status_text: String::new(),

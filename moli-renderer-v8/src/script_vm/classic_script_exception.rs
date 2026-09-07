@@ -14,9 +14,12 @@ impl ScriptVm {
     pub(super) fn report_classic_script_exception_and_finish_evaluation_best_effort(
         &mut self,
         report: &V8ExceptionReport,
+        muted_errors: bool,
     ) {
         log_uncaught_script_exception(report);
-        if let Err(error) = self.dispatch_classic_script_exception_and_finish_evaluation(report) {
+        if let Err(error) =
+            self.dispatch_classic_script_exception_and_finish_evaluation(report, muted_errors)
+        {
             self.record_runtime_warning(format_args!(
                 "classic script exception reporting failed: {error}"
             ));
@@ -26,19 +29,34 @@ impl ScriptVm {
     fn dispatch_classic_script_exception_and_finish_evaluation(
         &mut self,
         report: &V8ExceptionReport,
+        muted_errors: bool,
     ) -> Result<()> {
         self.with_default_context_scope(|scope, host_ptr| {
-            let error_value = report
-                .exception
-                .as_ref()
-                .map(|exception| v8::Local::new(scope, exception));
+            let error_value = if muted_errors {
+                None
+            } else {
+                report
+                    .exception
+                    .as_ref()
+                    .map(|exception| v8::Local::new(scope, exception))
+            };
+            let (summary, source, line, column) = if muted_errors {
+                ("Script error.", "", 0, 0)
+            } else {
+                (
+                    report.summary.as_str(),
+                    report.source.as_deref().unwrap_or(""),
+                    report.line.unwrap_or(0) as u32,
+                    report.column.unwrap_or(0) as u32,
+                )
+            };
             let dispatch_result = dispatch_window_error_event_with_details(
                 scope,
                 host_ptr,
-                &report.summary,
-                report.source.as_deref().unwrap_or(""),
-                report.line.unwrap_or(0) as u32,
-                report.column.unwrap_or(0) as u32,
+                summary,
+                source,
+                line,
+                column,
                 error_value,
             )
             .map_err(anyhow::Error::msg);
