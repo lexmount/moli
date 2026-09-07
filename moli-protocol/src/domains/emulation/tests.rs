@@ -1147,8 +1147,9 @@ async fn invalid_timezone_override_is_rejected_without_replacing_active_state() 
             .browser_context
             .as_ref()
             .expect("browser context")
-            .timezone_override
-            .as_deref(),
+            .active_page_target()
+            .effective_policy()
+            .timezone_override(),
         Some("Europe/Paris")
     );
 }
