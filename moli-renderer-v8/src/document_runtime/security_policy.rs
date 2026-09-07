@@ -88,6 +88,28 @@ pub(crate) struct DocumentConnectPolicySnapshot {
 }
 
 impl DocumentConnectPolicySnapshot {
+    pub(crate) fn font_violation(
+        &self,
+        document_url: &Url,
+        request_url: &Url,
+        disposition: ContentSecurityPolicyDisposition,
+        redirect_status: ContentSecurityPolicyRedirectStatus,
+    ) -> Option<DocumentContentSecurityPolicyViolation> {
+        let policies = match disposition {
+            ContentSecurityPolicyDisposition::Enforce => &self.enforce_policies,
+            ContentSecurityPolicyDisposition::Report => &self.report_only_policies,
+        };
+        document_url_policy_violation(
+            policies,
+            &self.reporting_endpoints,
+            document_url,
+            request_url,
+            ContentSecurityPolicyResourceKind::DocumentFont,
+            redirect_status,
+            disposition,
+        )
+    }
+
     pub(crate) fn from_policy_container(policy: &DocumentPolicyContainer) -> Self {
         let mut enforce_policies = policy.response_content_security_policies.clone();
         enforce_policies.extend(policy.document_content_security_policies.iter().cloned());

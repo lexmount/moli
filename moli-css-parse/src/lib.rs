@@ -19,8 +19,9 @@ pub use color::{
 };
 pub use declaration::{CssDeclaration, DeclarationParseOptions, parse_declaration_list};
 pub use font_face::{
-    CssFontFace, font_load_query_contains_css_wide_keyword, font_load_query_family,
-    normalize_font_face_src, parse_font_faces,
+    CssFontFace, CssFontShorthand, CssFontSource, font_load_query_contains_css_wide_keyword,
+    font_load_query_family, normalize_font_face_src, parse_font_face_sources, parse_font_faces,
+    parse_font_shorthand,
 };
 pub use math::{
     ContainerQueryLengthContext, CssNumericContext, CssNumericKind, CssNumericValue, UnitlessAngle,

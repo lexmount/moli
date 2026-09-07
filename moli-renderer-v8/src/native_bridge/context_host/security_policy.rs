@@ -1,9 +1,10 @@
 use super::{JsContextHost, OwnerDispatchScope};
 use crate::{
     content_security_policy::{
-        ContentSecurityPolicyNonUrlKind, ContentSecurityPolicyRedirectStatus,
-        ContentSecurityPolicyReportingEndpoints, ContentSecurityPolicyScriptElementRequest,
-        ContentSecurityPolicyViolationEventFields, TrustedTypesForScriptRequirements,
+        ContentSecurityPolicyDisposition, ContentSecurityPolicyNonUrlKind,
+        ContentSecurityPolicyRedirectStatus, ContentSecurityPolicyReportingEndpoints,
+        ContentSecurityPolicyScriptElementRequest, ContentSecurityPolicyViolationEventFields,
+        TrustedTypesForScriptRequirements,
     },
     context_bootstrap::CHILD_BROWSING_CONTEXT_HANDLE_SLOT,
     document_runtime::{
@@ -431,6 +432,35 @@ impl JsContextHost {
             return OwnerDispatchScope::LightweightPopup(popup_id);
         }
         OwnerDispatchScope::Top
+    }
+
+    pub(crate) fn font_request_allowed_by_csp(
+        &mut self,
+        scope: &mut v8::PinScope<'_, '_>,
+        owner: OwnerDispatchScope,
+        document_url: &url::Url,
+        request_url: &url::Url,
+        redirect_status: ContentSecurityPolicyRedirectStatus,
+    ) -> bool {
+        let Some(policy) = self.document_connect_policy_snapshot_for_owner(owner) else {
+            return false;
+        };
+        let mut allowed = true;
+        for disposition in [
+            ContentSecurityPolicyDisposition::Report,
+            ContentSecurityPolicyDisposition::Enforce,
+        ] {
+            if let Some(violation) =
+                policy.font_violation(document_url, request_url, disposition, redirect_status)
+            {
+                let host_ptr = self as *mut Self;
+                self.dispatch_content_security_policy_violation_event_for_owner_best_effort(
+                    scope, host_ptr, owner, &violation,
+                );
+                allowed &= disposition != ContentSecurityPolicyDisposition::Enforce;
+            }
+        }
+        allowed
     }
 
     pub(crate) fn check_document_connect_csp_for_owner<'s>(

@@ -8,6 +8,7 @@ mod csp_reports;
 mod event_source;
 mod fetch;
 mod fetch_surface;
+mod font_face;
 mod headers;
 mod image;
 mod js_values;
@@ -21,6 +22,7 @@ mod text_track;
 mod url_helpers;
 mod xhr;
 
+pub(crate) use font_face::{FontFaceFetchStart, start_font_face_fetch};
 use http::StatusCode;
 use moli_fetch::{Request, Response, observe_cookie_access_report_for_request};
 use moli_webapi_declare::WebApiObject;

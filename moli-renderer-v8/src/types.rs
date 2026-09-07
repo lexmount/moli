@@ -83,6 +83,7 @@ pub(super) enum PendingSubresourceContinuation {
         track_handle: crate::document_runtime::DomHandle,
         sequence: crate::native_bridge::TextTrackLoadSequenceId,
     },
+    FontFace(v8::Global<v8::Object>),
     StylesheetSubresource {
         binding: crate::frame_owner_model::StylesheetSubresourceLoadDelayBinding,
         web_font: Option<crate::css_resource_urls::StylesheetWebFont>,

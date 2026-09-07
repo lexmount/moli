@@ -1211,6 +1211,48 @@ impl JsContextHost {
         Some(internal_id)
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn record_async_font_face_fetch(
+        &mut self,
+        context: v8::Global<v8::Context>,
+        face: v8::Global<v8::Object>,
+        owner: OwnerDispatchScope,
+        cancel_handle: moli_fetch::FetchCancelHandle,
+        network_partition_key: Option<String>,
+        policy_context: crate::types::SubresourcePolicyContext,
+        mut info: PendingSubresourceFetchInfo,
+    ) -> u64 {
+        self.assign_pending_subresource_fetch_identity(&mut info);
+        let internal_id = info.internal_id;
+        let load = self.require_document_resource_load_for_dispatch_scope(
+            owner,
+            info.resource_type,
+            ResourceLoadDisposition::Ordinary,
+            Some(cancel_handle),
+        );
+        self.record_pending_subresource_request_started_with_initiator(
+            &info,
+            SubresourceRequestInitiatorType::Script,
+            load.disposition(),
+        );
+        self.pending_subresource_fetches.insert(
+            internal_id,
+            PendingSubresourceFetchState {
+                info,
+                load,
+                execution_context: PendingSubresourceExecutionContext::adapter(owner, context),
+                credentials_mode: moli_fetch::RequestCredentialsMode::SameOrigin,
+                request_mode: moli_fetch::RequestMode::Cors,
+                network_partition_key,
+                policy_context,
+                continuation: PendingSubresourceContinuation::FontFace(face),
+                deferred_request_started: false,
+            },
+        );
+        self.note_subresource_activity();
+        internal_id
+    }
+
     pub(crate) fn record_async_subresource_beacon(
         &mut self,
         execution_context: super::WindowExecutionContextIdentity,
