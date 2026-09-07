@@ -202,6 +202,13 @@ fn parse_candidate_init<'s>(
     Some(values)
 }
 
+pub(super) fn ice_candidate_receiver_branded<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> bool {
+    web_api_interfaces::RTCIceCandidate::is_instance(scope, receiver)
+}
+
 fn candidate_values<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     receiver: v8::Local<'s, v8::Object>,
