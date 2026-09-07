@@ -161,6 +161,9 @@ struct PerformancePrototypeMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "Performance", enumerable)]
 struct PerformancePrototypeAccessorsDeclaration {
+    #[webapi(accessor_property, getter = super::memory::performance_memory_getter)]
+    memory: (),
+
     #[webapi(
         accessor_property,
         getter = performance_attribute_getter_callback,

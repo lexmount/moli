@@ -20,6 +20,7 @@ mod media;
 mod misc;
 mod navigation;
 mod performance;
+mod performance_memory;
 mod pointer_lock;
 mod promise_rejection;
 mod security_policy;

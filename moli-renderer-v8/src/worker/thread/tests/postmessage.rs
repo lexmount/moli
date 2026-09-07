@@ -1844,7 +1844,8 @@ async fn worker_performance_now_uses_readonly_monotonic_time_origin() {
             readonly: descriptor && descriptor.writable === false,
             unchanged: after === before,
             numeric: typeof first === "number" && typeof second === "number",
-            monotonic: second >= first
+            monotonic: second >= first,
+            noLegacyMemory: !("memory" in performance) && !("MemoryInfo" in self)
         });
         close();
         "#
@@ -1858,7 +1859,7 @@ async fn worker_performance_now_uses_readonly_monotonic_time_origin() {
         .expect("channel closed");
     assert_eq!(
         expect_post_json(msg),
-        r#"{"readonly":true,"unchanged":true,"numeric":true,"monotonic":true}"#
+        r#"{"readonly":true,"unchanged":true,"numeric":true,"monotonic":true,"noLegacyMemory":true}"#
     );
 }
 
