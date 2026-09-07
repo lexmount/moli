@@ -302,12 +302,9 @@ async fn global_intercept_removal_updates_background_document_policy() {
             .unwrap();
         assert_eq!(pending.is_some(), loaded);
         if let Some(pending) = pending {
-            super::super::finish_fetch_interception_update(
-                &mut ctx.conn,
-                &background,
-                pending.wait().await.unwrap(),
-            )
-            .unwrap();
+            ctx.conn
+                .finish_document_fetch_command(pending.wait().await)
+                .unwrap();
         }
         assert!(
             ctx.conn
@@ -327,7 +324,7 @@ async fn global_intercept_removal_updates_background_document_policy() {
         );
         if let Some(pending) = pending {
             ctx.conn
-                .finish_removed_network_interception(pending.wait().await.unwrap())
+                .finish_document_fetch_command(pending.wait().await)
                 .unwrap();
         }
         let policy = ctx

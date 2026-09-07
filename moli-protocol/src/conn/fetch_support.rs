@@ -4,7 +4,8 @@ use url::Url;
 use super::body_spool::ensure_materialize_limit;
 use super::{
     CapturedBody, CapturedBodyWriter, CdpConnection, ClaimedNavigationRequest, CommandOwnerScope,
-    NavigationDispatchState, NavigationId, NavigationLoadOutcome, PausedResponsePreparedDocument,
+    DocumentFetchCommand, DocumentFetchCommandOutcome, NavigationDispatchState, NavigationId,
+    NavigationLoadOutcome, PausedResponsePreparedDocument,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::domains::network::MainDocumentBodyProgressSource;
@@ -2115,6 +2116,25 @@ pub struct FetchAuthChallenge {
 }
 
 impl CdpConnection {
+    async fn execute_document_fetch_command_for_owner(
+        &mut self,
+        owner: &CommandOwnerScope,
+        command: DocumentFetchCommand,
+    ) -> Result<
+        (
+            DocumentFetchCommandOutcome,
+            Option<moli_core::RendererOutputFence>,
+        ),
+        String,
+    > {
+        let document = self.loaded_browser_document_for_owner(owner)?;
+        let pending = self.start_document_fetch_command(document, command)?;
+        let completed = pending.wait().await;
+        let predecessor = completed.renderer_output_predecessor();
+        let outcome = self.finish_document_fetch_command(completed)?;
+        Ok((outcome, predecessor))
+    }
+
     pub async fn continue_pending_subresource_fetch_async(
         &mut self,
         internal_id: u64,
@@ -2174,13 +2194,9 @@ impl CdpConnection {
         intercept_response: bool,
         handle_auth_requests: bool,
     ) -> Result<PendingSubresourceContinueOutcome, String> {
-        let (context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(owner)
-            .ok_or("NoDocumentLoaded")?;
-        self.browser_context_by_id_mut(&context_id)
-            .ok_or("NoDocumentLoaded")?
-            .continue_pending_subresource_fetch_for_target_async(
-                &target_id,
+        self.execute_document_fetch_command_for_owner(
+            owner,
+            DocumentFetchCommand::ContinueRequest {
                 internal_id,
                 url,
                 method,
@@ -2188,8 +2204,11 @@ impl CdpConnection {
                 headers,
                 intercept_response,
                 handle_auth_requests,
-            )
-            .await
+            },
+        )
+        .await?
+        .0
+        .into_continue_outcome()
     }
 
     pub async fn continue_pending_subresource_auth_async(
@@ -2218,13 +2237,13 @@ impl CdpConnection {
         internal_id: u64,
         auth: SubresourceAuthCredentials,
     ) -> Result<PendingSubresourceContinueOutcome, String> {
-        let (context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(owner)
-            .ok_or("NoDocumentLoaded")?;
-        self.browser_context_by_id_mut(&context_id)
-            .ok_or("NoDocumentLoaded")?
-            .continue_pending_subresource_auth_for_target_async(&target_id, internal_id, auth)
-            .await
+        self.execute_document_fetch_command_for_owner(
+            owner,
+            DocumentFetchCommand::ContinueAuth { internal_id, auth },
+        )
+        .await?
+        .0
+        .into_continue_outcome()
     }
 
     pub async fn fail_pending_subresource_auth_async(
@@ -2253,13 +2272,15 @@ impl CdpConnection {
         internal_id: u64,
         error_text: String,
     ) -> Result<Option<moli_core::RendererOutputFence>, String> {
-        let (context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(owner)
-            .ok_or("NoDocumentLoaded")?;
-        self.browser_context_by_id_mut(&context_id)
-            .ok_or("NoDocumentLoaded")?
-            .fail_pending_subresource_auth_for_target_async(&target_id, internal_id, error_text)
-            .await
+        self.execute_document_fetch_command_for_owner(
+            owner,
+            DocumentFetchCommand::FailAuth {
+                internal_id,
+                error_text,
+            },
+        )
+        .await
+        .map(|(_, predecessor)| predecessor)
     }
 
     pub async fn fail_pending_subresource_fetch_async(
@@ -2288,13 +2309,15 @@ impl CdpConnection {
         internal_id: u64,
         error_text: String,
     ) -> Result<Option<moli_core::RendererOutputFence>, String> {
-        let (context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(owner)
-            .ok_or("NoDocumentLoaded")?;
-        self.browser_context_by_id_mut(&context_id)
-            .ok_or("NoDocumentLoaded")?
-            .fail_pending_subresource_fetch_for_target_async(&target_id, internal_id, error_text)
-            .await
+        self.execute_document_fetch_command_for_owner(
+            owner,
+            DocumentFetchCommand::FailRequest {
+                internal_id,
+                error_text,
+            },
+        )
+        .await
+        .map(|(_, predecessor)| predecessor)
     }
 
     pub async fn fulfill_pending_subresource_fetch_async(
@@ -2323,19 +2346,17 @@ impl CdpConnection {
         response_body: moli_core::page::RendererSyntheticResponseBody,
     ) -> Result<(), String> {
         let owner = CommandOwnerScope::capture(self, session_id);
-        let (context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(&owner)
-            .ok_or("NoDocumentLoaded")?;
-        self.browser_context_by_id_mut(&context_id)
-            .ok_or("NoDocumentLoaded")?
-            .fulfill_pending_subresource_fetch_for_target_async(
-                &target_id,
+        self.execute_document_fetch_command_for_owner(
+            &owner,
+            DocumentFetchCommand::FulfillRequest {
                 internal_id,
                 response_code,
                 response_headers,
                 response_body,
-            )
-            .await
+            },
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn continue_pending_subresource_response_async(
@@ -2377,18 +2398,16 @@ impl CdpConnection {
         response_code: Option<u16>,
         response_headers: Option<Vec<(String, String)>>,
     ) -> Result<(), String> {
-        let (context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(owner)
-            .ok_or("NoDocumentLoaded")?;
-        self.browser_context_by_id_mut(&context_id)
-            .ok_or("NoDocumentLoaded")?
-            .continue_pending_subresource_response_for_target_async(
-                &target_id,
+        self.execute_document_fetch_command_for_owner(
+            owner,
+            DocumentFetchCommand::ContinueResponse {
                 internal_id,
                 response_code,
                 response_headers,
-            )
-            .await
+            },
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn fail_pending_subresource_response_async(
@@ -2421,13 +2440,15 @@ impl CdpConnection {
         internal_id: u64,
         error_text: String,
     ) -> Result<Option<moli_core::RendererOutputFence>, String> {
-        let (context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(owner)
-            .ok_or("NoDocumentLoaded")?;
-        self.browser_context_by_id_mut(&context_id)
-            .ok_or("NoDocumentLoaded")?
-            .fail_pending_subresource_response_for_target_async(&target_id, internal_id, error_text)
-            .await
+        self.execute_document_fetch_command_for_owner(
+            owner,
+            DocumentFetchCommand::FailResponse {
+                internal_id,
+                error_text,
+            },
+        )
+        .await
+        .map(|(_, predecessor)| predecessor)
     }
 
     pub async fn fulfill_pending_subresource_response_async(
@@ -2456,19 +2477,17 @@ impl CdpConnection {
         response_body: moli_core::page::RendererSyntheticResponseBody,
     ) -> Result<(), String> {
         let owner = CommandOwnerScope::capture(self, session_id);
-        let (context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(&owner)
-            .ok_or("NoDocumentLoaded")?;
-        self.browser_context_by_id_mut(&context_id)
-            .ok_or("NoDocumentLoaded")?
-            .fulfill_pending_subresource_response_for_target_async(
-                &target_id,
+        self.execute_document_fetch_command_for_owner(
+            &owner,
+            DocumentFetchCommand::FulfillResponse {
                 internal_id,
                 response_code,
                 response_headers,
                 response_body,
-            )
-            .await
+            },
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn receive_synthetic_websocket_text_async(
@@ -2487,13 +2506,12 @@ impl CdpConnection {
         data: String,
     ) -> Result<(), String> {
         let owner = CommandOwnerScope::capture(self, session_id);
-        let (context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(&owner)
-            .ok_or("NoDocumentLoaded")?;
-        self.browser_context_by_id_mut(&context_id)
-            .ok_or("NoDocumentLoaded")?
-            .receive_synthetic_websocket_text_for_target_async(&target_id, socket_id, data)
-            .await
+        self.execute_document_fetch_command_for_owner(
+            &owner,
+            DocumentFetchCommand::DispatchWebSocketText { socket_id, data },
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn receive_synthetic_websocket_binary_async(
@@ -2512,13 +2530,12 @@ impl CdpConnection {
         data: Vec<u8>,
     ) -> Result<(), String> {
         let owner = CommandOwnerScope::capture(self, session_id);
-        let (context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(&owner)
-            .ok_or("NoDocumentLoaded")?;
-        self.browser_context_by_id_mut(&context_id)
-            .ok_or("NoDocumentLoaded")?
-            .receive_synthetic_websocket_binary_for_target_async(&target_id, socket_id, data)
-            .await
+        self.execute_document_fetch_command_for_owner(
+            &owner,
+            DocumentFetchCommand::DispatchWebSocketBinary { socket_id, data },
+        )
+        .await
+        .map(|_| ())
     }
 
     pub async fn close_synthetic_websocket_from_server_async(
@@ -2541,14 +2558,15 @@ impl CdpConnection {
         reason: String,
     ) -> Result<(), String> {
         let owner = CommandOwnerScope::capture(self, session_id);
-        let (context_id, target_id) = self
-            .resolved_page_owner_identity_for_owner(&owner)
-            .ok_or("NoDocumentLoaded")?;
-        self.browser_context_by_id_mut(&context_id)
-            .ok_or("NoDocumentLoaded")?
-            .close_synthetic_websocket_from_server_for_target_async(
-                &target_id, socket_id, code, reason,
-            )
-            .await
+        self.execute_document_fetch_command_for_owner(
+            &owner,
+            DocumentFetchCommand::CloseWebSocket {
+                socket_id,
+                code,
+                reason,
+            },
+        )
+        .await
+        .map(|_| ())
     }
 }
