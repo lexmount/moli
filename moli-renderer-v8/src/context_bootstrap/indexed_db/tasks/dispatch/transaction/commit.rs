@@ -63,8 +63,7 @@ fn finish_committed_transaction<'s>(
     if let Some(db) = object_property_as_object(scope, transaction, "db") {
         let _ = refresh_database_surface(scope, db);
     }
-    let _ = dispatch_idb_named_event(scope, transaction, "complete", |_, _| {});
-    release_indexed_db_transaction_dispatch_refs(scope, transaction);
+    dispatch_transaction_terminal(scope, transaction, "complete", true);
 }
 
 fn finish_failed_commit<'s>(
@@ -72,8 +71,7 @@ fn finish_failed_commit<'s>(
     transaction: v8::Local<'s, v8::Object>,
 ) {
     finish_transaction(scope, transaction);
-    let _ = dispatch_idb_named_event(scope, transaction, "error", |_, _| {});
-    release_indexed_db_transaction_dispatch_refs(scope, transaction);
+    dispatch_transaction_terminal(scope, transaction, "error", false);
 }
 
 fn finish_transaction<'s>(
