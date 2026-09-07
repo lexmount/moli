@@ -635,15 +635,8 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
             "about:blank"
         )
     });
-    assert!(
-        ctx.sent
-            .iter()
-            .all(|message| message.get("id").is_none_or(|id| !id.is_null())),
-        "an out-of-range page traversal must not emit an id:null command response: {:?}",
-        ctx.sent
-    );
 
-    ctx.sent.clear();
+
     ctx.process_async(json!({
         "id": 16,
         "method": "Runtime.evaluate",
@@ -671,6 +664,14 @@ async fn renderer_history_back_uses_browser_owned_navigation_history() {
             first_url
         )
     });
+    // The forward commit also drains the earlier out-of-range traversal.
+    assert!(
+        ctx.sent
+            .iter()
+            .all(|message| message.get("id").is_none_or(|id| !id.is_null())),
+        "an out-of-range page traversal must not emit an id:null command response: {:?}",
+        ctx.sent
+    );
 }
 
 // Ported from Chromium's
