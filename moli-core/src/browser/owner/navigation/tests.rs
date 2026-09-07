@@ -4,7 +4,11 @@ use crate::browser::{
     StoragePartitionKind, WebContentsCreation,
 };
 use moli_test_support::FixtureServer;
-use tokio::{io::AsyncReadExt, net::TcpListener};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+    sync::mpsc,
+};
 
 fn context_with_contents(service: &BrowserService) -> (BrowserContextHandle, WebContentsHandle) {
     let context = service
@@ -198,6 +202,127 @@ async fn browser_service_shutdown_retires_documents_despite_retained_capabilitie
     assert!(service.handle().endpoint.join.lock().is_none());
     service.shutdown();
     server.shutdown().await;
+}
+
+#[tokio::test]
+async fn browser_runtime_retirement_cancels_worker_graph_and_pending_fetches_without_devtools() {
+    for remove_context in [true, false] {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let (received_tx, mut received) = mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            let mut requests = tokio::task::JoinSet::new();
+            // One document, three worker scripts, and five held requests.
+            for _ in 0..9 {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                let received_tx = received_tx.clone();
+                requests.spawn(async move {
+                    let mut request = Vec::new();
+                    while !request.ends_with(b"\r\n\r\n") {
+                        assert_ne!(stream.read_buf(&mut request).await.unwrap(), 0);
+                    }
+                    let request = String::from_utf8(request).unwrap();
+                    let path = request.split_whitespace().nth(1).unwrap();
+                    let (mime, body) = match path {
+                        "/" => (
+                            "text/html",
+                            "<!doctype html><script>\
+                             fetch('/pending-window').catch(() => {});\
+                             import('/pending-module.js').catch(() => {});\
+                             globalThis.worker = new Worker('/dedicated.js');\
+                             globalThis.shared = new SharedWorker('/shared.js');\
+                             shared.port.start();\
+                             navigator.serviceWorker.register('/service.js');\
+                             </script>",
+                        ),
+                        "/dedicated.js" => (
+                            "text/javascript",
+                            "fetch('/pending-dedicated').catch(() => {});",
+                        ),
+                        "/shared.js" => (
+                            "text/javascript",
+                            "onconnect = () => { fetch('/pending-shared').catch(() => {}); };",
+                        ),
+                        "/service.js" => (
+                            "text/javascript",
+                            "oninstall = event => event.waitUntil(fetch('/pending-service'));",
+                        ),
+                        path if path.starts_with("/pending-") => {
+                            received_tx.send(path.to_owned()).unwrap();
+                            assert_eq!(stream.read(&mut [0]).await.unwrap(), 0, "{path}");
+                            return;
+                        }
+                        _ => panic!("unexpected Browser runtime request: {path}"),
+                    };
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: {mime}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    stream.write_all(response.as_bytes()).await.unwrap();
+                });
+            }
+            while let Some(result) = requests.join_next().await {
+                result.unwrap();
+            }
+        });
+        let service = BrowserService::start().unwrap();
+        let (context, contents) = context_with_contents(&service);
+        let (peer, peer_contents) = context_with_contents(&service);
+        let document = navigate(&context, contents, &url).await;
+        let lifetime = context.observe_document_lifetime(document).unwrap();
+        let mut pending = std::collections::BTreeSet::new();
+        for _ in 0..5 {
+            pending.insert(received.recv().await.unwrap());
+        }
+        assert_eq!(
+            pending,
+            [
+                "/pending-dedicated",
+                "/pending-module.js",
+                "/pending-service",
+                "/pending-shared",
+                "/pending-window",
+            ]
+            .map(str::to_owned)
+            .into_iter()
+            .collect()
+        );
+        // Worker startup happened after commit. Refresh the exact Document's
+        // cached page state before checking its running-isolate count.
+        let snapshot = context
+            .start_document_diagnostics_snapshot(document)
+            .unwrap()
+            .wait()
+            .await;
+        context
+            .finish_document_diagnostics_snapshot(snapshot)
+            .unwrap();
+        let runtime = context.worker_runtime_inspection_endpoint();
+        let active = runtime.moli_memory_diagnostics();
+        assert_eq!(context.dedicated_worker_running_isolate_count(), 1);
+        assert_eq!(active["sharedWorker"]["runningInstanceCount"], 1);
+        assert_eq!(active["serviceWorker"]["runningWorkers"], 1);
+
+        if remove_context {
+            assert!(context.remove().unwrap());
+            assert!(peer.contains_web_contents(peer_contents));
+        } else {
+            service.shutdown();
+            assert!(!peer.is_live());
+        }
+
+        assert_eq!(lifetime.wait().await, DocumentRetirement::Unavailable);
+        assert!(!context.is_live());
+        server.await.unwrap();
+        let retired = runtime.moli_memory_diagnostics();
+        assert_eq!(retired["sharedWorker"]["runningInstanceCount"], 0);
+        assert_eq!(retired["sharedWorker"]["clientCount"], 0);
+        assert_eq!(retired["serviceWorker"]["runningWorkers"], 0);
+        assert_eq!(retired["serviceWorker"]["inFlightEvents"], 0);
+        assert_eq!(retired["serviceWorker"]["versions"], 0);
+        assert_eq!(retired["serviceWorker"]["pendingServiceLaneEventCount"], 0);
+        service.shutdown();
+    }
 }
 
 #[derive(Clone, Copy)]

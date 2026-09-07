@@ -1703,6 +1703,77 @@ mod tests {
     }
 
     #[test]
+    fn context_shutdown_retires_versions_and_rejects_queued_and_late_completions() {
+        let service = new_service_worker_runtime_service();
+        let (_, version_id) = insert_running_installing_version(&service);
+        let owner = service.inner.state.lock().versions[&version_id].run_owner();
+        let completion = || ServiceWorkerLifecycleCompletion {
+            event_id: ServiceWorkerEventId(1),
+            owner: owner.clone(),
+            kind: ServiceWorkerLifecycleEventKind::Install,
+            result: Ok(()),
+        };
+        service.enqueue_lifecycle_event_completed(completion());
+        assert_eq!(service.pending_service_lane_event_count(), 1);
+
+        service.terminate_all_for_context_shutdown();
+
+        assert_eq!(service.pending_service_lane_event_count(), 0);
+        service.enqueue_lifecycle_event_completed(completion());
+        assert_eq!(service.pending_service_lane_event_count(), 0);
+        assert_eq!(service.drain_service_lane(), 0);
+        // Also reject a completion already removed from the service lane.
+        service.finish_lifecycle_event_completed(completion());
+        let diagnostics = service.diagnostics_snapshot();
+        assert_eq!(diagnostics.registration_count, 0);
+        assert_eq!(diagnostics.version_count, 0);
+        assert_eq!(diagnostics.in_flight_event_count, 0);
+        service.terminate_all_for_context_shutdown();
+    }
+
+    #[test]
+    fn context_shutdown_finishes_pending_fetches_and_cancels_navigation_preload() {
+        let service = new_service_worker_runtime_service();
+        let (_, version_id) = insert_running_installing_version(&service);
+        let run = service.inner.state.lock().versions[&version_id].run.clone();
+        let mut queue = crate::page_task_queue::RendererResourceCompletionTestHarness::new();
+        let cancel = moli_fetch::FetchCancelHandle::new();
+        let preload_cancel = moli_fetch::FetchCancelHandle::new();
+        let (completion_tx, mut completion_rx) = tokio::sync::oneshot::channel();
+        let mut job = test_fetch_job(
+            &service,
+            7,
+            version_id,
+            &run,
+            ServiceWorkerClientId(1),
+            url("https://example.test/app/page.html"),
+            url("https://example.test/app/pending"),
+            queue.sender(),
+            cancel.clone(),
+        );
+        job.direct_completion_tx = Some(completion_tx);
+        job.navigation_preload_cancel_handle = Some(preload_cancel.clone());
+        service
+            .inner
+            .state
+            .lock()
+            .pending_fetch_jobs
+            .insert(ServiceWorkerEventId(7), job);
+
+        service.terminate_all_for_context_shutdown();
+
+        assert!(cancel.is_cancelled());
+        assert!(preload_cancel.is_cancelled());
+        assert!(matches!(
+            completion_rx.try_recv(),
+            Ok(ServiceWorkerDirectFetchResult::Failure(message))
+                if message == SERVICE_WORKER_JOB_ABORTED_ERROR
+        ));
+        assert!(service.inner.state.lock().pending_fetch_jobs.is_empty());
+        assert!(!queue.has_ready_completion());
+    }
+
+    #[test]
     fn context_shutdown_aborts_pending_and_queued_register_jobs() {
         let service = new_service_worker_runtime_service();
         let registration_id = ServiceWorkerRegistrationId(1);
