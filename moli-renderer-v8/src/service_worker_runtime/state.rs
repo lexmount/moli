@@ -26,6 +26,7 @@ use crate::{
         ServiceWorkerWindowClientTarget,
     },
     worker::WorkerMessage,
+    worker_owner_wake::WorkerOwnerWakeRoutes,
 };
 
 use super::{
@@ -55,7 +56,7 @@ use super::{
         ServiceWorkerPendingMainScriptUpdateCheck, ServiceWorkerQueuedUnregisterJob,
         ServiceWorkerRegisterJob, ServiceWorkerRegistrationKey,
     },
-    owner_wake::ServiceWorkerOwnerWake,
+    owner_wake::ServiceWorkerRuntimeOwnerWake,
     registration::ServiceWorkerRegistration,
     resource_store::{ServiceWorkerStoredRegistration, SharedServiceWorkerResourceStore},
     run_owner::ServiceWorkerRunOwner,
@@ -131,7 +132,7 @@ pub(super) struct ServiceWorkerRuntimeInner {
     pub(super) pause_new_workers_on_start_for_devtools: AtomicBool,
     pub(super) state: Mutex<ServiceWorkerRuntimeState>,
     pub(super) service_lane: ServiceWorkerServiceLane,
-    pub(super) owner_wake: ServiceWorkerOwnerWake,
+    pub(super) owner_wake: Mutex<WorkerOwnerWakeRoutes<ServiceWorkerRuntimeOwnerWake>>,
     pub(super) resource_store: SharedServiceWorkerResourceStore,
     pub(super) restored_worker_context_runtime: RendererWorkerContextRuntime,
     pub(super) browser_resource_runtime: crate::network::BrowserResourceRuntimeBinding,
@@ -165,7 +166,7 @@ impl ServiceWorkerRuntimeInner {
                 output_transport,
             )),
             service_lane: ServiceWorkerServiceLane::default(),
-            owner_wake: ServiceWorkerOwnerWake::default(),
+            owner_wake: Mutex::default(),
             resource_store,
             restored_worker_context_runtime,
             browser_resource_runtime,

@@ -113,6 +113,7 @@ mod window_document_identity;
 mod window_host;
 mod window_webidl_callback;
 pub(crate) mod worker;
+mod worker_owner_wake;
 mod xml_serializer;
 
 pub(crate) mod planning {

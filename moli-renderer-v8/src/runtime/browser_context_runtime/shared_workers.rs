@@ -1,7 +1,10 @@
 use crate::{
     RendererSyntheticResponseBody,
-    shared_worker_runtime::{SharedWorkerLaunchParams, SharedWorkerRuntimeOwnerWakeSender},
+    shared_worker_runtime::{
+        SharedWorkerLaunchParams, SharedWorkerRuntimeOwnerWake, SharedWorkerRuntimeOwnerWakeSender,
+    },
     worker::{WorkerPendingFetchContinue, WorkerPendingXhrContinue},
+    worker_owner_wake::WorkerOwnerWakeRoutes,
 };
 use moli_shared_worker::{
     SharedWorkerClientId, SharedWorkerClientOwnerId, SharedWorkerDescriptor, SharedWorkerInstanceId,
@@ -26,7 +29,7 @@ pub(super) struct LazySharedWorkerRuntime {
 
 enum LazySharedWorkerRuntimeState {
     Deferred {
-        owner_wake_senders: Vec<SharedWorkerRuntimeOwnerWakeSender>,
+        owner_wake_senders: WorkerOwnerWakeRoutes<SharedWorkerRuntimeOwnerWake>,
         owner_local_host_id: Option<RendererOwnerLocalHostId>,
     },
     Live(crate::shared_worker_runtime::SharedWorkerRuntimeService),
@@ -47,7 +50,7 @@ impl LazySharedWorkerRuntime {
     ) -> Self {
         Self {
             state: Mutex::new(LazySharedWorkerRuntimeState::Deferred {
-                owner_wake_senders: Vec::new(),
+                owner_wake_senders: WorkerOwnerWakeRoutes::default(),
                 owner_local_host_id: None,
             }),
             client_owner_id_allocator: Default::default(),
@@ -93,7 +96,7 @@ impl LazySharedWorkerRuntime {
             self.browser_context_runtime_id,
             self.output_transport.clone(),
         );
-        for sender in owner_wake_senders {
+        for sender in owner_wake_senders.into_senders() {
             service.add_owner_wake_sender(sender);
         }
         if let Some(owner_local_host_id) = owner_local_host_id {
@@ -124,7 +127,7 @@ impl LazySharedWorkerRuntime {
         match &mut *state {
             LazySharedWorkerRuntimeState::Deferred {
                 owner_wake_senders, ..
-            } => owner_wake_senders.push(sender),
+            } => owner_wake_senders.register(sender),
             LazySharedWorkerRuntimeState::Live(service) => service.add_owner_wake_sender(sender),
         }
     }
@@ -508,5 +511,52 @@ impl RendererBrowserContextRuntime {
             .is_some_and(|runtime| {
                 runtime.detach_runtime_inspector_session(instance_id, inspector_session_id)
             })
+    }
+}
+
+#[cfg(test)]
+mod owner_wake_retirement_tests {
+    use super::*;
+
+    #[test]
+    fn deferred_worker_routes_are_bounded_without_service_initialization() {
+        let context = RendererBrowserContextRuntime::new();
+        let (peer_tx, _peer_rx) = crate::shared_worker_runtime::shared_worker_owner_wake_channel();
+        context.add_shared_worker_owner_wake_sender(peer_tx);
+        for _ in 0..64 {
+            let (sender, receiver) =
+                crate::shared_worker_runtime::shared_worker_owner_wake_channel();
+            context.add_shared_worker_owner_wake_sender(sender);
+            {
+                let state = context.inner.shared_worker_runtime.state.lock();
+                let LazySharedWorkerRuntimeState::Deferred {
+                    owner_wake_senders, ..
+                } = &*state
+                else {
+                    panic!("wake registration must not initialize worker services");
+                };
+                assert_eq!(
+                    owner_wake_senders.len_for_test(),
+                    2,
+                    "only the peer and current renderer remain"
+                );
+            }
+            drop(receiver);
+        }
+        let (closed, receiver) = crate::shared_worker_runtime::shared_worker_owner_wake_channel();
+        drop(receiver);
+        context.add_shared_worker_owner_wake_sender(closed);
+        let state = context.inner.shared_worker_runtime.state.lock();
+        let LazySharedWorkerRuntimeState::Deferred {
+            owner_wake_senders, ..
+        } = &*state
+        else {
+            unreachable!();
+        };
+        assert_eq!(
+            owner_wake_senders.len_for_test(),
+            1,
+            "closed admission must not reintroduce stale routes"
+        );
     }
 }

@@ -12,15 +12,13 @@ use moli_shared_worker::{
 use parking_lot::Mutex;
 use tracing::trace;
 
-use crate::runtime::RendererOwnerLocalHostId;
+use crate::{runtime::RendererOwnerLocalHostId, worker_owner_wake::WorkerOwnerWakeRoutes};
 
 use super::{
     host::SharedRendererSharedWorkerHost,
     instances::SharedWorkerHostStore,
     matching::{SharedWorkerClientOwnerIdAllocator, SharedWorkerMatchingStore},
-    owner_wake::{
-        SharedWorkerOwnerWake, SharedWorkerRuntimeOwnerWake, SharedWorkerRuntimeOwnerWakeSender,
-    },
+    owner_wake::{SharedWorkerRuntimeOwnerWake, SharedWorkerRuntimeOwnerWakeSender},
     service_lane::SharedWorkerServiceLane,
     target_output_streams::SharedWorkerTargetOutputStreams,
 };
@@ -53,7 +51,7 @@ struct SharedWorkerRuntimeInner {
     matching: Arc<SharedWorkerMatchingStore>,
     hosts: Arc<SharedWorkerHostStore>,
     service_lane: Arc<SharedWorkerServiceLane>,
-    owner_wake: SharedWorkerOwnerWake,
+    owner_wake: Mutex<WorkerOwnerWakeRoutes<SharedWorkerRuntimeOwnerWake>>,
     owner_local_host_id: Mutex<Option<RendererOwnerLocalHostId>>,
     target_output_streams: OnceLock<SharedWorkerTargetOutputStreams>,
 }
@@ -126,9 +124,9 @@ impl SharedWorkerRuntimeService {
     }
 
     pub(crate) fn add_owner_wake_sender(&self, sender: SharedWorkerRuntimeOwnerWakeSender) {
-        self.inner.owner_wake.add_owner_wake_sender(sender.clone());
+        self.inner.owner_wake.lock().register(sender.clone());
         if self.pending_service_lane_event_count() > 0 {
-            sender.signal(SharedWorkerRuntimeOwnerWake::ServiceLane);
+            let _ = sender.send(SharedWorkerRuntimeOwnerWake::ServiceLane);
         }
     }
 
@@ -146,7 +144,10 @@ impl SharedWorkerRuntimeService {
     }
 
     pub(super) fn signal_service_lane_wake(&self) -> bool {
-        self.inner.owner_wake.signal_service_lane_wake()
+        self.inner
+            .owner_wake
+            .lock()
+            .broadcast(SharedWorkerRuntimeOwnerWake::ServiceLane)
     }
 
     #[cfg(test)]

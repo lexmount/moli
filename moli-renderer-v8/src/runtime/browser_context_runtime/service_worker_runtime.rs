@@ -8,9 +8,10 @@ use crate::{
     runtime::{RendererRuntimeInspectorMessage, RendererRuntimeInspectorResponseSender},
     service_worker_runtime::{
         ServiceWorkerClientFrameType, ServiceWorkerClientId, ServiceWorkerRegistrationId,
-        ServiceWorkerRuntimeOwnerWakeSender, ServiceWorkerVersionId,
+        ServiceWorkerRuntimeOwnerWake, ServiceWorkerRuntimeOwnerWakeSender, ServiceWorkerVersionId,
     },
     window_document_identity::WindowDocumentOwner,
+    worker_owner_wake::WorkerOwnerWakeRoutes,
 };
 
 use super::RendererBrowserContextRuntime;
@@ -29,7 +30,7 @@ pub(super) struct LazyServiceWorkerRuntime {
 
 enum LazyServiceWorkerRuntimeState {
     Deferred {
-        owner_wake_senders: Vec<ServiceWorkerRuntimeOwnerWakeSender>,
+        owner_wake_senders: WorkerOwnerWakeRoutes<ServiceWorkerRuntimeOwnerWake>,
         window_clients: HashMap<ServiceWorkerClientId, DeferredServiceWorkerWindowClient>,
         force_update_on_page_load: bool,
         pause_new_workers_on_start: bool,
@@ -64,7 +65,7 @@ impl LazyServiceWorkerRuntime {
     ) -> Self {
         Self {
             state: Mutex::new(LazyServiceWorkerRuntimeState::Deferred {
-                owner_wake_senders: Vec::new(),
+                owner_wake_senders: WorkerOwnerWakeRoutes::default(),
                 window_clients: HashMap::new(),
                 force_update_on_page_load: false,
                 pause_new_workers_on_start: false,
@@ -108,7 +109,7 @@ impl LazyServiceWorkerRuntime {
                 self.browser_context_runtime_id,
                 self.output_transport.clone(),
             );
-        for sender in owner_wake_senders {
+        for sender in owner_wake_senders.into_senders() {
             service.add_owner_wake_sender(sender);
         }
         service.set_force_update_on_page_load_for_devtools(force_update_on_page_load);
@@ -277,7 +278,7 @@ impl LazyServiceWorkerRuntime {
         match &mut *state {
             LazyServiceWorkerRuntimeState::Deferred {
                 owner_wake_senders, ..
-            } => owner_wake_senders.push(sender),
+            } => owner_wake_senders.register(sender),
             LazyServiceWorkerRuntimeState::Live(service) => service.add_owner_wake_sender(sender),
         }
     }
@@ -647,5 +648,53 @@ impl RendererBrowserContextRuntime {
                     tag,
                 )
             })
+    }
+}
+
+#[cfg(test)]
+mod owner_wake_retirement_tests {
+    use super::*;
+
+    #[test]
+    fn deferred_worker_routes_are_bounded_without_service_initialization() {
+        let context = RendererBrowserContextRuntime::new();
+        let (peer_tx, _peer_rx) =
+            crate::service_worker_runtime::service_worker_owner_wake_channel();
+        context.add_service_worker_owner_wake_sender(peer_tx);
+        for _ in 0..64 {
+            let (sender, receiver) =
+                crate::service_worker_runtime::service_worker_owner_wake_channel();
+            context.add_service_worker_owner_wake_sender(sender);
+            {
+                let state = context.inner.service_worker_runtime.state.lock();
+                let LazyServiceWorkerRuntimeState::Deferred {
+                    owner_wake_senders, ..
+                } = &*state
+                else {
+                    panic!("wake registration must not initialize worker services");
+                };
+                assert_eq!(
+                    owner_wake_senders.len_for_test(),
+                    2,
+                    "only the peer and current renderer remain"
+                );
+            }
+            drop(receiver);
+        }
+        let (closed, receiver) = crate::service_worker_runtime::service_worker_owner_wake_channel();
+        drop(receiver);
+        context.add_service_worker_owner_wake_sender(closed);
+        let state = context.inner.service_worker_runtime.state.lock();
+        let LazyServiceWorkerRuntimeState::Deferred {
+            owner_wake_senders, ..
+        } = &*state
+        else {
+            unreachable!();
+        };
+        assert_eq!(
+            owner_wake_senders.len_for_test(),
+            1,
+            "closed admission must not reintroduce stale routes"
+        );
     }
 }

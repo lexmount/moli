@@ -338,14 +338,17 @@ impl ServiceWorkerRuntimeService {
     }
 
     pub(crate) fn add_owner_wake_sender(&self, sender: ServiceWorkerRuntimeOwnerWakeSender) {
-        self.inner.owner_wake.add_owner_wake_sender(sender.clone());
+        self.inner.owner_wake.lock().register(sender.clone());
         if self.pending_service_lane_event_count() > 0 {
-            sender.signal(ServiceWorkerRuntimeOwnerWake::ServiceLane);
+            let _ = sender.send(ServiceWorkerRuntimeOwnerWake::ServiceLane);
         }
     }
 
     pub(super) fn signal_service_lane_wake(&self) -> bool {
-        self.inner.owner_wake.signal_service_lane_wake()
+        self.inner
+            .owner_wake
+            .lock()
+            .broadcast(ServiceWorkerRuntimeOwnerWake::ServiceLane)
     }
 
     pub(crate) fn bind_target_output_transport(
