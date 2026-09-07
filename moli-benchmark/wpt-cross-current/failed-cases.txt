@@ -2805,7 +2805,6 @@ fullscreen/api/element-request-fullscreen-active-document.html
 fullscreen/api/element-request-fullscreen-not-allowed.html
 fullscreen/api/historical.html
 fullscreen/api/promises-reject.html
-geolocation/non-secure-contexts.http.html
 gyroscope/Gyroscope-supported-by-permissions-policy.html
 html/browsers/browsing-the-web/history-traversal/001.html
 html/browsers/browsing-the-web/history-traversal/PopStateEvent.html

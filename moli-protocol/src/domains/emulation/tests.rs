@@ -2396,6 +2396,94 @@ async fn evaluate_geolocation_once_for_session(
     ctx.take_response_by_id(id)["result"]["result"]["value"].clone()
 }
 
+async fn evaluate_geolocation_surface_shape(ctx: &mut TestContext, id: u64) -> serde_json::Value {
+    ctx.process_and_wait_for_response_async(json!({
+        "id": id,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "awaitPromise": true,
+            "returnByValue": true,
+            "expression": r#"
+                new Promise((resolve) => {
+                    const geolocation = navigator.geolocation;
+                    const finish = (outcome) => resolve(JSON.stringify({
+                        outcome,
+                        navigatorOwn: Object.prototype.hasOwnProperty.call(
+                            navigator,
+                            "geolocation"
+                        ),
+                        nativePrototype:
+                            typeof Geolocation === "function" &&
+                            Object.getPrototypeOf(geolocation) === Geolocation.prototype
+                    }));
+                    geolocation.getCurrentPosition(
+                        () => finish("success"),
+                        (error) => finish(`error:${error.code}`)
+                    );
+                })
+            "#
+        }
+    }))
+    .await;
+    let response = ctx.take_response_by_id(id);
+    let value = response["result"]["result"]["value"]
+        .as_str()
+        .expect("geolocation surface shape should be a JSON string");
+    serde_json::from_str(value).expect("geolocation surface shape should be valid JSON")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn geolocation_override_only_shadows_native_surface_while_enabled() {
+    let mut ctx = TestContext::new();
+    let mut bc = BrowserContext::new("BID-1".into());
+    bc.set_active_target_id("TID-1");
+    bc.attach_active_session("SID-1");
+    install_session_page_for_emulation_test(&mut ctx, bc, "data:text/html,<body>geo</body>").await;
+
+    assert_eq!(
+        evaluate_geolocation_surface_shape(&mut ctx, 101).await,
+        json!({
+            "outcome": "error:1",
+            "navigatorOwn": false,
+            "nativePrototype": true,
+        })
+    );
+
+    ctx.process_async(json!({
+        "id": 102,
+        "method": "Emulation.setGeolocationOverride",
+        "sessionId": "SID-1",
+        "params": { "latitude": 1, "longitude": 2, "accuracy": 3 }
+    }))
+    .await;
+    ctx.expect_result(102, json!({}), Some("SID-1"));
+    assert_eq!(
+        evaluate_geolocation_surface_shape(&mut ctx, 103).await,
+        json!({
+            "outcome": "success",
+            "navigatorOwn": true,
+            "nativePrototype": false,
+        })
+    );
+
+    ctx.process_async(json!({
+        "id": 104,
+        "method": "Emulation.clearGeolocationOverride",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(104, json!({}), Some("SID-1"));
+    assert_eq!(
+        evaluate_geolocation_surface_shape(&mut ctx, 105).await,
+        json!({
+            "outcome": "error:1",
+            "navigatorOwn": false,
+            "nativePrototype": true,
+        })
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn set_geolocation_override_updates_loaded_page_geolocation_surface() {
     let mut ctx = TestContext::new();

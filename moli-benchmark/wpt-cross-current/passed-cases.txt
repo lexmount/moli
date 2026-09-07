@@ -5054,6 +5054,7 @@ focus/iframe-focuses-parent-same-site.html
 focus/scroll-matches-focus.html
 fullscreen/api/document-fullscreen-enabled-active-document.html
 fullscreen/rendering/fullscreen-pseudo-class-support.html
+geolocation/non-secure-contexts.http.html
 gyroscope/Gyroscope_insecure_context.html
 hr-time/clamped-time-origin.html
 hr-time/navigation-start-post-before-unload.html
