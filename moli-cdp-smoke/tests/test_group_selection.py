@@ -34,6 +34,7 @@ class GroupSelectionTests(unittest.TestCase):
         self.assertIn("media-error", DEFAULT_GROUP_NAMES)
         self.assertIn("webgl-viewport", DEFAULT_GROUP_NAMES)
         self.assertIn("svg-rect", DEFAULT_GROUP_NAMES)
+        self.assertIn("target-lifecycle", DEFAULT_GROUP_NAMES)
         self.assertIn("multi-page", DEFAULT_GROUP_NAMES)
         self.assertIn("puppeteer", DEFAULT_GROUP_NAMES)
         self.assertEqual(
@@ -49,6 +50,12 @@ class GroupSelectionTests(unittest.TestCase):
             ("chrome-remote-interface", "cdp-use", "stagehand", "agent-browser"),
         )
         self.assertTrue(set(optional_names).isdisjoint(DEFAULT_GROUP_NAMES))
+
+    def test_target_lifecycle_uses_managed_process_without_playwright_context(self) -> None:
+        selection = resolve_group_selection(["target-lifecycle"])
+        self.assertEqual(tuple(group.name for group in selection.process_groups), ("target-lifecycle",))
+        self.assertFalse(selection.needs_playwright)
+        self.assertFalse(selection.raw_groups)
 
     def test_registry_and_listing_mark_exact_default_set(self) -> None:
         self.assertEqual(len(ALL_GROUPS), len(GROUPS_BY_NAME))

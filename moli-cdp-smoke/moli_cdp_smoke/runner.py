@@ -62,6 +62,7 @@ from .groups.puppeteer import run_puppeteer_group
 from .groups.stagehand import run_stagehand_group
 from .groups.svg_rect import run_svg_rect_group
 from .groups.target_semantics import run_target_semantics_group
+from .groups.target_lifecycle import run_target_lifecycle_group
 from .groups.tracing import run_raw_tracing_group, run_tracing_group
 from .groups.url_policy import run_url_policy_group
 from .groups.webgl_viewport import run_webgl_viewport_group
@@ -87,6 +88,7 @@ RawGroupRunner = Callable[[str, str, list[dict[str, Any]]], Awaitable[None]]
 ExternalGroupRunner = Callable[[str, str, list[dict[str, Any]]], Awaitable[None]]
 PageGroupRunner = Callable[[SmokeState], Awaitable[None]]
 BrowserGroupRunner = Callable[[Any, str, list[dict[str, Any]]], Awaitable[None]]
+ProcessGroupRunner = Callable[[str, str, list[dict[str, Any]], MoliServe | None], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -94,7 +96,7 @@ class SmokeGroup:
     name: str
     description: str
     phase: str
-    runner: RawGroupRunner | ExternalGroupRunner | PageGroupRunner | BrowserGroupRunner
+    runner: RawGroupRunner | ExternalGroupRunner | PageGroupRunner | BrowserGroupRunner | ProcessGroupRunner
 
 
 async def _await_group(group: SmokeGroup, awaitable: Awaitable[None]) -> None:
@@ -417,8 +419,13 @@ OPTIONAL_EXTERNAL_GROUPS: tuple[SmokeGroup, ...] = (
 )
 
 
+PROCESS_GROUPS: tuple[SmokeGroup, ...] = (
+    SmokeGroup("target-lifecycle", "Managed-process target churn, FD bounds, and post-close navigation.",
+               "process", run_target_lifecycle_group),
+)
+
 DEFAULT_GROUPS: tuple[SmokeGroup, ...] = (
-    RAW_GROUPS + PAGE_GROUPS + BROWSER_GROUPS + MANAGED_EXTERNAL_GROUPS
+    RAW_GROUPS + PAGE_GROUPS + BROWSER_GROUPS + MANAGED_EXTERNAL_GROUPS + PROCESS_GROUPS
 )
 ALL_GROUPS: tuple[SmokeGroup, ...] = DEFAULT_GROUPS + OPTIONAL_EXTERNAL_GROUPS
 DEFAULT_GROUP_NAMES: tuple[str, ...] = tuple(group.name for group in DEFAULT_GROUPS)
@@ -429,6 +436,10 @@ GROUPS_BY_NAME: dict[str, SmokeGroup] = {group.name: group for group in ALL_GROU
 @dataclass(frozen=True)
 class SmokeSelection:
     groups: tuple[SmokeGroup, ...]
+
+    @property
+    def process_groups(self) -> tuple[SmokeGroup, ...]:
+        return tuple(group for group in self.groups if group.phase == "process")
 
     @property
     def raw_groups(self) -> tuple[SmokeGroup, ...]:
@@ -671,6 +682,11 @@ async def async_main(argv: list[str] | None = None) -> int:
             raise RuntimeError("CDP endpoint was not initialized")
         if serve is None:
             await wait_for_cdp_server(endpoint, serve)
+        for current_group in selection.process_groups:
+            await _await_group(
+                current_group,
+                current_group.runner(endpoint, fixture.url, results, serve),  # type: ignore[misc]
+            )
         for current_group in selection.raw_groups:
             await _await_group(
                 current_group,
