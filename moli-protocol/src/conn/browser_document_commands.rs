@@ -2,9 +2,11 @@ use moli_core::{
     browser::{BrowserContextId, DocumentHandle},
     page::{
         ChildFrameTreeSnapshot, DocumentCookieOwnerSnapshot, RendererAppManifestLoadPublication,
+        RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
         RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
         RendererCommandTurnOutput, RendererNetworkResourceLoadPreparation,
-        RendererSetDocumentContentResult,
+        RendererResourceTextSearchOutcome, RendererSetDocumentContentResult,
+        SubresourceNetworkRecord,
     },
 };
 use std::sync::Arc;
@@ -13,14 +15,17 @@ use url::Url;
 use super::{
     BrowserAppManifestLoadPreparation, CdpConnection, CommandOwnerScope,
     CompletedAppManifestLoadPreparation, CompletedAppManifestPublication,
-    CompletedCaptureDocumentImage, CompletedCaptureDocumentSnapshot,
-    CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
-    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentStorageKeySnapshot,
+    CompletedCaptureDocumentImage, CompletedCaptureDocumentScreencastFrame,
+    CompletedCaptureDocumentSnapshot, CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
+    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
+    CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
     CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent, DocumentSnapshot,
     PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
-    PendingCaptureDocumentSnapshot, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
-    PendingDocumentCookieOwnerSnapshot, PendingDocumentStorageKeySnapshot,
-    PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
+    PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
+    PendingChildFrameTreeSnapshot, PendingDocumentBlobRead, PendingDocumentCookieOwnerSnapshot,
+    PendingDocumentCspBypassUpdate, PendingDocumentResourceTextSearch,
+    PendingDocumentStorageKeySnapshot, PendingNetworkResourceLoadPreparation,
+    PendingSetDocumentContent,
 };
 use crate::conn::state::BrowserContext;
 
@@ -121,6 +126,99 @@ impl CdpConnection {
         self.browser_context_by_browser_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_capture_document_image(completed)
+    }
+
+    pub(crate) fn start_capture_document_screencast_frame(
+        &self,
+        document: DocumentHandle,
+        request: RendererCaptureScreencastFrameRequest,
+    ) -> Result<PendingCaptureDocumentScreencastFrame, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_capture_document_screencast_frame(document, request)
+    }
+
+    pub(crate) fn finish_capture_document_screencast_frame(
+        &mut self,
+        completed: CompletedCaptureDocumentScreencastFrame,
+    ) -> Result<RendererCaptureScreencastFrameReply, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_capture_document_screencast_frame(completed)
+    }
+
+    pub(crate) fn start_child_frame_document_resource_text_search(
+        &self,
+        document: DocumentHandle,
+        frame_id: String,
+        url: String,
+        query: String,
+        case_sensitive: bool,
+        is_regex: bool,
+    ) -> Result<PendingDocumentResourceTextSearch, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_child_frame_document_resource_text_search(
+                document,
+                frame_id,
+                url,
+                query,
+                case_sensitive,
+                is_regex,
+            )
+    }
+
+    pub(crate) fn start_document_text_search(
+        &self,
+        document: DocumentHandle,
+        text: String,
+        query: String,
+        case_sensitive: bool,
+        is_regex: bool,
+    ) -> Result<PendingDocumentResourceTextSearch, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_text_search(document, text, query, case_sensitive, is_regex)
+    }
+
+    pub(crate) fn finish_document_resource_text_search(
+        &mut self,
+        completed: CompletedDocumentResourceTextSearch,
+    ) -> Result<RendererResourceTextSearchOutcome, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_document_resource_text_search(completed)
+    }
+
+    pub(crate) fn document_subresource_network_records(
+        &self,
+        document: DocumentHandle,
+    ) -> Result<Vec<SubresourceNetworkRecord>, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .document_subresource_network_records(document)
+    }
+
+    pub(crate) fn start_document_csp_bypass_update(
+        &self,
+        document: DocumentHandle,
+        bypass: bool,
+    ) -> Result<PendingDocumentCspBypassUpdate, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_csp_bypass_update(document, bypass)
+    }
+
+    pub(crate) fn finish_document_csp_bypass_update(
+        &mut self,
+        completed: CompletedDocumentCspBypassUpdate,
+    ) -> Result<(), String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_document_csp_bypass_update(completed)
     }
 
     pub(crate) fn start_document_storage_key_snapshot(

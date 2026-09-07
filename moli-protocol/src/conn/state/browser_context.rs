@@ -49,14 +49,18 @@ mod resource_runtime;
 pub(crate) use page_runtime::{
     BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
     CompletedAppManifestPublication, CompletedCaptureDocumentImage,
-    CompletedCaptureDocumentSnapshot, CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
-    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentStorageKeySnapshot,
+    CompletedCaptureDocumentScreencastFrame, CompletedCaptureDocumentSnapshot,
+    CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
+    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
+    CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
     CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent, DocumentSnapshot,
     NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind,
     PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
-    PendingCaptureDocumentSnapshot, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
-    PendingDocumentCookieOwnerSnapshot, PendingDocumentStorageKeySnapshot,
-    PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
+    PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
+    PendingChildFrameTreeSnapshot, PendingDocumentBlobRead, PendingDocumentCookieOwnerSnapshot,
+    PendingDocumentCspBypassUpdate, PendingDocumentResourceTextSearch,
+    PendingDocumentStorageKeySnapshot, PendingNetworkResourceLoadPreparation,
+    PendingSetDocumentContent,
 };
 pub(in crate::conn) mod page_slot;
 mod page_state;

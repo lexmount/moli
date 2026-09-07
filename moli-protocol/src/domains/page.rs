@@ -37,10 +37,12 @@ use url::Url;
 use super::input;
 use crate::conn::{
     BackgroundProtocolEvent, CapturedBody, CdpSessionRoute, CommandDispatchContext,
-    CommandOwnerScope, CompletedCaptureDocumentImage, CompletedCaptureDocumentSnapshot,
+    CommandOwnerScope, CompletedCaptureDocumentImage, CompletedCaptureDocumentScreencastFrame,
+    CompletedCaptureDocumentSnapshot, CompletedDocumentCspBypassUpdate,
     CompletedSetDocumentContent, NETWORK_ERROR_PAGE_URL, PageLifecycleEventsEnableResult,
     PageScreencastConfig, PageScreencastFormat, PendingCaptureDocumentImage,
-    PendingCaptureDocumentSnapshot, PendingSetDocumentContent,
+    PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
+    PendingDocumentCspBypassUpdate, PendingSetDocumentContent,
 };
 use crate::conn::{CdpConnection, Cmd, EmulatedViewportSurface};
 pub(crate) use crate::conn::{DEFAULT_LOADER_ID as LOADER_ID, monotonic_timestamp_seconds};
@@ -225,7 +227,7 @@ enum PendingPageCommandKind {
         pending: PendingSetDocumentContent,
     },
     SetBypassContentSecurityPolicy {
-        pending: PendingPageCommand,
+        pending: PendingDocumentCspBypassUpdate,
     },
     SameDocumentNavigate(Box<navigation::PendingSameDocumentNavigateCommand>),
     CaptureSnapshot {
@@ -294,7 +296,7 @@ enum CompletedPageCommandKind {
         completed: CompletedSetDocumentContent,
     },
     SetBypassContentSecurityPolicy {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: CompletedDocumentCspBypassUpdate,
     },
     SameDocumentNavigate(Box<navigation::CompletedSameDocumentNavigateCommand>),
     CaptureSnapshot {
@@ -339,9 +341,11 @@ impl CompletedPageCommandKind {
             | Self::RemoveDocumentStartScript { completed }
             | Self::GetFrameTree { completed, .. }
             | Self::ResetNavigationHistory { completed, .. }
-            | Self::SetBypassContentSecurityPolicy { completed }
             | Self::GetLayoutMetrics { completed }
             => direct(completed),
+            Self::SetBypassContentSecurityPolicy { completed } => {
+                completed.renderer_output_predecessor()
+            }
             Self::SetDocumentContent { completed } => completed.renderer_output_predecessor(),
             Self::CaptureSnapshot { completed } => completed.renderer_output_predecessor(),
             Self::CaptureScreenshot { completed }
@@ -473,7 +477,7 @@ impl PendingPageCommandDispatch {
             }
             PendingPageCommandKind::SetBypassContentSecurityPolicy { pending } => {
                 CompletedPageCommandKind::SetBypassContentSecurityPolicy {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: pending.wait().await,
                 }
             }
             PendingPageCommandKind::SameDocumentNavigate(pending) => {
@@ -1686,16 +1690,10 @@ fn try_start_set_bypass_csp_command(
         ));
     };
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let Ok((page_context_id, page_target_id)) = conn.resolve_document_command_owner(&owner_scope)
-    else {
+    let Ok(document) = conn.resolve_browser_document_for_owner(&owner_scope) else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::success());
     };
-    let page_context = conn
-        .browser_context_by_id(&page_context_id)
-        .expect("admitted document context remains registered");
-    match page_context
-        .start_set_bypass_content_security_policy_for_target(&page_target_id, effective_bypass)
-    {
+    match conn.start_document_csp_bypass_update(document, effective_bypass) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id: cmd.id,
             owner_scope,
@@ -1804,7 +1802,7 @@ pub struct PendingPageScreencastCapture {
     generation: i32,
     owner_scope: CommandOwnerScope,
     viewport: EmulatedViewportSurface,
-    pending: PendingPageCommand,
+    pending: Box<PendingCaptureDocumentScreencastFrame>,
 }
 
 pub struct CompletedPageScreencastCapture {
@@ -1812,7 +1810,7 @@ pub struct CompletedPageScreencastCapture {
     generation: i32,
     owner_scope: CommandOwnerScope,
     viewport: EmulatedViewportSurface,
-    completed: Result<Box<CompletedPageCommand>, String>,
+    completed: CompletedCaptureDocumentScreencastFrame,
 }
 
 impl CompletedPageScreencastCapture {
@@ -1832,12 +1830,7 @@ impl PendingPageScreencastCapture {
             generation: self.generation,
             owner_scope: self.owner_scope,
             viewport: self.viewport,
-            completed: self
-                .pending
-                .wait()
-                .await
-                .map(Box::new)
-                .map_err(|error| error.to_string()),
+            completed: (*self.pending).wait().await,
         }
     }
 }
@@ -1987,12 +1980,8 @@ impl CdpConnection {
             max_height: config.max_height(),
             known_visual_state,
         };
-        let pending = match self.resolve_document_command_owner(&owner_scope) {
-            Ok((page_context_id, page_target_id)) => match self
-                .browser_context_by_id(&page_context_id)
-                .expect("admitted document context remains registered")
-                .start_capture_screencast_frame_for_target(&page_target_id, request)
-            {
+        let pending = match self.resolve_browser_document_for_owner(&owner_scope) {
+            Ok(document) => match self.start_capture_document_screencast_frame(document, request) {
                 Ok(pending) => pending,
                 Err(error) => {
                     tracing::debug!(?error, "failed to start screencast frame capture");
@@ -2014,7 +2003,7 @@ impl CdpConnection {
             generation,
             owner_scope,
             viewport,
-            pending,
+            pending: Box::new(pending),
         })
     }
 
@@ -2036,53 +2025,21 @@ impl CdpConnection {
             return PageScreencastCaptureCompletion::Stale;
         }
 
-        let frame = match completed {
-            Ok(completion) => {
-                let (page_context_id, page_target_id) =
-                    match self.resolve_document_command_owner(&owner_scope) {
-                        Ok(route) => route,
-                        Err(_) => {
-                            let _ = self.complete_page_screencast_capture_for_owner(
-                                &owner_scope,
-                                generation,
-                                false,
-                            );
-                            return PageScreencastCaptureCompletion::Retry;
-                        }
-                    };
-                let page_context = self
-                    .browser_context_by_id_mut(&page_context_id)
-                    .expect("admitted document context remains registered");
-                match page_context
-                    .finish_capture_screencast_frame_for_target(&page_target_id, *completion)
+        let frame = match self.finish_capture_document_screencast_frame(completed) {
+            Ok(RendererCaptureScreencastFrameReply::Captured(frame)) => frame,
+            Ok(RendererCaptureScreencastFrameReply::Unchanged) => {
+                if self.complete_page_screencast_capture_for_owner(&owner_scope, generation, false)
+                    != Some(true)
                 {
-                    Ok(RendererCaptureScreencastFrameReply::Captured(frame)) => frame,
-                    Ok(RendererCaptureScreencastFrameReply::Unchanged) => {
-                        if self.complete_page_screencast_capture_for_owner(
-                            &owner_scope,
-                            generation,
-                            false,
-                        ) != Some(true)
-                        {
-                            return PageScreencastCaptureCompletion::Stale;
-                        }
-                        return PageScreencastCaptureCompletion::Unchanged;
-                    }
-                    Ok(
-                        RendererCaptureScreencastFrameReply::LayoutDisabled
-                        | RendererCaptureScreencastFrameReply::NoDocument,
-                    )
-                    | Err(_) => {
-                        let _ = self.complete_page_screencast_capture_for_owner(
-                            &owner_scope,
-                            generation,
-                            false,
-                        );
-                        return PageScreencastCaptureCompletion::Retry;
-                    }
+                    return PageScreencastCaptureCompletion::Stale;
                 }
+                return PageScreencastCaptureCompletion::Unchanged;
             }
-            Err(_) => {
+            Ok(
+                RendererCaptureScreencastFrameReply::LayoutDisabled
+                | RendererCaptureScreencastFrameReply::NoDocument,
+            )
+            | Err(_) => {
                 let _ = self.complete_page_screencast_capture_for_owner(
                     &owner_scope,
                     generation,
@@ -7682,28 +7639,7 @@ pub(crate) async fn complete_pending_page_command(
             .await;
         }
         CompletedPageCommandKind::SetBypassContentSecurityPolicy { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            let Some((page_context_id, page_target_id)) =
-                conn.loaded_document_owner_identity_for_owner(&owner_scope)
-            else {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "NoDocumentLoaded",
-                ));
-            };
-            let page_context = conn
-                .browser_context_by_id_mut(&page_context_id)
-                .expect("resolved document context remains registered");
-            if let Err(error) = page_context
-                .finish_set_bypass_content_security_policy_for_target(&page_target_id, completion)
-            {
+            if let Err(error) = conn.finish_document_csp_bypass_update(completed) {
                 return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                     -32000,
                     error.to_string(),

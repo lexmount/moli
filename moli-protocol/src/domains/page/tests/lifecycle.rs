@@ -3825,6 +3825,27 @@ async fn screencast_capture_materializes_jpeg_frame_and_ack_budget() {
             ),
         Some(false),
     );
+
+    let PageScreencastCaptureStart::Pending(stale_capture) = ctx
+        .conn
+        .start_page_screencast_frame_capture(&registration, None)
+    else {
+        panic!("an acknowledged subscription should start another capture");
+    };
+    ctx.conn
+        .replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::for_session(
+            "SID-screencast-frame",
+        ));
+    assert!(matches!(
+        ctx.conn
+            .complete_page_screencast_frame_capture(stale_capture.wait().await),
+        PageScreencastCaptureCompletion::Retry
+    ));
+    assert_eq!(
+        ctx.conn.page_screencast_subscription_status(&registration),
+        PageScreencastSubscriptionStatus::Ready,
+        "an outgoing Document capture must not finish against its replacement",
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
