@@ -123,6 +123,10 @@ enum DefaultTargetRuntimeInitialization {
 }
 
 impl CdpScheduler {
+    pub(crate) fn end_webdriver_session(self) -> Result<(), String> {
+        self.conn.end_webdriver_session()
+    }
+
     pub(crate) fn page_residence_identity_for_devtools_context(
         &mut self,
         context: &moli_protocol::devtools_runtime::DevToolsCommandContext,
