@@ -1099,6 +1099,21 @@ async fn opaque_child_isolated_world_projects_only_its_own_document() {
             .child_browsing_context_has_opaque_origin(child_handle),
         "sandbox without allow-same-origin must create an opaque child origin"
     );
+    let child_request_origin = {
+        let host = vm._context_host.borrow();
+        let owner = crate::native_bridge::OwnerDispatchScope::Child(child_handle);
+        let loader = host
+            .document_resource_loader_for_dispatch_scope(owner)
+            .expect("opaque child resource loader should exist");
+        host.subresource_request_environment(&loader, owner)
+            .expect("opaque child request environment should exist")
+            .request_origin
+    };
+    assert_eq!(
+        child_request_origin,
+        moli_url::WebOrigin::Opaque,
+        "sandboxed child subresource requests must use an opaque client origin"
+    );
     assert_eq!(
         vm.eval("document.getElementById('opaque-isolated-frame').contentDocument === null")
             .expect("top opaque contentDocument visibility should evaluate"),
