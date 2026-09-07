@@ -823,8 +823,8 @@ pub(super) async fn history_back_ignores_page_tampered_queue_microtask_page() ->
     Html(HISTORY_BACK_IGNORES_PAGE_TAMPERED_QUEUE_MICROTASK_HTML)
 }
 
-pub(super) async fn history_back_forward_same_turn_coalesces_page() -> Html<&'static str> {
-    Html(HISTORY_BACK_FORWARD_SAME_TURN_COALESCES_HTML)
+pub(super) async fn history_back_forward_same_turn_queues_page() -> Html<&'static str> {
+    Html(HISTORY_BACK_FORWARD_SAME_TURN_QUEUES_HTML)
 }
 
 pub(super) async fn history_state_mutation_does_not_mutate_stored_snapshot_page()
