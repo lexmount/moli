@@ -2771,6 +2771,15 @@ where
                     .map(|placement| placement.item_offset(item_index))
                     .unwrap_or_default();
                 if let InlineObjectRole::OutOfFlow(display) = object.role {
+                    // Inline-level placeholders use the resolved item's bidi
+                    // direction, which can differ from the paragraph direction.
+                    // A block-level placeholder remains attached to the IFC's
+                    // inline-start edge (Blink LogicalLineBuilder).
+                    let direction = match display {
+                        OutOfFlowDisplay::Inline if positioned.is_rtl() => InlineDirection::Rtl,
+                        OutOfFlowDisplay::Inline => InlineDirection::Ltr,
+                        OutOfFlowDisplay::Block => container_direction,
+                    };
                     let inline_offset = match display {
                         OutOfFlowDisplay::Inline => positioned.x,
                         OutOfFlowDisplay::Block => match container_direction {
@@ -2787,7 +2796,7 @@ where
                                 x: content_offset.x + inline_offset,
                                 y: content_offset.y + positioned.y + vertical_offset,
                             },
-                            direction: container_direction,
+                            direction,
                         });
                     continue;
                 }

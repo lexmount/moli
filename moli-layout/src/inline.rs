@@ -14,7 +14,10 @@ use std::{
     ops::Range,
 };
 
-use parley::{BreakReason, InlineBox, InlineBoxKind, Layout, PositionedLayoutItem, TextStyle};
+use parley::{
+    BaseDirection, BreakReason, InlineBox, InlineBoxBidi, InlineBoxKind, Layout,
+    PositionedLayoutItem, TextStyle,
+};
 use taffy::{MaybeResolve as _, Point, Size};
 
 use crate::{
@@ -1751,6 +1754,19 @@ impl InlineBuildInput {
             1.0,
             quantize,
         );
+        let root_style = &world.boxes[self.root_style.index()].style;
+        // CSS supplies the paragraph direction except for plaintext, which
+        // resolves its base direction from the first strong character.
+        builder.set_base_direction(
+            if root_style.unicode_bidi() == InlineUnicodeBidi::Plaintext {
+                BaseDirection::Auto
+            } else {
+                match root_style.direction() {
+                    InlineDirection::Ltr => BaseDirection::Ltr,
+                    InlineDirection::Rtl => BaseDirection::Rtl,
+                }
+            },
+        );
         let style_indices = styles
             .iter()
             .map(|style| builder.push_style(style.clone()))
@@ -1763,14 +1779,24 @@ impl InlineBuildInput {
                 builder.push_style_run(style_indices[*style_slot], range.clone());
             }
         }
-        for (object_id, (byte_index, _, kind)) in self.objects.iter().enumerate() {
-            builder.push_inline_box(InlineBox {
-                id: u64::try_from(object_id).expect("one IFC exceeded the u64 object limit"),
-                kind: *kind,
-                index: *byte_index,
-                width: 0.0,
-                height: 0.0,
-            });
+        for (object_id, (byte_index, object, kind)) in self.objects.iter().enumerate() {
+            let bidi = match object.role {
+                InlineObjectRole::StartEdge => InlineBoxBidi::StartBoundary,
+                InlineObjectRole::EndEdge => InlineBoxBidi::EndBoundary,
+                InlineObjectRole::Atomic
+                | InlineObjectRole::Float
+                | InlineObjectRole::OutOfFlow(_) => InlineBoxBidi::Neutral,
+            };
+            builder.push_inline_box_with_bidi(
+                InlineBox {
+                    id: u64::try_from(object_id).expect("one IFC exceeded the u64 object limit"),
+                    kind: *kind,
+                    index: *byte_index,
+                    width: 0.0,
+                    height: 0.0,
+                },
+                bidi,
+            );
         }
         let layout = builder.build(&self.text);
         let font_metrics = styles

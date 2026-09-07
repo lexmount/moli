@@ -1,0 +1,52 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CSS paragraph direction and inline object bidi ordering</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  /* Zero-sized glyphs retain bidi classes while making geometry independent
+     of installed fonts. Atomic boxes give each nonempty line a fixed size. */
+  .slot { position: relative; display: flow-root; width: 200px; height: 90px;
+          direction: rtl; font-size: 0; line-height: 30px; }
+  .ltr { direction: ltr; }
+  .atom { display: inline-block; width: 30px; height: 10px; }
+  .wide { width: 50px; }
+  .item { position: absolute; display: inline; width: 20px; height: 10px; }
+  .measured { position: static; display: inline-block; width: 20px; height: 10px; }
+  .embed { direction: ltr; unicode-bidi: embed; }
+  .isolate { direction: ltr; unicode-bidi: isolate; }
+  .override { direction: ltr; unicode-bidi: bidi-override; }
+</style>
+<div class="slot" id="empty" data-expected="180,0,20,10"><span class="item"></span></div>
+<div class="slot" id="neutral-before" data-expected="180,0,20,10"><span class="item"></span><span class="atom"></span></div>
+<div class="slot" id="neutral-after" data-expected="150,0,20,10"><span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="leading-object-before" data-expected="180,0,20,10"><span class="item"></span><span class="atom"></span>א</div>
+<div class="slot" id="leading-object-after" data-expected="150,0,20,10"><span class="atom"></span><span class="item"></span>א</div>
+<div class="slot" id="latin-first" data-expected="150,0,20,10">a<span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="numeric-first" data-expected="150,0,20,10">12<span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="neutral-first" data-expected="150,0,20,10">...<span class="atom"></span><span class="item"></span></div>
+<div class="slot ltr" id="hebrew-ltr-before" data-expected="0,0,20,10"><span class="item"></span><span class="atom"></span>א</div>
+<div class="slot ltr" id="hebrew-ltr-after" data-expected="30,0,20,10">א<span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="latin-surrounded" data-expected="200,0,20,10">a<span class="atom"></span><span class="item"></span>b</div>
+<div class="slot ltr" id="hebrew-surrounded" data-expected="-20,0,20,10">א<span class="atom"></span><span class="item"></span>ב</div>
+<div class="slot" id="paragraph-edge-after-latin" data-expected="150,0,20,10">a<span class="atom"></span>b<span class="item"></span></div>
+<div class="slot" id="two-atoms" data-expected="100,0,20,10"><span class="atom"></span><span class="atom wide"></span><span class="item"></span></div>
+<div class="slot" id="middle-of-atoms" data-expected="150,0,20,10"><span class="atom"></span><span class="item"></span><span class="atom wide"></span></div>
+<div class="slot" id="measured-neutral" data-expected="150,5,20,10"><span class="atom"></span><span class="item measured"></span></div>
+<div class="slot" id="measured-latin" data-expected="180,5,20,10">a<span class="atom"></span><span class="item measured"></span>b</div>
+<div class="slot ltr" id="measured-hebrew" data-expected="0,5,20,10">א<span class="atom"></span><span class="item measured"></span>ב</div>
+<div class="slot" id="span-boundaries" data-expected="150,0,20,10"><span><span class="atom"></span></span><span class="item"></span></div>
+<div class="slot" id="empty-span-boundaries" data-expected="150,0,20,10"><span></span><span class="atom"></span><span></span><span class="item"></span></div>
+<div class="slot" id="embed-before" data-expected="170,0,20,10"><span class="embed"><span class="item"></span><span class="atom"></span></span></div>
+<div class="slot" id="embed-after" data-expected="200,0,20,10"><span class="embed"><span class="atom"></span><span class="item"></span></span></div>
+<div class="slot" id="isolate-before" data-expected="170,0,20,10"><span class="isolate"><span class="item"></span><span class="atom"></span></span></div>
+<div class="slot" id="isolate-after" data-expected="200,0,20,10"><span class="isolate"><span class="atom"></span><span class="item"></span></span></div>
+<div class="slot" id="override-after" data-expected="200,0,20,10"><span class="override">א<span class="atom"></span><span class="item"></span>ב</span></div>
+<div class="slot" id="opposite-placeholder-style" data-expected="150,0,20,10"><span class="atom"></span><span class="item" style="direction:ltr"></span></div>
+<div class="slot" id="block-placeholder" data-expected="180,0,20,10"><span class="embed"><span class="atom"></span><span class="item" style="display:block"></span></span></div>
+<div class="slot" id="after-hard-break" data-expected="150,30,20,10"><span class="atom"></span><br><span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="wrap" style="width:50px" data-expected="0,30,20,10"><span class="atom"></span><span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="text-align-left" style="text-align:left" data-expected="-20,0,20,10"><span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="text-align-center" style="text-align:center" data-expected="65,0,20,10"><span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="plaintext-latin" style="unicode-bidi:plaintext" data-expected="30,0,20,10">a<span class="atom"></span><span class="item"></span></div>
+<div class="slot ltr" id="plaintext-hebrew" style="unicode-bidi:plaintext" data-expected="150,0,20,10">א<span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="dynamic-direction" data-expected="150,0,20,10"><span class="atom"></span><span class="item"></span></div>

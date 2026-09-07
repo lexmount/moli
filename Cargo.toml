@@ -87,6 +87,8 @@ exclude = ["vendor/xml5ever-0.39.0"]
 license = "MIT OR Apache-2.0"
 
 [patch.crates-io]
+# Keep the 0.11.1 shaping pipeline with explicit paragraph and inline-object bidi analysis.
+parley = { git = "https://github.com/ldm0/parley", rev = "ad5b8d7a24c8827fae74ec430a8b2636381db8d6" }
 xml5ever = { path = "vendor/xml5ever-0.39.0" }
 curl = { git = "https://github.com/ldm0/curl-rust", branch = "moli" }
 curl-sys = { git = "https://github.com/ldm0/curl-rust", branch = "moli" }

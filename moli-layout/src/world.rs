@@ -192,8 +192,9 @@ pub enum LayoutCapabilityDiagnostic {
 pub(crate) struct InlineStaticPosition {
     pub(crate) owner: LayoutBoxId,
     pub(crate) point: Point<f32>,
-    /// Direction of the formatting context that produced the static point,
-    /// which need not be the direction of the actual containing block.
+    /// Resolved bidi direction for an inline-level placeholder, or the IFC's
+    /// direction for a block-level placeholder. Neither is necessarily the
+    /// direction of the actual containing block.
     pub(crate) direction: InlineDirection,
 }
 

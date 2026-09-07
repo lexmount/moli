@@ -1054,6 +1054,77 @@ JSON.stringify(Array.from(document.querySelectorAll('.slot'), slot => {
     }
 
     #[test]
+    fn layout_renderer_resolves_css_paragraph_and_inline_object_directions() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread runtime should build");
+        runtime.block_on(tokio::task::LocalSet::new().run_until(async move {
+            let mut page = parse_phase_one_html_into_page_vm_for_test_with_env(
+                include_str!("../../../tests/fixtures/inline-bidi-objects.html"),
+                default_test_page_vm_env_config_with(|env| {
+                    env.layout_policy = moli_page_types::LayoutPolicy::OnDemand;
+                }),
+            )
+            .await;
+            // Exercise the initial build and rebuilding an existing IFC in
+            // both directions. Only explicit captures publish new geometry.
+            for direction in ["rtl", "ltr", "rtl"] {
+                page.vm_mut()
+                    .eval(&format!(
+                        "{{ const slot = document.getElementById('dynamic-direction'); \
+                         slot.style.direction = '{direction}'; \
+                         slot.dataset.expected = '{}'; }}",
+                        if direction == "rtl" {
+                            "150,0,20,10"
+                        } else {
+                            "30,0,20,10"
+                        },
+                    ))
+                    .expect("update paragraph direction");
+                page.vm_mut().sync_live_document_style_sources();
+                page.vm_mut()
+                    .screenshot_layout_snapshot(moli_layout::PaintViewport::new(800, 600, 1.0))
+                    .expect("bidi fixture layout should succeed")
+                    .expect("fixture should have a document element");
+                let geometry = page
+                    .vm_mut()
+                    .eval(
+                        r#"
+JSON.stringify(Array.from(document.querySelectorAll('.slot'), slot => {
+    const origin = slot.getBoundingClientRect();
+    const item = slot.querySelector('.item').getBoundingClientRect();
+    return {
+        id: slot.id,
+        actual: [item.x - origin.x, item.y - origin.y, item.width, item.height],
+        expected: slot.dataset.expected.split(',').map(Number)
+    };
+}))
+"#,
+                    )
+                    .expect("read published bidi geometry");
+                let cases: serde_json::Value =
+                    serde_json::from_str(&geometry).expect("geometry JSON");
+                let cases = cases.as_array().expect("geometry cases");
+                assert_eq!(cases.len(), 34);
+                for case in cases {
+                    for axis in 0..4 {
+                        let actual = case["actual"][axis].as_f64().expect("actual coordinate");
+                        let expected = case["expected"][axis]
+                            .as_f64()
+                            .expect("expected coordinate");
+                        assert!(
+                            (actual - expected).abs() <= 1.0 / 64.0,
+                            "{}[{axis}] after {direction}: expected {expected}, got {actual}",
+                            case["id"],
+                        );
+                    }
+                }
+            }
+        }));
+    }
+
+    #[test]
     fn layout_renderer_preserves_calc_min_width_in_float_intrinsic_contribution() {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
