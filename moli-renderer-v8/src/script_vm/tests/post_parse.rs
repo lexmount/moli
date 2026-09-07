@@ -168,6 +168,63 @@ async fn classic_script_exception_reports_window_error_then_completes() {
     );
 }
 
+#[tokio::test]
+async fn muted_classic_script_exceptions_expose_only_cross_origin_safe_details() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_test_vm_with_loader("https://example.com/", &loader);
+    vm.eval(
+        r#"
+        globalThis.__mutedClassicScriptErrors = [];
+        window.onerror = (message, source, line, column, error) => {
+          globalThis.__mutedClassicScriptErrors.push({
+            message,
+            source,
+            line,
+            column,
+            errorIsNull: error === null,
+          });
+          return true;
+        };
+        "installed";
+        "#,
+    )
+    .expect("window error observer should install");
+
+    for (position, source) in [
+        (8, "throw new Error('runtime secret');"),
+        (9, "function syntaxError( {"),
+    ] {
+        let mut script = ready_dynamic_runtime_script(position);
+        script.url = Url::parse(&format!("https://cross-origin.test/script-{position}.js"))
+            .expect("cross-origin script URL");
+        script.base_url = script.url.clone();
+        let script = crate::planning::prepared_script_with_loaded_source(
+            script,
+            source.to_owned(),
+            None,
+            true,
+        );
+
+        let outcome = vm
+            .execute_loaded_prepared_script_source(&script, source, None)
+            .await
+            .expect("a muted exception should still complete classic script evaluation");
+        assert!(matches!(
+            outcome,
+            crate::script_vm::LoadedScriptExecutionOutcome::Completed(
+                crate::script_vm::PreparedScriptBodyActivity::Entered
+            )
+        ));
+        assert_eq!(script.base_url.as_str(), "about:blank");
+    }
+
+    assert_eq!(
+        vm.eval("JSON.stringify(globalThis.__mutedClassicScriptErrors)")
+            .expect("muted classic script errors should remain observable"),
+        r#"[{"message":"Script error.","source":"","line":0,"column":0,"errorIsNull":true},{"message":"Script error.","source":"","line":0,"column":0,"errorIsNull":true}]"#,
+    );
+}
+
 fn is_document_script_execution_work(
     work: &PostParsePageOwnedWork,
     lane: crate::document_script_scheduler::DocumentScriptExecutionLane,
