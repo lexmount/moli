@@ -84,6 +84,60 @@ async fn same_origin_window_fetch_and_xhr_post_send_origin_on_wire() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn window_xhr_open_freezes_base_url_and_applies_url_credentials() {
+    let server = StaticHttpServer::spawn(1).await;
+    let base_url = server.base_url();
+    let loader = static_http_loader(std::iter::empty::<String>());
+    let mut vm = new_page_task_executor_test_vm_with_loader(
+        base_url
+            .join("page.html")
+            .expect("page fixture URL")
+            .as_str(),
+        &loader,
+    );
+    let first_base = base_url.join("first/").expect("first base URL");
+    let second_base = base_url.join("second/").expect("second base URL");
+
+    vm.eval(&format!(
+        r#"
+(() => {{
+  globalThis.__xhrOpenUrlProbe = "pending";
+  const base = document.createElement("base");
+  base.href = {};
+  document.head.append(base);
+  const xhr = new XMLHttpRequest();
+  xhr.open("GET", "resource", true, "alice", "secret");
+  base.href = {};
+  xhr.onload = () => {{ globalThis.__xhrOpenUrlProbe = "done"; }};
+  xhr.onerror = () => {{ globalThis.__xhrOpenUrlProbe = "error"; }};
+  xhr.send();
+  return "started";
+}})()
+"#,
+        serde_json::to_string(first_base.as_str()).expect("serialize first base URL"),
+        serde_json::to_string(second_base.as_str()).expect("serialize second base URL"),
+    ))
+    .expect("XHR open URL probe should evaluate");
+
+    advance_page_task_executor_until_eval_equals(
+        &mut vm,
+        &loader,
+        "String(globalThis.__xhrOpenUrlProbe)",
+        "done",
+        "XHR open URL probe",
+    )
+    .await;
+
+    let requests = server.finish().await;
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].target, "/first/resource");
+    assert_eq!(
+        requests[0].header_value("authorization"),
+        Some("Basic YWxpY2U6c2VjcmV0")
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn asynchronous_window_xhr_records_resource_timing_with_xmlhttprequest_initiator() {
     let server = StaticHttpServer::spawn(1).await;
     let base_url = server.base_url();
