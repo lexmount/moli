@@ -733,46 +733,12 @@ pub(crate) async fn complete_page_target_termination_owner_action_async(
             conn.take_scheduler_events(),
         );
     }
-    let target_host_closure = conn.prepare_target_host_closure(&expected_target_id);
-    let closed = conn
-        .close_web_contents_for_target_close_async(
-            &expected_target_id,
-            web_contents,
-            &mut out,
-            "Target closed",
-        )
-        .await;
-    let Some(closed) = closed else {
-        return crate::conn::CdpTurnOutcome::new_with_protocol_events(
-            out,
-            conn.take_scheduler_events(),
-        );
-    };
-    let closed_target_id = closed.target_id.clone();
-    let (target_detached_info_deltas, target_destroyed_deltas) = target_host_closure.into_parts();
-    for sid in closed.inspector_detached_session_ids() {
-        out.push(BackgroundProtocolEvent::inspector_detached(
-            Some(sid),
-            "Render process gone.",
-        ));
-    }
-    out.extend(conn.prepared_target_host_deltas_event_plan(target_detached_info_deltas));
     out.extend(
-        conn.dispose_target_closure_sessions_event_plan_async(
-            closed.into_detach_cleanup_plan(Some("Render process gone.")),
-            None,
+        conn.close_browser_web_contents_async(
+            web_contents,
+            crate::conn::PageCloseNotifications::PageCommand,
         )
         .await,
     );
-    if let Some(tab_cleanup) = conn.take_closed_top_level_target_sessions_cleanup_plan(
-        &closed_target_id,
-        Some("Render process gone."),
-    ) {
-        out.extend(
-            conn.dispose_target_closure_sessions_event_plan_async(tab_cleanup, None)
-                .await,
-        );
-    }
-    out.extend(conn.prepared_target_host_deltas_event_plan(target_destroyed_deltas));
     crate::conn::CdpTurnOutcome::new_with_protocol_events(out, conn.take_scheduler_events())
 }

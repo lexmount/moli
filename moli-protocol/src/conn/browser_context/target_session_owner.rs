@@ -65,33 +65,6 @@ fn empty_pending_fetch_state() -> super::fetch_owner::SessionOwnerPendingFetchSt
     )
 }
 
-pub(crate) struct ClosedPageTarget {
-    pub(crate) target_id: String,
-    pub(crate) primary_session_id: Option<String>,
-    pub(crate) attached_session_ids: Vec<String>,
-}
-
-impl ClosedPageTarget {
-    pub(crate) fn inspector_detached_session_ids(&self) -> impl Iterator<Item = &str> {
-        self.primary_session_id
-            .as_deref()
-            .into_iter()
-            .chain(self.attached_session_ids.iter().map(String::as_str))
-    }
-
-    pub(crate) fn into_detach_cleanup_plan(
-        self,
-        reason: Option<&str>,
-    ) -> crate::conn::TargetClosureCleanupPlan {
-        crate::conn::TargetClosureCleanupPlan::from_primary_and_attached_sessions(
-            self.target_id,
-            reason,
-            self.primary_session_id,
-            self.attached_session_ids,
-        )
-    }
-}
-
 pub(super) struct TargetSessionStateMut<'a> {
     pub(super) devtools_session_state: &'a mut DevToolsSessionState,
 }
@@ -1102,108 +1075,20 @@ impl CdpConnection {
             .await
     }
 
-    pub(crate) async fn close_web_contents_for_target_close_async(
+    pub(crate) async fn close_browser_web_contents_async(
         &mut self,
-        target_id: &str,
         handle: moli_core::browser::WebContentsHandle,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        reason: &'static str,
-    ) -> Option<ClosedPageTarget> {
-        let context = self.browser_context_by_browser_id(handle.context())?;
-        if context.web_contents_handle_for_target(target_id) != Some(handle) {
-            return None;
-        }
-        let was_selected = context.selected_web_contents_handle() == Some(handle);
-        let primary_route = self.target_session_route_for_target_id(target_id)?;
-        let primary_owner = CommandOwnerScope::for_route(primary_route);
-        let session_owners = self
-            .page_event_session_ids_for_owner(&primary_owner)
-            .into_iter()
-            .map(|session_id| {
-                session_id
-                    .as_deref()
-                    .map(CommandOwnerScope::for_session)
-                    .unwrap_or_else(|| primary_owner.clone())
-            })
-            .collect::<Vec<_>>();
-        let mut claimed_await_events = Vec::new();
-        for owner in &session_owners {
-            self.fail_pending_inspector_awaits_for_owner_background_events_into(
-                out,
-                &mut claimed_await_events,
-                owner,
-                reason,
-            );
-        }
-        out.extend(claimed_await_events);
-
-        let (closing, primary_session_id, attached_session_ids, collected_network_data_artifacts) = {
-            let browser_context = self.browser_context_by_browser_id_mut(handle.context())?;
-            let (target, closing) = browser_context.begin_web_contents_close(handle).ok()?;
-            let collected_network_data_artifacts =
-                target.runtime_slot.collected_network_data_artifacts();
-            let attached_session_ids = target
-                .devtools_sessions
-                .attached_session_ids()
-                .map(str::to_owned)
-                .collect::<Vec<_>>();
-            let primary_session_id = target.session_id().map(str::to_owned);
-            (
-                closing,
-                primary_session_id,
-                attached_session_ids,
-                collected_network_data_artifacts,
-            )
+        notifications: crate::conn::PageCloseNotifications,
+    ) -> Vec<BackgroundProtocolEvent> {
+        let Ok(closing) = self.browser.close_web_contents(handle) else {
+            return Vec::new();
         };
+        let activated = closing.activated;
         closing.close_async().await;
-        self.record_collected_network_data_artifacts(collected_network_data_artifacts);
-
-        let closed = ClosedPageTarget {
-            target_id: target_id.to_owned(),
-            primary_session_id,
-            attached_session_ids,
-        };
-        if !was_selected {
-            return Some(closed);
-        }
-
-        let selected = self
-            .browser_context_by_browser_id(handle.context())
-            .and_then(|browser_context| {
-                let target_id = browser_context.last_selectable_background_target_id()?;
-                let handle = browser_context.web_contents_handle_for_target(&target_id)?;
-                Some((target_id, handle))
-            });
-        let selected_target_id = if let Some((target_id, handle)) = selected {
-            if let Err(error) = self.select_browser_web_contents_async(handle).await {
-                tracing::warn!(%error, "failed to update selected WebContents surface after close");
-            }
-            Some(target_id)
-        } else {
-            None
-        };
-        if self
-            .browser_context
-            .as_ref()
-            .is_some_and(|context| context.browser_context_id() == handle.context())
-        {
-            self.refresh_active_browser_context_loader();
-        }
-        if let Some(selected_target_id) = selected_target_id {
-            self.notify_target_host_activated(&selected_target_id);
-            out.extend(
-                self.page_screencast_session_ids_for_target(&selected_target_id)
-                    .into_iter()
-                    .map(|session_id| {
-                        BackgroundProtocolEvent::page_screencast_visibility_changed(
-                            session_id.as_deref(),
-                            true,
-                        )
-                    }),
-            );
-        }
-
-        Some(closed)
+        // The command executor already owns its automation lifecycle output;
+        // only an independently observed Browser close must synthesize it.
+        self.retire_closed_web_contents(handle, activated, notifications)
+            .await
     }
 
     pub(crate) async fn rollback_incomplete_popup_target_without_event_async(
@@ -1224,11 +1109,15 @@ impl CdpConnection {
 
         let mut page_session_ids = Vec::new();
         if let Some(browser_context_id) = browser_context_id {
+            let browser = self.browser.clone();
             let target = self
                 .browser_context_by_id_mut(&browser_context_id)
                 .and_then(|browser_context| {
                     let handle = browser_context.web_contents_handle_for_target(target_id)?;
-                    browser_context.begin_web_contents_close(handle).ok()
+                    let closing = browser.close_web_contents(handle).ok()?;
+                    let mut target = browser_context.take_closed_web_contents_projection(handle)?;
+                    target.runtime_slot.retire_for_target_close();
+                    Some((target, closing))
                 });
             if let Some((target, closing)) = target {
                 page_session_ids.extend(

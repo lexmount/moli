@@ -52,27 +52,57 @@ impl CdpScheduler {
         &mut self,
         event: BrowserEventInput,
     ) -> ProtocolOutputSequence {
+        let mut closed = Vec::new();
         let disposed = match event {
             Ok(BrowserEventRecord {
-                event: BrowserEvent::ContextCreated(_),
+                event: BrowserEvent::ContextCreated(_) | BrowserEvent::WebContentsCreated(_),
                 ..
             }) => return ProtocolOutputSequence::empty(),
             Ok(BrowserEventRecord {
                 event: BrowserEvent::ContextDisposed(context),
                 ..
             }) => vec![context],
+            Ok(BrowserEventRecord {
+                event:
+                    BrowserEvent::WebContentsClosed {
+                        web_contents,
+                        activated,
+                    },
+                ..
+            }) => {
+                return ProtocolOutputSequence::from_background_events(
+                    self.conn
+                        .project_closed_web_contents(web_contents, activated)
+                        .await,
+                );
+            }
             Err(error) => {
                 let live = match error {
                     RecvError::Lagged(_) => self.conn.subscribe_browser_events().ok(),
                     RecvError::Closed => None,
                 };
-                let contexts = if let Some((snapshot, receiver)) = live {
-                    self.browser_event_rx = Some(receiver);
-                    snapshot.contexts
-                } else {
-                    self.browser_event_rx = None;
-                    Vec::new()
-                };
+                let contexts =
+                    if let Some((snapshot, receiver)) = live {
+                        self.browser_event_rx = Some(receiver);
+                        closed =
+                            self.conn
+                                .projected_web_contents()
+                                .into_iter()
+                                .filter(|handle| !snapshot.web_contents.contains(handle))
+                                .map(|handle| {
+                                    (
+                                        handle,
+                                        snapshot.selected_web_contents.iter().copied().find(
+                                            |selected| selected.context() == handle.context(),
+                                        ),
+                                    )
+                                })
+                                .collect();
+                        snapshot.contexts
+                    } else {
+                        self.browser_event_rx = None;
+                        Vec::new()
+                    };
                 self.conn
                     .browser_contexts()
                     .map(|context| context.browser_context_id())
@@ -86,6 +116,13 @@ impl CdpScheduler {
                 self.conn.project_disposed_browser_context(context).await,
             ));
         }
+        for (handle, activated) in closed {
+            output.append(ProtocolOutputSequence::from_background_events(
+                self.conn
+                    .project_closed_web_contents(handle, activated)
+                    .await,
+            ));
+        }
         output
     }
 }
@@ -95,6 +132,76 @@ mod tests {
     use super::*;
     use moli_core::browser::BrowserService;
     use moli_protocol::CdpInitialStoragePartition;
+
+    #[tokio::test]
+    async fn native_web_contents_close_and_lag_recovery_retire_only_exact_projections() {
+        for lagged in [false, true] {
+            let service = BrowserService::start().unwrap();
+            let browser = service.handle();
+            let (mut scheduler, mut receivers) =
+                CdpScheduler::new_with_initial_state_runtime_config(
+                    browser.clone(),
+                    CdpInitialStoragePartition::memory(),
+                    Default::default(),
+                );
+            let created = scheduler.execute_internal_protocol_message(&mut receivers, serde_json::json!({
+                "id": 1, "method": "Target.setDiscoverTargets", "params": {"discover": true},
+            })).await.unwrap_or_else(|failure| panic!("{:?}", failure.into_parts().1)).into_messages();
+            assert!(
+                created
+                    .iter()
+                    .any(|message| message["method"] == "Target.targetCreated")
+            );
+            let handle = scheduler.conn.projected_web_contents()[0];
+            // A live occurrence, or a forged stale record, cannot retire a live projection.
+            assert!(
+                scheduler
+                    .conn
+                    .project_closed_web_contents(handle, None)
+                    .await
+                    .is_empty()
+            );
+            browser
+                .close_web_contents(handle)
+                .unwrap()
+                .close_async()
+                .await;
+            let output = if lagged {
+                scheduler
+                    .handle_browser_event(Err(RecvError::Lagged(1)))
+                    .await
+            } else {
+                scheduler.drain_browser_events().await
+            }
+            .into_messages();
+            assert!(scheduler.conn.projected_web_contents().is_empty());
+            assert_eq!(scheduler.conn.browser_contexts().count(), 1);
+            assert!(browser.contains_context(handle.context()));
+            assert_eq!(
+                output
+                    .iter()
+                    .filter(|message| message["method"] == "Target.targetDestroyed"
+                        && message["params"]["targetId"] == scheduler.conn.default_target_id())
+                    .count(),
+                1
+            );
+            assert!(
+                scheduler
+                    .conn
+                    .project_closed_web_contents(handle, None)
+                    .await
+                    .is_empty()
+            );
+            assert!(
+                scheduler
+                    .drain_browser_events()
+                    .await
+                    .into_messages()
+                    .is_empty()
+            );
+            service.shutdown();
+        }
+    }
 
     #[tokio::test]
     async fn browser_shutdown_retires_all_context_sessions_before_closed_observation() {

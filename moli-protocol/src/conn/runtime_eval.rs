@@ -1890,61 +1890,14 @@ impl CdpConnection {
 
     /// Drain the removed projection directly. Resolving a session through the
     /// current Browser would either fail or select a different surviving page.
-    pub(crate) fn retire_browser_context_inspector_calls(
+    pub(crate) fn retire_browser_context_pending_calls(
         context: &mut crate::conn::BrowserContext,
         out: &mut Vec<BackgroundProtocolEvent>,
     ) {
         const REASON: &str = "Render process gone.";
         let mut claimed = Vec::new();
         for target in context.page_targets.iter_mut() {
-            let primary_owner =
-                CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
-                    browser_context_id: context.id.clone(),
-                    target_id: target.target_id().to_owned(),
-                    session_key: moli_page_types::DevToolsSessionKey::Primary,
-                });
-            let sessions = std::iter::once((
-                target.session_id().map(str::to_owned),
-                moli_page_types::DevToolsSessionKey::Primary,
-            ))
-            .chain(
-                target
-                    .devtools_sessions
-                    .attached_session_ids()
-                    .map(|session| {
-                        (
-                            Some(session.to_owned()),
-                            moli_page_types::DevToolsSessionKey::Attached(session.to_owned()),
-                        )
-                    }),
-            )
-            .collect::<Vec<_>>();
-            for (session_id, key) in sessions {
-                let state = target.devtools_sessions.ensure_session(&key);
-                for (id, entry) in state.drain_pending_inspector_awaits() {
-                    if entry.bidi_channel_listener().is_some() {
-                        continue;
-                    }
-                    let owner = entry
-                        .session_id()
-                        .map(CommandOwnerScope::for_session)
-                        .unwrap_or_else(|| primary_owner.clone());
-                    push_drained_pending_inspector_await_error(
-                        out,
-                        &mut claimed,
-                        id,
-                        &owner,
-                        &entry,
-                        REASON,
-                    );
-                }
-                push_terminated_renderer_call_error_background_events(
-                    out,
-                    state.terminate_all_renderer_calls(REASON),
-                    session_id.as_deref(),
-                    REASON,
-                );
-            }
+            Self::retire_page_pending_calls(&context.id, target, out, REASON);
         }
         for target in context.shared_worker_targets.values_mut().chain(
             context
@@ -1961,6 +1914,80 @@ impl CdpConnection {
         for target in context.service_worker_targets.values_mut() {
             Self::fail_pending_inspector_awaits_from_service_worker_target_state_background_events_into(
                 out, &mut claimed, target, REASON,
+            );
+        }
+        out.extend(claimed);
+    }
+
+    pub(crate) fn retire_page_pending_calls(
+        context_id: &str,
+        target: &mut crate::conn::PageAgentHost,
+        out: &mut Vec<BackgroundProtocolEvent>,
+        reason: &'static str,
+    ) {
+        // The Browser already canceled the physical interception. Consume the
+        // retained command metadata without resolving a current Page/permit.
+        let (requests, auth, responses, _, _, _) = target.fetch_owner.drain_pending_requests();
+        for navigation in requests
+            .into_iter()
+            .map(|pending| pending.navigation)
+            .chain(auth.into_iter().map(|pending| pending.navigation))
+            .chain(responses.into_iter().map(|pending| pending.navigation))
+        {
+            if let Some(id) = navigation.navigate_id {
+                out.extend(
+                    crate::domains::command_output::CommandOutputPlan::error(-32000, reason)
+                        .into_background_events(Some(id), navigation.owner.session_id()),
+                );
+            }
+        }
+        let primary_owner =
+            CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+                browser_context_id: context_id.to_owned(),
+                target_id: target.target_id().to_owned(),
+                session_key: moli_page_types::DevToolsSessionKey::Primary,
+            });
+        let sessions = std::iter::once((
+            target.session_id().map(str::to_owned),
+            moli_page_types::DevToolsSessionKey::Primary,
+        ))
+        .chain(
+            target
+                .devtools_sessions
+                .attached_session_ids()
+                .map(|session| {
+                    (
+                        Some(session.to_owned()),
+                        moli_page_types::DevToolsSessionKey::Attached(session.to_owned()),
+                    )
+                }),
+        )
+        .collect::<Vec<_>>();
+        let mut claimed = Vec::new();
+        for (session_id, key) in sessions {
+            let state = target.devtools_sessions.ensure_session(&key);
+            for (id, entry) in state.drain_pending_inspector_awaits() {
+                if entry.bidi_channel_listener().is_some() {
+                    continue;
+                }
+                let owner = entry
+                    .session_id()
+                    .map(CommandOwnerScope::for_session)
+                    .unwrap_or_else(|| primary_owner.clone());
+                push_drained_pending_inspector_await_error(
+                    out,
+                    &mut claimed,
+                    id,
+                    &owner,
+                    &entry,
+                    reason,
+                );
+            }
+            push_terminated_renderer_call_error_background_events(
+                out,
+                state.terminate_all_renderer_calls(reason),
+                session_id.as_deref(),
+                reason,
             );
         }
         out.extend(claimed);

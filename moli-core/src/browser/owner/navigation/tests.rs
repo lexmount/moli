@@ -37,7 +37,7 @@ fn start_load(
             contents,
             navigation,
             NavigationRequestLoadPolicy::BrowserInitiated,
-            context.inherited_document_policy(Default::default(), &[], None),
+            context.inherited_document_policy(Default::default(), &[], None, None),
         )
         .unwrap()
 }
@@ -91,7 +91,7 @@ async fn navigate(
             navigation,
             prepared,
             destination,
-            context.inherited_document_policy(Default::default(), &[], None),
+            context.inherited_document_policy(Default::default(), &[], None, None),
         )
         .unwrap()
         .materialize()
@@ -171,6 +171,52 @@ async fn browser_service_navigates_queries_replaces_and_closes_without_devtools(
     assert_eq!(context.loaded_document_count(), 0);
     assert!(context.is_live());
     assert!(context.remove().unwrap());
+    service.shutdown();
+    server.shutdown().await;
+}
+
+#[tokio::test]
+async fn native_web_contents_close_activates_loaded_peer_without_devtools() {
+    let server = FixtureServer::spawn().await.unwrap();
+    let service = BrowserService::start().unwrap();
+    let (context, first) = context_with_contents(&service);
+    navigate(&context, first, &server.url("/static")).await;
+    let (peer, _) = context.create_web_contents(Default::default()).unwrap();
+    let document = navigate(&context, peer, &server.url("/static")).await;
+    let (unloaded, _) = context.create_web_contents(Default::default()).unwrap();
+    assert!(context.select_web_contents(first.id()));
+    let background = context
+        .start_document_page_surface_update(
+            document,
+            false,
+            Some(crate::browser::EmulatedNetworkConditions::offline()),
+            None,
+        )
+        .unwrap()
+        .wait()
+        .await;
+    context.finish_document_policy_batch(background).unwrap();
+    let expression = "[document.hidden, document.hasFocus(), navigator.onLine].join(',')";
+    assert_eq!(
+        context
+            .evaluate_document_expression_for_test(document, expression, false)
+            .await
+            .unwrap()["value"],
+        "true,false,false"
+    );
+    let close = service.handle().close_web_contents(first).unwrap();
+    assert_eq!(close.activated, Some(peer));
+    close.close_async().await;
+    assert_eq!(context.selected_web_contents_handle(), Some(peer));
+    assert!(context.contains_web_contents(unloaded));
+    assert_eq!(
+        context
+            .evaluate_document_expression_for_test(document, expression, false)
+            .await
+            .unwrap()["value"],
+        "false,true,false",
+        "native close must activate the loaded peer without changing offline policy"
+    );
     service.shutdown();
     server.shutdown().await;
 }

@@ -371,6 +371,15 @@ async fn websocket_bidi_existing_classic_session_shares_classic_runtime_context(
 
 #[tokio::test]
 async fn classic_observes_native_context_disposal_with_and_without_bidi() {
+    classic_observes_native_retirement(false).await;
+}
+
+#[tokio::test]
+async fn classic_observes_native_web_contents_close_with_and_without_bidi() {
+    classic_observes_native_retirement(true).await;
+}
+
+async fn classic_observes_native_retirement(close_page: bool) {
     for attached in [false, true] {
         let (addr, server, browser) = super::browser_events::server_with_browser().await;
         let (_, mut events) = browser.subscribe().unwrap();
@@ -401,7 +410,24 @@ async fn classic_observes_native_context_disposal_with_and_without_bidi() {
         } else {
             None
         };
-        assert!(browser.remove_context(context).unwrap());
+        if close_page {
+            let handle = browser
+                .subscribe()
+                .unwrap()
+                .0
+                .web_contents
+                .into_iter()
+                .find(|handle| handle.context() == context)
+                .unwrap();
+            browser
+                .close_web_contents(handle)
+                .unwrap()
+                .close_async()
+                .await;
+            assert!(browser.contains_context(context));
+        } else {
+            assert!(browser.remove_context(context).unwrap());
+        }
         if let Some(socket) = bidi.as_mut() {
             recv_until_match(socket, |message| {
                 message["method"] == "browsingContext.contextDestroyed"

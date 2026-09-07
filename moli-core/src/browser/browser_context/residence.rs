@@ -72,6 +72,14 @@ impl BrowserContext {
         self.web_contents.len()
     }
 
+    pub(in crate::browser) fn web_contents_handles(
+        &self,
+    ) -> impl Iterator<Item = WebContentsHandle> + '_ {
+        self.web_contents
+            .keys()
+            .map(|id| WebContentsHandle::new(self.id, *id))
+    }
+
     pub fn selected_web_contents_handle(&self) -> Option<WebContentsHandle> {
         Some(WebContentsHandle::new(self.id, self.selected_web_contents?))
     }

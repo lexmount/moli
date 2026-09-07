@@ -387,7 +387,13 @@ impl BrowserContext {
             .shift_remove(&id)
             .expect("validated WebContents must remain resident until close");
         if self.selected_web_contents == Some(id) {
-            self.selected_web_contents = None;
+            self.selected_web_contents = self
+                .web_contents
+                .values()
+                .rev()
+                .find(|contents| contents.main_frame.current_document.is_some())
+                .or_else(|| self.web_contents.values().next_back())
+                .map(WebContents::id);
         }
         for contents in self.web_contents.values_mut() {
             if contents

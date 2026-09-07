@@ -318,11 +318,60 @@ impl BrowserHandle {
     pub fn subscribe(
         &self,
     ) -> Result<(super::BrowserSnapshot, super::BrowserEventReceiver), String> {
-        self.execute(|browser| browser.events.subscribe(browser.contexts.keys().copied()))
+        self.execute(|browser| {
+            browser.events.subscribe(
+                browser.contexts.keys().copied(),
+                browser
+                    .contexts
+                    .values()
+                    .flat_map(BrowserContext::web_contents_handles),
+                browser
+                    .contexts
+                    .values()
+                    .filter_map(BrowserContext::selected_web_contents_handle),
+            )
+        })
     }
 
     pub fn remove_context(&self, id: BrowserContextId) -> Result<bool, String> {
         self.execute(move |browser| browser.remove_context(id))
+    }
+
+    pub fn close_web_contents(
+        &self,
+        handle: WebContentsHandle,
+    ) -> Result<PendingWebContentsClose, String> {
+        self.execute(move |browser| {
+            let context = browser.context_mut(handle.context())?;
+            let was_selected = context.selected_web_contents_handle() == Some(handle);
+            let closing = context.close_web_contents(handle)?;
+            let activated = was_selected
+                .then(|| context.selected_web_contents_handle())
+                .flatten();
+            let surface = activated
+                .and_then(|selected| context.start_selected_document_visibility_update(selected));
+            browser.navigation_work.remove_web_contents(handle);
+            browser
+                .events
+                .publish(super::BrowserEvent::WebContentsClosed {
+                    web_contents: handle,
+                    activated,
+                });
+            let (completion_tx, completion) = oneshot::channel();
+            tokio::task::spawn_local(async move {
+                closing.close_async().await;
+                if let Some(surface) = surface
+                    && let Err(error) = surface.wait().await
+                {
+                    tracing::warn!(%error, "surviving WebContents surface update did not complete");
+                }
+                let _ = completion_tx.send(());
+            });
+            Ok(PendingWebContentsClose {
+                completion,
+                activated,
+            })
+        })?
     }
 
     pub fn set_permission_default(
@@ -383,6 +432,8 @@ pub struct BrowserContextHandle {
 /// Completion of a Browser-owned WebContents teardown.
 pub struct PendingWebContentsClose {
     completion: oneshot::Receiver<()>,
+    /// Native successor when closing the selected page; background closes do not activate.
+    pub activated: Option<WebContentsHandle>,
 }
 
 impl PendingWebContentsClose {
@@ -510,7 +561,16 @@ impl BrowserContextHandle {
         &self,
         creation: WebContentsCreation,
     ) -> Result<(WebContentsHandle, MainFrameSlotId), String> {
-        self.update(move |context| context.register_web_contents(creation.build()))?
+        let id = self.id;
+        self.browser.execute(move |browser| {
+            let created = browser
+                .context_mut(id)?
+                .register_web_contents(creation.build())?;
+            browser
+                .events
+                .publish(super::BrowserEvent::WebContentsCreated(created.0));
+            Ok(created)
+        })?
     }
 
     pub fn web_contents_window_name(
@@ -528,25 +588,30 @@ impl BrowserContextHandle {
         &self,
         handle: WebContentsHandle,
     ) -> Result<PendingWebContentsClose, String> {
-        let context = self.id;
-        self.browser.execute(move |browser| {
-            let closing = browser.context_mut(context)?.close_web_contents(handle)?;
-            browser.navigation_work.remove_web_contents(handle);
-            let (completion_tx, completion) = oneshot::channel();
-            tokio::task::spawn_local(async move {
-                closing.close_async().await;
-                let _ = completion_tx.send(());
-            });
-            Ok(PendingWebContentsClose { completion })
-        })?
+        if handle.context() != self.id {
+            return Err("WebContents belongs to another BrowserContext".into());
+        }
+        self.browser.close_web_contents(handle)
     }
 
     pub fn close_all_web_contents(&self) -> Vec<PendingWebContentsClose> {
         let context = self.id;
         self.browser
             .execute(move |browser| {
+                let handles = browser
+                    .context_mut(context)?
+                    .web_contents_handles()
+                    .collect::<Vec<_>>();
                 let closing = browser.context_mut(context)?.close_all_web_contents();
                 browser.navigation_work.remove_context(context);
+                for web_contents in handles {
+                    browser
+                        .events
+                        .publish(super::BrowserEvent::WebContentsClosed {
+                            web_contents,
+                            activated: None,
+                        });
+                }
                 Ok::<_, String>(
                     closing
                         .into_iter()
@@ -556,7 +621,10 @@ impl BrowserContextHandle {
                                 closing.close_async().await;
                                 let _ = completion_tx.send(());
                             });
-                            PendingWebContentsClose { completion }
+                            PendingWebContentsClose {
+                                completion,
+                                activated: None,
+                            }
                         })
                         .collect(),
                 )
