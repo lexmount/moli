@@ -52,8 +52,19 @@ fn event_subclass_constructor_callback<'s>(
         None
     };
     let security_policy_init = if kind == EventSubclassKind::SecurityPolicyViolationEvent {
-        let Some(init) = security_policy::parse_security_policy_violation_event_init(scope, &args)
-        else {
+        let Some(init) = security_policy::parse_security_policy_violation_event_init(scope, &args) else { return; };
+        Some(init)
+    } else { None };
+    let clipboard_event_init = if kind == EventSubclassKind::ClipboardEvent {
+        let Some(init) = data::parse_clipboard_event_init(scope, &args) else {
+            return;
+        };
+        Some(init)
+    } else {
+        None
+    };
+    let clipboard_change_event_init = if kind == EventSubclassKind::ClipboardChangeEvent {
+        let Some(init) = data::parse_clipboard_change_event_init(scope, &args) else {
             return;
         };
         Some(init)
@@ -89,6 +100,16 @@ fn event_subclass_constructor_callback<'s>(
             message_event_init
                 .as_ref()
                 .map(message::MessageEventInit::event_flags)
+        })
+        .or_else(|| {
+            clipboard_event_init
+                .as_ref()
+                .map(data::ClipboardEventInitMembers::event_flags)
+        })
+        .or_else(|| {
+            clipboard_change_event_init
+                .as_ref()
+                .map(data::ClipboardChangeEventInitMembers::event_flags)
         })
         .unwrap_or_else(|| read_event_init(scope, &args));
 
@@ -133,7 +154,20 @@ fn event_subclass_constructor_callback<'s>(
             }
         }
         EventSubclassKind::ClipboardEvent => {
-            data::initialize_clipboard_event(scope, event, init);
+            data::initialize_clipboard_event(
+                scope,
+                event,
+                clipboard_event_init.expect("ClipboardEvent init should be parsed"),
+            );
+        }
+        EventSubclassKind::ClipboardChangeEvent => {
+            if !data::initialize_clipboard_change_event(
+                scope,
+                event,
+                clipboard_change_event_init.expect("ClipboardChangeEvent init should be parsed"),
+            ) {
+                return;
+            }
         }
         EventSubclassKind::CapturedMouseEvent => {
             if !data::initialize_captured_mouse_event(scope, event, init) {
