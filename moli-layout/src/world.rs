@@ -6,8 +6,10 @@ use taffy::{Cache, Layout, Point, Style};
 use crate::{
     LayoutCssImageReference, LayoutElementSemantics, LayoutError, LayoutPoint, LayoutPseudo,
     LayoutResolvedGridTracks, LayoutScrollbarAxis, LayoutScrollbarColors, LayoutScrollbarGutter,
-    LayoutScrollbarWidth, ResolvedLayoutStyle, inline::InlineFormattingContext,
-    replaced::ReplacedContext, style::LayoutOverflowMode,
+    LayoutScrollbarWidth, ResolvedLayoutStyle,
+    inline::InlineFormattingContext,
+    replaced::ReplacedContext,
+    style::{InlineDirection, LayoutOverflowMode},
 };
 
 /// Dense identifier scoped to exactly one [`LayoutWorld`].
@@ -190,7 +192,9 @@ pub enum LayoutCapabilityDiagnostic {
 pub(crate) struct InlineStaticPosition {
     pub(crate) owner: LayoutBoxId,
     pub(crate) point: Point<f32>,
-    pub(crate) inline_level: bool,
+    /// Direction of the formatting context that produced the static point,
+    /// which need not be the direction of the actual containing block.
+    pub(crate) direction: InlineDirection,
 }
 
 impl LayoutCapabilityDiagnostic {

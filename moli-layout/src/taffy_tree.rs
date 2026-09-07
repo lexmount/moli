@@ -18,8 +18,9 @@ use crate::{
     LayoutWorld, PaintRect, PaintViewport,
     inline::{
         InlineContentWidthsMemo, InlineFormattingContext, InlineFragments, InlineLinePlacement,
-        InlineObjectRole, break_inline_lines, build_inline_fragments, build_inline_line_placements,
-        measure_inline_lines, relative_atomic_inset_offset, reset_inline_layout_for_probe,
+        InlineObjectRole, OutOfFlowDisplay, break_inline_lines, build_inline_fragments,
+        build_inline_line_placements, measure_inline_lines, relative_atomic_inset_offset,
+        reset_inline_layout_for_probe,
     },
     positioned::resolve_absolute_axis_margins,
     replaced::measure_replaced,
@@ -961,7 +962,7 @@ where
                 child,
                 area,
                 static_in_area,
-                static_position.inline_level,
+                static_position.direction,
                 numeric_parent_origin,
             );
         } else {
@@ -970,7 +971,7 @@ where
                 child,
                 area,
                 static_in_area,
-                area.direction == taffy::Direction::Rtl && static_position.inline_level,
+                static_position.direction == InlineDirection::Rtl,
                 numeric_parent_origin,
             );
         }
@@ -1120,7 +1121,7 @@ fn layout_inline_absolute_child<N>(
     child: LayoutBoxId,
     area: PositionedContainingArea,
     static_position: Point<f32>,
-    inline_level: bool,
+    static_direction: InlineDirection,
     numeric_parent_origin: Point<f32>,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -1224,9 +1225,7 @@ fn layout_inline_absolute_child<N>(
         let available_width = match (left, right) {
             (Some(left), None) => area_width - left,
             (None, Some(right)) => area_width - right,
-            (None, None) if area.direction == taffy::Direction::Rtl && inline_level => {
-                static_position.x
-            }
+            (None, None) if static_direction == InlineDirection::Rtl => static_position.x,
             (None, None) => area_width - static_position.x,
             (Some(_), Some(_)) => unreachable!("both insets already resolve auto width"),
         } - non_auto_margin_width;
@@ -1333,7 +1332,7 @@ fn layout_inline_absolute_child<N>(
         }
         (Some(left), None) => left + resolved_margin.left,
         (None, Some(right)) => area_width - final_size.width - right - resolved_margin.right,
-        (None, None) if area.direction == taffy::Direction::Rtl && inline_level => {
+        (None, None) if static_direction == InlineDirection::Rtl => {
             static_position.x - final_size.width - resolved_margin.right
         }
         (None, None) => static_position.x + resolved_margin.left,
@@ -2129,7 +2128,7 @@ where
                         margins,
                     });
                 }
-                InlineObjectRole::OutOfFlow => {
+                InlineObjectRole::OutOfFlow(_) => {
                     inline_box.width = 0.0;
                     inline_box.height = 0.0;
                 }
@@ -2582,20 +2581,24 @@ where
                 let vertical_offset = line_placement
                     .map(|placement| placement.item_offset(item_index))
                     .unwrap_or_default();
-                if object.role == InlineObjectRole::OutOfFlow {
-                    let inline_level = self.boxes[object.box_id.index()]
-                        .style
-                        .hypothetical_display_is_inline_level();
+                if let InlineObjectRole::OutOfFlow(display) = object.role {
+                    let inline_offset = match display {
+                        OutOfFlowDisplay::Inline => positioned.x,
+                        OutOfFlowDisplay::Block => match container_direction {
+                            InlineDirection::Ltr => 0.0,
+                            InlineDirection::Rtl => containing_block_size.width,
+                        },
+                    };
                     self.boxes[object.box_id.index()].inline_static_position =
                         Some(InlineStaticPosition {
                             owner: self.boxes[object.box_id.index()]
                                 .inline_context_owner
                                 .unwrap_or_else(|| panic!("out-of-flow IFC object lost its owner")),
                             point: Point {
-                                x: content_offset.x + if inline_level { positioned.x } else { 0.0 },
+                                x: content_offset.x + inline_offset,
                                 y: content_offset.y + positioned.y + vertical_offset,
                             },
-                            inline_level,
+                            direction: container_direction,
                         });
                     continue;
                 }

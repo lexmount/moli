@@ -1,0 +1,44 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Out-of-flow static positions belong to CSS line boxes</title>
+<style>
+html, body { margin: 0; padding: 0; }
+html { overflow: hidden; }
+.slot { display: flow-root; position: relative; width: 200px; height: 120px; font-size: 0; line-height: 30px; }
+.atom { display: inline-block; width: 30px; height: 10px; }
+.item { display: inline; position: absolute; width: 20px; height: 10px; background: green; }
+.block { display: block; }
+.rtl { direction: rtl; }
+</style>
+<!-- Zero-size text and fixed-size in-flow boxes isolate static positioning
+     from installed fonts. Rectangles are relative to the .slot border box. -->
+<div class="slot" id="inline-before" data-expected="0,0,20,10"><span class="item"></span><span class="atom"></span></div>
+<div class="slot" id="inline-after" data-expected="30,0,20,10"><span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="inline-next-line" data-expected="30,30,20,10"><span class="atom"></span><br><span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="inline-raised-ancestor" data-expected="30,0,20,10"><span class="atom"></span><span style="vertical-align:40px"><span class="item"></span></span></div>
+<div class="slot" id="inline-tall-line" data-expected="30,0,20,10"><span class="atom" style="height:50px"></span><span class="item"></span></div>
+<div class="slot" id="inline-margins" data-expected="41,3,20,10"><span class="atom"></span><span class="item" style="margin:3px 7px 9px 11px"></span></div>
+<div class="slot" id="inline-empty" data-expected="0,0,20,10"><span class="item"></span></div>
+<div class="slot" id="block-before" data-expected="0,0,20,10"><span class="item block"></span><span class="atom"></span></div>
+<div class="slot" id="block-after" data-expected="0,30,20,10"><span class="atom"></span><span class="item block"></span></div>
+<div class="slot" id="block-next-line" data-expected="0,30,20,10"><span class="atom"></span><br><span class="item block"></span><span class="atom"></span></div>
+<div class="slot" id="block-tall-line" data-expected="0,65,20,10"><span class="atom" style="height:50px"></span><span class="item block"></span></div>
+<div class="slot" id="block-empty" data-expected="0,0,20,10"><span class="item block"></span></div>
+<!-- Real RTL text supplies the paragraph direction; its zero font size keeps
+     these positioning assertions independent of the selected glyph font.
+     Paragraph direction and bidi levels of leading inline objects are a
+     separate Parley input limitation, not part of line-box block placement. -->
+<div class="slot rtl" id="rtl-inline-before-atomic" data-expected="180,0,20,10">א<span class="item"></span><span class="atom"></span></div>
+<div class="slot rtl" id="rtl-inline-after-atomic" data-expected="150,0,20,10">א<span class="atom"></span><span class="item"></span></div>
+<div class="slot rtl" id="rtl-block-before-content" data-expected="180,0,20,10"><span class="item block"></span><span class="atom"></span></div>
+<div class="slot rtl" id="rtl-block-after-content" data-expected="180,30,20,10">א<span class="atom"></span><span class="item block"></span></div>
+<div class="slot" id="padded-line" data-expected="43,9,20,10" style="padding:7px 11px;border:2px solid"><span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="indented-line" data-expected="55,0,20,10" style="text-indent:25px"><span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="indented-block" data-expected="0,30,20,10" style="text-indent:25px"><span class="atom"></span><span class="item block"></span></div>
+<div class="slot" id="different-containing-block" data-expected="41,7,20,10"><div style="margin:7px 11px"><span class="atom"></span><span class="item"></span></div></div>
+<div class="slot" id="definite-top" data-expected="30,17,20,10"><span class="atom"></span><span class="item" style="top:17px"></span></div>
+<div class="slot" id="inline-after-float" data-expected="50,0,20,10"><span style="float:left;width:20px;height:10px"></span><span class="atom"></span><span class="item"></span></div>
+<div class="slot" id="block-after-float" data-expected="0,30,20,10"><span style="float:left;width:20px;height:10px"></span><span class="atom"></span><span class="item block"></span></div>
+<div class="slot" id="block-after-only-out-of-flow" data-expected="0,0,20,10"><span style="position:absolute"></span><span class="item block"></span><span class="atom"></span></div>
+<div class="slot" id="rtl-ifc-ltr-containing-block" data-expected="139,7,20,10"><div style="direction:rtl;margin:7px 11px">א<span class="atom"></span><span class="item"></span></div></div>
+<div class="slot rtl" id="ltr-ifc-rtl-containing-block" data-expected="41,7,20,10"><div style="direction:ltr;margin:7px 11px"><span class="atom"></span><span class="item"></span></div></div>
