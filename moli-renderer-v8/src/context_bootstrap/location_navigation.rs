@@ -57,6 +57,7 @@ struct LocationNavigationOptions<'s> {
     user_initiated: bool,
     dispatch_child_navigate_event_for_all_kinds: bool,
     force_exact_same_document_navigation: bool,
+    explicit_initiator_url: Option<url::Url>,
 }
 
 pub(crate) fn resolve_cross_window_location_target(
@@ -315,6 +316,7 @@ pub(crate) fn navigate_child_meta_refresh<'s>(
     location: v8::Local<'s, v8::Object>,
     target: &url::Url,
     delay_ms: u32,
+    initiator_url: url::Url,
 ) {
     let Some(current_href) = location_href_slot(scope, location) else {
         return;
@@ -333,6 +335,7 @@ pub(crate) fn navigate_child_meta_refresh<'s>(
         LocationNavigationOptions {
             dispatch_child_navigate_event_for_all_kinds: true,
             force_exact_same_document_navigation: same_document_fragment,
+            explicit_initiator_url: Some(initiator_url),
             ..Default::default()
         },
     );
@@ -388,6 +391,7 @@ fn navigate_location_object_with_options<'s>(
         user_initiated,
         dispatch_child_navigate_event_for_all_kinds,
         force_exact_same_document_navigation,
+        explicit_initiator_url,
     } = options;
     let owner = runtime_window_owner(scope, location);
     if let Some(context) = location.get_creation_context(scope)
@@ -736,7 +740,8 @@ fn navigate_location_object_with_options<'s>(
         }
         if let Some(host_ptr) = host_ptr {
             let host = unsafe { &mut *host_ptr };
-            let initiator_url = location_navigation_initiator_url(scope, host);
+            let initiator_url =
+                explicit_initiator_url.or_else(|| location_navigation_initiator_url(scope, host));
             if matches!(kind, LocationNavigationKind::Reload) {
                 host.queue_child_browsing_context_reload_from_existing_seed(
                     scope,
