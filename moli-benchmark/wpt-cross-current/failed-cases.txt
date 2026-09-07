@@ -2763,8 +2763,6 @@ html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard
 html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard_iframe_history_4.html
 html/browsers/the-window-object/open-close/close_script_defer.html
 html/browsers/the-window-object/open-close/script-closable.html
-html/browsers/the-window-object/window-indexed-properties-strict.html
-html/browsers/the-window-object/window-indexed-properties.html
 html/browsers/windows/document-domain-removed-iframe.html
 html/cross-origin-embedder-policy/coep-on-response-from-service-worker.https.html
 html/cross-origin-embedder-policy/service-worker-cache-storage.https.html
