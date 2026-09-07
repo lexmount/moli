@@ -5160,6 +5160,7 @@ fetch/api/abort/destroyed-context.html
 fetch/api/cors/data-url-iframe.html
 fetch/api/cors/data-url-shared-worker.html
 fetch/api/cors/data-url-worker.html
+fetch/api/cors/sandboxed-iframe.html
 fetch/api/policies/csp-blocked-worker.html
 fetch/api/policies/referrer-no-referrer-worker.html
 fetch/api/policies/referrer-origin-when-cross-origin-worker.html

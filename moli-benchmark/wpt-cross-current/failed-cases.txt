@@ -2675,7 +2675,6 @@ editing/run/underline.html?2001-last
 editing/run/undo-redo-after-mutation.html
 editing/run/unlink.html
 encrypted-media/missing-sinf.html
-fetch/api/cors/sandboxed-iframe.html
 focus/activeelement-after-focusing-different-site-iframe-contentwindow.html
 focus/activeelement-after-focusing-different-site-iframe.html
 focus/activeelement-after-focusing-same-site-iframe.html
