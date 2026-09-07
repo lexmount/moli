@@ -319,27 +319,19 @@ fn append_file_form_data_entries<'s>(
     control: v8::Local<'s, v8::Object>,
     name: &str,
 ) {
-    let Some(files) = object_property_as_object(scope, control, "files") else {
+    let Some(files) = crate::native_bridge::element::input_files_for_object(scope, control)
+        .and_then(|files| file_api::file_list_files_from_object(scope, files))
+    else {
         push_empty_file_form_data_entry(scope, entries, name);
         return;
     };
-    let length = object_number_property(scope, files, "length")
-        .unwrap_or(0.0)
-        .max(0.0) as u32;
-    if length == 0 {
+    if files.is_empty() {
         push_empty_file_form_data_entry(scope, entries, name);
         return;
     }
-    for index in 0..length {
-        let Some(file) = files.get_index(scope, index) else {
-            continue;
-        };
-        if v8::Local::<v8::Object>::try_from(file)
-            .ok()
-            .is_some_and(|file| blob::blob_bytes_from_object(scope, file).is_some())
-        {
-            push_form_data_entry(entries, name, v8::Global::new(scope, file));
-        }
+    for file in files {
+        let file: v8::Local<'_, v8::Value> = file.into();
+        push_form_data_entry(entries, name, v8::Global::new(scope, file));
     }
 }
 

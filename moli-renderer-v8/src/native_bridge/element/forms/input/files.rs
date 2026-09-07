@@ -1,7 +1,6 @@
 use crate::dom::native::SelectedFile;
-use crate::util::{
-    get_private_value, global_constructor_prototype, set_private_value, v8_string, v8str,
-};
+use crate::native_bridge::element::{html_element_getter_receiver, html_element_setter_receiver};
+use crate::util::{get_private_value, set_private_value, v8_string};
 use std::fmt::Write as _;
 
 use super::super::*;
@@ -36,6 +35,8 @@ pub(crate) fn cache_input_files_from_selected_files<'s>(
     input: v8::Local<'s, v8::Object>,
     selected_files: &[SelectedFile],
 ) -> Option<v8::Local<'s, v8::Object>> {
+    let context = input.get_creation_context(scope)?;
+    let scope = &mut v8::ContextScope::new(scope, context);
     let signature = v8_string(scope, &selected_files_cache_signature(selected_files))?;
     let mut files = Vec::with_capacity(selected_files.len());
     for file in selected_files {
@@ -58,46 +59,43 @@ pub(in crate::native_bridge) fn input_files_getter_function<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    input_files_getter_from_object(scope, args.this(), &mut rv);
+    if html_element_getter_receiver(scope, args.this(), "HTMLInputElement", "files", "input")
+        .is_none()
+    {
+        return;
+    }
+    if let Some(files) = input_files_for_object(scope, args.this()) {
+        rv.set(files.into());
+    } else {
+        rv.set_null();
+    }
 }
 
-fn input_files_getter_from_object<'s>(
+pub(crate) fn input_files_for_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
-    rv: &mut v8::ReturnValue<'_, v8::Value>,
-) {
-    let Ok((runtime_ptr, handle)) = node_runtime_and_handle_from_object_or_detached(scope, object)
-    else {
-        rv.set_null();
-        return;
-    };
+) -> Option<v8::Local<'s, v8::Object>> {
+    let (runtime_ptr, handle) =
+        node_runtime_and_handle_from_object_or_detached(scope, object).ok()?;
     let runtime = unsafe { &*runtime_ptr };
-    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
-        rv.set_null();
-        return;
-    };
+    let element = runtime.dom_host().node(handle).and_then(Node::as_element)?;
     if !element.is_html_input() || element.input_type() != InputType::File {
-        rv.set_null();
-        return;
+        return None;
     }
     let selected_files = element.selected_files().to_vec();
     let current_signature = selected_files_cache_signature(&selected_files);
-    if let Some(cached) = get_private_value(scope, object, INPUT_FILES_CACHE_SLOT) {
+    if let Some(cached) = get_private_value(scope, object, INPUT_FILES_CACHE_SLOT)
+        .and_then(|value| v8::Local::<v8::Object>::try_from(value).ok())
+    {
         let cache_matches = get_private_value(scope, object, INPUT_FILES_CACHE_SIGNATURE_SLOT)
             .and_then(|value| value.to_string(scope))
             .is_some_and(|value| value.to_rust_string_lossy(scope) == current_signature);
         if cache_matches {
-            rv.set(cached);
-            return;
+            return Some(cached);
         }
     }
 
-    let Some(file_list) = cache_input_files_from_selected_files(scope, object, &selected_files)
-    else {
-        rv.set_null();
-        return;
-    };
-    rv.set(file_list.into());
+    cache_input_files_from_selected_files(scope, object, &selected_files)
 }
 
 pub(in crate::native_bridge) fn input_files_setter_function<'s>(
@@ -114,18 +112,11 @@ fn input_files_setter_on_object<'s>(
     object_owner: v8::Local<'s, v8::Object>,
     value: v8::Local<'s, v8::Value>,
 ) {
-    let Ok((runtime_ptr, handle)) =
-        node_runtime_and_handle_from_object_or_detached(scope, object_owner)
+    let Some((runtime_ptr, handle)) =
+        html_element_setter_receiver(scope, object_owner, "HTMLInputElement", "files", "input")
     else {
         return;
     };
-    let runtime = unsafe { &*runtime_ptr };
-    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
-        return;
-    };
-    if !element.is_html_input() || element.input_type() != InputType::File {
-        return;
-    }
     if value.is_null_or_undefined() {
         return;
     }
@@ -136,32 +127,29 @@ fn input_files_setter_on_object<'s>(
         );
         return;
     };
-    if !object_has_file_list_prototype(scope, object) {
+    // Web IDL checks the interface identity, independent of the object's realm
+    // or mutable prototype. This conversion also precedes input-type checks.
+    if !crate::context_bootstrap::is_file_list_object(scope, object) {
         throw_type_error(
             scope,
             "Failed to set the 'files' property on 'HTMLInputElement': The provided value is not of type 'FileList'.",
         );
         return;
     }
-    let length = object
-        .get(scope, v8str(scope, "length").into())
-        .and_then(|value| value.number_value(scope))
-        .filter(|value| value.is_finite() && *value >= 0.0)
-        .map(|value| value as u32)
-        .unwrap_or(0);
+    let runtime = unsafe { &*runtime_ptr };
+    let Some(element) = runtime.dom_host().node(handle).and_then(Node::as_element) else {
+        return;
+    };
+    if element.input_type() != InputType::File {
+        return;
+    }
+    let Some(file_objects) = crate::context_bootstrap::file_list_files_from_object(scope, object)
+    else {
+        return;
+    };
 
-    let mut files = Vec::with_capacity(length as usize);
-    for index in 0..length {
-        let Some(value) = object.get_index(scope, index) else {
-            continue;
-        };
-        let Ok(file_object) = v8::Local::<v8::Object>::try_from(value) else {
-            throw_type_error(
-                scope,
-                "Failed to set the 'files' property on 'HTMLInputElement': FileList entries must be File objects.",
-            );
-            return;
-        };
+    let mut files = Vec::with_capacity(file_objects.len());
+    for file_object in file_objects {
         let Some(file) = crate::context_bootstrap::selected_file_from_object(scope, file_object)
         else {
             throw_type_error(
@@ -184,15 +172,4 @@ fn input_files_setter_on_object<'s>(
             signature.into(),
         );
     }
-}
-
-fn object_has_file_list_prototype(
-    scope: &mut v8::PinScope<'_, '_>,
-    object: v8::Local<'_, v8::Object>,
-) -> bool {
-    global_constructor_prototype(scope, "FileList").is_some_and(|prototype| {
-        object
-            .get_prototype(scope)
-            .is_some_and(|candidate| candidate.strict_equals(prototype.into()))
-    })
 }
