@@ -830,11 +830,7 @@ async fn devtools_set_cache_behavior_global_updates_existing_targets_and_default
             .expect("background target should retain its network policy")
             .cache_disabled()
     );
-    assert!(
-        ctx.conn
-            .new_browser_context("BID-future".to_owned())
-            .global_cache_disabled
-    );
+    assert!(ctx.conn.browser_global_overrides.cache_disabled);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -884,11 +880,7 @@ async fn devtools_set_cache_behavior_contexts_only_updates_requested_targets() {
             .expect("background target should retain its network policy")
             .cache_disabled()
     );
-    assert!(
-        !ctx.conn
-            .new_browser_context("BID-future".to_owned())
-            .global_cache_disabled
-    );
+    assert!(!ctx.conn.browser_global_overrides.cache_disabled);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -927,7 +919,7 @@ async fn devtools_set_cache_behavior_rejects_unknown_context() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn devtools_set_cache_behavior_without_contexts_sets_future_default() {
+async fn devtools_set_cache_behavior_without_contexts_applies_to_future_target() {
     let mut ctx = TestContext::new();
 
     ctx.conn
@@ -950,10 +942,13 @@ async fn devtools_set_cache_behavior_without_contexts_sets_future_default() {
         .0
         .expect("global cache behavior should be accepted before contexts exist");
 
+    assert!(ctx.conn.browser_global_overrides.cache_disabled);
+    ctx.conn.install_default_browser_target();
+    let context = ctx.conn.browser_context.as_ref().expect("future context");
     assert!(
-        ctx.conn
-            .new_browser_context("BID-future".to_owned())
-            .global_cache_disabled
+        context
+            .effective_policy_for_target(context.active_target_id().expect("future target"))
+            .cache_disabled()
     );
 }
 #[tokio::test(flavor = "multi_thread")]

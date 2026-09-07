@@ -50,10 +50,11 @@ impl CdpConnection {
             self.ensure_page_navigation_engine_for_target(context_id, target_id)
                 .ok_or("navigation WebContents engine unavailable")?;
             let defaults = self.document_fetch_defaults();
+            let browser_globals = self.browser_global_overrides.clone();
             return self
                 .browser_context_by_id_mut(context_id)
                 .ok_or("BrowserContext unavailable")?
-                .resource_request_client_for_test(target_id, defaults);
+                .resource_request_client_for_test(target_id, defaults, &browser_globals);
         }
         let storage = inputs.resource_storage_handles();
         let engine = self
@@ -78,9 +79,10 @@ impl CdpConnection {
         self.ensure_page_navigation_engine_for_target(&context_id, &target_id)
             .ok_or("navigation WebContents engine unavailable")?;
         let defaults = self.document_fetch_defaults();
+        let browser_globals = self.browser_global_overrides.clone();
         self.browser_context_by_id_mut(&context_id)
             .ok_or("BrowserContext unavailable")?
-            .resource_request_client_for_test(&target_id, defaults)
+            .resource_request_client_for_test(&target_id, defaults, &browser_globals)
     }
 
     #[cfg(test)]
@@ -220,8 +222,9 @@ impl CdpConnection {
                 .ok_or("navigation WebContents engine unavailable")?;
         }
         let defaults = self.document_fetch_defaults();
+        let browser_globals = self.browser_global_overrides.clone();
         self.browser_context_by_browser_id_mut(web_contents.context())
             .ok_or("BrowserContext unavailable")?
-            .start_web_contents_resource_runtime_rebuild(web_contents, defaults)
+            .start_web_contents_resource_runtime_rebuild(web_contents, defaults, &browser_globals)
     }
 }

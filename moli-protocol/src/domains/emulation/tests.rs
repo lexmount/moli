@@ -183,7 +183,7 @@ async fn bidi_set_extra_headers_merges_global_user_context_and_context_layers() 
     .await;
     let future_context = ctx.conn.new_browser_context("BID-future".to_owned());
     assert_eq!(
-        future_context.effective_extra_headers(),
+        future_context.effective_extra_headers(&ctx.conn.browser_global_overrides.extra_headers),
         vec![
             ("some_header_name".to_owned(), "global".to_owned()),
             ("global_header".to_owned(), "1".to_owned())
@@ -210,7 +210,7 @@ async fn bidi_set_extra_headers_merges_global_user_context_and_context_layers() 
         .browser_context
         .as_ref()
         .expect("active browser context")
-        .effective_extra_headers();
+        .effective_extra_headers(&ctx.conn.browser_global_overrides.extra_headers);
     assert_eq!(
         headers,
         vec![
@@ -227,7 +227,7 @@ async fn bidi_set_extra_headers_merges_global_user_context_and_context_layers() 
         .browser_context
         .as_ref()
         .expect("active browser context")
-        .effective_extra_headers();
+        .effective_extra_headers(&ctx.conn.browser_global_overrides.extra_headers);
     assert_eq!(
         headers,
         vec![

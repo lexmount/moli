@@ -36,6 +36,7 @@ impl BrowserContext {
         request: crate::conn::state::ClaimedNavigationRequest,
         fetch_defaults: moli_fetch::FetchConfig,
         permissions: &moli_core::browser::PermissionDefaults,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Result<
         (
             String,
@@ -53,8 +54,8 @@ impl BrowserContext {
         let inherited = self.physical.inherited_document_policy(
             fetch_defaults,
             permissions,
-            &self.global_extra_headers,
-            self.global_network_conditions,
+            &browser_globals.extra_headers,
+            browser_globals.network_conditions,
         );
         let load = self
             .physical
@@ -72,6 +73,7 @@ impl BrowserContext {
         policy: moli_core::browser::NavigationRequestLoadPolicy,
         fetch_defaults: moli_fetch::FetchConfig,
         permissions: &moli_core::browser::PermissionDefaults,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Result<(String, crate::conn::state::AdmittedNavigationLoad), String> {
         let web_contents = permit.web_contents();
         let target_id = self
@@ -83,8 +85,8 @@ impl BrowserContext {
         let inherited = self.physical.inherited_document_policy(
             fetch_defaults,
             permissions,
-            &self.global_extra_headers,
-            self.global_network_conditions,
+            &browser_globals.extra_headers,
+            browser_globals.network_conditions,
         );
         let load = self
             .physical

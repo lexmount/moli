@@ -21,7 +21,12 @@ fn context() -> BrowserContext {
 
 fn build(context: &mut BrowserContext) -> AdmittedInitialDocumentBuild {
     let InitialDocumentAdmission::Build(build) = context
-        .start_initial_document_for_target(TARGET, Default::default(), &Default::default())
+        .start_initial_document_for_target(
+            TARGET,
+            Default::default(),
+            &Default::default(),
+            &Default::default(),
+        )
         .unwrap()
     else {
         panic!("expected new native build");
@@ -31,7 +36,12 @@ fn build(context: &mut BrowserContext) -> AdmittedInitialDocumentBuild {
 
 fn join(context: &mut BrowserContext) -> InitialDocumentPageBuildWaiter {
     let InitialDocumentAdmission::Join(waiter) = context
-        .start_initial_document_for_target(TARGET, Default::default(), &Default::default())
+        .start_initial_document_for_target(
+            TARGET,
+            Default::default(),
+            &Default::default(),
+            &Default::default(),
+        )
         .unwrap()
     else {
         panic!("expected join");
@@ -234,7 +244,12 @@ async fn initial_preload_observes_native_admission_policy_before_materialization
     };
     context.set_permission_override(&mut defaults, permission("granted"));
     let InitialDocumentAdmission::Build(mut work) = context
-        .start_initial_document_for_target(TARGET, Default::default(), &defaults)
+        .start_initial_document_for_target(
+            TARGET,
+            Default::default(),
+            &defaults,
+            &Default::default(),
+        )
         .unwrap()
     else {
         panic!("expected build");

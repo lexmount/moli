@@ -1169,6 +1169,16 @@ impl StandaloneNavigationEngineSlot {
     }
 }
 
+/// The single Browser-wide source for defaults inherited by every Context.
+/// Clones are short-lived operation snapshots and never Context residents.
+#[derive(Clone, Default)]
+pub(crate) struct BrowserGlobalOverrides {
+    pub(crate) extra_headers: Vec<(String, String)>,
+    pub(crate) network_conditions: Option<EmulatedNetworkConditions>,
+    pub(crate) geolocation: Option<EmulatedGeolocationOverrideState>,
+    pub(crate) cache_disabled: bool,
+}
+
 /// Persistent per-connection state.
 pub struct CdpConnection {
     // Browser/session routing state.
@@ -1212,11 +1222,8 @@ pub struct CdpConnection {
     permission_defaults: moli_core::browser::PermissionDefaults,
     next_global_io_stream_id: u64,
     base_browser_identity: moli_browser_profile::BrowserIdentityProfile,
-    global_extra_headers: Vec<(String, String)>,
+    pub(crate) browser_global_overrides: BrowserGlobalOverrides,
     global_browser_identity_override: Option<moli_browser_profile::BrowserIdentityProfile>,
-    global_network_conditions: Option<EmulatedNetworkConditions>,
-    global_geolocation_override: Option<EmulatedGeolocationOverrideState>,
-    global_cache_disabled: bool,
     pub(crate) network_data_collectors: crate::domains::network::NetworkDataCollectorStore,
     base_http_proxy: Option<String>,
     base_http_no_proxy: Option<String>,
@@ -1512,11 +1519,8 @@ impl CdpConnection {
             next_internal_runtime_command_id: 902_000_000,
             network_request_id_allocator: ConnectionNetworkRequestIdAllocator::default(),
             base_browser_identity,
-            global_extra_headers: Vec::new(),
+            browser_global_overrides: BrowserGlobalOverrides::default(),
             global_browser_identity_override: None,
-            global_network_conditions: None,
-            global_geolocation_override: None,
-            global_cache_disabled: false,
             network_data_collectors: crate::domains::network::NetworkDataCollectorStore::default(),
             base_http_proxy,
             base_http_no_proxy,
@@ -3201,13 +3205,11 @@ impl CdpConnection {
     }
 
     pub(crate) fn new_browser_context(&self, id: String) -> BrowserContext {
-        let mut browser_context = self.initial_storage_partition.new_default_browser_context(
+        self.initial_storage_partition.new_default_browser_context(
             id,
             self.fetch_config().http_cache_dir().map(PathBuf::from),
             self.fetch_config().http_cache_max_bytes(),
-        );
-        self.apply_global_browser_context_state(&mut browser_context);
-        browser_context
+        )
     }
 
     pub(crate) fn ensure_browser_context_for_implicit_target_creation(&mut self) {
@@ -3222,21 +3224,12 @@ impl CdpConnection {
         self.insert_browser_context(self.new_browser_context(browser_context_id));
     }
 
-    fn apply_global_browser_context_state(&self, browser_context: &mut BrowserContext) {
-        browser_context.global_cache_disabled = self.global_cache_disabled;
-        browser_context.global_extra_headers = self.global_extra_headers.clone();
-        browser_context.global_network_conditions = self.global_network_conditions;
-        browser_context.global_geolocation_override = self.global_geolocation_override.clone();
-    }
-
     pub(crate) fn new_ephemeral_browser_context(&self, id: String) -> BrowserContext {
-        let mut browser_context = BrowserContext::new_ephemeral_with_http_cache(
+        BrowserContext::new_ephemeral_with_http_cache(
             id,
             self.fetch_config().http_cache_dir().map(PathBuf::from),
             self.fetch_config().http_cache_max_bytes(),
-        );
-        self.apply_global_browser_context_state(&mut browser_context);
-        browser_context
+        )
     }
 
     pub fn snapshot_cookies(&mut self) -> Vec<StoredCookie> {
@@ -3888,6 +3881,7 @@ impl CdpConnection {
         let was_placeholder = self.default_target_lifecycle.is_placeholder();
         let default_browser_context_id = self.default_browser_context_id().to_owned();
         let default_target_id = self.default_target_id().to_owned();
+        let browser_cache_disabled = self.browser_global_overrides.cache_disabled;
         if !self.has_browser_context_id(&default_browser_context_id) {
             let mut browser_context = self.new_browser_context(default_browser_context_id.clone());
             browser_context.set_active_target_id(default_target_id.clone());
@@ -3917,6 +3911,8 @@ impl CdpConnection {
                     browser_context
                         .begin_active_target_initial_empty_document("about:blank".to_owned());
                 }
+                browser_context
+                    .set_base_cache_disabled_for_target(&default_target_id, browser_cache_disabled);
             }
         }
         if !self

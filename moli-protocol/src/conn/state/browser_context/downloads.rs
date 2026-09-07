@@ -24,9 +24,13 @@ impl BrowserContext {
         policy: &DownloadPolicy,
         request: Request,
         suggested_filename: Option<String>,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Result<Option<DownloadObservation>, String> {
-        let client =
-            self.ensure_web_contents_resource_request_client(web_contents, fetch_defaults)?;
+        let client = self.ensure_web_contents_resource_request_client(
+            web_contents,
+            fetch_defaults,
+            browser_globals,
+        )?;
         self.physical
             .downloads
             .start_request(policy, client, request, suggested_filename)

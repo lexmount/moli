@@ -2117,6 +2117,7 @@ mod pending_renderer_page_tests {
                 PAGE_SLOT_TEST_TARGET,
                 Default::default(),
                 &Default::default(),
+                &Default::default(),
             )
             .unwrap()
         else {
@@ -2132,6 +2133,7 @@ mod pending_renderer_page_tests {
             .start_initial_document_for_target(
                 PAGE_SLOT_TEST_TARGET,
                 Default::default(),
+                &Default::default(),
                 &Default::default(),
             )
             .unwrap()

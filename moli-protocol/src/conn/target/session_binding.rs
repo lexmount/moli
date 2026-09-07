@@ -118,6 +118,7 @@ impl CdpConnection {
     ) {
         // Mirror production Context insertion. Document admission must never
         // fall back to a connection/another WebContents' navigation engine.
+        browser_context.apply_browser_cache_disabled(self.browser_global_overrides.cache_disabled);
         browser_context.bind_page_navigation_engines(
             self.standalone_navigation_engine.runtime_config(),
             self.scheduler_hooks.renderer_publication_sender(),
@@ -131,6 +132,7 @@ impl CdpConnection {
         &mut self,
         mut browser_context: BrowserContext,
     ) {
+        browser_context.apply_browser_cache_disabled(self.browser_global_overrides.cache_disabled);
         browser_context.bind_page_navigation_engines(
             self.standalone_navigation_engine.runtime_config(),
             self.scheduler_hooks.renderer_publication_sender(),
@@ -151,6 +153,7 @@ impl CdpConnection {
         else {
             return Ok(());
         };
+        let global_extra_headers = self.browser_global_overrides.extra_headers.clone();
 
         let pending = {
             let Some(browser_context) = self.browser_context_by_id_mut(&browser_context_id) else {
@@ -184,8 +187,10 @@ impl CdpConnection {
             }
             browser_context.clear_devtools_network_state_for_target(&target_id, &session_key);
             let effective = browser_context.effective_policy_for_target(&target_id);
-            let headers =
-                browser_context.merged_extra_headers_for_target_policy(effective.extra_headers());
+            let headers = browser_context.merged_extra_headers_for_target_policy(
+                &global_extra_headers,
+                effective.extra_headers(),
+            );
             browser_context
                 .document_handle_for_target(&target_id)
                 .map(|document| {
@@ -312,10 +317,15 @@ impl CdpConnection {
         target_id: &str,
         session_id: &str,
     ) -> anyhow::Result<bool> {
+        let browser_globals = self.browser_global_overrides.clone();
         let (found, pending) = self
             .browser_context_by_id_mut(browser_context_id)
             .map(|context| {
-                context.start_reset_primary_page_session_target_state(target_id, session_id)
+                context.start_reset_primary_page_session_target_state(
+                    target_id,
+                    session_id,
+                    &browser_globals,
+                )
             })
             .unwrap_or((false, None));
         let Some(pending) = pending else {

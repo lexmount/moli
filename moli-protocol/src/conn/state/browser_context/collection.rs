@@ -81,7 +81,7 @@ impl BrowserContext {
             return false;
         }
         let id = contents.id();
-        let mut projection = PageAgentHost::new(
+        let projection = PageAgentHost::new(
             target_id,
             primary_session_id,
             identity,
@@ -90,15 +90,12 @@ impl BrowserContext {
             page_projection,
         );
         #[cfg(test)]
+        let mut projection = projection;
+        #[cfg(test)]
         if self.page_targets.is_empty() {
             projection.document_cookie_manager_surface =
                 self.default_document_cookie_manager_surface.clone();
         }
-        projection.base_network_request_policy =
-            crate::conn::state::session::BaseNetworkRequestPolicy::with_cache_disabled(
-                self.global_cache_disabled,
-            );
-        contents.network_request_policy.cache_disabled = self.global_cache_disabled;
         if let Some(config) = self.page_navigation_runtime_config() {
             contents.install_navigation_engine(self.new_page_navigation_engine(config));
         }

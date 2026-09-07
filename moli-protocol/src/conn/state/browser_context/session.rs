@@ -228,6 +228,17 @@ impl BrowserContext {
         self.install_effective_network_request_policy_for_target(target_id);
     }
 
+    pub(in crate::conn) fn apply_browser_cache_disabled(&mut self, disabled: bool) {
+        let target_ids = self
+            .page_targets
+            .iter()
+            .map(|target| target.target_id().to_owned())
+            .collect::<Vec<_>>();
+        for target_id in target_ids {
+            self.set_base_cache_disabled_for_target(&target_id, disabled);
+        }
+    }
+
     pub(crate) fn set_base_extra_headers_for_target(
         &mut self,
         target_id: &str,
@@ -861,15 +872,6 @@ pub(crate) struct InspectorSessionState {
 pub(in crate::conn::state) struct BaseNetworkRequestPolicy {
     cache_disabled: bool,
     extra_headers: Vec<(String, String)>,
-}
-
-impl BaseNetworkRequestPolicy {
-    pub(in crate::conn::state) fn with_cache_disabled(cache_disabled: bool) -> Self {
-        Self {
-            cache_disabled,
-            ..Self::default()
-        }
-    }
 }
 
 #[cfg(test)]

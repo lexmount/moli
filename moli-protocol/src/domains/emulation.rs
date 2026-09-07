@@ -1474,7 +1474,10 @@ fn start_network_conditions_update_for_current_route(
         } => conn
             .browser_context_by_id(browser_context_id)
             .is_some_and(|browser_context| {
-                browser_context.effective_network_offline_for_target(target_id)
+                browser_context.effective_network_offline_for_target(
+                    target_id,
+                    conn.browser_global_overrides.network_conditions,
+                )
             }),
         PendingEmulationPageTarget::SessionOwner { .. } => false,
     };
@@ -1549,7 +1552,12 @@ fn start_extra_headers_update_for_route(
             target_id,
         } => conn
             .browser_context_by_id(browser_context_id)
-            .map(|browser_context| browser_context.effective_extra_headers_for_target(target_id)),
+            .map(|browser_context| {
+                browser_context.effective_extra_headers_for_target(
+                    target_id,
+                    &conn.browser_global_overrides.extra_headers,
+                )
+            }),
         PendingEmulationPageTarget::SessionOwner { .. } => None,
     };
     let Some(headers) = headers else {
@@ -2934,10 +2942,11 @@ fn start_geolocation_surface_override_page_commands(
         return start_session_surface_override_page_command(conn, cmd.session_id);
     }
     let runtime_call_id = conn.next_internal_runtime_command_id();
-    let Some(browser_context) = conn.browser_context.as_mut() else {
+    let Some(browser_context) = conn.browser_context.as_ref() else {
         return Ok(Vec::new());
     };
-    let script = browser_context.generated_surface_override_script_for_active_target();
+    let script = browser_context
+        .generated_surface_override_script_for_active_target(&conn.browser_global_overrides);
     let browser_context_id = browser_context.id.clone();
     let Some(target_id) = browser_context.active_target_id_owned() else {
         return Ok(Vec::new());
@@ -2985,9 +2994,16 @@ fn start_session_surface_override_page_command_for_owner(
         if let Some(target_id) = target_id.as_deref()
             && browser_context.background_target(target_id).is_some()
         {
-            browser_context.generated_surface_override_script_for_background_target(target_id)
+            browser_context.generated_surface_override_script_for_background_target(
+                target_id,
+                &conn.browser_global_overrides,
+            )
         } else {
-            Some(browser_context.generated_surface_override_script_for_active_target())
+            Some(
+                browser_context.generated_surface_override_script_for_active_target(
+                    &conn.browser_global_overrides,
+                ),
+            )
         }
     };
     let Some(script) = script else {
@@ -3026,9 +3042,16 @@ fn start_surface_override_for_route(
                 return Err("BrowserContextNotLoaded".to_owned());
             };
             if browser_context.is_active_target(target_id) {
-                Some(browser_context.generated_surface_override_script_for_active_target())
+                Some(
+                    browser_context.generated_surface_override_script_for_active_target(
+                        &conn.browser_global_overrides,
+                    ),
+                )
             } else {
-                browser_context.generated_surface_override_script_for_background_target(target_id)
+                browser_context.generated_surface_override_script_for_background_target(
+                    target_id,
+                    &conn.browser_global_overrides,
+                )
             }
         }
         PendingEmulationPageTarget::SessionOwner { owner_scope } => {

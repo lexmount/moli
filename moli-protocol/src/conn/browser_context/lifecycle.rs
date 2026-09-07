@@ -53,6 +53,7 @@ impl CdpConnection {
     }
 
     pub fn insert_browser_context(&mut self, mut browser_context: BrowserContext) {
+        browser_context.apply_browser_cache_disabled(self.browser_global_overrides.cache_disabled);
         browser_context
             .set_service_worker_pause_on_start(self.service_worker_pause_on_start_for_devtools());
         browser_context.set_dedicated_worker_pause_on_start(
