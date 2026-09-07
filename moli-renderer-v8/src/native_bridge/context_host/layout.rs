@@ -353,6 +353,21 @@ impl JsContextHost {
         self.answer_layout_at_viewport(document, reason, viewport, queries)
     }
 
+    pub(crate) fn answer_fresh_layout_for_document(
+        &self,
+        document: DomHandle,
+        reason: LayoutFlushReason,
+        queries: &LayoutQueryBatch<DomHandle>,
+    ) -> Result<LayoutAnswers<DomHandle>, LayoutError> {
+        let viewport = self.layout_viewport_for_document(document);
+        self.with_fresh_layout_pass_for_document(
+            document,
+            LayoutPassRequest::new(viewport, reason),
+            |pass| Ok(pass.answer_queries(queries)),
+        )?
+        .ok_or(LayoutError::NoLayoutRoot)
+    }
+
     pub(crate) fn can_answer_layout_from_snapshot(
         &self,
         document: DomHandle,
