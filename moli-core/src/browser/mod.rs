@@ -10,6 +10,7 @@ mod document_lifecycle;
 mod document_lifetime;
 mod downloads;
 mod emulation;
+mod events;
 mod owner;
 mod permissions;
 mod renderer_residence;
@@ -32,6 +33,7 @@ pub use emulation::{
     EmulatedMediaOverrides, EmulatedNetworkConditions, EmulatedViewportSurface,
     viewport_surface_install_script,
 };
+pub use events::{BrowserEvent, BrowserEventReceiver, BrowserEventRecord, BrowserSnapshot};
 pub use owner::{
     BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserContextHandle,
     BrowserDocumentMaterialization, BrowserDocumentNavigationCommit, BrowserHandle,

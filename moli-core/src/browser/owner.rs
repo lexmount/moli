@@ -86,6 +86,7 @@ struct Browser {
     permission_defaults: super::PermissionDefaults,
     navigation_work: navigation::NavigationWorkRegistry,
     local_sender: BrowserLocalSender,
+    events: super::events::BrowserEventStream,
 }
 
 impl Browser {
@@ -95,6 +96,7 @@ impl Browser {
             permission_defaults: super::PermissionDefaults::default(),
             navigation_work: navigation::NavigationWorkRegistry::default(),
             local_sender,
+            events: super::events::BrowserEventStream::default(),
         }
     }
 
@@ -114,6 +116,7 @@ impl Browser {
         let id = context.id();
         let previous = self.contexts.insert(id, context);
         debug_assert!(previous.is_none(), "BrowserContext identity must be unique");
+        self.events.publish(super::BrowserEvent::ContextCreated(id));
         id
     }
 
@@ -122,13 +125,20 @@ impl Browser {
             return false;
         };
         self.navigation_work.remove_context(id);
+        self.events
+            .publish(super::BrowserEvent::ContextDisposed(id));
         context.shutdown();
         true
     }
 
     fn shutdown(&mut self) {
         self.navigation_work.clear();
-        for (_, context) in std::mem::take(&mut self.contexts) {
+        let contexts = std::mem::take(&mut self.contexts);
+        for id in contexts.keys().copied() {
+            self.events
+                .publish(super::BrowserEvent::ContextDisposed(id));
+        }
+        for (_, context) in contexts {
             context.shutdown();
         }
     }
@@ -301,6 +311,14 @@ impl BrowserHandle {
     pub fn contains_context(&self, id: BrowserContextId) -> bool {
         self.execute(move |browser| browser.contexts.contains_key(&id))
             .unwrap_or(false)
+    }
+
+    /// Subscribe and snapshot in the same owner turn, without a gap between
+    /// observing existing Contexts and receiving their subsequent lifecycle.
+    pub fn subscribe(
+        &self,
+    ) -> Result<(super::BrowserSnapshot, super::BrowserEventReceiver), String> {
+        self.execute(|browser| browser.events.subscribe(browser.contexts.keys().copied()))
     }
 
     pub fn remove_context(&self, id: BrowserContextId) -> Result<bool, String> {
@@ -603,7 +621,8 @@ impl BrowserContextHandle {
     }
 
     pub fn contains_web_contents(&self, handle: WebContentsHandle) -> bool {
-        self.read_live(move |context| context.contains_web_contents(handle))
+        self.read(move |context| context.contains_web_contents(handle))
+            .unwrap_or(false)
     }
 
     pub fn select_web_contents(&self, id: super::WebContentsId) -> bool {
@@ -611,11 +630,15 @@ impl BrowserContextHandle {
     }
 
     pub fn selected_web_contents_id(&self) -> Option<super::WebContentsId> {
-        self.read_live(BrowserContext::selected_web_contents_id)
+        self.read(BrowserContext::selected_web_contents_id)
+            .ok()
+            .flatten()
     }
 
     pub fn selected_web_contents_handle(&self) -> Option<WebContentsHandle> {
-        self.read_live(BrowserContext::selected_web_contents_handle)
+        self.read(BrowserContext::selected_web_contents_handle)
+            .ok()
+            .flatten()
     }
 
     pub fn web_contents_count(&self) -> usize {
@@ -752,7 +775,8 @@ impl BrowserContextHandle {
     }
 
     pub fn has_pending_javascript_dialog(&self) -> bool {
-        self.read_live(BrowserContext::has_pending_javascript_dialog)
+        self.read(BrowserContext::has_pending_javascript_dialog)
+            .unwrap_or(false)
     }
 
     forward_context_read! {
@@ -963,10 +987,26 @@ impl BrowserContextHandle {
         fn web_contents_for_renderer_owner(owner: crate::RendererOwnerLocalHostId) -> Option<WebContentsHandle>;
     }
 
+    // Session policy retirement can follow native Context or Browser shutdown.
+    // An absent owner needs no reset; never redirect it to a surviving Context.
+    pub fn set_service_worker_pause_on_start(&self, pause: bool) {
+        let _ = self.update(move |context| context.set_service_worker_pause_on_start(pause));
+    }
+
+    pub fn set_service_worker_related_pause_on_start_policies(
+        &self,
+        policies: Vec<(u64, u64, String, String)>,
+    ) {
+        let _ = self.update(move |context| {
+            context.set_service_worker_related_pause_on_start_policies(policies)
+        });
+    }
+
+    pub fn set_dedicated_worker_pause_on_start(&self, pause: bool) {
+        let _ = self.update(move |context| context.set_dedicated_worker_pause_on_start(pause));
+    }
+
     forward_context_update! {
-        fn set_service_worker_pause_on_start(pause: bool) -> ();
-        fn set_service_worker_related_pause_on_start_policies(policies: Vec<(u64, u64, String, String)>) -> ();
-        fn set_dedicated_worker_pause_on_start(pause: bool) -> ();
         fn set_service_worker_inspection_attached(version_id: u64, attached: bool) -> ();
         fn set_storage_quota_override(origin: String, quota: f64) -> ();
         fn set_javascript_dialog_handler_enabled(enabled: bool) -> ();

@@ -186,10 +186,24 @@ async fn handle_bidi_session_socket_local(
     actor.install_runtime_response_ready_sender(&mut scheduler);
     let mut adapter_scheduler = ProtocolAdapterScheduler::default();
     loop {
+        let output = scheduler.drain_browser_events().await;
+        if !actor
+            .send_or_route_protocol_output(&mut scheduler, &mut receivers, output, None)
+            .await
+            || scheduler.is_browser_closed()
+        {
+            break;
+        }
         let page_javascript_blocked = scheduler.has_pending_javascript_dialog();
         adapter_scheduler.schedule_turn_if_needed(&scheduler, page_javascript_blocked);
         tokio::select! {
             biased;
+            event = scheduler.recv_browser_event() => {
+                let output = scheduler.handle_browser_event(event).await;
+                if !actor.send_or_route_protocol_output(&mut scheduler, &mut receivers, output, None).await {
+                    break;
+                }
+            }
             maybe_message = actor.socket.recv() => {
                 let Some(message) = maybe_message else {
                     break;
