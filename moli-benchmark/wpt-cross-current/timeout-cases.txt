@@ -141,6 +141,7 @@ html/browsers/windows/browsing-context-names/choose-_top-001.html
 html/browsers/windows/browsing-context-names/choose-_top-002.html
 html/browsers/windows/browsing-context-names/choose-_top-003.html
 html/browsers/windows/browsing-context-names/choose-existing-001.html
+html/browsers/windows/noreferrer-null-opener.html
 html/cross-origin-embedder-policy/cache-storage-reporting-service-worker.https.html
 html/dom/documents/dom-tree-accessors/Document.currentScript.html
 html/dom/elements/global-attributes/cdata-dir_auto.html
@@ -170,7 +171,7 @@ html/semantics/embedded-content/the-img-element/image-loading-lazy-zero-intersec
 html/semantics/embedded-content/the-img-element/image-loading-lazy.html
 html/semantics/embedded-content/the-img-element/scrolling-below-viewport-image-lazy-loading-in-iframe.html
 html/semantics/embedded-content/the-img-element/sizes/implicit-sizes-ignores-width.html
-html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-dynamic-attributes.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto-resize-observer-removes-auto.html
 html/semantics/embedded-content/the-img-element/sizes/sizes-auto.html
@@ -180,7 +181,6 @@ html/semantics/popovers/popover-document-open.html
 html/semantics/scripting-1/the-script-element/change-src-attr-prepare-a-script.html
 html/semantics/scripting-1/the-script-element/execution-timing/102.html
 html/semantics/scripting-1/the-script-element/microtasks/checkpoint-after-workerglobalscope-onerror-module.html
-html/semantics/scripting-1/the-script-element/module/dynamic-import/v8-code-cache.html
 html/semantics/scripting-1/the-script-element/script-onerror-insertion-point-2.html
 html/semantics/text-level-semantics/the-a-element/a-type.historical.html
 html/webappapis/dynamic-markup-insertion/document-write/iframe_010.html
@@ -213,6 +213,7 @@ navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers-and-s
 navigation-api/navigate-event/defer/tentative/defer-with-multiple-handlers.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler-reject.html
 navigation-api/navigate-event/defer/tentative/defer-with-single-handler.html
+navigation-api/navigate-event/intercept-cross-origin.html
 navigation-api/navigate-event/navigate-form-requestSubmit.html
 navigation-api/navigate-event/navigation-back-cross-document-preventDefault.html
 navigation-api/navigate-event/navigation-traverseTo-navigates-top-and-same-doc-child-and-cross-doc-child.html
@@ -273,20 +274,18 @@ service-workers/service-worker/invalid-header.https.html
 service-workers/service-worker/iso-latin1-header.https.html
 service-workers/service-worker/navigation-preload/empty-preload-response-body.https.html
 service-workers/service-worker/navigation-redirect-to-http.https.html
-service-workers/service-worker/opaque-script.https.html
+service-workers/service-worker/navigation-timing-extended.https.html
 service-workers/service-worker/performance-timeline.https.html
 service-workers/service-worker/postmessage-to-client-message-queue.https.html
 service-workers/service-worker/referer.https.html
 service-workers/service-worker/registration-service-worker-attributes.https.html
 service-workers/service-worker/resource-timing-fetch-variants.https.html
-service-workers/service-worker/respond-with-body-accessed-response.https.html
 service-workers/service-worker/secure-context.https.html
 service-workers/service-worker/skip-waiting-without-client.https.html
 service-workers/service-worker/unregister-immediately-before-installed.https.html
 service-workers/service-worker/unregister-immediately-during-extendable-events.https.html
 shadow-dom/declarative/tentative/shadowrootadoptedstylesheets/shadowrootadoptedstylesheets-modulepreload-failure.html
 streams/transferable/deserialize-error.window.js?moli-wpt-script=window
-subresource-integrity/subresource-integrity.html
 svg/coordinate-systems/outer-svg-intrinsic-size-002.html
 svg/linking/scripted/href-mpath-element.html
 trusted-types/DOMParser-parseFromString-regression.html

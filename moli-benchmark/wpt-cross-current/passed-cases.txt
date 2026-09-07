@@ -33,6 +33,7 @@ content-security-policy/form-action/form-action-src-javascript-prevented.html
 content-security-policy/frame-ancestors/frame-ancestors-from-serviceworker.https.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-none-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-self-block.html
+content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-url-allow.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-cross-url-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-same-none-block.html
 content-security-policy/frame-ancestors/frame-ancestors-nested-cross-in-same-self-block.html
@@ -266,19 +267,13 @@ css/css-animations/parsing/keyframes-name-invalid.html
 css/css-animations/parsing/keyframes-name-valid.html
 css/css-cascade/all-prop-revert-layer-noop.html?include=0
 css/css-cascade/all-prop-revert-layer-noop.html?include=1
-css/css-cascade/all-prop-revert-layer-noop.html?include=2
 css/css-cascade/all-prop-revert-layer-noop.html?include=3
-css/css-cascade/all-prop-revert-layer-noop.html?include=4
-css/css-cascade/all-prop-revert-layer-noop.html?include=5
 css/css-cascade/all-prop-revert-layer-noop.html?include=6
 css/css-cascade/all-prop-revert-layer-noop.html?include=7
 css/css-cascade/all-prop-revert-layer.html
 css/css-cascade/all-prop-revert-noop.html?include=0
 css/css-cascade/all-prop-revert-noop.html?include=1
-css/css-cascade/all-prop-revert-noop.html?include=2
 css/css-cascade/all-prop-revert-noop.html?include=3
-css/css-cascade/all-prop-revert-noop.html?include=4
-css/css-cascade/all-prop-revert-noop.html?include=5
 css/css-cascade/all-prop-revert-noop.html?include=6
 css/css-cascade/all-prop-revert-noop.html?include=7
 css/css-cascade/at-scope-parsing.html
@@ -290,7 +285,6 @@ css/css-cascade/important-vs-inline-003.html
 css/css-cascade/inherit-initial.html
 css/css-cascade/inline-style-background.html
 css/css-cascade/layer-basic.html
-css/css-cascade/layer-counter-style-override.html
 css/css-cascade/layer-cssom-order-reverse-at-property.html
 css/css-cascade/layer-cssom-order-reverse.html
 css/css-cascade/layer-import.html
@@ -1487,10 +1481,10 @@ css/css-grid/abspos/orthogonal-positioned-grid-items-014.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-015.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-016.html
 css/css-grid/abspos/orthogonal-positioned-grid-items-017.html
-css/css-grid/abspos/positioned-grid-descendants-005.html
+css/css-grid/abspos/positioned-grid-descendants-003.html
 css/css-grid/abspos/positioned-grid-descendants-006.html
+css/css-grid/abspos/positioned-grid-descendants-008.html
 css/css-grid/abspos/positioned-grid-descendants-009.html
-css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-012.html
 css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-descendants-014.html
@@ -1623,6 +1617,7 @@ css/css-grid/alignment/grid-item-aspect-ratio-justify-self-002.html
 css/css-grid/alignment/grid-item-auto-margins-001.html
 css/css-grid/alignment/grid-item-auto-margins-002.html
 css/css-grid/alignment/grid-item-auto-margins-alignment.html
+css/css-grid/alignment/grid-place-content-001.html
 css/css-grid/alignment/grid-row-axis-alignment-sticky-positioned-items-001.html
 css/css-grid/alignment/grid-row-axis-alignment-sticky-positioned-items-002.html
 css/css-grid/alignment/grid-self-alignment-baseline-with-grid-001.html
@@ -2002,7 +1997,6 @@ css/css-grid/parsing/grid-auto-rows-invalid.html
 css/css-grid/parsing/grid-auto-rows-valid.html
 css/css-grid/parsing/grid-column-invalid.html
 css/css-grid/parsing/grid-column-shorthand.html
-css/css-grid/parsing/grid-content-sized-columns-resolution.html
 css/css-grid/parsing/grid-row-invalid.html
 css/css-grid/parsing/grid-row-shorthand.html
 css/css-grid/parsing/grid-shorthand-invalid.html
@@ -2854,6 +2848,7 @@ css/cssom-view/getClientRects-zoom.html
 css/cssom-view/historical.html
 css/cssom-view/htmlelement-offset-width-001.html
 css/cssom-view/inheritance.html
+css/cssom-view/matchMedia.html
 css/cssom-view/negativeMargins.html
 css/cssom-view/offsetParent-block-in-inline.html
 css/cssom-view/offsetParent-body-and-html.html
@@ -2871,6 +2866,7 @@ css/cssom-view/parsing/scroll-behavior-valid.html
 css/cssom-view/pt-to-px-width.html
 css/cssom-view/resize-event-on-initial-layout-001.html
 css/cssom-view/resize-event-on-initial-layout-002.html
+css/cssom-view/screen-detached-frame.html
 css/cssom-view/screenLeftTop.html
 css/cssom-view/scroll-back-to-initial-position.html
 css/cssom-view/scroll-behavior-smooth-positions.html
@@ -2952,7 +2948,6 @@ css/cssom/border-shorthand-serialization.html
 css/cssom/computed-style-001.html
 css/cssom/computed-style-002.html
 css/cssom/computed-style-003.html
-css/cssom/computed-style-004.html
 css/cssom/computed-style-005.html
 css/cssom/computed-style-set-property.html
 css/cssom/css-style-attr-decl-block.html
@@ -2988,6 +2983,7 @@ css/cssom/cssstyledeclaration-setter-form-controls.html
 css/cssom/cssstyledeclaration-setter-logical.html
 css/cssom/delete-namespace-rule-when-child-rule-exists.html
 css/cssom/escape.html
+css/cssom/font-family-serialization-001.html
 css/cssom/font-shorthand-serialization.html
 css/cssom/font-variant-shorthand-serialization.html
 css/cssom/getComputedStyle-animations-replaced-into-ib-split.html
@@ -3001,7 +2997,6 @@ css/cssom/getComputedStyle-insets-nobox.html
 css/cssom/getComputedStyle-insets-relpos-inline.html
 css/cssom/getComputedStyle-insets-static.html
 css/cssom/getComputedStyle-layout-dependent-removed-ib-sibling.html
-css/cssom/getComputedStyle-layout-dependent-replaced-into-ib-split.html
 css/cssom/getComputedStyle-line-height.html
 css/cssom/getComputedStyle-logical-enumeration.html
 css/cssom/getComputedStyle-margins-roundtrip.html
@@ -3042,6 +3037,7 @@ css/cssom/serialize-all-longhands.html
 css/cssom/serialize-custom-props.html
 css/cssom/serialize-media-rule.html
 css/cssom/serialize-namespaced-type-selectors.html
+css/cssom/serialize-values.html
 css/cssom/serialize-variable-reference.html
 css/cssom/set-selector-text-attachment.html
 css/cssom/setproperty-null-undefined.html
@@ -3614,6 +3610,7 @@ dom/nodes/Node-removeChild.html
 dom/nodes/Node-replaceChild.html
 dom/nodes/Node-textContent.html
 dom/nodes/NodeList-Iterable.html
+dom/nodes/NodeList-static-length-getter-tampered-1.html
 dom/nodes/NodeList-static-length-getter-tampered-2.html
 dom/nodes/NodeList-static-length-getter-tampered-3.html
 dom/nodes/NodeList-static-length-getter-tampered-indexOf-1.html
@@ -4808,6 +4805,7 @@ encoding/legacy-mb-tchinese/big5/big5-decode.html?14001-last
 encoding/legacy-mb-tchinese/big5/big5-decode.html?2001-3000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?3001-4000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?4001-5000
+encoding/legacy-mb-tchinese/big5/big5-decode.html?5001-6000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?6001-7000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?7001-8000
 encoding/legacy-mb-tchinese/big5/big5-decode.html?8001-9000
@@ -5100,12 +5098,14 @@ html/browsers/browsing-the-web/navigating-across-documents/javascript-url-return
 html/browsers/browsing-the-web/navigating-across-documents/javascript-url-return-value-handling.html
 html/browsers/browsing-the-web/navigating-across-documents/javascript-url-task-queuing.html
 html/browsers/browsing-the-web/navigating-across-documents/navigate-cross-origin-iframe-to-same-url-with-fragment-fire-load-event.html
+html/browsers/browsing-the-web/navigating-across-documents/navigate-to-unparseable-url.html
 html/browsers/browsing-the-web/navigating-across-documents/navigation-unload-form-submit.html
 html/browsers/browsing-the-web/navigating-across-documents/navigation-unload-same-origin-fragment.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup-during-load.html
 html/browsers/browsing-the-web/navigating-across-documents/replace-before-load/window-open-popup.html
 html/browsers/browsing-the-web/navigating-across-documents/source/navigate-child-function-parent.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/anchor-fragment-history-back-on-click.html
+html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-same-document-nav.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/cross-document-traversal-stop.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/forward-to-pruned-entry.html
 html/browsers/browsing-the-web/overlapping-navigations-and-traversals/same-document-nav-cross-document-nav.html
@@ -5224,6 +5224,7 @@ html/browsers/the-window-object/named-access-on-the-window-object/nested-context
 html/browsers/the-window-object/named-access-on-the-window-object/prototype.html
 html/browsers/the-window-object/named-access-on-the-window-object/removing.html
 html/browsers/the-window-object/named-access-on-the-window-object/strict-mode-redefine-readonly-property.html
+html/browsers/the-window-object/named-access-on-the-window-object/window-named-properties.html
 html/browsers/the-window-object/named-access-on-the-window-object/window-null-names.html
 html/browsers/the-window-object/navigate-to-about-blank-while-initial-load-pending.html
 html/browsers/the-window-object/open-close/open-features-tokenization-noopener.html
@@ -5243,7 +5244,6 @@ html/browsers/windows/browsing-context-window.html
 html/browsers/windows/embedded-opener-a-form.html
 html/browsers/windows/nested-browsing-contexts/window-parent.html
 html/browsers/windows/nested-browsing-contexts/window-top.html
-html/browsers/windows/noreferrer-null-opener.html
 html/browsers/windows/targeting-cross-origin-nested-browsing-contexts.html
 html/browsers/windows/targeting-with-embedded-null-in-target.html
 html/cross-origin-embedder-policy/no-secure-context.html
@@ -5357,6 +5357,7 @@ html/editing/editing-0/contenteditable/user-interaction-editing-contenteditable.
 html/editing/editing-0/making-entire-documents-editable-the-designmode-idl-attribute/user-interaction-editing-designMode.html
 html/editing/editing-0/spelling-and-grammar-checking/spellcheck-enumerated-ascii-case-insensitive.html
 html/editing/editing-0/spelling-and-grammar-checking/user-interaction-editing-spellcheck.html
+html/editing/editing-0/writing-suggestions/writingsuggestions.html
 html/editing/the-hidden-attribute/hidden-idl.html
 html/editing/the-hidden-attribute/hidden-until-found-idl.html
 html/embedded-content/the-img-element/attr-img-fetchpriority.html
@@ -5380,6 +5381,7 @@ html/interaction/focus/focusgroup/tentative/ax-role-inference-item-elementintern
 html/interaction/focus/focusgroup/tentative/ax-role-inference-item-elementinternals.html
 html/interaction/focus/focusgroup/tentative/ax-role-inference-owner-elementinternals.html
 html/interaction/focus/focusgroup/tentative/ax-role-inference-owner.html
+html/interaction/focus/focusgroup/tentative/idl-reflection.html
 html/interaction/focus/processing-model/legend-focusable.html
 html/interaction/focus/processing-model/legend.html
 html/interaction/focus/processing-model/preventScroll-nested-scroll-elements.html
@@ -5405,6 +5407,7 @@ html/meta/refresh-time.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-all.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/document-applets.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/heading-obsolete-attributes-01.html
+html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/nothing.html
 html/obsolete/requirements-for-implementations/other-elements-attributes-and-apis/script-IDL-event-htmlfor.html
 html/obsolete/requirements-for-implementations/the-marquee-element-0/marquee-events-historical.html
 html/obsolete/requirements-for-implementations/the-marquee-element-0/marquee-loop.html
@@ -5524,6 +5527,7 @@ html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_nonesca
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_popups_nonescaping-3.html
 html/semantics/embedded-content/the-iframe-element/same-origin-contextual-fragment.html
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed-frame.html
+html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-anchor.html
 html/semantics/embedded-content/the-iframe-element/srcdoc-attribute-reset.html
 html/semantics/embedded-content/the-iframe-element/srcdoc_process_attributes.html
@@ -5878,7 +5882,6 @@ html/semantics/interfaces.html
 html/semantics/links/links-created-by-a-and-area-elements/anchor-src-encoding.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_attribute-getter-setter.html
 html/semantics/links/links-created-by-a-and-area-elements/htmlanchorelement_getter.html
-html/semantics/links/links-created-by-a-and-area-elements/target_blank_implicit_noopener.html
 html/semantics/popovers/hide-other-popover-side-effects.html
 html/semantics/popovers/popover-active-document.html
 html/semantics/popovers/popover-beforetoggle-opening-event.html
@@ -5974,7 +5977,6 @@ html/semantics/scripting-1/the-script-element/execution-timing/076.html
 html/semantics/scripting-1/the-script-element/execution-timing/077.html
 html/semantics/scripting-1/the-script-element/execution-timing/078.html
 html/semantics/scripting-1/the-script-element/execution-timing/079.html
-html/semantics/scripting-1/the-script-element/execution-timing/081.html
 html/semantics/scripting-1/the-script-element/execution-timing/082.html
 html/semantics/scripting-1/the-script-element/execution-timing/084.html
 html/semantics/scripting-1/the-script-element/execution-timing/086.html
@@ -6084,6 +6086,7 @@ html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compi
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-module.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-of-promise-result.html
 html/semantics/scripting-1/the-script-element/module/dynamic-import/string-compilation-other-document.html
+html/semantics/scripting-1/the-script-element/module/dynamic-import/v8-code-cache.html
 html/semantics/scripting-1/the-script-element/module/error-and-slow-dependency.html
 html/semantics/scripting-1/the-script-element/module/error-type-1.html
 html/semantics/scripting-1/the-script-element/module/error-type-2.html
@@ -6643,6 +6646,7 @@ import-maps/module-map-key.html
 import-maps/multiple-import-maps/basic.html
 import-maps/multiple-import-maps/conflict-first-persists.html
 import-maps/multiple-import-maps/resolution-consistency-in-module-tree-inline.html
+import-maps/multiple-import-maps/resolution-consistency-in-module-tree.html
 import-maps/multiple-import-maps/scope-ordering-reverse.html
 import-maps/multiple-import-maps/scope-ordering.html
 import-maps/multiple-import-maps/url-resolution-conflict.html
@@ -7347,6 +7351,7 @@ shadow-dom/declarative/declarative-shadow-dom-slot-assignment.html
 shadow-dom/declarative/declarative-shadow-dom-write-to-iframe.html
 shadow-dom/declarative/declarative-with-disabled-shadow.html
 shadow-dom/declarative/gethtml-ordering.html
+shadow-dom/declarative/gethtml.html
 shadow-dom/declarative/innerhtml-before-closing-tag.html
 shadow-dom/declarative/innerhtml-on-ordinary-template.html
 shadow-dom/declarative/move-template-before-closing-tag.html
@@ -8279,6 +8284,7 @@ workers/interfaces/WorkerGlobalScope/close/setTimeout.html
 workers/interfaces/WorkerGlobalScope/location/members.html
 workers/interfaces/WorkerGlobalScope/location/setting-members.html
 workers/interfaces/WorkerGlobalScope/location/worker-separate-file.html
+workers/interfaces/WorkerGlobalScope/onerror/exception-in-onerror.html
 workers/interfaces/WorkerGlobalScope/onerror/handled.html
 workers/interfaces/WorkerGlobalScope/onerror/message-classic-DOMException.html
 workers/interfaces/WorkerGlobalScope/onerror/message-classic-Error.html
@@ -8397,7 +8403,6 @@ xhr/xmlhttprequest-timeout-worker-overrides.html?timeout disabled after initiall
 xhr/xmlhttprequest-timeout-worker-overrides.html?timeout enabled after initially disabled
 xhr/xmlhttprequest-timeout-worker-overrides.html?timeout overrides load after a delay
 xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to expired value before load fires
-xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to expiring value after load fires
 xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to non-expiring value after timeout fires
 xhr/xmlhttprequest-timeout-worker-simple.html?load fires normally
 xhr/xmlhttprequest-timeout-worker-simple.html?no time out scheduled, load fires normally
