@@ -164,12 +164,8 @@ pub(in crate::domains) fn set_service_worker_pause_on_start_owner(
 
 fn sync_dedicated_worker_pause_on_start_for_devtools(conn: &CdpConnection) {
     let pause = conn.dedicated_worker_pause_on_start_for_devtools();
-    let runtimes = conn
-        .browser_contexts()
-        .map(BrowserContext::renderer_runtime)
-        .collect::<Vec<_>>();
-    for runtime in runtimes {
-        runtime.set_dedicated_worker_pause_on_start_for_devtools(pause);
+    for context in conn.browser_contexts() {
+        context.set_dedicated_worker_pause_on_start(pause);
     }
 }
 

@@ -124,9 +124,7 @@ fn page_owner_state_commands_complete_through_command_dispatch() {
 
     {
         let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-        browser_context
-            .renderer_runtime()
-            .set_javascript_dialog_handler_enabled(true);
+        browser_context.set_javascript_dialog_handler_enabled(true);
         let page_session_state = &mut browser_context.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state;
@@ -159,9 +157,7 @@ fn page_owner_state_commands_complete_through_command_dispatch() {
             .page_session_state,
     );
     assert!(
-        !browser_context
-            .renderer_runtime()
-            .javascript_dialog_handler_enabled(),
+        !browser_context.javascript_dialog_handler_enabled(),
         "Page.disable should disengage renderer JavaScript dialog handling"
     );
 }

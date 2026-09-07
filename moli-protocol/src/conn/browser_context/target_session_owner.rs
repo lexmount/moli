@@ -3149,7 +3149,7 @@ mod tests {
             inputs
                 .renderer_runtime
                 .runtime()
-                .shares_state_with(&background.renderer_runtime()),
+                .shares_state_with(&background.renderer_runtime_owner_access().runtime()),
             "background navigation must reuse the browser-context renderer runtime"
         );
         assert_eq!(

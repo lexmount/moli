@@ -637,11 +637,9 @@ impl CdpConnection {
         let Some(browser_context) = self.browser_context_by_id(browser_context_id) else {
             return;
         };
-        browser_context
-            .renderer_runtime()
-            .set_javascript_dialog_handler_enabled(
-                browser_context_has_page_domain_enabled_session(browser_context),
-            );
+        browser_context.set_javascript_dialog_handler_enabled(
+            browser_context_has_page_domain_enabled_session(browser_context),
+        );
     }
 
     pub(crate) fn set_console_enabled_for_session_owner(
@@ -1215,7 +1213,6 @@ mod tests {
 
         let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
         active.set_active_target_id("TID-active".to_owned());
-        let active_runtime = active.renderer_runtime();
 
         let mut inactive = BrowserContext::new("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
@@ -1227,27 +1224,39 @@ mod tests {
             inactive
                 .assign_attached_session_to_target("TID-inactive", "SID-inactive-b".to_owned(),)
         );
-        let inactive_runtime = inactive.renderer_runtime();
-
         conn.install_browser_context_fixture_for_test(active);
         conn.push_inactive_browser_context_fixture_for_test(inactive);
 
         assert!(conn.set_page_domain_enabled_for_session_owner(Some("SID-inactive-a"), true));
-        assert!(inactive_runtime.javascript_dialog_handler_enabled());
         assert!(
-            !active_runtime.javascript_dialog_handler_enabled(),
+            conn.browser_context_by_id("BID-inactive")
+                .unwrap()
+                .javascript_dialog_handler_enabled()
+        );
+        assert!(
+            !conn
+                .browser_context_by_id("BID-active")
+                .unwrap()
+                .javascript_dialog_handler_enabled(),
             "enabling an inactive target session must not mutate the active browser context"
         );
 
         assert!(conn.set_page_domain_enabled_for_session_owner(Some("SID-inactive-b"), true));
         assert!(conn.disable_page_domain_for_session_owner(Some("SID-inactive-a")));
         assert!(
-            inactive_runtime.javascript_dialog_handler_enabled(),
+            conn.browser_context_by_id("BID-inactive")
+                .unwrap()
+                .javascript_dialog_handler_enabled(),
             "one frontend must not disable dialog handling while a peer remains subscribed"
         );
 
         assert!(conn.disable_page_domain_for_session_owner(Some("SID-inactive-b")));
-        assert!(!inactive_runtime.javascript_dialog_handler_enabled());
+        assert!(
+            !conn
+                .browser_context_by_id("BID-inactive")
+                .unwrap()
+                .javascript_dialog_handler_enabled()
+        );
     }
 
     #[test]

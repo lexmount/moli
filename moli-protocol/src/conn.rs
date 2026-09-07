@@ -37,6 +37,7 @@ mod body_spool;
 mod browser_context;
 mod browser_document_commands;
 mod browser_web_contents_commands;
+mod browser_worker_commands;
 mod command_owner_scope;
 mod command_view;
 mod cookie_manager_surface;
@@ -1350,9 +1351,7 @@ impl CdpConnection {
         let Some(browser_context) = self.browser_context.as_ref() else {
             return false;
         };
-        browser_context
-            .renderer_runtime()
-            .set_javascript_dialog_handler_enabled(enabled);
+        browser_context.set_javascript_dialog_handler_enabled(enabled);
         true
     }
 

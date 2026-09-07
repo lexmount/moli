@@ -2581,11 +2581,11 @@ async fn tab_auto_attach_does_not_own_browser_level_service_worker_pause() {
     ctx.expect_result(9034, json!({}), None);
 
     assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 0);
-    assert!(ctx.conn.browser_contexts().all(|browser_context| {
-        !browser_context
-            .renderer_runtime()
-            .service_worker_pause_on_start_for_devtools()
-    }));
+    assert!(
+        ctx.conn
+            .browser_contexts()
+            .all(|browser_context| { !browser_context.service_worker_pause_on_start() })
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

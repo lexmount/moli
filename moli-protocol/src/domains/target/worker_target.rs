@@ -10,15 +10,18 @@
 //! exact run into a target/session identity before appending output. The
 //! projection coordinator only validates and consumes the captured value.
 
-use moli_core::page::{
-    RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
-    RendererRuntimeInspectorMessage, RendererServiceWorkerConsoleMessage,
-    RendererServiceWorkerExceptionMessage, RendererServiceWorkerFetchDiagnostic,
-    RendererServiceWorkerFetchDiagnosticResult, RendererServiceWorkerRunIdentity,
-    RendererServiceWorkerTargetEvent, RendererServiceWorkerTargetInfo,
-    RendererServiceWorkerVersionStatus, RendererSharedWorkerConsoleMessage,
-    RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo, RuntimeConsoleMessageSnapshot,
-    SubresourceRequestInitiatorType,
+use moli_core::{
+    browser::ServiceWorkerCommand,
+    page::{
+        RendererDedicatedWorkerTargetEvent, RendererDedicatedWorkerTargetInfo,
+        RendererRuntimeInspectorMessage, RendererServiceWorkerConsoleMessage,
+        RendererServiceWorkerExceptionMessage, RendererServiceWorkerFetchDiagnostic,
+        RendererServiceWorkerFetchDiagnosticResult, RendererServiceWorkerRunIdentity,
+        RendererServiceWorkerTargetEvent, RendererServiceWorkerTargetInfo,
+        RendererServiceWorkerVersionStatus, RendererSharedWorkerConsoleMessage,
+        RendererSharedWorkerTargetEvent, RendererSharedWorkerTargetInfo,
+        RuntimeConsoleMessageSnapshot, SubresourceRequestInitiatorType,
+    },
 };
 use moli_shared_worker::SharedWorkerInstanceId;
 use serde_json::json;
@@ -1673,9 +1676,7 @@ fn register_service_worker_target_with_active_run(
             return outputs;
         };
         if should_pause_on_start_for_related_devtools {
-            context
-                .renderer_runtime()
-                .set_service_worker_pause_on_start_for_version_for_devtools(info.version_id, true);
+            context.set_service_worker_pause_on_start_for_version(info.version_id, true);
         }
         context.insert_service_worker_target(ServiceWorkerTargetState::new(
             info.registration_id,
@@ -2262,11 +2263,11 @@ pub(super) async fn close_browser_context_worker_targets_for_dispose_async(
     browser_context_id: &str,
     reason: &'static str,
 ) -> Vec<BackgroundProtocolEvent> {
-    let Some((renderer_runtime, shared_worker_ids, service_worker_ids)) = conn
+    let Some((context, shared_worker_ids, service_worker_ids)) = conn
         .browser_context_by_id(browser_context_id)
         .map(|context| {
             (
-                context.renderer_runtime(),
+                context.browser_context_id(),
                 context
                     .shared_worker_targets
                     .keys()
@@ -2285,7 +2286,7 @@ pub(super) async fn close_browser_context_worker_targets_for_dispose_async(
 
     let mut outputs = TargetPreparedOutputs::default();
     for instance_id in shared_worker_ids {
-        renderer_runtime.close_shared_worker_for_target_close(instance_id);
+        let _ = conn.close_browser_shared_worker(context, instance_id);
         outputs.extend(remove_shared_worker_target_with_reason(
             conn,
             browser_context_id,
@@ -2293,7 +2294,9 @@ pub(super) async fn close_browser_context_worker_targets_for_dispose_async(
             reason,
         ));
     }
-    if let Err(error) = renderer_runtime.stop_all_service_workers_for_devtools() {
+    if let Err(error) =
+        conn.execute_browser_service_worker_command(context, ServiceWorkerCommand::StopAll)
+    {
         tracing::warn!(
             browser_context_id,
             error,
@@ -2335,12 +2338,12 @@ pub(super) async fn close_shared_worker_target_for_target_close_async(
     target_id: &str,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> bool {
-    let Some((browser_context_id, renderer_runtime, instance_id)) =
+    let Some((browser_context_id, context, instance_id)) =
         conn.browser_context.as_ref().and_then(|context| {
             let target = context.shared_worker_target(target_id)?;
             Some((
                 context.id.clone(),
-                context.renderer_runtime(),
+                context.browser_context_id(),
                 target.renderer_instance_id,
             ))
         })
@@ -2348,7 +2351,7 @@ pub(super) async fn close_shared_worker_target_for_target_close_async(
         return false;
     };
 
-    renderer_runtime.close_shared_worker_for_target_close(instance_id);
+    let _ = conn.close_browser_shared_worker(context, instance_id);
     let outputs = remove_shared_worker_target(conn, &browser_context_id, instance_id);
     let mut prepared_outputs =
         ProtocolOutputPayloads::from_slot(TargetPreparedOutputSlot::from_outputs(outputs));
@@ -2367,12 +2370,12 @@ pub(super) async fn close_dedicated_worker_target_for_target_close_async(
     target_id: &str,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> bool {
-    let Some((browser_context_id, renderer_runtime, instance_id)) =
+    let Some((browser_context_id, context, instance_id)) =
         conn.browser_context.as_ref().and_then(|context| {
             let target = context.dedicated_worker_target(target_id)?;
             Some((
                 context.id.clone(),
-                context.renderer_runtime(),
+                context.browser_context_id(),
                 target.renderer_instance_id,
             ))
         })
@@ -2380,7 +2383,7 @@ pub(super) async fn close_dedicated_worker_target_for_target_close_async(
         return false;
     };
 
-    renderer_runtime.close_dedicated_worker_for_devtools(instance_id);
+    let _ = conn.close_browser_dedicated_worker(context, instance_id);
     let outputs = prepare_dedicated_worker_target_retirement(
         conn,
         &browser_context_id,

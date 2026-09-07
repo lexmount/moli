@@ -12,6 +12,7 @@ use crate::devtools_runtime::{
 use moli_core::{
     RendererOutputFence, RendererRuntimeCommandCausalIdentity,
     RendererRuntimeInspectorResponseSender,
+    browser::BrowserContextId,
     page::{
         DocumentNodeObjectSnapshot, DocumentNodeRuntimeObjectResolution,
         MAX_INSPECTOR_PROTOCOL_VALUE_DEPTH, RendererAgentAttachmentId, RendererCommandTurnOutput,
@@ -207,7 +208,7 @@ enum RuntimeRemoteObjectOwnerIdentity {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct SharedWorkerRuntimeTargetRoute {
-    browser_context_id: String,
+    browser_context: BrowserContextId,
     worker: WorkerRuntimeTarget,
 }
 
@@ -219,7 +220,7 @@ enum WorkerRuntimeTarget {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct ServiceWorkerRuntimeTargetRoute {
-    browser_context_id: String,
+    browser_context: BrowserContextId,
     version_id: u64,
 }
 
@@ -4303,12 +4304,14 @@ impl CdpConnection {
                 browser_context_id,
                 target_id,
             } => {
-                let target = self
+                let context = self
                     .browser_context_by_id(&browser_context_id)
-                    .and_then(|context| context.shared_worker_target(&target_id))
+                    .ok_or_else(|| "UnknownSession".to_owned())?;
+                let target = context
+                    .shared_worker_target(&target_id)
                     .ok_or_else(|| "UnknownSession".to_owned())?;
                 Ok(SharedWorkerRuntimeTargetRoute {
-                    browser_context_id,
+                    browser_context: context.browser_context_id(),
                     worker: WorkerRuntimeTarget::Shared(target.renderer_instance_id),
                 })
             }
@@ -4316,12 +4319,14 @@ impl CdpConnection {
                 browser_context_id,
                 target_id,
             } => {
-                let target = self
+                let context = self
                     .browser_context_by_id(&browser_context_id)
-                    .and_then(|context| context.dedicated_worker_target(&target_id))
+                    .ok_or_else(|| "UnknownSession".to_owned())?;
+                let target = context
+                    .dedicated_worker_target(&target_id)
                     .ok_or_else(|| "UnknownSession".to_owned())?;
                 Ok(SharedWorkerRuntimeTargetRoute {
-                    browser_context_id,
+                    browser_context: context.browser_context_id(),
                     worker: WorkerRuntimeTarget::Dedicated(target.renderer_instance_id),
                 })
             }
@@ -4341,11 +4346,10 @@ impl CdpConnection {
         if let Some(target) = self.dedicated_worker_target_for_session_mut(Some(session_id)) {
             target.discard_main_script_network_replay_for(session_id);
         }
-        let renderer_runtime = self
-            .browser_context_by_id(&route.browser_context_id)
-            .map(|context| context.renderer_runtime())
+        let browser_context = self
+            .browser_context_by_browser_id(route.browser_context)
             .ok_or_else(|| "UnknownSession".to_owned())?;
-        Ok(renderer_runtime.run_dedicated_worker_if_waiting_for_debugger_for_devtools(instance_id))
+        Ok(browser_context.run_dedicated_worker_if_waiting_for_debugger(instance_id))
     }
 
     fn service_worker_runtime_target_for_session(
@@ -4362,12 +4366,14 @@ impl CdpConnection {
         else {
             return Err("UnknownSession".to_owned());
         };
-        let target = self
+        let context = self
             .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.service_worker_target(&target_id))
+            .ok_or_else(|| "UnknownSession".to_owned())?;
+        let target = context
+            .service_worker_target(&target_id)
             .ok_or_else(|| "UnknownSession".to_owned())?;
         Ok(ServiceWorkerRuntimeTargetRoute {
-            browser_context_id,
+            browser_context: context.browser_context_id(),
             version_id: target.renderer_version_id,
         })
     }
@@ -4413,8 +4419,8 @@ impl CdpConnection {
     ) -> Result<PendingSharedWorkerRuntimeProtocolMessageDispatch, String> {
         let route = self.shared_worker_runtime_target_for_session(session_id)?;
         let renderer_runtime = self
-            .browser_context_by_id(&route.browser_context_id)
-            .map(|context| context.renderer_runtime())
+            .browser_context_by_browser_id(route.browser_context)
+            .map(BrowserContext::worker_runtime_inspection_endpoint)
             .ok_or_else(|| "UnknownSession".to_owned())?;
         let worker = route.worker;
         let inspector_session_id = session_id.map(str::to_owned);
@@ -4648,8 +4654,8 @@ impl CdpConnection {
     ) -> Result<PendingServiceWorkerRuntimeProtocolMessageDispatch, String> {
         let route = self.service_worker_runtime_target_for_session(session_id)?;
         let renderer_runtime = self
-            .browser_context_by_id(&route.browser_context_id)
-            .map(|context| context.renderer_runtime())
+            .browser_context_by_browser_id(route.browser_context)
+            .map(BrowserContext::worker_runtime_inspection_endpoint)
             .ok_or_else(|| "UnknownSession".to_owned())?;
         let version_id = route.version_id;
         let inspector_session_id = session_id.map(str::to_owned);

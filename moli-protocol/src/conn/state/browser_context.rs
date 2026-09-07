@@ -11,7 +11,7 @@ use moli_core::browser::{BrowserContextId, NavigationId};
 use moli_core::network::{SharedWebStorageStore, new_shared_web_storage_store};
 use moli_core::runtime::{
     NavigationEngine, NavigationPageStorageHandles, NavigationResourceStorageHandles,
-    NavigationRuntimeConfig, RendererBrowserContextRuntime, RendererBrowserContextRuntimeOwner,
+    NavigationRuntimeConfig, RendererBrowserContextRuntimeOwner,
     RendererBrowserContextRuntimeOwnerAccess, RendererSharedWorkerRuntimeDiagnostics,
     storage_partition::StoragePartitionState,
 };
@@ -83,6 +83,7 @@ pub(in crate::conn) mod session;
 mod storage_partition;
 #[cfg(test)]
 mod tests;
+mod workers;
 pub(crate) use page_state::LoadedNavigationPageCommit;
 use physical::BrowserContext as PhysicalBrowserContext;
 pub(crate) use physical::{ContextEmulationDefaults, ContextNetworkPolicy};
@@ -654,12 +655,21 @@ impl BrowserContext {
             .usage_for_origin(serialized_origin)
     }
 
-    pub(crate) fn renderer_runtime(&self) -> RendererBrowserContextRuntime {
-        self.physical.renderer_runtime()
-    }
-
     pub(crate) fn renderer_runtime_owner_access(&self) -> RendererBrowserContextRuntimeOwnerAccess {
         self.physical.renderer_runtime_owner_access()
+    }
+
+    pub(crate) fn set_javascript_dialog_handler_enabled(&self, enabled: bool) {
+        self.physical
+            .renderer_runtime()
+            .set_javascript_dialog_handler_enabled(enabled);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn javascript_dialog_handler_enabled(&self) -> bool {
+        self.physical
+            .renderer_runtime()
+            .javascript_dialog_handler_enabled()
     }
 
     pub(crate) fn take_renderer_runtime_owner_for_teardown(
@@ -672,7 +682,7 @@ impl BrowserContext {
         &self,
         runtime_id: moli_core::RendererBrowserContextRuntimeId,
     ) -> bool {
-        self.renderer_runtime().id() == runtime_id
+        self.physical.renderer_runtime().id() == runtime_id
     }
 
     pub(crate) fn target_id_for_renderer_owner_local_host_id(
@@ -832,7 +842,7 @@ impl BrowserContext {
                 "estimatedDocumentIsolateCount": estimated_document_isolate_count,
                 "sharedWorkerTargetCount": self.shared_worker_targets.len(),
                 "serviceWorkerTargetCount": self.service_worker_targets.len(),
-                "browserContextRuntime": self.renderer_runtime().moli_memory_diagnostics(),
+                "browserContextRuntime": self.physical.renderer_runtime().moli_memory_diagnostics(),
             },
             "runtimeSession": runtime_session_diagnostics,
             "pageSession": page_session_diagnostics,
@@ -1055,7 +1065,8 @@ impl BrowserContext {
     pub(crate) fn shared_worker_runtime_diagnostics_for_diagnostics(
         &self,
     ) -> RendererSharedWorkerRuntimeDiagnostics {
-        self.renderer_runtime()
+        self.physical
+            .renderer_runtime()
             .shared_worker_runtime_diagnostics_for_diagnostics()
     }
 

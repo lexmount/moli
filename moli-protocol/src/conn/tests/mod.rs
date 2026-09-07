@@ -517,7 +517,7 @@ fn active_browser_context_installs_its_renderer_runtime_on_engine() {
     let mut conn = CdpConnection::new();
     let mut browser_context = conn.new_browser_context("CTX-runtime".to_owned());
     browser_context.set_active_target_id("TID-runtime");
-    let renderer_runtime = browser_context.renderer_runtime();
+    let renderer_runtime = browser_context.renderer_runtime_owner_access().runtime();
 
     conn.insert_browser_context(browser_context);
 
@@ -536,7 +536,7 @@ fn activating_inactive_browser_context_switches_engine_renderer_runtime() {
     conn.insert_browser_context(first);
     let mut second = conn.new_browser_context("CTX-second".to_owned());
     second.set_active_target_id("TID-second");
-    let second_renderer_runtime = second.renderer_runtime();
+    let second_renderer_runtime = second.renderer_runtime_owner_access().runtime();
     conn.insert_browser_context(second);
 
     assert!(conn.activate_browser_context_by_id("CTX-second"));
@@ -620,7 +620,7 @@ async fn removing_active_browser_context_switches_engine_to_activated_context() 
     conn.insert_browser_context(first);
     let mut second = conn.new_browser_context("CTX-second".to_owned());
     second.set_active_target_id("TID-second");
-    let second_renderer_runtime = second.renderer_runtime();
+    let second_renderer_runtime = second.renderer_runtime_owner_access().runtime();
     conn.insert_browser_context(second);
 
     let removed = conn
