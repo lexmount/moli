@@ -645,15 +645,61 @@ impl BrowserContext {
     pub(crate) fn devtools_target_infos(&self) -> Vec<DevToolsTargetInfo> {
         let mut infos = Vec::new();
         if let Some(target_id) = self.active_target_id() {
-            infos.push(
-                self.devtools_target_info(target_id)
-                    .expect("active target must remain addressable"),
-            );
+            infos.extend(self.devtools_target_info(target_id));
         }
         infos.extend(
             self.background_targets()
                 .filter_map(|target| self.devtools_target_info(target.target_id())),
         );
+        infos.extend(
+            self.shared_worker_targets
+                .values()
+                .map(|target| self.shared_worker_devtools_target_info(target)),
+        );
+        infos.extend(
+            self.dedicated_worker_targets
+                .values()
+                .map(|target| self.dedicated_worker_devtools_target_info(target)),
+        );
+        infos.extend(
+            self.service_worker_targets
+                .values()
+                .map(|target| self.service_worker_devtools_target_info(target)),
+        );
+        infos
+    }
+
+    /// Terminal projection data must not query a Context already retired by
+    /// the Browser. Destruction uses the last projected URL/title and identity.
+    pub(crate) fn retired_devtools_target_infos(&self) -> Vec<DevToolsTargetInfo> {
+        let mut infos = self
+            .page_targets
+            .iter()
+            .map(|target| DevToolsTargetInfo {
+                target_id: Some(DevToolsTargetId::from(target.target_id())),
+                kind: DevToolsTargetKind::Page,
+                title: target
+                    .owner_state
+                    .committed_document_title()
+                    .unwrap_or_default()
+                    .to_owned(),
+                url: target.target_url().to_owned(),
+                attached: target.has_session()
+                    || target
+                        .devtools_sessions
+                        .attached_session_ids()
+                        .next()
+                        .is_some(),
+                opener_id: None,
+                opener_frame_id: target
+                    .opener_frame_id
+                    .as_deref()
+                    .map(crate::devtools_runtime::DevToolsFrameId::from),
+                can_access_opener: false,
+                browser_context_id: Some(DevToolsBrowserContextId::from(self.id.as_str())),
+                moli_popup_id: None,
+            })
+            .collect::<Vec<_>>();
         infos.extend(
             self.shared_worker_targets
                 .values()

@@ -34,6 +34,7 @@ const PAGE_SCREENCAST_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 mod actor;
 mod adapter_scheduler;
+mod browser_events;
 mod command_dispatch;
 mod frontend_control;
 mod protocol_residence;
@@ -110,6 +111,7 @@ pub(crate) enum CommandStartAction {
 
 pub(crate) struct CdpScheduler {
     conn: CdpConnection,
+    browser_event_rx: Option<moli_core::browser::BrowserEventReceiver>,
     pending_navigation_background_events: VecDeque<PendingNavigationBackgroundEvent>,
     renderer_command_response_order: RendererCommandResponseOrder,
     queues: SchedulerQueues,
@@ -246,15 +248,22 @@ pub(crate) struct CdpSchedulerEventReceivers {
 /// value in the caller makes ownership unambiguous: once dequeued, the input
 /// is completed before the command wait selects again.
 pub(crate) enum CdpSchedulerInterleavedInput {
+    BrowserEvent(browser_events::BrowserEventInput),
     BackgroundNavigationCompletion(BackgroundNavigationCompletion),
     BackgroundEvent(BackgroundProtocolEvent),
     RendererPublication(RendererOutputTransportMessage),
 }
 
 impl CdpSchedulerEventReceivers {
-    pub(crate) async fn recv_interleaved_input(&mut self) -> Option<CdpSchedulerInterleavedInput> {
+    async fn recv_interleaved_input(
+        &mut self,
+        browser_event_rx: &mut Option<moli_core::browser::BrowserEventReceiver>,
+    ) -> Option<CdpSchedulerInterleavedInput> {
         tokio::select! {
             biased;
+            event = browser_events::recv_browser_event(browser_event_rx) => {
+                Some(CdpSchedulerInterleavedInput::BrowserEvent(event))
+            }
             maybe_completion = self.background_navigation_completion_rx.recv() => {
                 maybe_completion.map(
                     CdpSchedulerInterleavedInput::BackgroundNavigationCompletion,
@@ -698,8 +707,12 @@ impl CdpScheduler {
     }
 
     fn new(conn: CdpConnection) -> Self {
+        let (_, browser_events) = conn
+            .subscribe_browser_events()
+            .expect("a scheduler must subscribe to its live Browser owner");
         Self {
             conn,
+            browser_event_rx: Some(browser_events),
             pending_navigation_background_events: VecDeque::new(),
             renderer_command_response_order: RendererCommandResponseOrder::default(),
             queues: SchedulerQueues::default(),
@@ -956,6 +969,7 @@ impl CdpScheduler {
         drain_load_completion: bool,
         background_command_id: Option<u64>,
     ) -> DevToolsCommandExecution {
+        let mut protocol_output = self.drain_browser_events().await;
         let navigation_wait = devtools_navigation_wait(&command);
         let navigation_context = command.context().clone();
         let outcome = self
@@ -968,7 +982,6 @@ impl CdpScheduler {
         let (mut result, scheduler_events, protocol_events, renderer_output_predecessor) =
             outcome.into_complete_parts();
         self.apply_scheduler_events(scheduler_events);
-        let mut protocol_output = ProtocolOutputSequence::empty();
         if let Some(predecessor) = renderer_output_predecessor {
             if let Some(receivers) = receivers {
                 match self
@@ -1168,6 +1181,7 @@ impl CdpScheduler {
         background_command_id: Option<u64>,
         expected_page: Option<&DevToolsPageResidenceIdentity>,
     ) -> DevToolsPageCommandExecution {
+        let mut protocol_output = self.drain_browser_events().await;
         let navigation_wait = devtools_navigation_wait(&command);
         let navigation_lifecycle_milestone =
             devtools_navigation_lifecycle_milestone(navigation_wait);
@@ -1178,16 +1192,17 @@ impl CdpScheduler {
                 .devtools_context_routes_to_top_level_target(&navigation_context);
         let mut foreground_navigation_network_barrier =
             ForegroundNavigationNetworkBarrier::for_navigation_wait(navigation_wait);
-        let mut protocol_output = match self
+        match self
             .drain_inflight_background_navigation_before_internal_command(
                 receivers,
                 &navigation_context,
             )
             .await
         {
-            Ok(output) => output,
+            Ok(output) => protocol_output.append(output),
             Err(failure) => {
-                let (protocol_output, error) = failure.into_parts();
+                let (output, error) = failure.into_parts();
+                protocol_output.append(output);
                 return DevToolsPageCommandExecution {
                     execution: DevToolsCommandExecution {
                         result: Err(error),
@@ -1428,7 +1443,7 @@ impl CdpScheduler {
             .conn
             .has_inflight_background_navigation_for_devtools_context(context)
         {
-            let Some(input) = receivers.recv_interleaved_input().await else {
+            let Some(input) = self.recv_interleaved_input(receivers).await else {
                 return Err(RendererOutputTransportFailure::new(
                     out,
                     renderer_output_transport_terminal_error(
@@ -1457,7 +1472,7 @@ impl CdpScheduler {
             .devtools_document_lifecycle_wait_state(context, key)
             == moli_protocol::DevToolsDocumentLifecycleWaitState::Pending
         {
-            let Some(input) = receivers.recv_interleaved_input().await else {
+            let Some(input) = self.recv_interleaved_input(receivers).await else {
                 return Err(RendererOutputTransportFailure::new(
                     out,
                     renderer_output_transport_terminal_error(
@@ -1669,7 +1684,8 @@ impl CdpScheduler {
                         DevToolsError::new(DevToolsErrorKind::Timeout, "navigation wait timed out"),
                     ));
                 };
-                match tokio::time::timeout(remaining, receivers.recv_interleaved_input()).await {
+                match tokio::time::timeout(remaining, self.recv_interleaved_input(receivers)).await
+                {
                     Ok(progress) => progress,
                     Err(_) => {
                         return Err(RendererOutputTransportFailure::without_output(
@@ -1681,7 +1697,7 @@ impl CdpScheduler {
                     }
                 }
             }
-            None => receivers.recv_interleaved_input().await,
+            None => self.recv_interleaved_input(receivers).await,
         };
         let input = input.ok_or_else(|| {
             RendererOutputTransportFailure::without_output(DevToolsError::new(
@@ -1761,7 +1777,7 @@ impl CdpScheduler {
             if !self.has_deferred_main_document_load_completion_for_devtools_context(context) {
                 return Ok(out);
             }
-            let Some(input) = receivers.recv_interleaved_input().await else {
+            let Some(input) = self.recv_interleaved_input(receivers).await else {
                 return Err(RendererOutputTransportFailure::new(
                     out,
                     renderer_output_transport_terminal_error(
@@ -1984,6 +2000,9 @@ impl CdpScheduler {
         input: CdpSchedulerInterleavedInput,
     ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
         match input {
+            CdpSchedulerInterleavedInput::BrowserEvent(event) => {
+                Ok(self.handle_browser_event(event).await)
+            }
             CdpSchedulerInterleavedInput::BackgroundNavigationCompletion(completion) => {
                 self.drain_background_navigation_completion_with_progress_barrier(
                     completion, receivers,

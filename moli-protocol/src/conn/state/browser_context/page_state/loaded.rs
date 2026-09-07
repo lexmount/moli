@@ -287,6 +287,13 @@ impl BrowserContext {
 
     pub(crate) async fn close_all_pages_async(&mut self) {
         let closing_contents = self.browser_context.close_all_web_contents();
+        self.retire_page_projections();
+        for closing in closing_contents {
+            closing.close_async().await;
+        }
+    }
+
+    pub(crate) fn retire_page_projections(&mut self) {
         let mut projections = std::mem::take(&mut self.page_targets);
         for target in projections.iter_mut() {
             target.runtime_slot.retire_for_target_close();
@@ -294,9 +301,6 @@ impl BrowserContext {
         self.target_popup_ids.clear();
         self.pending_popup_javascript_dialogs.clear();
         drop(projections);
-        for closing in closing_contents {
-            closing.close_async().await;
-        }
     }
 }
 

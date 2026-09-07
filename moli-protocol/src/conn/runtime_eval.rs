@@ -1888,6 +1888,84 @@ impl CdpConnection {
             .is_some_and(DevToolsSessionState::has_pending_inspector_awaits)
     }
 
+    /// Drain the removed projection directly. Resolving a session through the
+    /// current Browser would either fail or select a different surviving page.
+    pub(crate) fn retire_browser_context_inspector_calls(
+        context: &mut crate::conn::BrowserContext,
+        out: &mut Vec<BackgroundProtocolEvent>,
+    ) {
+        const REASON: &str = "Render process gone.";
+        let mut claimed = Vec::new();
+        for target in context.page_targets.iter_mut() {
+            let primary_owner =
+                CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
+                    browser_context_id: context.id.clone(),
+                    target_id: target.target_id().to_owned(),
+                    session_key: moli_page_types::DevToolsSessionKey::Primary,
+                });
+            let sessions = std::iter::once((
+                target.session_id().map(str::to_owned),
+                moli_page_types::DevToolsSessionKey::Primary,
+            ))
+            .chain(
+                target
+                    .devtools_sessions
+                    .attached_session_ids()
+                    .map(|session| {
+                        (
+                            Some(session.to_owned()),
+                            moli_page_types::DevToolsSessionKey::Attached(session.to_owned()),
+                        )
+                    }),
+            )
+            .collect::<Vec<_>>();
+            for (session_id, key) in sessions {
+                let state = target.devtools_sessions.ensure_session(&key);
+                for (id, entry) in state.drain_pending_inspector_awaits() {
+                    if entry.bidi_channel_listener().is_some() {
+                        continue;
+                    }
+                    let owner = entry
+                        .session_id()
+                        .map(CommandOwnerScope::for_session)
+                        .unwrap_or_else(|| primary_owner.clone());
+                    push_drained_pending_inspector_await_error(
+                        out,
+                        &mut claimed,
+                        id,
+                        &owner,
+                        &entry,
+                        REASON,
+                    );
+                }
+                push_terminated_renderer_call_error_background_events(
+                    out,
+                    state.terminate_all_renderer_calls(REASON),
+                    session_id.as_deref(),
+                    REASON,
+                );
+            }
+        }
+        for target in context.shared_worker_targets.values_mut().chain(
+            context
+                .dedicated_worker_targets
+                .values_mut()
+                .map(|target| &mut target.inner),
+        ) {
+            for session in target.session_ids() {
+                Self::fail_pending_inspector_awaits_from_shared_worker_target_session_background_events_into(
+                    out, &mut claimed, target, &session, REASON,
+                );
+            }
+        }
+        for target in context.service_worker_targets.values_mut() {
+            Self::fail_pending_inspector_awaits_from_service_worker_target_state_background_events_into(
+                out, &mut claimed, target, REASON,
+            );
+        }
+        out.extend(claimed);
+    }
+
     pub(crate) fn fail_pending_inspector_awaits_from_shared_worker_target_session_background_events_into(
         out: &mut Vec<BackgroundProtocolEvent>,
         claimed_events: &mut Vec<BackgroundProtocolEvent>,

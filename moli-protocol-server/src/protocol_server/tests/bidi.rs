@@ -370,6 +370,77 @@ async fn websocket_bidi_existing_classic_session_shares_classic_runtime_context(
 }
 
 #[tokio::test]
+async fn classic_observes_native_context_disposal_with_and_without_bidi() {
+    for attached in [false, true] {
+        let (addr, server, browser) = super::browser_events::server_with_browser().await;
+        let (_, mut events) = browser.subscribe().unwrap();
+        let session = classic_new_session_on_server(addr).await;
+        let marker = classic_request_on_server_with_body(
+            addr,
+            "POST",
+            &format!("/session/{session}/execute/sync"),
+            json!({"script": "return 73;", "args": []}),
+        )
+        .await;
+        assert_eq!(marker["value"], 73);
+        let moli_core::browser::BrowserEvent::ContextCreated(context) =
+            events.try_recv().unwrap().event
+        else {
+            panic!("expected the Classic physical Context");
+        };
+        let mut bidi = if attached {
+            let mut socket = connect_classic_session_bidi_socket(addr, &session).await;
+            send_bidi_command(
+                &mut socket,
+                1,
+                "session.subscribe",
+                json!({"events": ["browsingContext.contextDestroyed"]}),
+            )
+            .await;
+            Some(socket)
+        } else {
+            None
+        };
+        assert!(browser.remove_context(context).unwrap());
+        if let Some(socket) = bidi.as_mut() {
+            recv_until_match(socket, |message| {
+                message["method"] == "browsingContext.contextDestroyed"
+            })
+            .await;
+        }
+        let windows = classic_request_on_server_with_body(
+            addr,
+            "GET",
+            &format!("/session/{session}/window/handles"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(windows["value"], json!([]));
+        let (status, stale) = classic_request_status_on_server_with_body(
+            addr,
+            "POST",
+            &format!("/session/{session}/execute/sync"),
+            json!({"script": "return 1;", "args": []}),
+        )
+        .await;
+        assert_eq!(status, 404);
+        assert_eq!(stale["value"]["error"], "no such window");
+        let deleted = classic_request_on_server_with_body(
+            addr,
+            "DELETE",
+            &format!("/session/{session}"),
+            json!({}),
+        )
+        .await;
+        assert_eq!(deleted, json!({"value": null}));
+        if let Some(mut socket) = bidi {
+            let _ = socket.close(None).await;
+        }
+        abort_test_cdp_server(server).await;
+    }
+}
+
+#[tokio::test]
 async fn classic_delete_session_retires_browser_work_after_bidi_detach() {
     assert_classic_delete_session_retires_browser_work(true).await;
 }

@@ -254,6 +254,18 @@ async fn run_cdp_scheduler_actor(
     let mut frontend_control = CdpFrontendControlState::default();
 
     loop {
+        let browser_output = scheduler.drain_browser_events().await;
+        if !flush_protocol_output_with_runtime_deferred_reply_routing(
+            &frontend_router,
+            &mut scheduler,
+            &mut pending_runtime_deferred_replies,
+            browser_output,
+        )
+        .await
+            || scheduler.is_browser_closed()
+        {
+            break;
+        }
         if scheduler_input_rx.renderer_publication_rx.is_closed() {
             break;
         }
@@ -263,6 +275,14 @@ async fn run_cdp_scheduler_actor(
         let page_screencast_deadline = scheduler.next_page_screencast_deadline();
         tokio::select! {
             biased;
+            event = scheduler.recv_browser_event() => {
+                let output = scheduler.handle_browser_event(event).await;
+                if !flush_protocol_output_with_runtime_deferred_reply_routing(
+                    &frontend_router, &mut scheduler, &mut pending_runtime_deferred_replies, output,
+                ).await {
+                    break;
+                }
+            }
             maybe_completion = pending_command_completion_rx.recv(), if !in_flight_commands.is_empty() => {
                 let Some(completion) = maybe_completion else {
                     break;

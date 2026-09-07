@@ -38,6 +38,85 @@ use super::{
     next_page_screencast_deadline, page_screencast_interval,
 };
 
+#[tokio::test]
+async fn native_context_disposal_invalidates_shared_frontend_projection() {
+    for protocol in [
+        DevToolsProtocol::Cdp,
+        DevToolsProtocol::WebDriverBidi,
+        DevToolsProtocol::WebDriverClassic,
+    ] {
+        let service = moli_core::browser::BrowserService::start().unwrap();
+        let browser = service.handle();
+        let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
+            browser.clone(),
+            moli_protocol::CdpInitialStoragePartition::memory(),
+            Default::default(),
+        );
+        let context = scheduler
+            .conn
+            .browser_contexts()
+            .next()
+            .expect("materialized default Context")
+            .browser_context_id();
+        let created = scheduler
+            .execute_internal_protocol_message(
+                &mut receivers,
+                json!({
+                    "id": 1, "method": "Target.setDiscoverTargets", "params": {"discover": true},
+                }),
+            )
+            .await
+            .unwrap_or_else(|failure| panic!("discovery failed: {:?}", failure.into_parts().1))
+            .into_messages();
+        assert!(
+            created
+                .iter()
+                .any(|message| message["method"] == "Target.targetCreated")
+        );
+        assert!(browser.remove_context(context).unwrap());
+
+        let execution = scheduler
+            .execute_devtools_command_with_external_load_wait_and_protocol_messages(
+                &mut receivers,
+                DevToolsCommand::GetTargets(
+                    moli_protocol::devtools_runtime::DevToolsGetTargetsCommand {
+                        context: DevToolsCommandContext {
+                            protocol,
+                            session_id: None,
+                            target_id: None,
+                            browser_context_id: None,
+                        },
+                        root: None,
+                        max_depth: None,
+                        filter: None,
+                    },
+                ),
+            )
+            .await;
+        let DevToolsCommandResult::GetTargets(result) = execution.result.unwrap() else {
+            panic!("expected the surviving Browser's target listing");
+        };
+        assert!(
+            result.targets.is_empty(),
+            "disposed Context must have no projected targets"
+        );
+        assert!(scheduler.conn.browser_contexts().next().is_none());
+        assert!(
+            execution
+                .protocol_output
+                .into_messages()
+                .iter()
+                .any(|message| {
+                    message["method"] == "Target.targetDestroyed"
+                        && message["params"]["targetId"]
+                            == moli_protocol::DEFAULT_CDP_PAGE_TARGET_ID
+                }),
+            "the Browser disposal must publish target destruction"
+        );
+        service.shutdown();
+    }
+}
+
 #[test]
 fn screencast_deadlines_are_one_hz_downsampled_without_catch_up() {
     let started = tokio::time::Instant::now();
