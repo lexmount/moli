@@ -2409,6 +2409,7 @@ impl PageScriptHost {
                     policy_container.response_content_security_policies.clone();
             }
             let loaded = LoadedChildDocument {
+                request_referrer: None,
                 final_url: snapshot.url,
                 policy_container,
                 content_type: snapshot.content_type,
@@ -2490,6 +2491,7 @@ impl PageScriptHost {
                 );
                 Ok(PopupDocumentLoadOutcome::Loaded(Box::new(
                     LoadedChildDocument {
+                        request_referrer: None,
                         final_url: head.final_url,
                         policy_container,
                         content_type,

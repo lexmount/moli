@@ -249,6 +249,10 @@ impl ChildBrowsingContextEntry {
         self.document_policy_container.document_referrer.as_str()
     }
 
+    pub(super) fn set_document_referrer(&mut self, referrer: String) {
+        self.document_policy_container.document_referrer = referrer;
+    }
+
     pub(super) fn document_referrer_policy(&self) -> Option<&str> {
         self.document_policy_container.referrer_policy.as_deref()
     }

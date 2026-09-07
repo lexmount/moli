@@ -197,6 +197,10 @@ impl PageScriptHost {
                     .and_then(|entry| entry.navigation_entry_seed().session_history.admitted_entry),
                 target,
                 target_url: target_url.clone(),
+                use_request_referrer: matches!(
+                    &bootstrap,
+                    ChildBrowsingContextBootstrap::Request(_)
+                ),
                 resource_loader: resource_loader.clone(),
                 reserved_service_worker_client_id: service_worker_client_id,
                 document_credentialless,
@@ -674,6 +678,11 @@ impl PageScriptHost {
                     document_credentialless,
                     credentialless_storage_nonce,
                 );
+                if pending.use_request_referrer
+                    && let Some(referrer) = loaded.request_referrer
+                {
+                    entry.set_document_referrer(referrer);
+                }
                 let resource_was_cached = loaded
                     .document_network
                     .as_ref()
@@ -964,6 +973,7 @@ impl PageScriptHost {
                         request,
                         head,
                         moli_fetch::ResponseBody::materialized_bytes(body),
+                        None,
                     )
                 }),
             None => Err(UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP.to_owned()),
@@ -1326,8 +1336,11 @@ impl ChildDocumentFetch {
                 .request
                 .take()
                 .ok_or_else(|| UNSUPPORTED_CHILD_DOCUMENT_BOOTSTRAP.to_owned())?;
+            let wire_referrer = response
+                .network_request_headers()
+                .map(referrer_from_request_headers);
             let (head, body) = response.into_body();
-            self.accept_response(request, head, body)
+            self.accept_response(request, head, body, wire_referrer)
         });
         self.complete_hop(result);
     }
@@ -1345,7 +1358,9 @@ impl ChildDocumentFetch {
         mut request: crate::network::navigation::NavigationInterception,
         head: moli_fetch::ResponseHead,
         body: moli_fetch::ResponseBody,
+        wire_referrer: Option<String>,
     ) -> Result<Option<ChildDocumentLoadOutcome>, String> {
+        let known_redirects = request.request().redirect_chain().len();
         if let Some(redirect) = request
             .follow_redirect(&head)
             .map_err(|error| error.to_string())?
@@ -1374,7 +1389,24 @@ impl ChildDocumentFetch {
         } else {
             None
         };
-        child_document_load_outcome_from_response(
+        let referrer = wire_referrer
+            .or_else(|| {
+                head.redirect_chain
+                    .last()
+                    .and_then(|redirect| redirect.dispatched_request.as_ref())
+                    .map(|request| referrer_from_request_headers(&request.headers))
+            })
+            .or_else(|| {
+                // Cached or synthetic responses may have no wire observation.
+                // Apply any redirect policies that this request did not follow itself.
+                let mut request = request.clone();
+                for hop in head.redirect_chain.iter().skip(known_redirects) {
+                    request.update_referrer_for_redirect(&hop.from_url, &hop.headers);
+                }
+                request.referrer_header_value(&head.final_url)
+            })
+            .unwrap_or_default();
+        let mut outcome = child_document_load_outcome_from_response(
             request.url.as_str().to_owned(),
             request.method.clone(),
             request.request_headers.to_byte_strings(),
@@ -1385,8 +1417,11 @@ impl ChildDocumentFetch {
             self.download_policy,
             self.response_body.take(),
             resource_timing_status,
-        )
-        .map(Some)
+        )?;
+        if let ChildDocumentLoadOutcome::Loaded(loaded) = &mut outcome {
+            loaded.request_referrer = Some(referrer);
+        }
+        Ok(Some(outcome))
     }
 
     fn complete_hop(self, result: Result<Option<ChildDocumentLoadOutcome>, String>) {
@@ -1535,9 +1570,18 @@ fn child_document_load_outcome_from_response(
             content_type,
             character_set,
             markup,
+            request_referrer: None,
             document_network: Some(network),
         },
     )))
+}
+
+fn referrer_from_request_headers(headers: &[(String, String)]) -> String {
+    headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("referer"))
+        .map(|(_, value)| value.clone())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

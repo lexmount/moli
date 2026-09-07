@@ -880,6 +880,17 @@ fn child_meta_refresh_callback<'s>(
     // Keep the Document's revision counter so a later identical declaration
     // cannot authorize a stale callback from an earlier schedule.
     task.timer_id = None;
+    let dispatch = super::OwnerDispatchScope::Child(handle);
+    let initiator = (|| {
+        let url = host.child_browsing_context_current_url(handle)?;
+        let loader = host.document_resource_loader_for_dispatch_scope(dispatch)?;
+        let policy = host.document_policy_container_for_inheritance(dispatch)?;
+        Some(crate::runtime::RendererNavigationInitiator::new(
+            url,
+            loader.fetch_context().request_origin(),
+            policy.referrer_policy,
+        ))
+    })();
     let Some(window) = host.child_browsing_context_window_wrapper(scope, handle) else {
         return;
     };
@@ -889,7 +900,13 @@ fn child_meta_refresh_callback<'s>(
     else {
         return;
     };
-    navigate_child_meta_refresh(scope, location, &navigation.url, navigation.delay_ms);
+    navigate_child_meta_refresh(
+        scope,
+        location,
+        &navigation.url,
+        navigation.delay_ms,
+        initiator,
+    );
 }
 
 fn child_meta_refresh_handle_from_data(

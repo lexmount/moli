@@ -67,6 +67,13 @@ pub(crate) fn resolve_cross_window_location_target(
         .map(|url| url.to_string())
 }
 
+#[derive(Default)]
+struct LocationNavigationOptions {
+    dispatch_child_navigate_event_for_all_kinds: bool,
+    force_exact_same_document_navigation: bool,
+    child_navigation_initiator: Option<crate::runtime::RendererNavigationInitiator>,
+}
+
 pub(crate) fn navigate_location_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     location: v8::Local<'s, v8::Object>,
@@ -74,7 +81,12 @@ pub(crate) fn navigate_location_object<'s>(
     raw_target: Option<String>,
 ) {
     navigate_location_object_with_source_element_and_child_navigate_event(
-        scope, location, kind, raw_target, None, false, false,
+        scope,
+        location,
+        kind,
+        raw_target,
+        None,
+        LocationNavigationOptions::default(),
     );
 }
 
@@ -121,8 +133,10 @@ pub(crate) fn navigate_top_level_same_document_from_browser(
         kind,
         Some(target),
         None,
-        false,
-        true,
+        LocationNavigationOptions {
+            force_exact_same_document_navigation: true,
+            ..Default::default()
+        },
     );
     true
 }
@@ -172,8 +186,10 @@ pub(crate) fn navigate_top_level_meta_refresh(
         kind,
         Some(target.to_string()),
         None,
-        false,
-        same_document_fragment,
+        LocationNavigationOptions {
+            force_exact_same_document_navigation: same_document_fragment,
+            ..Default::default()
+        },
     );
     context_host_ptr_from_global_bridge(scope)
         .is_some_and(|host_ptr| unsafe { &*host_ptr }.has_pending_location_navigation())
@@ -188,6 +204,7 @@ pub(crate) fn navigate_child_meta_refresh<'s>(
     location: v8::Local<'s, v8::Object>,
     target: &url::Url,
     delay_ms: u32,
+    child_navigation_initiator: Option<crate::runtime::RendererNavigationInitiator>,
 ) {
     let Some(current_href) = location_href_slot(scope, location) else {
         return;
@@ -204,8 +221,11 @@ pub(crate) fn navigate_child_meta_refresh<'s>(
         kind,
         Some(target.to_string()),
         None,
-        true,
-        same_document_fragment,
+        LocationNavigationOptions {
+            dispatch_child_navigate_event_for_all_kinds: true,
+            force_exact_same_document_navigation: same_document_fragment,
+            child_navigation_initiator,
+        },
     );
 }
 
@@ -222,8 +242,7 @@ pub(crate) fn navigate_location_object_with_source_element<'s>(
         kind,
         raw_target,
         source_element,
-        false,
-        false,
+        LocationNavigationOptions::default(),
     );
 }
 
@@ -234,7 +253,15 @@ pub(crate) fn navigate_location_object_with_child_navigate_event<'s>(
     raw_target: Option<String>,
 ) {
     navigate_location_object_with_source_element_and_child_navigate_event(
-        scope, location, kind, raw_target, None, true, false,
+        scope,
+        location,
+        kind,
+        raw_target,
+        None,
+        LocationNavigationOptions {
+            dispatch_child_navigate_event_for_all_kinds: true,
+            ..Default::default()
+        },
     );
 }
 
@@ -244,9 +271,13 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
     kind: LocationNavigationKind,
     raw_target: Option<String>,
     source_element: Option<v8::Local<'s, v8::Object>>,
-    dispatch_child_navigate_event_for_all_kinds: bool,
-    force_exact_same_document_navigation: bool,
+    options: LocationNavigationOptions,
 ) {
+    let LocationNavigationOptions {
+        dispatch_child_navigate_event_for_all_kinds,
+        force_exact_same_document_navigation,
+        child_navigation_initiator,
+    } = options;
     let owner = runtime_window_owner(scope, location);
     if let Some(context) = location.get_creation_context(scope)
         && let Some(host_ptr) = crate::util::context_host_ptr_from_context_slot(context)
@@ -654,7 +685,21 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         }
         if let Some(host_ptr) = host_ptr {
             let host = unsafe { &mut *host_ptr };
-            if matches!(kind, LocationNavigationKind::Reload) {
+            if matches!(resolved.scheme(), "http" | "https")
+                && let Some(initiator) = child_navigation_initiator
+            {
+                host.queue_child_browsing_context_request_without_seed_update(
+                    scope,
+                    handle,
+                    crate::native_bridge::ChildBrowsingContextNavigationRequest {
+                        initiator,
+                        url: resolved,
+                        method: "GET".to_owned(),
+                        body: None,
+                        request_headers: Vec::new(),
+                    },
+                );
+            } else if matches!(kind, LocationNavigationKind::Reload) {
                 host.queue_child_browsing_context_reload_from_existing_seed(
                     scope,
                     handle,

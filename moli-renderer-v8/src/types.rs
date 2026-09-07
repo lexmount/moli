@@ -1706,6 +1706,7 @@ impl ChildModulepreloadFetchCompletion {
 #[derive(Debug)]
 pub(super) struct LoadedChildDocument {
     pub(super) final_url: Url,
+    pub(super) request_referrer: Option<String>,
     pub(super) policy_container: DocumentPolicyContainer,
     pub(super) content_type: Option<String>,
     pub(super) character_set: String,
