@@ -2524,14 +2524,7 @@ fn web_audio_declared_fixed_own_methods_keep_descriptors() {
     ctx: ["addEventListener", "removeEventListener", "dispatchEvent"].map(name => describe(ctx, name)),
     osc: ["connect", "disconnect", "start"].map(name => describe(osc, name)),
     comp: ["connect", "disconnect"].map(name => describe(comp, name)),
-    analyser: [
-      "connect",
-      "disconnect",
-      "getFloatFrequencyData",
-      "getFloatTimeDomainData",
-      "getByteFrequencyData",
-      "getByteTimeDomainData"
-    ].map(name => describe(analyser, name)),
+    analyser: ["connect", "disconnect"].map(name => describe(analyser, name)),
     param: describe(osc.frequency, "setValueAtTime")
   });
 })()
@@ -2541,7 +2534,7 @@ fn web_audio_declared_fixed_own_methods_keep_descriptors() {
 
     assert_eq!(
         result,
-        r#"{"ctxKeys":"addEventListener,removeEventListener,dispatchEvent","oscKeys":"","compKeys":"","analyserKeys":"","paramKeys":"","ctx":["addEventListener:true:true:true:function:addEventListener:0","removeEventListener:true:true:true:function:removeEventListener:0","dispatchEvent:true:true:true:function:dispatchEvent:0"],"osc":["connect:false:true:true:function:connect:1","disconnect:false:true:true:function:disconnect:0","start:false:true:true:function:start:1"],"comp":["connect:false:true:true:function:connect:1","disconnect:false:true:true:function:disconnect:0"],"analyser":["connect:false:true:true:function:connect:1","disconnect:false:true:true:function:disconnect:0","getFloatFrequencyData:false:true:true:function:getFloatFrequencyData:1","getFloatTimeDomainData:false:true:true:function:getFloatTimeDomainData:1","getByteFrequencyData:false:true:true:function:getByteFrequencyData:1","getByteTimeDomainData:false:true:true:function:getByteTimeDomainData:1"],"param":"setValueAtTime:false:true:true:function:setValueAtTime:2"}"#
+        r#"{"ctxKeys":"addEventListener,removeEventListener,dispatchEvent","oscKeys":"","compKeys":"","analyserKeys":"","paramKeys":"","ctx":["addEventListener:true:true:true:function:addEventListener:0","removeEventListener:true:true:true:function:removeEventListener:0","dispatchEvent:true:true:true:function:dispatchEvent:0"],"osc":["connect:false:true:true:function:connect:1","disconnect:false:true:true:function:disconnect:0","start:false:true:true:function:start:1"],"comp":["connect:false:true:true:function:connect:1","disconnect:false:true:true:function:disconnect:0"],"analyser":["connect:false:true:true:function:connect:1","disconnect:false:true:true:function:disconnect:0"],"param":"setValueAtTime:false:true:true:function:setValueAtTime:2"}"#
     );
 }
 
@@ -2723,6 +2716,7 @@ fn web_audio_internal_maps_and_errors_ignore_public_primordial_overrides() {
   globalThis.__webAudioPrimordialProbe = {
     contextTag: Object.prototype.toString.call(context),
     closedTag: Object.prototype.toString.call(closed),
+    closedState: context.state,
     rejection: "pending"
   };
   rejected.catch(error => {
@@ -2744,7 +2738,7 @@ fn web_audio_internal_maps_and_errors_ignore_public_primordial_overrides() {
         .expect("WebAudio primordial override probe should evaluate");
     assert_eq!(
         result,
-        r#"{"contextTag":"[object AudioContext]","closedTag":"[object Promise]","rejection":"TypeError:true"}"#
+        r#"{"contextTag":"[object AudioContext]","closedTag":"[object Promise]","closedState":"closed","rejection":"TypeError:true"}"#
     );
 }
 

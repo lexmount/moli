@@ -66,6 +66,61 @@ fn run_eval_source(
 }
 
 #[test]
+fn eval_can_use_realtime_audio_oscillator_and_analyser_shims() -> Result<()> {
+    let output = run_eval(
+        "data:text/html,<!doctype html><title>Web Audio</title>",
+        r#"(async () => {
+          const context = new AudioContext();
+          const oscillator = context.createOscillator();
+          const analyser = context.createAnalyser();
+          oscillator.type = 'triangle';
+          oscillator.frequency.setValueAtTime(880, context.currentTime);
+          analyser.fftSize = 32;
+          const connected = oscillator.connect(analyser).connect(context.destination);
+          oscillator.start(0);
+          const frequencies = new Float32Array(analyser.frequencyBinCount + 1).fill(42);
+          const readResult = analyser.getFloatFrequencyData(frequencies);
+          const waveform = new Uint8Array(analyser.fftSize);
+          analyser.getByteTimeDomainData(waveform);
+          oscillator.disconnect();
+          analyser.disconnect();
+          await context.close();
+          return {
+            oscillator: oscillator instanceof OscillatorNode,
+            frequency: oscillator.frequency.value,
+            analyser: analyser instanceof AnalyserNode,
+            connected: connected === context.destination,
+            readReturnedUndefined: readResult === undefined,
+            bins: analyser.frequencyBinCount,
+            filled: frequencies.slice(0, -1).every(value => Number.isFinite(value) && value < 0),
+            untouchedTail: frequencies[analyser.frequencyBinCount],
+            silentWaveform: waveform.every(value => value === 128),
+            state: context.state
+          };
+        })()"#,
+        &[],
+    )?;
+    assert!(output.status.success(), "{}", clean_output(&output.stderr));
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)?;
+    assert_eq!(
+        value,
+        serde_json::json!({
+            "oscillator": true,
+            "frequency": 880,
+            "analyser": true,
+            "connected": true,
+            "readReturnedUndefined": true,
+            "bins": 16,
+            "filled": true,
+            "untouchedTail": 42,
+            "silentWaveform": true,
+            "state": "closed"
+        })
+    );
+    Ok(())
+}
+
+#[test]
 fn eval_computed_sizes_only_use_existing_geometry_with_or_without_css() -> Result<()> {
     let url = "data:text/html,<!doctype html><div id=target style=\"max-width:20px\"></div><canvas id=canvas style=\"max-width:40px\"></canvas>";
     let script = r#"(() => {

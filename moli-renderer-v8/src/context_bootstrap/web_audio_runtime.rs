@@ -4,6 +4,7 @@ use super::media_queries::{
     simple_event_target_remove_event_listener_callback,
 };
 use super::*;
+use crate::native_bridge::throw_dom_exception;
 use crate::util::{
     array_push_value, call_object_method, get_private_value, object_string_property,
     set_private_value, set_symbol_to_string_tag,
@@ -30,7 +31,7 @@ const OFFLINE_AUDIO_COMPLETE_CONTEXT_SLOT: &str = "__moliOfflineAudioCompleteCon
 const OFFLINE_AUDIO_COMPLETE_BUFFER_SLOT: &str = "__moliOfflineAudioCompleteBuffer";
 const OFFLINE_AUDIO_COMPRESSORS_SLOT: &str = "__moliOfflineAudioCompressors";
 const DYNAMICS_COMPRESSOR_REDUCTION_SLOT: &str = "__moliDynamicsCompressorReduction";
-const MAX_AUDIO_ANALYSER_ARRAY_FILL_LENGTH: u32 = 1 << 24;
+const ANALYSER_FFT_SIZE_SLOT: &str = "__moliAnalyserFftSize";
 
 #[derive(WebApiObject)]
 #[webapi(interface = "AudioContext")]
@@ -203,10 +204,8 @@ struct DynamicsCompressorNodePrototypeDeclaration {
 #[derive(WebApiObject)]
 #[webapi(interface = "AnalyserNode")]
 struct AnalyserNodeObjectDeclaration {
-    #[webapi(data_property = "fftSize")]
+    #[webapi(slot = ANALYSER_FFT_SIZE_SLOT)]
     fft_size: f64,
-    #[webapi(data_property = "frequencyBinCount")]
-    frequency_bin_count: f64,
     #[webapi(data_property = "minDecibels")]
     min_decibels: f64,
     #[webapi(data_property = "maxDecibels")]
@@ -217,6 +216,15 @@ struct AnalyserNodeObjectDeclaration {
     connect: (),
     #[webapi(method, length = 0, callback = audio_node_disconnect_callback)]
     disconnect: (),
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "AnalyserNode", enumerable)]
+struct AnalyserNodePrototypeDeclaration {
+    #[webapi(accessor_property = "fftSize", getter = analyser_fft_size_getter_callback, setter = analyser_fft_size_setter_callback)]
+    fft_size: (),
+    #[webapi(accessor_property = "frequencyBinCount", getter = analyser_frequency_bin_count_getter_callback)]
+    frequency_bin_count: (),
     #[webapi(method, length = 1, callback = analyser_get_float_frequency_data_callback)]
     get_float_frequency_data: (),
     #[webapi(method, length = 1, callback = analyser_get_float_time_domain_data_callback)]
@@ -370,6 +378,13 @@ struct AudioParamSetValueAtTimeArgs {
     start_time: f64,
 }
 
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "AnalyserNode.fftSize")]
+struct AnalyserFftSizeArgs {
+    #[webidl(required)]
+    value: u32,
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(
     name = "AudioContext",
@@ -397,43 +412,39 @@ struct AudioWorkletNodeTemplateDeclaration {
 }
 
 #[derive(WebApiFunctionTemplate)]
-#[webapi(name = "OfflineAudioContext", enumerable)]
-struct OfflineAudioContextTemplateMethodsDeclaration {
+#[webapi(name = "BaseAudioContext", enumerable)]
+struct BaseAudioContextPrototypeDeclaration {
     #[webapi(
         method = "createOscillator",
         length = 0,
-        callback = offline_audio_context_create_oscillator_callback
+        callback = audio_context_create_oscillator_callback
     )]
     create_oscillator: (),
 
     #[webapi(
         method = "createDynamicsCompressor",
         length = 0,
-        callback = offline_audio_context_create_dynamics_compressor_callback
+        callback = audio_context_create_dynamics_compressor_callback
     )]
     create_dynamics_compressor: (),
 
     #[webapi(
         method = "createAnalyser",
         length = 0,
-        callback = offline_audio_context_create_analyser_callback
+        callback = audio_context_create_analyser_callback
     )]
     create_analyser: (),
+}
 
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "OfflineAudioContext", enumerable)]
+struct OfflineAudioContextPrototypeDeclaration {
     #[webapi(
         method = "startRendering",
         length = 0,
         callback = offline_audio_context_start_rendering_callback
     )]
     start_rendering: (),
-}
-
-pub(super) fn install_offline_audio_context_bindings<'s>(
-    scope: &mut v8::PinScope<'s, '_, ()>,
-    template: v8::Local<'s, v8::FunctionTemplate>,
-) {
-    let proto = template.prototype_template(scope);
-    OfflineAudioContextTemplateMethodsDeclaration::initialize_prototype_template(scope, proto);
 }
 
 pub(in crate::context_bootstrap) fn build_audio_context_constructor_template<'s>(
@@ -453,11 +464,32 @@ pub(in crate::context_bootstrap) fn install_web_audio_template_bindings<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
 ) {
-    if interface_name == "DynamicsCompressorNode" {
-        DynamicsCompressorNodePrototypeDeclaration::initialize_prototype_template(
-            scope,
-            template.prototype_template(scope),
-        );
+    match interface_name {
+        "BaseAudioContext" => {
+            BaseAudioContextPrototypeDeclaration::initialize_prototype_template(
+                scope,
+                template.prototype_template(scope),
+            );
+        }
+        "OfflineAudioContext" => {
+            OfflineAudioContextPrototypeDeclaration::initialize_prototype_template(
+                scope,
+                template.prototype_template(scope),
+            );
+        }
+        "AnalyserNode" => {
+            AnalyserNodePrototypeDeclaration::initialize_prototype_template(
+                scope,
+                template.prototype_template(scope),
+            );
+        }
+        "DynamicsCompressorNode" => {
+            DynamicsCompressorNodePrototypeDeclaration::initialize_prototype_template(
+                scope,
+                template.prototype_template(scope),
+            );
+        }
+        _ => {}
     }
 }
 
@@ -569,6 +601,7 @@ fn audio_context_close_callback<'s>(
         AUDIO_CONTEXT_PROCESSORS_SLOT,
         processors.into(),
     );
+    define_non_enumerable_string_property(scope, context, "state", "closed");
 
     if let Some(promise) = resolved_undefined_promise(scope) {
         rv.set(promise.into());
@@ -1258,11 +1291,27 @@ pub(in crate::context_bootstrap) fn audio_buffer_get_channel_data_callback<'s>(
     rv.set(data.into());
 }
 
-fn offline_audio_context_create_oscillator_callback<'s>(
+fn require_base_audio_context<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    object: v8::Local<'s, v8::Object>,
+) -> bool {
+    if is_audio_context_object(scope, object)
+        || get_private_value(scope, object, OFFLINE_AUDIO_LENGTH_SLOT).is_some()
+    {
+        return true;
+    }
+    throw_type_error(scope, "Illegal invocation: expected a BaseAudioContext.");
+    false
+}
+
+fn audio_context_create_oscillator_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !require_base_audio_context(scope, args.this()) {
+        return;
+    }
     let frequency = audio_param(scope, 440.0);
     let node = OscillatorNodeObjectDeclaration::new("sine", frequency)
         .bind(scope)
@@ -1270,11 +1319,14 @@ fn offline_audio_context_create_oscillator_callback<'s>(
     rv.set(node.into());
 }
 
-fn offline_audio_context_create_dynamics_compressor_callback<'s>(
+fn audio_context_create_dynamics_compressor_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if !require_base_audio_context(scope, args.this()) {
+        return;
+    }
     let threshold = audio_param(scope, -24.0);
     let knee = audio_param(scope, 30.0);
     let ratio = audio_param(scope, 12.0);
@@ -1288,12 +1340,15 @@ fn offline_audio_context_create_dynamics_compressor_callback<'s>(
     rv.set(node.into());
 }
 
-fn offline_audio_context_create_analyser_callback<'s>(
+fn audio_context_create_analyser_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
-    _args: v8::FunctionCallbackArguments<'s>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let node = AnalyserNodeObjectDeclaration::new(2048.0, 1024.0, -100.0, -30.0, 0.8)
+    if !require_base_audio_context(scope, args.this()) {
+        return;
+    }
+    let node = AnalyserNodeObjectDeclaration::new(2048.0, -100.0, -30.0, 0.8)
         .bind(scope)
         .expect("AnalyserNode declaration should bind");
     rv.set(node.into());
@@ -1430,90 +1485,166 @@ fn audio_node_disconnect_callback<'s>(
 fn analyser_get_float_frequency_data_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    fill_numeric_array_like_with_profile(
-        scope,
-        args.get(0),
-        SYNTHETIC_ANALYSER_FREQUENCY_BINS,
-        *SYNTHETIC_ANALYSER_FREQUENCY_BINS.last().unwrap_or(&-100.0),
-    );
-    rv.set(v8::undefined(scope).into());
+    copy_analyser_data(scope, &args, AnalyserData::FloatFrequency);
 }
 
 fn analyser_get_float_time_domain_data_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    fill_numeric_array_like(scope, args.get(0), 0.0);
-    rv.set(v8::undefined(scope).into());
+    copy_analyser_data(scope, &args, AnalyserData::FloatTimeDomain);
 }
 
 fn analyser_get_byte_frequency_data_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'s, v8::Value>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    fill_numeric_array_like(scope, args.get(0), 0.0);
-    rv.set(v8::undefined(scope).into());
+    copy_analyser_data(scope, &args, AnalyserData::ByteFrequency);
 }
 
 fn analyser_get_byte_time_domain_data_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    copy_analyser_data(scope, &args, AnalyserData::ByteTimeDomain);
+}
+
+fn analyser_fft_size<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    object: v8::Local<'s, v8::Object>,
+) -> Option<u32> {
+    let Some(size) = web_audio_number_slot(scope, object, ANALYSER_FFT_SIZE_SLOT) else {
+        throw_type_error(scope, "Illegal invocation: expected an AnalyserNode.");
+        return None;
+    };
+    Some(size as u32)
+}
+
+fn analyser_fft_size_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    fill_numeric_array_like(scope, args.get(0), 128.0);
-    rv.set(v8::undefined(scope).into());
-}
-
-fn fill_numeric_array_like(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-    fill: f64,
-) {
-    let Ok(array_like) = v8::Local::<v8::Object>::try_from(value) else {
-        return;
-    };
-    let Some(length_value) = array_like.get(scope, v8str(scope, "length").into()) else {
-        return;
-    };
-    let Some(length) = length_value.uint32_value(scope) else {
-        return;
-    };
-    let length = capped_numeric_array_like_length(length);
-    let value = v8::Number::new(scope, fill);
-    for index in 0..length {
-        let _ = array_like.set_index(scope, index, value.into());
+    if let Some(size) = analyser_fft_size(scope, args.this()) {
+        rv.set_uint32(size);
     }
 }
 
-fn fill_numeric_array_like_with_profile(
-    scope: &mut v8::PinScope<'_, '_>,
-    value: v8::Local<'_, v8::Value>,
-    profile: &[f64],
-    fallback: f64,
+fn analyser_fft_size_setter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'s, v8::Value>,
 ) {
-    let Ok(array_like) = v8::Local::<v8::Object>::try_from(value) else {
+    if analyser_fft_size(scope, args.this()).is_none() {
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<AnalyserFftSizeArgs>(scope, &args) else {
         return;
     };
-    let Some(length_value) = array_like.get(scope, v8str(scope, "length").into()) else {
+    if !(32..=32768).contains(&parsed.value) || !parsed.value.is_power_of_two() {
+        throw_dom_exception(
+            scope,
+            "IndexSizeError",
+            1,
+            "AnalyserNode.fftSize must be a power of two between 32 and 32768.",
+        );
+        return;
+    }
+    set_web_audio_number_slot(
+        scope,
+        args.this(),
+        ANALYSER_FFT_SIZE_SLOT,
+        parsed.value as f64,
+    );
+}
+
+fn analyser_frequency_bin_count_getter_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    if let Some(size) = analyser_fft_size(scope, args.this()) {
+        rv.set_uint32(size / 2);
+    }
+}
+
+enum AnalyserData {
+    FloatFrequency,
+    FloatTimeDomain,
+    ByteFrequency,
+    ByteTimeDomain,
+}
+
+fn copy_analyser_data<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: &v8::FunctionCallbackArguments<'s>,
+    kind: AnalyserData,
+) {
+    let Some(fft_size) = analyser_fft_size(scope, args.this()) else {
         return;
     };
-    let Some(length) = length_value.uint32_value(scope) else {
+    let array: Option<v8::Local<v8::TypedArray>> = match kind {
+        AnalyserData::FloatFrequency | AnalyserData::FloatTimeDomain => {
+            v8::Local::<v8::Float32Array>::try_from(args.get(0))
+                .ok()
+                .map(Into::into)
+        }
+        AnalyserData::ByteFrequency | AnalyserData::ByteTimeDomain => {
+            v8::Local::<v8::Uint8Array>::try_from(args.get(0))
+                .ok()
+                .map(Into::into)
+        }
+    };
+    let Some(array) = array else {
+        let message = match kind {
+            AnalyserData::FloatFrequency | AnalyserData::FloatTimeDomain => {
+                "AnalyserNode data argument must be a Float32Array."
+            }
+            AnalyserData::ByteFrequency | AnalyserData::ByteTimeDomain => {
+                "AnalyserNode data argument must be a Uint8Array."
+            }
+        };
+        throw_type_error(scope, message);
         return;
     };
-    let length = capped_numeric_array_like_length(length);
+    if let Some(store) = array.get_backing_store()
+        && (store.is_shared() || store.is_resizable_by_user_javascript())
+    {
+        throw_type_error(
+            scope,
+            "AnalyserNode data requires a non-shared, fixed-length buffer.",
+        );
+        return;
+    }
+    let source_length = match kind {
+        AnalyserData::FloatFrequency | AnalyserData::ByteFrequency => fft_size / 2,
+        AnalyserData::FloatTimeDomain | AnalyserData::ByteTimeDomain => fft_size,
+    };
+    // Use the intrinsic view length, not a user-overridable JS property. The
+    // validated fftSize bounds the work, and excess destination entries stay intact.
+    let length = array.length().min(source_length as usize);
     for index in 0..length {
-        let fill = profile.get(index as usize).copied().unwrap_or(fallback);
+        // Preserve the existing compatibility profile. This is synthetic data,
+        // not an FFT of connected nodes; real audio graph processing is separate.
+        let fill = match kind {
+            AnalyserData::FloatFrequency => SYNTHETIC_ANALYSER_FREQUENCY_BINS
+                .get(index)
+                .or_else(|| SYNTHETIC_ANALYSER_FREQUENCY_BINS.last())
+                .copied()
+                .unwrap_or(-100.0),
+            AnalyserData::FloatTimeDomain | AnalyserData::ByteFrequency => 0.0,
+            AnalyserData::ByteTimeDomain => 128.0,
+        };
         let value = v8::Number::new(scope, fill);
-        let _ = array_like.set_index(scope, index, value.into());
+        if array.set_index(scope, index as u32, value.into()).is_none() {
+            return;
+        }
     }
-}
-
-fn capped_numeric_array_like_length(length: u32) -> u32 {
-    length.min(MAX_AUDIO_ANALYSER_ARRAY_FILL_LENGTH)
 }
 
 fn oscillator_start_callback<'s>(
@@ -1651,30 +1782,4 @@ fn float_to_usize(value: f64) -> Option<usize> {
         return None;
     }
     usize::try_from(value as u64).ok()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{MAX_AUDIO_ANALYSER_ARRAY_FILL_LENGTH, capped_numeric_array_like_length};
-
-    #[test]
-    fn numeric_array_like_fill_length_is_bounded() {
-        assert_eq!(capped_numeric_array_like_length(0), 0);
-        assert_eq!(
-            capped_numeric_array_like_length(MAX_AUDIO_ANALYSER_ARRAY_FILL_LENGTH - 1),
-            MAX_AUDIO_ANALYSER_ARRAY_FILL_LENGTH - 1
-        );
-        assert_eq!(
-            capped_numeric_array_like_length(MAX_AUDIO_ANALYSER_ARRAY_FILL_LENGTH),
-            MAX_AUDIO_ANALYSER_ARRAY_FILL_LENGTH
-        );
-        assert_eq!(
-            capped_numeric_array_like_length(MAX_AUDIO_ANALYSER_ARRAY_FILL_LENGTH + 1),
-            MAX_AUDIO_ANALYSER_ARRAY_FILL_LENGTH
-        );
-        assert_eq!(
-            capped_numeric_array_like_length(u32::MAX),
-            MAX_AUDIO_ANALYSER_ARRAY_FILL_LENGTH
-        );
-    }
 }
