@@ -37,8 +37,10 @@ use url::Url;
 use super::input;
 use crate::conn::{
     BackgroundProtocolEvent, CapturedBody, CdpSessionRoute, CommandDispatchContext,
-    CommandOwnerScope, NETWORK_ERROR_PAGE_URL, PageLifecycleEventsEnableResult,
-    PageScreencastConfig, PageScreencastFormat,
+    CommandOwnerScope, CompletedCaptureDocumentImage, CompletedCaptureDocumentSnapshot,
+    CompletedSetDocumentContent, NETWORK_ERROR_PAGE_URL, PageLifecycleEventsEnableResult,
+    PageScreencastConfig, PageScreencastFormat, PendingCaptureDocumentImage,
+    PendingCaptureDocumentSnapshot, PendingSetDocumentContent,
 };
 use crate::conn::{CdpConnection, Cmd, EmulatedViewportSurface};
 pub(crate) use crate::conn::{DEFAULT_LOADER_ID as LOADER_ID, monotonic_timestamp_seconds};
@@ -169,6 +171,14 @@ const PRINT_TO_PDF_LAYOUT_DISABLED_MESSAGE: &str =
 const PRINT_TO_PDF_UNSUPPORTED_MESSAGE: &str =
     "Page.printToPDF is not supported: PDF generation is not implemented.";
 
+fn capture_document_image_error(error: String) -> String {
+    if error == "Document changed" {
+        "capture screenshot completed for a stale renderer attachment".into()
+    } else {
+        error
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameTreeCommandOutputKind {
     FrameTree,
@@ -212,23 +222,23 @@ enum PendingPageCommandKind {
         pending: PendingPageCommand,
     },
     SetDocumentContent {
-        pending: PendingPageCommand,
+        pending: PendingSetDocumentContent,
     },
     SetBypassContentSecurityPolicy {
         pending: PendingPageCommand,
     },
     SameDocumentNavigate(Box<navigation::PendingSameDocumentNavigateCommand>),
     CaptureSnapshot {
-        pending: PendingPageCommand,
+        pending: PendingCaptureDocumentSnapshot,
     },
     GetLayoutMetrics {
         pending: PendingPageCommand,
     },
     CaptureScreenshot {
-        pending: PendingPageCommand,
+        pending: PendingCaptureDocumentImage,
     },
     PrintToPdf {
-        pending: PendingPageCommand,
+        pending: PendingCaptureDocumentImage,
         options: pdf::RasterPdfOptions,
         transfer_mode: DevToolsPrintToPdfTransferMode,
     },
@@ -281,23 +291,23 @@ enum CompletedPageCommandKind {
         completed: Box<Result<CompletedPageCommand, String>>,
     },
     SetDocumentContent {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: CompletedSetDocumentContent,
     },
     SetBypassContentSecurityPolicy {
         completed: Box<Result<CompletedPageCommand, String>>,
     },
     SameDocumentNavigate(Box<navigation::CompletedSameDocumentNavigateCommand>),
     CaptureSnapshot {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: CompletedCaptureDocumentSnapshot,
     },
     GetLayoutMetrics {
         completed: Box<Result<CompletedPageCommand, String>>,
     },
     CaptureScreenshot {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: CompletedCaptureDocumentImage,
     },
     PrintToPdf {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: CompletedCaptureDocumentImage,
         options: pdf::RasterPdfOptions,
         transfer_mode: DevToolsPrintToPdfTransferMode,
     },
@@ -329,12 +339,13 @@ impl CompletedPageCommandKind {
             | Self::RemoveDocumentStartScript { completed }
             | Self::GetFrameTree { completed, .. }
             | Self::ResetNavigationHistory { completed, .. }
-            | Self::SetDocumentContent { completed }
             | Self::SetBypassContentSecurityPolicy { completed }
-            | Self::CaptureSnapshot { completed }
             | Self::GetLayoutMetrics { completed }
-            | Self::CaptureScreenshot { completed }
-            | Self::PrintToPdf { completed, .. } => direct(completed),
+            => direct(completed),
+            Self::SetDocumentContent { completed } => completed.renderer_output_predecessor(),
+            Self::CaptureSnapshot { completed } => completed.renderer_output_predecessor(),
+            Self::CaptureScreenshot { completed }
+            | Self::PrintToPdf { completed, .. } => completed.renderer_output_predecessor(),
             Self::SearchInResource(completed) => completed.renderer_output_predecessor(),
             Self::GetAppManifest(completed) => completed.renderer_output_predecessor(),
             Self::SameDocumentNavigate(completed) => completed.renderer_output_predecessor(),
@@ -457,7 +468,7 @@ impl PendingPageCommandDispatch {
             }
             PendingPageCommandKind::SetDocumentContent { pending } => {
                 CompletedPageCommandKind::SetDocumentContent {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: pending.wait().await,
                 }
             }
             PendingPageCommandKind::SetBypassContentSecurityPolicy { pending } => {
@@ -470,7 +481,7 @@ impl PendingPageCommandDispatch {
             }
             PendingPageCommandKind::CaptureSnapshot { pending } => {
                 CompletedPageCommandKind::CaptureSnapshot {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: pending.wait().await,
                 }
             }
             PendingPageCommandKind::GetLayoutMetrics { pending } => {
@@ -480,7 +491,7 @@ impl PendingPageCommandDispatch {
             }
             PendingPageCommandKind::CaptureScreenshot { pending } => {
                 CompletedPageCommandKind::CaptureScreenshot {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: pending.wait().await,
                 }
             }
             PendingPageCommandKind::PrintToPdf {
@@ -488,7 +499,7 @@ impl PendingPageCommandDispatch {
                 options,
                 transfer_mode,
             } => CompletedPageCommandKind::PrintToPdf {
-                completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                completed: pending.wait().await,
                 options,
                 transfer_mode,
             },
@@ -5710,21 +5721,17 @@ fn try_start_page_capture_snapshot_command(
             "unsupported snapshot format.",
         ));
     }
-    let (page_context_id, page_target_id) = match conn
-        .resolve_document_command_owner(&CommandOwnerScope::capture(conn, cmd.session_id))
-    {
-        Ok(route) => route,
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
+    let document = match conn.resolve_browser_document_for_owner(&owner_scope) {
+        Ok(document) => document,
         Err(message) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
         }
     };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("admitted document context remains registered");
-    match page_context.start_serialize_html_for_target(&page_target_id) {
+    match conn.start_capture_document_snapshot(document) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id: cmd.id,
-            owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
+            owner_scope,
             kind: Box::new(PendingPageCommandKind::CaptureSnapshot { pending }),
         }),
         Err(error) => PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -6673,25 +6680,20 @@ fn try_start_page_set_document_content_command(
     if let Err(message) = conn.ensure_document_accessible_for_session_owner(session_id) {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
     }
-    let Some((page_context_id, page_target_id)) = conn
-        .loaded_document_owner_identity_for_owner(&CommandOwnerScope::capture(conn, session_id))
-    else {
-        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-            -32000,
-            "No Document instance to set HTML for",
-        ));
+    let owner_scope = CommandOwnerScope::capture(conn, session_id);
+    let document = match conn.loaded_browser_document_for_owner(&owner_scope) {
+        Ok(document) => document,
+        Err(_) => {
+            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32000,
+                "No Document instance to set HTML for",
+            ));
+        }
     };
-    let page_context = conn
-        .browser_context_by_id(&page_context_id)
-        .expect("resolved document context remains registered");
-    match page_context.start_set_document_content_for_target(
-        &page_target_id,
-        params.frame_id.into(),
-        params.html,
-    ) {
+    match conn.start_set_document_content(document, params.frame_id.into(), params.html) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id: cmd.id,
-            owner_scope: CommandOwnerScope::capture(conn, session_id),
+            owner_scope,
             kind: Box::new(PendingPageCommandKind::SetDocumentContent { pending }),
         }),
         Err(error) => PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -6792,16 +6794,12 @@ fn start_devtools_capture_screenshot_command(
 
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let owner_scope = CommandOwnerScope::capture(conn, session_id);
-    let (page_context_id, page_target_id) =
-        match conn.resolve_document_command_owner(&CommandOwnerScope::capture(conn, session_id)) {
-            Ok(route) => route,
-            Err(message) => {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-            }
-        };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("admitted document context remains registered");
+    let document = match conn.resolve_browser_document_for_owner(&owner_scope) {
+        Ok(document) => document,
+        Err(message) => {
+            return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+        }
+    };
     let format = match command.format.as_deref() {
         None | Some("png") => RendererScreenshotFormat::Png,
         Some("jpeg") => RendererScreenshotFormat::Jpeg,
@@ -6844,7 +6842,7 @@ fn start_devtools_capture_screenshot_command(
         max_width: None,
         max_height: None,
     };
-    match page_context.start_capture_screenshot_with_request_for_target(&page_target_id, request) {
+    match conn.start_capture_document_image(document, request) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
             owner_scope,
@@ -6890,16 +6888,12 @@ fn start_devtools_print_to_pdf_command(
         .unwrap_or(DevToolsPrintToPdfTransferMode::ReturnAsBase64);
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let owner_scope = CommandOwnerScope::capture(conn, session_id);
-    let (page_context_id, page_target_id) =
-        match conn.resolve_document_command_owner(&CommandOwnerScope::capture(conn, session_id)) {
-            Ok(route) => route,
-            Err(message) => {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-            }
-        };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("admitted document context remains registered");
+    let document = match conn.resolve_browser_document_for_owner(&owner_scope) {
+        Ok(document) => document,
+        Err(message) => {
+            return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+        }
+    };
     let request = RendererCaptureScreenshotRequest {
         purpose: RendererScreenshotPurpose::Print {
             print_background: command.print_background.unwrap_or(false),
@@ -6911,7 +6905,7 @@ fn start_devtools_print_to_pdf_command(
         max_width: None,
         max_height: None,
     };
-    match page_context.start_capture_screenshot_with_request_for_target(&page_target_id, request) {
+    match conn.start_capture_document_image(document, request) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
             owner_scope,
@@ -7718,37 +7712,13 @@ pub(crate) async fn complete_pending_page_command(
             CommandOutputPlan::success()
         }
         CompletedPageCommandKind::SetDocumentContent { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            let (result, output) = {
-                let Some((page_context_id, page_target_id)) =
-                    conn.loaded_document_owner_identity_for_owner(&owner_scope)
-                else {
+            let (result, output) = match conn.finish_set_document_content(completed) {
+                Ok(completed) => completed,
+                Err(error) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
-                        "No Document instance to set HTML for",
+                        error.to_string(),
                     ));
-                };
-                let page_context = conn
-                    .browser_context_by_id_mut(&page_context_id)
-                    .expect("resolved document context remains registered");
-                match page_context.finish_set_document_content_command_turn_for_target(
-                    &page_target_id,
-                    completion,
-                ) {
-                    Ok(completed) => completed,
-                    Err(error) => {
-                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                            -32000,
-                            error.to_string(),
-                        ));
-                    }
                 }
             };
             command_context.consume_renderer_command_turn_output(output);
@@ -7862,42 +7832,18 @@ pub(crate) async fn complete_pending_page_command(
             )
         }
         CompletedPageCommandKind::CaptureSnapshot { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
+            let snapshot = match conn.finish_capture_document_snapshot(completed) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
-                        format!("Failed to serialize page snapshot: {message}"),
+                        format!("Failed to serialize page snapshot: {error}"),
                     ));
                 }
             };
-            let Some((page_context_id, page_target_id)) =
-                conn.loaded_document_owner_identity_for_owner(&owner_scope)
-            else {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "NoDocumentLoaded",
-                ));
-            };
-            let page_context = conn
-                .browser_context_by_id_mut(&page_context_id)
-                .expect("resolved document context remains registered");
-            let html =
-                match page_context.finish_serialize_html_for_target(&page_target_id, completion) {
-                    Ok(html) => html,
-                    Err(error) => {
-                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                            -32000,
-                            format!("Failed to serialize page snapshot: {error}"),
-                        ));
-                    }
-                };
-            let url = page_context
-                .target_document_url(&page_target_id)
-                .expect("loaded document URL")
-                .as_str()
-                .to_owned();
-            CommandOutputPlan::result(json!({ "data": build_mhtml_snapshot(&url, &html) }))
+            CommandOutputPlan::result(json!({
+                "data": build_mhtml_snapshot(&snapshot.url, &snapshot.html),
+            }))
         }
         CompletedPageCommandKind::GetLayoutMetrics { completed } => {
             let completion = match *completed {
@@ -7927,28 +7873,7 @@ pub(crate) async fn complete_pending_page_command(
             }
         }
         CompletedPageCommandKind::CaptureScreenshot { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to capture page screenshot: {message}"),
-                    ));
-                }
-            };
-            let (page_context_id, page_target_id) =
-                match conn.resolve_document_command_owner(&owner_scope) {
-                    Ok(route) => route,
-                    Err(message) => {
-                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                            -32000, message,
-                        ));
-                    }
-                };
-            let page_context = conn
-                .browser_context_by_id_mut(&page_context_id)
-                .expect("admitted document context remains registered");
-            match page_context.finish_capture_screenshot_for_target(&page_target_id, completion) {
+            match conn.finish_capture_document_image(completed) {
                 Ok(RendererCaptureScreenshotReply::Captured(image)) => {
                     CommandOutputPlan::from_devtools_result(
                         DevToolsCommandResult::CaptureScreenshot(DevToolsCaptureScreenshotResult {
@@ -7967,7 +7892,10 @@ pub(crate) async fn complete_pending_page_command(
                 }
                 Err(error) => CommandOutputPlan::error(
                     -32000,
-                    format!("Failed to capture page screenshot: {error}"),
+                    format!(
+                        "Failed to capture page screenshot: {}",
+                        capture_document_image_error(error)
+                    ),
                 ),
             }
         }
@@ -7976,30 +7904,7 @@ pub(crate) async fn complete_pending_page_command(
             options,
             transfer_mode,
         } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to capture PDF content: {message}"),
-                    ));
-                }
-            };
-            let (page_context_id, page_target_id) =
-                match conn.resolve_document_command_owner(&owner_scope) {
-                    Ok(route) => route,
-                    Err(message) => {
-                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                            -32000, message,
-                        ));
-                    }
-                };
-            let page_context = conn
-                .browser_context_by_id_mut(&page_context_id)
-                .expect("admitted document context remains registered");
-            let image = match page_context
-                .finish_capture_screenshot_for_target(&page_target_id, completion)
-            {
+            let image = match conn.finish_capture_document_image(completed) {
                 Ok(RendererCaptureScreenshotReply::Captured(image)) => image,
                 Ok(RendererCaptureScreenshotReply::LayoutDisabled) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -8016,7 +7921,10 @@ pub(crate) async fn complete_pending_page_command(
                 Err(error) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
-                        format!("Failed to capture PDF content: {error}"),
+                        format!(
+                            "Failed to capture PDF content: {}",
+                            capture_document_image_error(error)
+                        ),
                     ));
                 }
             };
