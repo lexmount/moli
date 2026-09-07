@@ -629,6 +629,16 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        name: "Clipboard",
+        parent: Some("EventTarget"),
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
+        name: "ClipboardItem",
+        parent: None,
+        kind: ConstructorKind::ClipboardItem,
+    },
+    ConstructorSpec {
         name: "MediaCapabilities",
         parent: None,
         kind: ConstructorKind::Illegal,

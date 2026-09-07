@@ -620,6 +620,8 @@ fn navigator_scalar_access_does_not_materialize_unused_same_object_children() {
         "Geolocation",
         "GeolocationPositionError",
         "MediaCapabilities",
+        "Clipboard",
+        "ClipboardItem",
     ] {
         assert_eq!(
             constructor_materialization_count(&mut vm, name),
@@ -674,6 +676,9 @@ fn navigator_scalar_access_does_not_materialize_unused_same_object_children() {
                 storageRealm:
                   Object.getPrototypeOf(navigator.storage) ===
                     StorageManager.prototype,
+                clipboardRealm:
+                  Object.getPrototypeOf(navigator.clipboard) ===
+                    Clipboard.prototype,
                 geolocationRealm:
                   Object.getPrototypeOf(navigator.geolocation) ===
                     Geolocation.prototype,
@@ -685,7 +690,7 @@ fn navigator_scalar_access_does_not_materialize_unused_same_object_children() {
             "#,
         )
         .expect("Navigator lazy subobjects should materialize"),
-        r#"{"same":true,"languagesFrozen":false,"permissionsRealm":true,"mediaDevicesRealm":true,"storageRealm":true,"geolocationRealm":true,"mediaCapabilitiesRealm":true}"#
+        r#"{"same":true,"languagesFrozen":false,"permissionsRealm":true,"mediaDevicesRealm":true,"storageRealm":true,"clipboardRealm":true,"geolocationRealm":true,"mediaCapabilitiesRealm":true}"#
     );
     assert_eq!(
         default_navigator_subobjects(&mut vm),
@@ -709,6 +714,12 @@ fn navigator_scalar_access_does_not_materialize_unused_same_object_children() {
         ]
     );
     assert_eq!(constructor_materialization_count(&mut vm, "Geolocation"), 1);
+    assert_eq!(constructor_materialization_count(&mut vm, "Clipboard"), 1);
+    assert_eq!(
+        constructor_materialization_count(&mut vm, "ClipboardItem"),
+        0,
+        "materializing navigator.clipboard must not eagerly build ClipboardItem"
+    );
     assert_eq!(
         constructor_materialization_count(&mut vm, "MediaCapabilities"),
         1

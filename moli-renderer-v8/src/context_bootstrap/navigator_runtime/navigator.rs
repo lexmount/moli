@@ -21,6 +21,7 @@ use super::super::window_runtime::{
     service_worker_object_set_owner_scope,
 };
 use super::super::*;
+use super::clipboard::{build_clipboard_object, install_clipboard_template_bindings};
 use super::collections::{
     build_navigator_plugin_collections, install_navigator_collection_template_bindings,
 };
@@ -106,7 +107,6 @@ const SERVICE_WORKER_CONTAINER_ONMESSAGEERROR_SLOT: &str =
 const SERVICE_WORKER_CONTAINER_ONCONTROLLERCHANGE_SLOT: &str =
     "__moliServiceWorkerContainerOncontrollerchange";
 const SERVICE_WORKER_CONTAINER_CONTROLLER_SLOT: &str = "__moliServiceWorkerContainerController";
-const CLIPBOARD_TEXT_SLOT: &str = "__moliClipboardText";
 pub(in crate::context_bootstrap) const SERVICE_WORKER_OWNER_TOKEN_SLOT: &str =
     "__moliServiceWorkerOwner";
 const USER_ACTIVATION_BRAND_SLOT: &str = "__moliUserActivationBrand";
@@ -490,19 +490,6 @@ struct ServiceWorkerContainerDeclaration {
 }
 
 #[derive(Default, WebApiObject)]
-#[webapi(interface = "Object")]
-struct ClipboardObjectDeclaration {
-    #[webapi(slot = CLIPBOARD_TEXT_SLOT, init = "")]
-    text: (),
-
-    #[webapi(method, enumerable, length = 0, callback = clipboard_read_text_callback)]
-    read_text: (),
-
-    #[webapi(method, enumerable, length = 1, callback = clipboard_write_text_callback)]
-    write_text: (),
-}
-
-#[derive(Default, WebApiObject)]
 #[webapi(interface = "UserActivation")]
 struct UserActivationObjectDeclaration {
     #[webapi(slot = USER_ACTIVATION_BRAND_SLOT, init = true)]
@@ -752,44 +739,6 @@ fn navigator_user_activation_state_getter_callback<'s>(
     rv.set(v8::Boolean::new(scope, active).into());
 }
 
-fn set_resolved_promise(
-    scope: &mut v8::PinScope<'_, '_>,
-    rv: &mut v8::ReturnValue<'_, v8::Value>,
-    value: v8::Local<'_, v8::Value>,
-) {
-    let Some(resolver) = v8::PromiseResolver::new(scope) else {
-        rv.set(v8::undefined(scope).into());
-        return;
-    };
-    let promise = resolver.get_promise(scope);
-    let _ = resolver.resolve(scope, value);
-    rv.set(promise.into());
-}
-
-fn clipboard_read_text_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let value = get_private_value(scope, args.this(), CLIPBOARD_TEXT_SLOT)
-        .filter(|value| value.is_string())
-        .unwrap_or_else(|| v8::String::empty(scope).into());
-    set_resolved_promise(scope, &mut rv, value);
-}
-
-fn clipboard_write_text_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let text = args
-        .get(0)
-        .to_string(scope)
-        .unwrap_or_else(|| v8::String::empty(scope));
-    set_private_value(scope, args.this(), CLIPBOARD_TEXT_SLOT, text.into());
-    set_resolved_promise(scope, &mut rv, v8::undefined(scope).into());
-}
-
 fn navigator_connection_event_target_noop_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
@@ -866,6 +815,7 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
 ) {
+    install_clipboard_template_bindings(scope, template, interface_name);
     install_geolocation_template_bindings(scope, template, interface_name);
     install_navigator_collection_template_bindings(scope, template, interface_name);
     install_media_capabilities_template_bindings(scope, template, interface_name);
@@ -903,6 +853,7 @@ fn filter_navigator_secure_context_exposure<'s>(
     secure_context: bool,
 ) -> Result<()> {
     if !secure_context {
+        delete_object_property(scope, prototype, "clipboard")?;
         delete_object_property(scope, prototype, "storage")?;
         delete_object_property(scope, prototype, "storageBuckets")?;
         delete_object_property(scope, prototype, "serviceWorker")?;
@@ -1054,10 +1005,7 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
         NavigatorSubobject::ServiceWorker => {
             build_service_worker_container(scope, owner_child, owner_popup)?.into()
         }
-        NavigatorSubobject::Clipboard => ClipboardObjectDeclaration::default()
-            .bind(scope)
-            .map_err(|error| anyhow!("failed to bind navigator.clipboard object: {error}"))?
-            .into(),
+        NavigatorSubobject::Clipboard => build_clipboard_object(scope)?.into(),
         NavigatorSubobject::UserActivation => build_user_activation(scope)?.into(),
         NavigatorSubobject::StorageBuckets => {
             build_storage_bucket_manager(scope, owner_child, owner_popup)?.into()

@@ -80,7 +80,13 @@ pub(in crate::context_bootstrap) const WORKER_SHARED_INTERFACE_NAMES: &[&str] = 
     "FormData",
 ];
 
-const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &["SubtleCrypto", "CryptoKey", "IdleDetector"];
+const SECURE_CONTEXT_ONLY_INTERFACE_NAMES: &[&str] = &[
+    "SubtleCrypto",
+    "CryptoKey",
+    "IdleDetector",
+    "Clipboard",
+    "ClipboardItem",
+];
 const WORKER_ONLY_INTERFACE_NAMES: &[&str] = &["WorkerNavigator", "WorkerLocation"];
 const WINDOW_DEDICATED_AND_SHARED_WORKER_INTERFACE_NAMES: &[&str] = &[
     "Worker",

@@ -1791,6 +1791,8 @@ pub(crate) fn finish_context_bootstrap(
         ("Permissions", "Permissions"),
         ("PermissionStatus", "PermissionStatus"),
         ("MediaDevices", "MediaDevices"),
+        ("Clipboard", "Clipboard"),
+        ("ClipboardItem", "ClipboardItem"),
         ("MediaCapabilities", "MediaCapabilities"),
         ("Screen", "Screen"),
         ("ScreenOrientation", "ScreenOrientation"),

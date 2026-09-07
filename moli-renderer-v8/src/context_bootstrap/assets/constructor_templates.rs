@@ -28,6 +28,7 @@ use super::super::{
     },
     media_source::media_source_constructor_callback,
     message_ports::{message_channel_constructor_callback, message_port_constructor_callback},
+    navigator_runtime::clipboard_item_constructor_callback,
     notification_runtime::notification_constructor_callback,
     performance_runtime::performance_observer_constructor_callback,
     range_surface::{
@@ -107,6 +108,11 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         }
         ConstructorKind::ClipboardEvent => {
             build_event_subclass_template(scope, EventSubclassKind::ClipboardEvent)
+        }
+        ConstructorKind::ClipboardItem => {
+            v8::FunctionTemplate::builder(clipboard_item_constructor_callback)
+                .length(1)
+                .build(scope)
         }
         ConstructorKind::KeyboardEvent => {
             build_event_subclass_template(scope, EventSubclassKind::KeyboardEvent)
