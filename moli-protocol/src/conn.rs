@@ -81,12 +81,13 @@ pub(crate) use state::{
     CompletedChildFrameLifecycleWork, CompletedChildFrameNavigation,
     CompletedChildFrameTreeSnapshot, CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
-    CompletedDocumentDiagnosticsSnapshot, CompletedDocumentInputCommand,
-    CompletedDocumentLifecycleStop, CompletedDocumentPolicyBatch, CompletedDocumentPolicyUpdate,
-    CompletedDocumentResourceRuntimeUpdate, CompletedDocumentResourceTextSearch,
-    CompletedDocumentStorageKeySnapshot, CompletedNavigationHistoryReset,
-    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent,
-    CompletedTopLevelHistoryTraversal, CompletedTopLevelSameDocumentNavigation,
+    CompletedDocumentDiagnosticsSnapshot, CompletedDocumentFetchCommand,
+    CompletedDocumentInputCommand, CompletedDocumentLifecycleStop, CompletedDocumentPolicyBatch,
+    CompletedDocumentPolicyUpdate, CompletedDocumentResourceRuntimeUpdate,
+    CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
+    CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
+    CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
+    CompletedTopLevelSameDocumentNavigation, DocumentFetchCommand, DocumentFetchCommandOutcome,
     DocumentPolicyUpdate, DocumentRuntimePolicyReconciliation, DocumentSnapshot,
     LIVE_DEVICE_METRICS_CLEAR_SCRIPT, PendingAppManifestLoadPreparation,
     PendingAppManifestPublication, PendingCaptureDocumentImage,
@@ -94,8 +95,8 @@ pub(crate) use state::{
     PendingChildFrameLifecycleWork, PendingChildFrameNavigation, PendingChildFrameTreeSnapshot,
     PendingDocumentAutofillTrigger, PendingDocumentBlobRead, PendingDocumentCookieOwnerSnapshot,
     PendingDocumentCspBypassUpdate, PendingDocumentDiagnosticsSnapshot,
-    PendingDocumentInputCommand, PendingDocumentLifecycleStop, PendingDocumentPolicyBatch,
-    PendingDocumentPolicyUpdate, PendingDocumentResourceRuntimeUpdate,
+    PendingDocumentFetchCommand, PendingDocumentInputCommand, PendingDocumentLifecycleStop,
+    PendingDocumentPolicyBatch, PendingDocumentPolicyUpdate, PendingDocumentResourceRuntimeUpdate,
     PendingDocumentResourceTextSearch, PendingDocumentStorageKeySnapshot,
     PendingNavigationHistoryReset, PendingNetworkResourceLoadPreparation,
     PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
@@ -1803,17 +1804,6 @@ impl CdpConnection {
             return Err("Navigation is changing the document".to_owned());
         }
         Ok(())
-    }
-
-    /// Validates ordinary document-command admission without lending Browser state.
-    /// Configuration and interruptible work intentionally do not use this gate.
-    pub(crate) fn resolve_document_command_owner(
-        &self,
-        owner: &CommandOwnerScope,
-    ) -> Result<(String, String), String> {
-        self.ensure_document_accessible_for_owner(owner)?;
-        self.loaded_document_owner_identity_for_owner(owner)
-            .ok_or_else(|| "NoDocumentLoaded".to_owned())
     }
 
     pub(crate) fn current_document_loader_id_for_session_owner(

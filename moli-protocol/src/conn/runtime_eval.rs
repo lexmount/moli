@@ -4097,7 +4097,10 @@ impl CdpConnection {
         await_promise: bool,
     ) -> Result<Value, String> {
         let owner = CommandOwnerScope::capture(self, session_id);
-        let (context_id, target_id) = self.resolve_document_command_owner(&owner)?;
+        self.ensure_document_accessible_for_owner(&owner)?;
+        let (context_id, target_id) = self
+            .loaded_document_owner_identity_for_owner(&owner)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?;
         let payload = self
             .browser_context_by_id_mut(&context_id)
             .ok_or("NoDocumentLoaded")?

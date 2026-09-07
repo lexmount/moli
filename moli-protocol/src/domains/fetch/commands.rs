@@ -1,6 +1,7 @@
 use crate::conn::{
     BackgroundNavigationBodyCompletionSink, CapturedBody, CdpConnection, Cmd, CommandOwnerScope,
-    DEFAULT_LOADER_ID, PendingStreamingDocumentResponseNavigation, monotonic_timestamp_seconds,
+    CompletedDocumentFetchCommand, DEFAULT_LOADER_ID, DocumentFetchCommand,
+    PendingStreamingDocumentResponseNavigation, monotonic_timestamp_seconds,
 };
 use crate::devtools_runtime::{
     DevToolsAuthChallengeAction, DevToolsCommand, DevToolsContinueInterceptedRequestCommand,
@@ -10,9 +11,7 @@ use crate::devtools_runtime::{
 };
 use crate::domains::command_output::CommandOutputPlan;
 use crate::domains::{activity, network, page};
-use moli_core::page::{
-    CompletedPageCommand, RendererSyntheticResponseBody, SubresourceResourceType,
-};
+use moli_core::page::{RendererSyntheticResponseBody, SubresourceResourceType};
 use moli_url_policy::BrowserUrlScheme;
 use url::Url;
 
@@ -304,25 +303,20 @@ fn start_devtools_continue_intercepted_request_command(
                 ));
             }
         };
-        let pending_page =
-            conn.resolve_document_command_owner(owner)
-                .and_then(|(context_id, target_id)| {
-                    let context = conn
-                        .browser_context_by_id_mut(&context_id)
-                        .ok_or("NoDocumentLoaded")?;
-                    context
-                        .start_continue_pending_subresource_fetch_for_target(
-                            &target_id,
-                            pending.internal_id,
-                            parsed_url,
-                            method,
-                            post_data,
-                            headers,
-                            intercept_response,
-                            handle_auth_requests,
-                        )
-                        .map_err(|error| format!("subresource fetch continue failed: {error}"))
-                });
+        let pending_page = super::start_document_fetch_command_for_owner(
+            conn,
+            owner,
+            DocumentFetchCommand::ContinueRequest {
+                internal_id: pending.internal_id,
+                url: parsed_url,
+                method,
+                body: post_data,
+                headers,
+                intercept_response,
+                handle_auth_requests,
+            },
+        )
+        .map_err(|error| format!("subresource fetch continue failed: {error}"));
         let pending_page = match pending_page {
             Ok(pending_page) => pending_page,
             Err(message) => {
@@ -339,7 +333,7 @@ fn start_devtools_continue_intercepted_request_command(
             PendingFetchCommandKind::ContinueRequest {
                 state: Box::new(PendingContinueRequestState::SubresourceFetch { correlation }),
             },
-            PendingFetchCommandOperation::Page(Ok(pending_page)),
+            PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
         ));
     }
     if let Some(mut pending) = take_pending_navigation(conn, owner, action_session_id, &request_id)
@@ -388,14 +382,13 @@ fn start_devtools_continue_intercepted_request_command(
 
 pub(super) async fn complete_continue_request_command_async(
     conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand, String>>,
+    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
     state: PendingContinueRequestState,
     out: &mut FetchCommandOutput,
 ) {
     match state {
         PendingContinueRequestState::SubresourceFetch { correlation } => {
-            if let Err(error) = finish_continue_subresource_request(conn, owner, completed) {
+            if let Err(error) = finish_continue_subresource_request(conn, completed) {
                 correlation.rollback(conn);
                 out.push_error(-32000, error);
                 return;
@@ -411,16 +404,10 @@ pub(super) async fn complete_continue_request_command_async(
 
 fn finish_continue_subresource_request(
     conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand, String>>,
+    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
 ) -> Result<(), String> {
-    let completion = completed.ok_or_else(|| "Missing renderer completion".to_owned())??;
-    let (context_id, target_id) = conn.resolve_document_command_owner(owner)?;
-    let context = conn
-        .browser_context_by_id_mut(&context_id)
-        .ok_or("NoDocumentLoaded")?;
-    context
-        .finish_continue_pending_subresource_fetch_for_target(&target_id, completion)
+    super::finish_document_fetch_command(conn, completed)
+        .and_then(crate::conn::DocumentFetchCommandOutcome::into_continue_outcome)
         .map(|_| ())
         .map_err(|error| format!("subresource fetch continue failed: {error}"))
 }
@@ -543,26 +530,13 @@ fn start_devtools_fail_intercepted_request_command(
             plan.extend_background_events(events);
             return FetchCommandTaskStep::Complete(plan);
         }
-        let (context_id, target_id) = match conn.resolve_document_command_owner(owner) {
-            Ok(route) => route,
-            Err(message) if message == "NoDocumentLoaded" => {
-                return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "NoDocumentLoaded",
-                ));
-            }
-            Err(message) => {
-                return FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-            }
-        };
-
-        let context = conn
-            .browser_context_by_id_mut(&context_id)
-            .expect("admitted document context remains registered");
-        let pending_page = match context.start_fail_pending_subresource_fetch_for_target(
-            &target_id,
-            pending.internal_id,
-            error_text.clone(),
+        let pending_page = match super::start_document_fetch_command_for_owner(
+            conn,
+            owner,
+            DocumentFetchCommand::FailRequest {
+                internal_id: pending.internal_id,
+                error_text: error_text.clone(),
+            },
         ) {
             Ok(pending_page) => pending_page,
             Err(error) => {
@@ -580,7 +554,7 @@ fn start_devtools_fail_intercepted_request_command(
                     pending: Box::new(pending),
                 }),
             },
-            PendingFetchCommandOperation::Page(Ok(pending_page)),
+            PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
         ));
     }
 
@@ -590,26 +564,13 @@ fn start_devtools_fail_intercepted_request_command(
         action_session_id,
         &request_id,
     ) {
-        let (context_id, target_id) = match conn.resolve_document_command_owner(owner) {
-            Ok(route) => route,
-            Err(message) if message == "NoDocumentLoaded" => {
-                return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "NoDocumentLoaded",
-                ));
-            }
-            Err(message) => {
-                return FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-            }
-        };
-
-        let context = conn
-            .browser_context_by_id_mut(&context_id)
-            .expect("admitted document context remains registered");
-        let pending_page = match context.start_fail_pending_subresource_response_for_target(
-            &target_id,
-            pending.internal_id,
-            error_text.clone(),
+        let pending_page = match super::start_document_fetch_command_for_owner(
+            conn,
+            owner,
+            DocumentFetchCommand::FailResponse {
+                internal_id: pending.internal_id,
+                error_text: error_text.clone(),
+            },
         ) {
             Ok(pending_page) => pending_page,
             Err(error) => {
@@ -627,7 +588,7 @@ fn start_devtools_fail_intercepted_request_command(
                     pending: Box::new(pending),
                 }),
             },
-            PendingFetchCommandOperation::Page(Ok(pending_page)),
+            PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
         ));
     }
 
@@ -656,7 +617,7 @@ fn start_devtools_fail_intercepted_request_command(
 pub(super) async fn complete_fail_request_command_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand, String>>,
+    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
     state: PendingFailRequestState,
     out: &mut FetchCommandOutput,
 ) {
@@ -686,27 +647,7 @@ pub(super) async fn complete_fail_request_command_async(
             .await;
         }
         PendingFailRequestState::SubresourceFetch { pending } => {
-            let Some(completed) = completed else {
-                out.push_error(-32000, "Missing renderer completion");
-                return;
-            };
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    out.push_error(-32000, error);
-                    return;
-                }
-            };
-            let result =
-                conn.resolve_document_command_owner(owner)
-                    .and_then(|(context_id, target_id)| {
-                        conn.browser_context_by_id_mut(&context_id)
-                            .ok_or("NoDocumentLoaded")?
-                            .finish_fail_pending_subresource_fetch_for_target(
-                                &target_id, completion,
-                            )
-                    });
-            if let Err(message) = result {
+            if let Err(message) = super::finish_document_fetch_command(conn, completed) {
                 out.push_error(-32000, message);
                 return;
             }
@@ -722,27 +663,7 @@ pub(super) async fn complete_fail_request_command_async(
             out.extend_background_events(events);
         }
         PendingFailRequestState::SubresourceResponse { pending } => {
-            let Some(completed) = completed else {
-                out.push_error(-32000, "Missing renderer completion");
-                return;
-            };
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    out.push_error(-32000, error);
-                    return;
-                }
-            };
-            let result =
-                conn.resolve_document_command_owner(owner)
-                    .and_then(|(context_id, target_id)| {
-                        conn.browser_context_by_id_mut(&context_id)
-                            .ok_or("NoDocumentLoaded")?
-                            .finish_fail_pending_subresource_response_for_target(
-                                &target_id, completion,
-                            )
-                    });
-            if let Err(message) = result {
+            if let Err(message) = super::finish_document_fetch_command(conn, completed) {
                 out.push_error(-32000, message);
                 return;
             }
@@ -801,12 +722,6 @@ pub(super) enum PendingFulfillRequestState {
         response_headers: Vec<(String, String)>,
         decoded_body: Option<RendererSyntheticResponseBody>,
     },
-}
-
-pub(super) enum PendingWebSocketCommandOperation {
-    DispatchText,
-    DispatchBinary,
-    Close,
 }
 
 pub(super) fn start_fulfill_request_command(
@@ -926,28 +841,15 @@ fn start_devtools_fulfill_intercepted_request_command(
         let websocket_socket_id = pending.websocket_socket_id;
         let register_synthetic_websocket =
             pending.resource_type == SubresourceResourceType::WebSocket && response_code == 101;
-        let (context_id, target_id) = match conn.resolve_document_command_owner(owner) {
-            Ok(route) => route,
-            Err(message) if message == "NoDocumentLoaded" => {
-                return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "NoDocumentLoaded",
-                ));
-            }
-            Err(message) => {
-                return FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-            }
-        };
-
-        let context = conn
-            .browser_context_by_id_mut(&context_id)
-            .expect("admitted document context remains registered");
-        let pending_page = match context.start_fulfill_pending_subresource_fetch_for_target(
-            &target_id,
-            pending.internal_id,
-            response_code,
-            response_headers.clone(),
-            decoded_body.unwrap_or_else(RendererSyntheticResponseBody::empty),
+        let pending_page = match super::start_document_fetch_command_for_owner(
+            conn,
+            owner,
+            DocumentFetchCommand::FulfillRequest {
+                internal_id: pending.internal_id,
+                response_code,
+                response_headers: response_headers.clone(),
+                response_body: decoded_body.unwrap_or_else(RendererSyntheticResponseBody::empty),
+            },
         ) {
             Ok(pending_page) => pending_page,
             Err(error) => {
@@ -969,7 +871,7 @@ fn start_devtools_fulfill_intercepted_request_command(
                     register_synthetic_websocket,
                 }),
             },
-            PendingFetchCommandOperation::Page(Ok(pending_page)),
+            PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
         ));
     }
 
@@ -979,28 +881,15 @@ fn start_devtools_fulfill_intercepted_request_command(
         action_session_id,
         &request_id,
     ) {
-        let (context_id, target_id) = match conn.resolve_document_command_owner(owner) {
-            Ok(route) => route,
-            Err(message) if message == "NoDocumentLoaded" => {
-                return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "NoDocumentLoaded",
-                ));
-            }
-            Err(message) => {
-                return FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-            }
-        };
-
-        let context = conn
-            .browser_context_by_id_mut(&context_id)
-            .expect("admitted document context remains registered");
-        let pending_page = match context.start_fulfill_pending_subresource_response_for_target(
-            &target_id,
-            pending.internal_id,
-            response_code,
-            response_headers.clone(),
-            decoded_body.unwrap_or_else(RendererSyntheticResponseBody::empty),
+        let pending_page = match super::start_document_fetch_command_for_owner(
+            conn,
+            owner,
+            DocumentFetchCommand::FulfillResponse {
+                internal_id: pending.internal_id,
+                response_code,
+                response_headers: response_headers.clone(),
+                response_body: decoded_body.unwrap_or_else(RendererSyntheticResponseBody::empty),
+            },
         ) {
             Ok(pending_page) => pending_page,
             Err(error) => {
@@ -1018,7 +907,7 @@ fn start_devtools_fulfill_intercepted_request_command(
                     pending: Box::new(pending),
                 }),
             },
-            PendingFetchCommandOperation::Page(Ok(pending_page)),
+            PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
         ));
     }
 
@@ -1065,7 +954,7 @@ fn start_devtools_fulfill_intercepted_request_command(
 pub(super) async fn complete_fulfill_request_command_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand, String>>,
+    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
     state: PendingFulfillRequestState,
     out: &mut FetchCommandOutput,
 ) {
@@ -1077,27 +966,7 @@ pub(super) async fn complete_fulfill_request_command_async(
             websocket_socket_id,
             register_synthetic_websocket,
         } => {
-            let Some(completed) = completed else {
-                out.push_error(-32000, "Missing renderer completion");
-                return;
-            };
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    out.push_error(-32000, error);
-                    return;
-                }
-            };
-            let result =
-                conn.resolve_document_command_owner(owner)
-                    .and_then(|(context_id, target_id)| {
-                        conn.browser_context_by_id_mut(&context_id)
-                            .ok_or("NoDocumentLoaded")?
-                            .finish_fulfill_pending_subresource_fetch_for_target(
-                                &target_id, completion,
-                            )
-                    });
-            if let Err(message) = result {
+            if let Err(message) = super::finish_document_fetch_command(conn, completed) {
                 out.push_error(-32000, message);
                 return;
             }
@@ -1121,27 +990,7 @@ pub(super) async fn complete_fulfill_request_command_async(
             out.extend_background_events(events);
         }
         PendingFulfillRequestState::SubresourceResponse { pending } => {
-            let Some(completed) = completed else {
-                out.push_error(-32000, "Missing renderer completion");
-                return;
-            };
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    out.push_error(-32000, error);
-                    return;
-                }
-            };
-            let result =
-                conn.resolve_document_command_owner(owner)
-                    .and_then(|(context_id, target_id)| {
-                        conn.browser_context_by_id_mut(&context_id)
-                            .ok_or("NoDocumentLoaded")?
-                            .finish_fulfill_pending_subresource_response_for_target(
-                                &target_id, completion,
-                            )
-                    });
-            if let Err(message) = result {
+            if let Err(message) = super::finish_document_fetch_command(conn, completed) {
                 out.push_error(-32000, message);
                 return;
             }
@@ -1258,33 +1107,12 @@ pub(super) fn start_dispatch_websocket_message_command(
         return FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, "RequestNotFound"));
     };
 
-    let (context_id, target_id) = match conn
-        .resolve_document_command_owner(&CommandOwnerScope::capture(conn, cmd.session_id))
-    {
-        Ok(route) => route,
-        Err(message) if message == "NoDocumentLoaded" => {
-            return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32000,
-                "NoDocumentLoaded",
-            ));
-        }
-        Err(message) => {
-            return FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-        }
-    };
-
-    let context = conn
-        .browser_context_by_id_mut(&context_id)
-        .expect("admitted document context remains registered");
-    let (operation, pending_page) = match WebSocketMessageOpcode::parse(&params.opcode) {
-        Some(WebSocketMessageOpcode::Text) => (
-            PendingWebSocketCommandOperation::DispatchText,
-            context.start_receive_synthetic_websocket_text_for_target(
-                &target_id,
-                socket_id,
-                params.data,
-            ),
-        ),
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let command = match WebSocketMessageOpcode::parse(&params.opcode) {
+        Some(WebSocketMessageOpcode::Text) => DocumentFetchCommand::DispatchWebSocketText {
+            socket_id,
+            data: params.data,
+        },
         Some(WebSocketMessageOpcode::Binary) => {
             let bytes = match decode_base64_bytes(&params.data) {
                 Ok(bytes) => bytes,
@@ -1295,12 +1123,10 @@ pub(super) fn start_dispatch_websocket_message_command(
                     ));
                 }
             };
-            (
-                PendingWebSocketCommandOperation::DispatchBinary,
-                context.start_receive_synthetic_websocket_binary_for_target(
-                    &target_id, socket_id, bytes,
-                ),
-            )
+            DocumentFetchCommand::DispatchWebSocketBinary {
+                socket_id,
+                data: bytes,
+            }
         }
         None => {
             return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -1309,7 +1135,7 @@ pub(super) fn start_dispatch_websocket_message_command(
             ));
         }
     };
-    let pending = match pending_page {
+    let pending = match super::start_document_fetch_command_for_owner(conn, &owner, command) {
         Ok(pending) => pending,
         Err(error) => {
             return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -1322,8 +1148,8 @@ pub(super) fn start_dispatch_websocket_message_command(
         conn,
         cmd.id,
         cmd.session_id,
-        PendingFetchCommandKind::DispatchWebSocketMessage { operation },
-        PendingFetchCommandOperation::Page(Ok(pending)),
+        PendingFetchCommandKind::DispatchWebSocketMessage,
+        PendingFetchCommandOperation::DocumentFetch(Ok(pending)),
     ))
 }
 
@@ -1346,29 +1172,15 @@ pub(super) fn start_close_websocket_command(
         return FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, "RequestNotFound"));
     };
 
-    let (context_id, target_id) = match conn
-        .resolve_document_command_owner(&CommandOwnerScope::capture(conn, cmd.session_id))
-    {
-        Ok(route) => route,
-        Err(message) if message == "NoDocumentLoaded" => {
-            return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
-                -32000,
-                "NoDocumentLoaded",
-            ));
-        }
-        Err(message) => {
-            return FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-        }
-    };
-
-    let context = conn
-        .browser_context_by_id_mut(&context_id)
-        .expect("admitted document context remains registered");
-    let pending = match context.start_close_synthetic_websocket_from_server_for_target(
-        &target_id,
-        socket_id,
-        params.code,
-        params.reason,
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let pending = match super::start_document_fetch_command_for_owner(
+        conn,
+        &owner,
+        DocumentFetchCommand::CloseWebSocket {
+            socket_id,
+            code: params.code,
+            reason: params.reason,
+        },
     ) {
         Ok(pending) => pending,
         Err(error) => {
@@ -1383,55 +1195,17 @@ pub(super) fn start_close_websocket_command(
         cmd.id,
         cmd.session_id,
         PendingFetchCommandKind::CloseWebSocket,
-        PendingFetchCommandOperation::Page(Ok(pending)),
+        PendingFetchCommandOperation::DocumentFetch(Ok(pending)),
     ))
 }
 
 pub(super) fn complete_websocket_page_command(
     conn: &mut CdpConnection,
-    owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand, String>>,
-    operation: PendingWebSocketCommandOperation,
+    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
     out: &mut FetchCommandOutput,
 ) {
-    let Some(completed) = completed else {
-        out.push_error(-32000, "Missing renderer completion");
-        return;
-    };
-    let completion = match completed {
-        Ok(completion) => completion,
-        Err(error) => {
-            out.push_error(-32000, error);
-            return;
-        }
-    };
-    let result = match conn.resolve_document_command_owner(owner) {
-        Ok((context_id, target_id)) => {
-            let context = conn
-                .browser_context_by_id_mut(&context_id)
-                .expect("admitted document context remains registered");
-            match operation {
-                PendingWebSocketCommandOperation::DispatchText => context
-                    .finish_receive_synthetic_websocket_text_for_target(&target_id, completion),
-                PendingWebSocketCommandOperation::DispatchBinary => context
-                    .finish_receive_synthetic_websocket_binary_for_target(&target_id, completion),
-                PendingWebSocketCommandOperation::Close => context
-                    .finish_close_synthetic_websocket_from_server_for_target(
-                        &target_id, completion,
-                    ),
-            }
-        }
-        Err(message) if message == "NoDocumentLoaded" => {
-            out.push_error(-32000, "NoDocumentLoaded");
-            return;
-        }
-        Err(message) => {
-            out.push_error(-32000, message);
-            return;
-        }
-    };
-    match result {
-        Ok(()) => out.push_success(),
+    match super::finish_document_fetch_command(conn, completed) {
+        Ok(_) => out.push_success(),
         Err(error) => out.push_error(-32000, &error),
     }
 }
@@ -1673,27 +1447,14 @@ fn start_devtools_continue_intercepted_response_command(
             response_headers
         };
         let pending_internal_id = pending.internal_id;
-        let (context_id, target_id) = match conn.resolve_document_command_owner(owner) {
-            Ok(route) => route,
-            Err(message) if message == "NoDocumentLoaded" => {
-                return FetchCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "NoDocumentLoaded",
-                ));
-            }
-            Err(message) => {
-                return FetchCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-            }
-        };
-
-        let context = conn
-            .browser_context_by_id_mut(&context_id)
-            .expect("admitted document context remains registered");
-        let pending_page = match context.start_continue_pending_subresource_response_for_target(
-            &target_id,
-            pending_internal_id,
-            continue_response_code,
-            continue_response_headers,
+        let pending_page = match super::start_document_fetch_command_for_owner(
+            conn,
+            owner,
+            DocumentFetchCommand::ContinueResponse {
+                internal_id: pending_internal_id,
+                response_code: continue_response_code,
+                response_headers: continue_response_headers,
+            },
         ) {
             Ok(pending_page) => pending_page,
             Err(error) => {
@@ -1711,7 +1472,7 @@ fn start_devtools_continue_intercepted_response_command(
                     pending: Box::new(pending),
                 }),
             },
-            PendingFetchCommandOperation::Page(Ok(pending_page)),
+            PendingFetchCommandOperation::DocumentFetch(Ok(pending_page)),
         ));
     }
     if let Some(step) = super::auth::start_devtools_continue_with_auth_command_for_pending(
@@ -1790,7 +1551,7 @@ async fn continue_response_transfer_inline(
 pub(super) async fn complete_continue_response_command_async(
     conn: &mut CdpConnection,
     owner: &CommandOwnerScope,
-    completed: Option<Result<CompletedPageCommand, String>>,
+    completed: Option<Result<CompletedDocumentFetchCommand, String>>,
     state: PendingContinueResponseState,
     out: &mut FetchCommandOutput,
 ) {
@@ -1812,27 +1573,7 @@ pub(super) async fn complete_continue_response_command_async(
         }
         PendingContinueResponseState::SubresourceResponse { pending } => {
             let pending = *pending;
-            let Some(completed) = completed else {
-                out.push_error(-32000, "Missing renderer completion");
-                return;
-            };
-            let completion = match completed {
-                Ok(completion) => completion,
-                Err(error) => {
-                    out.push_error(-32000, error);
-                    return;
-                }
-            };
-            let result =
-                conn.resolve_document_command_owner(owner)
-                    .and_then(|(context_id, target_id)| {
-                        conn.browser_context_by_id_mut(&context_id)
-                            .ok_or("NoDocumentLoaded")?
-                            .finish_continue_pending_subresource_response_for_target(
-                                &target_id, completion,
-                            )
-                    });
-            if let Err(message) = result {
+            if let Err(message) = super::finish_document_fetch_command(conn, completed) {
                 out.push_error(-32000, message);
                 return;
             }

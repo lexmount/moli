@@ -1,7 +1,7 @@
 use super::*;
 use crate::conn::{
-    CapturedBody, CdpCommandTaskStep, ClaimedSubresourceContinueRequest, FetchAuthChallenge,
-    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchOwnerKind,
+    CapturedBody, CdpCommandTaskStep, ClaimedSubresourceContinueRequest, DocumentFetchCommand,
+    FetchAuthChallenge, PendingSubresourceFetchAuthRequest, PendingSubresourceFetchOwnerKind,
     PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
 };
 use crate::domains::fetch::{
@@ -51,16 +51,16 @@ async fn fetch_interception_update_rejects_a_replaced_page() {
         .conn
         .loaded_document_owner_identity_for_owner(&owner)
         .unwrap();
+    let document = ctx.conn.resolve_browser_document_for_owner(&owner).unwrap();
     let completion = ctx
         .conn
         .browser_context_by_id_mut(&context_id)
         .unwrap()
-        .start_target_fetch_interception_update(&target_id, false, None)
+        .start_web_contents_fetch_interception_update(document.web_contents(), false, None, false)
         .unwrap()
         .unwrap()
         .wait()
-        .await
-        .unwrap();
+        .await;
     let replacement = ctx
         .conn
         .load_page_via_runtime_async("data:text/html,<title>replacement</title>")
@@ -71,10 +71,10 @@ async fn fetch_interception_update_rejects_a_replaced_page() {
         .as_mut()
         .unwrap()
         .replace_active_page_for_test(Some(replacement));
-    assert_eq!(
-        super::super::finish_fetch_interception_update(&mut ctx.conn, &owner, completion),
-        Err("Renderer Page changed".to_owned())
-    );
+    assert!(matches!(
+        ctx.conn.finish_document_fetch_command(completion),
+        Err(error) if error == "Renderer Page changed"
+    ));
     assert_eq!(
         ctx.conn
             .browser_context_by_id(&context_id)
@@ -88,13 +88,125 @@ async fn fetch_interception_update_rejects_a_replaced_page() {
         .conn
         .browser_context_by_id_mut(&context_id)
         .unwrap()
-        .start_target_fetch_interception_update(&target_id, false, None)
+        .start_web_contents_fetch_interception_update(document.web_contents(), false, None, false)
         .unwrap()
         .unwrap()
         .wait()
+        .await;
+    ctx.conn.finish_document_fetch_command(completion).unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn subresource_continue_completion_rejects_a_replaced_document() {
+    let mut ctx = TestContext::new();
+    with_loaded_http_document(
+        &mut ctx,
+        "data:text/html,<title>fetch correlation</title>",
+        "SID-1",
+        "TID-1",
+    )
+    .await;
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .active_page_target_mut()
+        .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
+        .runtime_session_state
+        .inspector_enabled = true;
+
+    ctx.process_async(json!({
+        "id": 80,
+        "method": "Fetch.enable",
+        "sessionId": "SID-1"
+    }))
+    .await;
+    ctx.expect_result(80, json!({}), Some("SID-1"));
+    enable_runtime_async(&mut ctx, "SID-1", 81).await;
+    ctx.sent.clear();
+
+    let request_url = "http://example.test/exact-document";
+    ctx.process_async(json!({
+        "id": 82,
+        "method": "Runtime.evaluate",
+        "sessionId": "SID-1",
+        "params": {
+            "expression": format!(
+                "fetch('{request_url}').catch(() => undefined); 'scheduled'"
+            )
+        }
+    }))
+    .await;
+    let _ = take_response_by_id(&mut ctx, 82);
+    wait_until_messages(
+        &mut ctx,
+        Some("SID-1"),
+        "exact-document subresource request pause",
+        |messages| {
+            messages.iter().any(|message| {
+                message["method"] == json!("Fetch.requestPaused")
+                    && message["params"]["request"]["url"] == json!(request_url)
+            })
+        },
+    )
+    .await;
+    let paused = ctx.take_first_matching("Fetch.requestPaused event", |message| {
+        message["method"] == json!("Fetch.requestPaused")
+            && message["params"]["request"]["url"] == json!(request_url)
+    });
+    let request_id = paused["params"]["requestId"]
+        .as_str()
+        .expect("paused request id")
+        .to_owned();
+    ctx.sent.clear();
+
+    let owner = crate::conn::CommandOwnerScope::capture(&ctx.conn, Some("SID-1"));
+    let request = ctx
+        .conn
+        .take_pending_subresource_fetch_request_for_owner(&owner, Some("SID-1"), &request_id)
+        .expect("paused request must remain owned by its document");
+    let document = ctx.conn.resolve_browser_document_for_owner(&owner).unwrap();
+    let pending = ctx
+        .conn
+        .start_document_fetch_command(
+            document,
+            DocumentFetchCommand::ContinueRequest {
+                internal_id: request.internal_id,
+                url: None,
+                method: None,
+                body: None,
+                headers: None,
+                intercept_response: false,
+                handle_auth_requests: false,
+            },
+        )
+        .unwrap();
+    let completed = pending.wait().await;
+
+    let replacement = ctx
+        .conn
+        .load_page_via_runtime_async("data:text/html,<title>replacement</title>")
         .await
         .unwrap();
-    super::super::finish_fetch_interception_update(&mut ctx.conn, &owner, completion).unwrap();
+    ctx.conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .replace_active_page_for_test(Some(replacement));
+
+    assert!(matches!(
+        ctx.conn.finish_document_fetch_command(completed),
+        Err(error) if error == "Document changed"
+    ));
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .target_document_title("TID-1")
+            .as_deref(),
+        Some("replacement")
+    );
 }
 
 fn pending_auth(

@@ -11,8 +11,8 @@ use crate::conn::state::{
 use crate::conn::{
     CapturedBody, ClaimedFetchNavigation, ClaimedFetchResponseNavigation, CommandOwnerScope,
     CompletedFetchResponseBodyStreamReadDispatch, FetchInterceptionPattern, FetchRequestStage,
-    InFlightSubresourceFetchRequest, PausedDocumentTransfer, PendingFetchAuthNavigation,
-    PendingFetchNavigation, PendingFetchResponseBodyStreamRead,
+    InFlightSubresourceFetchRequest, PausedDocumentTransfer, PendingDocumentFetchCommand,
+    PendingFetchAuthNavigation, PendingFetchNavigation, PendingFetchResponseBodyStreamRead,
     PendingFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamReadStart,
     PendingFetchResponseNavigation, PendingSubresourceFetchAuthRequest,
     PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest, TargetRuntimeSlot,
@@ -213,20 +213,28 @@ fn target_scoped_stream_owner_matches_session(
 fn remove_network_intercept_from_browser_context(
     browser_context: &mut BrowserContext,
     intercept_id: &str,
-) -> Result<Option<Option<moli_core::page::PendingPageCommand>>, String> {
+) -> Result<Option<Option<PendingDocumentFetchCommand>>, String> {
     let target_ids = browser_context
         .page_targets
         .iter()
         .map(|target| target.target_id().to_owned())
         .collect::<Vec<_>>();
     for target_id in target_ids {
+        let web_contents = browser_context
+            .web_contents_handle_for_target(&target_id)
+            .ok_or("WebContents unavailable")?;
         let target = browser_context
             .page_target_mut(&target_id)
             .expect("target must remain registered");
         if target.fetch_owner.remove_network_intercept(intercept_id) {
             let (enabled, resource_type) = target.fetch_owner.subresource_interception_config();
             return browser_context
-                .start_target_fetch_interception_update(&target_id, enabled, resource_type)
+                .start_web_contents_fetch_interception_update(
+                    web_contents,
+                    enabled,
+                    resource_type,
+                    true,
+                )
                 .map(Some)
                 .map_err(|error| format!("failed to update page fetch interception: {error}"));
         }
@@ -236,28 +244,6 @@ fn remove_network_intercept_from_browser_context(
 }
 
 impl CdpConnection {
-    pub(crate) fn finish_removed_network_interception(
-        &mut self,
-        completion: moli_core::page::CompletedPageCommand,
-    ) -> Result<(), String> {
-        // BiDi's global removal may refer to a background or inactive page.
-        // Observe only the physical origin of the completion, not the command
-        // caller's selected page. Retirement does not undo the installed policy.
-        for context in self
-            .browser_context
-            .iter_mut()
-            .chain(self.inactive_browser_contexts.iter_mut())
-        {
-            if context.observe_renderer_page_state(completion.page_state()) {
-                break;
-            }
-        }
-        completion
-            .into_unit_page_command_turn()
-            .map(drop)
-            .map_err(|error| error.to_string())
-    }
-
     pub(crate) fn target_fetch_subresource_interception_snapshot_for_owner(
         &self,
         owner: &CommandOwnerScope,
@@ -1360,7 +1346,7 @@ impl CdpConnection {
         session_id: Option<&str>,
         handle_auth_requests: bool,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentFetchCommand>, String> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.start_enable_fetch_for_owner(&owner, handle_auth_requests, patterns)
     }
@@ -1370,7 +1356,7 @@ impl CdpConnection {
         command_owner: &CommandOwnerScope,
         handle_auth_requests: bool,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentFetchCommand>, String> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -1379,12 +1365,17 @@ impl CdpConnection {
             handle_auth_requests,
             patterns,
         );
+        let web_contents = owner
+            .browser_context
+            .web_contents_handle_for_target(&owner.target_id)
+            .ok_or("WebContents unavailable")?;
         owner
             .browser_context
-            .start_target_fetch_interception_update(
-                &owner.target_id,
+            .start_web_contents_fetch_interception_update(
+                web_contents,
                 subresource_enabled,
                 subresource_resource_type,
+                false,
             )
             .map_err(|error| format!("failed to update page fetch interception: {error}"))
     }
@@ -1398,7 +1389,7 @@ impl CdpConnection {
         handle_auth_requests: bool,
         auth_url_patterns: Vec<String>,
         patterns: Vec<FetchInterceptionPattern>,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentFetchCommand>, String> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -1409,12 +1400,17 @@ impl CdpConnection {
             auth_url_patterns,
             patterns,
         );
+        let web_contents = owner
+            .browser_context
+            .web_contents_handle_for_target(&owner.target_id)
+            .ok_or("WebContents unavailable")?;
         owner
             .browser_context
-            .start_target_fetch_interception_update(
-                &owner.target_id,
+            .start_web_contents_fetch_interception_update(
+                web_contents,
                 subresource_enabled,
                 subresource_resource_type,
+                false,
             )
             .map_err(|error| format!("failed to update page fetch interception: {error}"))
     }
@@ -1424,7 +1420,7 @@ impl CdpConnection {
         command_owner: &CommandOwnerScope,
         intercept_id: &str,
         allow_global_lookup: bool,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentFetchCommand>, String> {
         let Some(mut owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -1436,12 +1432,17 @@ impl CdpConnection {
             }
             return Err("NetworkInterceptNotFound".to_owned());
         };
+        let web_contents = owner
+            .browser_context
+            .web_contents_handle_for_target(&owner.target_id)
+            .ok_or("WebContents unavailable")?;
         owner
             .browser_context
-            .start_target_fetch_interception_update(
-                &owner.target_id,
+            .start_web_contents_fetch_interception_update(
+                web_contents,
                 subresource_enabled,
                 subresource_resource_type,
+                false,
             )
             .map_err(|error| format!("failed to update page fetch interception: {error}"))
     }
@@ -1449,7 +1450,7 @@ impl CdpConnection {
     fn start_remove_network_intercept_from_any_target(
         &mut self,
         intercept_id: &str,
-    ) -> Result<Option<moli_core::page::PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentFetchCommand>, String> {
         if let Some(browser_context) = self.browser_context.as_mut()
             && let Some(pending) =
                 remove_network_intercept_from_browser_context(browser_context, intercept_id)?
@@ -1471,7 +1472,7 @@ impl CdpConnection {
         session_id: Option<&str>,
     ) -> Option<(
         SessionOwnerPendingFetchState,
-        Result<Option<moli_core::page::PendingPageCommand>, String>,
+        Result<Option<PendingDocumentFetchCommand>, String>,
     )> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.start_disable_fetch_for_owner(&owner, true)
@@ -1483,7 +1484,7 @@ impl CdpConnection {
         renderer_policy_reconciled: bool,
     ) -> Option<(
         SessionOwnerPendingFetchState,
-        Result<Option<moli_core::page::PendingPageCommand>, String>,
+        Result<Option<PendingDocumentFetchCommand>, String>,
     )> {
         let owner = CommandOwnerScope::capture(self, session_id);
         self.start_disable_fetch_for_owner(&owner, !renderer_policy_reconciled)
@@ -1495,7 +1496,7 @@ impl CdpConnection {
         enqueue_renderer_update: bool,
     ) -> Option<(
         SessionOwnerPendingFetchState,
-        Result<Option<moli_core::page::PendingPageCommand>, String>,
+        Result<Option<PendingDocumentFetchCommand>, String>,
     )> {
         let mut owner = self.target_session_owner_mut_for_owner(command_owner)?;
         let (pending, (subresource_enabled, subresource_resource_type), removed) = owner
@@ -1506,21 +1507,34 @@ impl CdpConnection {
         // renderer lifecycle interrupt, so only publish it to the Browser
         // owner here and never wait behind active JavaScript.
         let page_command = if enqueue_renderer_update {
-            owner
+            let web_contents = owner
                 .browser_context
-                .start_target_fetch_interception_update(
-                    &owner.target_id,
-                    subresource_enabled,
-                    subresource_resource_type,
-                )
+                .web_contents_handle_for_target(&owner.target_id)
+                .ok_or_else(|| "WebContents unavailable".to_owned());
+            web_contents.and_then(|web_contents| {
+                owner
+                    .browser_context
+                    .start_web_contents_fetch_interception_update(
+                        web_contents,
+                        subresource_enabled,
+                        subresource_resource_type,
+                        false,
+                    )
+            })
         } else if removed {
             owner
                 .browser_context
-                .install_target_fetch_interception_policy(
-                    &owner.target_id,
-                    subresource_enabled,
-                    subresource_resource_type,
-                )
+                .web_contents_handle_for_target(&owner.target_id)
+                .ok_or_else(|| "WebContents unavailable".to_owned())
+                .and_then(|web_contents| {
+                    owner
+                        .browser_context
+                        .install_web_contents_fetch_interception_policy(
+                            web_contents,
+                            subresource_enabled,
+                            subresource_resource_type,
+                        )
+                })
                 .map(|()| None)
         } else {
             Ok(None)

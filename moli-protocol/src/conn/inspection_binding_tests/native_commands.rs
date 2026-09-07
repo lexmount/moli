@@ -256,7 +256,10 @@ async fn browser_native_commands_do_not_require_a_live_inspector_session() {
     }})).await;
     assert!(ctx.take_response_by_id(1).get("error").is_none());
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let (context_id, target_id) = ctx.conn.resolve_document_command_owner(&owner).unwrap();
+    let (context_id, target_id) = ctx
+        .conn
+        .loaded_document_owner_identity_for_owner(&owner)
+        .unwrap();
     let context = ctx.conn.browser_context_by_id(&context_id).unwrap();
     let residence = context
         .target_renderer_page_residence_identity(&target_id)

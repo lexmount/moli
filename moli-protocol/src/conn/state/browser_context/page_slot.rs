@@ -463,6 +463,7 @@ impl BrowserContext {
             .map(|document| &document.page)
     }
 
+    #[cfg(test)]
     pub(super) fn loaded_page_for_target_mut(&mut self, target_id: &str) -> Option<&mut Page> {
         self.web_contents_for_target_mut(target_id)?
             .main_frame

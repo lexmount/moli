@@ -21,20 +21,21 @@ use super::{
     CompletedChildFrameNavigation, CompletedChildFrameTreeSnapshot,
     CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
-    CompletedDocumentDiagnosticsSnapshot, CompletedDocumentInputCommand,
-    CompletedDocumentLifecycleStop, CompletedDocumentPolicyBatch, CompletedDocumentPolicyUpdate,
-    CompletedDocumentResourceRuntimeUpdate, CompletedDocumentResourceTextSearch,
-    CompletedDocumentStorageKeySnapshot, CompletedNavigationHistoryReset,
-    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent,
-    CompletedTopLevelHistoryTraversal, CompletedTopLevelSameDocumentNavigation,
+    CompletedDocumentDiagnosticsSnapshot, CompletedDocumentFetchCommand,
+    CompletedDocumentInputCommand, CompletedDocumentLifecycleStop, CompletedDocumentPolicyBatch,
+    CompletedDocumentPolicyUpdate, CompletedDocumentResourceRuntimeUpdate,
+    CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
+    CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
+    CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
+    CompletedTopLevelSameDocumentNavigation, DocumentFetchCommand, DocumentFetchCommandOutcome,
     DocumentPolicyUpdate, DocumentRuntimePolicyReconciliation, DocumentSnapshot, PageInputCommand,
     PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
     PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
     PendingChildFrameLifecycleWork, PendingChildFrameNavigation, PendingChildFrameTreeSnapshot,
     PendingDocumentAutofillTrigger, PendingDocumentBlobRead, PendingDocumentCookieOwnerSnapshot,
     PendingDocumentCspBypassUpdate, PendingDocumentDiagnosticsSnapshot,
-    PendingDocumentInputCommand, PendingDocumentLifecycleStop, PendingDocumentPolicyBatch,
-    PendingDocumentPolicyUpdate, PendingDocumentResourceTextSearch,
+    PendingDocumentFetchCommand, PendingDocumentInputCommand, PendingDocumentLifecycleStop,
+    PendingDocumentPolicyBatch, PendingDocumentPolicyUpdate, PendingDocumentResourceTextSearch,
     PendingDocumentStorageKeySnapshot, PendingNavigationHistoryReset,
     PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
     PendingTopLevelHistoryTraversal, PendingTopLevelSameDocumentNavigation,
@@ -90,6 +91,30 @@ impl CdpConnection {
         self.browser_context_by_browser_id_mut(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .observe_document_lifetime(document)
+    }
+
+    pub(crate) fn start_document_fetch_command(
+        &self,
+        document: DocumentHandle,
+        command: DocumentFetchCommand,
+    ) -> Result<PendingDocumentFetchCommand, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_fetch_command(document, command)
+    }
+
+    pub(crate) fn finish_document_fetch_command(
+        &mut self,
+        completed: CompletedDocumentFetchCommand,
+    ) -> Result<DocumentFetchCommandOutcome, String> {
+        let context = completed.document().web_contents().context();
+        match self.browser_context_by_browser_id_mut(context) {
+            Some(context) => context.finish_document_fetch_command(completed),
+            None if completed.is_interception_update() => {
+                BrowserContext::finish_unobserved_document_fetch_interception_update(completed)
+            }
+            None => Err("NoDocumentLoaded".to_owned()),
+        }
     }
 
     pub(crate) fn start_document_input_command(

@@ -3113,9 +3113,12 @@ mod tests {
                     }],
                 );
         }
+        let web_contents = background
+            .web_contents_handle_for_target("TID-background")
+            .unwrap();
         assert!(
             background
-                .start_target_fetch_interception_update("TID-background", true, None)
+                .start_web_contents_fetch_interception_update(web_contents, true, None, false)
                 .unwrap()
                 .is_none()
         );
