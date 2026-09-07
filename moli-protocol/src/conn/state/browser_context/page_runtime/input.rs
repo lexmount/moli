@@ -1,6 +1,12 @@
 use super::BrowserContext;
+use super::document_commands::{
+    CompletedDocumentAutofillTrigger, CompletedDocumentInputCommand,
+    PendingDocumentAutofillTrigger, PendingDocumentInputCommand,
+};
+use moli_core::browser::{DocumentHandle, DocumentLifetimeObserver};
 use moli_core::page::{
-    PageInputExt, PendingPageCommand, RendererDragData, RendererPointerEventProperties,
+    PageInputExt, RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
+    RendererCommandTurnOutput, RendererDragData, RendererPointerEventProperties,
     RendererTouchPoint,
 };
 
@@ -43,37 +49,46 @@ pub(crate) enum PageInputCommand<'a> {
 }
 
 impl BrowserContext {
-    pub(crate) fn start_target_autofill_trigger(
-        &self,
-        target_id: &str,
-        request: moli_core::page::RendererAutofillTriggerRequest,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_autofill_trigger(request)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn finish_target_autofill_trigger(
+    pub(crate) fn observe_document_lifetime(
         &mut self,
-        target_id: &str,
-        completion: moli_core::page::CompletedPageCommand,
-    ) -> Result<moli_core::page::RendererAutofillTriggerOutcome, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_autofill_trigger(completion)
+        document: DocumentHandle,
+    ) -> Result<DocumentLifetimeObserver, String> {
+        Ok(self.physical.document_mut(document)?.lifetime.observe())
+    }
+
+    pub(crate) fn start_document_autofill_trigger(
+        &self,
+        document: DocumentHandle,
+        request: RendererAutofillTriggerRequest,
+    ) -> Result<PendingDocumentAutofillTrigger, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
+            .start_autofill_trigger(request)
+            .map_err(|error| error.to_string())?;
+        Ok(PendingDocumentAutofillTrigger::new(document, pending))
+    }
+
+    pub(crate) fn finish_document_autofill_trigger(
+        &mut self,
+        completed: CompletedDocumentAutofillTrigger,
+    ) -> Result<RendererAutofillTriggerOutcome, String> {
+        let (document, completion) = completed.into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_autofill_trigger(completion?)
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_target_input_command(
+    pub(crate) fn start_document_input_command(
         &self,
-        target_id: &str,
+        document: DocumentHandle,
         command: PageInputCommand<'_>,
-    ) -> Result<PendingPageCommand, String> {
-        let page = self
-            .loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?;
-        match command {
+    ) -> Result<PendingDocumentInputCommand, String> {
+        let page = &self.physical.document(document)?.page;
+        let pending = match command {
             PageInputCommand::Key {
                 event_name,
                 key,
@@ -131,6 +146,24 @@ impl BrowserContext {
                 .start_dispatch_drag_event_at_point_with_outcome(x, y, event_name, data, modifiers),
             PageInputCommand::InsertText(text) => page.start_insert_text_into_active_control(text),
         }
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string())?;
+        Ok(PendingDocumentInputCommand::new(document, pending))
+    }
+
+    pub(crate) fn finish_document_input_command(
+        &mut self,
+        completed: CompletedDocumentInputCommand,
+    ) -> Result<RendererCommandTurnOutput, String> {
+        let (document, completion) = completed.into_parts();
+        let completion = completion?;
+        match self.physical.document_mut(document) {
+            Ok(document) => Ok(document.page.finish_page_command_turn(completion)),
+            // InputInjector acknowledges an event consumed by the retired
+            // renderer, but its frozen Page state cannot enter a replacement.
+            Err(error) if matches!(error.as_str(), "Document changed" | "NoDocumentLoaded") => {
+                Ok(completion.into_output())
+            }
+            Err(error) => Err(error),
+        }
     }
 }

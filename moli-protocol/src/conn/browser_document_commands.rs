@@ -1,12 +1,13 @@
 use moli_core::{
-    browser::{BrowserContextId, DocumentHandle},
+    browser::{BrowserContextId, DocumentHandle, DocumentLifetimeObserver},
     page::{
         ChildFrameTreeSnapshot, DocumentCookieOwnerSnapshot, RendererAppManifestLoadPublication,
+        RendererAutofillTriggerOutcome, RendererAutofillTriggerRequest,
         RendererCaptureScreencastFrameReply, RendererCaptureScreencastFrameRequest,
         RendererCaptureScreenshotReply, RendererCaptureScreenshotRequest,
         RendererCommandTurnOutput, RendererNetworkResourceLoadPreparation,
-        RendererResourceTextSearchOutcome, RendererSetDocumentContentResult,
-        SubresourceNetworkRecord,
+        RendererPageDiagnosticsSnapshot, RendererResourceTextSearchOutcome,
+        RendererSetDocumentContentResult, SubresourceNetworkRecord,
     },
 };
 use std::sync::Arc;
@@ -16,19 +17,23 @@ use super::{
     BrowserAppManifestLoadPreparation, CdpConnection, CommandOwnerScope,
     CompletedAppManifestLoadPreparation, CompletedAppManifestPublication,
     CompletedCaptureDocumentImage, CompletedCaptureDocumentScreencastFrame,
-    CompletedCaptureDocumentSnapshot, CompletedChildFrameNavigation,
-    CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
+    CompletedCaptureDocumentSnapshot, CompletedChildFrameLifecycleWork,
+    CompletedChildFrameNavigation, CompletedChildFrameTreeSnapshot,
+    CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
-    CompletedDocumentPolicyBatch, CompletedDocumentPolicyUpdate,
-    CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
-    CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
-    CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
-    CompletedTopLevelSameDocumentNavigation, DocumentPolicyUpdate,
-    DocumentRuntimePolicyReconciliation, DocumentSnapshot, PendingAppManifestLoadPreparation,
-    PendingAppManifestPublication, PendingCaptureDocumentImage,
+    CompletedDocumentDiagnosticsSnapshot, CompletedDocumentInputCommand,
+    CompletedDocumentLifecycleStop, CompletedDocumentPolicyBatch, CompletedDocumentPolicyUpdate,
+    CompletedDocumentResourceRuntimeUpdate, CompletedDocumentResourceTextSearch,
+    CompletedDocumentStorageKeySnapshot, CompletedNavigationHistoryReset,
+    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent,
+    CompletedTopLevelHistoryTraversal, CompletedTopLevelSameDocumentNavigation,
+    DocumentPolicyUpdate, DocumentRuntimePolicyReconciliation, DocumentSnapshot, PageInputCommand,
+    PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
     PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
-    PendingChildFrameNavigation, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
-    PendingDocumentCookieOwnerSnapshot, PendingDocumentCspBypassUpdate, PendingDocumentPolicyBatch,
+    PendingChildFrameLifecycleWork, PendingChildFrameNavigation, PendingChildFrameTreeSnapshot,
+    PendingDocumentAutofillTrigger, PendingDocumentBlobRead, PendingDocumentCookieOwnerSnapshot,
+    PendingDocumentCspBypassUpdate, PendingDocumentDiagnosticsSnapshot,
+    PendingDocumentInputCommand, PendingDocumentLifecycleStop, PendingDocumentPolicyBatch,
     PendingDocumentPolicyUpdate, PendingDocumentResourceTextSearch,
     PendingDocumentStorageKeySnapshot, PendingNavigationHistoryReset,
     PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
@@ -78,6 +83,124 @@ impl CdpConnection {
         self.loaded_browser_document_for_owner(owner)
     }
 
+    pub(crate) fn observe_browser_document_lifetime(
+        &mut self,
+        document: DocumentHandle,
+    ) -> Result<DocumentLifetimeObserver, String> {
+        self.browser_context_by_browser_id_mut(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .observe_document_lifetime(document)
+    }
+
+    pub(crate) fn start_document_input_command(
+        &self,
+        document: DocumentHandle,
+        command: PageInputCommand<'_>,
+    ) -> Result<PendingDocumentInputCommand, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_input_command(document, command)
+    }
+
+    pub(crate) fn finish_document_input_command(
+        &mut self,
+        completed: CompletedDocumentInputCommand,
+    ) -> Result<RendererCommandTurnOutput, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_document_input_command(completed)
+    }
+
+    pub(crate) fn start_document_autofill_trigger(
+        &self,
+        document: DocumentHandle,
+        request: RendererAutofillTriggerRequest,
+    ) -> Result<PendingDocumentAutofillTrigger, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_autofill_trigger(document, request)
+    }
+
+    pub(crate) fn finish_document_autofill_trigger(
+        &mut self,
+        completed: CompletedDocumentAutofillTrigger,
+    ) -> Result<RendererAutofillTriggerOutcome, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_document_autofill_trigger(completed)
+    }
+
+    pub(crate) fn start_document_lifecycle_stop(
+        &self,
+        document: DocumentHandle,
+    ) -> Result<PendingDocumentLifecycleStop, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_lifecycle_stop(document)
+    }
+
+    pub(crate) fn finish_document_lifecycle_stop(
+        &mut self,
+        completed: CompletedDocumentLifecycleStop,
+    ) -> Result<RendererCommandTurnOutput, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_document_lifecycle_stop(completed)
+    }
+
+    pub(crate) fn start_document_diagnostics_snapshot(
+        &self,
+        document: DocumentHandle,
+    ) -> Result<PendingDocumentDiagnosticsSnapshot, String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_diagnostics_snapshot(document)
+    }
+
+    pub(crate) fn finish_document_diagnostics_snapshot(
+        &mut self,
+        completed: CompletedDocumentDiagnosticsSnapshot,
+    ) -> Result<RendererPageDiagnosticsSnapshot, String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_document_diagnostics_snapshot(completed)
+    }
+
+    pub(crate) fn start_document_child_frame_lifecycle_work(
+        &mut self,
+        document: DocumentHandle,
+        timeout: std::time::Duration,
+    ) -> Result<PendingChildFrameLifecycleWork, String> {
+        self.browser_context_by_browser_id_mut(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_child_frame_lifecycle_work(document, timeout)
+    }
+
+    pub(crate) fn finish_document_child_frame_lifecycle_work(
+        &mut self,
+        completed: CompletedChildFrameLifecycleWork,
+    ) -> Result<(bool, RendererCommandTurnOutput), String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_document_child_frame_lifecycle_work(completed)
+    }
+
+    pub(crate) fn finish_document_resource_runtime_update(
+        &mut self,
+        completed: CompletedDocumentResourceRuntimeUpdate,
+    ) -> Result<(), String> {
+        let context = completed.document().web_contents().context();
+        match self.browser_context_by_browser_id_mut(context) {
+            Some(context) => context.finish_document_resource_runtime_update(completed),
+            None => BrowserContext::finish_unobserved_document_resource_runtime_update(completed),
+        }
+    }
+
     pub(crate) fn start_set_document_content(
         &self,
         document: DocumentHandle,
@@ -89,15 +212,14 @@ impl CdpConnection {
             .start_set_document_content(document, frame_id, html)
     }
 
-    pub(crate) fn start_set_document_javascript_dialog_handler_enabled(
+    pub(crate) fn set_document_javascript_dialog_handler_enabled(
         &self,
         document: DocumentHandle,
         enabled: bool,
     ) -> Result<(), String> {
         self.browser_context_by_browser_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
-            .start_document_javascript_dialog_handler_enabled(document, enabled)
-            .map(drop)
+            .set_document_javascript_dialog_handler_enabled(document, enabled)
     }
 
     pub(crate) fn start_document_policy_update(
@@ -341,6 +463,26 @@ impl CdpConnection {
         self.browser_context_by_browser_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .document_subresource_network_records(document)
+    }
+
+    pub(crate) fn ensure_browser_document_current(
+        &self,
+        document: DocumentHandle,
+    ) -> Result<(), String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .ensure_document_current(document)
+    }
+
+    pub(crate) fn document_response_headers(
+        &self,
+        document: DocumentHandle,
+    ) -> Result<Vec<(String, String)>, String> {
+        Ok(self
+            .browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .document_response_headers(document)?
+            .to_vec())
     }
 
     pub(crate) fn start_document_csp_bypass_update(

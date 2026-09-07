@@ -1712,14 +1712,12 @@ async fn root_set_document_content_unloads_descendant_frame_before_clearing_pare
         .conn
         .start_child_frame_lifecycle_work_for_owner(owner, std::time::Duration::from_secs(2))
         .expect("loaded page should expose child-frame lifecycle work");
-    let completed = pending
-        .wait()
-        .await
-        .expect("srcdoc child lifecycle should complete");
+    let completed = pending.wait().await;
     assert!(
         ctx.conn
-            .complete_child_frame_lifecycle_work_for_session_owner(completed)
+            .finish_document_child_frame_lifecycle_work(completed)
             .expect("srcdoc child lifecycle completion should apply")
+            .0
     );
 
     assert_eq!(

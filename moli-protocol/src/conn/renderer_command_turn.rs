@@ -1,38 +1,6 @@
-use moli_core::page::{
-    CompletedPageCommand, RendererCommandTurnCompletion, RendererCommandTurnOutput,
-};
+use moli_core::page::{RendererCommandTurnCompletion, RendererCommandTurnOutput};
 
-use super::{CdpConnection, CommandDispatchContext, TargetPageResidenceIdentity};
-
-impl CdpConnection {
-    /// Settles a renderer command turn against the Page residence that admitted it.
-    ///
-    /// A completed renderer turn is immutable even if navigation replaces its
-    /// originating Page before protocol delivery resumes. Refresh the Page cache
-    /// only while that exact residence is still current; otherwise preserve the
-    /// output for domain-specific reply handling without installing stale state
-    /// into the replacement Page.
-    pub(crate) fn settle_page_command_turn_for_owner(
-        &mut self,
-        owner: &TargetPageResidenceIdentity,
-        completion: CompletedPageCommand,
-    ) -> RendererCommandTurnOutput {
-        if let Some(target_id) = owner.target_id()
-            && let Some(context) = self.browser_context_by_id_mut(owner.browser_context_id())
-        {
-            return context.settle_target_page_command_turn(
-                target_id,
-                owner.document_id(),
-                completion,
-            );
-        }
-
-        // The renderer has already settled this immutable result. Losing the
-        // protocol-side Page cache must not turn its acknowledgement into an
-        // error or apply its state to a future replacement Page.
-        completion.into_output()
-    }
-}
+use super::CommandDispatchContext;
 
 impl CommandDispatchContext {
     /// Captures the exact concrete-stream predecessor and consumes the unique

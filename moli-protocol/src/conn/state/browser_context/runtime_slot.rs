@@ -1,5 +1,5 @@
 use super::BrowserContext;
-use moli_core::browser::BrowserSequence;
+use moli_core::browser::{BrowserSequence, DocumentHandle};
 use moli_core::page::{
     Page, RendererAgentAttachmentId, RendererDocumentLifecycleIdentity,
     RendererRuntimeInspectorMessageBatch, ScriptNetworkOutputItem, ScriptObservableOutputItem,
@@ -1257,6 +1257,24 @@ impl BrowserContext {
         );
         true
     }
+
+    pub(crate) fn ingest_document_observable_output_updates(
+        &mut self,
+        document: DocumentHandle,
+    ) -> bool {
+        if self.physical.document(document).is_err() {
+            return false;
+        }
+        let Some(target_id) = self
+            .page_targets
+            .get_for_web_contents(document.web_contents().id())
+            .map(|projection| projection.target_id().to_owned())
+        else {
+            return false;
+        };
+        self.ingest_owner_page_observable_output_updates_for_target(&target_id)
+    }
+
     pub(crate) fn observe_renderer_page_state_for_target(
         &mut self,
         target_id: &str,

@@ -371,9 +371,14 @@ mod tests {
             .as_mut()
             .expect("browser context should be loaded");
         let target_id = bc.active_target_id_owned().unwrap();
+        let document = bc
+            .document_handle_for_target(&target_id)
+            .expect("active target should have an exact Document");
+        let completed = bc
+            .start_document_diagnostics_snapshot(document)
+            .expect("runtime console messages should load");
         let snapshot = bc
-            .target_page_diagnostics_snapshot_async(&target_id)
-            .await
+            .finish_document_diagnostics_snapshot(completed.wait().await)
             .expect("runtime console messages should load");
         let console_messages = snapshot
             .runtime_observable_source()

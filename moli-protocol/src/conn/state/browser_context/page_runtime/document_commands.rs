@@ -3,8 +3,8 @@ use moli_core::browser::{DocumentHandle, WebContentsHandle};
 use moli_core::page::{
     CompletedPageCommand, PendingPageCommand, RendererCaptureScreencastFrameReply,
     RendererCaptureScreencastFrameRequest, RendererCaptureScreenshotReply,
-    RendererCaptureScreenshotRequest, RendererCommandTurnOutput, RendererResourceTextSearchOutcome,
-    RendererSetDocumentContentResult, SubresourceNetworkRecord,
+    RendererCaptureScreenshotRequest, RendererCommandTurnOutput, RendererPageDiagnosticsSnapshot,
+    RendererResourceTextSearchOutcome, RendererSetDocumentContentResult, SubresourceNetworkRecord,
 };
 
 struct PendingDocumentCommand {
@@ -46,7 +46,10 @@ macro_rules! define_document_command {
         pub(crate) struct $completed(CompletedDocumentCommand);
 
         impl $pending {
-            pub(super) fn new(document: DocumentHandle, pending: PendingPageCommand) -> Self {
+            pub(in crate::conn::state::browser_context) fn new(
+                document: DocumentHandle,
+                pending: PendingPageCommand,
+            ) -> Self {
                 Self(PendingDocumentCommand { document, pending })
             }
 
@@ -60,7 +63,7 @@ macro_rules! define_document_command {
                 self.0.document
             }
 
-            pub(super) fn into_parts(
+            pub(in crate::conn::state::browser_context) fn into_parts(
                 self,
             ) -> (DocumentHandle, Result<CompletedPageCommand, String>) {
                 self.0.into_parts()
@@ -155,6 +158,47 @@ define_document_command!(
     PendingAppManifestPublication,
     CompletedAppManifestPublication,
     renderer_output_predecessor
+);
+define_document_command!(PendingDocumentInputCommand, CompletedDocumentInputCommand);
+define_document_command!(
+    PendingDocumentAutofillTrigger,
+    CompletedDocumentAutofillTrigger
+);
+define_document_command!(
+    PendingDocumentLifecycleStop,
+    CompletedDocumentLifecycleStop,
+    renderer_output_predecessor
+);
+define_document_command!(
+    PendingDocumentDiagnosticsSnapshot,
+    CompletedDocumentDiagnosticsSnapshot
+);
+
+#[cfg(test)]
+impl CompletedDocumentDiagnosticsSnapshot {
+    pub(crate) fn page_state_for_test(
+        &self,
+    ) -> Option<&std::sync::Arc<moli_renderer_v8::RendererPageState>> {
+        self.0
+            .completed
+            .as_ref()
+            .ok()
+            .map(CompletedPageCommand::page_state)
+    }
+
+    pub(in crate::conn) fn into_page_completion_for_test(
+        self,
+    ) -> Result<CompletedPageCommand, String> {
+        self.0.completed
+    }
+}
+define_document_command!(
+    PendingChildFrameLifecycleWork,
+    CompletedChildFrameLifecycleWork
+);
+define_document_command!(
+    PendingDocumentResourceRuntimeUpdate,
+    CompletedDocumentResourceRuntimeUpdate
 );
 
 impl CompletedTopLevelHistoryTraversal {
@@ -540,16 +584,19 @@ impl BrowserContext {
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn start_document_javascript_dialog_handler_enabled(
+    pub(crate) fn set_document_javascript_dialog_handler_enabled(
         &self,
         document: DocumentHandle,
         enabled: bool,
-    ) -> Result<PendingPageCommand, String> {
-        self.physical
+    ) -> Result<(), String> {
+        let pending = self
+            .physical
             .document(document)?
             .page
             .start_set_javascript_dialog_handler_enabled(enabled)
-            .map_err(|error| error.to_string())
+            .map_err(|error| error.to_string())?;
+        drop(pending);
+        Ok(())
     }
 
     pub(crate) fn start_document_csp_bypass_update(
@@ -590,34 +637,111 @@ impl BrowserContext {
             .to_vec())
     }
 
-    pub(crate) fn target_response_headers(&self, target_id: &str) -> Option<&[(String, String)]> {
-        self.loaded_page_for_target(target_id)
-            .map(|page| page.headers())
+    pub(crate) fn ensure_document_current(&self, document: DocumentHandle) -> Result<(), String> {
+        self.physical.document(document).map(|_| ())
     }
 
-    pub(crate) fn target_subresource_network_records(
+    pub(crate) fn document_response_headers(
         &self,
-        target_id: &str,
-    ) -> Option<&[SubresourceNetworkRecord]> {
-        self.loaded_page_for_target(target_id)
-            .map(|page| page.subresource_network_records())
+        document: DocumentHandle,
+    ) -> Result<&[(String, String)], String> {
+        Ok(self.physical.document(document)?.page.headers())
     }
 
-    pub(crate) async fn stop_target_document_lifecycle_async(
+    pub(crate) fn start_document_lifecycle_stop(
+        &self,
+        document: DocumentHandle,
+    ) -> Result<PendingDocumentLifecycleStop, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
+            .start_stop_document_lifecycle()
+            .map_err(|error| error.to_string())?;
+        Ok(PendingDocumentLifecycleStop::new(document, pending))
+    }
+
+    pub(crate) fn finish_document_lifecycle_stop(
         &mut self,
-        target_id: &str,
-    ) -> Result<(), String> {
-        let Some(page) = self.loaded_page_for_target_mut(target_id) else {
-            return Ok(());
-        };
-        page.stop_document_lifecycle_async()
-            .await
+        completed: CompletedDocumentLifecycleStop,
+    ) -> Result<RendererCommandTurnOutput, String> {
+        let (document, completion) = completed.into_parts();
+        self.physical
+            .document_mut(document)?
+            .page
+            .finish_stop_document_lifecycle(completion?)
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn crash_target_renderer_from_io(&mut self, target_id: &str) {
-        if let Some(page) = self.loaded_page_for_target_mut(target_id) {
-            page.crash_devtools_target_from_io();
+    pub(crate) fn start_document_diagnostics_snapshot(
+        &self,
+        document: DocumentHandle,
+    ) -> Result<PendingDocumentDiagnosticsSnapshot, String> {
+        let pending = self
+            .physical
+            .document(document)?
+            .page
+            .start_page_diagnostics_snapshot()
+            .map_err(|error| error.to_string())?;
+        Ok(PendingDocumentDiagnosticsSnapshot::new(document, pending))
+    }
+
+    pub(crate) fn finish_document_diagnostics_snapshot(
+        &mut self,
+        completed: CompletedDocumentDiagnosticsSnapshot,
+    ) -> Result<RendererPageDiagnosticsSnapshot, String> {
+        let (document, completion) = completed.into_parts();
+        let snapshot = self
+            .physical
+            .document_mut(document)?
+            .page
+            .finish_page_diagnostics_snapshot(completion?)
+            .map_err(|error| error.to_string())?;
+        self.ingest_document_observable_output_updates(document);
+        Ok(snapshot)
+    }
+
+    pub(crate) fn start_document_child_frame_lifecycle_work(
+        &mut self,
+        document: DocumentHandle,
+        timeout: std::time::Duration,
+    ) -> Result<PendingChildFrameLifecycleWork, String> {
+        self.physical.document(document)?;
+        let storage = self.physical.storage_partition.handles.clone();
+        let pending = self
+            .physical
+            .web_contents_mut(document.web_contents())?
+            .start_child_frame_lifecycle_work(&storage, timeout)?;
+        Ok(PendingChildFrameLifecycleWork::new(document, pending))
+    }
+
+    pub(crate) fn finish_document_child_frame_lifecycle_work(
+        &mut self,
+        completed: CompletedChildFrameLifecycleWork,
+    ) -> Result<(bool, RendererCommandTurnOutput), String> {
+        let (document, completion) = completed.into_parts();
+        self.physical.document(document)?;
+        let completed = self
+            .physical
+            .web_contents_mut(document.web_contents())?
+            .complete_child_frame_lifecycle_work(completion?)?;
+        self.ingest_document_observable_output_updates(document);
+        Ok(completed)
+    }
+
+    pub(crate) fn crash_web_contents_renderer_from_io(
+        &self,
+        web_contents: WebContentsHandle,
+    ) -> Result<(), String> {
+        if let Some(document) = self
+            .physical
+            .web_contents(web_contents)?
+            .main_frame
+            .current_document
+            .as_ref()
+        {
+            document.page.crash_devtools_target_from_io();
         }
+        Ok(())
     }
 }

@@ -1,10 +1,11 @@
 use super::BrowserContext;
 #[cfg(test)]
+use moli_core::browser::{DocumentLifetime, DocumentLifetimeObserver};
+#[cfg(test)]
 use moli_core::page::RendererLifecycleEventStamp;
 use moli_core::{
     browser::{
-        BrowserSequence, DocumentId, DocumentLifecycle, DocumentLifetime, DocumentLifetimeObserver,
-        NavigationId, RendererPageResidenceIdentity,
+        BrowserSequence, DocumentId, DocumentLifecycle, NavigationId, RendererPageResidenceIdentity,
     },
     page::{
         Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
@@ -779,6 +780,7 @@ impl BrowserContext {
             .is_some()
     }
 
+    #[cfg(test)]
     pub(super) fn document_lifetime_mut_for_target(
         &mut self,
         target_id: &str,
@@ -871,6 +873,7 @@ impl BrowserContext {
         document_id
     }
 
+    #[cfg(test)]
     pub(crate) fn document_lifetime_observer_for_target(
         &mut self,
         target_id: &str,

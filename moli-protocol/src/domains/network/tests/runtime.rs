@@ -86,12 +86,11 @@ async fn runtime_capture_without_network_listener_does_not_advance_subresource_c
 
     ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
         .await;
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    let document = context.document_handle_for_target("TID-1").unwrap();
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .unwrap()
-            .target_subresource_network_records("TID-1")
+        context
+            .document_subresource_network_records(document)
             .unwrap()
             .len(),
         1

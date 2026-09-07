@@ -274,13 +274,15 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         .conn
         .target_page_residence_identity_for_session(None)
         .expect("the original Page should have a residence identity");
+    let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
+    let document = ctx
+        .conn
+        .resolve_browser_document_for_owner(&command_owner)
+        .expect("the original Document should resolve exactly");
     let pending = ctx
         .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .start_target_input_command(
-            original_owner.target_id().unwrap(),
+        .start_document_input_command(
+            document,
             crate::conn::PageInputCommand::Mouse {
                 x: INPUT_HIT_X.into(),
                 y: INPUT_HIT_Y.into(),
@@ -343,9 +345,13 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
         .target_page_residence_identity_for_session(None)
         .expect("the original Page should have a residence identity");
     let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
+    let document = ctx
+        .conn
+        .resolve_browser_document_for_owner(&command_owner)
+        .expect("the original Document should resolve exactly");
     let document_lifetime_observer = ctx
         .conn
-        .capture_document_lifetime_for_owner(&command_owner)
+        .observe_browser_document_lifetime(document)
         .expect("the original Page should expose its attachment lifetime");
 
     let replacement_url = "data:text/html,<body>replacement-before-completion</body>";
@@ -386,9 +392,13 @@ async fn completed_renderer_ack_wins_when_page_replacement_is_already_observable
     with_loaded_document(&mut ctx, "<body>origin</body>").await;
 
     let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
+    let document = ctx
+        .conn
+        .resolve_browser_document_for_owner(&command_owner)
+        .expect("the original Document should resolve exactly");
     let document_lifetime_observer = ctx
         .conn
-        .capture_document_lifetime_for_owner(&command_owner)
+        .observe_browser_document_lifetime(document)
         .expect("the original Page should expose its attachment lifetime");
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>replacement-after-ack</body>",

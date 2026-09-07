@@ -1228,7 +1228,12 @@ async fn disable_failure_still_neutrally_settles_the_drained_navigation() {
     {
         let context = ctx.conn.browser_context.as_mut().unwrap();
         let target_id = context.active_target_id_owned().unwrap();
-        context.crash_target_renderer_from_io(&target_id);
+        let web_contents = context
+            .web_contents_handle_for_target(&target_id)
+            .expect("active target should own WebContents");
+        context
+            .crash_web_contents_renderer_from_io(web_contents)
+            .expect("active WebContents should remain live");
     }
 
     ctx.process_async(json!({"id": 3, "sessionId": "SID-1", "method": "Fetch.disable"}))

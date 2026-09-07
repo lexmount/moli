@@ -1,26 +1,30 @@
 use super::BrowserContext;
-use moli_core::page::{CompletedPageCommand, PendingPageCommand, RendererCommandTurnOutput};
-use std::time::Duration;
+use moli_core::page::{CompletedPageCommand, PendingPageCommand};
 
 mod document_commands;
 pub(crate) use document_commands::{
     CompletedAppManifestLoadPreparation, CompletedAppManifestPublication,
     CompletedCaptureDocumentImage, CompletedCaptureDocumentScreencastFrame,
-    CompletedCaptureDocumentSnapshot, CompletedChildFrameNavigation,
-    CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
+    CompletedCaptureDocumentSnapshot, CompletedChildFrameLifecycleWork,
+    CompletedChildFrameNavigation, CompletedChildFrameTreeSnapshot,
+    CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
+    CompletedDocumentDiagnosticsSnapshot, CompletedDocumentInputCommand,
+    CompletedDocumentLifecycleStop, CompletedDocumentResourceRuntimeUpdate,
     CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
     CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
     CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
     CompletedTopLevelSameDocumentNavigation, DocumentSnapshot, PendingAppManifestLoadPreparation,
     PendingAppManifestPublication, PendingCaptureDocumentImage,
     PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
-    PendingChildFrameNavigation, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
-    PendingDocumentCookieOwnerSnapshot, PendingDocumentCspBypassUpdate,
-    PendingDocumentResourceTextSearch, PendingDocumentStorageKeySnapshot,
-    PendingNavigationHistoryReset, PendingNetworkResourceLoadPreparation,
-    PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
-    PendingTopLevelSameDocumentNavigation,
+    PendingChildFrameLifecycleWork, PendingChildFrameNavigation, PendingChildFrameTreeSnapshot,
+    PendingDocumentAutofillTrigger, PendingDocumentBlobRead, PendingDocumentCookieOwnerSnapshot,
+    PendingDocumentCspBypassUpdate, PendingDocumentDiagnosticsSnapshot,
+    PendingDocumentInputCommand, PendingDocumentLifecycleStop,
+    PendingDocumentResourceRuntimeUpdate, PendingDocumentResourceTextSearch,
+    PendingDocumentStorageKeySnapshot, PendingNavigationHistoryReset,
+    PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
+    PendingTopLevelHistoryTraversal, PendingTopLevelSameDocumentNavigation,
 };
 mod document_queries;
 mod emulation;
@@ -94,41 +98,6 @@ impl BrowserContext {
             .map_err(|error| error.to_string())
     }
 
-    pub(crate) fn settle_target_page_command_turn(
-        &mut self,
-        target_id: &str,
-        document_id: moli_core::browser::DocumentId,
-        completion: CompletedPageCommand,
-    ) -> RendererCommandTurnOutput {
-        if self.target_document_id(target_id) == Some(document_id)
-            && let Some(page) = self.loaded_page_for_target_mut(target_id)
-        {
-            return page.finish_page_command_turn(completion);
-        }
-        completion.into_output()
-    }
-
-    pub(crate) fn start_target_page_diagnostics_snapshot(
-        &self,
-        target_id: &str,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_page_diagnostics_snapshot()
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn finish_target_page_diagnostics_snapshot(
-        &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
-    ) -> Result<moli_core::page::RendererPageDiagnosticsSnapshot, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_page_diagnostics_snapshot(completion)
-            .map_err(|error| error.to_string())
-    }
-
     #[cfg(test)]
     pub(crate) async fn reset_selected_resource_runtime_async(&mut self) -> bool {
         let Some(contents) = self
@@ -143,41 +112,5 @@ impl BrowserContext {
         }
         contents.reset_resource_runtime_for_test().await;
         true
-    }
-
-    pub(crate) fn start_target_child_frame_lifecycle_work(
-        &mut self,
-        target_id: &str,
-        timeout: Duration,
-    ) -> Result<PendingPageCommand, String> {
-        let storage = self.physical.storage_partition.handles.clone();
-        self.web_contents_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_child_frame_lifecycle_work(&storage, timeout)
-    }
-
-    pub(crate) fn complete_target_child_frame_lifecycle_work(
-        &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
-    ) -> Result<(bool, RendererCommandTurnOutput), String> {
-        let completed = self
-            .web_contents_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .complete_child_frame_lifecycle_work(completion)?;
-        self.ingest_owner_page_observable_output_updates_for_target(target_id);
-        Ok(completed)
-    }
-
-    pub(crate) async fn target_page_diagnostics_snapshot_async(
-        &mut self,
-        target_id: &str,
-    ) -> Result<moli_core::page::RendererPageDiagnosticsSnapshot, String> {
-        let Some(page) = self.loaded_page_for_target_mut(target_id) else {
-            return Ok(Default::default());
-        };
-        page.page_diagnostics_snapshot_async()
-            .await
-            .map_err(|error| error.to_string())
     }
 }

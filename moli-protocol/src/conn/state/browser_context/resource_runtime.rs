@@ -1,9 +1,8 @@
-use super::BrowserContext;
-use crate::conn::state::web_contents::WebContents;
-use moli_core::{
-    network::ResourceRequestClient,
-    page::{CompletedPageCommand, PendingPageCommand},
+use super::{
+    BrowserContext, CompletedDocumentResourceRuntimeUpdate, PendingDocumentResourceRuntimeUpdate,
 };
+use crate::conn::state::web_contents::WebContents;
+use moli_core::network::ResourceRequestClient;
 use moli_fetch::FetchConfig;
 
 impl BrowserContext {
@@ -96,35 +95,55 @@ impl BrowserContext {
         self.ensure_target_resource_request_client(target, defaults)
     }
 
-    pub(in crate::conn) fn start_target_resource_runtime_rebuild(
+    pub(in crate::conn) fn start_web_contents_resource_runtime_rebuild(
         &mut self,
-        target: &str,
+        web_contents: moli_core::browser::WebContentsHandle,
         defaults: FetchConfig,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentResourceRuntimeUpdate>, String> {
+        let document = self.document_handle_for_web_contents(web_contents)?;
         let inherited = self.physical.inherited_resource_policy(
             defaults,
             &self.global_extra_headers,
             self.global_network_conditions,
         );
-        self.web_contents_for_target_mut(target)
-            .ok_or("WebContents unavailable")?
-            .start_resource_runtime_rebuild(&inherited)
-    }
-
-    pub(crate) fn finish_target_resource_runtime_update(
-        &mut self,
-        target: &str,
-        completion: CompletedPageCommand,
-    ) -> Result<(), String> {
-        if let Some(contents) = self.web_contents_for_target_mut(target) {
-            return contents.finish_resource_runtime_update(completion);
+        let pending = self
+            .physical
+            .web_contents_mut(web_contents)?
+            .start_resource_runtime_rebuild(&inherited)?;
+        match (document, pending) {
+            (Some(document), Some(pending)) => Ok(Some(PendingDocumentResourceRuntimeUpdate::new(
+                document, pending,
+            ))),
+            (None, None) => Ok(None),
+            _ => Err("resource runtime Document changed during admission".to_owned()),
         }
-        Self::finish_unobserved_resource_runtime_update(completion)
     }
 
-    pub(crate) fn finish_unobserved_resource_runtime_update(
-        completion: CompletedPageCommand,
+    pub(crate) fn finish_document_resource_runtime_update(
+        &mut self,
+        completed: CompletedDocumentResourceRuntimeUpdate,
     ) -> Result<(), String> {
-        WebContents::finish_unobserved_resource_runtime_update(completion)
+        let (document, completion) = completed.into_parts();
+        let completion = completion?;
+        match self.physical.document(document) {
+            Ok(_) => self
+                .physical
+                .web_contents_mut(document.web_contents())?
+                .finish_resource_runtime_update(completion),
+            Err(error) if matches!(error.as_str(), "Document changed" | "NoDocumentLoaded") => {
+                match self.physical.web_contents_mut(document.web_contents()) {
+                    Ok(contents) => contents.finish_resource_runtime_update(completion),
+                    Err(_) => WebContents::finish_unobserved_resource_runtime_update(completion),
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    pub(crate) fn finish_unobserved_document_resource_runtime_update(
+        completed: CompletedDocumentResourceRuntimeUpdate,
+    ) -> Result<(), String> {
+        let (_, completion) = completed.into_parts();
+        WebContents::finish_unobserved_resource_runtime_update(completion?)
     }
 }

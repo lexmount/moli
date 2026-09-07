@@ -967,6 +967,62 @@ async fn document_policy_completion_rejects_replacement_document() {
 }
 
 #[tokio::test]
+async fn document_native_command_completions_reject_replacement_document() {
+    let browser = Browser::new(BrowserConfig::default()).unwrap();
+    let first = browser
+        .fetch("data:text/html,<input id=field>")
+        .await
+        .unwrap();
+    let mut owner = context_with_document(first);
+    let document = owner.document_handle_for_target(TARGET).unwrap();
+    let autofill = owner
+        .start_document_autofill_trigger(
+            document,
+            moli_core::page::RendererAutofillTriggerRequest {
+                frame_id: None,
+                field_id: 1,
+                card: None,
+                address: None,
+            },
+        )
+        .unwrap()
+        .wait()
+        .await;
+    let stopped = owner
+        .start_document_lifecycle_stop(document)
+        .unwrap()
+        .wait()
+        .await;
+
+    let second = browser
+        .fetch("data:text/html,<p>replacement native command owner</p>")
+        .await
+        .unwrap();
+    let retired = owner
+        .replace_target_page_for_test(TARGET, Some(second))
+        .unwrap();
+    let replacement = owner.document_handle_for_target(TARGET).unwrap();
+    assert_ne!(replacement, document);
+    assert_eq!(
+        owner.finish_document_autofill_trigger(autofill),
+        Err("Document changed".to_owned())
+    );
+    assert!(matches!(
+        owner.finish_document_lifecycle_stop(stopped),
+        Err(error) if error == "Document changed"
+    ));
+    assert_eq!(owner.document_handle_for_target(TARGET), Some(replacement));
+
+    retired.close_async().await.unwrap();
+    owner
+        .clear_target_page_for_test(TARGET)
+        .unwrap()
+        .close_async()
+        .await
+        .unwrap();
+}
+
+#[tokio::test]
 async fn document_replacement_preserves_stable_page_engine_history_and_storage() {
     let browser = Browser::new(BrowserConfig::default()).unwrap();
     let first = browser

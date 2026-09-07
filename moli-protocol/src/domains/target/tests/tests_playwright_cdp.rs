@@ -6137,14 +6137,17 @@ async fn playwright_over_cdp_script_execution_disabled_blocks_page_scripts_but_n
     )
     .await;
     let context = ctx.conn.browser_context.as_mut().unwrap();
-    let completion = context
-        .start_target_page_diagnostics_snapshot(&attached.target_id)
+    let document = context
+        .document_handle_for_target(&attached.target_id)
+        .expect("attached target should have an exact Document");
+    let completed = context
+        .start_document_diagnostics_snapshot(document)
         .unwrap()
         .wait()
-        .await
-        .unwrap();
-    let skipped_script = completion
-        .page_state()
+        .await;
+    let skipped_script = completed
+        .page_state_for_test()
+        .expect("diagnostics command should complete")
         .script_execution
         .runs()
         .iter()
@@ -6155,9 +6158,8 @@ async fn playwright_over_cdp_script_execution_disabled_blocks_page_scripts_but_n
             )
         });
     context
-        .finish_target_page_diagnostics_snapshot(&attached.target_id, completion)
+        .finish_document_diagnostics_snapshot(completed)
         .unwrap();
-
     let active = ctx
         .conn
         .browser_context

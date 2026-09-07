@@ -39,11 +39,11 @@ use crate::conn::{
     BackgroundProtocolEvent, CapturedBody, CdpSessionRoute, CommandDispatchContext,
     CommandOwnerScope, CompletedCaptureDocumentImage, CompletedCaptureDocumentScreencastFrame,
     CompletedCaptureDocumentSnapshot, CompletedDocumentCspBypassUpdate,
-    CompletedNavigationHistoryReset, CompletedSetDocumentContent, NETWORK_ERROR_PAGE_URL,
-    PageLifecycleEventsEnableResult, PageScreencastConfig, PageScreencastFormat,
-    PendingCaptureDocumentImage, PendingCaptureDocumentScreencastFrame,
-    PendingCaptureDocumentSnapshot, PendingDocumentCspBypassUpdate, PendingNavigationHistoryReset,
-    PendingSetDocumentContent,
+    CompletedDocumentLifecycleStop, CompletedNavigationHistoryReset, CompletedSetDocumentContent,
+    NETWORK_ERROR_PAGE_URL, PageLifecycleEventsEnableResult, PageScreencastConfig,
+    PageScreencastFormat, PendingCaptureDocumentImage, PendingCaptureDocumentScreencastFrame,
+    PendingCaptureDocumentSnapshot, PendingDocumentCspBypassUpdate, PendingDocumentLifecycleStop,
+    PendingNavigationHistoryReset, PendingSetDocumentContent,
 };
 use crate::conn::{CdpConnection, Cmd, EmulatedViewportSurface};
 pub(crate) use crate::conn::{DEFAULT_LOADER_ID as LOADER_ID, monotonic_timestamp_seconds};
@@ -208,6 +208,7 @@ enum PendingPageCommandKind {
     AddScriptToEvaluateOnNewDocument(preload::PendingAddScriptToEvaluateOnNewDocumentCommand),
     GetFrameTree {
         output_kind: FrameTreeCommandOutputKind,
+        document: moli_core::browser::DocumentHandle,
         target_id: String,
         target_loader_id: String,
         target_url: String,
@@ -249,8 +250,12 @@ enum PendingPageCommandKind {
     ContinueNavigationWithoutRequestPause(
         Box<navigation::PendingContinueNavigationWithoutRequestPauseCommand>,
     ),
-    StopLoading,
-    Crash,
+    StopLoading {
+        pending: Option<PendingDocumentLifecycleStop>,
+    },
+    Crash {
+        web_contents: Option<moli_core::browser::WebContentsHandle>,
+    },
     Close,
     CreateIsolatedWorld(preload::PendingCreateIsolatedWorldCommand),
 }
@@ -276,6 +281,7 @@ enum CompletedPageCommandKind {
     AddScriptToEvaluateOnNewDocument(preload::CompletedAddScriptToEvaluateOnNewDocumentCommand),
     GetFrameTree {
         output_kind: FrameTreeCommandOutputKind,
+        document: moli_core::browser::DocumentHandle,
         target_id: String,
         target_loader_id: String,
         target_url: String,
@@ -317,8 +323,12 @@ enum CompletedPageCommandKind {
     ContinueNavigationWithoutRequestPause(
         Box<navigation::CompletedContinueNavigationWithoutRequestPauseCommand>,
     ),
-    StopLoading,
-    Crash,
+    StopLoading {
+        completed: Option<CompletedDocumentLifecycleStop>,
+    },
+    Crash {
+        web_contents: Option<moli_core::browser::WebContentsHandle>,
+    },
     Close,
     CreateIsolatedWorld(Box<preload::CompletedCreateIsolatedWorldCommand>),
 }
@@ -355,12 +365,14 @@ impl CompletedPageCommandKind {
             Self::SameDocumentNavigate(completed) => completed.renderer_output_predecessor(),
             Self::TraverseSameDocumentHistory(completed) => completed.renderer_output_predecessor(),
             Self::ChildFrameNavigate(completed) => completed.renderer_output_predecessor(),
+            Self::StopLoading { completed } => completed
+                .as_ref()
+                .and_then(CompletedDocumentLifecycleStop::renderer_output_predecessor),
             Self::BringToFront { .. }
             | Self::AddScriptToEvaluateOnNewDocument(_)
             | Self::Navigate(_)
             | Self::ContinueNavigationWithoutRequestPause(_)
-            | Self::StopLoading
-            | Self::Crash
+            | Self::Crash { .. }
             | Self::Close
             // createIsolatedWorld may restart on a replacement renderer attachment. Its
             // completion handler records the fence only after rejecting a stale completion,
@@ -406,8 +418,8 @@ impl PendingPageCommandDispatch {
             | PendingPageCommandKind::TraverseSameDocumentHistory(_)
             | PendingPageCommandKind::ChildFrameNavigate(_)
             | PendingPageCommandKind::ContinueNavigationWithoutRequestPause(_)
-            | PendingPageCommandKind::StopLoading
-            | PendingPageCommandKind::Crash
+            | PendingPageCommandKind::StopLoading { .. }
+            | PendingPageCommandKind::Crash { .. }
             | PendingPageCommandKind::Close
             | PendingPageCommandKind::CreateIsolatedWorld(_) => None,
         }
@@ -439,6 +451,7 @@ impl PendingPageCommandDispatch {
             }
             PendingPageCommandKind::GetFrameTree {
                 output_kind,
+                document,
                 target_id,
                 target_loader_id,
                 target_url,
@@ -449,6 +462,7 @@ impl PendingPageCommandDispatch {
                 pending,
             } => CompletedPageCommandKind::GetFrameTree {
                 output_kind,
+                document,
                 target_id,
                 target_loader_id,
                 target_url,
@@ -522,8 +536,17 @@ impl PendingPageCommandDispatch {
                     pending.wait().await,
                 ))
             }
-            PendingPageCommandKind::StopLoading => CompletedPageCommandKind::StopLoading,
-            PendingPageCommandKind::Crash => CompletedPageCommandKind::Crash,
+            PendingPageCommandKind::StopLoading { pending } => {
+                CompletedPageCommandKind::StopLoading {
+                    completed: match pending {
+                        Some(pending) => Some(pending.wait().await),
+                        None => None,
+                    },
+                }
+            }
+            PendingPageCommandKind::Crash { web_contents } => {
+                CompletedPageCommandKind::Crash { web_contents }
+            }
             PendingPageCommandKind::Close => CompletedPageCommandKind::Close,
             PendingPageCommandKind::CreateIsolatedWorld(pending) => {
                 CompletedPageCommandKind::CreateIsolatedWorld(Box::new(pending.wait().await))
@@ -1580,7 +1603,7 @@ fn start_set_javascript_dialog_handler_enabled(
     let Ok(document) = conn.loaded_browser_document_for_owner(&owner) else {
         return Ok(());
     };
-    conn.start_set_document_javascript_dialog_handler_enabled(document, enabled)
+    conn.set_document_javascript_dialog_handler_enabled(document, enabled)
 }
 
 fn set_lifecycle_events_enabled_command(
@@ -6284,9 +6307,7 @@ async fn devtools_frame_tree_for_current_owner_async(
             Vec::new(),
         ));
     }
-    let Some((page_context_id, page_target_id)) =
-        conn.loaded_document_owner_identity_for_owner(owner)
-    else {
+    let Ok(document) = conn.resolve_browser_document_for_owner(owner) else {
         return Ok(frame_tree_payload(
             target_id,
             target_loader_id,
@@ -6299,10 +6320,9 @@ async fn devtools_frame_tree_for_current_owner_async(
         ));
     };
     let target_mime_type = main_document_mime_type(
-        conn.browser_context_by_id(&page_context_id)
-            .expect("resolved document context remains registered")
-            .target_response_headers(&page_target_id)
-            .expect("loaded document headers"),
+        &conn
+            .document_response_headers(document)
+            .map_err(devtools_frame_tree_error)?,
     );
     let inspector_session_id = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let pending = conn
@@ -6918,9 +6938,7 @@ fn start_devtools_get_frame_tree_command(
             &[],
         ));
     }
-    let Some((page_context_id, page_target_id)) =
-        conn.loaded_document_owner_identity_for_owner(&owner)
-    else {
+    let Ok(document) = conn.resolve_browser_document_for_owner(&owner) else {
         return PageCommandTaskStep::Complete(get_frame_tree_command_output_plan(
             output_kind,
             target_id,
@@ -6934,14 +6952,12 @@ fn start_devtools_get_frame_tree_command(
             &[],
         ));
     };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("resolved document context remains registered");
-    let target_mime_type = main_document_mime_type(
-        page_context
-            .target_response_headers(&page_target_id)
-            .expect("loaded document headers"),
-    );
+    let target_mime_type = match conn.document_response_headers(document) {
+        Ok(headers) => main_document_mime_type(&headers),
+        Err(error) => {
+            return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
+        }
+    };
     let inspector_session_id = conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
     let pending = conn
         .renderer_inspection_binding_for_owner(&owner, RendererInspectorCommandRoute::MainThread)
@@ -6958,6 +6974,7 @@ fn start_devtools_get_frame_tree_command(
             owner_scope: owner,
             kind: Box::new(PendingPageCommandKind::GetFrameTree {
                 output_kind,
+                document,
                 target_id,
                 target_loader_id,
                 target_url,
@@ -7666,6 +7683,7 @@ pub(crate) async fn complete_pending_page_command(
         }
         CompletedPageCommandKind::GetFrameTree {
             output_kind,
+            document,
             target_id,
             target_loader_id,
             target_url,
@@ -7692,22 +7710,30 @@ pub(crate) async fn complete_pending_page_command(
                     &[],
                 ));
             }
-            let Some((page_context_id, page_target_id)) =
-                conn.loaded_document_owner_identity_for_owner(&owner_scope)
-            else {
-                return PageCommandTaskStep::Complete(get_frame_tree_command_output_plan(
-                    output_kind,
-                    target_id,
-                    target_loader_id,
-                    target_url,
-                    target_unreachable_url,
-                    target_security_origin,
-                    target_secure_context_type,
-                    target_mime_type,
-                    Vec::new(),
-                    &[],
-                ));
-            };
+            match conn.ensure_browser_document_current(document) {
+                Ok(()) => {}
+                Err(message)
+                    if matches!(message.as_str(), "Document changed" | "NoDocumentLoaded") =>
+                {
+                    return PageCommandTaskStep::Complete(get_frame_tree_command_output_plan(
+                        output_kind,
+                        target_id,
+                        target_loader_id,
+                        target_url,
+                        target_unreachable_url,
+                        target_security_origin,
+                        target_secure_context_type,
+                        target_mime_type,
+                        Vec::new(),
+                        &[],
+                    ));
+                }
+                Err(message) => {
+                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                        -32000, message,
+                    ));
+                }
+            }
             let child_frames = match *completed {
                 Ok(completion) => {
                     if let Err(message) =
@@ -7734,9 +7760,14 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let page_context = conn
-                .browser_context_by_id(&page_context_id)
-                .expect("resolved document context remains registered");
+            let resource_records = match conn.document_subresource_network_records(document) {
+                Ok(records) => records,
+                Err(message) => {
+                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                        -32000, message,
+                    ));
+                }
+            };
             get_frame_tree_command_output_plan(
                 output_kind,
                 target_id,
@@ -7747,9 +7778,7 @@ pub(crate) async fn complete_pending_page_command(
                 target_secure_context_type,
                 target_mime_type,
                 child_frames,
-                page_context
-                    .target_subresource_network_records(&page_target_id)
-                    .expect("loaded document resource records"),
+                &resource_records,
             )
         }
         CompletedPageCommandKind::CaptureSnapshot { completed } => {
@@ -7932,19 +7961,22 @@ pub(crate) async fn complete_pending_page_command(
             )
             .await;
         }
-        CompletedPageCommandKind::StopLoading => {
+        CompletedPageCommandKind::StopLoading { completed } => {
             return termination::complete_stop_loading_command_dispatch(
                 conn,
                 command_id,
                 &owner_scope,
+                completed,
+                command_context,
             )
             .await;
         }
-        CompletedPageCommandKind::Crash => {
+        CompletedPageCommandKind::Crash { web_contents } => {
             return termination::complete_crash_command_dispatch(
                 conn,
                 command_id,
                 &owner_scope,
+                web_contents,
                 command_context,
             )
             .await;

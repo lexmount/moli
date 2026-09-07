@@ -53,6 +53,15 @@ impl CdpConnection {
             .web_contents_window_surface(handle)
     }
 
+    pub(crate) fn crash_browser_web_contents_renderer_from_io(
+        &self,
+        handle: WebContentsHandle,
+    ) -> Result<(), String> {
+        self.browser_context_by_browser_id(handle.context())
+            .ok_or_else(|| "WebContents unavailable".to_owned())?
+            .crash_web_contents_renderer_from_io(handle)
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn update_browser_window_surface(
         &mut self,

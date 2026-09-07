@@ -1,8 +1,9 @@
 #[cfg(test)]
 use moli_core::network::ResourceRequestClient;
-use moli_core::page::{CompletedPageCommand, PendingPageCommand};
 
-use super::{BrowserContext, CdpConnection};
+#[cfg(test)]
+use super::BrowserContext;
+use super::{CdpConnection, PendingDocumentResourceRuntimeUpdate};
 #[cfg(test)]
 use super::{TargetNavigationLoadInputs, state::BrowserContextResourceStorageHandles};
 
@@ -171,8 +172,8 @@ impl CdpConnection {
         let owner = super::CommandOwnerScope::capture(self, None);
         let result = async {
             if let Some(pending) = self.start_rebuild_resource_runtime_for_owner(&owner)? {
-                let completion = pending.wait().await.map_err(|error| error.to_string())?;
-                self.finish_rebuild_resource_runtime_for_owner(&owner, completion)?;
+                let completed = pending.wait().await;
+                self.finish_document_resource_runtime_update(completed)?;
             }
             Ok::<(), String>(())
         }
@@ -185,7 +186,7 @@ impl CdpConnection {
     pub(crate) fn start_rebuild_resource_runtime_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentResourceRuntimeUpdate>, String> {
         let owner = super::CommandOwnerScope::capture(self, session_id);
         self.start_rebuild_resource_runtime_for_owner(&owner)
     }
@@ -193,49 +194,34 @@ impl CdpConnection {
     pub(crate) fn start_rebuild_resource_runtime_for_owner(
         &mut self,
         owner: &super::CommandOwnerScope,
-    ) -> Result<Option<PendingPageCommand>, String> {
-        let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
-        else {
-            // Only live Browser/context defaults may exist without a page.
-            // An expired session or Page route must never fall back to a peer.
-            return match owner.resolve_route(self) {
-                Some(super::CdpSessionRoute::Browser) => Ok(None),
-                Some(super::CdpSessionRoute::BrowserContext { browser_context_id })
-                    if self.browser_context_by_id(&browser_context_id).is_some() =>
-                {
-                    Ok(None)
-                }
-                _ => Err("NoDocumentLoaded".to_owned()),
-            };
+    ) -> Result<Option<PendingDocumentResourceRuntimeUpdate>, String> {
+        let web_contents = match self.browser_web_contents_for_owner(owner) {
+            Ok(web_contents) => web_contents,
+            Err(_) => {
+                // Only live Browser/context defaults may exist without a page.
+                // An expired session or Page route must never fall back to a peer.
+                return match owner.resolve_route(self) {
+                    Some(super::CdpSessionRoute::Browser) => Ok(None),
+                    Some(super::CdpSessionRoute::BrowserContext { browser_context_id })
+                        if self.browser_context_by_id(&browser_context_id).is_some() =>
+                    {
+                        Ok(None)
+                    }
+                    _ => Err("NoDocumentLoaded".to_owned()),
+                };
+            }
         };
         #[cfg(test)]
-        self.ensure_page_navigation_engine_for_target(&context_id, &target_id)
-            .ok_or("navigation WebContents engine unavailable")?;
-        let defaults = self.document_fetch_defaults();
-        self.browser_context_by_id_mut(&context_id)
-            .ok_or("BrowserContext unavailable")?
-            .start_target_resource_runtime_rebuild(&target_id, defaults)
-    }
-
-    pub(crate) fn finish_rebuild_resource_runtime_for_session_owner(
-        &mut self,
-        session_id: Option<&str>,
-        completion: CompletedPageCommand,
-    ) -> Result<(), String> {
-        let owner = super::CommandOwnerScope::capture(self, session_id);
-        self.finish_rebuild_resource_runtime_for_owner(&owner, completion)
-    }
-
-    pub(crate) fn finish_rebuild_resource_runtime_for_owner(
-        &mut self,
-        owner: &super::CommandOwnerScope,
-        completion: CompletedPageCommand,
-    ) -> Result<(), String> {
-        if let Some((context_id, target_id)) = self.resolved_page_owner_identity_for_owner(owner)
-            && let Some(context) = self.browser_context_by_id_mut(&context_id)
         {
-            return context.finish_target_resource_runtime_update(&target_id, completion);
+            let (context_id, target_id) = self
+                .resolved_page_owner_identity_for_owner(owner)
+                .ok_or("NoDocumentLoaded")?;
+            self.ensure_page_navigation_engine_for_target(&context_id, &target_id)
+                .ok_or("navigation WebContents engine unavailable")?;
         }
-        BrowserContext::finish_unobserved_resource_runtime_update(completion)
+        let defaults = self.document_fetch_defaults();
+        self.browser_context_by_browser_id_mut(web_contents.context())
+            .ok_or("BrowserContext unavailable")?
+            .start_web_contents_resource_runtime_rebuild(web_contents, defaults)
     }
 }
