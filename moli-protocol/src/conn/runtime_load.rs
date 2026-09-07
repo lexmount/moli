@@ -1566,6 +1566,7 @@ impl CdpConnection {
             cpu_throttling_rate: load_inputs.cpu_throttling_rate,
             emulated_media: load_inputs.emulated_media,
             idle_override,
+            navigator_overrides: load_inputs.navigator_overrides,
             viewport_surface: load_inputs.viewport_surface,
             browser_resource_runtime,
             navigator_identity,

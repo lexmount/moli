@@ -677,6 +677,22 @@ fn navigator_runtime_data_getter_callback<'s>(
         }
         return;
     }
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let host = unsafe { &*host_ptr };
+        match key {
+            "onLine" => {
+                rv.set_bool(host.navigator_online());
+                return;
+            }
+            "maxTouchPoints" => {
+                if let Some(max_touch_points) = host.navigator_overrides().max_touch_points {
+                    rv.set_uint32(max_touch_points);
+                    return;
+                }
+            }
+            _ => {}
+        }
+    }
     match backing.get(scope, v8str(scope, key).into()) {
         Some(value) => rv.set(value),
         None => rv.set(v8::undefined(scope).into()),

@@ -172,6 +172,7 @@ pub(crate) struct TargetNavigationLoadInputs {
     pub(crate) emulated_media: moli_core::page::EmulatedMediaOverrides,
     pub(crate) viewport_surface: Option<moli_core::page::ViewportSurface>,
     pub(crate) network_offline: bool,
+    pub(crate) navigator_overrides: moli_page_types::NavigatorOverrides,
     pub(crate) bypass_service_worker: bool,
     pub(crate) cache_disabled: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
@@ -336,6 +337,9 @@ impl TargetNavigationLoadInputs {
             network_offline: page_state.network_policy.network_offline()
                 || effective_network_conditions
                     .is_some_and(|conditions| !conditions.navigator_online()),
+            navigator_overrides: browser_context
+                .navigator_overrides_for_target(target_id)
+                .expect("resolved Page target retains its navigator state"),
             bypass_service_worker: effective_policy.bypass_service_worker(),
             cache_disabled: effective_policy.cache_disabled(),
             blocked_url_patterns: effective_policy.blocked_url_patterns().to_vec(),
@@ -403,6 +407,7 @@ impl TargetNavigationLoadInputs {
             emulated_media: Default::default(),
             viewport_surface: None,
             network_offline: false,
+            navigator_overrides: Default::default(),
             bypass_service_worker: false,
             cache_disabled: false,
             blocked_url_patterns: Vec::new(),

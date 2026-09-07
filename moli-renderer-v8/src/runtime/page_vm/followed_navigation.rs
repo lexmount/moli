@@ -1196,6 +1196,7 @@ impl PageVm {
             cpu_throttling_rate: self.cpu_throttling_rate,
             emulated_media: self.emulated_media.clone(),
             idle_override: self.idle_override,
+            navigator_overrides: self.navigator_overrides.clone(),
             viewport_surface: self.viewport_surface,
             network_offline: self.network_offline,
             blocked_url_patterns: self.blocked_url_patterns.clone(),

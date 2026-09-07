@@ -1,5 +1,10 @@
 use serde_json::json;
 
+pub use moli_page_types::{
+    GeolocationOverride as EmulatedGeolocationOverrideState,
+    GeolocationPositionOverride as EmulatedGeolocationOverride,
+};
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct EmulatedDeviceMetrics {
     pub width: u32,
@@ -213,32 +218,6 @@ pub(crate) fn viewport_surface_install_script(
         surface = surface.as_json_string(),
         descriptor_setup = descriptor_setup,
     )
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct EmulatedGeolocationOverride {
-    pub latitude: f64,
-    pub longitude: f64,
-    pub accuracy: f64,
-    pub altitude: Option<f64>,
-    pub altitude_accuracy: Option<f64>,
-    pub heading: Option<f64>,
-    pub speed: Option<f64>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum EmulatedGeolocationOverrideState {
-    Position(EmulatedGeolocationOverride),
-    PositionUnavailable,
-}
-
-impl EmulatedGeolocationOverrideState {
-    pub(crate) fn position(&self) -> Option<&EmulatedGeolocationOverride> {
-        match self {
-            Self::Position(position) => Some(position),
-            Self::PositionUnavailable => None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

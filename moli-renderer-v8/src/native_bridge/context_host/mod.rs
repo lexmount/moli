@@ -126,6 +126,7 @@ mod message_ports;
 mod messages;
 mod module_owner_tasks;
 mod navigation;
+mod navigator_overrides;
 mod opfs_tasks;
 mod permissions;
 mod pointer_capture;
@@ -876,6 +877,8 @@ pub(crate) struct JsContextHost {
     viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     wpt_extensions_enabled: bool,
     network_offline: bool,
+    navigator_overrides: moli_page_types::NavigatorOverrides,
+    geolocation_objects: Vec<v8::Weak<v8::Object>>,
     blocked_url_patterns: Vec<String>,
     service_worker_client_id: ServiceWorkerClientId,
     service_worker_control: Option<ServiceWorkerControlState>,

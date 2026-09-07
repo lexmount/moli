@@ -9,6 +9,8 @@ mod screen;
 mod visual_viewport;
 mod window_state;
 
+pub(crate) use geolocation::notify_geolocation_override_changed;
+
 pub(in crate::context_bootstrap) use self::clipboard::clipboard_item_constructor_callback;
 pub(crate) use self::navigator::build_lightweight_popup_window_navigator_object;
 pub(super) use self::navigator::install_navigator_template_bindings;

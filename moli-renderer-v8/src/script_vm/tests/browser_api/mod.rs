@@ -21,6 +21,7 @@ mod media;
 mod media_devices;
 mod misc;
 mod navigation;
+mod navigator_overrides;
 mod performance;
 mod pointer_lock;
 mod promise_rejection;

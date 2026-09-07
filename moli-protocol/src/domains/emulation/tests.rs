@@ -19,6 +19,18 @@ use tokio::{
     time::{Duration, timeout},
 };
 
+mod native_navigator;
+
+async fn install_geolocation_page_for_test(ctx: &mut TestContext, bc: BrowserContext) {
+    ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.install_buffered_navigation_fixture_for_session_owner(
+        url::Url::parse("https://geolocation.example/page").unwrap(),
+        "<!doctype html><body>geolocation</body>".into(),
+        Some("SID-1"),
+    )
+    .await;
+}
+
 async fn complete_pending_command_task_for_test(
     ctx: &mut TestContext,
     pending: PendingCdpCommandDispatch,
@@ -2393,6 +2405,10 @@ async fn evaluate_geolocation_once_for_session(
         }
     }))
     .await;
+    crate::testing::wait_until_scheduler_message(ctx, "native Geolocation callback", |message| {
+        message["id"] == json!(id)
+    })
+    .await;
     ctx.take_response_by_id(id)["result"]["result"]["value"].clone()
 }
 
@@ -2402,7 +2418,7 @@ async fn set_geolocation_override_updates_loaded_page_geolocation_surface() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    install_session_page_for_emulation_test(&mut ctx, bc, "data:text/html,<body>ok</body>").await;
+    install_geolocation_page_for_test(&mut ctx, bc).await;
 
     ctx.process_async(json!({
         "id": 87,
@@ -2426,6 +2442,19 @@ async fn set_geolocation_override_updates_loaded_page_geolocation_surface() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn set_geolocation_override_applies_to_subsequent_navigation_surface() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().route(
+                "/geo",
+                get(|| async { axum::response::Html("<!doctype html><body>geo</body>") }),
+            ),
+        )
+        .await
+        .unwrap();
+    });
     let mut ctx = TestContext::new();
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
@@ -2445,7 +2474,7 @@ async fn set_geolocation_override_applies_to_subsequent_navigation_surface() {
         "id": 90,
         "method": "Page.navigate",
         "sessionId": "SID-1",
-        "params": { "url": "data:text/html,<body>geo</body>" }
+        "params": { "url": format!("http://{addr}/geo") }
     }))
     .await;
     let _ = ctx.take_all();
@@ -2457,6 +2486,7 @@ async fn set_geolocation_override_applies_to_subsequent_navigation_surface() {
     assert_eq!(payload["latitude"], json!(35.658581));
     assert_eq!(payload["longitude"], json!(139.745433));
     assert_eq!(payload["accuracy"], json!(3));
+    server.abort();
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2465,7 +2495,7 @@ async fn set_geolocation_override_missing_position_reports_unavailable() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    install_session_page_for_emulation_test(&mut ctx, bc, "data:text/html,<body>ok</body>").await;
+    install_geolocation_page_for_test(&mut ctx, bc).await;
 
     ctx.process_async(json!({
         "id": 92,
@@ -2497,7 +2527,7 @@ async fn clear_geolocation_override_restores_default_after_explicit_unavailable(
             speed: None,
         },
     ));
-    install_session_page_for_emulation_test(&mut ctx, bc, "data:text/html,<body>geo</body>").await;
+    install_geolocation_page_for_test(&mut ctx, bc).await;
 
     ctx.process_async(json!({
         "id": 97,
@@ -2556,7 +2586,7 @@ async fn set_geolocation_override_respects_denied_permission() {
     let mut bc = BrowserContext::new("BID-1".into());
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
-    install_session_page_for_emulation_test(&mut ctx, bc, "data:text/html,<body>ok</body>").await;
+    install_geolocation_page_for_test(&mut ctx, bc).await;
 
     ctx.process_async(json!({
         "id": 94,
@@ -2580,7 +2610,7 @@ async fn set_geolocation_override_respects_denied_permission() {
     ctx.expect_result(95, json!({}), None);
 
     let value = evaluate_geolocation_once(&mut ctx, 96).await;
-    assert_eq!(value, json!("error:1:User denied Geolocation"));
+    assert_eq!(value, json!("error:1:Geolocation permission denied"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3089,8 +3119,9 @@ async fn session_emulation_routes_to_loaded_background_owner_without_activation(
     bc.attach_active_session("SID-active");
     bc.insert_page_target_host(background);
     ctx.conn.install_browser_context_fixture_for_test(bc);
-    ctx.install_navigation_fixture_for_session_owner(
-        "data:text/html,<body>background</body>",
+    ctx.install_buffered_navigation_fixture_for_session_owner(
+        url::Url::parse("https://geolocation.example/background").unwrap(),
+        "<body>background</body>".into(),
         Some("SID-background"),
     )
     .await;

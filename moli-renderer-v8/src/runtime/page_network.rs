@@ -198,6 +198,16 @@ impl PageVm {
         Ok(())
     }
 
+    pub(crate) fn set_navigator_overrides(
+        &mut self,
+        overrides: &moli_page_types::NavigatorOverrides,
+    ) -> anyhow::Result<()> {
+        self.vm_mut()
+            .set_navigator_overrides_and_sync_surface(overrides)?;
+        self.navigator_overrides = overrides.clone();
+        Ok(())
+    }
+
     pub(crate) fn set_network_offline(&mut self, offline: bool) {
         self.network_offline = offline;
         self.vm_mut().set_network_offline(offline);

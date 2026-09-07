@@ -9,6 +9,9 @@ use crate::{
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
+mod position;
+mod watches;
+
 const GEOLOCATION_BRAND_SLOT: &str = "__moliGeolocationBrand";
 const GEOLOCATION_SECURE_CONTEXT_SLOT: &str = "__moliGeolocationSecureContext";
 const GEOLOCATION_NEXT_WATCH_ID_SLOT: &str = "__moliGeolocationNextWatchId";
@@ -134,6 +137,7 @@ pub(super) fn install_geolocation_template_bindings<'s>(
     template: v8::Local<'s, v8::FunctionTemplate>,
     interface_name: &str,
 ) {
+    position::install(scope, template, interface_name);
     let prototype = template.prototype_template(scope);
     match interface_name {
         "Geolocation" => {
@@ -169,6 +173,10 @@ pub(super) fn build_geolocation_object<'s>(
         GEOLOCATION_CHILD_HANDLE_SLOT,
         child_handle,
     );
+    watches::initialize(scope, geolocation);
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        unsafe { &mut *host_ptr }.register_geolocation_object(scope, geolocation);
+    }
     Ok(geolocation)
 }
 
@@ -184,17 +192,14 @@ fn geolocation_get_current_position_callback<'s>(
     let Some(parsed) = webidl::parse_args::<GetCurrentPositionArgs>(scope, &args) else {
         return;
     };
-    // Moli currently has no coordinate acquisition source. Conversion
-    // still validates and captures the required PositionCallback according to
-    // Web IDL, but no success task is manufactured in unavailable-only mode.
-    let _ = parsed.success_callback;
     let _ = (
         parsed.options.enable_high_accuracy,
         parsed.options.maximum_age,
     );
-    queue_geolocation_error(
+    queue_geolocation_result(
         scope,
         args.this(),
+        parsed.success_callback,
         parsed.error_callback,
         parsed.options.timeout,
         None,
@@ -214,20 +219,18 @@ fn geolocation_watch_position_callback<'s>(
     let Some(parsed) = webidl::parse_args::<WatchPositionArgs>(scope, &args) else {
         return;
     };
-    // As above, the success callback is a valid Web IDL callback value but
-    // unavailable-only mode has no position update source that can invoke it.
-    let _ = parsed.success_callback;
     let _ = (
         parsed.options.enable_high_accuracy,
         parsed.options.maximum_age,
     );
     let watch_id = take_next_watch_id(scope, args.this());
-    queue_geolocation_error(
+    watches::insert(
         scope,
         args.this(),
+        watch_id,
+        parsed.success_callback,
         parsed.error_callback,
         parsed.options.timeout,
-        Some(watch_id),
     );
     rv.set_int32(watch_id);
 }
@@ -244,6 +247,7 @@ fn geolocation_clear_watch_callback<'s>(
     let Some(parsed) = webidl::parse_args::<ClearWatchArgs>(scope, &args) else {
         return;
     };
+    watches::remove(scope, args.this(), parsed.watch_id);
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
         let _ =
             unsafe { &mut *host_ptr }.cancel_geolocation_watch(scope, args.this(), parsed.watch_id);
@@ -329,43 +333,88 @@ fn take_next_watch_id<'s>(
     watch_id
 }
 
-fn queue_geolocation_error<'s>(
+fn queue_geolocation_result<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     geolocation: v8::Local<'s, v8::Object>,
+    success_callback: webidl::WebIdlCallbackFunction,
     error_callback: Option<webidl::WebIdlCallbackFunction>,
     timeout: u32,
     watch_id: Option<i32>,
 ) {
-    let Some(error_callback) = error_callback else {
+    let (code, message) = geolocation_error(scope, geolocation, timeout);
+    if code == PERMISSION_DENIED
+        && let Some(watch_id) = watch_id
+    {
+        // A permission denial is terminal, unlike a temporarily unavailable
+        // position. Do not retain the callbacks for future override updates.
+        watches::remove(scope, geolocation, watch_id);
+    }
+    let position = context_host_ptr_from_global_bridge(scope)
+        .and_then(|host_ptr| {
+            unsafe { &*host_ptr }
+                .navigator_overrides()
+                .geolocation
+                .as_ref()
+                .and_then(moli_page_types::GeolocationOverride::position)
+                .cloned()
+        })
+        .filter(|_| code == POSITION_UNAVAILABLE);
+    // Without an override Moli has no native location provider yet, so clearing
+    // and explicitly simulating an unavailable position both deliver this error.
+    // Keep them distinct in host state so source changes still notify watches.
+    let callback = if position.is_some() {
+        success_callback
+    } else if let Some(callback) = error_callback {
+        callback
+    } else {
         return;
     };
-    let (code, message) = geolocation_error(scope, geolocation, timeout);
     let Some(geolocation_context) = geolocation.get_creation_context(scope) else {
         return;
     };
-    // GeolocationPositionError belongs to the Geolocation object's relevant
+    // Both position and error belong to the Geolocation object's relevant
     // Realm, independently of the callback's relevant Realm.
-    let error = {
+    let result = {
         let scope = &mut v8::ContextScope::new(scope, geolocation_context);
-        let Ok(error) =
-            GeolocationPositionErrorObjectDeclaration::new(code, message.to_owned()).bind(scope)
-        else {
-            return;
+        let result = if let Some(position) = position {
+            position::build(scope, &position)
+        } else {
+            let Ok(error) =
+                GeolocationPositionErrorObjectDeclaration::new(code, message.to_owned())
+                    .bind(scope)
+            else {
+                return;
+            };
+            error
         };
-        v8::Global::new(scope, v8::Local::<v8::Value>::from(error))
+        v8::Global::new(scope, v8::Local::<v8::Value>::from(result))
     };
     let owner = geolocation_child_handle(scope, geolocation)
         .map(HostTimerOwner::ChildWindow)
         .unwrap_or(HostTimerOwner::Window);
     if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
-        let _ = unsafe { &mut *host_ptr }.queue_window_geolocation_error_callback(
+        let _ = unsafe { &mut *host_ptr }.queue_window_geolocation_callback(
             scope,
-            error_callback,
+            callback,
             geolocation,
-            error,
+            result,
             owner,
             watch_id,
         );
+    }
+}
+
+pub(crate) fn notify_geolocation_override_changed(scope: &mut v8::PinScope<'_, '_>) {
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
+    let geolocations = unsafe { &mut *host_ptr }.live_geolocation_objects(scope);
+    for geolocation in geolocations {
+        let Some(context) = geolocation.get_creation_context(scope) else {
+            continue;
+        };
+        let scope = &mut v8::ContextScope::new(scope, context);
+        watches::notify(scope, geolocation);
     }
 }
 

@@ -335,6 +335,7 @@ pub(crate) use self::navigation_restore::{
 };
 pub(crate) use self::navigation_traversal::queue_top_level_history_traversal_by_delta;
 pub(crate) use self::navigator_runtime::install_worker_navigator_runtime_state;
+pub(crate) use self::navigator_runtime::notify_geolocation_override_changed;
 pub(crate) use self::navigator_runtime::{
     bind_window_navigator_identity_seed, set_window_navigator_identity,
     update_cached_window_visual_viewport_dimensions,

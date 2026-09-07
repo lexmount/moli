@@ -350,13 +350,14 @@ async fn rust_cdp_chromium_import_emulation_device_metrics_hot_apply_window_surf
 // Capability source: docs/WEB_CAPABILITIES.md browser/device APIs exposed to pages.
 #[tokio::test(flavor = "multi_thread")]
 async fn rust_cdp_capability_emulation_geolocation_override_runtime_surface() {
+    let fixture = SmokeFixtureServer::start().await;
     let mut ctx = TestContext::new_with_target_discovery(false);
     let attached = attached_smoke_session(&mut ctx, 118_000).await;
     navigate_and_take_response(
         &mut ctx,
         &attached.session_id,
         118_005,
-        "data:text/html,<body>geo</body>".to_owned(),
+        fixture.url("/plain"),
     )
     .await;
     ctx.process_async(json!({
@@ -389,6 +390,12 @@ async fn rust_cdp_capability_emulation_geolocation_override_runtime_surface() {
             "#
         }
     }))
+    .await;
+    crate::testing::wait_until_scheduler_message(
+        &mut ctx,
+        "native Geolocation result",
+        |message| message["id"] == json!(118_007),
+    )
     .await;
     let response = take_response_by_id(&mut ctx, 118_007);
     let payload: Value = serde_json::from_str(

@@ -29,7 +29,7 @@ pub(super) enum WindowWebIdlCallbackTaskKind {
     Timer,
     AnimationFrame { timestamp: f64 },
     Idle { timeout_deadline_ms: f64 },
-    GeolocationError { watch_id: Option<i32> },
+    Geolocation { watch_id: Option<i32> },
 }
 
 pub(super) struct ScheduledWindowWebIdlCallback {
@@ -78,7 +78,7 @@ impl ScheduledWindowWebIdlCallback {
             } => timeout_deadline_ms < 0.0 || now_ms < timeout_deadline_ms,
             WindowWebIdlCallbackTaskKind::Timer
             | WindowWebIdlCallbackTaskKind::AnimationFrame { .. }
-            | WindowWebIdlCallbackTaskKind::GeolocationError { .. } => false,
+            | WindowWebIdlCallbackTaskKind::Geolocation { .. } => false,
         }
     }
 
@@ -90,7 +90,7 @@ impl ScheduledWindowWebIdlCallback {
     ) -> bool {
         matches!(
             self.kind,
-            WindowWebIdlCallbackTaskKind::GeolocationError {
+            WindowWebIdlCallbackTaskKind::Geolocation {
                 watch_id: Some(candidate)
             } if candidate == watch_id
         ) && v8::Local::new(scope, &self.target_receiver).strict_equals(geolocation.into())
@@ -131,11 +131,11 @@ impl ScheduledWindowWebIdlCallback {
                 arguments.push(deadline.into());
                 v8::undefined(scope).into()
             }
-            WindowWebIdlCallbackTaskKind::GeolocationError { .. } => {
+            WindowWebIdlCallbackTaskKind::Geolocation { .. } => {
                 assert_eq!(
                     extra_args.len(),
                     1,
-                    "a Geolocation error task must retain exactly one error argument"
+                    "a Geolocation task must retain exactly one result argument"
                 );
                 arguments.push(v8::Local::new(scope, &extra_args[0]));
                 v8::undefined(scope).into()
@@ -155,10 +155,10 @@ impl ScheduledWindowWebIdlCallback {
                 "host callback threw",
                 "requestIdleCallback callback",
             ),
-            WindowWebIdlCallbackTaskKind::GeolocationError { .. } => (
-                "PositionErrorCallback",
+            WindowWebIdlCallbackTaskKind::Geolocation { .. } => (
+                "Geolocation callback",
                 "Geolocation callback threw",
-                "Geolocation error callback",
+                "Geolocation callback",
             ),
         };
         invoke_window_webidl_callback_function(

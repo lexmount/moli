@@ -1088,6 +1088,7 @@ pub(crate) struct PageVmEnvConfig {
     pub(crate) cpu_throttling_rate: f64,
     pub(crate) emulated_media: crate::protocol_types::EmulatedMediaOverrides,
     pub(crate) idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
+    pub(crate) navigator_overrides: moli_page_types::NavigatorOverrides,
     pub(crate) viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     pub(crate) network_offline: bool,
     pub(crate) blocked_url_patterns: Vec<String>,
@@ -1610,6 +1611,7 @@ pub(crate) struct PageVm {
     pub(super) cpu_throttling_rate: f64,
     pub(super) emulated_media: crate::protocol_types::EmulatedMediaOverrides,
     pub(super) idle_override: Option<crate::protocol_types::EmulatedIdleOverride>,
+    pub(super) navigator_overrides: moli_page_types::NavigatorOverrides,
     pub(super) viewport_surface: Option<crate::protocol_types::ViewportSurface>,
     pub(super) network_offline: bool,
     pub(super) blocked_url_patterns: Vec<String>,
@@ -4329,6 +4331,7 @@ impl PageVm {
             cpu_throttling_rate: env.cpu_throttling_rate,
             emulated_media: env.emulated_media.clone(),
             idle_override: env.idle_override,
+            navigator_overrides: env.navigator_overrides.clone(),
             viewport_surface: env.viewport_surface,
             network_offline: env.network_offline,
             blocked_url_patterns: env.blocked_url_patterns.clone(),
@@ -4392,6 +4395,9 @@ impl PageVm {
             .set_timezone_override(env.timezone_override.as_deref());
         page_vm.vm_mut().set_emulated_media(&env.emulated_media);
         page_vm.vm_mut().set_idle_override(env.idle_override);
+        page_vm
+            .vm_mut()
+            .set_navigator_overrides(&env.navigator_overrides);
         page_vm
             .vm_mut()
             .set_viewport_surface_for_bootstrap(env.viewport_surface);
