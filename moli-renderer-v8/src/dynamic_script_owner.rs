@@ -2112,6 +2112,7 @@ impl DynamicScriptOwner {
                     entry.script.clone(),
                     source,
                     completion.outcome.source_bytes.clone(),
+                    completion.outcome.muted_errors,
                 );
                 entry.ready_state = DynamicScriptReadyState::Ready {
                     order,
@@ -2290,6 +2291,7 @@ mod tests {
                 source_result: Ok(source.into()),
                 source_bytes: None,
                 network_result: None,
+                muted_errors: false,
             },
         }
     }
@@ -2301,6 +2303,7 @@ mod tests {
                 source_result: Err(error.into()),
                 source_bytes: None,
                 network_result: None,
+                muted_errors: false,
             },
         }
     }

@@ -107,11 +107,16 @@ impl ResolvedDeferPhaseScript {
             source_result,
             source_bytes,
             network_result,
+            muted_errors,
         } = outcome;
         match source_result {
             Ok(source) => {
-                self.script =
-                    prepared_script_with_loaded_source(self.script.clone(), source, source_bytes);
+                self.script = prepared_script_with_loaded_source(
+                    self.script.clone(),
+                    source,
+                    source_bytes,
+                    muted_errors,
+                );
                 self.classic_source_state = ParserDeferredClassicSourceState::Ready(network_result);
             }
             Err(error) => {
