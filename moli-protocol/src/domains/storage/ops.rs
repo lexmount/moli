@@ -1,6 +1,8 @@
 use crate::conn::{
     BrowserContext, BrowserContextCookieManagerSurfaceSnapshot, CdpConnection, Cmd,
-    CommandOwnerScope, SiteDataClearOptions,
+    CommandOwnerScope, CompletedChildFrameTreeSnapshot, CompletedDocumentCookieOwnerSnapshot,
+    CompletedDocumentStorageKeySnapshot, PendingChildFrameTreeSnapshot,
+    PendingDocumentCookieOwnerSnapshot, PendingDocumentStorageKeySnapshot, SiteDataClearOptions,
 };
 use crate::devtools_runtime::{
     DevToolsBrowserContextId, DevToolsCommand, DevToolsCommandResult, DevToolsCookieParam,
@@ -11,7 +13,6 @@ use crate::devtools_runtime::{
 use crate::domains::actions::StorageAction;
 use crate::domains::command_output::CommandOutputPlan;
 use moli_cookie_jar::StoredCookieSetReport;
-use moli_core::page::{CompletedPageCommand, PendingPageCommand};
 use serde_json::{Value, json};
 use url::Url;
 
@@ -41,14 +42,14 @@ pub(crate) struct PendingStorageCommandDispatch {
     command_id: Option<u64>,
     session_id: Option<String>,
     kind: PendingStorageCommandKind,
-    pending: PendingPageCommand,
+    pending: PendingStorageBrowserCommand,
 }
 
 pub(crate) struct CompletedStorageCommandDispatch {
     command_id: Option<u64>,
     session_id: Option<String>,
     kind: PendingStorageCommandKind,
-    completed: Result<CompletedPageCommand, String>,
+    completed: CompletedStorageBrowserCommand,
 }
 
 pub(crate) enum StorageCommandTaskStep {
@@ -62,11 +63,8 @@ enum DevToolsSetCookiesTaskStep {
 }
 
 enum PendingStorageCommandKind {
-    GetStorageKeyForTopFrame {
-        owner_scope: CommandOwnerScope,
-    },
+    GetStorageKeyForTopFrame,
     GetStorageKeyForFrame {
-        owner_scope: CommandOwnerScope,
         frame_id: String,
     },
     SetCookies {
@@ -75,13 +73,36 @@ enum PendingStorageCommandKind {
     },
 }
 
+enum PendingStorageBrowserCommand {
+    StorageKey(PendingDocumentStorageKeySnapshot),
+    ChildFrames(PendingChildFrameTreeSnapshot),
+    CookieOwner(PendingDocumentCookieOwnerSnapshot),
+}
+
+enum CompletedStorageBrowserCommand {
+    StorageKey(CompletedDocumentStorageKeySnapshot),
+    ChildFrames(CompletedChildFrameTreeSnapshot),
+    CookieOwner(CompletedDocumentCookieOwnerSnapshot),
+}
+
 impl PendingStorageCommandDispatch {
     pub(crate) async fn wait(self) -> CompletedStorageCommandDispatch {
+        let completed = match self.pending {
+            PendingStorageBrowserCommand::StorageKey(pending) => {
+                CompletedStorageBrowserCommand::StorageKey(pending.wait().await)
+            }
+            PendingStorageBrowserCommand::ChildFrames(pending) => {
+                CompletedStorageBrowserCommand::ChildFrames(pending.wait().await)
+            }
+            PendingStorageBrowserCommand::CookieOwner(pending) => {
+                CompletedStorageBrowserCommand::CookieOwner(pending.wait().await)
+            }
+        };
         CompletedStorageCommandDispatch {
             command_id: self.command_id,
             session_id: self.session_id,
             kind: self.kind,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            completed,
         }
     }
 }
@@ -493,16 +514,13 @@ fn start_get_storage_key_for_frame_command(
     };
 
     if params.frame_id == target_id {
-        if let Ok((context_id, target_id)) = conn.resolve_document_command_owner(&owner_scope) {
-            let context = conn
-                .browser_context_by_id(&context_id)
-                .expect("admitted document context remains registered");
-            return match context.start_document_storage_key_snapshot_for_target(&target_id) {
+        if let Ok(document) = conn.resolve_browser_document_for_owner(&owner_scope) {
+            return match conn.start_document_storage_key_snapshot(document) {
                 Ok(pending) => StorageCommandTaskStep::Pending(PendingStorageCommandDispatch {
                     command_id: cmd.id,
                     session_id: cmd.session_id.map(str::to_owned),
-                    kind: PendingStorageCommandKind::GetStorageKeyForTopFrame { owner_scope },
-                    pending,
+                    kind: PendingStorageCommandKind::GetStorageKeyForTopFrame,
+                    pending: PendingStorageBrowserCommand::StorageKey(pending),
                 }),
                 Err(error) => StorageCommandTaskStep::Complete(CommandOutputPlan::error(
                     -32000,
@@ -522,24 +540,20 @@ fn start_get_storage_key_for_frame_command(
     if let Err(message) = conn.ensure_document_accessible_for_owner(&owner_scope) {
         return StorageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
     }
-    let Ok((context_id, target_id)) = conn.resolve_document_command_owner(&owner_scope) else {
+    let Ok(document) = conn.resolve_browser_document_for_owner(&owner_scope) else {
         return StorageCommandTaskStep::Complete(CommandOutputPlan::error(
             -32000,
             "NoFrameForGivenId",
         ));
     };
-    let context = conn
-        .browser_context_by_id(&context_id)
-        .expect("admitted document context remains registered");
-    match context.start_child_frame_tree_snapshot_for_target(&target_id) {
+    match conn.start_child_frame_tree_snapshot(document) {
         Ok(pending) => StorageCommandTaskStep::Pending(PendingStorageCommandDispatch {
             command_id: cmd.id,
             session_id: cmd.session_id.map(str::to_owned),
             kind: PendingStorageCommandKind::GetStorageKeyForFrame {
-                owner_scope,
                 frame_id: params.frame_id,
             },
-            pending,
+            pending: PendingStorageBrowserCommand::ChildFrames(pending),
         }),
         Err(error) => {
             StorageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error.to_string()))
@@ -672,7 +686,10 @@ fn start_devtools_set_cookies_result(
         let reports = set_cookies_with_manager_surface(browser_context, &manager_surface, cookies);
         return DevToolsSetCookiesTaskStep::Complete(Ok(set_cookie_reports_result(&reports)));
     };
-    match browser_context.start_document_cookie_owner_snapshot_for_target(&target_id) {
+    let document = browser_context
+        .document_handle_for_target(&target_id)
+        .expect("loaded document has a Browser handle");
+    match conn.start_document_cookie_owner_snapshot(document) {
         Ok(pending) => DevToolsSetCookiesTaskStep::Pending(PendingStorageCommandDispatch {
             command_id,
             session_id: session_id.map(str::to_owned),
@@ -680,7 +697,7 @@ fn start_devtools_set_cookies_result(
                 browser_context_id,
                 cookies,
             },
-            pending,
+            pending: PendingStorageBrowserCommand::CookieOwner(pending),
         }),
         Err(error) => DevToolsSetCookiesTaskStep::Complete(Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
@@ -739,47 +756,36 @@ pub(crate) fn complete_pending_storage_command(
     conn: &mut CdpConnection,
     completed: CompletedStorageCommandDispatch,
 ) -> CommandOutputPlan {
-    match completed.kind {
-        PendingStorageCommandKind::GetStorageKeyForTopFrame { owner_scope } => {
-            complete_get_storage_key_for_top_frame_command(conn, &owner_scope, completed.completed)
-        }
-        PendingStorageCommandKind::GetStorageKeyForFrame {
-            owner_scope,
-            frame_id,
-        } => complete_get_storage_key_for_frame_command(
-            conn,
-            &owner_scope,
-            completed.completed,
-            &frame_id,
-        ),
-        PendingStorageCommandKind::SetCookies {
-            browser_context_id,
-            cookies,
-        } => devtools_set_cookies_output_plan(complete_set_cookies_result(
+    match (completed.kind, completed.completed) {
+        (
+            PendingStorageCommandKind::GetStorageKeyForTopFrame,
+            CompletedStorageBrowserCommand::StorageKey(completed),
+        ) => complete_get_storage_key_for_top_frame_command(conn, completed),
+        (
+            PendingStorageCommandKind::GetStorageKeyForFrame { frame_id },
+            CompletedStorageBrowserCommand::ChildFrames(completed),
+        ) => complete_get_storage_key_for_frame_command(conn, completed, &frame_id),
+        (
+            PendingStorageCommandKind::SetCookies {
+                browser_context_id,
+                cookies,
+            },
+            CompletedStorageBrowserCommand::CookieOwner(completed),
+        ) => devtools_set_cookies_output_plan(complete_set_cookies_result(
             conn,
             &browser_context_id,
-            completed.completed,
+            completed,
             cookies,
         )),
+        _ => CommandOutputPlan::error(-32000, "UnexpectedStorageCommandKind"),
     }
 }
 
 fn complete_get_storage_key_for_top_frame_command(
     conn: &mut CdpConnection,
-    owner_scope: &CommandOwnerScope,
-    completed: Result<CompletedPageCommand, String>,
+    completed: CompletedDocumentStorageKeySnapshot,
 ) -> CommandOutputPlan {
-    let completion = match completed {
-        Ok(completion) => completion,
-        Err(error) => return CommandOutputPlan::error(-32000, error),
-    };
-    let Ok((context_id, target_id)) = conn.resolve_document_command_owner(owner_scope) else {
-        return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
-    };
-    let context = conn
-        .browser_context_by_id_mut(&context_id)
-        .expect("admitted document context remains registered");
-    match context.finish_document_storage_key_snapshot_for_target(&target_id, completion) {
+    match conn.finish_document_storage_key_snapshot(completed) {
         Ok(storage_key) => storage_key_result_plan(&storage_key),
         Err(error) => CommandOutputPlan::error(-32000, error.to_string()),
     }
@@ -787,30 +793,18 @@ fn complete_get_storage_key_for_top_frame_command(
 
 fn complete_get_storage_key_for_frame_command(
     conn: &mut CdpConnection,
-    owner_scope: &CommandOwnerScope,
-    completed: Result<CompletedPageCommand, String>,
+    completed: CompletedChildFrameTreeSnapshot,
     frame_id: &str,
 ) -> CommandOutputPlan {
-    let completion = match completed {
-        Ok(completion) => completion,
-        Err(error) => return CommandOutputPlan::error(-32000, error),
+    let child_frames = match conn.finish_child_frame_tree_snapshot(completed) {
+        Ok(child_frames) => child_frames,
+        Err(error) => {
+            return CommandOutputPlan::error(
+                -32000,
+                format!("Failed to snapshot child frame tree: {error}"),
+            );
+        }
     };
-    let Ok((context_id, target_id)) = conn.resolve_document_command_owner(owner_scope) else {
-        return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
-    };
-    let context = conn
-        .browser_context_by_id_mut(&context_id)
-        .expect("admitted document context remains registered");
-    let child_frames =
-        match context.finish_child_frame_tree_snapshot_for_target(&target_id, completion) {
-            Ok(child_frames) => child_frames,
-            Err(error) => {
-                return CommandOutputPlan::error(
-                    -32000,
-                    format!("Failed to snapshot child frame tree: {error}"),
-                );
-            }
-        };
 
     let Some(frame) = find_child_frame(&child_frames, frame_id) else {
         return CommandOutputPlan::error(-32000, "NoFrameForGivenId");
@@ -855,57 +849,36 @@ fn complete_pending_set_cookies_result(
     conn: &mut CdpConnection,
     completed: CompletedStorageCommandDispatch,
 ) -> Result<DevToolsSetCookiesResult, DevToolsError> {
-    let PendingStorageCommandKind::SetCookies {
-        browser_context_id,
-        cookies,
-    } = completed.kind
+    let (
+        PendingStorageCommandKind::SetCookies {
+            browser_context_id,
+            cookies,
+        },
+        CompletedStorageBrowserCommand::CookieOwner(completed),
+    ) = (completed.kind, completed.completed)
     else {
         return Err(DevToolsError::new(
             DevToolsErrorKind::Internal,
             "UnexpectedStorageCommandKind",
         ));
     };
-    complete_set_cookies_result(conn, &browser_context_id, completed.completed, cookies)
+    complete_set_cookies_result(conn, &browser_context_id, completed, cookies)
 }
 
 fn complete_set_cookies_result(
     conn: &mut CdpConnection,
     browser_context_id: &str,
-    completed: Result<CompletedPageCommand, String>,
+    completed: CompletedDocumentCookieOwnerSnapshot,
     cookies: Vec<CdpCookieParam>,
 ) -> Result<DevToolsSetCookiesResult, DevToolsError> {
-    let completion = match completed {
-        Ok(completion) => completion,
-        Err(error) => return Err(DevToolsError::new(DevToolsErrorKind::Internal, error)),
-    };
+    let owner = conn
+        .finish_document_cookie_owner_snapshot(completed)
+        .map_err(|error| DevToolsError::new(DevToolsErrorKind::Internal, error))?;
     let Some(browser_context) = conn.browser_context_by_id_mut(browser_context_id) else {
         return Err(DevToolsError::new(
             DevToolsErrorKind::NoSuchTarget,
             "UnknownBrowserContextId",
         ));
-    };
-    let owner = {
-        let Some(target_id) = browser_context
-            .active_target_id()
-            .filter(|target_id| browser_context.target_has_loaded_page(target_id))
-            .map(str::to_owned)
-        else {
-            return Err(DevToolsError::new(
-                DevToolsErrorKind::Internal,
-                "NoDocumentLoaded",
-            ));
-        };
-        match browser_context
-            .finish_document_cookie_owner_snapshot_for_target(&target_id, completion)
-        {
-            Ok(owner) => owner,
-            Err(error) => {
-                return Err(DevToolsError::new(
-                    DevToolsErrorKind::Internal,
-                    error.to_string(),
-                ));
-            }
-        }
     };
     let manager_surface = browser_context.cookie_manager_surface_snapshot_with_owner(&owner);
     let reports = set_cookies_with_manager_surface(browser_context, &manager_surface, cookies);

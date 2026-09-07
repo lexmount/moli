@@ -395,3 +395,60 @@ async fn completed_browser_document_command_cannot_retarget_a_replacement_docume
         Some("replacement-document")
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn app_manifest_fetch_cannot_publish_into_a_replacement_document() {
+    let mut ctx = dom_context().await;
+    ctx.install_buffered_navigation_fixture_for_session_owner(
+        url::Url::parse("https://manifest.example/page").unwrap(),
+        r#"<!doctype html><link rel="manifest" href="data:application/manifest+json,%7B%7D"><title>manifest-owner</title>"#
+            .into(),
+        None,
+    )
+    .await;
+
+    let raw = json!({"id": 801, "method": "Page.getAppManifest"}).to_string();
+    let CdpCommandTaskStep::Pending(prepare) = ctx.conn.start_command_dispatch(&raw) else {
+        panic!("app manifest inspection must start on the original document");
+    };
+    let CdpCommandTaskStep::Pending(fetch) = ctx
+        .conn
+        .complete_pending_command_dispatch(prepare.wait().await)
+        .await
+    else {
+        panic!("an external app manifest must enter the browser fetch stage");
+    };
+    let fetched = fetch.wait().await;
+
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<title>replacement-manifest-owner</title>",
+        None,
+    )
+    .await;
+
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(fetched).await
+    else {
+        panic!("a stale app manifest fetch must not publish into the replacement document");
+    };
+    let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+    let response = messages
+        .iter()
+        .find(|message| message["id"] == json!(801))
+        .expect("app manifest response");
+    assert_eq!(response["error"]["code"], json!(-32000), "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        json!("Failed to publish app manifest result: Document changed"),
+        "the fetched result must retain its originating Browser Document: {response}"
+    );
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .target_document_title("TID-dom-inspection")
+            .as_deref(),
+        Some("replacement-manifest-owner")
+    );
+}

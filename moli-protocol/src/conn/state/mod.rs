@@ -134,13 +134,19 @@ pub use browser_context::BrowserContext;
 #[cfg(test)]
 pub(crate) use browser_context::BrowserContextResourceStorageHandles;
 pub(crate) use browser_context::{
-    BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles, ContextNetworkPolicy,
-    SiteDataClearOptions,
+    BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
+    CompletedAppManifestPublication, CompletedCaptureDocumentImage,
+    CompletedCaptureDocumentSnapshot, CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
+    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentStorageKeySnapshot,
+    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent, DocumentSnapshot,
+    PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
+    PendingCaptureDocumentSnapshot, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
+    PendingDocumentCookieOwnerSnapshot, PendingDocumentStorageKeySnapshot,
+    PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
 };
 pub(crate) use browser_context::{
-    CompletedCaptureDocumentImage, CompletedCaptureDocumentSnapshot, CompletedSetDocumentContent,
-    DocumentSnapshot, PendingCaptureDocumentImage, PendingCaptureDocumentSnapshot,
-    PendingSetDocumentContent,
+    BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles, ContextNetworkPolicy,
+    SiteDataClearOptions,
 };
 pub(crate) use browser_context::{
     CompletedContextPermissionUpdate, PendingContextPermissionUpdate,

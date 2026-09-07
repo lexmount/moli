@@ -46,6 +46,10 @@ macro_rules! define_document_command {
         pub(crate) struct $completed(CompletedDocumentCommand);
 
         impl $pending {
+            pub(super) fn new(document: DocumentHandle, pending: PendingPageCommand) -> Self {
+                Self(PendingDocumentCommand { document, pending })
+            }
+
             pub(crate) async fn wait(self) -> $completed {
                 $completed(self.0.wait().await)
             }
@@ -56,25 +60,68 @@ macro_rules! define_document_command {
                 self.0.document
             }
 
+            pub(super) fn into_parts(
+                self,
+            ) -> (DocumentHandle, Result<CompletedPageCommand, String>) {
+                self.0.into_parts()
+            }
+        }
+    };
+    ($pending:ident, $completed:ident, renderer_output_predecessor) => {
+        define_document_command!($pending, $completed);
+
+        impl $completed {
             pub(crate) fn renderer_output_predecessor(
                 &self,
             ) -> Option<moli_core::RendererOutputFence> {
                 self.0.renderer_output_predecessor()
             }
-
-            fn into_inner(self) -> CompletedDocumentCommand {
-                self.0
-            }
         }
     };
 }
 
-define_document_command!(PendingSetDocumentContent, CompletedSetDocumentContent);
+define_document_command!(
+    PendingSetDocumentContent,
+    CompletedSetDocumentContent,
+    renderer_output_predecessor
+);
 define_document_command!(
     PendingCaptureDocumentSnapshot,
-    CompletedCaptureDocumentSnapshot
+    CompletedCaptureDocumentSnapshot,
+    renderer_output_predecessor
 );
-define_document_command!(PendingCaptureDocumentImage, CompletedCaptureDocumentImage);
+define_document_command!(
+    PendingCaptureDocumentImage,
+    CompletedCaptureDocumentImage,
+    renderer_output_predecessor
+);
+define_document_command!(
+    PendingDocumentStorageKeySnapshot,
+    CompletedDocumentStorageKeySnapshot
+);
+define_document_command!(
+    PendingChildFrameTreeSnapshot,
+    CompletedChildFrameTreeSnapshot
+);
+define_document_command!(
+    PendingDocumentCookieOwnerSnapshot,
+    CompletedDocumentCookieOwnerSnapshot
+);
+define_document_command!(PendingDocumentBlobRead, CompletedDocumentBlobRead);
+define_document_command!(
+    PendingNetworkResourceLoadPreparation,
+    CompletedNetworkResourceLoadPreparation
+);
+define_document_command!(
+    PendingAppManifestLoadPreparation,
+    CompletedAppManifestLoadPreparation,
+    renderer_output_predecessor
+);
+define_document_command!(
+    PendingAppManifestPublication,
+    CompletedAppManifestPublication,
+    renderer_output_predecessor
+);
 
 pub(crate) struct DocumentSnapshot {
     pub(crate) url: String,
@@ -181,17 +228,14 @@ impl BrowserContext {
             .page
             .start_set_document_content(frame_id, html)
             .map_err(|error| error.to_string())?;
-        Ok(PendingSetDocumentContent(PendingDocumentCommand {
-            document,
-            pending,
-        }))
+        Ok(PendingSetDocumentContent::new(document, pending))
     }
 
     pub(crate) fn finish_set_document_content(
         &mut self,
         completed: CompletedSetDocumentContent,
     ) -> Result<(RendererSetDocumentContentResult, RendererCommandTurnOutput), String> {
-        let (document, completion) = completed.into_inner().into_parts();
+        let (document, completion) = completed.into_parts();
         self.physical
             .document_mut(document)?
             .page
@@ -253,17 +297,14 @@ impl BrowserContext {
             .page
             .start_serialize_html()
             .map_err(|error| error.to_string())?;
-        Ok(PendingCaptureDocumentSnapshot(PendingDocumentCommand {
-            document,
-            pending,
-        }))
+        Ok(PendingCaptureDocumentSnapshot::new(document, pending))
     }
 
     pub(crate) fn finish_capture_document_snapshot(
         &mut self,
         completed: CompletedCaptureDocumentSnapshot,
     ) -> Result<DocumentSnapshot, String> {
-        let (document, completion) = completed.into_inner().into_parts();
+        let (document, completion) = completed.into_parts();
         let document = self.physical.document_mut(document)?;
         let html = document
             .page
@@ -286,17 +327,14 @@ impl BrowserContext {
             .page
             .start_capture_screenshot_with_request(request)
             .map_err(|error| error.to_string())?;
-        Ok(PendingCaptureDocumentImage(PendingDocumentCommand {
-            document,
-            pending,
-        }))
+        Ok(PendingCaptureDocumentImage::new(document, pending))
     }
 
     pub(crate) fn finish_capture_document_image(
         &mut self,
         completed: CompletedCaptureDocumentImage,
     ) -> Result<RendererCaptureScreenshotReply, String> {
-        let (document, completion) = completed.into_inner().into_parts();
+        let (document, completion) = completed.into_parts();
         self.physical
             .document_mut(document)?
             .page

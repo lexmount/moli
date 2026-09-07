@@ -47,9 +47,16 @@ mod navigation;
 mod page_runtime;
 mod resource_runtime;
 pub(crate) use page_runtime::{
-    CompletedCaptureDocumentImage, CompletedCaptureDocumentSnapshot, CompletedSetDocumentContent,
-    DocumentSnapshot, NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind,
-    PendingCaptureDocumentImage, PendingCaptureDocumentSnapshot, PendingSetDocumentContent,
+    BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
+    CompletedAppManifestPublication, CompletedCaptureDocumentImage,
+    CompletedCaptureDocumentSnapshot, CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
+    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentStorageKeySnapshot,
+    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent, DocumentSnapshot,
+    NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind,
+    PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
+    PendingCaptureDocumentSnapshot, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
+    PendingDocumentCookieOwnerSnapshot, PendingDocumentStorageKeySnapshot,
+    PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
 };
 pub(in crate::conn) mod page_slot;
 mod page_state;
