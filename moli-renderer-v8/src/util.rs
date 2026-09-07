@@ -168,22 +168,6 @@ pub(crate) fn apply_webidl_constructor_prototype_fallback<'s>(
     let _ = receiver.set_prototype(scope, prototype.into());
 }
 
-pub(crate) fn define_v8_array_data_properties<'s, I, T>(
-    scope: &mut v8::PinScope<'s, '_>,
-    array: v8::Local<'s, v8::Array>,
-    values: I,
-) -> Option<()>
-where
-    I: IntoIterator<Item = T>,
-    T: WebApiValue<'s>,
-{
-    for (index, value) in values.into_iter().enumerate() {
-        let value = value.to_v8_value(scope)?;
-        define_v8_array_data_property(scope, array, index as u32, value)?;
-    }
-    Some(())
-}
-
 pub(super) fn create_script_origin<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resource_name: &str,

@@ -22043,6 +22043,45 @@ fn zhihu_probe_navigator_plugin_and_mime_surfaces_match_chromium_pdf_builtins() 
     );
 }
 #[test]
+fn navigator_plugin_collection_lengths_are_branded_readonly_prototype_attributes() {
+    let mut vm = new_storage_test_vm("https://navigator-collections-length.test/");
+    let result = vm.eval(r#"
+        (() => {
+          const collections = [navigator.plugins, navigator.mimeTypes, navigator.plugins[0]];
+          function throwsTypeError(callback) {
+            try { callback(); return false; } catch (error) { return error instanceof TypeError; }
+          }
+          for (const [index, collection] of collections.entries()) {
+            const prototype = Object.getPrototypeOf(collection);
+            const descriptor = Object.getOwnPropertyDescriptor(prototype, 'length');
+            if (!descriptor || descriptor.get.name !== 'get length' || descriptor.get.length !== 0 ||
+                descriptor.set !== undefined || !descriptor.enumerable || !descriptor.configurable ||
+                Object.hasOwn(collection, 'length') || Array.isArray(collection)) return 'descriptor';
+            const length = index === 0 ? 5 : 2;
+            const first = collection[0];
+            collection.length = 0;
+            collection.__moliNavigatorCollectionLength = 0;
+            if (collection.length !== length || collection[0] !== first ||
+                Array.from(collection).length !== length || collection.item(0) !== first)
+              return 'assignment changed collection';
+            if (!throwsTypeError(() => { 'use strict'; collection.length = 0; })) return 'strict';
+            for (const fake of [{}, [], Object.create(collection), prototype, collections[(index + 1) % 3]]) {
+              if (!throwsTypeError(() => descriptor.get.call(fake))) return 'brand';
+            }
+          }
+          const iframe = document.createElement('iframe');
+          document.appendChild(document.createElement('html')).appendChild(iframe);
+          const foreign = iframe.contentWindow.navigator;
+          const foreignCollections = [foreign.plugins, foreign.mimeTypes, foreign.plugins[0]];
+          return collections.every((collection, i) =>
+            Object.getOwnPropertyDescriptor(Object.getPrototypeOf(collection), 'length')
+              .get.call(foreignCollections[i]) === collection.length);
+        })()
+    "#).expect("collection length probe should evaluate");
+    assert_eq!(result, "true");
+}
+
+#[test]
 fn navigator_plugin_collections_parse_webidl_arguments() {
     let mut vm = new_storage_test_vm("https://navigator-collections-webidl.test/");
 

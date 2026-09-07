@@ -1,6 +1,6 @@
 use super::super::*;
 use crate::{
-    util::{define_v8_array_data_properties, get_private_value, throw_type_error},
+    util::{get_private_value, throw_type_error},
     webidl,
 };
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
@@ -35,6 +35,7 @@ const PDF_MIME_TYPES: &[(&str, &str, &str)] = &[
 const PLUGIN_ARRAY_BRAND_SLOT: &str = "__moliPluginArrayBrand";
 const MIME_TYPE_ARRAY_BRAND_SLOT: &str = "__moliMimeTypeArrayBrand";
 const PLUGIN_BRAND_SLOT: &str = "__moliPluginBrand";
+const COLLECTION_LENGTH_SLOT: &str = "__moliNavigatorCollectionLength";
 
 #[derive(WebApiObject)]
 #[webapi(interface = "MimeType")]
@@ -53,33 +54,33 @@ struct MimeTypeObjectDeclaration<'scope> {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
-struct MimeTypeArrayObjectDeclaration<'scope> {
-    #[webapi(prototype)]
-    prototype: Option<v8::Local<'scope, v8::Object>>,
-
+#[webapi(interface = "MimeTypeArray")]
+struct MimeTypeArrayObjectDeclaration {
     #[webapi(slot = MIME_TYPE_ARRAY_BRAND_SLOT, init = true)]
     brand: (),
+
+    #[webapi(slot = COLLECTION_LENGTH_SLOT)]
+    length: u32,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
-struct PluginArrayObjectDeclaration<'scope> {
-    #[webapi(prototype)]
-    prototype: Option<v8::Local<'scope, v8::Object>>,
-
+#[webapi(interface = "PluginArray")]
+struct PluginArrayObjectDeclaration {
     #[webapi(slot = PLUGIN_ARRAY_BRAND_SLOT, init = true)]
     brand: (),
+
+    #[webapi(slot = COLLECTION_LENGTH_SLOT)]
+    length: u32,
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "Plugin")]
 struct PluginObjectDeclaration<'scope> {
-    #[webapi(prototype)]
-    prototype: Option<v8::Local<'scope, v8::Object>>,
-
     #[webapi(slot = PLUGIN_BRAND_SLOT, init = true)]
     brand: (),
+
+    #[webapi(slot = COLLECTION_LENGTH_SLOT)]
+    length: u32,
 
     #[webapi(data_property)]
     name: v8::Local<'scope, v8::String>,
@@ -94,6 +95,9 @@ struct PluginObjectDeclaration<'scope> {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "MimeTypeArray", enumerable)]
 struct MimeTypeArrayPrototypeDeclaration {
+    #[webapi(accessor_property, getter = mime_type_array_length_getter)]
+    length: (),
+
     #[webapi(method, callback = mime_type_array_item_callback, length = 1)]
     item: (),
 
@@ -110,6 +114,9 @@ struct MimeTypeArrayPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "PluginArray", enumerable)]
 struct PluginArrayPrototypeDeclaration {
+    #[webapi(accessor_property, getter = plugin_array_length_getter)]
+    length: (),
+
     #[webapi(method, callback = plugin_array_item_callback, length = 1)]
     item: (),
 
@@ -129,6 +136,9 @@ struct PluginArrayPrototypeDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "Plugin", enumerable)]
 struct PluginPrototypeDeclaration {
+    #[webapi(accessor_property, getter = plugin_length_getter)]
+    length: (),
+
     #[webapi(method, callback = plugin_item_callback, length = 1)]
     item: (),
 
@@ -157,6 +167,45 @@ pub(super) fn install_navigator_collection_template_bindings<'s>(
         }
         "Plugin" => PluginPrototypeDeclaration::initialize_prototype_template(scope, prototype),
         _ => {}
+    }
+}
+
+fn plugin_array_length_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    collection_length_getter_for(scope, args, rv, PLUGIN_ARRAY_BRAND_SLOT);
+}
+
+fn mime_type_array_length_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    collection_length_getter_for(scope, args, rv, MIME_TYPE_ARRAY_BRAND_SLOT);
+}
+
+fn plugin_length_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    rv: v8::ReturnValue<'s, v8::Value>,
+) {
+    collection_length_getter_for(scope, args, rv, PLUGIN_BRAND_SLOT);
+}
+
+fn collection_length_getter_for<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'s, v8::Value>,
+    brand_slot: &'static str,
+) {
+    if !receiver_has_brand(scope, args.this(), brand_slot) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    if let Some(length) = get_private_value(scope, args.this(), COLLECTION_LENGTH_SLOT) {
+        rv.set(length);
     }
 }
 
@@ -301,23 +350,21 @@ fn build_plugin<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     name: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let plugin = v8::Array::new(scope, PDF_MIME_TYPES.len() as i32);
-    PluginObjectDeclaration::new(
-        global_constructor_prototype(scope, "Plugin"),
+    let plugin = PluginObjectDeclaration::new(
+        PDF_MIME_TYPES.len() as u32,
         v8_string(scope, name)?,
         v8_string(scope, "internal-pdf-viewer")?,
         v8_string(scope, "Portable Document Format")?,
     )
-    .initialize(scope, plugin.into())
+    .bind(scope)
     .ok()?;
 
     let mut mime_types = Vec::with_capacity(PDF_MIME_TYPES.len());
     for (type_name, suffixes, description) in PDF_MIME_TYPES {
-        let mime_type =
-            build_mime_type(scope, type_name, suffixes, description, Some(plugin.into()))?;
+        let mime_type = build_mime_type(scope, type_name, suffixes, description, Some(plugin))?;
         mime_types.push((type_name, mime_type));
     }
-    define_v8_array_data_properties(scope, plugin, mime_types.iter().map(|(_, item)| *item))?;
+    define_collection_indices(scope, plugin, mime_types.iter().map(|(_, item)| *item))?;
     for (type_name, mime_type) in mime_types {
         let _ = plugin.define_own_property(
             scope,
@@ -327,16 +374,15 @@ fn build_plugin<'s>(
         );
     }
 
-    Some(plugin.into())
+    Some(plugin)
 }
 
 fn build_mime_type_array<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     enabled_plugin: v8::Local<'s, v8::Object>,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let array = v8::Array::new(scope, PDF_MIME_TYPES.len() as i32);
-    MimeTypeArrayObjectDeclaration::new(global_constructor_prototype(scope, "MimeTypeArray"))
-        .initialize(scope, array.into())
+    let array = MimeTypeArrayObjectDeclaration::new(PDF_MIME_TYPES.len() as u32)
+        .bind(scope)
         .ok()?;
     let mut mime_types = Vec::with_capacity(PDF_MIME_TYPES.len());
     for (type_name, suffixes, description) in PDF_MIME_TYPES {
@@ -349,7 +395,7 @@ fn build_mime_type_array<'s>(
         )?;
         mime_types.push((type_name, mime_type));
     }
-    define_v8_array_data_properties(scope, array, mime_types.iter().map(|(_, item)| *item))?;
+    define_collection_indices(scope, array, mime_types.iter().map(|(_, item)| *item))?;
     for (type_name, mime_type) in mime_types {
         let _ = array.define_own_property(
             scope,
@@ -358,20 +404,19 @@ fn build_mime_type_array<'s>(
             v8::PropertyAttribute::DONT_ENUM,
         );
     }
-    Some(array.into())
+    Some(array)
 }
 
 fn build_plugin_array<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<'s, v8::Object>> {
-    let array = v8::Array::new(scope, PDF_PLUGIN_NAMES.len() as i32);
-    PluginArrayObjectDeclaration::new(global_constructor_prototype(scope, "PluginArray"))
-        .initialize(scope, array.into())
+    let array = PluginArrayObjectDeclaration::new(PDF_PLUGIN_NAMES.len() as u32)
+        .bind(scope)
         .ok()?;
     let mut plugins = Vec::with_capacity(PDF_PLUGIN_NAMES.len());
     for name in PDF_PLUGIN_NAMES {
         let plugin = build_plugin(scope, name)?;
         plugins.push((name, plugin));
     }
-    define_v8_array_data_properties(scope, array, plugins.iter().map(|(_, item)| *item))?;
+    define_collection_indices(scope, array, plugins.iter().map(|(_, item)| *item))?;
     for (name, plugin) in plugins {
         let _ = array.define_own_property(
             scope,
@@ -380,7 +425,21 @@ fn build_plugin_array<'s>(scope: &mut v8::PinScope<'s, '_>) -> Option<v8::Local<
             v8::PropertyAttribute::DONT_ENUM,
         );
     }
-    Some(array.into())
+    Some(array)
+}
+
+fn define_collection_indices<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    collection: v8::Local<'s, v8::Object>,
+    items: impl IntoIterator<Item = v8::Local<'s, v8::Object>>,
+) -> Option<()> {
+    for (index, item) in items.into_iter().enumerate() {
+        let key = v8_string(scope, &index.to_string())?;
+        if collection.create_data_property(scope, key.into(), item.into()) != Some(true) {
+            return None;
+        }
+    }
+    Some(())
 }
 
 pub(super) struct NavigatorPluginCollections<'scope> {
