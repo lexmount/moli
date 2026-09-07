@@ -32,6 +32,7 @@ pub(in crate::context_bootstrap) enum EventSubclassKind {
     CapturedMouseEvent = 30,
     FontFaceSetLoadEvent = 31,
     HashChangeEvent = 32,
+    ClipboardChangeEvent = 33,
 }
 
 impl EventSubclassKind {
@@ -69,6 +70,7 @@ impl EventSubclassKind {
             30 => Some(Self::CapturedMouseEvent),
             31 => Some(Self::FontFaceSetLoadEvent),
             32 => Some(Self::HashChangeEvent),
+            33 => Some(Self::ClipboardChangeEvent),
             _ => None,
         }
     }
@@ -107,6 +109,7 @@ impl EventSubclassKind {
             Self::CapturedMouseEvent => "CapturedMouseEvent",
             Self::FontFaceSetLoadEvent => "FontFaceSetLoadEvent",
             Self::HashChangeEvent => "HashChangeEvent",
+            Self::ClipboardChangeEvent => "ClipboardChangeEvent",
         }
     }
 }
