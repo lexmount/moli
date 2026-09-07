@@ -36,6 +36,7 @@ mod bidi_channel_work;
 mod body_spool;
 mod browser_context;
 mod browser_document_commands;
+mod browser_web_contents_commands;
 mod command_owner_scope;
 mod command_view;
 mod cookie_manager_surface;
@@ -72,31 +73,33 @@ mod settings;
 #[cfg(test)]
 mod site_data_manager_surface;
 mod state;
+pub(crate) use state::PageInputCommand;
 pub(crate) use state::{
     BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
     CompletedAppManifestPublication, CompletedCaptureDocumentImage,
     CompletedCaptureDocumentScreencastFrame, CompletedCaptureDocumentSnapshot,
     CompletedChildFrameNavigation, CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
+    CompletedDocumentPolicyBatch, CompletedDocumentPolicyUpdate,
     CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
     CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
     CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
-    CompletedTopLevelSameDocumentNavigation, DocumentSnapshot, PendingAppManifestLoadPreparation,
-    PendingAppManifestPublication, PendingCaptureDocumentImage,
+    CompletedTopLevelSameDocumentNavigation, DocumentPolicyUpdate,
+    DocumentRuntimePolicyReconciliation, DocumentSnapshot, LIVE_DEVICE_METRICS_CLEAR_SCRIPT,
+    PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
     PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
     PendingChildFrameNavigation, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
-    PendingDocumentCookieOwnerSnapshot, PendingDocumentCspBypassUpdate,
-    PendingDocumentResourceTextSearch, PendingDocumentStorageKeySnapshot,
-    PendingNavigationHistoryReset, PendingNetworkResourceLoadPreparation,
-    PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
-    PendingTopLevelSameDocumentNavigation,
+    PendingDocumentCookieOwnerSnapshot, PendingDocumentCspBypassUpdate, PendingDocumentPolicyBatch,
+    PendingDocumentPolicyUpdate, PendingDocumentResourceTextSearch,
+    PendingDocumentStorageKeySnapshot, PendingNavigationHistoryReset,
+    PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
+    PendingTopLevelHistoryTraversal, PendingTopLevelSameDocumentNavigation,
 };
 pub(crate) use state::{
     ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
     NavigationRequestInterception,
 };
 pub(crate) use state::{CompletedContextPermissionUpdate, PendingContextPermissionUpdate};
-pub(crate) use state::{NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind};
 mod target;
 mod top_level_navigation_work;
 
@@ -576,11 +579,11 @@ pub(crate) use site_data_manager_surface::{
 pub(crate) use state::BrowserContextResourceStorageHandles;
 pub(crate) use state::JavaScriptDialogError;
 pub use state::{
-    BrowserContext, BrowserWindowBounds, DevToolsPageResidenceIdentity, DocumentStartScript,
-    DownloadNavigation, EmulatedDeviceMetrics, EmulatedGeolocationOverride,
-    EmulatedGeolocationOverrideState, EmulatedMediaOverrides, IsolatedWorldDefinition,
-    LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
-    PageAgentHost, PageNavigationHistoryEntry, RuntimeBindingDefinition, TargetInfo, URL_BASE,
+    BrowserContext, DevToolsPageResidenceIdentity, DocumentStartScript, DownloadNavigation,
+    EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
+    EmulatedMediaOverrides, IsolatedWorldDefinition, LoadedNavigation, NavigationDispatchState,
+    NavigationLoadOutcome, NavigationRequestLoadPolicy, PageAgentHost, PageNavigationHistoryEntry,
+    RuntimeBindingDefinition, TargetInfo, URL_BASE,
 };
 pub(crate) use state::{
     BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles,
@@ -1193,7 +1196,6 @@ pub struct CdpConnection {
     next_internal_runtime_command_id: u64,
     network_request_id_allocator: ConnectionNetworkRequestIdAllocator,
     // Browser profile, permissions, download and global IO state.
-    pub window_bounds: BrowserWindowBounds,
     download_policy: moli_core::browser::DownloadPolicy,
     download_subscriptions: download_policy::DownloadSubscriptions,
     // Browser defaults remain embedded until the Browser aggregate cutover.
@@ -1489,7 +1491,6 @@ impl CdpConnection {
             service_worker_pause_on_start_owner_sessions: HashSet::new(),
             dedicated_worker_pause_on_start_owner_sessions: HashSet::new(),
             install_default_target_on_auto_attach: false,
-            window_bounds: BrowserWindowBounds::default(),
             download_policy: moli_core::browser::DownloadPolicy::default(),
             download_subscriptions: download_policy::DownloadSubscriptions::default(),
             permission_defaults: moli_core::browser::PermissionDefaults::default(),

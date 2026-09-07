@@ -2505,10 +2505,8 @@ async fn session_cleanup_exception_keeps_peer_alive(primary: bool) {
         }})).await;
         ctx.expect_result(73, json!({}), Some("SID-cleanup-peer"));
         ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
             .reset_primary_page_session_target_state_async(
+                "BID-cleanup-exception",
                 "TID-cleanup-exception",
                 "SID-cleanup-exception",
             )

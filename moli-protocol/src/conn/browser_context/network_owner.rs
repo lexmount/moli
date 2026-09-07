@@ -2,6 +2,7 @@ use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionOwnerRef};
 use super::*;
 use crate::conn::CdpSessionRoute;
 use crate::conn::{CapturedBody, TargetRuntimeSlot};
+use crate::conn::{DocumentPolicyUpdate, PendingDocumentPolicyUpdate};
 use crate::devtools_runtime::DevToolsNetworkDataType;
 use crate::domains::network::{
     CapturedRequestBody, CapturedResponseBody, CollectedNetworkDataArtifact,
@@ -163,7 +164,7 @@ impl TargetSessionOwnerMut<'_> {
     fn start_set_cache_disabled(
         mut self,
         cache_disabled: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         self.mutate_network_policy_session_state(|state| {
             state.cache_disabled = cache_disabled;
         });
@@ -173,51 +174,99 @@ impl TargetSessionOwnerMut<'_> {
     fn start_set_bypass_service_worker(
         mut self,
         bypass_service_worker: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         self.mutate_network_policy_session_state(|state| {
             state.bypass_service_worker = bypass_service_worker;
         });
-        self.browser_context
-            .start_target_service_worker_bypass_refresh(&self.target_id)
+        let effective = self
+            .browser_context
+            .effective_policy_for_target(&self.target_id);
+        self.start_document_policy_update(DocumentPolicyUpdate::BypassServiceWorker(
+            effective.bypass_service_worker(),
+        ))
     }
 
     fn start_set_blocked_url_patterns(
         mut self,
         blocked_url_patterns: Vec<String>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         self.mutate_network_policy_session_state(|state| {
             state.blocked_url_patterns = blocked_url_patterns;
         });
-        self.browser_context
-            .start_target_blocked_urls_refresh(&self.target_id)
+        let effective = self
+            .browser_context
+            .effective_policy_for_target(&self.target_id);
+        self.start_document_policy_update(DocumentPolicyUpdate::BlockedUrls(
+            effective.blocked_url_patterns().to_vec(),
+        ))
     }
 
     fn start_set_extra_http_headers(
         mut self,
         extra_headers: Vec<(String, String)>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         self.mutate_network_policy_session_state(|state| {
             state.extra_headers = extra_headers;
         });
-        self.browser_context
-            .start_target_extra_headers_refresh(&self.target_id)
+        self.start_effective_extra_http_headers_update()
     }
 
     fn start_set_target_extra_http_headers(
-        self,
+        mut self,
         extra_headers: Vec<(String, String)>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         self.browser_context
             .set_base_extra_headers_for_target(&self.target_id, extra_headers);
+        self.start_effective_extra_http_headers_update()
+    }
+
+    fn start_effective_extra_http_headers_update(
+        &mut self,
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        let headers = self
+            .browser_context
+            .effective_extra_headers_for_target(&self.target_id);
+        let Some(document) = self
+            .browser_context
+            .document_handle_for_target(&self.target_id)
+        else {
+            return Ok(None);
+        };
         self.browser_context
-            .start_target_extra_headers_refresh(&self.target_id)
+            .start_document_policy_update(document, DocumentPolicyUpdate::ExtraHttpHeaders(headers))
+            .map(Some)
     }
 
     fn start_replay_effective_network_request_policy(
         &mut self,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        let effective = self
+            .browser_context
+            .effective_policy_for_target(&self.target_id);
+        let headers = self
+            .browser_context
+            .merged_extra_headers_for_target_policy(effective.extra_headers());
+        self.start_document_policy_update(DocumentPolicyUpdate::NetworkRequestPolicy {
+            extra_headers: headers,
+            bypass_service_worker: effective.bypass_service_worker(),
+            cache_disabled: effective.cache_disabled(),
+            blocked_url_patterns: effective.blocked_url_patterns().to_vec(),
+        })
+    }
+
+    fn start_document_policy_update(
+        &mut self,
+        update: DocumentPolicyUpdate,
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        let Some(document) = self
+            .browser_context
+            .document_handle_for_target(&self.target_id)
+        else {
+            return Ok(None);
+        };
         self.browser_context
-            .start_target_network_request_policy_refresh(&self.target_id)
+            .start_document_policy_update(document, update)
+            .map(Some)
     }
 
     fn set_devtools_browser_identity_override(
@@ -261,11 +310,24 @@ impl TargetSessionOwnerMut<'_> {
     fn start_set_network_offline(
         self,
         offline: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        let Some(handle) = self
+            .browser_context
+            .web_contents_handle_for_target(&self.target_id)
+        else {
+            return Ok(None);
+        };
         self.browser_context
-            .set_network_offline_for_target(&self.target_id, offline);
+            .set_web_contents_network_offline(handle, offline)?;
+        let Some(document) = self
+            .browser_context
+            .document_handle_for_target(&self.target_id)
+        else {
+            return Ok(None);
+        };
         self.browser_context
-            .start_target_network_offline_refresh(&self.target_id)
+            .start_document_policy_update(document, DocumentPolicyUpdate::NetworkOffline(offline))
+            .map(Some)
     }
 }
 
@@ -579,7 +641,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         cache_disabled: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         let Some(owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -608,7 +670,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         bypass_service_worker: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         let Some(owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -619,7 +681,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         blocked_url_patterns: Vec<String>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         let Some(owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -630,7 +692,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         extra_headers: Vec<(String, String)>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         let Some(owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -641,7 +703,7 @@ impl CdpConnection {
         &mut self,
         command_owner: &crate::conn::CommandOwnerScope,
         extra_headers: Vec<(String, String)>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         let Some(owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -651,7 +713,7 @@ impl CdpConnection {
     pub(crate) fn start_replay_effective_network_request_policy_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         if matches!(
             self.session_route(session_id),
             Some(
@@ -779,7 +841,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         offline: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
         self.start_set_network_offline_for_owner(&owner, offline)
     }
@@ -788,7 +850,7 @@ impl CdpConnection {
         &mut self,
         command_owner: &crate::conn::CommandOwnerScope,
         offline: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         let Some(owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -848,11 +910,14 @@ mod tests {
             ("SID-attached", Some(false), false),
             ("SID-background", None, true),
         ] {
+            conn.reset_primary_page_session_target_state_async(
+                "BID-background",
+                "TID-background",
+                session,
+            )
+            .await
+            .unwrap();
             let context = conn.browser_context.as_mut().unwrap();
-            context
-                .reset_primary_page_session_target_state_async("TID-background", session)
-                .await
-                .unwrap();
             let target = context.page_target("TID-background").unwrap();
             assert!(target.is_session("SID-background"));
             assert_eq!(
@@ -946,16 +1011,23 @@ mod tests {
         let mut conn = connection_with_background_attached_session();
         conn.start_set_network_offline_for_session_owner(Some("SID-attached"), true)
             .unwrap();
-        let context = conn.browser_context.as_mut().unwrap();
-        context
-            .reset_primary_page_session_target_state_async("TID-background", "SID-attached")
-            .await
-            .unwrap();
+        conn.reset_primary_page_session_target_state_async(
+            "BID-background",
+            "TID-background",
+            "SID-attached",
+        )
+        .await
+        .unwrap();
+        let context = conn.browser_context.as_ref().unwrap();
         assert!(context.network_offline_for_target("TID-background"));
-        context
-            .reset_primary_page_session_target_state_async("TID-background", "SID-background")
-            .await
-            .unwrap();
+        conn.reset_primary_page_session_target_state_async(
+            "BID-background",
+            "TID-background",
+            "SID-background",
+        )
+        .await
+        .unwrap();
+        let context = conn.browser_context.as_ref().unwrap();
         assert!(!context.network_offline_for_target("TID-background"));
     }
 

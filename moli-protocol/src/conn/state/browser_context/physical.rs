@@ -5,7 +5,7 @@ use moli_browser_profile::BrowserIdentityProfile;
 use moli_core::{
     browser::{
         BrowserContextId, DocumentHandle, DownloadManager, DownloadPolicy, PermissionOverrides,
-        WebContentsId,
+        WebContentsHandle, WebContentsId,
     },
     runtime::{
         NavigationEngine, NavigationRuntimeConfig, RendererBrowserContextRuntime,
@@ -43,6 +43,27 @@ pub(super) struct BrowserContext {
 }
 
 impl BrowserContext {
+    pub(super) fn web_contents(&self, handle: WebContentsHandle) -> Result<&WebContents, String> {
+        if handle.context() != self.id {
+            return Err("WebContents belongs to a different BrowserContext".into());
+        }
+        self.web_contents
+            .get(&handle.id())
+            .ok_or_else(|| "WebContents unavailable".into())
+    }
+
+    pub(super) fn web_contents_mut(
+        &mut self,
+        handle: WebContentsHandle,
+    ) -> Result<&mut WebContents, String> {
+        if handle.context() != self.id {
+            return Err("WebContents belongs to a different BrowserContext".into());
+        }
+        self.web_contents
+            .get_mut(&handle.id())
+            .ok_or_else(|| "WebContents unavailable".into())
+    }
+
     pub(super) fn document(&self, handle: DocumentHandle) -> Result<&DocumentHost, String> {
         if handle.web_contents().context() != self.id {
             return Err("Document belongs to a different BrowserContext".into());

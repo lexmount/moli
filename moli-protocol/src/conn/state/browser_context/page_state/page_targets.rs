@@ -9,7 +9,31 @@ use crate::conn::{
 use crate::devtools_runtime::{
     DevToolsBrowserContextId, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
 };
+use moli_core::browser::WebContentsHandle;
 use moli_core::network::SharedWebStorageStore;
+
+pub(crate) struct PendingWebContentsSelection {
+    admission_error: Option<String>,
+    surface_updates: Vec<crate::conn::PendingDocumentPolicyUpdate>,
+}
+
+pub(crate) struct CompletedWebContentsSelection {
+    admission_error: Option<String>,
+    surface_updates: Vec<crate::conn::CompletedDocumentPolicyUpdate>,
+}
+
+impl PendingWebContentsSelection {
+    pub(crate) async fn wait(self) -> CompletedWebContentsSelection {
+        let mut surface_updates = Vec::with_capacity(self.surface_updates.len());
+        for update in self.surface_updates {
+            surface_updates.push(update.wait().await);
+        }
+        CompletedWebContentsSelection {
+            admission_error: self.admission_error,
+            surface_updates,
+        }
+    }
+}
 
 impl BrowserContext {
     pub(in crate::conn) fn take_page_target_for_close(
@@ -138,8 +162,11 @@ impl BrowserContext {
             TargetPageSlot::empty_for_initial_document_page_build(),
         );
         debug_assert!(inserted, "new active page target id must be unique");
-        let selected = self.select_registered_page_target(&target_id);
-        debug_assert!(selected, "newly inserted page target must be selectable");
+        let handle = self
+            .web_contents_handle_for_target(&target_id)
+            .expect("newly inserted target must have WebContents");
+        self.select_registered_web_contents(handle)
+            .expect("newly inserted WebContents must be selectable");
     }
 
     pub(crate) fn reusable_window_open_target_name(target_name: &str) -> Option<&str> {
@@ -150,6 +177,16 @@ impl BrowserContext {
     }
 
     pub(crate) fn target_id_for_window_name(&self, target_name: &str) -> Option<&str> {
+        let id = self.web_contents_handle_for_window_name(target_name)?.id();
+        self.page_targets
+            .get_for_web_contents(id)
+            .map(PageAgentHost::target_id)
+    }
+
+    pub(crate) fn web_contents_handle_for_window_name(
+        &self,
+        target_name: &str,
+    ) -> Option<moli_core::browser::WebContentsHandle> {
         let name = Self::reusable_window_open_target_name(target_name)?;
         let id = self
             .physical
@@ -157,35 +194,16 @@ impl BrowserContext {
             .values()
             .find(|contents| contents.window.name.as_deref() == Some(name))?
             .id();
-        self.page_targets
-            .get_for_web_contents(id)
-            .map(PageAgentHost::target_id)
+        Some(moli_core::browser::WebContentsHandle::new(
+            self.physical.id,
+            id,
+        ))
     }
 
     pub(crate) fn has_attached_child_frame_id(&self, frame_id: &str) -> bool {
         self.page_targets
             .iter()
             .any(|target| target.owner_state.has_attached_child_frame_id(frame_id))
-    }
-
-    pub(crate) fn remember_target_window_name(&mut self, target_name: &str, target_id: &str) {
-        let Some(id) = self
-            .page_target(target_id)
-            .map(PageAgentHost::web_contents_id)
-        else {
-            return;
-        };
-        let name = Self::reusable_window_open_target_name(target_name).map(str::to_owned);
-        for contents in self.physical.web_contents.values_mut() {
-            let is_target = contents.id() == id;
-            let window = &mut contents.window;
-            if is_target {
-                window.name = name.clone();
-            } else if name.is_some() && window.name == name {
-                // Preserve the existing last-assignment-wins lookup rule.
-                window.name = None;
-            }
-        }
     }
 
     pub(crate) fn remember_target_popup_id(&mut self, popup_id: Option<u64>, target_id: &str) {
@@ -217,22 +235,11 @@ impl BrowserContext {
             })
     }
 
-    pub(crate) fn remember_target_opener(
+    pub(crate) fn set_target_opener_frame_attribution(
         &mut self,
         target_id: &str,
-        opener_target_id: String,
         opener_frame_id: String,
-        can_access_opener: bool,
     ) {
-        let opener =
-            self.page_target(&opener_target_id)
-                .map(|target| crate::conn::state::WindowOpener {
-                    web_contents_id: target.web_contents_id(),
-                    can_access: can_access_opener,
-                });
-        if let Some(contents) = self.web_contents_for_target_mut(target_id) {
-            contents.window.opener = opener;
-        }
         if let Some(target) = self.page_target_mut(target_id) {
             target.opener_frame_id = Some(opener_frame_id);
         }
@@ -335,102 +342,17 @@ impl BrowserContext {
             && self.dispose_devtools_session_for_target(target_id, session_id, session_key)
     }
 
-    pub(crate) async fn clear_devtools_network_session_policy_async(
-        &mut self,
-        target_id: &str,
-        session_key: &moli_page_types::DevToolsSessionKey,
-    ) -> anyhow::Result<()> {
-        let Some(target) = self.page_target_mut(target_id) else {
-            return Ok(());
-        };
-        let listener_session_id = session_key.wire_session_id().map(str::to_owned);
-        match session_key {
-            moli_page_types::DevToolsSessionKey::Primary => {
-                target.runtime_slot.disable_primary_network_events();
-            }
-            moli_page_types::DevToolsSessionKey::Attached(attached_session_id) => {
-                target
-                    .runtime_slot
-                    .remove_attached_network_session(attached_session_id);
-            }
-        }
-        target
-            .runtime_slot
-            .remove_network_session_observation_cursor(listener_session_id.as_deref());
-        target
-            .runtime_slot
-            .remove_captured_response_body_visibility_for_session(listener_session_id.as_deref());
-        if !target.runtime_slot.has_network_event_listeners() {
-            target.runtime_slot.clear_captured_response_bodies();
-            target.runtime_slot.clear_websocket_request_ids();
-        }
-        self.clear_devtools_network_state_for_target(target_id, session_key);
-        let effective = self.effective_policy_for_target(target_id);
-        let headers = self.merged_extra_headers_for_target_policy(effective.extra_headers());
-        if let Some(page) = self.loaded_page_for_target_mut(target_id) {
-            // Reconcile current Browser policy even on a repeated disposal:
-            // clearing a contribution is not proof the renderer applied it.
-            page.set_network_request_policy_async(
-                &headers,
-                effective.bypass_service_worker(),
-                effective.cache_disabled(),
-                effective.blocked_url_patterns(),
-            )
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!(
-                    "failed to restore detached session network request policy: {error}"
-                )
-            })?;
-        }
-        Ok(())
-    }
-
-    pub(crate) async fn clear_devtools_emulation_session_policy_async(
-        &mut self,
-        target_id: &str,
-        session_key: &moli_page_types::DevToolsSessionKey,
-    ) -> anyhow::Result<()> {
-        let Some(_) = self.page_target(target_id) else {
-            return Ok(());
-        };
-        self.clear_devtools_emulation_policy_state_for_target(target_id, session_key);
-        let effective = self.effective_policy_for_target(target_id);
-        let locale = effective
-            .locale_override()
-            .map(str::to_owned)
-            .or_else(|| self.emulation_defaults().locale.clone());
-        let timezone = effective
-            .timezone_override()
-            .map(str::to_owned)
-            .or_else(|| self.emulation_defaults().timezone.clone());
-        let Some(page) = self.loaded_page_for_target_mut(target_id) else {
-            return Ok(());
-        };
-        let locale_result = page
-            .set_locale_override_async(locale.as_deref())
-            .await
-            .map_err(|error| anyhow::anyhow!("failed to restore detached session locale: {error}"));
-        let timezone_result = page
-            .set_timezone_override_async(timezone.as_deref())
-            .await
-            .map_err(|error| {
-                anyhow::anyhow!("failed to restore detached session timezone: {error}")
-            });
-        locale_result.and(timezone_result)
-    }
-
-    pub(crate) async fn reset_primary_page_session_target_state_async(
+    pub(crate) fn start_reset_primary_page_session_target_state(
         &mut self,
         target_id: &str,
         session_id: &str,
-    ) -> anyhow::Result<bool> {
+    ) -> (bool, Option<crate::conn::PendingDocumentPolicyBatch>) {
         let is_active = self.is_active_target(target_id);
         let Some(target) = self.page_target_mut(target_id) else {
-            return Ok(false);
+            return (false, None);
         };
         if !target.is_session(session_id) {
-            return Ok(false);
+            return (false, None);
         }
         self.reset_primary_session_target_state_fields_for_target(target_id);
 
@@ -448,70 +370,28 @@ impl BrowserContext {
             .timezone_override()
             .map(str::to_owned)
             .or_else(|| self.emulation_defaults().timezone.clone());
-        let surface_script = if is_active {
-            Some(self.generated_surface_override_script_for_active_target())
-        } else {
-            self.generated_surface_override_script_for_background_target(target_id)
+        let Some(document) = self.document_handle_for_target(target_id) else {
+            return (true, None);
         };
-        if let Some(page) = self.loaded_page_for_target_mut(target_id) {
-            let mut first_error = None;
-            if let Err(error) = page
-                .set_network_request_policy_async(
-                    &effective_headers,
-                    effective_policy.bypass_service_worker(),
-                    effective_policy.cache_disabled(),
-                    effective_policy.blocked_url_patterns(),
-                )
-                .await
-            {
-                first_error = Some(anyhow::anyhow!(
-                    "failed to clear page network request policy: {error}"
-                ));
-            }
-            if let Err(error) = page.set_network_offline_async(false).await {
-                first_error.get_or_insert_with(|| {
-                    anyhow::anyhow!("failed to clear page offline state: {error}")
-                });
-            }
-            if let Err(error) = page
-                .set_script_execution_disabled_async(script_execution_disabled)
-                .await
-            {
-                first_error.get_or_insert_with(|| {
-                    anyhow::anyhow!("failed to clear page script execution disabled state: {error}")
-                });
-            }
-            if let Err(error) = page
-                .set_locale_override_async(effective_locale.as_deref())
-                .await
-            {
-                first_error.get_or_insert_with(|| {
-                    anyhow::anyhow!("failed to restore page locale: {error}")
-                });
-            }
-            if let Err(error) = page
-                .set_timezone_override_async(effective_timezone.as_deref())
-                .await
-            {
-                first_error.get_or_insert_with(|| {
-                    anyhow::anyhow!("failed to restore page timezone: {error}")
-                });
-            }
-            if let Some(surface_script) = surface_script
-                && let Err(error) = page
-                    .run_page_surface_override_script_async(&surface_script)
-                    .await
-            {
-                first_error.get_or_insert_with(|| {
-                    anyhow::anyhow!("failed to restore page surface overrides: {error}")
-                });
-            }
-            if let Some(error) = first_error {
-                return Err(error);
-            }
-        }
-
-        Ok(true)
+        let pending = self.start_document_policy_batch_with_surface(
+            document,
+            vec![
+                crate::conn::DocumentPolicyUpdate::NetworkRequestPolicy {
+                    extra_headers: effective_headers,
+                    bypass_service_worker: effective_policy.bypass_service_worker(),
+                    cache_disabled: effective_policy.cache_disabled(),
+                    blocked_url_patterns: effective_policy.blocked_url_patterns().to_vec(),
+                },
+                crate::conn::DocumentPolicyUpdate::NetworkOffline(false),
+                crate::conn::DocumentPolicyUpdate::ScriptExecutionDisabled(
+                    script_execution_disabled,
+                ),
+                crate::conn::DocumentPolicyUpdate::LocaleOverride(effective_locale),
+                crate::conn::DocumentPolicyUpdate::TimezoneOverride(effective_timezone),
+            ],
+            is_active,
+        );
+        (true, Some(pending))
     }
 
     #[cfg(test)]
@@ -578,27 +458,6 @@ impl BrowserContext {
         )
     }
 
-    #[cfg(test)]
-    pub(crate) async fn select_first_background_target_async(&mut self) -> Option<String> {
-        let selected_target_id = self
-            .background_targets()
-            .find(|target| self.target_has_loaded_page(target.target_id()))
-            .map(|target| target.target_id().to_owned())
-            .or_else(|| {
-                self.background_targets()
-                    .next()
-                    .map(|target| target.target_id().to_owned())
-            })?;
-        self.select_background_target_async(selected_target_id)
-            .await
-    }
-
-    pub(crate) async fn select_last_background_target_async(&mut self) -> Option<String> {
-        let selected_target_id = self.last_selectable_background_target_id()?;
-        self.select_background_target_async(selected_target_id)
-            .await
-    }
-
     pub(crate) fn last_selectable_background_target_id(&self) -> Option<String> {
         self.background_targets()
             .rev()
@@ -611,52 +470,58 @@ impl BrowserContext {
             })
     }
 
-    async fn select_background_target_async(&mut self, target_id: String) -> Option<String> {
-        self.select_page_target_async(&target_id)
-            .await
-            .expect("applying selected target visibility should succeed")
-            .then_some(target_id)
+    pub(crate) fn start_select_web_contents(
+        &mut self,
+        selected: WebContentsHandle,
+    ) -> Result<PendingWebContentsSelection, String> {
+        let selected_has_dialog = self.web_contents_has_pending_javascript_dialog(selected)?;
+        let previous = self.selected_web_contents_handle();
+        if previous == Some(selected) {
+            return Ok(PendingWebContentsSelection {
+                admission_error: None,
+                surface_updates: Vec::new(),
+            });
+        }
+        let previous_has_dialog = previous
+            .map(|handle| self.web_contents_has_pending_javascript_dialog(handle))
+            .transpose()?
+            .unwrap_or(false);
+        self.select_registered_web_contents(selected)?;
+
+        let mut admission_error = None;
+        let mut surface_updates = Vec::new();
+        if !selected_has_dialog && !previous_has_dialog {
+            for (handle, foreground) in
+                std::iter::once((selected, true)).chain(previous.map(|handle| (handle, false)))
+            {
+                let Some(document) = self.document_handle_for_web_contents(handle)? else {
+                    continue;
+                };
+                match self.start_document_page_surface_update(document, foreground) {
+                    Ok(update) => surface_updates.push(update),
+                    Err(error) => {
+                        admission_error.get_or_insert(error);
+                    }
+                }
+            }
+        }
+        Ok(PendingWebContentsSelection {
+            admission_error,
+            surface_updates,
+        })
     }
 
-    pub(crate) async fn select_page_target_async(
+    pub(crate) fn finish_select_web_contents(
         &mut self,
-        target_id: &str,
-    ) -> anyhow::Result<bool> {
-        if self.is_active_target(target_id) {
-            return Ok(true);
+        completed: CompletedWebContentsSelection,
+    ) -> Result<(), String> {
+        let mut first_error = completed.admission_error;
+        for update in completed.surface_updates {
+            if let Err(error) = self.finish_document_policy_update(update) {
+                first_error.get_or_insert(error);
+            }
         }
-        if self.background_target(target_id).is_none() {
-            return Ok(false);
-        }
-        let synchronize_loaded_page = self
-            .page_targets
-            .active(self.physical.selected_web_contents_id())
-            .is_none_or(|host| !self.has_pending_javascript_dialog_for_target(host.target_id()))
-            && self.page_target(target_id).is_none_or(|host| {
-                !self.has_pending_javascript_dialog_for_target(host.target_id())
-            });
-        let previous_active_target_id = self.active_target_id_owned();
-        let previous_surface_script = if synchronize_loaded_page {
-            previous_active_target_id
-                .as_deref()
-                .and_then(|target_id| self.page_target(target_id))
-                .map(|host| self.generated_surface_override_script_for_background_state(host))
-        } else {
-            None
-        };
-        let selected = self.select_registered_page_target(target_id);
-        debug_assert!(selected, "existing page target must be selectable");
-        if synchronize_loaded_page {
-            self.apply_surface_overrides_to_loaded_page_async().await?;
-        }
-        if let (Some(previous_active_target_id), Some(script)) =
-            (previous_active_target_id, previous_surface_script)
-            && let Some(page) = self.loaded_page_for_target_mut(&previous_active_target_id)
-            && let Err(error) = page.run_page_surface_override_script_async(&script).await
-        {
-            tracing::warn!(target_id = previous_active_target_id, %error, "failed to update background page visibility");
-        }
-        Ok(true)
+        first_error.map_or(Ok(()), Err)
     }
 
     pub(crate) fn begin_active_target_initial_empty_document(&mut self, initial_url: String) {
@@ -1418,12 +1283,14 @@ mod tests {
         context.set_active_target_id("TID-opener");
         let opener = context.active_page_target().web_contents_id();
         context.stage_background_target("TID-popup".into(), None, "about:blank".into(), None, None);
-        context.remember_target_opener(
-            "TID-popup",
-            "TID-opener".into(),
-            "FRAME-opener".into(),
-            true,
-        );
+        let popup_handle = context.web_contents_handle_for_target("TID-popup").unwrap();
+        let opener_handle = context
+            .web_contents_handle_for_target("TID-opener")
+            .unwrap();
+        context
+            .set_web_contents_opener(popup_handle, Some(opener_handle), true)
+            .unwrap();
+        context.set_target_opener_frame_attribution("TID-popup", "FRAME-opener".into());
 
         assert!(context.rekey_active_target("TID-renamed"));
         context.stage_background_target(
@@ -1455,7 +1322,12 @@ mod tests {
     fn window_name_follows_web_contents_and_dies_with_its_owner() {
         let mut context = BrowserContext::new("BC-window-rekey".into());
         context.set_active_target_id("TID-window");
-        context.remember_target_window_name("report", "TID-window");
+        let handle = context
+            .web_contents_handle_for_target("TID-window")
+            .unwrap();
+        context
+            .set_web_contents_window_name(handle, Some("report".into()))
+            .unwrap();
         assert!(context.rekey_active_target("TID-renamed"));
         context.stage_background_target(
             "TID-window".into(),
@@ -1474,7 +1346,9 @@ mod tests {
             Some("TID-renamed")
         );
 
-        context.remember_target_window_name("renamed-report", "TID-renamed");
+        context
+            .set_web_contents_window_name(handle, Some("renamed-report".into()))
+            .unwrap();
         assert_eq!(context.target_id_for_window_name("report"), None);
         assert_eq!(
             context.target_id_for_window_name("renamed-report"),
@@ -1504,8 +1378,16 @@ mod tests {
         for id in ["TID-spaced", "TID-exact"] {
             context.stage_background_target(id.into(), None, "about:blank".into(), None, None);
         }
-        context.remember_target_window_name(" ReportWindow ", "TID-spaced");
-        context.remember_target_window_name("ReportWindow", "TID-exact");
+        let spaced = context
+            .web_contents_handle_for_target("TID-spaced")
+            .unwrap();
+        let exact = context.web_contents_handle_for_target("TID-exact").unwrap();
+        context
+            .set_web_contents_window_name(spaced, Some(" ReportWindow ".into()))
+            .unwrap();
+        context
+            .set_web_contents_window_name(exact, Some("ReportWindow".into()))
+            .unwrap();
         assert_eq!(
             context.target_id_for_window_name(" ReportWindow "),
             Some("TID-spaced")
@@ -1662,13 +1544,15 @@ mod tests {
             None,
         );
 
-        assert_eq!(
-            context
-                .select_background_target_async("TID-selected".to_owned())
-                .await
-                .as_deref(),
-            Some("TID-selected")
-        );
+        let handle = context
+            .web_contents_handle_for_target("TID-selected")
+            .unwrap();
+        let completed = context
+            .start_select_web_contents(handle)
+            .unwrap()
+            .wait()
+            .await;
+        context.finish_select_web_contents(completed).unwrap();
 
         assert_eq!(context.active_target_id(), Some("TID-selected"));
         assert!(
@@ -1876,12 +1760,15 @@ mod tests {
             None,
         );
 
-        assert!(
-            context
-                .select_page_target_async("TID-pending-bg")
-                .await
-                .expect("pending background target should remain selectable")
-        );
+        let handle = context
+            .web_contents_handle_for_target("TID-pending-bg")
+            .expect("pending background target should remain selectable");
+        let completed = context
+            .start_select_web_contents(handle)
+            .unwrap()
+            .wait()
+            .await;
+        context.finish_select_web_contents(completed).unwrap();
 
         assert_eq!(
             context.runtime_slot_diagnostics_for_target(context.active_target_id().unwrap())["loadedPageAbsenceReason"],
@@ -1944,9 +1831,17 @@ mod tests {
             .expect("second loaded background target should have an attachment");
 
         let selected = context
-            .select_first_background_target_async()
-            .await
+            .background_targets()
+            .find(|target| context.target_has_loaded_page(target.target_id()))
+            .map(|target| target.target_id().to_owned())
             .expect("loaded background target should be selectable");
+        let handle = context.web_contents_handle_for_target(&selected).unwrap();
+        let completed = context
+            .start_select_web_contents(handle)
+            .unwrap()
+            .wait()
+            .await;
+        context.finish_select_web_contents(completed).unwrap();
 
         assert_eq!(selected, "TID-first-loaded");
         assert_eq!(context.active_target_id(), Some("TID-first-loaded"));
@@ -2013,12 +1908,17 @@ mod tests {
             .and_then(|target| target.runtime_slot().current_renderer_attachment())
             .expect("background attachment");
 
-        assert!(
-            context
-                .select_page_target_async("TID-background-route")
-                .await
-                .expect("target selection should succeed")
-        );
+        let handle = context
+            .web_contents_handle_for_target("TID-background-route")
+            .unwrap();
+        let completed = context
+            .start_select_web_contents(handle)
+            .unwrap()
+            .wait()
+            .await;
+        context
+            .finish_select_web_contents(completed)
+            .expect("target selection should succeed");
 
         assert_eq!(
             context
@@ -2077,12 +1977,15 @@ mod tests {
             .runtime_slot
             .set_session_observation_cursor_at_counts_for_test(None, 4, 5);
 
-        assert!(
-            context
-                .select_page_target_async("TID-bg")
-                .await
-                .expect("target selection should not fail")
-        );
+        let handle = context.web_contents_handle_for_target("TID-bg").unwrap();
+        let completed = context
+            .start_select_web_contents(handle)
+            .unwrap()
+            .wait()
+            .await;
+        context
+            .finish_select_web_contents(completed)
+            .expect("target selection should not fail");
 
         assert_eq!(context.active_target_id(), Some("TID-bg"));
         assert!(

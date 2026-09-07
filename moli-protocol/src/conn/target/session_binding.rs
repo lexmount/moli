@@ -1,6 +1,6 @@
 #[cfg(test)]
 use crate::conn::BrowserContext;
-use crate::conn::CdpConnection;
+use crate::conn::{CdpConnection, DocumentPolicyUpdate};
 use crate::devtools_runtime::DevToolsTargetInfo;
 
 use super::{
@@ -152,12 +152,76 @@ impl CdpConnection {
             return Ok(());
         };
 
-        let Some(browser_context) = self.browser_context_by_id_mut(&browser_context_id) else {
+        let pending = {
+            let Some(browser_context) = self.browser_context_by_id_mut(&browser_context_id) else {
+                return Ok(());
+            };
+            let Some(target) = browser_context.page_target_mut(&target_id) else {
+                return Ok(());
+            };
+            let listener_session_id = session_key.wire_session_id().map(str::to_owned);
+            match &session_key {
+                moli_page_types::DevToolsSessionKey::Primary => {
+                    target.runtime_slot.disable_primary_network_events();
+                }
+                moli_page_types::DevToolsSessionKey::Attached(attached_session_id) => {
+                    target
+                        .runtime_slot
+                        .remove_attached_network_session(attached_session_id);
+                }
+            }
+            target
+                .runtime_slot
+                .remove_network_session_observation_cursor(listener_session_id.as_deref());
+            target
+                .runtime_slot
+                .remove_captured_response_body_visibility_for_session(
+                    listener_session_id.as_deref(),
+                );
+            if !target.runtime_slot.has_network_event_listeners() {
+                target.runtime_slot.clear_captured_response_bodies();
+                target.runtime_slot.clear_websocket_request_ids();
+            }
+            browser_context.clear_devtools_network_state_for_target(&target_id, &session_key);
+            let effective = browser_context.effective_policy_for_target(&target_id);
+            let headers =
+                browser_context.merged_extra_headers_for_target_policy(effective.extra_headers());
+            browser_context
+                .document_handle_for_target(&target_id)
+                .map(|document| {
+                    browser_context.start_document_policy_update(
+                        document,
+                        DocumentPolicyUpdate::NetworkRequestPolicy {
+                            extra_headers: headers,
+                            bypass_service_worker: effective.bypass_service_worker(),
+                            cache_disabled: effective.cache_disabled(),
+                            blocked_url_patterns: effective.blocked_url_patterns().to_vec(),
+                        },
+                    )
+                })
+                .transpose()
+                .map_err(anyhow::Error::msg)?
+        };
+        let Some(pending) = pending else {
             return Ok(());
         };
-        browser_context
-            .clear_devtools_network_session_policy_async(&target_id, &session_key)
-            .await
+        let completed = pending.wait().await;
+        let document = completed.document();
+        match self.finish_document_policy_update(completed) {
+            Ok(()) => Ok(()),
+            Err(error)
+                if error == "Document changed"
+                    && self
+                        .browser_context_by_id(&browser_context_id)
+                        .and_then(|context| context.document_handle_for_target(&target_id))
+                        != Some(document) =>
+            {
+                Ok(())
+            }
+            Err(error) => Err(anyhow::anyhow!(
+                "failed to restore detached session network request policy: {error}"
+            )),
+        }
     }
 
     pub(crate) async fn clear_devtools_emulation_session_policy_async(
@@ -173,11 +237,51 @@ impl CdpConnection {
             return Ok(());
         };
 
-        let policy_result = match self.browser_context_by_id_mut(&browser_context_id) {
-            Some(browser_context) => {
+        let pending_policy = match self.browser_context_by_id_mut(&browser_context_id) {
+            Some(browser_context) if browser_context.page_target(&target_id).is_some() => {
                 browser_context
-                    .clear_devtools_emulation_session_policy_async(&target_id, &session_key)
-                    .await
+                    .clear_devtools_emulation_policy_state_for_target(&target_id, &session_key);
+                let effective = browser_context.effective_policy_for_target(&target_id);
+                let locale = effective
+                    .locale_override()
+                    .map(str::to_owned)
+                    .or_else(|| browser_context.emulation_defaults().locale.clone());
+                let timezone = effective
+                    .timezone_override()
+                    .map(str::to_owned)
+                    .or_else(|| browser_context.emulation_defaults().timezone.clone());
+                browser_context
+                    .document_handle_for_target(&target_id)
+                    .map(|document| {
+                        browser_context.start_document_policy_batch(
+                            document,
+                            vec![
+                                DocumentPolicyUpdate::LocaleOverride(locale),
+                                DocumentPolicyUpdate::TimezoneOverride(timezone),
+                            ],
+                        )
+                    })
+            }
+            _ => None,
+        };
+        let policy_result = match pending_policy {
+            Some(pending) => {
+                let completed = pending.wait().await;
+                let document = completed.document();
+                match self.finish_document_policy_batch(completed) {
+                    Ok(()) => Ok(()),
+                    Err(_)
+                        if self
+                            .browser_context_by_id(&browser_context_id)
+                            .and_then(|context| context.document_handle_for_target(&target_id))
+                            != Some(document) =>
+                    {
+                        Ok(())
+                    }
+                    Err(error) => Err(anyhow::anyhow!(
+                        "failed to restore detached session document policy: {error}"
+                    )),
+                }
             }
             None => Ok(()),
         };
@@ -202,6 +306,39 @@ impl CdpConnection {
         }
         .await;
         policy_result.and(identity_result)
+    }
+
+    pub(crate) async fn reset_primary_page_session_target_state_async(
+        &mut self,
+        browser_context_id: &str,
+        target_id: &str,
+        session_id: &str,
+    ) -> anyhow::Result<bool> {
+        let (found, pending) = self
+            .browser_context_by_id_mut(browser_context_id)
+            .map(|context| {
+                context.start_reset_primary_page_session_target_state(target_id, session_id)
+            })
+            .unwrap_or((false, None));
+        let Some(pending) = pending else {
+            return Ok(found);
+        };
+        let completed = pending.wait().await;
+        let document = completed.document();
+        match self.finish_document_policy_batch(completed) {
+            Ok(()) => Ok(found),
+            Err(_)
+                if self
+                    .browser_context_by_id(browser_context_id)
+                    .and_then(|context| context.document_handle_for_target(target_id))
+                    != Some(document) =>
+            {
+                Ok(found)
+            }
+            Err(error) => Err(anyhow::anyhow!(
+                "failed to reset primary Page session document policy: {error}"
+            )),
+        }
     }
 
     pub(crate) fn is_browser_session_id(&self, session_id: Option<&str>) -> bool {

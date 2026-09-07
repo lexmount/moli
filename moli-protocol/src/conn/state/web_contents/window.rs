@@ -25,6 +25,16 @@ pub(crate) enum WindowSurfaceState {
 }
 
 impl WindowSurfaceState {
+    pub(crate) fn from_label(label: &str) -> Option<Self> {
+        match label {
+            "normal" => Some(Self::Normal),
+            "maximized" => Some(Self::Maximized),
+            "minimized" => Some(Self::Minimized),
+            "fullscreen" => Some(Self::Fullscreen),
+            _ => None,
+        }
+    }
+
     pub(crate) fn document_hidden(self) -> bool {
         matches!(self, Self::Minimized)
     }
@@ -73,5 +83,19 @@ impl WindowSurface {
         if let Some(y) = y {
             self.y = y;
         }
+    }
+
+    pub(in crate::conn) fn update(
+        &mut self,
+        state: Option<WindowSurfaceState>,
+        width: Option<u32>,
+        height: Option<u32>,
+        x: Option<i32>,
+        y: Option<i32>,
+    ) {
+        if let Some(state) = state {
+            self.state = state;
+        }
+        self.set_geometry(width, height, x, y);
     }
 }

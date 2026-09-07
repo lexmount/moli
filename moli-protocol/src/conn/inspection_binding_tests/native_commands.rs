@@ -55,15 +55,16 @@ async fn native_history_reset_completion_survives_selection_and_session_detach()
         panic!("history reset must execute on the Browser Document");
     };
     let completed = pending.wait().await;
-    assert!(
+    assert!({
+        let handle = ctx
+            .conn
+            .browser_web_contents_for_target("TID-native-background")
+            .unwrap();
         ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .select_page_target_async("TID-native-background")
+            .select_browser_web_contents_async(handle)
             .await
-            .unwrap()
-    );
+            .is_ok()
+    });
     let peer = ctx
         .conn
         .browser_context
@@ -119,15 +120,14 @@ async fn native_input_completion_keeps_its_document_after_selection_and_session_
         panic!("input must be admitted to the original Browser document");
     };
     let completed = pending.wait().await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .select_page_target_async("TID-native-background")
-            .await
-            .unwrap()
-    );
+    let handle = ctx
+        .conn
+        .browser_web_contents_for_target("TID-native-background")
+        .unwrap();
+    ctx.conn
+        .select_browser_web_contents_async(handle)
+        .await
+        .unwrap();
     ctx.process_async(
         json!({"id": 23, "method": "Target.detachFromTarget", "params": {
             "targetId": "TID-dom-inspection", "sessionId": "SID-native-original",
@@ -177,15 +177,14 @@ async fn native_diagnostics_completion_keeps_exact_documents_after_selection_and
         .wait()
         .await
         .unwrap();
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .select_page_target_async("TID-native-background")
-            .await
-            .unwrap()
-    );
+    let handle = ctx
+        .conn
+        .browser_web_contents_for_target("TID-native-background")
+        .unwrap();
+    ctx.conn
+        .select_browser_web_contents_async(handle)
+        .await
+        .unwrap();
     ctx.process_async(
         json!({"id": 31, "method": "Target.detachFromTarget", "params": {
             "targetId": "TID-dom-inspection", "sessionId": "SID-native-original",

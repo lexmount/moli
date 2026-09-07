@@ -90,7 +90,9 @@ pub(super) fn complete_network_resource_preparation(
     let owner_scope = completed.owner_scope.clone();
     let completion = match completed.completed {
         CompletedNetworkCommandWork::NetworkResourcePreparation(completion) => *completion,
-        CompletedNetworkCommandWork::Page { .. } | CompletedNetworkCommandWork::Resource(_) => {
+        CompletedNetworkCommandWork::DocumentPolicy(_)
+        | CompletedNetworkCommandWork::Page { .. }
+        | CompletedNetworkCommandWork::Resource(_) => {
             return invalid_completion_step();
         }
     };
@@ -131,7 +133,8 @@ pub(super) fn complete_network_resource_fetch(
     let owner_scope = completed.owner_scope.clone();
     let outcome = match completed.completed {
         CompletedNetworkCommandWork::Resource(outcome) => outcome,
-        CompletedNetworkCommandWork::Page { .. }
+        CompletedNetworkCommandWork::DocumentPolicy(_)
+        | CompletedNetworkCommandWork::Page { .. }
         | CompletedNetworkCommandWork::NetworkResourcePreparation(_) => {
             return invalid_completion_plan();
         }

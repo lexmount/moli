@@ -620,29 +620,46 @@ async fn page_with_installed_dialog_for_test(
     );
     owner.attach_active_session("SID-dialog-owner");
     let completion = RendererJavaScriptDialogCompletion::pending();
-    assert!(owner.install_javascript_dialog_for_target(
+    let document = owner.document_handle_for_target(TARGET).unwrap();
+    let key = owner
+        .install_document_javascript_dialog(
+            document,
+            RendererPendingJavaScriptDialog::new(
+                RendererJavaScriptDialogId::new(1),
+                RendererDocumentLifecycleIdentity {
+                    frame: source.frame,
+                    document: source.document,
+                    epoch: source.epoch,
+                },
+                RendererJavaScriptDialogSource::RootFrame,
+                "about:blank".into(),
+                "prompt".into(),
+                "owned dialog".into(),
+                "default".into(),
+                Some(completion.clone()),
+            ),
+        )
+        .unwrap();
+    let wrong_document = moli_core::browser::DocumentHandle::new(
+        moli_core::browser::WebContentsHandle::new(
+            document.web_contents().context(),
+            moli_core::browser::WebContentsId::allocate(),
+        ),
+        document.id(),
+    );
+    assert!(!owner.project_javascript_dialog_for_session(
         TARGET,
         &moli_page_types::DevToolsSessionKey::Primary,
-        crate::conn::TargetPageResidenceIdentity::new(
-            "BID-dialog-owner".into(),
-            Some("TID-dialog-owner".into()),
-            owner.target_document_id(TARGET).unwrap(),
-        ),
         "FRAME-dialog-owner".into(),
-        RendererPendingJavaScriptDialog::new(
-            RendererJavaScriptDialogId::new(1),
-            RendererDocumentLifecycleIdentity {
-                frame: source.frame,
-                document: source.document,
-                epoch: source.epoch,
-            },
-            RendererJavaScriptDialogSource::RootFrame,
-            "about:blank".into(),
-            "prompt".into(),
-            "owned dialog".into(),
-            "default".into(),
-            Some(completion.clone()),
-        ),
+        wrong_document,
+        key,
+    ));
+    assert!(owner.project_javascript_dialog_for_session(
+        TARGET,
+        &moli_page_types::DevToolsSessionKey::Primary,
+        "FRAME-dialog-owner".into(),
+        document,
+        key,
     ));
     (owner, completion)
 }
@@ -814,52 +831,111 @@ async fn dialog_disable_and_exact_detach_dismiss_only_their_browser_dialogs() {
         .lifecycle
         .snapshot()
         .unwrap();
-    assert!(owner.install_javascript_dialog_for_target(
+    let document_handle = owner.document_handle_for_target(TARGET).unwrap();
+    let key = owner
+        .install_document_javascript_dialog(
+            document_handle,
+            RendererPendingJavaScriptDialog::new(
+                RendererJavaScriptDialogId::new(2),
+                RendererDocumentLifecycleIdentity {
+                    frame: snapshot.frame,
+                    document: snapshot.document,
+                    epoch: snapshot.epoch,
+                },
+                RendererJavaScriptDialogSource::RootFrame,
+                "about:blank".into(),
+                "alert".into(),
+                "peer".into(),
+                String::new(),
+                Some(peer_completion.clone()),
+            ),
+        )
+        .unwrap();
+    assert!(owner.project_javascript_dialog_for_session(
         TARGET,
         &peer,
-        crate::conn::TargetPageResidenceIdentity::new(
-            "BID-dialog-owner".into(),
-            Some("TID-dialog-owner".into()),
-            document
-        ),
         "FRAME-dialog-owner".into(),
-        RendererPendingJavaScriptDialog::new(
-            RendererJavaScriptDialogId::new(2),
-            RendererDocumentLifecycleIdentity {
-                frame: snapshot.frame,
-                document: snapshot.document,
-                epoch: snapshot.epoch
-            },
-            RendererJavaScriptDialogSource::RootFrame,
-            "about:blank".into(),
-            "alert".into(),
-            "peer".into(),
-            String::new(),
-            Some(peer_completion.clone())
-        )
+        document_handle,
+        key,
     ));
     owner.disable_devtools_page_domain_for_target(TARGET, &DevToolsSessionKey::Primary);
     assert!(!primary_completion.finish(true, "late primary".into()));
     assert!(!primary_completion.wait().accepted);
-    assert!(owner.has_pending_javascript_dialog_for_target(TARGET));
+    assert!(
+        owner
+            .web_contents_has_pending_javascript_dialog(document_handle.web_contents())
+            .unwrap()
+    );
+    let (projected_document, key) = owner
+        .projected_javascript_dialog_for_session(TARGET, &peer)
+        .unwrap();
     assert_eq!(
         owner
-            .javascript_dialog_snapshot_for_target(TARGET, &peer)
+            .document_javascript_dialog_snapshot(projected_document, key)
             .unwrap()
             .message,
         "peer"
     );
     assert!(!owner.dispose_devtools_session_for_target(TARGET, "SID-wrong", &peer));
+    let (projected_document, key) = owner
+        .projected_javascript_dialog_for_session(TARGET, &peer)
+        .unwrap();
     assert!(
         owner
-            .javascript_dialog_snapshot_for_target(TARGET, &peer)
+            .document_javascript_dialog_snapshot(projected_document, key)
             .is_some()
     );
     assert!(owner.dispose_devtools_session_for_target(TARGET, "SID-dialog-peer", &peer));
     assert!(!peer_completion.finish(true, "late peer".into()));
     assert!(!peer_completion.wait().accepted);
-    assert!(!owner.has_pending_javascript_dialog_for_target(TARGET));
+    assert!(
+        !owner
+            .web_contents_has_pending_javascript_dialog(document_handle.web_contents())
+            .unwrap()
+    );
     assert_eq!(owner.target_document_id(TARGET), Some(document));
+}
+
+#[tokio::test]
+async fn document_policy_completion_rejects_replacement_document() {
+    let browser = Browser::new(BrowserConfig::default()).unwrap();
+    let first = browser
+        .fetch("data:text/html,<p>first policy owner</p>")
+        .await
+        .unwrap();
+    let mut owner = context_with_document(first);
+    let document = owner.document_handle_for_target(TARGET).unwrap();
+    let completed = owner
+        .start_document_policy_update(
+            document,
+            crate::conn::DocumentPolicyUpdate::CpuThrottlingRate(3.0),
+        )
+        .unwrap()
+        .wait()
+        .await;
+
+    let second = browser
+        .fetch("data:text/html,<p>replacement policy owner</p>")
+        .await
+        .unwrap();
+    let retired = owner
+        .replace_target_page_for_test(TARGET, Some(second))
+        .unwrap();
+    let replacement = owner.document_handle_for_target(TARGET).unwrap();
+    assert_ne!(replacement, document);
+    assert_eq!(
+        owner.finish_document_policy_update(completed),
+        Err("Document changed".to_owned())
+    );
+    assert_eq!(owner.document_handle_for_target(TARGET), Some(replacement));
+
+    retired.close_async().await.unwrap();
+    owner
+        .clear_target_page_for_test(TARGET)
+        .unwrap()
+        .close_async()
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -882,9 +958,18 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
         owner.selected_web_contents_id().unwrap(),
         owner.active_page_target().main_frame_slot_id(),
     );
-    owner.set_target_window_surface_state(TARGET, crate::conn::WindowSurfaceState::Fullscreen);
-    owner.set_target_window_surface_geometry(TARGET, Some(800), Some(600), Some(10), Some(20));
-    let window = owner.target_window_surface(TARGET).unwrap();
+    let web_contents = owner.web_contents_handle_for_target(TARGET).unwrap();
+    owner
+        .update_web_contents_window_surface(
+            web_contents,
+            Some(crate::conn::WindowSurfaceState::Fullscreen),
+            Some(800),
+            Some(600),
+            Some(10),
+            Some(20),
+        )
+        .unwrap();
+    let window = owner.web_contents_window_surface(web_contents).unwrap();
     owner.apply_target_emulation_policy_change(
         TARGET,
         crate::conn::EmulationPolicyChange::CpuThrottlingRate(4.0),
@@ -973,7 +1058,10 @@ async fn document_replacement_preserves_stable_page_engine_history_and_storage()
         stable_ids
     );
     assert_eq!(owner.target_document_id(TARGET), Some(reserved));
-    assert_eq!(owner.target_window_surface(TARGET).unwrap(), window);
+    assert_eq!(
+        owner.web_contents_window_surface(web_contents).unwrap(),
+        window
+    );
     assert_eq!(
         owner
             .target_emulation_policy(TARGET)

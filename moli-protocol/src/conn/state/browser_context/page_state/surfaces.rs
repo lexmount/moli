@@ -4,6 +4,7 @@ use crate::conn::state::PageSurface;
 use crate::conn::{BrowserContext, DocumentStartScript, EmulatedViewportSurface, PageAgentHost};
 #[cfg(test)]
 use moli_cookie_jar::{BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides};
+use moli_core::browser::WebContentsHandle;
 
 impl BrowserContext {
     #[cfg(test)]
@@ -259,19 +260,29 @@ impl BrowserContext {
     // Context default resolution stays in this residence until Commit 7;
     // source generation itself only reads the embedded Browser object.
     fn page_surface_for_state(&self, state: &PageAgentHost, foreground: bool) -> PageSurface {
-        self.web_contents_for_target(state.target_id())
-            .expect("live WebContents")
-            .page_surface(
-                foreground,
-                self.emulation_defaults()
-                    .network_conditions
-                    .or(self.global_network_conditions),
-                self.emulation_defaults()
-                    .geolocation
-                    .as_ref()
-                    .or(self.global_geolocation_override.as_ref()),
-                self.emulation_defaults().device_metrics.as_ref(),
-            )
+        self.page_surface_for_web_contents(
+            WebContentsHandle::new(self.browser_context_id(), state.web_contents_id()),
+            foreground,
+        )
+        .expect("live WebContents")
+    }
+
+    pub(in crate::conn::state::browser_context) fn page_surface_for_web_contents(
+        &self,
+        handle: WebContentsHandle,
+        foreground: bool,
+    ) -> Result<PageSurface, String> {
+        Ok(self.physical.web_contents(handle)?.page_surface(
+            foreground,
+            self.emulation_defaults()
+                .network_conditions
+                .or(self.global_network_conditions),
+            self.emulation_defaults()
+                .geolocation
+                .as_ref()
+                .or(self.global_geolocation_override.as_ref()),
+            self.emulation_defaults().device_metrics.as_ref(),
+        ))
     }
 
     pub(crate) fn generated_surface_override_script_for_active_target(&self) -> String {
@@ -305,38 +316,6 @@ impl BrowserContext {
             has_bidi_channel_argument: false,
             bidi_channel_handoffs: Vec::new(),
         }
-    }
-
-    pub(crate) async fn apply_background_target_surface_overrides_async(
-        &mut self,
-        target_id: &str,
-    ) -> anyhow::Result<bool> {
-        let Some(script) = self.generated_surface_override_script_for_background_target(target_id)
-        else {
-            return Ok(false);
-        };
-        let Some(page) = self.loaded_page_for_target_mut(target_id) else {
-            return Ok(false);
-        };
-        page.run_page_surface_override_script_async(&script)
-            .await
-            .map_err(|error| anyhow::anyhow!("failed to hide background page surface: {error}"))?;
-        Ok(true)
-    }
-
-    pub(crate) async fn apply_surface_overrides_to_loaded_page_async(
-        &mut self,
-    ) -> anyhow::Result<()> {
-        let script = self.generated_surface_override_script_for_active_target();
-        let Some(target_id) = self.active_target_id_owned() else {
-            return Ok(());
-        };
-        let Some(page) = self.loaded_page_for_target_mut(&target_id) else {
-            return Ok(());
-        };
-        page.run_page_surface_override_script_async(&script)
-            .await
-            .map_err(|error| anyhow::anyhow!("failed to apply page surface overrides: {error}"))
     }
 
     #[cfg(test)]
@@ -412,10 +391,19 @@ mod tests {
             "TID-background-window",
             crate::conn::EmulationPolicyChange::FocusEnabled(true),
         );
-        context.set_target_window_surface_state(
-            "TID-background-window",
-            WindowSurfaceState::Minimized,
-        );
+        let handle = context
+            .web_contents_handle_for_target("TID-background-window")
+            .unwrap();
+        context
+            .update_web_contents_window_surface(
+                handle,
+                Some(WindowSurfaceState::Minimized),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
         let id = context.selected_web_contents_id().unwrap();
         drop(
             context

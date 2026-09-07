@@ -52,19 +52,20 @@ pub(crate) use page_runtime::{
     CompletedCaptureDocumentScreencastFrame, CompletedCaptureDocumentSnapshot,
     CompletedChildFrameNavigation, CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
+    CompletedDocumentPolicyBatch, CompletedDocumentPolicyUpdate,
     CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
     CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
     CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
-    CompletedTopLevelSameDocumentNavigation, DocumentSnapshot, NetworkPolicyUpdateKind,
-    PageInputCommand, PagePolicyUpdateKind, PendingAppManifestLoadPreparation,
-    PendingAppManifestPublication, PendingCaptureDocumentImage,
+    CompletedTopLevelSameDocumentNavigation, DocumentPolicyUpdate,
+    DocumentRuntimePolicyReconciliation, DocumentSnapshot, PageInputCommand,
+    PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
     PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
     PendingChildFrameNavigation, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
-    PendingDocumentCookieOwnerSnapshot, PendingDocumentCspBypassUpdate,
-    PendingDocumentResourceTextSearch, PendingDocumentStorageKeySnapshot,
-    PendingNavigationHistoryReset, PendingNetworkResourceLoadPreparation,
-    PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
-    PendingTopLevelSameDocumentNavigation,
+    PendingDocumentCookieOwnerSnapshot, PendingDocumentCspBypassUpdate, PendingDocumentPolicyBatch,
+    PendingDocumentPolicyUpdate, PendingDocumentResourceTextSearch,
+    PendingDocumentStorageKeySnapshot, PendingNavigationHistoryReset,
+    PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
+    PendingTopLevelHistoryTraversal, PendingTopLevelSameDocumentNavigation,
 };
 pub(in crate::conn) mod page_slot;
 mod page_state;
@@ -863,22 +864,20 @@ impl BrowserContext {
             })
         });
         let mut diagnostics = target.owner_state.moli_memory_diagnostics();
+        let window_surface = self
+            .web_contents_window_surface(moli_core::browser::WebContentsHandle::new(
+                self.physical.id,
+                target.web_contents_id(),
+            ))
+            .expect("live WebContents");
         diagnostics["initialEmptyDocument"] = json!(initial);
-        diagnostics["windowSurfaceState"] = json!(
-            self.target_window_surface(target.target_id())
-                .expect("live WebContents")
-                .state
-                .label()
-        );
+        diagnostics["windowSurfaceState"] = json!(window_surface.state.label());
         diagnostics["targetCrashed"] = json!(self.target_is_crashed(target.target_id()));
         diagnostics["isDefault"] = json!(
             target.owner_state.is_default()
                 && navigation.is_default()
                 && !self.target_is_crashed(target.target_id())
-                && self
-                    .target_window_surface(target.target_id())
-                    .expect("live WebContents")
-                    == super::WindowSurface::default()
+                && window_surface == super::WindowSurface::default()
         );
         diagnostics
     }
@@ -1554,8 +1553,11 @@ impl BrowserContext {
             );
             debug_assert!(inserted, "new page target id must be unique");
         }
-        let selected = self.select_registered_page_target(&target_id);
-        debug_assert!(selected, "registered page target must be selectable");
+        let handle = self
+            .web_contents_handle_for_target(&target_id)
+            .expect("registered page target must have WebContents");
+        self.select_registered_web_contents(handle)
+            .expect("registered WebContents must remain selectable");
     }
 
     pub(crate) fn rekey_active_target(&mut self, target_id: impl Into<String>) -> bool {

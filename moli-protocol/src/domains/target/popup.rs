@@ -192,15 +192,21 @@ pub(crate) async fn create_popup_target_from_renderer_output_background_events_a
             session_storage_store,
             initial_empty_document_storage_key,
         );
+        let popup_handle = browser_context
+            .web_contents_handle_for_target(&target_id)
+            .expect("staged popup must own WebContents");
         if let Some(opener) = opener {
-            browser_context.remember_target_opener(
-                &target_id,
-                opener.target_id,
-                opener.frame_id,
-                can_access_opener,
-            );
+            let opener_handle = browser_context.web_contents_handle_for_target(&opener.target_id);
+            browser_context
+                .set_web_contents_opener(popup_handle, opener_handle, can_access_opener)
+                .expect("staged popup and resolved opener must remain live");
+            browser_context.set_target_opener_frame_attribution(&target_id, opener.frame_id);
         }
-        browser_context.remember_target_window_name(&target_name, &target_id);
+        let window_name =
+            BrowserContext::reusable_window_open_target_name(&target_name).map(str::to_owned);
+        browser_context
+            .set_web_contents_window_name(popup_handle, window_name)
+            .expect("staged popup must remain live");
         browser_context.remember_target_popup_id(popup_id, &target_id);
     }
 

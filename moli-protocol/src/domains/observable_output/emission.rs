@@ -868,15 +868,14 @@ mod tests {
             observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
         let mut old_active_owner_prepared = old_active_prepared.clone();
 
-        assert!(
-            ctx.conn
-                .browser_context
-                .as_mut()
-                .expect("browser context")
-                .select_page_target_async("TID-activated")
-                .await
-                .expect("target activation should succeed")
-        );
+        let handle = ctx
+            .conn
+            .browser_web_contents_for_target("TID-activated")
+            .expect("target WebContents");
+        ctx.conn
+            .select_browser_web_contents_async(handle)
+            .await
+            .expect("target activation should succeed");
 
         {
             let bc = ctx.conn.browser_context.as_ref().expect("browser context");

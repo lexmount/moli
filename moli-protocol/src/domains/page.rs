@@ -83,14 +83,13 @@ pub(in crate::domains) async fn dispose_primary_session_target_state_async(
         session_key: moli_page_types::DevToolsSessionKey::Primary,
     } = plan.target()
     {
-        let reset_result = match conn.browser_context_by_id_mut(browser_context_id) {
-            Some(browser_context) => {
-                browser_context
-                    .reset_primary_page_session_target_state_async(target_id, session_id)
-                    .await
-            }
-            None => Ok(false),
-        };
+        let reset_result = conn
+            .reset_primary_page_session_target_state_async(
+                browser_context_id,
+                target_id,
+                session_id,
+            )
+            .await;
         reset_result.and_then(|found| {
             anyhow::ensure!(
                 found,
@@ -1578,23 +1577,10 @@ fn start_set_javascript_dialog_handler_enabled(
     enabled: bool,
 ) -> Result<(), String> {
     let owner = CommandOwnerScope::capture(conn, session_id);
-    let route = conn
-        .loaded_document_owner_identity_for_owner(&owner)
-        .or_else(|| {
-            let context = conn.browser_context.as_ref()?;
-            let target_id = context.active_target_id()?;
-            context
-                .target_has_loaded_page(target_id)
-                .then(|| (context.id.clone(), target_id.to_owned()))
-        });
-    if let Some((context_id, target_id)) = route
-        && let Some(context) = conn.browser_context_by_id(&context_id)
-    {
-        return context
-            .start_set_javascript_dialog_handler_enabled_for_target(&target_id, enabled)
-            .map(|_| ());
-    }
-    Ok(())
+    let Ok(document) = conn.loaded_browser_document_for_owner(&owner) else {
+        return Ok(());
+    };
+    conn.start_set_document_javascript_dialog_handler_enabled(document, enabled)
 }
 
 fn set_lifecycle_events_enabled_command(

@@ -14,17 +14,22 @@ fn window_and_crash_state_outlive_the_devtools_projection() {
     let mut context = BrowserContext::new("BID-window".into());
     context.set_active_target_id("TID-window");
     context.attach_active_session("SID-window");
-    context.set_target_window_surface_state("TID-window", WindowSurfaceState::Minimized);
-    context.set_target_window_surface_geometry(
-        "TID-window",
-        Some(800),
-        Some(600),
-        Some(-10),
-        Some(20),
-    );
+    let handle = context
+        .web_contents_handle_for_target("TID-window")
+        .unwrap();
+    context
+        .update_web_contents_window_surface(
+            handle,
+            Some(WindowSurfaceState::Minimized),
+            Some(800),
+            Some(600),
+            Some(-10),
+            Some(20),
+        )
+        .unwrap();
     context.set_target_crash_state("TID-window", true);
     let id = context.selected_web_contents_id().unwrap();
-    let surface = context.target_window_surface("TID-window").unwrap();
+    let surface = context.web_contents_window_surface(handle).unwrap();
     let opener = WebContentsId::allocate();
     let window = &mut context.physical.web_contents.get_mut(&id).unwrap().window;
     window.name = Some("report".into());
@@ -36,7 +41,7 @@ fn window_and_crash_state_outlive_the_devtools_projection() {
     target.opener_frame_id = Some("FRAME-opener".into());
     assert_eq!(target.detach_session().as_deref(), Some("SID-window"));
     assert!(context.target_is_crashed("TID-window"));
-    assert_eq!(context.target_window_surface("TID-window"), Some(surface));
+    assert_eq!(context.web_contents_window_surface(handle), Ok(surface));
 
     drop(context.page_targets.remove("TID-window").unwrap());
     assert_eq!(context.selected_web_contents_id(), Some(id));

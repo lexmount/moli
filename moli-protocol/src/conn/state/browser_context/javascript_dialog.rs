@@ -1,4 +1,5 @@
 use super::BrowserContext;
+use moli_core::browser::{DocumentHandle, WebContentsHandle};
 use moli_core::page::{
     RendererDocumentLifecycleIdentity, RendererJavaScriptDialogId, RendererJavaScriptDialogSource,
     RendererPendingJavaScriptDialog,
@@ -8,10 +9,12 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
+use crate::conn::state::TargetPageProtocolAttachmentIdentity;
+#[cfg(test)]
+use crate::conn::state::TargetPageResidenceIdentity;
 use crate::conn::state::web_contents::{
     JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogKey, JavaScriptDialogSnapshot,
 };
-use crate::conn::state::{TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity};
 
 /// Stable lifetime of one target Page's JavaScript-dialog output.
 ///
@@ -226,15 +229,26 @@ impl Drop for TargetPreparedJavaScriptDialog {
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct TargetJavaScriptDialog {
     source_frame_id: String,
+    document: DocumentHandle,
     pub(in crate::conn::state) key: JavaScriptDialogKey,
 }
 
 impl TargetJavaScriptDialog {
-    pub(crate) fn new(source_frame_id: String, key: JavaScriptDialogKey) -> Self {
+    pub(crate) fn new(
+        source_frame_id: String,
+        document: DocumentHandle,
+        key: JavaScriptDialogKey,
+    ) -> Self {
+        debug_assert_eq!(document.id(), key.document);
         Self {
             source_frame_id,
+            document,
             key,
         }
+    }
+
+    pub(crate) fn into_parts(self) -> (String, DocumentHandle, JavaScriptDialogKey) {
+        (self.source_frame_id, self.document, self.key)
     }
 
     #[cfg(test)]
@@ -286,26 +300,55 @@ impl TargetJavaScriptDialogState {
     }
 }
 
-// In-place AgentHost -> Browser bridge, replaced by typed commands in Commit 22.
-// Session authority stays here; WebContents only receives exact neutral keys.
 impl BrowserContext {
-    pub(crate) fn install_javascript_dialog_for_target(
+    fn validate_javascript_dialog_document(&self, document: DocumentHandle) -> Result<(), String> {
+        match self.document_handle_for_web_contents(document.web_contents())? {
+            Some(current) if current == document => Ok(()),
+            Some(_) => Err("Document changed".into()),
+            None => Err("NoDocumentLoaded".into()),
+        }
+    }
+
+    pub(crate) fn web_contents_has_pending_javascript_dialog(
+        &self,
+        handle: WebContentsHandle,
+    ) -> Result<bool, String> {
+        Ok(!self
+            .physical
+            .web_contents(handle)?
+            .javascript_dialogs
+            .is_empty())
+    }
+
+    pub(crate) fn install_document_javascript_dialog(
+        &mut self,
+        document: DocumentHandle,
+        dialog: RendererPendingJavaScriptDialog,
+    ) -> Result<JavaScriptDialogKey, String> {
+        if let Err(error) = self.validate_javascript_dialog_document(document) {
+            let _ = dialog.finish(false, String::new());
+            return Err(error);
+        }
+        Ok(self
+            .physical
+            .web_contents_mut(document.web_contents())?
+            .javascript_dialogs
+            .install(document.id(), dialog))
+    }
+
+    pub(crate) fn project_javascript_dialog_for_session(
         &mut self,
         target_id: &str,
         session: &moli_page_types::DevToolsSessionKey,
-        page_owner: TargetPageResidenceIdentity,
         source_frame_id: String,
-        dialog: RendererPendingJavaScriptDialog,
+        document: DocumentHandle,
+        key: JavaScriptDialogKey,
     ) -> bool {
-        if self.target_document_id(target_id) != Some(page_owner.document_id()) {
-            let _ = dialog.finish(false, String::new());
+        if self.document_handle_for_target(target_id) != Some(document)
+            || key.document != document.id()
+        {
             return false;
         }
-        let key = self
-            .web_contents_for_target_mut(target_id)
-            .expect("resolved WebContents must remain live")
-            .javascript_dialogs
-            .install(page_owner.document_id(), dialog);
         self.page_targets
             .get_mut(target_id)
             .expect("resolved target projection must remain live")
@@ -313,15 +356,15 @@ impl BrowserContext {
             .ensure_session(session)
             .page_session_state
             .javascript_dialog_state
-            .push(TargetJavaScriptDialog::new(source_frame_id, key));
+            .push(TargetJavaScriptDialog::new(source_frame_id, document, key));
         true
     }
 
-    fn javascript_dialog_key_for_target(
+    pub(crate) fn projected_javascript_dialog_for_session(
         &self,
         target_id: &str,
         session: &moli_page_types::DevToolsSessionKey,
-    ) -> Option<JavaScriptDialogKey> {
+    ) -> Option<(DocumentHandle, JavaScriptDialogKey)> {
         let dialog = self
             .page_targets
             .get(target_id)
@@ -331,91 +374,104 @@ impl BrowserContext {
             .page_session_state
             .javascript_dialog_state
             .peek_next()?;
-        (Some(dialog.key.document) == self.target_document_id(target_id)).then_some(dialog.key)
+        (self.document_handle_for_target(target_id) == Some(dialog.document)
+            && self
+                .validate_javascript_dialog_document(dialog.document)
+                .is_ok())
+        .then_some((dialog.document, dialog.key))
     }
 
-    pub(crate) fn javascript_dialog_snapshot_for_target(
+    pub(crate) fn document_javascript_dialog_snapshot(
         &self,
-        target_id: &str,
-        session: &moli_page_types::DevToolsSessionKey,
+        document: DocumentHandle,
+        key: JavaScriptDialogKey,
     ) -> Option<JavaScriptDialogSnapshot> {
-        let key = self.javascript_dialog_key_for_target(target_id, session)?;
-        self.web_contents_for_target(target_id)
-            .expect("resolved WebContents must remain live")
+        self.validate_javascript_dialog_document(document).ok()?;
+        self.physical
+            .web_contents(document.web_contents())
+            .ok()?
             .javascript_dialogs
             .snapshot(key)
     }
 
-    pub(crate) fn set_javascript_dialog_prompt_text_for_target(
+    pub(crate) fn set_document_javascript_dialog_prompt_text(
         &mut self,
-        target_id: &str,
-        session: &moli_page_types::DevToolsSessionKey,
+        document: DocumentHandle,
+        key: JavaScriptDialogKey,
         prompt_text: String,
     ) -> Result<(), JavaScriptDialogError> {
-        let key = self
-            .javascript_dialog_key_for_target(target_id, session)
-            .ok_or(JavaScriptDialogError::NotFound)?;
-        self.web_contents_for_target_mut(target_id)
-            .expect("resolved WebContents must remain live")
+        self.validate_javascript_dialog_document(document)
+            .map_err(|_| JavaScriptDialogError::NotFound)?;
+        self.physical
+            .web_contents_mut(document.web_contents())
+            .map_err(|_| JavaScriptDialogError::NotFound)?
             .javascript_dialogs
             .set_prompt_text(key, prompt_text)
     }
 
-    pub(crate) fn handle_javascript_dialog_for_target(
+    pub(crate) fn finish_document_javascript_dialog(
         &mut self,
-        target_id: &str,
-        session: &moli_page_types::DevToolsSessionKey,
+        document: DocumentHandle,
+        key: JavaScriptDialogKey,
         accepted: bool,
         prompt_text: Option<String>,
-    ) -> Option<(String, JavaScriptDialogClosed)> {
-        let Some(key) = self.javascript_dialog_key_for_target(target_id, session) else {
-            self.dismiss_devtools_javascript_dialogs_for_target(target_id, session);
-            return None;
-        };
-        let projection = self
-            .page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection must remain live")
-            .devtools_sessions
-            .ensure_session(session)
-            .page_session_state
-            .javascript_dialog_state
-            .pop_next()?;
-        let outcome = self
-            .web_contents_for_target_mut(target_id)
-            .expect("resolved WebContents must remain live")
+    ) -> Option<JavaScriptDialogClosed> {
+        self.validate_javascript_dialog_document(document).ok()?;
+        self.physical
+            .web_contents_mut(document.web_contents())
+            .ok()?
             .javascript_dialogs
-            .finish(key, accepted, prompt_text)?;
-        Some((projection.source_frame_id, outcome))
+            .finish(key, accepted, prompt_text)
     }
 
-    pub(crate) fn dismiss_devtools_javascript_dialogs_for_target(
+    pub(crate) fn dismiss_document_javascript_dialog(
+        &mut self,
+        document: DocumentHandle,
+        key: JavaScriptDialogKey,
+    ) {
+        if self.validate_javascript_dialog_document(document).is_ok()
+            && let Ok(contents) = self.physical.web_contents_mut(document.web_contents())
+        {
+            contents.javascript_dialogs.dismiss(key);
+        }
+    }
+
+    pub(crate) fn pop_projected_javascript_dialog_for_session(
         &mut self,
         target_id: &str,
         session: &moli_page_types::DevToolsSessionKey,
-    ) {
-        let projections = self
-            .page_targets
+    ) -> Option<TargetJavaScriptDialog> {
+        self.page_targets
             .get_mut(target_id)
             .expect("resolved target projection must remain live")
             .devtools_sessions
             .ensure_session(session)
             .page_session_state
             .javascript_dialog_state
-            .take_pending();
-        self.dismiss_javascript_dialog_projections_for_target(target_id, projections);
+            .pop_next()
     }
 
-    pub(in crate::conn::state) fn dismiss_javascript_dialog_projections_for_target(
+    pub(crate) fn take_projected_javascript_dialogs_for_session(
         &mut self,
         target_id: &str,
+        session: &moli_page_types::DevToolsSessionKey,
+    ) -> Vec<TargetJavaScriptDialog> {
+        self.page_targets
+            .get_mut(target_id)
+            .expect("resolved target projection must remain live")
+            .devtools_sessions
+            .ensure_session(session)
+            .page_session_state
+            .javascript_dialog_state
+            .take_pending()
+    }
+
+    pub(in crate::conn) fn dismiss_projected_javascript_dialogs(
+        &mut self,
         projections: Vec<TargetJavaScriptDialog>,
     ) {
         for projection in projections {
-            self.web_contents_for_target_mut(target_id)
-                .expect("resolved WebContents must remain live")
-                .javascript_dialogs
-                .dismiss(projection.key);
+            self.dismiss_document_javascript_dialog(projection.document, projection.key);
         }
     }
 }

@@ -25,11 +25,13 @@ pub(crate) use document_commands::{
 mod document_queries;
 mod emulation;
 mod input;
-pub(crate) use emulation::PagePolicyUpdateKind;
+pub(crate) use emulation::{
+    CompletedDocumentPolicyBatch, CompletedDocumentPolicyUpdate, DocumentPolicyUpdate,
+    DocumentRuntimePolicyReconciliation, PendingDocumentPolicyBatch, PendingDocumentPolicyUpdate,
+};
 mod network_commands;
 mod resource_commands;
 pub(crate) use input::PageInputCommand;
-pub(crate) use network_commands::NetworkPolicyUpdateKind;
 pub(crate) use resource_commands::BrowserAppManifestLoadPreparation;
 
 impl BrowserContext {
@@ -125,94 +127,6 @@ impl BrowserContext {
             .ok_or("NoDocumentLoaded")?
             .finish_page_diagnostics_snapshot(completion)
             .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn start_target_service_worker_bypass_refresh(
-        &mut self,
-        target_id: &str,
-    ) -> Result<Option<PendingPageCommand>, String> {
-        let Some(contents) = self.web_contents_for_target_mut(target_id) else {
-            return Ok(None);
-        };
-        let Some(document) = contents.main_frame.current_document.as_mut() else {
-            return Ok(None);
-        };
-        document
-            .page
-            .start_set_bypass_service_worker(contents.network_request_policy.bypass_service_worker)
-            .map(Some)
-            .map_err(|error| format!("failed to update page service worker bypass: {error}"))
-    }
-
-    pub(crate) fn start_target_blocked_urls_refresh(
-        &mut self,
-        target_id: &str,
-    ) -> Result<Option<PendingPageCommand>, String> {
-        let Some(contents) = self.web_contents_for_target_mut(target_id) else {
-            return Ok(None);
-        };
-        let Some(document) = contents.main_frame.current_document.as_mut() else {
-            return Ok(None);
-        };
-        document
-            .page
-            .start_set_blocked_url_patterns(&contents.network_request_policy.blocked_url_patterns)
-            .map(Some)
-            .map_err(|error| format!("failed to update page blocked URLs: {error}"))
-    }
-
-    pub(crate) fn start_target_extra_headers_refresh(
-        &mut self,
-        target_id: &str,
-    ) -> Result<Option<PendingPageCommand>, String> {
-        let headers = self.effective_extra_headers_for_target(target_id);
-        let Some(page) = self.loaded_page_for_target_mut(target_id) else {
-            return Ok(None);
-        };
-        page.start_set_extra_http_headers(&headers)
-            .map(Some)
-            .map_err(|error| format!("failed to update page extra HTTP headers: {error}"))
-    }
-
-    pub(crate) fn start_target_network_request_policy_refresh(
-        &mut self,
-        target_id: &str,
-    ) -> Result<Option<PendingPageCommand>, String> {
-        let headers = self.effective_extra_headers_for_target(target_id);
-        let Some(contents) = self.web_contents_for_target_mut(target_id) else {
-            return Ok(None);
-        };
-        let Some(document) = contents.main_frame.current_document.as_mut() else {
-            return Ok(None);
-        };
-        let policy = &contents.network_request_policy;
-        document
-            .page
-            .start_set_network_request_policy(
-                &headers,
-                policy.bypass_service_worker,
-                policy.cache_disabled,
-                &policy.blocked_url_patterns,
-            )
-            .map(Some)
-            .map_err(|error| format!("failed to replay page network request policy: {error}"))
-    }
-
-    pub(crate) fn start_target_network_offline_refresh(
-        &mut self,
-        target_id: &str,
-    ) -> Result<Option<PendingPageCommand>, String> {
-        let Some(contents) = self.web_contents_for_target_mut(target_id) else {
-            return Ok(None);
-        };
-        let Some(document) = contents.main_frame.current_document.as_mut() else {
-            return Ok(None);
-        };
-        document
-            .page
-            .start_set_network_offline(contents.network_offline)
-            .map(Some)
-            .map_err(|error| format!("set emulated network conditions failed: {error}"))
     }
 
     #[cfg(test)]

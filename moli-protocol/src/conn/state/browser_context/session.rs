@@ -72,6 +72,16 @@ impl PageAgentHost {
 }
 
 impl BrowserContext {
+    fn dismiss_javascript_dialog_projection_for_session(
+        &mut self,
+        target_id: &str,
+        session_key: &moli_page_types::DevToolsSessionKey,
+    ) {
+        let projections =
+            self.take_projected_javascript_dialogs_for_session(target_id, session_key);
+        self.dismiss_projected_javascript_dialogs(projections);
+    }
+
     pub(crate) fn bypass_content_security_policy_for_target(&self, target_id: &str) -> bool {
         self.web_contents_for_target(target_id)
             .expect("resolved WebContents must remain live")
@@ -112,7 +122,7 @@ impl BrowserContext {
         target_id: &str,
         session_key: &moli_page_types::DevToolsSessionKey,
     ) {
-        self.dismiss_devtools_javascript_dialogs_for_target(target_id, session_key);
+        self.dismiss_javascript_dialog_projection_for_session(target_id, session_key);
         let state = &mut self
             .page_targets
             .get_mut(target_id)
@@ -145,13 +155,11 @@ impl BrowserContext {
         let Some(mut removed) = removed else {
             return false;
         };
-        self.dismiss_javascript_dialog_projections_for_target(
-            target_id,
-            removed
-                .page_session_state
-                .javascript_dialog_state
-                .take_pending(),
-        );
+        let projections = removed
+            .page_session_state
+            .javascript_dialog_state
+            .take_pending();
+        self.dismiss_projected_javascript_dialogs(projections);
         self.install_effective_content_security_policy_for_target(target_id);
         true
     }
@@ -490,14 +498,6 @@ impl BrowserContext {
         self.install_effective_browser_identity_for_target(target_id);
         self.install_effective_locale_for_target(target_id);
         self.install_effective_timezone_for_target(target_id);
-    }
-
-    pub(crate) fn has_pending_javascript_dialog_for_target(&self, target_id: &str) -> bool {
-        !self
-            .web_contents_for_target(target_id)
-            .expect("resolved WebContents must remain live")
-            .javascript_dialogs
-            .is_empty()
     }
 
     pub(crate) fn has_non_default_session_state_for_target(&self, target_id: &str) -> bool {

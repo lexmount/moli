@@ -19,28 +19,33 @@ use super::{
     CompletedCaptureDocumentSnapshot, CompletedChildFrameNavigation,
     CompletedChildFrameTreeSnapshot, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
+    CompletedDocumentPolicyBatch, CompletedDocumentPolicyUpdate,
     CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
     CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
     CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
-    CompletedTopLevelSameDocumentNavigation, DocumentSnapshot, PendingAppManifestLoadPreparation,
+    CompletedTopLevelSameDocumentNavigation, DocumentPolicyUpdate,
+    DocumentRuntimePolicyReconciliation, DocumentSnapshot, PendingAppManifestLoadPreparation,
     PendingAppManifestPublication, PendingCaptureDocumentImage,
     PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
     PendingChildFrameNavigation, PendingChildFrameTreeSnapshot, PendingDocumentBlobRead,
-    PendingDocumentCookieOwnerSnapshot, PendingDocumentCspBypassUpdate,
-    PendingDocumentResourceTextSearch, PendingDocumentStorageKeySnapshot,
-    PendingNavigationHistoryReset, PendingNetworkResourceLoadPreparation,
-    PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
-    PendingTopLevelSameDocumentNavigation,
+    PendingDocumentCookieOwnerSnapshot, PendingDocumentCspBypassUpdate, PendingDocumentPolicyBatch,
+    PendingDocumentPolicyUpdate, PendingDocumentResourceTextSearch,
+    PendingDocumentStorageKeySnapshot, PendingNavigationHistoryReset,
+    PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
+    PendingTopLevelHistoryTraversal, PendingTopLevelSameDocumentNavigation,
 };
 use crate::conn::state::BrowserContext;
 
 impl CdpConnection {
-    fn browser_context_by_browser_id(&self, context: BrowserContextId) -> Option<&BrowserContext> {
+    pub(super) fn browser_context_by_browser_id(
+        &self,
+        context: BrowserContextId,
+    ) -> Option<&BrowserContext> {
         self.browser_contexts()
             .find(|candidate| candidate.browser_context_id() == context)
     }
 
-    fn browser_context_by_browser_id_mut(
+    pub(super) fn browser_context_by_browser_id_mut(
         &mut self,
         context: BrowserContextId,
     ) -> Option<&mut BrowserContext> {
@@ -82,6 +87,58 @@ impl CdpConnection {
         self.browser_context_by_browser_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_set_document_content(document, frame_id, html)
+    }
+
+    pub(crate) fn start_set_document_javascript_dialog_handler_enabled(
+        &self,
+        document: DocumentHandle,
+        enabled: bool,
+    ) -> Result<(), String> {
+        self.browser_context_by_browser_id(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_javascript_dialog_handler_enabled(document, enabled)
+            .map(drop)
+    }
+
+    pub(crate) fn start_document_policy_update(
+        &mut self,
+        document: DocumentHandle,
+        update: DocumentPolicyUpdate,
+    ) -> Result<PendingDocumentPolicyUpdate, String> {
+        self.browser_context_by_browser_id_mut(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_policy_update(document, update)
+    }
+
+    pub(crate) fn start_document_runtime_policy_reconciliation(
+        &mut self,
+        document: DocumentHandle,
+        policy: DocumentRuntimePolicyReconciliation,
+    ) -> Result<PendingDocumentPolicyBatch, String> {
+        Ok(self
+            .browser_context_by_browser_id_mut(document.web_contents().context())
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .start_document_runtime_policy_reconciliation(document, policy))
+    }
+
+    pub(crate) fn finish_document_policy_update(
+        &mut self,
+        completed: CompletedDocumentPolicyUpdate,
+    ) -> Result<(), String> {
+        let context = completed.document().web_contents().context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_document_policy_update(completed)
+    }
+
+    pub(crate) fn finish_document_policy_batch(
+        &mut self,
+        completed: CompletedDocumentPolicyBatch,
+    ) -> Result<(), String> {
+        let context = completed.context();
+        self.browser_context_by_browser_id_mut(context)
+            .ok_or_else(|| "NoDocumentLoaded".to_owned())?
+            .finish_document_policy_batch(completed)
     }
 
     pub(crate) fn finish_set_document_content(

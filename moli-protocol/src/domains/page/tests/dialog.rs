@@ -133,15 +133,11 @@ async fn pending_javascript_dialogs_are_preserved_per_background_target() {
             crate::conn::TargetPageSlot::empty_for_test_fixture(),
         );
     ctx.conn.commit_declared_session_fixtures_for_test();
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .select_page_target_async("TID-B")
-            .await
-            .unwrap()
-    );
+    let handle = ctx.conn.browser_web_contents_for_target("TID-B").unwrap();
+    ctx.conn
+        .select_browser_web_contents_async(handle)
+        .await
+        .unwrap();
     assert!(
         ctx.conn
             .javascript_dialog_snapshot_for_owner(&crate::conn::CommandOwnerScope::for_session(
@@ -156,15 +152,11 @@ async fn pending_javascript_dialogs_are_preserved_per_background_target() {
     );
 
     for (target, session, message) in [("TID-A", "SID-A", "a"), ("TID-B", "SID-B", "b")] {
-        assert!(
-            ctx.conn
-                .browser_context
-                .as_mut()
-                .unwrap()
-                .select_page_target_async(target)
-                .await
-                .unwrap()
-        );
+        let handle = ctx.conn.browser_web_contents_for_target(target).unwrap();
+        ctx.conn
+            .select_browser_web_contents_async(handle)
+            .await
+            .unwrap();
         let dialog = ctx
             .conn
             .javascript_dialog_snapshot_for_owner(&crate::conn::CommandOwnerScope::for_session(
