@@ -1333,7 +1333,10 @@ fn reused_devtools_ids_do_not_reuse_browser_object_identities() {
     context.set_active_target_id("TID-reused");
     let first_web_contents = context.active_page_target().web_contents_id();
     let first_main_frame_slot = context.active_page_target().main_frame_slot_id();
-    drop(context.take_page_target_for_close("TID-reused"));
+    let first_handle = context
+        .web_contents_handle_for_target("TID-reused")
+        .unwrap();
+    drop(context.begin_web_contents_close(first_handle));
 
     context.set_active_target_id("TID-reused");
     assert_ne!(
@@ -1364,7 +1367,8 @@ fn navigation_lifetime_survives_devtools_target_rekey_but_not_recreation() {
     assert!(!cancellation.is_cancelled());
     assert!(context.accepts_document_body_completion_event(&navigation));
 
-    drop(context.take_page_target_for_close("TID-after"));
+    let handle = context.web_contents_handle_for_target("TID-after").unwrap();
+    drop(context.begin_web_contents_close(handle));
     context.set_active_target_id("TID-after");
     let replacement = context
         .start_document_navigation_for_active_target("LOADER-reused".to_owned())

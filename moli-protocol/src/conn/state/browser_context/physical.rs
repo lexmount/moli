@@ -181,8 +181,16 @@ impl BrowserContext {
         true
     }
 
-    pub(super) fn close_web_contents(&mut self, id: WebContentsId) -> Option<ClosingWebContents> {
-        let removed = self.web_contents.shift_remove(&id)?;
+    pub(super) fn close_web_contents(
+        &mut self,
+        handle: WebContentsHandle,
+    ) -> Result<ClosingWebContents, String> {
+        self.web_contents(handle)?;
+        let id = handle.id();
+        let removed = self
+            .web_contents
+            .shift_remove(&id)
+            .expect("validated WebContents must remain resident until close");
         if self.selected_web_contents == Some(id) {
             self.selected_web_contents = None;
         }
@@ -195,7 +203,7 @@ impl BrowserContext {
                 contents.window.opener = None;
             }
         }
-        Some(removed.begin_close())
+        Ok(removed.begin_close())
     }
 
     pub(super) fn close_all_web_contents(&mut self) -> Vec<ClosingWebContents> {

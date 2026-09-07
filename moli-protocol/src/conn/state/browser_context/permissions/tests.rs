@@ -80,7 +80,10 @@ async fn permission_completion_cannot_retarget_a_reused_devtools_target_id() {
         .wait()
         .await;
 
-    let (projection, closing) = context.take_page_target_for_close("same-target").unwrap();
+    let old_handle = context
+        .web_contents_handle_for_target("same-target")
+        .unwrap();
+    let (projection, closing) = context.begin_web_contents_close(old_handle).unwrap();
     drop(projection);
     closing.close_async().await;
     context.set_active_target_id("same-target");

@@ -191,8 +191,9 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     let slot = &context.page_targets.get("TID-close").unwrap().runtime_slot;
     let dialog_scope = slot.javascript_dialog_scope_observer();
     let id = context.selected_web_contents_id().unwrap();
+    let handle = context.web_contents_handle_for_target("TID-close").unwrap();
 
-    let (mut projection, closing) = context.take_page_target_for_close("TID-close").unwrap();
+    let (mut projection, closing) = context.begin_web_contents_close(handle).unwrap();
     assert!(!context.physical.web_contents.contains_key(&id));
     assert!(context.page_targets.is_empty());
     assert_eq!(context.selected_web_contents_id(), None);
@@ -216,7 +217,7 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     // Cancellation of the teardown future must not resurrect either authority.
     drop(closing);
     assert!(build.materialize().await.is_err());
-    assert!(context.take_page_target_for_close("TID-close").is_none());
+    assert!(context.begin_web_contents_close(handle).is_err());
     drop(projection);
 }
 

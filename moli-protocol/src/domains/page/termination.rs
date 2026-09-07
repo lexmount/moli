@@ -14,13 +14,19 @@ use crate::domains::command_output::{CommandOutputBuffer, CommandOutputPlan};
 pub(crate) struct PageTargetTerminationOwnerAction {
     owner_scope: CommandOwnerScope,
     target_id: String,
+    web_contents: moli_core::browser::WebContentsHandle,
 }
 
 impl PageTargetTerminationOwnerAction {
-    pub(crate) fn new(owner_scope: CommandOwnerScope, target_id: String) -> Self {
+    pub(crate) fn new(
+        owner_scope: CommandOwnerScope,
+        target_id: String,
+        web_contents: moli_core::browser::WebContentsHandle,
+    ) -> Self {
         Self {
             owner_scope,
             target_id,
+            web_contents,
         }
     }
 
@@ -32,8 +38,14 @@ impl PageTargetTerminationOwnerAction {
         &self.target_id
     }
 
-    fn into_parts(self) -> (CommandOwnerScope, String) {
-        (self.owner_scope, self.target_id)
+    fn into_parts(
+        self,
+    ) -> (
+        CommandOwnerScope,
+        String,
+        moli_core::browser::WebContentsHandle,
+    ) {
+        (self.owner_scope, self.target_id, self.web_contents)
     }
 }
 
@@ -603,10 +615,12 @@ pub(super) fn try_start_close_command_dispatch(
     conn: &CdpConnection,
     cmd: &Cmd<'_>,
 ) -> PageCommandTaskStep {
+    let owner_scope = crate::conn::CommandOwnerScope::capture(conn, cmd.session_id);
+    let web_contents = conn.browser_web_contents_for_owner(&owner_scope).ok();
     PageCommandTaskStep::Pending(super::PendingPageCommandDispatch {
         command_id: cmd.id,
-        owner_scope: crate::conn::CommandOwnerScope::capture(conn, cmd.session_id),
-        kind: Box::new(super::PendingPageCommandKind::Close),
+        owner_scope,
+        kind: Box::new(super::PendingPageCommandKind::Close { web_contents }),
     })
 }
 
@@ -614,6 +628,7 @@ pub(super) async fn complete_close_command_dispatch(
     conn: &mut CdpConnection,
     _command_id: Option<u64>,
     owner: &CommandOwnerScope,
+    web_contents: Option<moli_core::browser::WebContentsHandle>,
     command_context: &mut crate::conn::CommandDispatchContext,
 ) -> PageCommandTaskStep {
     let mut out = Vec::new();
@@ -631,6 +646,18 @@ pub(super) async fn complete_close_command_dispatch(
         ));
     };
     let target_id = target_id.expect("validated Page target identity");
+    let Some(web_contents) = web_contents else {
+        return PageCommandTaskStep::Complete(CommandOutputPlan::error_without_session(
+            -31998,
+            "TargetNotLoaded",
+        ));
+    };
+    if conn.browser_web_contents_for_owner(owner).ok() != Some(web_contents) {
+        return PageCommandTaskStep::Complete(CommandOutputPlan::error_without_session(
+            -31998,
+            "TargetNotLoaded",
+        ));
+    }
 
     let (
         pending_navigations,
@@ -676,6 +703,7 @@ pub(super) async fn complete_close_command_dispatch(
     conn.publish_page_target_termination_owner_action(PageTargetTerminationOwnerAction::new(
         owner.clone(),
         target_id,
+        web_contents,
     ));
     complete_success_with_background_events(out)
 }
@@ -684,7 +712,7 @@ pub(crate) async fn complete_page_target_termination_owner_action_async(
     conn: &mut CdpConnection,
     action: PageTargetTerminationOwnerAction,
 ) -> crate::conn::CdpTurnOutcome {
-    let (owner_scope, expected_target_id) = action.into_parts();
+    let (owner_scope, expected_target_id, web_contents) = action.into_parts();
     let mut out = Vec::new();
     let current_target_id = conn
         .target_owner_identity_for_owner(&owner_scope)
@@ -695,22 +723,25 @@ pub(crate) async fn complete_page_target_termination_owner_action_async(
             conn.take_scheduler_events(),
         );
     }
+    if conn
+        .browser_web_contents_for_target(&expected_target_id)
+        .ok()
+        != Some(web_contents)
+    {
+        return crate::conn::CdpTurnOutcome::new_with_protocol_events(
+            out,
+            conn.take_scheduler_events(),
+        );
+    }
     let target_host_closure = conn.prepare_target_host_closure(&expected_target_id);
-    let is_active_target = conn
-        .browser_context
-        .as_ref()
-        .is_some_and(|browser_context| browser_context.is_active_target(&expected_target_id));
-    let closed = if is_active_target {
-        conn.close_active_page_target_for_target_close_async(&mut out, "Target closed")
-            .await
-    } else {
-        conn.close_background_page_target_for_target_close_async(
+    let closed = conn
+        .close_web_contents_for_target_close_async(
             &expected_target_id,
+            web_contents,
             &mut out,
             "Target closed",
         )
-        .await
-    };
+        .await;
     let Some(closed) = closed else {
         return crate::conn::CdpTurnOutcome::new_with_protocol_events(
             out,
