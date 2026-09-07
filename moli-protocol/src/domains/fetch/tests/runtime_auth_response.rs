@@ -23,6 +23,23 @@ fn take_fetch_event_for_request(
     })
 }
 
+fn take_response_body_stream_handle(
+    ctx: &mut TestContext,
+    command_id: u64,
+    session_id: &str,
+) -> String {
+    let response = take_response_by_id(ctx, command_id);
+    assert_eq!(response["sessionId"], session_id, "{response}");
+    let handle = response["result"]["stream"]
+        .as_str()
+        .expect("response body stream handle");
+    assert!(
+        handle.starts_with("BID-1:TID-1:STREAM-"),
+        "stream must remain scoped to the owning target: {response}"
+    );
+    handle.to_owned()
+}
+
 fn network_events_for_request<'a>(
     ctx: &'a TestContext,
     method: &str,
@@ -379,16 +396,12 @@ async fn runtime_fetch_subresource_response_stage_preserves_binary_body_for_cdp_
         "params": { "requestId": request_id }
     }))
     .await;
-    ctx.expect_result(
-        36_015,
-        json!({ "stream": "BID-1:TID-1:STREAM-2" }),
-        Some("SID-1"),
-    );
+    let stream_handle = take_response_body_stream_handle(&mut ctx, 36_015, "SID-1");
 
     ctx.process_async(json!({
         "id": 36_016,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(
@@ -4322,16 +4335,12 @@ async fn runtime_fetch_subresource_take_response_body_as_stream_at_response_stag
         "params": { "requestId": request_id }
     }))
     .await;
-    ctx.expect_result(
-        422,
-        json!({ "stream": "BID-1:TID-1:STREAM-2" }),
-        Some("SID-1"),
-    );
+    let stream_handle = take_response_body_stream_handle(&mut ctx, 422, "SID-1");
 
     ctx.process_async(json!({
         "id": 423,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2", "size": 8 }
+        "params": { "handle": &stream_handle, "size": 8 }
     }))
     .await;
     ctx.expect_result(
@@ -4347,7 +4356,7 @@ async fn runtime_fetch_subresource_take_response_body_as_stream_at_response_stag
     ctx.process_async(json!({
         "id": 424,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(
@@ -4418,7 +4427,7 @@ async fn runtime_fetch_subresource_take_response_body_as_stream_at_response_stag
     ctx.process_async(json!({
         "id": 429,
         "method": "IO.close",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(429, json!({}), None);
@@ -4525,16 +4534,12 @@ async fn runtime_xhr_subresource_take_response_body_as_stream_at_response_stage(
         "params": { "requestId": request_id }
     }))
     .await;
-    ctx.expect_result(
-        457,
-        json!({ "stream": "BID-1:TID-1:STREAM-2" }),
-        Some("SID-1"),
-    );
+    let stream_handle = take_response_body_stream_handle(&mut ctx, 457, "SID-1");
 
     ctx.process_async(json!({
         "id": 458,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2", "size": 8 }
+        "params": { "handle": &stream_handle, "size": 8 }
     }))
     .await;
     ctx.expect_result(
@@ -4550,7 +4555,7 @@ async fn runtime_xhr_subresource_take_response_body_as_stream_at_response_stage(
     ctx.process_async(json!({
         "id": 459,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(
@@ -4595,7 +4600,7 @@ async fn runtime_xhr_subresource_take_response_body_as_stream_at_response_stage(
     ctx.process_async(json!({
         "id": 462,
         "method": "IO.close",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(462, json!({}), None);
@@ -4710,16 +4715,12 @@ async fn runtime_fetch_redirect_subresource_take_response_body_as_stream_at_resp
         "params": { "requestId": request_id }
     }))
     .await;
-    ctx.expect_result(
-        467,
-        json!({ "stream": "BID-1:TID-1:STREAM-2" }),
-        Some("SID-1"),
-    );
+    let stream_handle = take_response_body_stream_handle(&mut ctx, 467, "SID-1");
 
     ctx.process_async(json!({
         "id": 468,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2", "size": 15 }
+        "params": { "handle": &stream_handle, "size": 15 }
     }))
     .await;
     ctx.expect_result(
@@ -4735,7 +4736,7 @@ async fn runtime_fetch_redirect_subresource_take_response_body_as_stream_at_resp
     ctx.process_async(json!({
         "id": 469,
         "method": "IO.read",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(
@@ -4780,7 +4781,7 @@ async fn runtime_fetch_redirect_subresource_take_response_body_as_stream_at_resp
     ctx.process_async(json!({
         "id": 472,
         "method": "IO.close",
-        "params": { "handle": "BID-1:TID-1:STREAM-2" }
+        "params": { "handle": &stream_handle }
     }))
     .await;
     ctx.expect_result(472, json!({}), None);

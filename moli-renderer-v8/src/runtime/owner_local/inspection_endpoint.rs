@@ -4,21 +4,34 @@ mod accessibility;
 mod css;
 mod dom;
 mod dom_debugger;
+mod page;
 mod runtime;
 pub use accessibility::RendererAccessibilityInspection;
 pub use css::RendererCssInspection;
 pub use dom::RendererDomInspection;
 pub use dom_debugger::RendererDomDebuggerInspection;
+pub use page::RendererPageInspection;
 pub use runtime::RendererRuntimeInspection;
 
 impl RendererInspectionEndpoint {
-    /// Seals the frontend's Main/IO ingress synchronously, then lets the
-    /// original renderer owner destroy its V8 session and registrations. The
-    /// acknowledgement proves cleanup completed before service records retire.
-    /// Arming the existing detach guard wakes paused JavaScript; this is not a
-    /// command queued on the session that is being destroyed.
-    pub async fn detach_session(&self, inspector_session_id: Option<String>) -> Result<()> {
-        let reply = self.page_context_cancel_tx.with_inspector_admission(|| {
+    /// Seals the frontend's Main/IO ingress synchronously, then destroys its
+    /// V8 session through the target IO lifecycle receiver. Active JavaScript
+    /// is interrupted only long enough to mutate the exact Page stack; an idle
+    /// target performs the same work at its owner wake boundary.
+    pub async fn detach_session(
+        &self,
+        inspector_session_id: Option<String>,
+        fetch_subresource_interception: Option<(
+            bool,
+            Option<moli_page_types::SubresourceResourceType>,
+        )>,
+    ) -> Result<()> {
+        let (route, reply) = self.page_context_cancel_tx.with_inspector_admission(|| {
+            if self.devtools_target.io_ref().route_id().is_none() {
+                self.devtools_target
+                    .close("Inspector session executor has shut down");
+                return Err(anyhow!("renderer Inspector session executor has shut down"));
+            }
             let session = DevToolsSessionKey::from_wire_session_id(
                 inspector_session_id.as_deref().filter(|id| !id.is_empty()),
             );
@@ -28,21 +41,44 @@ impl RendererInspectionEndpoint {
                 self.devtools_agent_token,
                 session,
             );
-            self.render_runtime.enqueue(
-                RendererOwnerCommand::FinalizeRuntimeInspectorSessionDetach {
-                    token: self.token,
+            let (reply_tx, reply_rx) = oneshot::channel();
+            let route = self.devtools_target.io_ref().enqueue_command(
+                self.devtools_agent_token,
+                RendererDevToolsIoCommandEnvelope::finalize_session_detach(
+                    RendererInspectorIngressTicket::new(
+                        None,
+                        inspector_session_id.clone(),
+                        RendererInspectorCommandRoute::Io,
+                    ),
+                    self.token,
                     inspector_session_id,
+                    fetch_subresource_interception,
                     pause_guard,
-                },
-            )
+                    reply_tx,
+                ),
+            );
+            Ok((route, reply_rx))
         })??;
-        match reply
+        let claim = route
+            .wait_for_first_dispatch()
             .await
-            .map_err(|_| anyhow!("renderer session detach reply channel closed"))??
-        {
-            RendererOwnerReply::RuntimeInspectorSessionDetachFinalized(_) => Ok(()),
-            _ => Err(anyhow!("unexpected renderer session detach reply")),
+            .map_err(|message| anyhow!(message))?;
+        match claim {
+            RendererRuntimeInspectorIoCommandClaim::Dispatched => {}
+            RendererRuntimeInspectorIoCommandClaim::Canceled(message) => {
+                return Err(anyhow!(message));
+            }
+            RendererRuntimeInspectorIoCommandClaim::SessionResponse { .. } => {
+                return Err(anyhow!(
+                    "session detach unexpectedly produced a protocol response"
+                ));
+            }
         }
+        reply
+            .await
+            .map_err(|_| anyhow!("renderer session detach reply channel closed"))?
+            .map(|_| ())
+            .map_err(anyhow::Error::msg)
     }
 
     // Only the finite typed agent facades may enter this path. Keep the native
@@ -566,7 +602,10 @@ mod tests {
         old.retire_page();
 
         assert!(
-            old.detach_session(None).now_or_never().unwrap().is_err(),
+            old.detach_session(None, None)
+                .now_or_never()
+                .unwrap()
+                .is_err(),
             "retired detach must not close replacement ingress"
         );
         assert_retired(&old);
@@ -622,7 +661,7 @@ mod tests {
         let main = endpoint.enqueue_main_command(main_command()).unwrap();
         let io = endpoint.enqueue_io_command(io_command()).unwrap();
         let error = endpoint
-            .detach_session(None)
+            .detach_session(None, None)
             .now_or_never()
             .unwrap()
             .unwrap_err();

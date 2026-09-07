@@ -83,6 +83,19 @@ impl TargetSessionOwnerRef<'_> {
             .map(|policy| policy.emit_touch_events_for_mouse)
     }
 
+    fn emulation_disposal_is_effectively_noop(&self) -> Option<bool> {
+        let target = self.browser_context.page_target(&self.target_id)?;
+        let session = target.devtools_sessions.session(&self.session_key)?;
+        let effective = self
+            .browser_context
+            .target_emulation_policy(&self.target_id)?;
+        Some(
+            session
+                .emulation_session_state
+                .disposal_is_effectively_noop(effective),
+        )
+    }
+
     #[cfg(test)]
     fn emulation_session_state(&self) -> Option<&DevToolsEmulationSessionState> {
         self.browser_context
@@ -164,6 +177,15 @@ impl CdpConnection {
             .unwrap_or(false)
     }
 
+    pub(crate) fn emulation_disposal_is_effectively_noop_for_session_owner(
+        &self,
+        session_id: &str,
+    ) -> bool {
+        self.target_session_owner_ref(Some(session_id))
+            .and_then(|owner| owner.emulation_disposal_is_effectively_noop())
+            .unwrap_or(false)
+    }
+
     #[cfg(test)]
     pub(crate) fn emulation_session_state_for_session_owner(
         &self,
@@ -193,6 +215,22 @@ impl CdpConnection {
             .browser_context
             .apply_target_emulation_policy_changes(&owner.target_id, changes);
         true
+    }
+
+    pub(crate) fn set_emulation_renderer_cleanup_pending_for_session_owner(
+        &mut self,
+        session_id: &str,
+        pending: bool,
+    ) {
+        if let Some(owner) = self.target_session_owner_mut(Some(session_id))
+            && let Some(target) = owner.browser_context.page_target_mut(&owner.target_id)
+        {
+            target
+                .devtools_sessions
+                .ensure_session(&owner.session_key)
+                .emulation_session_state
+                .set_renderer_cleanup_pending(pending);
+        }
     }
 }
 

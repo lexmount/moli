@@ -22,7 +22,8 @@ use crate::{
     runtime::{
         RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,
         RendererDevToolsMainNestedDispatch, RendererOwnerReply,
-        RendererRuntimeInspectorResponseSender, dispatch_nested_main_page_command,
+        RendererRuntimeInspectorResponseSender, detach_session_from_page,
+        dispatch_nested_main_page_command,
     },
 };
 use interrupt::{
@@ -337,6 +338,30 @@ impl RendererInspectorSessionExecutorLocal {
     ) {
         let mut first_dispatch = self.target.io_ref().first_dispatch_guard(&mut command);
         match command.kind() {
+            RendererDevToolsIoCommandKind::SessionLifecycle => {
+                let RendererDevToolsIoCommandPayload::FinalizeSessionDetach {
+                    token,
+                    inspector_session_id,
+                    fetch_subresource_interception,
+                    mut pause_guard,
+                    reply,
+                } = command.into_payload()
+                else {
+                    unreachable!("session lifecycle IO command kind must carry a detach payload")
+                };
+                let result = detach_session_from_page(
+                    token,
+                    inspector_session_id.as_deref(),
+                    fetch_subresource_interception,
+                )
+                .map_err(|error| error.to_string());
+                if result.is_ok() {
+                    pause_guard.complete();
+                }
+                let _ = reply.send(result);
+                first_dispatch.release();
+                return;
+            }
             RendererDevToolsIoCommandKind::Performance => {
                 let RendererDevToolsIoCommandPayload::PerformanceGetMetrics { result, response } =
                     command.into_payload()

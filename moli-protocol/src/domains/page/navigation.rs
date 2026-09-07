@@ -18,10 +18,11 @@ use url::Url;
 
 use crate::conn::{
     BackgroundNavigationLoadJob, BackgroundProtocolEvent, CapturedBody, CdpConnection,
-    CdpSessionRoute, Cmd, CommandDispatchContext, CommandOwnerScope, FetchRequestStage,
-    NavigationDispatchState, NavigationId, NavigationLoadOutcome, NavigationRequestLoadPolicy,
-    NavigationResultProjection, NavigationSourceDocumentSecurityContext, PendingFetchNavigation,
-    ResponseStageUrlMatchPolicy, monotonic_timestamp_seconds,
+    CdpSessionRoute, ClaimedFetchNavigation, Cmd, CommandDispatchContext, CommandOwnerScope,
+    FetchRequestStage, NavigationDispatchState, NavigationId, NavigationLoadOutcome,
+    NavigationRequestInterception, NavigationRequestLoadPolicy, NavigationResultProjection,
+    NavigationSourceDocumentSecurityContext, PendingFetchNavigation, ResponseStageUrlMatchPolicy,
+    monotonic_timestamp_seconds,
 };
 use moli_cookie_jar::{NetworkCookieRequestContext, StoredCookieQueryReport};
 
@@ -90,12 +91,20 @@ pub(super) struct CompletedSameDocumentNavigateCommand {
 
 pub(super) struct PendingContinueNavigationWithoutRequestPauseCommand {
     prefix_events: Vec<BackgroundProtocolEvent>,
-    pending: PendingFetchNavigation,
+    pending: ClaimedFetchNavigation,
 }
 
 pub(super) struct CompletedContinueNavigationWithoutRequestPauseCommand {
     prefix_events: Vec<BackgroundProtocolEvent>,
-    pending: PendingFetchNavigation,
+    pending: ClaimedFetchNavigation,
+}
+
+struct PendingFetchNavigationSeed {
+    fetch_request_id: String,
+    interception_session_id: Option<String>,
+    intercept_response: bool,
+    response_stage_url_match_policy: ResponseStageUrlMatchPolicy,
+    auth_required_blocked_intercepts: Vec<crate::devtools_runtime::DevToolsNetworkInterceptId>,
 }
 
 struct HistoryTraversalUrlFallback {
@@ -1281,9 +1290,9 @@ fn direct_navigation_result_from_fetch_continuation(
     completed: &CompletedContinueNavigationWithoutRequestPauseCommand,
     result: &mut DirectNavigationResult,
 ) -> Result<(), DevToolsError> {
-    if completed.pending.document_navigation_token.is_none() {
-        if superseded_cdp_page_navigate_payload(&completed.pending.navigation).is_some() {
-            result.set_cdp_navigation_aborted(&completed.pending.navigation.frame_id);
+    if !completed.pending.is_current() {
+        if superseded_cdp_page_navigate_payload(&completed.pending.pending.navigation).is_some() {
+            result.set_cdp_navigation_aborted(&completed.pending.pending.navigation.frame_id);
             return Ok(());
         }
         return Err(DevToolsError::new(
@@ -1291,7 +1300,7 @@ fn direct_navigation_result_from_fetch_continuation(
             "Navigation aborted",
         ));
     }
-    let state = &completed.pending.navigation;
+    let state = &completed.pending.pending.navigation;
     if !result.url.is_empty() {
         result.set_navigation_identity(&state.frame_id, &state.loader_id);
     }
@@ -2656,7 +2665,7 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
             inherited_secure_context_type,
         ),
     };
-    let mut pending_fetch_navigation = None;
+    let mut pending_fetch_navigation_seed = None;
 
     if let Some(preflight) = navigation_preflight.take() {
         navigation_state.session_id = session_id.clone();
@@ -2686,14 +2695,11 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                     "TargetNotLoaded",
                 ));
             };
-            pending_fetch_navigation = Some(PendingFetchNavigation {
+            pending_fetch_navigation_seed = Some(PendingFetchNavigationSeed {
                 fetch_request_id,
                 interception_session_id: preflight
                     .document_fetch_event_session_id
                     .or_else(|| session_id.clone()),
-                document_navigation_token: None,
-                navigation: navigation_state.clone(),
-                request_cookie_report: None,
                 intercept_response: preflight.document_fetch_response_stage_candidate,
                 response_stage_url_match_policy: if preflight
                     .document_fetch_response_stage_candidate
@@ -2718,9 +2724,39 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
             "TargetNotLoaded",
         ));
     };
-    if let Some(pending) = pending_fetch_navigation.as_mut() {
-        pending.document_navigation_token = Some(document_navigation_token);
-    }
+    let pending_fetch_navigation = if let Some(seed) = pending_fetch_navigation_seed {
+        let request = NavigationRequestInterception::new(
+            navigation_state.requested_url.clone(),
+            navigation_state.request_method.clone(),
+            navigation_state.clone_request_body_bytes(),
+            navigation_state.request_headers.clone(),
+            navigation_state.request_load_policy,
+        );
+        let navigation_permit = match conn.pause_navigation_request_for_owner(
+            owner,
+            document_navigation_token,
+            request,
+        ) {
+            Ok(permit) => permit,
+            Err(message) => {
+                return NavigateCommandStart::CompletePlan(CommandOutputPlan::error(
+                    -32000, message,
+                ));
+            }
+        };
+        Some(PendingFetchNavigation {
+            fetch_request_id: seed.fetch_request_id,
+            interception_session_id: seed.interception_session_id,
+            navigation_permit,
+            navigation: navigation_state.clone(),
+            request_cookie_report: None,
+            intercept_response: seed.intercept_response,
+            response_stage_url_match_policy: seed.response_stage_url_match_policy,
+            auth_required_blocked_intercepts: seed.auth_required_blocked_intercepts,
+        })
+    } else {
+        None
+    };
     if pending_fetch_navigation.is_some() {
         emit_navigation_started_for_session_owner(
             conn,
@@ -2773,14 +2809,14 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
                 );
             }
             pending.navigation.request_announced = pending.navigation.request_id.is_some();
-            let _ = conn.register_pending_fetch_navigation_request_for_owner(
-                &pending.navigation.owner,
-                pending.clone(),
-            );
-            out.push(fetch::request_paused_background_event(
+            let paused_event = fetch::request_paused_background_event(
                 pending.interception_session_id.as_deref(),
                 &pending,
-            ));
+            );
+            let pending_owner = pending.navigation.owner.clone();
+            let _ =
+                conn.register_pending_fetch_navigation_request_for_owner(&pending_owner, pending);
+            out.push(paused_event);
             let mut output = CommandOutputBuffer::default();
             output.extend_background_events_after_messages(out);
             return NavigateCommandStart::CompleteImmediate(output.into_plan());
@@ -2803,10 +2839,11 @@ fn start_navigate_to_url_command_with_background_policy_and_request(
             );
         }
         pending.navigation.request_announced = pending.navigation.request_id.is_some();
+        let request = conn.take_navigation_request(pending.navigation_permit);
         return NavigateCommandStart::PendingContinueWithoutRequestPause(Box::new(
             PendingContinueNavigationWithoutRequestPauseCommand {
                 prefix_events: out,
-                pending,
+                pending: ClaimedFetchNavigation::new(pending, request),
             },
         ));
     }

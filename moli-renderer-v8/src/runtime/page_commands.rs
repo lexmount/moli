@@ -1237,11 +1237,6 @@ impl PageVm {
                 )?;
                 Ok(RendererPageReply::Unit)
             }
-            RendererInspectorPageCommand::DetachRuntimeInspectorSession {
-                pause_guard: _pause_guard,
-            } => Ok(RendererPageReply::Bool(
-                self.detach_runtime_inspector_session(inspector_session_id),
-            )),
             RendererInspectorPageCommand::AddRuntimeBinding {
                 name,
                 execution_context_name,

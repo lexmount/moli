@@ -32,7 +32,8 @@ pub(in crate::conn) use web_contents::{
     InitialDocumentPageBuildWaiter,
 };
 pub(crate) use web_contents::{
-    InterceptedNavigationLoad, InterceptedNavigationResponse, NavigationInterceptionPermit,
+    ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
+    NavigationInterceptionPermit, NavigationRequestInterception,
 };
 
 #[cfg(test)]

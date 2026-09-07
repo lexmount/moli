@@ -275,7 +275,7 @@ async fn browser_native_commands_do_not_require_a_live_inspector_session() {
         .unwrap()
         .current_renderer_inspection_binding()
         .unwrap()
-        .detach_session(None)
+        .detach_session(None, None)
         .await
         .unwrap();
 

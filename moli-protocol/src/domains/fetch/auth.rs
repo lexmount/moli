@@ -476,6 +476,40 @@ fn next_chained_navigation_auth_required_event(
     ))
 }
 
+pub(super) async fn default_navigation_auth_as_background_events_async(
+    conn: &mut CdpConnection,
+    out: &mut FetchCommandOutput,
+    fallback_session_id: Option<&str>,
+    pending: PendingFetchAuthNavigation,
+) {
+    if pending
+        .auth_stage_pause_state()
+        .is_some_and(|chain| !chain.remaining_sessions.is_empty())
+        && let Some(event) =
+            next_chained_navigation_auth_required_event(conn, fallback_session_id, pending.clone())
+    {
+        out.extend_background_events([event]);
+        return;
+    }
+
+    drop(conn.take_navigation_auth(pending.auth_permit));
+    let token = Some(pending.auth_permit.navigation());
+    let navigation_state = pending.navigation;
+    let navigation = network::materialize_navigation_load_result(
+        conn,
+        &navigation_state,
+        Err("Fetch auth challenge aborted".to_owned()),
+    );
+    complete_tokened_materialized_navigation_as_background_events_async(
+        conn,
+        out,
+        token,
+        navigation_state,
+        navigation,
+    )
+    .await;
+}
+
 fn next_chained_subresource_auth_required_event(
     conn: &mut CdpConnection,
     command_session_id: Option<&str>,
@@ -561,20 +595,11 @@ pub(super) async fn complete_continue_with_auth_command_async(
         }
         PendingContinueWithAuthState::NavigationFail { pending } => {
             out.push_success();
-            drop(conn.take_navigation_auth(pending.auth_permit));
-            let token = Some(pending.auth_permit.navigation());
-            let navigation_state = pending.navigation;
-            let navigation = network::materialize_navigation_load_result(
-                conn,
-                &navigation_state,
-                Err("Fetch auth challenge aborted".to_owned()),
-            );
-            complete_tokened_materialized_navigation_as_background_events_async(
+            default_navigation_auth_as_background_events_async(
                 conn,
                 out,
-                token,
-                navigation_state,
-                navigation,
+                owner.session_id(),
+                *pending,
             )
             .await;
         }
@@ -604,7 +629,7 @@ pub(super) async fn complete_continue_with_auth_command_async(
                 PendingFetchNavigation {
                     fetch_request_id: pending.response_stage_request_id,
                     interception_session_id: pending.interception_session_id.clone(),
-                    document_navigation_token: Some(pending.auth_permit.navigation()),
+                    navigation_permit: pending.auth_permit,
                     navigation: pending.navigation,
                     request_cookie_report: None,
                     intercept_response: pending.intercept_response,
@@ -612,7 +637,7 @@ pub(super) async fn complete_continue_with_auth_command_async(
                     auth_required_blocked_intercepts: Vec::new(),
                 },
                 Some(auth),
-                Some(response.retry()),
+                response.retry(),
             )
             .await;
         }

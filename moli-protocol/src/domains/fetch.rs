@@ -19,7 +19,7 @@ use crate::devtools_runtime::{
 };
 use crate::domains::actions::FetchAction;
 use crate::domains::command_output::{CommandOutputPlan, devtools_error_from_cdp_error_parts};
-use crate::domains::{activity, network, page};
+use crate::domains::{activity, page};
 use serde_json::json;
 
 #[cfg(test)]
@@ -60,18 +60,20 @@ pub(in crate::domains) async fn dispose_session_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     session_id: &str,
+    renderer_policy_reconciled: bool,
 ) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
-    dispose_owner_async(conn, out, Some(session_id)).await
+    dispose_owner_async(conn, out, Some(session_id), renderer_policy_reconciled).await
 }
 
 pub(in crate::domains) async fn dispose_owner_async(
     conn: &mut CdpConnection,
     out: &mut Vec<BackgroundProtocolEvent>,
     session_id: Option<&str>,
+    renderer_policy_reconciled: bool,
 ) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
     let owner = CommandOwnerScope::capture(conn, session_id);
     let Some((pending_fetch_state, pending_page_command)) =
-        conn.start_disable_fetch_for_session_owner(session_id)
+        conn.start_dispose_fetch_for_session_owner(session_id, renderer_policy_reconciled)
     else {
         return Ok(None);
     };
@@ -114,20 +116,37 @@ pub(in crate::domains) async fn dispose_owner_async(
     // Session teardown has no command response to fence. The concrete
     // renderer publication remains ordered on its own stream and will reach
     // protocol ingress independently.
-    let predecessor = page::fail_pending_fetch_state_background_events_async(
+    let mut navigation_output = FetchCommandOutput::default();
+    release_main_document_interceptions_neutrally_async(
+        conn,
+        &mut navigation_output,
+        owner.session_id(),
+        pending_navigations,
+        pending_auth_navigations,
+        pending_response_navigations,
+    )
+    .await;
+    let mut navigation_plan = navigation_output.into_output_plan();
+    let predecessor = navigation_plan.take_renderer_output_predecessor();
+    let (_, navigation_events) = navigation_plan.into_command_status_and_background_events();
+    out.extend(navigation_events);
+
+    let subresource_predecessor = page::fail_pending_fetch_state_background_events_async(
         conn,
         out,
         session_id,
         "Target detached",
         "Target detached",
-        pending_navigations,
-        pending_auth_navigations,
-        pending_response_navigations,
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
         pending_subresource_fetches,
         pending_subresource_auths,
         pending_subresource_responses,
     )
     .await;
+    let predecessor =
+        merge_optional_renderer_output_predecessors(predecessor, subresource_predecessor);
     if let Some(error) = renderer_cleanup_error {
         return Err(error);
     }
@@ -211,7 +230,7 @@ enum CompletedFetchCommandOperation {
 type FetchDisablePendingState = (
     Vec<crate::conn::PendingFetchNavigation>,
     Vec<crate::conn::PendingFetchAuthNavigation>,
-    Vec<crate::conn::PausedDocumentTransfer>,
+    Vec<crate::conn::PendingFetchResponseNavigation>,
     Vec<(String, crate::conn::PendingSubresourceFetchRequest)>,
     Vec<(String, crate::conn::PendingSubresourceFetchAuthRequest)>,
     Vec<(String, crate::conn::PendingSubresourceFetchResponseRequest)>,
@@ -976,49 +995,15 @@ async fn complete_disable_command_async(
         pending_subresource_responses,
     ) = pending_fetch_state;
 
-    for pending in pending_navigations {
-        let token = pending.document_navigation_token;
-        let navigation_state = pending.navigation;
-        let navigation = network::materialize_navigation_load_result(
-            conn,
-            &navigation_state,
-            Err("Fetch interception disabled".to_owned()),
-        );
-        navigation::complete_tokened_materialized_navigation_as_background_events_async(
-            conn,
-            out,
-            token,
-            navigation_state,
-            navigation,
-        )
-        .await;
-    }
-    for pending in pending_auth_navigations {
-        drop(conn.take_navigation_auth(pending.auth_permit));
-        let token = Some(pending.auth_permit.navigation());
-        let navigation_state = pending.navigation;
-        let navigation = network::materialize_navigation_load_result(
-            conn,
-            &navigation_state,
-            Err("Fetch interception disabled".to_owned()),
-        );
-        navigation::complete_tokened_materialized_navigation_as_background_events_async(
-            conn,
-            out,
-            token,
-            navigation_state,
-            navigation,
-        )
-        .await;
-    }
-    for pending in pending_response_navigations {
-        let (token, navigation, result) = pending.fail("Fetch interception disabled".to_owned());
-        let result = network::materialize_navigation_load_result(conn, &navigation, result);
-        navigation::complete_tokened_materialized_navigation_as_background_events_async(
-            conn, out, token, navigation, result,
-        )
-        .await;
-    }
+    release_main_document_interceptions_neutrally_async(
+        conn,
+        out,
+        owner.session_id(),
+        pending_navigations,
+        pending_auth_navigations,
+        pending_response_navigations,
+    )
+    .await;
     for (_, pending) in pending_subresource_fetches {
         if let Ok(predecessor) = conn
             .fail_pending_subresource_fetch_for_owner_async(
@@ -1088,6 +1073,51 @@ async fn complete_disable_command_async(
             out.extend_background_events(events);
         }
     }
+}
+
+async fn release_main_document_interceptions_neutrally_async(
+    conn: &mut CdpConnection,
+    out: &mut FetchCommandOutput,
+    fallback_session_id: Option<&str>,
+    pending_navigations: Vec<crate::conn::PendingFetchNavigation>,
+    pending_auth_navigations: Vec<crate::conn::PendingFetchAuthNavigation>,
+    pending_response_navigations: Vec<crate::conn::PendingFetchResponseNavigation>,
+) {
+    for pending in pending_navigations {
+        let request = conn.take_navigation_request(pending.navigation_permit);
+        navigation::continue_navigation_request_as_background_events_async(
+            conn,
+            out,
+            crate::conn::ClaimedFetchNavigation::new(pending, request),
+        )
+        .await;
+    }
+    for pending in pending_auth_navigations {
+        auth::default_navigation_auth_as_background_events_async(
+            conn,
+            out,
+            fallback_session_id,
+            pending,
+        )
+        .await;
+    }
+    for pending in pending_response_navigations {
+        let transfer = conn.take_navigation_response(pending.permit);
+        navigation::continue_navigation_response_neutrally_as_background_events_async(
+            conn, out, pending, transfer,
+        )
+        .await;
+    }
+}
+
+fn merge_optional_renderer_output_predecessors(
+    mut first: Option<moli_core::RendererOutputFence>,
+    second: Option<moli_core::RendererOutputFence>,
+) -> Option<moli_core::RendererOutputFence> {
+    if let Some(second) = second {
+        second.merge_into_same_stream_tail(&mut first);
+    }
+    first
 }
 
 #[cfg(test)]

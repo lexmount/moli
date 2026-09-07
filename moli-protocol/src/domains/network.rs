@@ -56,6 +56,9 @@ pub(in crate::domains) async fn dispose_session_policy_async(
     conn: &mut CdpConnection,
     session_id: &str,
 ) -> anyhow::Result<()> {
+    if !conn.network_listener_enabled_for_session_owner(session_id) {
+        return Ok(());
+    }
     conn.clear_devtools_network_session_policy_async(session_id)
         .await
 }

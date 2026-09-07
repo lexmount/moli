@@ -35,16 +35,24 @@ pub(super) fn clear_browser_cache_command_output_plan(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
 ) -> CommandOutputPlan {
-    let bc = match conn.browser_context_for_command_session_mut(cmd.session_id) {
-        Ok(bc) => bc,
-        Err((code, message)) => return CommandOutputPlan::error(code, message),
+    let response_streams = {
+        let bc = match conn.browser_context_for_command_session_mut(cmd.session_id) {
+            Ok(bc) => bc,
+            Err((code, message)) => return CommandOutputPlan::error(code, message),
+        };
+        bc.clear_network_body_artifacts();
+        let response_streams = bc
+            .page_targets
+            .iter_mut()
+            .flat_map(|target| target.fetch_owner.drop_active_fetch_response_body_streams())
+            .collect::<Vec<_>>();
+        if let Err(message) = bc.clear_http_cache() {
+            return CommandOutputPlan::error(-32000, message);
+        }
+        response_streams
     };
-    bc.clear_network_body_artifacts();
-    for target in bc.page_targets.iter_mut() {
-        target.fetch_owner.drop_active_fetch_response_body_streams();
-    }
-    if let Err(message) = bc.clear_http_cache() {
-        return CommandOutputPlan::error(-32000, message);
+    for pending in response_streams {
+        drop(conn.take_navigation_response(pending.permit));
     }
     CommandOutputPlan::success()
 }

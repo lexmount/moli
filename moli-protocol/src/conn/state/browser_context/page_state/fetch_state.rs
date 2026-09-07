@@ -1,7 +1,10 @@
+#[cfg(test)]
+use crate::conn::fetch_support::OpenBodyStreamError;
 use crate::conn::{BrowserContext, ConnectionNetworkRequestIdAllocator, PageTargetHost};
 #[cfg(test)]
 use crate::conn::{
-    DocumentBodySource, NavigationDispatchState, NavigationId, PendingSubresourceFetchRequest,
+    DocumentBodySource, NavigationDispatchState, NavigationId, PausedDocumentTransfer,
+    PendingFetchResponseNavigation, PendingSubresourceFetchRequest,
 };
 
 fn document_navigation_loader_id(sequence: u64) -> String {
@@ -51,21 +54,55 @@ impl BrowserContext {
         &mut self,
         request_id: &str,
     ) -> Result<Option<String>, String> {
-        let handle = self
-            .active_page_target_mut()
-            .runtime_slot
-            .allocate_io_stream_handle();
-        let active_target = &mut self
-            .page_targets
-            .active_mut(self.physical.selected_web_contents_id())
-            .expect("cannot open a response stream without an active page target");
-        active_target
-            .fetch_owner
-            .open_pending_fetch_response_body_stream(
-                &mut active_target.runtime_slot,
-                request_id,
-                handle,
-            )
+        let target_id = self
+            .active_target_id()
+            .expect("cannot open a response stream without an active page target")
+            .to_owned();
+        let Some((permit, handle)) = self.page_target_mut(&target_id).and_then(|target| {
+            let permit = target
+                .fetch_owner
+                .pending_fetch_response_navigation(request_id)?
+                .permit;
+            Some((permit, target.runtime_slot.allocate_io_stream_handle()))
+        }) else {
+            return Ok(None);
+        };
+        let Some(transfer) = self.take_navigation_response(permit) else {
+            return Ok(None);
+        };
+        let opened = match transfer.open_body_stream(handle) {
+            Ok(opened) => opened,
+            Err(OpenBodyStreamError::NotOpenable(transfer)) => {
+                let _ = self.restore_navigation_response(permit, *transfer);
+                return Ok(None);
+            }
+            Err(OpenBodyStreamError::Failed { transfer, message }) => {
+                let _ = self.restore_navigation_response(permit, *transfer);
+                return Err(message);
+            }
+        };
+        if self
+            .restore_navigation_response(permit, opened.transfer)
+            .is_err()
+        {
+            return Ok(None);
+        }
+        let target = self
+            .page_target_mut(&target_id)
+            .expect("paused response target remains registered");
+        if let Some(bytes) = opened.buffered_bytes {
+            target
+                .runtime_slot
+                .insert_io_stream(opened.handle.clone(), bytes, 0);
+        } else {
+            target
+                .fetch_owner
+                .set_pending_fetch_response_body_stream_handle(
+                    request_id,
+                    Some(opened.handle.clone()),
+                );
+        }
+        Ok(Some(opened.handle))
     }
 
     #[cfg(test)]
@@ -86,14 +123,37 @@ impl BrowserContext {
         navigation: NavigationDispatchState,
         body: DocumentBodySource,
     ) {
-        self.active_page_target_mut()
+        let target_id = self
+            .active_target_id()
+            .expect("response pause requires an active page target")
+            .to_owned();
+        let navigation_token = document_navigation_token.unwrap_or_else(|| {
+            self.begin_target_document_navigation(&target_id, navigation.loader_id.clone())
+        });
+        let transfer = PausedDocumentTransfer::pending(navigation.request_load_policy, body);
+        let permit = self
+            .pause_navigation_response_for_target(&target_id, navigation_token, transfer)
+            .expect("test response pause must address the pending Browser navigation");
+        self.page_target_mut(&target_id)
+            .expect("response pause target remains registered")
             .fetch_owner
             .register_pending_fetch_response_navigation(
                 request_id,
-                document_navigation_token,
-                navigation,
-                body,
+                PendingFetchResponseNavigation::new(navigation, permit),
             );
+    }
+
+    #[cfg(test)]
+    pub(crate) fn pending_fetch_response_prepared_renderer_agent_for_test(
+        &self,
+        request_id: &str,
+    ) -> Option<moli_core::page::RendererDevToolsAgentToken> {
+        let target_id = self.active_target_id()?;
+        self.page_target(target_id)?
+            .fetch_owner
+            .pending_fetch_response_navigation(request_id)?;
+        self.paused_navigation_response_for_target(target_id)?
+            .prepared_renderer_agent_token()
     }
 
     #[cfg(test)]
@@ -449,7 +509,7 @@ mod tests {
         assert!(
             bc.active_page_target()
                 .fetch_owner
-                .pending_fetch_response_transfer_is_pending_for_test("INT-1"),
+                .has_pending_fetch_response_navigation_for_test("INT-1"),
             "buffered body stream reads from IO artifacts and keeps the paused response reusable"
         );
         assert!(

@@ -4,20 +4,15 @@ use serde_json::{Value, json};
 use url::Url;
 
 use super::super::fetch_support::{
-    ClaimedSubresourceContinueRequest, DocumentBodySource, InFlightSubresourceFetchRequest,
-    PausedDocumentTransfer, PausedDocumentTransfers, PendingFetchAuthNavigation,
-    PendingFetchNavigation, PendingFetchResponseBodyStreamRead,
-    PendingFetchResponseBodyStreamReadDispatch, PendingFetchResponseBodyStreamReadStart,
-    PendingSubresourceFetchAuthRequest, PendingSubresourceFetchOwnerKind,
-    PendingSubresourceFetchRequest, PendingSubresourceFetchResponseRequest,
-    ResponseStageUrlMatchPolicy, fetch_subresource_interception_config_for_patterns,
-    matching_fetch_pattern,
+    ClaimedSubresourceContinueRequest, InFlightSubresourceFetchRequest, PendingFetchAuthNavigation,
+    PendingFetchNavigation, PendingFetchResponseNavigation, PendingSubresourceFetchAuthRequest,
+    PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
+    PendingSubresourceFetchResponseRequest, ResponseStageUrlMatchPolicy,
+    fetch_subresource_interception_config_for_patterns, matching_fetch_pattern,
 };
 pub(super) use super::super::fetch_support::{
-    FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter, OpenBodyStreamError,
+    FetchInterceptionPattern, FetchRequestStage, FetchResourceTypeFilter,
 };
-use super::navigation_outcome::NavigationDispatchState;
-use super::runtime_slot::TargetRuntimeSlot;
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use moli_fetch::url_pattern_matches;
 
@@ -26,7 +21,8 @@ pub struct TargetFetchState {
     pending_fetch_request_ids: HashSet<String>,
     pending_fetch_navigations: HashMap<String, PendingFetchNavigation>,
     pending_fetch_auth_navigations: HashMap<String, PendingFetchAuthNavigation>,
-    pending_fetch_response_transfers: PausedDocumentTransfers,
+    pending_fetch_response_navigations: HashMap<String, PendingFetchResponseNavigation>,
+    pending_fetch_response_body_streams: HashMap<String, String>,
     pending_subresource_fetches: HashMap<String, PendingSubresourceFetchRequest>,
     in_flight_subresource_fetches: HashMap<u64, InFlightSubresourceFetchRequest>,
     pending_subresource_fetch_auths: HashMap<String, PendingSubresourceFetchAuthRequest>,
@@ -166,6 +162,36 @@ impl TargetFetchState {
         drained
     }
 
+    fn drain_pending_fetch_response_navigations_for_session(
+        &mut self,
+        session_id: Option<&str>,
+    ) -> Vec<PendingFetchResponseNavigation> {
+        let request_ids = self
+            .pending_fetch_response_navigations
+            .iter()
+            .filter(|(_, pending)| {
+                session_id.is_none()
+                    || pending.owner_session_id().is_none()
+                    || pending.owner_session_id() == session_id
+            })
+            .map(|(request_id, _)| request_id.clone())
+            .collect::<Vec<_>>();
+        request_ids
+            .into_iter()
+            .filter_map(|request_id| {
+                self.pending_fetch_request_ids.remove(&request_id);
+                if let Some(handle) = self
+                    .pending_fetch_response_navigations
+                    .get(&request_id)
+                    .and_then(PendingFetchResponseNavigation::active_body_stream_handle)
+                {
+                    self.pending_fetch_response_body_streams.remove(handle);
+                }
+                self.pending_fetch_response_navigations.remove(&request_id)
+            })
+            .collect()
+    }
+
     fn drain_pending_subresource_fetches_for_session(
         &mut self,
         session_id: Option<&str>,
@@ -303,8 +329,8 @@ impl TargetFetchState {
         self.pending_fetch_navigations.contains_key(request_id)
             || self.pending_fetch_auth_navigations.contains_key(request_id)
             || self
-                .pending_fetch_response_transfers
-                .contains_request(request_id)
+                .pending_fetch_response_navigations
+                .contains_key(request_id)
             || self.pending_subresource_fetches.contains_key(request_id)
             || self
                 .pending_subresource_fetch_auths
@@ -339,7 +365,7 @@ impl TargetFetchState {
     ) -> (
         Vec<PendingFetchNavigation>,
         Vec<PendingFetchAuthNavigation>,
-        Vec<PausedDocumentTransfer>,
+        Vec<PendingFetchResponseNavigation>,
         Vec<(String, PendingSubresourceFetchRequest)>,
         Vec<(String, PendingSubresourceFetchAuthRequest)>,
         Vec<(String, PendingSubresourceFetchResponseRequest)>,
@@ -350,9 +376,15 @@ impl TargetFetchState {
         let pending_auth_navigations = std::mem::take(&mut self.pending_fetch_auth_navigations)
             .into_values()
             .collect::<Vec<_>>();
-        let pending_response_navigations = self
-            .pending_fetch_response_transfers
-            .drain_pending_transfers();
+        self.pending_fetch_response_body_streams.clear();
+        let pending_response_navigations =
+            std::mem::take(&mut self.pending_fetch_response_navigations)
+                .into_iter()
+                .map(|(request_id, pending)| {
+                    self.pending_fetch_request_ids.remove(&request_id);
+                    pending
+                })
+                .collect::<Vec<_>>();
         let pending_subresource_fetches = std::mem::take(&mut self.pending_subresource_fetches)
             .into_iter()
             .collect::<Vec<_>>();
@@ -373,11 +405,6 @@ impl TargetFetchState {
                 pending_auth_navigations
                     .iter()
                     .map(|pending| pending.fetch_request_id.as_str()),
-            )
-            .chain(
-                pending_response_navigations
-                    .iter()
-                    .map(|pending| pending.fetch_request_id()),
             )
             .chain(
                 pending_subresource_fetches
@@ -454,8 +481,8 @@ impl TargetFetchState {
         // more specific Fetch command path. Keep the internal error string
         // aligned with the Fetch domain wire error for wrong-action ids.
         if self
-            .pending_fetch_response_transfers
-            .contains_request(request_id)
+            .pending_fetch_response_navigations
+            .contains_key(request_id)
             || self.pending_fetch_navigations.contains_key(request_id)
             || self.pending_fetch_auth_navigations.contains_key(request_id)
             || self.pending_subresource_fetches.contains_key(request_id)
@@ -533,139 +560,79 @@ impl TargetFetchState {
     pub(crate) fn register_pending_fetch_response_navigation(
         &mut self,
         request_id: String,
-        document_navigation_token: Option<super::NavigationId>,
-        navigation: NavigationDispatchState,
-        body: DocumentBodySource,
+        pending: PendingFetchResponseNavigation,
     ) {
         self.pending_fetch_request_ids.insert(request_id.clone());
-        self.pending_fetch_response_transfers
-            .register_pending_navigation(request_id, document_navigation_token, navigation, body);
+        if let Some(handle) = pending.active_body_stream_handle() {
+            self.pending_fetch_response_body_streams
+                .insert(handle.to_owned(), request_id.clone());
+        }
+        self.pending_fetch_response_navigations
+            .insert(request_id, pending);
     }
 
-    pub(crate) fn take_pending_fetch_response_transfer_for_terminal_action(
+    pub(crate) fn pending_fetch_response_navigation(
+        &self,
+        request_id: &str,
+    ) -> Option<&PendingFetchResponseNavigation> {
+        self.pending_fetch_response_navigations.get(request_id)
+    }
+
+    pub(crate) fn take_pending_fetch_response_navigation_for_terminal_action(
         &mut self,
         request_id: &str,
-    ) -> Option<PausedDocumentTransfer> {
-        let transfer = self.pending_fetch_response_transfers.take(request_id)?;
+    ) -> Option<PendingFetchResponseNavigation> {
+        let pending = self.pending_fetch_response_navigations.remove(request_id)?;
+        if let Some(handle) = pending.active_body_stream_handle() {
+            self.pending_fetch_response_body_streams.remove(handle);
+        }
         self.pending_fetch_request_ids.remove(request_id);
-        Some(transfer)
+        Some(pending)
     }
 
-    pub(crate) fn take_pending_fetch_response_transfer(
+    pub(crate) fn set_pending_fetch_response_body_stream_handle(
         &mut self,
         request_id: &str,
-    ) -> Option<PausedDocumentTransfer> {
-        self.pending_fetch_response_transfers.take(request_id)
-    }
-
-    pub(crate) fn register_pending_fetch_response_transfer(
-        &mut self,
-        request_id: String,
-        transfer: PausedDocumentTransfer,
-    ) {
-        self.pending_fetch_request_ids.insert(request_id.clone());
-        self.pending_fetch_response_transfers
-            .register(request_id, transfer);
-    }
-
-    pub(crate) fn take_pending_fetch_response_body_stream_by_handle(
-        &mut self,
-        handle: &str,
-    ) -> Option<(String, PausedDocumentTransfer)> {
-        self.pending_fetch_response_transfers
-            .take_body_stream_by_handle(handle)
-    }
-
-    pub(crate) fn open_pending_fetch_response_body_stream(
-        &mut self,
-        runtime_slot: &mut TargetRuntimeSlot,
-        request_id: &str,
-        handle: String,
-    ) -> Result<Option<String>, String> {
-        let Some(transfer) = self.take_pending_fetch_response_transfer(request_id) else {
-            return Ok(None);
+        handle: Option<String>,
+    ) -> bool {
+        let Some(pending) = self.pending_fetch_response_navigations.get_mut(request_id) else {
+            return false;
         };
-        let opened = match transfer.open_body_stream(handle) {
-            Ok(opened) => opened,
-            Err(OpenBodyStreamError::NotOpenable(transfer)) => {
-                self.register_pending_fetch_response_transfer(request_id.to_owned(), *transfer);
-                return Ok(None);
-            }
-            Err(OpenBodyStreamError::Failed { transfer, message }) => {
-                self.register_pending_fetch_response_transfer(request_id.to_owned(), *transfer);
-                return Err(message);
-            }
-        };
-
-        let handle = opened.handle;
-        let buffered_bytes = opened.buffered_bytes;
-        self.register_pending_fetch_response_transfer(request_id.to_owned(), opened.transfer);
-        if let Some(bytes) = buffered_bytes {
-            runtime_slot.insert_io_stream(handle.clone(), bytes, 0);
+        if let Some(previous) = pending.active_body_stream_handle() {
+            self.pending_fetch_response_body_streams.remove(previous);
         }
-
-        Ok(Some(handle))
+        if let Some(handle) = handle.as_ref() {
+            self.pending_fetch_response_body_streams
+                .insert(handle.clone(), request_id.to_owned());
+        }
+        pending.set_active_body_stream_handle(handle);
+        true
     }
 
-    pub(crate) fn start_pending_fetch_response_body_stream_read(
-        &mut self,
+    pub(crate) fn pending_fetch_response_body_stream(
+        &self,
         handle: &str,
-        offset: Option<usize>,
-        size: Option<usize>,
-    ) -> PendingFetchResponseBodyStreamReadStart {
-        let Some((request_id, transfer)) =
-            self.take_pending_fetch_response_body_stream_by_handle(handle)
-        else {
-            return PendingFetchResponseBodyStreamReadStart::NotFound;
-        };
-
-        if let Some(offset) = offset
-            && offset != transfer.body_stream_offset().unwrap_or(0)
-        {
-            self.register_pending_fetch_response_transfer(request_id, transfer);
-            return PendingFetchResponseBodyStreamReadStart::OffsetNotSupported;
-        }
-
-        PendingFetchResponseBodyStreamReadStart::Pending(Box::new(
-            PendingFetchResponseBodyStreamReadDispatch::new(
-                request_id,
-                handle.to_owned(),
-                transfer,
-                size,
-            ),
+    ) -> Option<(&str, &PendingFetchResponseNavigation)> {
+        let request_id = self.pending_fetch_response_body_streams.get(handle)?;
+        Some((
+            request_id,
+            self.pending_fetch_response_navigations.get(request_id)?,
         ))
     }
 
-    pub(crate) fn finish_pending_fetch_response_body_stream_read(
+    pub(crate) fn drop_active_fetch_response_body_streams(
         &mut self,
-        runtime_slot: &mut TargetRuntimeSlot,
-        completed: super::super::fetch_support::CompletedFetchResponseBodyStreamReadDispatch,
-    ) -> PendingFetchResponseBodyStreamRead {
-        let request_id = completed.request_id().to_owned();
-        let handle = completed.handle().to_owned();
-        match completed.into_completed() {
-            Ok((bytes, eof, transfer)) => {
-                self.register_pending_fetch_response_transfer(request_id, transfer);
-                if eof {
-                    runtime_slot.insert_io_stream(handle, Vec::new(), 0);
-                }
-                PendingFetchResponseBodyStreamRead::Read { bytes, eof }
-            }
-            Err(completed) => {
-                let (transfer, message) = *completed;
-                self.register_pending_fetch_response_transfer(request_id, transfer);
-                PendingFetchResponseBodyStreamRead::Failed(message)
-            }
-        }
-    }
-
-    pub(crate) fn close_pending_fetch_response_body_stream(&mut self, handle: &str) -> bool {
-        let Some((request_id, _)) = self.take_pending_fetch_response_body_stream_by_handle(handle)
-        else {
-            return false;
-        };
-        self.pending_fetch_request_ids.remove(&request_id);
-        true
+    ) -> Vec<PendingFetchResponseNavigation> {
+        let request_ids = std::mem::take(&mut self.pending_fetch_response_body_streams)
+            .into_values()
+            .collect::<Vec<_>>();
+        request_ids
+            .into_iter()
+            .filter_map(|request_id| {
+                self.pending_fetch_request_ids.remove(&request_id);
+                self.pending_fetch_response_navigations.remove(&request_id)
+            })
+            .collect()
     }
 
     pub(crate) fn take_pending_subresource_fetch_request(
@@ -873,7 +840,7 @@ impl TargetFetchState {
     ) -> (
         Vec<PendingFetchNavigation>,
         Vec<PendingFetchAuthNavigation>,
-        Vec<PausedDocumentTransfer>,
+        Vec<PendingFetchResponseNavigation>,
         Vec<(String, PendingSubresourceFetchRequest)>,
         Vec<(String, PendingSubresourceFetchAuthRequest)>,
         Vec<(String, PendingSubresourceFetchResponseRequest)>,
@@ -887,7 +854,7 @@ impl TargetFetchState {
     ) -> (
         Vec<PendingFetchNavigation>,
         Vec<PendingFetchAuthNavigation>,
-        Vec<PausedDocumentTransfer>,
+        Vec<PendingFetchResponseNavigation>,
         Vec<(String, PendingSubresourceFetchRequest)>,
         Vec<(String, PendingSubresourceFetchAuthRequest)>,
         Vec<(String, PendingSubresourceFetchResponseRequest)>,
@@ -895,13 +862,8 @@ impl TargetFetchState {
         let pending_navigations = self.drain_pending_fetch_navigations_for_session(session_id);
         let pending_auth_navigations =
             self.drain_pending_fetch_auth_navigations_for_session(session_id);
-        let pending_response_navigations = self
-            .pending_fetch_response_transfers
-            .drain_pending_transfers_for_session(session_id);
-        for pending in &pending_response_navigations {
-            self.pending_fetch_request_ids
-                .remove(pending.fetch_request_id());
-        }
+        let pending_response_navigations =
+            self.drain_pending_fetch_response_navigations_for_session(session_id);
         let pending_subresource_fetches =
             self.drain_pending_subresource_fetches_for_session(session_id);
         let pending_subresource_auths =
@@ -929,7 +891,8 @@ impl TargetFetchState {
         self.pending_fetch_request_ids.clear();
         self.pending_fetch_navigations.clear();
         self.pending_fetch_auth_navigations.clear();
-        self.pending_fetch_response_transfers.clear();
+        self.pending_fetch_response_navigations.clear();
+        self.pending_fetch_response_body_streams.clear();
         self.pending_subresource_fetches.clear();
         self.in_flight_subresource_fetches.clear();
         self.pending_subresource_fetch_auths.clear();
@@ -940,7 +903,8 @@ impl TargetFetchState {
         self.pending_fetch_request_ids.is_empty()
             && self.pending_fetch_navigations.is_empty()
             && self.pending_fetch_auth_navigations.is_empty()
-            && self.pending_fetch_response_transfers.is_empty()
+            && self.pending_fetch_response_navigations.is_empty()
+            && self.pending_fetch_response_body_streams.is_empty()
             && self.pending_subresource_fetches.is_empty()
             && self.in_flight_subresource_fetches.is_empty()
             && self.pending_subresource_fetch_auths.is_empty()
@@ -952,7 +916,7 @@ impl TargetFetchState {
             "pendingFetchRequestIdCount": self.pending_fetch_request_ids.len(),
             "pendingFetchNavigationCount": self.pending_fetch_navigations.len(),
             "pendingFetchAuthNavigationCount": self.pending_fetch_auth_navigations.len(),
-            "pendingFetchResponseTransferPresent": !self.pending_fetch_response_transfers.is_empty(),
+            "pendingFetchResponseTransferPresent": !self.pending_fetch_response_navigations.is_empty(),
             "pendingSubresourceFetchCount": self.pending_subresource_fetches.len(),
             "inFlightSubresourceFetchCount": self.in_flight_subresource_fetches.len(),
             "pendingSubresourceFetchAuthCount": self.pending_subresource_fetch_auths.len(),
@@ -1071,6 +1035,20 @@ impl TargetFetchConfig {
             self.enabled || self.handle_auth_requests,
             &self.patterns,
         )
+    }
+
+    pub(crate) fn subresource_interception_config_after_removing_fetch_session(
+        &self,
+        session_id: Option<&str>,
+    ) -> Option<(bool, Option<moli_core::page::SubresourceResourceType>)> {
+        let key = session_id.map(str::to_owned);
+        if !self.fetch_sessions.contains_key(&key) {
+            return None;
+        }
+        let mut remaining = self.clone();
+        let removed = remaining.remove_fetch_session(session_id);
+        debug_assert!(removed, "known Fetch session must be removable");
+        Some(remaining.subresource_interception_config())
     }
 
     pub(crate) fn subresource_interception_snapshot(
@@ -1843,14 +1821,10 @@ impl TargetFetchOwner {
             .register_pending_fetch_navigation_request(pending);
     }
 
-    pub(crate) fn drop_active_fetch_response_body_streams(&mut self) {
-        for request_id in self
-            .pending
-            .pending_fetch_response_transfers
-            .drop_active_body_streams()
-        {
-            self.pending.pending_fetch_request_ids.remove(&request_id);
-        }
+    pub(crate) fn drop_active_fetch_response_body_streams(
+        &mut self,
+    ) -> Vec<PendingFetchResponseNavigation> {
+        self.pending.drop_active_fetch_response_body_streams()
     }
 
     pub(crate) fn consume_pending_request_action(
@@ -1890,41 +1864,41 @@ impl TargetFetchOwner {
     pub(crate) fn register_pending_fetch_response_navigation(
         &mut self,
         request_id: String,
-        document_navigation_token: Option<super::NavigationId>,
-        navigation: NavigationDispatchState,
-        body: DocumentBodySource,
-    ) {
-        self.pending.register_pending_fetch_response_navigation(
-            request_id,
-            document_navigation_token,
-            navigation,
-            body,
-        );
-    }
-
-    pub(crate) fn take_pending_fetch_response_transfer_for_terminal_action(
-        &mut self,
-        request_id: &str,
-    ) -> Option<PausedDocumentTransfer> {
-        self.pending
-            .take_pending_fetch_response_transfer_for_terminal_action(request_id)
-    }
-
-    pub(crate) fn take_pending_fetch_response_transfer(
-        &mut self,
-        request_id: &str,
-    ) -> Option<PausedDocumentTransfer> {
-        self.pending
-            .take_pending_fetch_response_transfer(request_id)
-    }
-
-    pub(crate) fn register_pending_fetch_response_transfer(
-        &mut self,
-        request_id: String,
-        transfer: PausedDocumentTransfer,
+        pending: PendingFetchResponseNavigation,
     ) {
         self.pending
-            .register_pending_fetch_response_transfer(request_id, transfer);
+            .register_pending_fetch_response_navigation(request_id, pending);
+    }
+
+    pub(crate) fn pending_fetch_response_navigation(
+        &self,
+        request_id: &str,
+    ) -> Option<&PendingFetchResponseNavigation> {
+        self.pending.pending_fetch_response_navigation(request_id)
+    }
+
+    pub(crate) fn take_pending_fetch_response_navigation_for_terminal_action(
+        &mut self,
+        request_id: &str,
+    ) -> Option<PendingFetchResponseNavigation> {
+        self.pending
+            .take_pending_fetch_response_navigation_for_terminal_action(request_id)
+    }
+
+    pub(crate) fn set_pending_fetch_response_body_stream_handle(
+        &mut self,
+        request_id: &str,
+        handle: Option<String>,
+    ) -> bool {
+        self.pending
+            .set_pending_fetch_response_body_stream_handle(request_id, handle)
+    }
+
+    pub(crate) fn pending_fetch_response_body_stream(
+        &self,
+        handle: &str,
+    ) -> Option<(&str, &PendingFetchResponseNavigation)> {
+        self.pending.pending_fetch_response_body_stream(handle)
     }
 
     pub(crate) fn pending_subresource_fetch_response_request(
@@ -2072,40 +2046,6 @@ impl TargetFetchOwner {
             .register_pending_subresource_fetch_response_request(request_id, pending);
     }
 
-    pub(crate) fn open_pending_fetch_response_body_stream(
-        &mut self,
-        runtime_slot: &mut TargetRuntimeSlot,
-        request_id: &str,
-        handle: String,
-    ) -> Result<Option<String>, String> {
-        self.pending
-            .open_pending_fetch_response_body_stream(runtime_slot, request_id, handle)
-    }
-
-    pub(crate) fn start_pending_fetch_response_body_stream_read(
-        &mut self,
-        handle: &str,
-        offset: Option<usize>,
-        size: Option<usize>,
-    ) -> PendingFetchResponseBodyStreamReadStart {
-        self.pending
-            .start_pending_fetch_response_body_stream_read(handle, offset, size)
-    }
-
-    pub(crate) fn finish_pending_fetch_response_body_stream_read(
-        &mut self,
-        runtime_slot: &mut TargetRuntimeSlot,
-        completed: super::super::fetch_support::CompletedFetchResponseBodyStreamReadDispatch,
-    ) -> PendingFetchResponseBodyStreamRead {
-        self.pending
-            .finish_pending_fetch_response_body_stream_read(runtime_slot, completed)
-    }
-
-    pub(crate) fn close_pending_fetch_response_body_stream(&mut self, handle: &str) -> bool {
-        self.pending
-            .close_pending_fetch_response_body_stream(handle)
-    }
-
     #[cfg(test)]
     pub(crate) fn has_in_flight_subresource_fetches_for_test(&self) -> bool {
         !self.pending.in_flight_subresource_fetches.is_empty()
@@ -2150,30 +2090,15 @@ impl TargetFetchOwner {
             || !self.pending.pending_subresource_fetches.is_empty()
             || !self.pending.pending_subresource_fetch_auths.is_empty()
             || !self.pending.pending_subresource_fetch_responses.is_empty()
-            || !self.pending.pending_fetch_response_transfers.is_empty()
+            || !self.pending.pending_fetch_response_navigations.is_empty()
             || !self.pending.in_flight_subresource_fetches.is_empty()
     }
 
     #[cfg(test)]
-    pub(crate) fn pending_fetch_response_transfer_is_pending_for_test(
-        &self,
-        request_id: &str,
-    ) -> bool {
+    pub(crate) fn has_pending_fetch_response_navigation_for_test(&self, request_id: &str) -> bool {
         self.pending
-            .pending_fetch_response_transfers
-            .get(request_id)
-            .is_some_and(PausedDocumentTransfer::is_pending)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn pending_fetch_response_prepared_renderer_agent_for_test(
-        &self,
-        request_id: &str,
-    ) -> Option<moli_core::page::RendererDevToolsAgentToken> {
-        self.pending
-            .pending_fetch_response_transfers
-            .get(request_id)
-            .and_then(PausedDocumentTransfer::prepared_renderer_agent_token)
+            .pending_fetch_response_navigations
+            .contains_key(request_id)
     }
 
     #[cfg(test)]
@@ -2182,8 +2107,9 @@ impl TargetFetchOwner {
         handle: &str,
     ) -> Option<&str> {
         self.pending
-            .pending_fetch_response_transfers
-            .active_body_stream_request_id(handle)
+            .pending_fetch_response_body_streams
+            .get(handle)
+            .map(String::as_str)
     }
 
     pub(crate) fn drain_pending_requests(
@@ -2191,7 +2117,7 @@ impl TargetFetchOwner {
     ) -> (
         Vec<PendingFetchNavigation>,
         Vec<PendingFetchAuthNavigation>,
-        Vec<PausedDocumentTransfer>,
+        Vec<PendingFetchResponseNavigation>,
         Vec<(String, PendingSubresourceFetchRequest)>,
         Vec<(String, PendingSubresourceFetchAuthRequest)>,
         Vec<(String, PendingSubresourceFetchResponseRequest)>,
@@ -2205,7 +2131,7 @@ impl TargetFetchOwner {
     ) -> (
         Vec<PendingFetchNavigation>,
         Vec<PendingFetchAuthNavigation>,
-        Vec<PausedDocumentTransfer>,
+        Vec<PendingFetchResponseNavigation>,
         Vec<(String, PendingSubresourceFetchRequest)>,
         Vec<(String, PendingSubresourceFetchAuthRequest)>,
         Vec<(String, PendingSubresourceFetchResponseRequest)>,
@@ -2223,7 +2149,7 @@ impl TargetFetchOwner {
 mod tests {
     use super::*;
     use crate::conn::{
-        CapturedBody, FetchAuthChallenge, NavigationResultProjection,
+        CapturedBody, FetchAuthChallenge, NavigationDispatchState, NavigationResultProjection,
         PendingSubresourceFetchAuthStage, PendingSubresourceFetchAuthStageChain,
         PendingSubresourceFetchRequestStage, PendingSubresourceFetchRequestStageChain,
     };
@@ -2239,6 +2165,38 @@ mod tests {
             Some("TID-fetch-state".to_owned()),
             1,
         )
+    }
+
+    #[test]
+    fn session_disposal_preview_preserves_config_and_projects_remaining_sessions() {
+        let script_pattern = FetchInterceptionPattern {
+            url_pattern: "*/script.js".to_owned(),
+            resource_type_filter: Some(FetchResourceTypeFilter::Script),
+            request_stage: FetchRequestStage::Request,
+        };
+        let image_pattern = FetchInterceptionPattern {
+            url_pattern: "*/image.png".to_owned(),
+            resource_type_filter: Some(FetchResourceTypeFilter::Image),
+            request_stage: FetchRequestStage::Request,
+        };
+        let mut config = TargetFetchConfig::default();
+        config.configure(Some("SID-A".to_owned()), false, vec![script_pattern]);
+        config.configure(Some("SID-B".to_owned()), false, vec![image_pattern]);
+        let original = config.clone();
+
+        assert_eq!(
+            config.subresource_interception_config_after_removing_fetch_session(Some("SID-A")),
+            Some((true, Some(SubresourceResourceType::Image)))
+        );
+        assert_eq!(
+            config, original,
+            "disposal preview must not mutate raw state"
+        );
+        assert_eq!(
+            config
+                .subresource_interception_config_after_removing_fetch_session(Some("SID-missing")),
+            None
+        );
     }
 
     fn pending_subresource_fetch(

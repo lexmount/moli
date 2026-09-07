@@ -86,6 +86,7 @@ pub(crate) async fn dispose_live_handlers_async(
     background_events: &mut Vec<BackgroundProtocolEvent>,
     protocol_events: &mut Vec<BackgroundProtocolEvent>,
     plan: &SessionDisposalPlan,
+    renderer_policy_reconciled: bool,
 ) -> DevToolsSessionHandlerDisposal {
     let mut disposal = DevToolsSessionHandlerDisposal {
         first_error: None,
@@ -93,7 +94,13 @@ pub(crate) async fn dispose_live_handlers_async(
     };
     for handler in DevToolsSessionHandlers::for_target(plan.target()).handlers {
         let result = handler
-            .dispose_async(conn, background_events, protocol_events, plan)
+            .dispose_async(
+                conn,
+                background_events,
+                protocol_events,
+                plan,
+                renderer_policy_reconciled,
+            )
             .await;
         match result {
             Ok(Some(predecessor)) => {
@@ -150,6 +157,7 @@ impl DevToolsSessionDomainHandler {
         background_events: &mut Vec<BackgroundProtocolEvent>,
         protocol_events: &mut Vec<BackgroundProtocolEvent>,
         plan: &SessionDisposalPlan,
+        renderer_policy_reconciled: bool,
     ) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
         let session_id = plan.session_id();
         match self {
@@ -170,6 +178,7 @@ impl DevToolsSessionDomainHandler {
                     conn,
                     background_events,
                     session_id,
+                    renderer_policy_reconciled,
                 ))
                 .await
             }

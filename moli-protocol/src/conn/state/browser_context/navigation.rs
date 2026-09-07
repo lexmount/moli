@@ -10,6 +10,92 @@ impl BrowserContext {
             .is_some_and(|contents| contents.navigation().has_paused_auth_for_test())
     }
 
+    pub(in crate::conn) fn pause_navigation_request_for_target(
+        &mut self,
+        target: &str,
+        navigation: moli_core::browser::NavigationId,
+        request: crate::conn::state::NavigationRequestInterception,
+    ) -> Result<crate::conn::state::NavigationInterceptionPermit, String> {
+        self.web_contents_for_target_mut(target)
+            .ok_or("navigation WebContents unavailable")?
+            .pause_navigation_request(navigation, request)
+    }
+
+    pub(in crate::conn) fn take_navigation_request(
+        &mut self,
+        permit: crate::conn::state::NavigationInterceptionPermit,
+    ) -> Option<crate::conn::state::ClaimedNavigationRequest> {
+        self.physical
+            .web_contents
+            .get_mut(&permit.web_contents())?
+            .take_navigation_request(permit)
+    }
+
+    pub(in crate::conn) fn start_claimed_navigation_request(
+        &mut self,
+        request: crate::conn::state::ClaimedNavigationRequest,
+        fetch_defaults: moli_fetch::FetchConfig,
+        permissions: &moli_core::browser::PermissionDefaults,
+    ) -> Result<
+        (
+            String,
+            crate::conn::state::web_contents::InterceptedNavigationLoad,
+        ),
+        String,
+    > {
+        let web_contents = request.permit().web_contents();
+        let target_id = self
+            .page_targets
+            .get_for_web_contents(web_contents)
+            .ok_or("navigation Target projection unavailable")?
+            .target_id()
+            .to_owned();
+        let inherited = self.physical.inherited_document_policy(
+            fetch_defaults,
+            permissions,
+            &self.global_extra_headers,
+            self.global_network_conditions,
+        );
+        let load = self
+            .physical
+            .web_contents
+            .get_mut(&web_contents)
+            .ok_or("navigation WebContents unavailable")?
+            .start_claimed_navigation_request(request, inherited)?;
+        self.project_navigation_load_for_target(&target_id, &load.load)?;
+        Ok((target_id, load))
+    }
+
+    pub(in crate::conn) fn start_navigation_load_for_interception(
+        &mut self,
+        permit: crate::conn::state::NavigationInterceptionPermit,
+        policy: moli_core::browser::NavigationRequestLoadPolicy,
+        fetch_defaults: moli_fetch::FetchConfig,
+        permissions: &moli_core::browser::PermissionDefaults,
+    ) -> Result<(String, crate::conn::state::AdmittedNavigationLoad), String> {
+        let web_contents = permit.web_contents();
+        let target_id = self
+            .page_targets
+            .get_for_web_contents(web_contents)
+            .ok_or("navigation Target projection unavailable")?
+            .target_id()
+            .to_owned();
+        let inherited = self.physical.inherited_document_policy(
+            fetch_defaults,
+            permissions,
+            &self.global_extra_headers,
+            self.global_network_conditions,
+        );
+        let load = self
+            .physical
+            .web_contents
+            .get_mut(&web_contents)
+            .ok_or("navigation WebContents unavailable")?
+            .start_navigation_load_for_interception(permit, policy, inherited)?;
+        self.project_navigation_load_for_target(&target_id, &load)?;
+        Ok((target_id, load))
+    }
+
     pub(in crate::conn) fn pause_navigation_auth(
         &mut self,
         response: crate::conn::state::web_contents::InterceptedNavigationResponse<
@@ -33,6 +119,48 @@ impl BrowserContext {
             .web_contents
             .get_mut(&permit.web_contents())?
             .take_navigation_auth(permit)
+    }
+
+    pub(in crate::conn) fn pause_navigation_response_for_target(
+        &mut self,
+        target: &str,
+        navigation: moli_core::browser::NavigationId,
+        transfer: crate::conn::PausedDocumentTransfer,
+    ) -> Result<crate::conn::state::web_contents::NavigationInterceptionPermit, String> {
+        self.web_contents_for_target_mut(target)
+            .ok_or("navigation WebContents unavailable")?
+            .pause_navigation_response(navigation, transfer)
+    }
+
+    pub(in crate::conn) fn take_navigation_response(
+        &mut self,
+        permit: crate::conn::state::web_contents::NavigationInterceptionPermit,
+    ) -> Option<crate::conn::PausedDocumentTransfer> {
+        self.physical
+            .web_contents
+            .get_mut(&permit.web_contents())?
+            .take_navigation_response(permit)
+    }
+
+    pub(in crate::conn) fn restore_navigation_response(
+        &mut self,
+        permit: crate::conn::state::web_contents::NavigationInterceptionPermit,
+        transfer: crate::conn::PausedDocumentTransfer,
+    ) -> Result<(), Box<crate::conn::PausedDocumentTransfer>> {
+        let Some(contents) = self.physical.web_contents.get_mut(&permit.web_contents()) else {
+            return Err(Box::new(transfer));
+        };
+        contents.restore_navigation_response(permit, transfer)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn paused_navigation_response_for_target(
+        &self,
+        target: &str,
+    ) -> Option<&crate::conn::PausedDocumentTransfer> {
+        self.web_contents_for_target(target)?
+            .navigation()
+            .paused_response_for_test()
     }
 
     pub(in crate::conn) fn resolve_target_history_traversal(

@@ -1,15 +1,15 @@
-use std::collections::HashMap;
 use std::str::FromStr;
 use url::Url;
 
 use super::body_spool::ensure_materialize_limit;
 use super::{
-    CapturedBody, CapturedBodyWriter, CdpConnection, CommandOwnerScope, NavigationDispatchState,
-    NavigationId, NavigationLoadOutcome, PausedResponsePreparedDocument,
+    CapturedBody, CapturedBodyWriter, CdpConnection, ClaimedNavigationRequest, CommandOwnerScope,
+    NavigationDispatchState, NavigationId, NavigationLoadOutcome, PausedResponsePreparedDocument,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::domains::network::MainDocumentBodyProgressSource;
 use moli_cookie_jar::StoredCookieQueryReport;
+use moli_core::browser::NavigationRequestLoadPolicy;
 use moli_core::page::{
     PendingSubresourceContinueOutcome, SubresourceAuthCredentials, SubresourceNetworkRequestHandle,
     SubresourceResourceType,
@@ -442,16 +442,82 @@ impl PendingSubresourceFetchOwnerKind {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PendingFetchNavigation {
     pub fetch_request_id: String,
     pub interception_session_id: Option<String>,
-    pub(crate) document_navigation_token: Option<NavigationId>,
+    pub(crate) navigation_permit: super::state::NavigationInterceptionPermit,
     pub navigation: NavigationDispatchState,
     pub(crate) request_cookie_report: Option<StoredCookieQueryReport>,
     pub intercept_response: bool,
     pub response_stage_url_match_policy: ResponseStageUrlMatchPolicy,
     pub auth_required_blocked_intercepts: Vec<DevToolsNetworkInterceptId>,
+}
+
+impl PendingFetchNavigation {
+    #[cfg(test)]
+    pub(crate) fn test_navigation_permit() -> super::state::NavigationInterceptionPermit {
+        super::state::NavigationInterceptionPermit::for_correlation_test()
+    }
+}
+
+/// A DevTools request-stage projection claimed together with the Browser work
+/// addressed by its permit. `request` is absent only after the exact navigation
+/// was already superseded or otherwise retired.
+#[derive(Debug)]
+pub(crate) struct ClaimedFetchNavigation {
+    pub(crate) pending: PendingFetchNavigation,
+    pub(crate) request: Option<ClaimedNavigationRequest>,
+}
+
+impl ClaimedFetchNavigation {
+    pub(crate) fn new(
+        pending: PendingFetchNavigation,
+        request: Option<ClaimedNavigationRequest>,
+    ) -> Self {
+        Self { pending, request }
+    }
+
+    pub(crate) fn navigation_token(&self) -> NavigationId {
+        self.pending.navigation_permit.navigation()
+    }
+
+    pub(crate) fn is_current(&self) -> bool {
+        self.request.is_some()
+    }
+
+    pub(crate) fn apply_overrides(
+        &mut self,
+        requested_url: Option<Url>,
+        method: Option<String>,
+        body: Option<String>,
+        headers: Option<Vec<(String, String)>>,
+    ) {
+        if let Some(request) = self.request.as_mut() {
+            request.apply_overrides(
+                requested_url.clone(),
+                method.clone(),
+                body.clone(),
+                headers.clone(),
+            );
+        }
+        if let Some(requested_url) = requested_url {
+            self.pending.navigation.requested_url = requested_url;
+        }
+        if let Some(method) = method {
+            self.pending.navigation.request_method = method;
+        }
+        if let Some(body) = body {
+            self.pending.navigation.set_request_body_text(body);
+        }
+        if let Some(headers) = headers {
+            self.pending.navigation.request_headers = headers;
+        }
+    }
+
+    pub(crate) fn into_parts(self) -> (PendingFetchNavigation, Option<ClaimedNavigationRequest>) {
+        (self.pending, self.request)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -493,29 +559,250 @@ impl PendingFetchAuthNavigation {
     }
 }
 
+/// DevTools correlation for a Browser-owned response-stage pause.
+///
+/// The response body, prepared Document and cancellation authority live in
+/// the pending WebContents navigation addressed by `permit`.
+#[derive(Debug)]
+pub struct PendingFetchResponseNavigation {
+    pub navigation: NavigationDispatchState,
+    pub(crate) permit: super::state::NavigationInterceptionPermit,
+    active_body_stream_handle: Option<String>,
+}
+
+impl PendingFetchResponseNavigation {
+    pub(crate) fn new(
+        navigation: NavigationDispatchState,
+        permit: super::state::NavigationInterceptionPermit,
+    ) -> Self {
+        Self {
+            navigation,
+            permit,
+            active_body_stream_handle: None,
+        }
+    }
+
+    pub(crate) fn owner_session_id(&self) -> Option<&str> {
+        self.navigation.session_id.as_deref()
+    }
+
+    pub(crate) fn active_body_stream_handle(&self) -> Option<&str> {
+        self.active_body_stream_handle.as_deref()
+    }
+
+    pub(crate) fn set_active_body_stream_handle(&mut self, handle: Option<String>) {
+        self.active_body_stream_handle = handle;
+    }
+}
+
+/// One terminal DevTools decision claimed together with its Browser work.
+///
+/// `transfer` is absent when the exact Browser navigation was already retired.
+/// The remaining projection still settles the old frontend navigation without
+/// reselecting or mutating the winning Document.
+#[derive(Debug)]
+pub(crate) struct ClaimedFetchResponseNavigation {
+    request_id: String,
+    pending: PendingFetchResponseNavigation,
+    transfer: Option<PausedDocumentTransfer>,
+}
+
+impl ClaimedFetchResponseNavigation {
+    pub(crate) fn new(
+        request_id: String,
+        pending: PendingFetchResponseNavigation,
+        transfer: Option<PausedDocumentTransfer>,
+    ) -> Self {
+        Self {
+            request_id,
+            pending,
+            transfer,
+        }
+    }
+
+    pub(crate) fn into_restore_parts(
+        self,
+    ) -> Option<(
+        String,
+        PendingFetchResponseNavigation,
+        PausedDocumentTransfer,
+    )> {
+        Some((self.request_id, self.pending, self.transfer?))
+    }
+
+    pub(crate) fn into_pending_streaming_document_response_navigation(
+        self,
+    ) -> Result<PendingStreamingDocumentResponseNavigation, Box<Self>> {
+        let Self {
+            request_id,
+            pending,
+            transfer,
+        } = self;
+        let Some(PausedDocumentTransfer {
+            request_load_policy,
+            state,
+        }) = transfer
+        else {
+            return Err(Box::new(Self {
+                request_id,
+                pending,
+                transfer: None,
+            }));
+        };
+        match state {
+            PausedDocumentTransferState::Pending {
+                body:
+                    DocumentBodySource::StreamingRaw {
+                        response,
+                        network_observation_journal,
+                        body_progress_source,
+                        prepared_document,
+                        ..
+                    },
+            } => Ok(PendingStreamingDocumentResponseNavigation {
+                permit: pending.permit,
+                request_load_policy,
+                navigation: pending.navigation,
+                response,
+                network_observation_journal,
+                body_progress_source,
+                prepared_document,
+            }),
+            state => Err(Box::new(Self {
+                request_id,
+                pending,
+                transfer: Some(PausedDocumentTransfer {
+                    request_load_policy,
+                    state,
+                }),
+            })),
+        }
+    }
+
+    pub(crate) async fn continue_response_async(
+        self,
+        conn: &mut CdpConnection,
+        response_code: Option<u16>,
+        response_headers: Vec<(String, String)>,
+    ) -> Result<
+        (
+            Option<NavigationId>,
+            NavigationDispatchState,
+            Result<NavigationLoadOutcome, String>,
+        ),
+        Self,
+    > {
+        let Self {
+            request_id,
+            pending,
+            transfer,
+        } = self;
+        let Some(transfer) = transfer else {
+            return Ok((
+                Some(pending.permit.navigation()),
+                pending.navigation,
+                Err("renderer channel navigation was superseded by a newer navigation".to_owned()),
+            ));
+        };
+        match transfer
+            .continue_response_async(
+                conn,
+                pending.permit,
+                &pending.navigation,
+                response_code,
+                response_headers,
+            )
+            .await
+        {
+            Ok(completed) => Ok((
+                Some(pending.permit.navigation()),
+                pending.navigation,
+                completed,
+            )),
+            Err(transfer) => Err(Self {
+                request_id,
+                pending,
+                transfer: Some(transfer),
+            }),
+        }
+    }
+
+    pub(crate) async fn fulfill_synthetic_async(
+        self,
+        conn: &mut CdpConnection,
+        response_code: u16,
+        response_headers: Vec<(String, String)>,
+        synthetic_body: CapturedBody,
+    ) -> (
+        Option<NavigationId>,
+        NavigationDispatchState,
+        Result<NavigationLoadOutcome, String>,
+    ) {
+        let Self {
+            pending, transfer, ..
+        } = self;
+        let Some(transfer) = transfer else {
+            return (
+                Some(pending.permit.navigation()),
+                pending.navigation,
+                Err("renderer channel navigation was superseded by a newer navigation".to_owned()),
+            );
+        };
+        let navigation = transfer
+            .fulfill_synthetic_async(
+                conn,
+                pending.permit,
+                &pending.navigation,
+                response_code,
+                response_headers,
+                synthetic_body,
+            )
+            .await;
+        (
+            Some(pending.permit.navigation()),
+            pending.navigation,
+            navigation,
+        )
+    }
+
+    pub(crate) fn fail(
+        self,
+        error_text: String,
+    ) -> (
+        Option<NavigationId>,
+        NavigationDispatchState,
+        Result<NavigationLoadOutcome, String>,
+    ) {
+        let Self {
+            pending, transfer, ..
+        } = self;
+        drop(transfer);
+        (
+            Some(pending.permit.navigation()),
+            pending.navigation,
+            Err(error_text),
+        )
+    }
+}
+
 #[derive(Debug)]
 pub struct PausedDocumentTransfer {
-    fetch_request_id: String,
+    request_load_policy: NavigationRequestLoadPolicy,
     state: PausedDocumentTransferState,
 }
 
 #[derive(Debug)]
 enum PausedDocumentTransferState {
     Pending {
-        document_navigation_token: Option<NavigationId>,
-        navigation: NavigationDispatchState,
         body: DocumentBodySource,
     },
     ActiveBodyStream {
-        handle: String,
         stream: ActiveDocumentBodyStreamState,
     },
 }
 
 #[derive(Debug)]
 struct ActiveDocumentBodyStreamState {
-    document_navigation_token: Option<NavigationId>,
-    navigation: NavigationDispatchState,
     requested_url: Url,
     request_method: String,
     request_headers: Vec<(String, String)>,
@@ -526,143 +813,6 @@ struct ActiveDocumentBodyStreamState {
     unread_body: Vec<u8>,
     offset: usize,
     finished: bool,
-}
-
-#[derive(Debug, Default)]
-pub struct PausedDocumentTransfers {
-    transfers: HashMap<String, PausedDocumentTransfer>,
-    body_stream_handles: HashMap<String, String>,
-}
-
-impl PausedDocumentTransfers {
-    pub(crate) fn is_empty(&self) -> bool {
-        self.transfers.is_empty() && self.body_stream_handles.is_empty()
-    }
-
-    pub(crate) fn contains_request(&self, request_id: &str) -> bool {
-        self.transfers.contains_key(request_id)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn get(&self, request_id: &str) -> Option<&PausedDocumentTransfer> {
-        self.transfers.get(request_id)
-    }
-
-    #[cfg(test)]
-    pub(crate) fn active_body_stream_request_id(&self, handle: &str) -> Option<&str> {
-        self.body_stream_handles.get(handle).map(String::as_str)
-    }
-
-    pub(crate) fn clear(&mut self) {
-        self.transfers.clear();
-        self.body_stream_handles.clear();
-    }
-
-    pub(crate) fn drain_pending_transfers(&mut self) -> Vec<PausedDocumentTransfer> {
-        self.body_stream_handles.clear();
-        std::mem::take(&mut self.transfers)
-            .into_values()
-            .filter(PausedDocumentTransfer::is_pending)
-            .collect()
-    }
-
-    pub(crate) fn drain_pending_transfers_for_session(
-        &mut self,
-        session_id: Option<&str>,
-    ) -> Vec<PausedDocumentTransfer> {
-        let request_ids = self
-            .transfers
-            .iter()
-            .filter(|(_, transfer)| {
-                let owner_session_id = transfer.owner_session_id();
-                transfer.is_pending()
-                    && (session_id.is_none()
-                        || owner_session_id.is_none()
-                        || owner_session_id == session_id)
-            })
-            .map(|(request_id, _)| request_id.clone())
-            .collect::<Vec<_>>();
-        request_ids
-            .into_iter()
-            .filter_map(|request_id| self.transfers.remove(&request_id))
-            .collect()
-    }
-
-    pub(crate) fn drop_active_body_streams(&mut self) -> Vec<String> {
-        let mut dropped_request_ids = Vec::new();
-        self.transfers.retain(|request_id, transfer| {
-            let keep = transfer.is_pending();
-            if !keep {
-                dropped_request_ids.push(request_id.clone());
-            }
-            keep
-        });
-        self.body_stream_handles.clear();
-        dropped_request_ids
-    }
-
-    pub(crate) fn take(&mut self, request_id: &str) -> Option<PausedDocumentTransfer> {
-        let transfer = self.transfers.remove(request_id)?;
-        self.remove_body_stream_handle_for_request(request_id, &transfer);
-        Some(transfer)
-    }
-
-    pub(crate) fn register(&mut self, request_id: String, transfer: PausedDocumentTransfer) {
-        self.clear_body_stream_handle_owner(&request_id);
-        if let Some(handle) = transfer.active_body_stream_handle() {
-            self.body_stream_handles
-                .insert(handle.to_owned(), request_id.clone());
-        }
-        self.transfers.insert(request_id, transfer);
-    }
-
-    pub(crate) fn register_pending_navigation(
-        &mut self,
-        request_id: String,
-        document_navigation_token: Option<NavigationId>,
-        navigation: NavigationDispatchState,
-        body: DocumentBodySource,
-    ) {
-        self.register(
-            request_id.clone(),
-            PausedDocumentTransfer::pending(
-                request_id,
-                document_navigation_token,
-                navigation,
-                body,
-            ),
-        );
-    }
-
-    pub(crate) fn take_body_stream_by_handle(
-        &mut self,
-        handle: &str,
-    ) -> Option<(String, PausedDocumentTransfer)> {
-        let request_id = self.body_stream_handles.remove(handle)?;
-        let transfer = self.transfers.remove(&request_id)?;
-        if transfer.active_body_stream_handle() == Some(handle) {
-            Some((request_id, transfer))
-        } else {
-            self.register(request_id, transfer);
-            None
-        }
-    }
-
-    fn remove_body_stream_handle_for_request(
-        &mut self,
-        request_id: &str,
-        transfer: &PausedDocumentTransfer,
-    ) {
-        if let Some(handle) = transfer.active_body_stream_handle() {
-            self.body_stream_handles.remove(handle);
-        }
-        self.clear_body_stream_handle_owner(request_id);
-    }
-
-    fn clear_body_stream_handle_owner(&mut self, request_id: &str) {
-        self.body_stream_handles
-            .retain(|_, owner_request_id| owner_request_id != request_id);
-    }
 }
 
 #[derive(Debug)]
@@ -762,7 +912,8 @@ pub(crate) enum OpenBodyStreamError {
 }
 
 pub(crate) struct PendingStreamingDocumentResponseNavigation {
-    pub(crate) document_navigation_token: NavigationId,
+    pub(crate) permit: super::state::NavigationInterceptionPermit,
+    pub(crate) request_load_policy: NavigationRequestLoadPolicy,
     pub(crate) navigation: NavigationDispatchState,
     pub(crate) response: StreamingRawResponse,
     pub(crate) network_observation_journal: NetworkObservationJournal,
@@ -772,27 +923,13 @@ pub(crate) struct PendingStreamingDocumentResponseNavigation {
 
 impl PausedDocumentTransfer {
     pub(crate) fn pending(
-        fetch_request_id: String,
-        document_navigation_token: Option<NavigationId>,
-        navigation: NavigationDispatchState,
+        request_load_policy: NavigationRequestLoadPolicy,
         body: DocumentBodySource,
     ) -> Self {
         Self {
-            fetch_request_id,
-            state: PausedDocumentTransferState::Pending {
-                document_navigation_token,
-                navigation,
-                body,
-            },
+            request_load_policy,
+            state: PausedDocumentTransferState::Pending { body },
         }
-    }
-
-    pub(crate) fn fetch_request_id(&self) -> &str {
-        &self.fetch_request_id
-    }
-
-    pub(crate) fn is_pending(&self) -> bool {
-        matches!(self.state, PausedDocumentTransferState::Pending { .. })
     }
 
     #[cfg(test)]
@@ -812,39 +949,17 @@ impl PausedDocumentTransfer {
         }
     }
 
-    fn owner_session_id(&self) -> Option<&str> {
-        match &self.state {
-            PausedDocumentTransferState::Pending { navigation, .. }
-            | PausedDocumentTransferState::ActiveBodyStream {
-                stream: ActiveDocumentBodyStreamState { navigation, .. },
-                ..
-            } => navigation.session_id.as_deref(),
-        }
-    }
-
-    fn active_body_stream_handle(&self) -> Option<&str> {
-        match &self.state {
-            PausedDocumentTransferState::ActiveBodyStream { handle, .. } => Some(handle),
-            PausedDocumentTransferState::Pending { .. } => None,
-        }
-    }
-
     pub(crate) fn open_body_stream(
         self,
         handle: String,
     ) -> Result<PendingFetchResponseOpenedBodyStream, OpenBodyStreamError> {
         let Self {
-            fetch_request_id,
+            request_load_policy,
             state,
         } = self;
-        let PausedDocumentTransferState::Pending {
-            document_navigation_token,
-            navigation,
-            body,
-        } = state
-        else {
+        let PausedDocumentTransferState::Pending { body } = state else {
             return Err(OpenBodyStreamError::NotOpenable(Box::new(Self {
-                fetch_request_id,
+                request_load_policy,
                 state,
             })));
         };
@@ -858,15 +973,12 @@ impl PausedDocumentTransfer {
                 body_progress_source,
                 prepared_document: _,
             } => Ok(PendingFetchResponseOpenedBodyStream {
-                handle: handle.clone(),
+                handle,
                 buffered_bytes: None,
                 transfer: PausedDocumentTransfer {
-                    fetch_request_id,
+                    request_load_policy,
                     state: PausedDocumentTransferState::ActiveBodyStream {
-                        handle,
                         stream: ActiveDocumentBodyStreamState::new(
-                            document_navigation_token,
-                            navigation,
                             requested_url,
                             request_method,
                             request_headers,
@@ -888,20 +1000,16 @@ impl PausedDocumentTransfer {
                 Ok(PendingFetchResponseOpenedBodyStream {
                     handle,
                     buffered_bytes: Some(bytes),
-                    transfer: PausedDocumentTransfer {
-                        fetch_request_id,
-                        state: PausedDocumentTransferState::Pending {
-                            document_navigation_token,
-                            navigation,
-                            body: DocumentBodySource::BufferedRaw {
-                                requested_url,
-                                request_method,
-                                request_headers,
-                                response,
-                                network_observation_journal,
-                            },
+                    transfer: PausedDocumentTransfer::pending(
+                        request_load_policy,
+                        DocumentBodySource::BufferedRaw {
+                            requested_url,
+                            request_method,
+                            request_headers,
+                            response,
+                            network_observation_journal,
                         },
-                    },
+                    ),
                 })
             }
             DocumentBodySource::CapturedRaw {
@@ -917,22 +1025,18 @@ impl PausedDocumentTransfer {
                     Ok(bytes) => bytes,
                     Err(error) => {
                         return Err(OpenBodyStreamError::Failed {
-                            transfer: Box::new(PausedDocumentTransfer {
-                                fetch_request_id,
-                                state: PausedDocumentTransferState::Pending {
-                                    document_navigation_token,
-                                    navigation,
-                                    body: DocumentBodySource::CapturedRaw {
-                                        requested_url,
-                                        request_method,
-                                        request_headers,
-                                        head,
-                                        body,
-                                        network_observation_journal,
-                                        body_progress_source,
-                                    },
+                            transfer: Box::new(PausedDocumentTransfer::pending(
+                                request_load_policy,
+                                DocumentBodySource::CapturedRaw {
+                                    requested_url,
+                                    request_method,
+                                    request_headers,
+                                    head,
+                                    body,
+                                    network_observation_journal,
+                                    body_progress_source,
                                 },
-                            }),
+                            )),
                             message: format!(
                                 "failed to materialize captured response body: {error}"
                             ),
@@ -942,22 +1046,18 @@ impl PausedDocumentTransfer {
                 Ok(PendingFetchResponseOpenedBodyStream {
                     handle,
                     buffered_bytes: Some(bytes),
-                    transfer: PausedDocumentTransfer {
-                        fetch_request_id,
-                        state: PausedDocumentTransferState::Pending {
-                            document_navigation_token,
-                            navigation,
-                            body: DocumentBodySource::CapturedRaw {
-                                requested_url,
-                                request_method,
-                                request_headers,
-                                head,
-                                body,
-                                network_observation_journal,
-                                body_progress_source,
-                            },
+                    transfer: PausedDocumentTransfer::pending(
+                        request_load_policy,
+                        DocumentBodySource::CapturedRaw {
+                            requested_url,
+                            request_method,
+                            request_headers,
+                            head,
+                            body,
+                            network_observation_journal,
+                            body_progress_source,
                         },
-                    },
+                    ),
                 })
             }
         }
@@ -970,74 +1070,18 @@ impl PausedDocumentTransfer {
         }
     }
 
-    pub(crate) fn into_pending_streaming_document_response_navigation(
-        self,
-    ) -> Result<PendingStreamingDocumentResponseNavigation, Box<Self>> {
-        let Self {
-            fetch_request_id,
-            state,
-        } = self;
-        match state {
-            PausedDocumentTransferState::Pending {
-                document_navigation_token,
-                navigation,
-                body:
-                    DocumentBodySource::StreamingRaw {
-                        requested_url,
-                        request_method,
-                        request_headers,
-                        response,
-                        network_observation_journal,
-                        body_progress_source,
-                        prepared_document,
-                    },
-            } => {
-                let Some(document_navigation_token) = document_navigation_token else {
-                    return Err(Box::new(Self {
-                        fetch_request_id,
-                        state: PausedDocumentTransferState::Pending {
-                            document_navigation_token: None,
-                            navigation,
-                            body: DocumentBodySource::StreamingRaw {
-                                requested_url,
-                                request_method,
-                                request_headers,
-                                response,
-                                network_observation_journal,
-                                body_progress_source,
-                                prepared_document,
-                            },
-                        },
-                    }));
-                };
-                Ok(PendingStreamingDocumentResponseNavigation {
-                    document_navigation_token,
-                    navigation,
-                    response,
-                    network_observation_journal,
-                    body_progress_source,
-                    prepared_document,
-                })
-            }
-            state => Err(Box::new(Self {
-                fetch_request_id,
-                state,
-            })),
-        }
-    }
-
     pub(crate) async fn read_body_stream_async(
         self,
         size: Option<usize>,
     ) -> Result<(Vec<u8>, bool, Self), (Self, String)> {
         let Self {
-            fetch_request_id,
+            request_load_policy,
             state,
         } = self;
-        let PausedDocumentTransferState::ActiveBodyStream { handle, mut stream } = state else {
+        let PausedDocumentTransferState::ActiveBodyStream { mut stream } = state else {
             return Err((
                 Self {
-                    fetch_request_id,
+                    request_load_policy,
                     state,
                 },
                 "StreamHandleNotFound".to_owned(),
@@ -1051,37 +1095,30 @@ impl PausedDocumentTransfer {
                         Err(message) => {
                             return Err((
                                 Self {
-                                    fetch_request_id,
-                                    state: PausedDocumentTransferState::ActiveBodyStream {
-                                        handle,
-                                        stream,
-                                    },
+                                    request_load_policy,
+                                    state: PausedDocumentTransferState::ActiveBodyStream { stream },
                                 },
                                 message,
                             ));
                         }
                     };
-                    PausedDocumentTransferState::Pending {
-                        document_navigation_token: stream.document_navigation_token,
-                        navigation: stream.navigation,
-                        body,
-                    }
+                    PausedDocumentTransferState::Pending { body }
                 } else {
-                    PausedDocumentTransferState::ActiveBodyStream { handle, stream }
+                    PausedDocumentTransferState::ActiveBodyStream { stream }
                 };
                 Ok((
                     bytes,
                     eof,
                     Self {
-                        fetch_request_id,
+                        request_load_policy,
                         state,
                     },
                 ))
             }
             Err(message) => Err((
                 Self {
-                    fetch_request_id,
-                    state: PausedDocumentTransferState::ActiveBodyStream { handle, stream },
+                    request_load_policy,
+                    state: PausedDocumentTransferState::ActiveBodyStream { stream },
                 },
                 message,
             )),
@@ -1093,19 +1130,14 @@ impl PausedDocumentTransfer {
         limit: usize,
     ) -> Result<(Option<Vec<u8>>, Self), (String, Self)> {
         let Self {
-            fetch_request_id,
+            request_load_policy,
             state,
         } = self;
-        let PausedDocumentTransferState::Pending {
-            document_navigation_token,
-            navigation,
-            body,
-        } = state
-        else {
+        let PausedDocumentTransferState::Pending { body } = state else {
             return Ok((
                 None,
                 Self {
-                    fetch_request_id,
+                    request_load_policy,
                     state,
                 },
             ));
@@ -1113,21 +1145,11 @@ impl PausedDocumentTransfer {
         match body.materialize_body_limited_async(limit).await {
             Ok((bytes, body)) => Ok((
                 Some(bytes),
-                PausedDocumentTransfer::pending(
-                    fetch_request_id,
-                    document_navigation_token,
-                    navigation,
-                    body,
-                ),
+                PausedDocumentTransfer::pending(request_load_policy, body),
             )),
             Err((message, body)) => Err((
                 message,
-                PausedDocumentTransfer::pending(
-                    fetch_request_id,
-                    document_navigation_token,
-                    navigation,
-                    body,
-                ),
+                PausedDocumentTransfer::pending(request_load_policy, body),
             )),
         }
     }
@@ -1135,103 +1157,112 @@ impl PausedDocumentTransfer {
     pub(crate) async fn continue_response_async(
         self,
         conn: &mut CdpConnection,
+        permit: super::state::NavigationInterceptionPermit,
+        navigation: &NavigationDispatchState,
         response_code: Option<u16>,
         response_headers: Vec<(String, String)>,
-    ) -> Result<
-        (
-            Option<NavigationId>,
-            NavigationDispatchState,
-            Result<NavigationLoadOutcome, String>,
-        ),
-        Self,
-    > {
-        match self.state {
-            PausedDocumentTransferState::Pending {
-                document_navigation_token,
-                navigation,
-                body,
-            } => {
-                let navigation_state = navigation.clone();
-                let navigation = body
-                    .continue_navigation_async(conn, &navigation, response_code, response_headers)
-                    .await;
-                Ok((document_navigation_token, navigation_state, navigation))
-            }
-            PausedDocumentTransferState::ActiveBodyStream { handle, stream } => Err(Self {
-                fetch_request_id: self.fetch_request_id,
-                state: PausedDocumentTransferState::ActiveBodyStream { handle, stream },
+    ) -> Result<Result<NavigationLoadOutcome, String>, Self> {
+        let Self {
+            request_load_policy,
+            state,
+        } = self;
+        match state {
+            PausedDocumentTransferState::Pending { body } => Ok(body
+                .continue_navigation_async(
+                    conn,
+                    permit,
+                    request_load_policy,
+                    navigation,
+                    response_code,
+                    response_headers,
+                )
+                .await),
+            PausedDocumentTransferState::ActiveBodyStream { stream } => Err(Self {
+                request_load_policy,
+                state: PausedDocumentTransferState::ActiveBodyStream { stream },
             }),
         }
+    }
+
+    /// Releases a response pause after its decision provider disappears.
+    ///
+    /// An active DevTools body stream has already consumed part of the wire
+    /// response, so it cannot use the ordinary continue path. Finish capturing
+    /// that stream and resume from the complete body instead of turning a
+    /// session lifecycle event into a Browser navigation failure.
+    pub(crate) async fn continue_response_neutrally_async(
+        self,
+        conn: &mut CdpConnection,
+        permit: super::state::NavigationInterceptionPermit,
+        navigation: &NavigationDispatchState,
+    ) -> Result<NavigationLoadOutcome, String> {
+        let Self {
+            request_load_policy,
+            state,
+        } = self;
+        let body = match state {
+            PausedDocumentTransferState::Pending { body } => body,
+            PausedDocumentTransferState::ActiveBodyStream { mut stream } => {
+                stream.read_async(None).await?;
+                stream.finish_pending_body_source()?
+            }
+        };
+        body.continue_navigation_async(
+            conn,
+            permit,
+            request_load_policy,
+            navigation,
+            None,
+            Vec::new(),
+        )
+        .await
     }
 
     pub(crate) async fn fulfill_synthetic_async(
         self,
         conn: &mut CdpConnection,
+        permit: super::state::NavigationInterceptionPermit,
+        navigation: &NavigationDispatchState,
         response_code: u16,
         response_headers: Vec<(String, String)>,
         synthetic_body: CapturedBody,
-    ) -> (
-        Option<NavigationId>,
-        NavigationDispatchState,
-        Result<NavigationLoadOutcome, String>,
-    ) {
-        match self.state {
-            PausedDocumentTransferState::Pending {
-                document_navigation_token,
-                navigation,
-                body,
-            } => {
-                let request_cookie_report = body.request_cookie_report().cloned();
-                let body_progress_source = body.body_progress_source();
-                let navigation_state = navigation.clone();
-                let navigation = conn
-                    .build_navigation_from_buffered_body_source_for_navigation_async(
-                        &navigation,
-                        navigation.requested_url.clone(),
+    ) -> Result<NavigationLoadOutcome, String> {
+        let Self {
+            request_load_policy,
+            state,
+        } = self;
+        match state {
+            PausedDocumentTransferState::Pending { body } => {
+                body.fulfill_synthetic_navigation_async(
+                    conn,
+                    permit,
+                    request_load_policy,
+                    navigation,
+                    response_code,
+                    response_headers,
+                    synthetic_body,
+                )
+                .await
+            }
+            PausedDocumentTransferState::ActiveBodyStream { stream } => {
+                stream
+                    .fulfill_synthetic_async(
+                        conn,
+                        permit,
+                        request_load_policy,
+                        navigation,
                         response_code,
                         response_headers,
                         synthetic_body,
-                        request_cookie_report,
-                        NetworkObservationJournal::default(),
-                        body_progress_source,
                     )
-                    .await;
-                (document_navigation_token, navigation_state, navigation)
-            }
-            PausedDocumentTransferState::ActiveBodyStream { stream, .. } => {
-                stream
-                    .fulfill_synthetic_async(conn, response_code, response_headers, synthetic_body)
                     .await
             }
-        }
-    }
-
-    pub(crate) fn fail(
-        self,
-        error_text: String,
-    ) -> (
-        Option<NavigationId>,
-        NavigationDispatchState,
-        Result<NavigationLoadOutcome, String>,
-    ) {
-        match self.state {
-            PausedDocumentTransferState::Pending {
-                document_navigation_token,
-                navigation,
-                body,
-            } => {
-                let _ = body;
-                (document_navigation_token, navigation, Err(error_text))
-            }
-            PausedDocumentTransferState::ActiveBodyStream { stream, .. } => stream.fail(error_text),
         }
     }
 }
 
 impl ActiveDocumentBodyStreamState {
     fn new(
-        document_navigation_token: Option<NavigationId>,
-        navigation: NavigationDispatchState,
         requested_url: Url,
         request_method: String,
         request_headers: Vec<(String, String)>,
@@ -1240,8 +1271,6 @@ impl ActiveDocumentBodyStreamState {
         body_progress_source: MainDocumentBodyProgressSource,
     ) -> Self {
         Self {
-            document_navigation_token,
-            navigation,
             requested_url,
             request_method,
             request_headers,
@@ -1301,44 +1330,34 @@ impl ActiveDocumentBodyStreamState {
     async fn fulfill_synthetic_async(
         self,
         conn: &mut CdpConnection,
+        permit: super::state::NavigationInterceptionPermit,
+        request_load_policy: NavigationRequestLoadPolicy,
+        navigation: &NavigationDispatchState,
         response_code: u16,
         response_headers: Vec<(String, String)>,
         synthetic_body: CapturedBody,
-    ) -> (
-        Option<NavigationId>,
-        NavigationDispatchState,
-        Result<NavigationLoadOutcome, String>,
-    ) {
-        let navigation_state = self.navigation.clone();
+    ) -> Result<NavigationLoadOutcome, String> {
         let final_url = self.response.final_url.clone();
-        let navigation = conn
-            .build_navigation_from_buffered_body_source_for_navigation_async(
-                &self.navigation,
-                final_url,
-                response_code,
-                response_headers,
-                synthetic_body,
-                self.response.request_cookie_report.clone(),
-                NetworkObservationJournal::default(),
-                self.body_progress_source,
-            )
-            .await;
-        (self.document_navigation_token, navigation_state, navigation)
-    }
-
-    fn fail(
-        self,
-        error_text: String,
-    ) -> (
-        Option<NavigationId>,
-        NavigationDispatchState,
-        Result<NavigationLoadOutcome, String>,
-    ) {
-        (
-            self.document_navigation_token,
-            self.navigation,
-            Err(error_text),
+        let request_cookie_report = self.response.request_cookie_report.clone();
+        let work = conn.start_intercepted_navigation_load_for_response(
+            permit,
+            request_load_policy,
+            self.requested_url,
+            self.request_method,
+            self.request_headers,
+        )?;
+        conn.build_navigation_from_buffered_body_source_for_intercepted_request_async(
+            navigation,
+            work,
+            final_url,
+            response_code,
+            response_headers,
+            synthetic_body,
+            request_cookie_report,
+            NetworkObservationJournal::default(),
+            self.body_progress_source,
         )
+        .await
     }
 }
 
@@ -1463,31 +1482,11 @@ fn clone_buffered_raw_body_for_paused_reuse(response: &RawResponse) -> Vec<u8> {
 }
 
 impl DocumentBodySource {
-    pub(crate) fn request_cookie_report(&self) -> Option<&StoredCookieQueryReport> {
-        match self {
-            Self::BufferedRaw { response, .. } => response.request_cookie_report.as_ref(),
-            Self::StreamingRaw { response, .. } => response.request_cookie_report.as_ref(),
-            Self::CapturedRaw { head, .. } => head.request_cookie_report.as_ref(),
-        }
-    }
-
-    fn body_progress_source(&self) -> MainDocumentBodyProgressSource {
-        match self {
-            Self::StreamingRaw {
-                body_progress_source,
-                ..
-            }
-            | Self::CapturedRaw {
-                body_progress_source,
-                ..
-            } => body_progress_source.clone(),
-            Self::BufferedRaw { .. } => MainDocumentBodyProgressSource::default(),
-        }
-    }
-
     pub(crate) async fn continue_navigation_async(
         self,
         conn: &mut CdpConnection,
+        permit: super::state::NavigationInterceptionPermit,
+        request_load_policy: NavigationRequestLoadPolicy,
         navigation: &NavigationDispatchState,
         response_code: Option<u16>,
         response_headers: Vec<(String, String)>,
@@ -1495,17 +1494,26 @@ impl DocumentBodySource {
         let has_response_override = response_code.is_some() || !response_headers.is_empty();
         match self {
             Self::BufferedRaw {
+                requested_url,
+                request_method,
+                request_headers,
                 response,
                 network_observation_journal,
-                ..
             } => {
+                let work = conn.start_intercepted_navigation_load_for_response(
+                    permit,
+                    request_load_policy,
+                    requested_url,
+                    request_method,
+                    request_headers,
+                )?;
                 if !has_response_override {
-                    conn.build_navigation_from_buffered_raw_response_for_navigation_async(
+                    conn.build_intercepted_navigation_response_async(
                         navigation,
-                        NetworkFetchResult::with_observation_journal(
+                        work.with_response(NetworkFetchResult::with_observation_journal(
                             response,
                             network_observation_journal,
-                        ),
+                        )),
                     )
                     .await
                 } else {
@@ -1518,8 +1526,9 @@ impl DocumentBodySource {
                         .try_into_materialized_bytes()
                         .expect("RawResponse body should remain materialized at the response override boundary");
                     let body = CapturedBody::from_bytes(body);
-                    conn.build_navigation_from_buffered_body_source_for_navigation_async(
+                    conn.build_navigation_from_buffered_body_source_for_intercepted_request_async(
                         navigation,
+                        work,
                         final_url,
                         response_code.unwrap_or(status),
                         if response_headers.is_empty() {
@@ -1536,21 +1545,30 @@ impl DocumentBodySource {
                 }
             }
             Self::StreamingRaw {
+                requested_url,
+                request_method,
+                request_headers,
                 response,
                 network_observation_journal,
                 body_progress_source,
                 prepared_document,
-                ..
             } => {
                 if !has_response_override && let Some(prepared_document) = prepared_document {
                     return Ok(prepared_document.resume_streaming(response, None));
                 }
-                conn.build_navigation_from_streaming_raw_response_with_response_override_for_navigation_async(
+                let work = conn.start_intercepted_navigation_load_for_response(
+                    permit,
+                    request_load_policy,
+                    requested_url,
+                    request_method,
+                    request_headers,
+                )?;
+                conn.build_navigation_from_intercepted_streaming_response_with_override_async(
                     navigation,
-                    NetworkFetchResult::with_observation_journal(
+                    work.with_response(NetworkFetchResult::with_observation_journal(
                         response,
                         network_observation_journal,
-                    ),
+                    )),
                     response_code,
                     response_headers,
                     body_progress_source,
@@ -1558,15 +1576,25 @@ impl DocumentBodySource {
                 .await
             }
             Self::CapturedRaw {
+                requested_url,
+                request_method,
+                request_headers,
                 head,
                 body,
                 network_observation_journal,
                 body_progress_source,
-                ..
             } => {
+                let work = conn.start_intercepted_navigation_load_for_response(
+                    permit,
+                    request_load_policy,
+                    requested_url,
+                    request_method,
+                    request_headers,
+                )?;
                 if !has_response_override {
-                    conn.build_navigation_from_captured_raw_response_for_navigation_async(
+                    conn.build_navigation_from_captured_raw_response_for_intercepted_request_async(
                         navigation,
+                        work,
                         head,
                         body,
                         network_observation_journal,
@@ -1578,8 +1606,9 @@ impl DocumentBodySource {
                     let headers = head.headers.clone();
                     let final_url = head.final_url.clone();
                     let request_cookie_report = head.request_cookie_report.clone();
-                    conn.build_navigation_from_buffered_body_source_for_navigation_async(
+                    conn.build_navigation_from_buffered_body_source_for_intercepted_request_async(
                         navigation,
+                        work,
                         final_url,
                         response_code.unwrap_or(status),
                         if response_headers.is_empty() {
@@ -1596,6 +1625,91 @@ impl DocumentBodySource {
                 }
             }
         }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn fulfill_synthetic_navigation_async(
+        self,
+        conn: &mut CdpConnection,
+        permit: super::state::NavigationInterceptionPermit,
+        request_load_policy: NavigationRequestLoadPolicy,
+        navigation: &NavigationDispatchState,
+        response_code: u16,
+        response_headers: Vec<(String, String)>,
+        synthetic_body: CapturedBody,
+    ) -> Result<NavigationLoadOutcome, String> {
+        let (
+            requested_url,
+            request_method,
+            request_headers,
+            final_url,
+            request_cookie_report,
+            body_progress_source,
+        ) = match self {
+            Self::BufferedRaw {
+                requested_url,
+                request_method,
+                request_headers,
+                response,
+                ..
+            } => (
+                requested_url,
+                request_method,
+                request_headers,
+                response.final_url.clone(),
+                response.request_cookie_report.clone(),
+                MainDocumentBodyProgressSource::default(),
+            ),
+            Self::StreamingRaw {
+                requested_url,
+                request_method,
+                request_headers,
+                response,
+                body_progress_source,
+                ..
+            } => (
+                requested_url,
+                request_method,
+                request_headers,
+                response.final_url.clone(),
+                response.request_cookie_report.clone(),
+                body_progress_source,
+            ),
+            Self::CapturedRaw {
+                requested_url,
+                request_method,
+                request_headers,
+                head,
+                body_progress_source,
+                ..
+            } => (
+                requested_url,
+                request_method,
+                request_headers,
+                head.final_url.clone(),
+                head.request_cookie_report.clone(),
+                body_progress_source,
+            ),
+        };
+        let work = conn.start_intercepted_navigation_load_for_response(
+            permit,
+            request_load_policy,
+            requested_url,
+            request_method,
+            request_headers,
+        )?;
+        conn.build_navigation_from_buffered_body_source_for_intercepted_request_async(
+            navigation,
+            work,
+            final_url,
+            response_code,
+            response_headers,
+            synthetic_body,
+            request_cookie_report,
+            NetworkObservationJournal::default(),
+            body_progress_source,
+        )
+        .await
     }
 
     pub(crate) async fn materialize_body_limited_async(

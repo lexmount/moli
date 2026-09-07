@@ -110,7 +110,7 @@ struct PendingNavigationRequest {
     navigation_id: NavigationId,
     document_id: DocumentId,
     history_update: Option<PendingNavigationHistoryUpdate>,
-    paused_auth: Option<Box<super::navigation_interception::PausedNavigationAuth>>,
+    paused_interception: Option<super::navigation_interception::PausedNavigationInterception>,
     document_preparation: Option<(
         moli_core::browser::RendererPageResidenceIdentity,
         moli_fetch::FetchCancelHandle,
@@ -129,7 +129,7 @@ impl PendingNavigationRequest {
             navigation_id,
             document_id: DocumentId::allocate(),
             history_update,
-            paused_auth: None,
+            paused_interception: None,
             document_preparation: None,
             cancellation_handles: vec![moli_fetch::FetchCancelHandle::new()],
             background_completion_pending: false,
@@ -189,10 +189,119 @@ pub(in crate::conn) struct NavigationController {
 
 impl NavigationController {
     #[cfg(test)]
+    pub(in crate::conn::state) fn has_paused_request_for_test(&self) -> bool {
+        self.pending_navigation_request
+            .as_ref()
+            .and_then(|request| request.paused_interception.as_ref())
+            .is_some_and(|paused| {
+                matches!(
+                    paused,
+                    super::navigation_interception::PausedNavigationInterception::Request(_)
+                )
+            })
+    }
+
+    #[cfg(test)]
     pub(in crate::conn::state) fn has_paused_auth_for_test(&self) -> bool {
         self.pending_navigation_request
             .as_ref()
-            .is_some_and(|request| request.paused_auth.is_some())
+            .and_then(|request| request.paused_interception.as_ref())
+            .is_some_and(|paused| {
+                matches!(
+                    paused,
+                    super::navigation_interception::PausedNavigationInterception::Auth(_)
+                )
+            })
+    }
+
+    #[cfg(test)]
+    pub(in crate::conn::state) fn paused_response_for_test(
+        &self,
+    ) -> Option<&crate::conn::PausedDocumentTransfer> {
+        match self
+            .pending_navigation_request
+            .as_ref()?
+            .paused_interception
+            .as_ref()?
+        {
+            super::navigation_interception::PausedNavigationInterception::Response(paused) => {
+                Some(&paused.transfer)
+            }
+            super::navigation_interception::PausedNavigationInterception::Request(_)
+            | super::navigation_interception::PausedNavigationInterception::Auth(_) => None,
+        }
+    }
+
+    pub(super) fn pause_request(
+        &mut self,
+        web_contents: WebContentsId,
+        navigation: NavigationId,
+        navigation_request: super::navigation_interception::NavigationRequestInterception,
+    ) -> Result<super::NavigationInterceptionPermit, String> {
+        let pending = self
+            .pending_navigation_request
+            .as_mut()
+            .filter(|pending| {
+                pending.navigation_id == navigation
+                    && !pending.committed
+                    && !pending.cancellation_handle().is_cancelled()
+            })
+            .ok_or("stale request-stage navigation")?;
+        if pending.paused_interception.is_some() {
+            return Err("navigation already has a paused interception".to_owned());
+        }
+        let request = moli_core::browser::BrowserRequestId::allocate();
+        let permit = super::NavigationInterceptionPermit {
+            web_contents,
+            navigation,
+            document: pending.document_id,
+            request,
+        };
+        pending.paused_interception = Some(
+            super::navigation_interception::PausedNavigationInterception::Request(Box::new(
+                super::navigation_interception::PausedNavigationRequest {
+                    request,
+                    navigation_request,
+                },
+            )),
+        );
+        Ok(permit)
+    }
+
+    pub(super) fn take_request(
+        &mut self,
+        permit: super::NavigationInterceptionPermit,
+    ) -> Option<super::navigation_interception::ClaimedNavigationRequest> {
+        let pending = self.pending_navigation_request.as_mut().filter(|pending| {
+            pending.navigation_id == permit.navigation
+                && pending.document_id == permit.document
+                && !pending.committed
+                && !pending.cancellation_handle().is_cancelled()
+        })?;
+        let super::navigation_interception::PausedNavigationInterception::Request(paused) =
+            pending.paused_interception.as_ref()?
+        else {
+            return None;
+        };
+        if paused.request != permit.request {
+            return None;
+        }
+        match pending
+            .paused_interception
+            .take()
+            .expect("validated paused navigation request")
+        {
+            super::navigation_interception::PausedNavigationInterception::Request(paused) => Some(
+                super::navigation_interception::ClaimedNavigationRequest::new(
+                    permit,
+                    paused.navigation_request,
+                ),
+            ),
+            super::navigation_interception::PausedNavigationInterception::Auth(_)
+            | super::navigation_interception::PausedNavigationInterception::Response(_) => {
+                unreachable!("validated request interception")
+            }
+        }
     }
 
     pub(super) fn pause_auth_response(
@@ -210,8 +319,8 @@ impl NavigationController {
                     && !identity.is_cancelled()
             })
             .ok_or("stale navigation auth response")?;
-        if pending.paused_auth.is_some() {
-            return Err("navigation already has a paused auth response".to_owned());
+        if pending.paused_interception.is_some() {
+            return Err("navigation already has a paused interception".to_owned());
         }
         let request = moli_core::browser::BrowserRequestId::allocate();
         let permit = super::NavigationInterceptionPermit {
@@ -220,9 +329,11 @@ impl NavigationController {
             document: identity.document,
             request,
         };
-        pending.paused_auth = Some(Box::new(
-            super::navigation_interception::PausedNavigationAuth { request, response },
-        ));
+        pending.paused_interception = Some(
+            super::navigation_interception::PausedNavigationInterception::Auth(Box::new(
+                super::navigation_interception::PausedNavigationAuth { request, response },
+            )),
+        );
         Ok(permit)
     }
 
@@ -236,17 +347,122 @@ impl NavigationController {
                 && !pending.committed
                 && !pending.cancellation_handle().is_cancelled()
         })?;
-        let paused = pending.paused_auth.as_ref()?;
+        let super::navigation_interception::PausedNavigationInterception::Auth(paused) =
+            pending.paused_interception.as_ref()?
+        else {
+            return None;
+        };
         if paused.request != permit.request || paused.response.identity().is_cancelled() {
             return None;
         }
         Some(
-            pending
-                .paused_auth
+            match pending
+                .paused_interception
                 .take()
                 .expect("validated auth response")
-                .response,
+            {
+                super::navigation_interception::PausedNavigationInterception::Auth(paused) => {
+                    paused.response
+                }
+                super::navigation_interception::PausedNavigationInterception::Request(_)
+                | super::navigation_interception::PausedNavigationInterception::Response(_) => {
+                    unreachable!("validated auth interception")
+                }
+            },
         )
+    }
+
+    pub(super) fn pause_response(
+        &mut self,
+        web_contents: WebContentsId,
+        navigation: NavigationId,
+        transfer: crate::conn::PausedDocumentTransfer,
+    ) -> Result<super::NavigationInterceptionPermit, String> {
+        let pending = self
+            .pending_navigation_request
+            .as_mut()
+            .filter(|pending| {
+                pending.navigation_id == navigation
+                    && !pending.committed
+                    && !pending.cancellation_handle().is_cancelled()
+            })
+            .ok_or("stale response-stage navigation")?;
+        if pending.paused_interception.is_some() {
+            return Err("navigation already has a paused interception".to_owned());
+        }
+        let request = moli_core::browser::BrowserRequestId::allocate();
+        let permit = super::NavigationInterceptionPermit {
+            web_contents,
+            navigation,
+            document: pending.document_id,
+            request,
+        };
+        pending.paused_interception = Some(
+            super::navigation_interception::PausedNavigationInterception::Response(Box::new(
+                super::navigation_interception::PausedNavigationResponse { request, transfer },
+            )),
+        );
+        Ok(permit)
+    }
+
+    pub(super) fn take_response(
+        &mut self,
+        permit: super::NavigationInterceptionPermit,
+    ) -> Option<crate::conn::PausedDocumentTransfer> {
+        let pending = self.pending_navigation_request.as_mut().filter(|pending| {
+            pending.navigation_id == permit.navigation
+                && pending.document_id == permit.document
+                && !pending.committed
+                && !pending.cancellation_handle().is_cancelled()
+        })?;
+        let super::navigation_interception::PausedNavigationInterception::Response(paused) =
+            pending.paused_interception.as_ref()?
+        else {
+            return None;
+        };
+        if paused.request != permit.request {
+            return None;
+        }
+        Some(
+            match pending
+                .paused_interception
+                .take()
+                .expect("validated paused navigation response")
+            {
+                super::navigation_interception::PausedNavigationInterception::Response(paused) => {
+                    paused.transfer
+                }
+                super::navigation_interception::PausedNavigationInterception::Request(_)
+                | super::navigation_interception::PausedNavigationInterception::Auth(_) => {
+                    unreachable!("validated response interception")
+                }
+            },
+        )
+    }
+
+    pub(super) fn restore_response(
+        &mut self,
+        permit: super::NavigationInterceptionPermit,
+        transfer: crate::conn::PausedDocumentTransfer,
+    ) -> Result<(), Box<crate::conn::PausedDocumentTransfer>> {
+        let Some(pending) = self.pending_navigation_request.as_mut().filter(|pending| {
+            pending.navigation_id == permit.navigation
+                && pending.document_id == permit.document
+                && !pending.committed
+                && !pending.cancellation_handle().is_cancelled()
+                && pending.paused_interception.is_none()
+        }) else {
+            return Err(Box::new(transfer));
+        };
+        pending.paused_interception = Some(
+            super::navigation_interception::PausedNavigationInterception::Response(Box::new(
+                super::navigation_interception::PausedNavigationResponse {
+                    request: permit.request,
+                    transfer,
+                },
+            )),
+        );
+        Ok(())
     }
 
     pub(super) fn resolve_history_traversal(
@@ -403,6 +619,20 @@ impl NavigationController {
             .as_ref()
             .filter(|request| request.matches(token) && !request.committed)
             .map(PendingNavigationRequest::cancellation_handle)
+    }
+
+    pub(super) fn accepts_interception_permit(
+        &self,
+        permit: super::NavigationInterceptionPermit,
+    ) -> bool {
+        self.pending_navigation_request
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.navigation_id == permit.navigation
+                    && pending.document_id == permit.document
+                    && !pending.committed
+                    && !pending.cancellation_handle().is_cancelled()
+            })
     }
 
     pub(super) fn admit_document_load(

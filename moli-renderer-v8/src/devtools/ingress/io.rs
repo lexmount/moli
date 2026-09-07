@@ -255,12 +255,13 @@ impl RendererInspectorIoState {
         !self.closed
             && self.active_command_id.is_none()
             && self.commands.iter().any(|command| {
-                !self
-                    .session_detaches
-                    .contains_key(&RendererDevToolsSessionLaneKey::new(
-                        command.agent_token,
-                        command.ticket().session().clone(),
-                    ))
+                command.kind() == RendererDevToolsIoCommandKind::SessionLifecycle
+                    || !self
+                        .session_detaches
+                        .contains_key(&RendererDevToolsSessionLaneKey::new(
+                            command.agent_token,
+                            command.ticket().session().clone(),
+                        ))
             })
     }
 
@@ -516,12 +517,13 @@ impl RendererInspectorIoIngress {
             .commands
             .iter()
             .position(|command| {
-                !state
-                    .session_detaches
-                    .contains_key(&RendererDevToolsSessionLaneKey::new(
-                        command.agent_token,
-                        command.ticket().session().clone(),
-                    ))
+                command.kind() == RendererDevToolsIoCommandKind::SessionLifecycle
+                    || !state
+                        .session_detaches
+                        .contains_key(&RendererDevToolsSessionLaneKey::new(
+                            command.agent_token,
+                            command.ticket().session().clone(),
+                        ))
             })
             .expect("a ready Inspector task runner must have an eligible command");
         let mut command = state

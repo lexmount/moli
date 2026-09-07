@@ -1,4 +1,4 @@
-use super::target_session_owner::TargetSessionOwnerMut;
+use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionOwnerRef};
 use super::*;
 use crate::conn::CdpSessionRoute;
 use crate::conn::{CapturedBody, TargetRuntimeSlot};
@@ -36,6 +36,20 @@ impl<'a> TargetSessionOwnerMut<'a> {
     fn disable_listener(mut self) -> bool {
         self.mutate_network_policy_session_state(|state| *state = Default::default());
         self.into_network_listener_owner().disable_listener()
+    }
+}
+
+impl TargetSessionOwnerRef<'_> {
+    fn network_listener_enabled(&self) -> bool {
+        let Some(target) = self.browser_context.page_target(&self.target_id) else {
+            return false;
+        };
+        match &self.session_key {
+            DevToolsSessionKey::Primary => target.runtime_slot.primary_network_events_enabled(),
+            DevToolsSessionKey::Attached(session_id) => target
+                .runtime_slot
+                .attached_network_events_enabled_for_session(session_id),
+        }
     }
 }
 
@@ -472,6 +486,11 @@ impl CdpConnection {
     ) -> bool {
         let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
         self.set_network_listener_enabled_for_owner(&owner, true)
+    }
+
+    pub(crate) fn network_listener_enabled_for_session_owner(&self, session_id: &str) -> bool {
+        self.target_session_owner_ref(Some(session_id))
+            .is_some_and(|owner| owner.network_listener_enabled())
     }
 
     fn set_network_listener_enabled_for_owner(

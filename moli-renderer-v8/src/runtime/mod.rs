@@ -288,7 +288,8 @@ pub use self::owner_local::RendererPageTestingHandle;
 pub use self::owner_local::{
     RendererAccessibilityInspection, RendererCssInspection, RendererDomDebuggerInspection,
     RendererDomInspection, RendererInspectionEndpoint, RendererPageCommandPending,
-    RendererPageHandle, RendererRuntimeInspection, RendererRuntimeInspectorSessionDetachGuard,
+    RendererPageHandle, RendererPageInspection, RendererRuntimeInspection,
+    RendererRuntimeInspectorSessionDetachGuard,
 };
 pub(crate) use self::owner_local_store::RendererPageToken;
 pub use self::page::{
@@ -466,7 +467,7 @@ pub(crate) use crate::service_worker_runtime::{
     ServiceWorkerSyncRegistrationResult, ServiceWorkerVersionId, ServiceWorkerWorkerMessage,
     service_worker_exposed_client_id,
 };
-pub(crate) use nested_main::dispatch_nested_main_page_command;
+pub(crate) use nested_main::{detach_session_from_page, dispatch_nested_main_page_command};
 
 static NEXT_RENDERER_OWNER_LOCAL_HOST_ID: AtomicU64 = AtomicU64::new(1);
 

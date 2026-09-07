@@ -55,8 +55,14 @@ impl RendererAgentBinding {
     pub(crate) async fn detach_session(
         &self,
         inspector_session_id: Option<String>,
+        fetch_subresource_interception: Option<(
+            bool,
+            Option<moli_core::page::SubresourceResourceType>,
+        )>,
     ) -> anyhow::Result<()> {
-        self.endpoint.detach_session(inspector_session_id).await
+        self.endpoint
+            .detach_session(inspector_session_id, fetch_subresource_interception)
+            .await
     }
 
     pub(crate) fn runtime_inspection(
@@ -65,6 +71,14 @@ impl RendererAgentBinding {
     ) -> moli_renderer_v8::RendererRuntimeInspection<'_> {
         self.endpoint
             .runtime_inspection(self.attachment.id(), inspector_session_id)
+    }
+
+    pub(crate) fn page_inspection(
+        &self,
+        inspector_session_id: Option<String>,
+    ) -> moli_renderer_v8::RendererPageInspection<'_> {
+        self.endpoint
+            .page_inspection(self.attachment.id(), inspector_session_id)
     }
 
     pub(crate) fn dom_debugger_inspection(

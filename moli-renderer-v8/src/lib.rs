@@ -280,7 +280,7 @@ pub use runtime::{
     RendererPageCookieFacadeSnapshotReply, RendererPageCreationArtifacts,
     RendererPageCreationDiagnostics, RendererPageCreationPhase, RendererPageCreationProgress,
     RendererPageDiagnosticsSnapshot, RendererPageDumpFormat, RendererPageDumpOptions,
-    RendererPageDumpStripOptions, RendererPageHandle, RendererPageReply,
+    RendererPageDumpStripOptions, RendererPageHandle, RendererPageInspection, RendererPageReply,
     RendererPageReservationToken, RendererPageState, RendererPageTestingHandle, RendererPageView,
     RendererPendingDownloadActivation, RendererPendingDownloadResponse,
     RendererPendingFileChooserActivation, RendererPendingJavaScriptDialog,
