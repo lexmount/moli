@@ -1695,6 +1695,7 @@ pub(crate) fn finish_context_bootstrap(
         ("XPathResult", "XPathResult"),
         ("SVGLength", "SVGLength"),
         ("SVGNumber", "SVGNumber"),
+        ("SVGRect", "SVGRect"),
         ("SVGAnimatedLength", "SVGAnimatedLength"),
         ("SVGLengthList", "SVGLengthList"),
         ("SVGAnimatedLengthList", "SVGAnimatedLengthList"),

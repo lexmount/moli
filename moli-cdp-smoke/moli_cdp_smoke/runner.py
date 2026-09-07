@@ -60,6 +60,7 @@ from .groups.protocol_regressions import (
 from .groups.proxy_auth import run_proxy_auth_group
 from .groups.puppeteer import run_puppeteer_group
 from .groups.stagehand import run_stagehand_group
+from .groups.svg_rect import run_svg_rect_group
 from .groups.target_semantics import run_target_semantics_group
 from .groups.tracing import run_raw_tracing_group, run_tracing_group
 from .groups.url_policy import run_url_policy_group
@@ -344,6 +345,12 @@ BROWSER_GROUPS: tuple[SmokeGroup, ...] = (
         "WebGL viewport state and HTML/OffscreenCanvas context lifetime.",
         "browser",
         run_webgl_viewport_group,
+    ),
+    SmokeGroup(
+        "svg-rect",
+        "Detached SVGRect interface, float conversion, and SVG feature detection.",
+        "browser",
+        run_svg_rect_group,
     ),
     SmokeGroup(
         "media-error",

@@ -109,6 +109,11 @@ const CONSTRUCTOR_SPECS_BEFORE_STREAMS: &[ConstructorSpec] = &[
         kind: ConstructorKind::Illegal,
     },
     ConstructorSpec {
+        name: "SVGRect",
+        parent: None,
+        kind: ConstructorKind::Illegal,
+    },
+    ConstructorSpec {
         name: "SVGAnimatedLength",
         parent: None,
         kind: ConstructorKind::Illegal,

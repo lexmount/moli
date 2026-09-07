@@ -152,6 +152,12 @@ Offscreen canvases: viewport initialization, setter/conversion errors, copied
 Int32Array queries, context isolation, context reacquisition, resize retention,
 and clamping to the advertised maximum. It is not a GPU rendering test.
 
+The default `svg-rect` group checks the detached `SVGRect` interface used by
+SVG capability detection, sharing the renderer fixture for prototype, identity,
+and restricted-float conversion contracts. It was calibrated on 2026-09-07
+against Debian `/usr/bin/chromium` 145.0.7632.116 and runs independently of
+IndexedDB startup coverage.
+
 Covered well:
 
 - The default raw `debugger-breakpoints`, `runtime-exception`, and

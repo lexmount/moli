@@ -1,5 +1,17 @@
 use super::*;
 
+#[test]
+fn svg_create_rect_supports_capability_detection_and_detached_float_values() {
+    let mut vm = new_storage_test_vm("https://svg-rect.test/");
+    assert_eq!(
+        vm.eval(include_str!(
+            "../../../../tests/fixtures/svg-create-rect.js"
+        ))
+        .expect("SVGRect contract should pass"),
+        "svg-create-rect:ok"
+    );
+}
+
 async fn expect_one_child_frame_task_source(
     vm: &mut ScriptVm,
     expected: impl Into<ChildFrameSemanticTurnKind>,

@@ -436,6 +436,13 @@ struct SvgTextContentElementTemplateMethodsDeclaration {
 #[webapi(name = "SVGSVGElement", enumerable)]
 struct SvgSvgElementTemplateMethodsDeclaration {
     #[webapi(
+        method = "createSVGRect",
+        length = 0,
+        callback = super::rect::create_svg_rect
+    )]
+    create_svg_rect: (),
+
+    #[webapi(
         method = "createSVGMatrix",
         length = 0,
         callback = svg_svg_element_create_matrix_callback

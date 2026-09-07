@@ -12,6 +12,7 @@ use moli_svg::{
 mod bindings;
 mod builders;
 mod callbacks;
+mod rect;
 
 const SVG_GRAPHICS_TRANSFORM_SLOT: &str = "__moliSvgGraphicsTransform";
 const SVG_PATTERN_TRANSFORM_SLOT: &str = "__moliSvgPatternTransform";
@@ -244,6 +245,7 @@ pub(in crate::context_bootstrap) fn install_svg_template_bindings<'s>(
     match name {
         "SVGLength" => bindings::install_svg_length_bindings(scope, template),
         "SVGNumber" => bindings::install_svg_number_bindings(scope, template),
+        "SVGRect" => rect::install_bindings(scope, template),
         "SVGAnimatedLength" => bindings::install_svg_animated_length_bindings(scope, template),
         "SVGLengthList" => bindings::install_svg_length_list_bindings(scope, template),
         "SVGAnimatedLengthList" => {
