@@ -130,7 +130,7 @@ pub(in crate::native_bridge) use self::form_element::{
     form_named_getter, form_named_query, form_no_validate_getter_function,
     form_no_validate_setter_function, form_target_getter_function, form_target_setter_function,
 };
-pub(crate) use self::input::cache_input_files_from_selected_files;
+pub(crate) use self::input::{cache_input_files_from_selected_files, input_files_for_object};
 pub(in crate::native_bridge) use self::input::{
     input_accept_getter_function, input_accept_setter_function, input_alt_getter_function,
     input_alt_setter_function, input_checked_getter_function, input_checked_setter_function,

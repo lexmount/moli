@@ -16,7 +16,7 @@ pub(in crate::native_bridge) use self::defaults::{
     input_default_checked_getter_function, input_default_checked_setter_function,
     input_default_value_getter_function, input_default_value_setter_function,
 };
-pub(crate) use self::files::cache_input_files_from_selected_files;
+pub(crate) use self::files::{cache_input_files_from_selected_files, input_files_for_object};
 pub(in crate::native_bridge) use self::files::{
     input_files_getter_function, input_files_setter_function,
 };

@@ -339,6 +339,7 @@ pub(super) use forms::{
 };
 pub(crate) use forms::{
     cache_input_files_from_selected_files, form_control_is_effectively_disabled,
+    input_files_for_object,
 };
 pub(crate) use forms::{
     dispatch_text_control_event, is_text_control,
