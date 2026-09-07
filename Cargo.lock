@@ -2630,6 +2630,7 @@ dependencies = [
  "moli-image",
  "parking_lot",
  "parley",
+ "read-fonts",
  "stylo",
  "stylo_taffy",
  "taffy",
