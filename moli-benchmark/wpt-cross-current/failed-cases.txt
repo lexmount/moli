@@ -16,7 +16,6 @@ content-security-policy/inheritance/document-write-iframe.html
 content-security-policy/inheritance/location-reload.html
 content-security-policy/inside-worker/dedicatedworker-report-only.html
 content-security-policy/inside-worker/serviceworker-report-only.https.sub.html
-content-security-policy/navigation/javascript-url-navigation-evaluated-to-string-inherits-csp.html
 content-security-policy/resource-hints/prefetch-allowed-by-default.html
 content-security-policy/resource-hints/prefetch-allowed-no-default.html
 content-security-policy/resource-hints/prefetch-allowed-with-conflicting-permissive-policies.html
@@ -35,9 +34,11 @@ cookiestore/serviceworker_cookieStore_subscriptions_reset.https.html
 css/css-animations/parsing/keyframe-selectors.html
 css/css-animations/stability/animation-event-destroy-renderer.html?animationiteration
 css/css-animations/stability/animation-event-destroy-renderer.html?animationstart
+css/css-cascade/all-prop-revert-layer-noop.html?include=1
 css/css-cascade/all-prop-revert-layer-noop.html?include=2
 css/css-cascade/all-prop-revert-layer-noop.html?include=4
 css/css-cascade/all-prop-revert-layer-noop.html?include=5
+css/css-cascade/all-prop-revert-noop.html?include=1
 css/css-cascade/all-prop-revert-noop.html?include=2
 css/css-cascade/all-prop-revert-noop.html?include=4
 css/css-cascade/all-prop-revert-noop.html?include=5
@@ -503,7 +504,6 @@ css/css-grid/abspos/positioned-grid-descendants-002.html
 css/css-grid/abspos/positioned-grid-descendants-004.html
 css/css-grid/abspos/positioned-grid-descendants-005.html
 css/css-grid/abspos/positioned-grid-descendants-007.html
-css/css-grid/abspos/positioned-grid-descendants-011.html
 css/css-grid/abspos/positioned-grid-descendants-013.html
 css/css-grid/abspos/positioned-grid-items-020.html
 css/css-grid/abspos/positioned-grid-items-021.html
@@ -1943,6 +1943,7 @@ css/css-syntax/charset/page-windows-1251-css-utf8-bom.html
 css/css-syntax/charset/page-windows-1252-http-windows-1251-css-utf8-bom.html
 css/css-syntax/escaped-eof.html
 css/css-syntax/non-ascii-codepoints.html
+css/css-syntax/serialize-consecutive-tokens.html
 css/css-syntax/unclosed-constructs.html
 css/css-text-decor/animations/discrete-no-interpolation.html
 css/css-text-decor/animations/text-decoration-thickness-interpolation.html
@@ -2456,8 +2457,6 @@ css/cssom-view/table-with-border-client-width-height.html
 css/cssom-view/window-scroll-arguments.html
 css/cssom-view/window-scroll-promise-interruption.html
 css/cssom-view/window-scroll-promises.html
-css/cssom/computed-style-004.html
-css/cssom/cssimportrule.html
 css/cssom/cssom-getPropertyValue-common-checks.html
 css/cssom/cssom-pagerule.html
 css/cssom/flex-serialization.html
@@ -2762,6 +2761,7 @@ html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard
 html/browsers/the-window-object/garbage-collection-and-browsing-contexts/discard_iframe_history_4.html
 html/browsers/the-window-object/open-close/close_script_defer.html
 html/browsers/the-window-object/open-close/script-closable.html
+html/browsers/the-window-object/window-open-noopener.html?indexed
 html/browsers/windows/document-domain-removed-iframe.html
 html/cross-origin-embedder-policy/coep-on-response-from-service-worker.https.html
 html/cross-origin-embedder-policy/service-worker-cache-storage.https.html
@@ -2832,7 +2832,6 @@ html/interaction/focus/focus-selection.html
 html/interaction/focus/processing-model/focus-fixup-rule-one-no-dialogs.html
 html/interaction/focus/processing-model/textarea-scroll-selection.html
 html/interaction/focus/tabindex-focus-flag.html
-html/interaction/focus/the-autofocus-attribute/autofocus-area.html
 html/interaction/focus/the-autofocus-attribute/autofocus-dialog.html
 html/interaction/focus/the-autofocus-attribute/autofocus-on-stable-document.html
 html/interaction/focus/the-autofocus-attribute/document-with-fragment-empty.html
@@ -2877,6 +2876,7 @@ html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navi
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_allow_top_navigation-3.html
 html/semantics/embedded-content/the-iframe-element/iframe_sandbox_navigate_ancestor-1.html
 html/semantics/embedded-content/the-iframe-element/sandbox-inherit-to-blank-document-unsandboxed.html
+html/semantics/embedded-content/the-iframe-element/src-repeated-in-ancestor.html
 html/semantics/embedded-content/the-img-element/already-loaded-image-sync-width.html
 html/semantics/embedded-content/the-img-element/current-pixel-density/error.html
 html/semantics/embedded-content/the-img-element/currentSrc-blob-cache.html
@@ -2900,6 +2900,7 @@ html/semantics/embedded-content/the-img-element/relevant-mutations-lazy.html
 html/semantics/embedded-content/the-img-element/relevant-mutations.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-display-none.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-quirks-mode.html
+html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-standards-mode.html
 html/semantics/embedded-content/the-img-element/sizes/parse-a-sizes-attribute-width-1000px.html
 html/semantics/embedded-content/the-img-element/svg-img-density-vs-zoom.html
 html/semantics/embedded-content/the-img-element/update-src-complete.html
@@ -2935,7 +2936,6 @@ html/semantics/permission-element/usermedia/onstream-attribute.html
 html/semantics/permission-element/usermedia/usermedia-error-attribute.html
 html/semantics/popovers/popover-anchor-multicol-display.html
 html/semantics/popovers/popover-events.html
-html/semantics/popovers/popover-move-documents.html
 html/semantics/popovers/popover-nested-in-button.html
 html/semantics/popovers/popover-overlay.html
 html/semantics/popovers/popover-shadow-dom.html
@@ -2944,6 +2944,7 @@ html/semantics/popovers/popover-types-with-hints.html
 html/semantics/scripting-1/the-script-element/css-module/cors-crossorigin-requests.html
 html/semantics/scripting-1/the-script-element/execution-timing/083.html
 html/semantics/scripting-1/the-script-element/execution-timing/085.html
+html/semantics/scripting-1/the-script-element/execution-timing/092.html
 html/semantics/scripting-1/the-script-element/execution-timing/125.html
 html/semantics/scripting-1/the-script-element/execution-timing/128.html
 html/semantics/scripting-1/the-script-element/execution-timing/137.html
@@ -2980,6 +2981,8 @@ html/semantics/scripting-1/the-script-element/text-module/cors-crossorigin-reque
 html/semantics/scripting-1/the-script-element/text-module/integrity.html
 html/semantics/scripting-1/the-script-element/text-module/module.html
 html/semantics/scripting-1/the-script-element/text-module/service-worker-test.https.html
+html/semantics/selectors/pseudo-classes/autofill.html
+html/semantics/text-level-semantics/historical.html
 html/semantics/the-button-element/command-and-commandfor/on-dialog-behavior.html
 html/syntax/charset/xhr.html
 html/syntax/parsing/cdata-in-integration-point-fragment.html
@@ -3072,7 +3075,6 @@ permissions-policy/reporting/fullscreen-reporting.html
 permissions-policy/reporting/sync-xhr-report-only.html
 permissions-policy/reporting/sync-xhr-reporting.html
 pointerevents/compat/pointerevent_touch-action-verification.html
-pointerevents/pointerevent_root_hit_test.html
 pointerevents/pointerevent_touch-action-verification.html
 quirks/line-height-calculation.html
 quirks/percentage-height-calculation.html
@@ -3132,6 +3134,7 @@ secure-contexts/basic-dedicated-worker.html
 secure-contexts/basic-popup-and-iframe-tests.html
 selection/shadow-dom/tentative/Selection-getComposedRanges-range-update.html
 selection/toString-user-select-none.html
+service-workers/cache-storage/cache-api-nested-worker.https.html
 service-workers/cache-storage/cache-keys-attributes-for-service-worker.https.html
 service-workers/cache-storage/sandboxed-iframes.https.html
 service-workers/service-worker/active.https.html
@@ -3177,7 +3180,6 @@ service-workers/service-worker/next-hop-protocol.https.html
 service-workers/service-worker/opaque-response-preloaded.https.html
 service-workers/service-worker/opaque-script.https.html
 service-workers/service-worker/referrer-policy-header.https.html
-service-workers/service-worker/register-default-scope.https.html
 service-workers/service-worker/registration-end-to-end.https.html
 service-workers/service-worker/registration-scope-module-static-import.https.html
 service-workers/service-worker/registration-scope.https.html
@@ -3282,9 +3284,6 @@ trusted-types/Element-setAttribute-respects-Elements-node-documents-globals-CSP-
 trusted-types/ServiceWorkerContainer-register-from-DedicatedWorker.https.html
 trusted-types/ServiceWorkerContainer-register-from-ServiceWorker.https.html
 trusted-types/ServiceWorkerContainer-register-from-SharedWorker.https.html
-trusted-types/block-string-assignment-to-Document-write.html
-trusted-types/block-string-assignment-to-Element-outerHTML.html
-trusted-types/block-string-assignment-to-Element-setHTMLUnsafe.html
 trusted-types/should-sink-type-mismatch-violation-be-blocked-by-csp-002-worker.html
 trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-002.html
 trusted-types/should-trusted-type-policy-creation-be-blocked-by-csp-003.html
@@ -3308,11 +3307,11 @@ webrtc-identity/RTCPeerConnection-constructor.html
 webrtc-priority/RTCPeerConnection-ondatachannel.html
 webrtc-priority/RTCRtpParameters-encodings.html
 webusb/usb-supported-by-permissions-policy.html
+workers/interfaces/WorkerGlobalScope/onerror/exception-in-onerror.html
 workers/semantics/structured-clone/dedicated.html
 workers/semantics/structured-clone/shared.html
 worklets/animation-worklet-service-worker-interception.https.html
 worklets/audio-worklet-service-worker-interception.https.html
 worklets/layout-worklet-service-worker-interception.https.html
 worklets/paint-worklet-service-worker-interception.https.html
-xhr/xmlhttprequest-timeout-overridesexpires.html?timeout set to expiring value after load fires
 xhr/xmlhttprequest-timeout-worker-overridesexpires.html?timeout set to non-expiring value after timeout fires
