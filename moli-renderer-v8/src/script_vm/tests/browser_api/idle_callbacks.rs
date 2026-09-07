@@ -129,7 +129,7 @@ async fn idle_deadline_declared_shape_keeps_state_private() {
 
     assert_eq!(
         result,
-        r#"{"ctor":"IdleDeadline","didTimeout":false,"typeofTimeRemaining":"function","firstFinite":true,"secondFinite":true,"spoofIgnored":true,"leaksStateField":false,"leaksInternalSlotNameBefore":false,"initialInternalOwnNames":"","spoofedInternalOwnNames":"__moliIdleDeadlineMs","keys":["didTimeout","timeRemaining"],"ownNames":["didTimeout","timeRemaining"]}"#
+        r#"{"ctor":"IdleDeadline","didTimeout":false,"typeofTimeRemaining":"function","firstFinite":true,"secondFinite":true,"spoofIgnored":true,"leaksStateField":false,"leaksInternalSlotNameBefore":false,"initialInternalOwnNames":"","spoofedInternalOwnNames":"__moliIdleDeadlineMs","keys":[],"ownNames":[]}"#
     );
 }
 
@@ -157,6 +157,9 @@ async fn idle_callback_uses_webidl_callback_function_semantics() {
             return new Proxy(
               function(deadline) {
                 "use strict";
+                const ownRemaining = deadline.timeRemaining();
+                const borrowedRemaining =
+                  IdleDeadline.prototype.timeRemaining.call(deadline);
                 parent.__idleCallbackFacts = {
                   callbackRealm:
                     globalThis === parent.__idleCallbackFrame.contentWindow,
@@ -164,6 +167,8 @@ async fn idle_callback_uses_webidl_callback_function_semantics() {
                   argumentCount: arguments.length,
                   deadlineRealm: deadline instanceof parent.IdleDeadline,
                   hasTimeRemaining: typeof deadline.timeRemaining === "function",
+                  crossRealmTimeRemaining:
+                    Math.abs(ownRemaining - borrowedRemaining) <= 5,
                   proxyCalls: parent.__idleCallbackProxyCalls
                 };
               },
@@ -190,7 +195,7 @@ async fn idle_callback_uses_webidl_callback_function_semantics() {
     assert_eq!(
         vm.eval("JSON.stringify(__idleCallbackFacts)")
             .expect("idle Web IDL callback facts"),
-        r#"{"callbackRealm":true,"receiverUndefined":true,"argumentCount":1,"deadlineRealm":true,"hasTimeRemaining":true,"proxyCalls":1}"#
+        r#"{"callbackRealm":true,"receiverUndefined":true,"argumentCount":1,"deadlineRealm":true,"hasTimeRemaining":true,"crossRealmTimeRemaining":true,"proxyCalls":1}"#
     );
 }
 

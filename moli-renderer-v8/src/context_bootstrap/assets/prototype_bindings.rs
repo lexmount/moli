@@ -432,6 +432,9 @@ pub(super) fn install_constructor_template_bindings<'s>(
     if spec.name == "IdleDetector" {
         install_idle_detector_template_bindings(scope, template);
     }
+    if spec.name == "IdleDeadline" {
+        crate::window_host::install_idle_deadline_template_bindings(scope, template);
+    }
     if spec.name == "Notification" {
         install_notification_template_bindings(scope, template);
     }

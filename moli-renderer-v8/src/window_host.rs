@@ -47,7 +47,7 @@ use super::{
     },
     webidl,
 };
-use moli_webapi_declare::WebApiObject;
+use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use url::Url;
 
@@ -56,6 +56,8 @@ const WINDOW_SCROLL_Y_SLOT: &str = "__moliWindowScrollY";
 const WINDOW_PENDING_ANIMATION_FRAME_TIMESTAMP_SLOT: &str =
     "__moliWindowPendingAnimationFrameTimestamp";
 const IDLE_CALLBACK_BUDGET_MS: f64 = 50.0;
+const IDLE_DEADLINE_BRAND_SLOT: &str = "__moliIdleDeadlineBrand";
+const IDLE_DEADLINE_DID_TIMEOUT_SLOT: &str = "__moliIdleDeadlineDidTimeout";
 const IDLE_DEADLINE_MS_SLOT: &str = "__moliIdleDeadlineMs";
 const IDLE_OPPORTUNITY_DELAY_MS: u32 = 1;
 const WINDOW_REQUEST_ANIMATION_FRAME_DELAY_MS: u32 = 16;
@@ -78,10 +80,14 @@ struct WindowDocumentEventInitDeclaration {
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
-struct IdleDeadlineStateDeclaration {
+#[webapi(interface = "IdleDeadline")]
+struct IdleDeadlineDeclaration {
+    #[webapi(slot = IDLE_DEADLINE_BRAND_SLOT, init = true)]
+    brand: (),
     #[webapi(slot = IDLE_DEADLINE_MS_SLOT)]
     deadline_ms: f64,
+    #[webapi(slot = IDLE_DEADLINE_DID_TIMEOUT_SLOT)]
+    did_timeout: bool,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -108,17 +114,18 @@ struct WindowRequestIdleCallbackArgs<'s> {
     options: Option<v8::Local<'s, v8::Value>>,
 }
 
-#[derive(WebApiObject)]
-#[webapi(interface = "IdleDeadline")]
-struct IdleDeadlineDeclaration<'scope> {
-    #[webapi(data_property, enumerable)]
-    did_timeout: bool,
-    deadline_state: v8::Local<'scope, v8::Object>,
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "IdleDeadline", enumerable)]
+struct IdleDeadlinePrototypeDeclaration {
+    #[webapi(
+        accessor_property = "didTimeout",
+        getter = window_idle_deadline_did_timeout_getter
+    )]
+    did_timeout: (),
     #[webapi(
         method,
-        enumerable,
-        callback = window_idle_deadline_time_remaining_callback,
-        data = self.deadline_state
+        length = 0,
+        callback = window_idle_deadline_time_remaining_callback
     )]
     time_remaining: (),
 }
@@ -1906,12 +1913,45 @@ pub(crate) fn build_window_idle_deadline<'s>(
     } else {
         now_ms + IDLE_CALLBACK_BUDGET_MS
     };
-    let deadline_state = IdleDeadlineStateDeclaration::new(deadline_ms)
-        .bind(scope)
-        .ok()?;
-    IdleDeadlineDeclaration::new(did_timeout, deadline_state)
+    IdleDeadlineDeclaration::new(deadline_ms, did_timeout)
         .bind(scope)
         .ok()
+}
+
+pub(crate) fn install_idle_deadline_template_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    IdleDeadlinePrototypeDeclaration::initialize_prototype_template(
+        scope,
+        template.prototype_template(scope),
+    );
+}
+
+fn idle_deadline_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Object>> {
+    if get_private_value(scope, receiver, IDLE_DEADLINE_BRAND_SLOT)
+        .is_some_and(|value| value.is_true())
+    {
+        return Some(receiver);
+    }
+    throw_type_error(scope, "Illegal invocation");
+    None
+}
+
+fn window_idle_deadline_did_timeout_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(deadline) = idle_deadline_receiver(scope, args.this()) else {
+        return;
+    };
+    let did_timeout = get_private_value(scope, deadline, IDLE_DEADLINE_DID_TIMEOUT_SLOT)
+        .is_some_and(|value| value.boolean_value(scope));
+    rv.set_bool(did_timeout);
 }
 
 fn window_idle_deadline_time_remaining_callback<'s>(
@@ -1919,20 +1959,13 @@ fn window_idle_deadline_time_remaining_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let now_ms = current_time_ms();
-    let remaining_ms = if let Ok(state) = v8::Local::<v8::Object>::try_from(args.data()) {
-        let mut deadline_ms = get_private_value(scope, state, IDLE_DEADLINE_MS_SLOT)
-            .and_then(|value| value.number_value(scope))
-            .unwrap_or(0.0);
-        if deadline_ms <= 0.0 {
-            deadline_ms = now_ms + IDLE_CALLBACK_BUDGET_MS;
-            let value = v8::Number::new(scope, deadline_ms);
-            set_private_value(scope, state, IDLE_DEADLINE_MS_SLOT, value.into());
-        }
-        (deadline_ms - now_ms).max(0.0)
-    } else {
-        0.0
+    let Some(deadline) = idle_deadline_receiver(scope, args.this()) else {
+        return;
     };
+    let now_ms = current_time_ms();
+    let remaining_ms = get_private_value(scope, deadline, IDLE_DEADLINE_MS_SLOT)
+        .and_then(|value| value.number_value(scope))
+        .map_or(0.0, |deadline_ms| (deadline_ms - now_ms).max(0.0));
     rv.set(v8::Number::new(scope, remaining_ms).into());
 }
 
