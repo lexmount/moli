@@ -942,6 +942,9 @@ impl RendererWorkerContextRuntime {
 }
 
 #[cfg(test)]
+mod owner_wake_tests;
+
+#[cfg(test)]
 mod tests {
     use std::time::Duration;
 
