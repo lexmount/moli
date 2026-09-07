@@ -40,6 +40,7 @@ class GroupSelectionTests(unittest.TestCase):
         self.assertIn("layout-policy", DEFAULT_GROUP_NAMES)
         self.assertIn("scrollbar-visibility", DEFAULT_GROUP_NAMES)
         self.assertIn("target-lifecycle", DEFAULT_GROUP_NAMES)
+        self.assertIn("svg-indexeddb-startup", DEFAULT_GROUP_NAMES)
         self.assertIn("multi-page", DEFAULT_GROUP_NAMES)
         self.assertIn("puppeteer", DEFAULT_GROUP_NAMES)
         self.assertEqual(
