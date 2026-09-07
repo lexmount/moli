@@ -1,5 +1,7 @@
 use super::*;
 
+mod compression;
+
 fn stream_test_vm() -> StandaloneScriptVmHarness {
     new_storage_test_vm("https://stream-runtime.test/")
 }

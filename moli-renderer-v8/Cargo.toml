@@ -23,6 +23,7 @@ cssparser = "0.37"
 data-url = "0.3.2"
 dom = { package = "stylo_dom", version = "0.20" }
 encoding_rs = "0.8"
+flate2 = { version = "1.1.9", default-features = false, features = ["zlib"] }
 euclid = "0.22"
 kurbo = "0.13.1"
 futures-util = "0.3.31"

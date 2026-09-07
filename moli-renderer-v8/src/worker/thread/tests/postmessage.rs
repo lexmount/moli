@@ -1,6 +1,39 @@
 use super::*;
 
 #[tokio::test]
+async fn worker_compression_streams_roundtrip_all_formats() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"
+        (async () => {
+            const result = [];
+            for (const format of ['deflate-raw', 'deflate', 'gzip']) {
+                const source = new ReadableStream({start(c) {
+                    c.enqueue(new TextEncoder().encode('worker 压缩流'));
+                    c.close();
+                }});
+                const stream = source.pipeThrough(new CompressionStream(format))
+                    .pipeThrough(new DecompressionStream(format));
+                result.push(await new Response(stream).text());
+            }
+            postMessage(result);
+        })().catch(e => postMessage([e.name,e.message]));
+        "#
+        .into(),
+        "https://compression-worker.test/worker.js".into(),
+    );
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("worker compression must settle")
+        .expect("worker must return roundtrip result");
+    let result: serde_json::Value = serde_json::from_str(&expect_post_json(msg)).unwrap();
+    assert_eq!(
+        result,
+        serde_json::json!(["worker 压缩流", "worker 压缩流", "worker 压缩流"])
+    );
+}
+
+#[tokio::test]
 async fn worker_postmessage_to_parent() {
     ensure_v8();
     let mut handle = spawn_worker(

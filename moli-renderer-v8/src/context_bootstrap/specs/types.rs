@@ -57,6 +57,8 @@ pub(in crate::context_bootstrap) enum ConstructorKind {
     TransformStreamDefaultController,
     TextEncoderStream,
     TextDecoderStream,
+    CompressionStream,
+    DecompressionStream,
     ByteLengthQueuingStrategy,
     CountQueuingStrategy,
     Blob,

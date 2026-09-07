@@ -25,6 +25,7 @@ use super::stream_objects::{
 use super::*;
 use moli_webapi_declare::WebApiFunctionTemplate;
 
+mod compression;
 mod constructors;
 mod readable;
 mod transferable;
@@ -41,7 +42,7 @@ enum StreamPrototypeInstaller {
     Controller,
     QueuingStrategy,
     TransformFamily,
-    None,
+    Compression,
 }
 
 #[derive(Clone, Copy)]
@@ -54,10 +55,7 @@ struct StreamInterfaceSpec {
 ///
 /// Every entry is exposed in each realm Moli currently supports. The
 /// constructor registry, worker realm profiles, and prototype installer consume
-/// this table, so those surfaces cannot drift independently. `CompressionStream`
-/// and `DecompressionStream` intentionally retain their existing
-/// illegal-constructor behavior here; the catalog centralizes shape and exposure
-/// without claiming their algorithms.
+/// this table, so those surfaces cannot drift independently.
 const STREAM_INTERFACE_SPECS: &[StreamInterfaceSpec] = &[
     StreamInterfaceSpec {
         constructor: ConstructorSpec {
@@ -159,17 +157,17 @@ const STREAM_INTERFACE_SPECS: &[StreamInterfaceSpec] = &[
         constructor: ConstructorSpec {
             name: "CompressionStream",
             parent: None,
-            kind: ConstructorKind::Illegal,
+            kind: ConstructorKind::CompressionStream,
         },
-        prototype_installer: StreamPrototypeInstaller::None,
+        prototype_installer: StreamPrototypeInstaller::Compression,
     },
     StreamInterfaceSpec {
         constructor: ConstructorSpec {
             name: "DecompressionStream",
             parent: None,
-            kind: ConstructorKind::Illegal,
+            kind: ConstructorKind::DecompressionStream,
         },
-        prototype_installer: StreamPrototypeInstaller::None,
+        prototype_installer: StreamPrototypeInstaller::Compression,
     },
     StreamInterfaceSpec {
         constructor: ConstructorSpec {
@@ -318,6 +316,7 @@ pub(super) use super::stream_objects::{
     readable_stream_default_reader_constructor_callback,
     writable_stream_default_writer_constructor_callback,
 };
+pub(super) use compression::compression_stream_constructor_callback;
 pub(super) use constructors::{
     byte_length_queuing_strategy_constructor_callback, count_queuing_strategy_constructor_callback,
     readable_stream_constructor_callback, text_decoder_stream_constructor_callback,
@@ -417,7 +416,9 @@ pub(super) fn install_stream_template_bindings<'s>(
         StreamPrototypeInstaller::TransformFamily => {
             writable::install_transform_stream_template_bindings(scope, prototype, interface_name);
         }
-        StreamPrototypeInstaller::None => {}
+        StreamPrototypeInstaller::Compression => {
+            compression::install_template_bindings(scope, prototype, interface_name);
+        }
     }
 }
 

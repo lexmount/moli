@@ -40,7 +40,7 @@ use super::super::{
     specs::{ConstructorKind, ConstructorPrototypeProperty, ConstructorSpec},
     speech_synthesis::speech_synthesis_utterance_constructor_callback,
     streams::{
-        byte_length_queuing_strategy_constructor_callback,
+        byte_length_queuing_strategy_constructor_callback, compression_stream_constructor_callback,
         count_queuing_strategy_constructor_callback,
         readable_stream_byob_reader_constructor_callback, readable_stream_constructor_callback,
         readable_stream_default_reader_constructor_callback,
@@ -289,6 +289,16 @@ pub(in crate::context_bootstrap) fn build_constructor_template<'s>(
         ConstructorKind::TextDecoderStream => {
             v8::FunctionTemplate::builder(text_decoder_stream_constructor_callback)
                 .length(0)
+                .build(scope)
+        }
+        ConstructorKind::CompressionStream => {
+            v8::FunctionTemplate::builder(compression_stream_constructor_callback::<false>)
+                .length(1)
+                .build(scope)
+        }
+        ConstructorKind::DecompressionStream => {
+            v8::FunctionTemplate::builder(compression_stream_constructor_callback::<true>)
+                .length(1)
                 .build(scope)
         }
         ConstructorKind::CountQueuingStrategy => {

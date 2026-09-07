@@ -1286,6 +1286,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
+ "libz-sys",
  "miniz_oxide",
 ]
 
@@ -2862,6 +2863,7 @@ dependencies = [
  "data-url",
  "encoding_rs",
  "euclid",
+ "flate2",
  "futures-util",
  "html-escape",
  "html5ever",
