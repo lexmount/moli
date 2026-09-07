@@ -8,7 +8,7 @@ use webidl::WebIdlDictionarySerialize;
 pub(super) struct ClipboardInit<'s> {
     #[webidl(inherit)]
     base: EventInit,
-    #[webidl(nullable, interface = web_api_interfaces::DataTransfer)]
+    #[webidl(nullable, interface = web_api_interfaces::DataTransfer, snapshot_slot = CLIPBOARD_EVENT_CLIPBOARD_DATA_SLOT)]
     clipboard_data: Option<v8::Local<'s, v8::Object>>,
 }
 
