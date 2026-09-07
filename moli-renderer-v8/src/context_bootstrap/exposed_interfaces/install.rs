@@ -66,11 +66,7 @@ pub(in crate::context_bootstrap) fn install_worker_exposed_interfaces<'s>(
     secure_context: bool,
     specs: Vec<ConstructorSpec>,
 ) -> Result<()> {
-    let registry = ExposedInterfaceTemplateRegistry::install(
-        scope,
-        specs,
-        TemplateBuildProfile::for_realm(realm_kind),
-    )?;
+    let registry = worker_interface_template_registry(scope, realm_kind, specs)?;
     IntrinsicInterfaceRegistry::initialize_for_current_context(scope, registry.len(), realm_kind)?;
 
     for metadata in registry.metadata_entries() {
@@ -100,6 +96,36 @@ pub(in crate::context_bootstrap) fn install_worker_exposed_interfaces<'s>(
             })?;
     }
     Ok(())
+}
+
+pub(in crate::context_bootstrap) fn prepare_worker_event_target_template<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    realm_kind: RealmKind,
+    specs: Vec<ConstructorSpec>,
+) -> Result<v8::Local<'s, v8::FunctionTemplate>> {
+    let registry = worker_interface_template_registry(scope, realm_kind, specs)?;
+    let event_target_id = registry
+        .id_by_name("EventTarget")
+        .ok_or_else(|| anyhow!("worker interface registry is missing EventTarget"))?;
+    registry.get_or_build_template(scope, event_target_id)
+}
+
+fn worker_interface_template_registry<C>(
+    scope: &mut v8::PinScope<'_, '_, C>,
+    realm_kind: RealmKind,
+    specs: Vec<ConstructorSpec>,
+) -> Result<Rc<ExposedInterfaceTemplateRegistry>> {
+    let expected_profile = TemplateBuildProfile::for_realm(realm_kind);
+    if let Some(registry) = ExposedInterfaceTemplateRegistry::current(scope) {
+        if registry.profile() != expected_profile {
+            return Err(anyhow!(
+                "worker interface registry profile mismatch: expected {expected_profile:?}, got {:?}",
+                registry.profile()
+            ));
+        }
+        return Ok(registry);
+    }
+    ExposedInterfaceTemplateRegistry::install(scope, specs, expected_profile)
 }
 
 pub(crate) fn filter_window_exposed_interfaces(
