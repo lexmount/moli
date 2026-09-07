@@ -35,23 +35,39 @@ use moli_fetch::{
 
 use super::{BrowserContextHandle, BrowserHandle, BrowserOwnerMessage, PendingDocumentRetirement};
 
+#[cfg(test)]
+mod tests;
+
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 struct NavigationWorkId(u64);
 
-struct ContextWork<T> {
-    context: BrowserContextId,
-    value: T,
+enum NavigationWork {
+    InFlight,
+    Load(Box<PhysicalNavigationLoad>),
+    PreparedResponse(Box<PhysicalPreparedNavigationResponse>),
+    Materialization(Box<PhysicalDocumentMaterialization>),
+    PreparedDocument(Box<PhysicalPreparedDocumentNavigation>),
+    InitialBuild(Box<PhysicalInitialDocumentBuild>),
+    BuiltInitialDocument(Box<PhysicalBuiltInitialDocument>),
+}
+
+impl NavigationWork {
+    fn retire(self) {
+        if let Self::BuiltInitialDocument(built) = self {
+            tokio::task::spawn_local(built.retire());
+        }
+    }
+}
+
+struct NavigationWorkEntry {
+    contents: WebContentsHandle,
+    value: NavigationWork,
 }
 
 #[derive(Default)]
 pub(super) struct NavigationWorkRegistry {
     next_id: u64,
-    loads: HashMap<NavigationWorkId, ContextWork<PhysicalNavigationLoad>>,
-    prepared_responses: HashMap<NavigationWorkId, ContextWork<PhysicalPreparedNavigationResponse>>,
-    materializations: HashMap<NavigationWorkId, ContextWork<PhysicalDocumentMaterialization>>,
-    prepared_documents: HashMap<NavigationWorkId, ContextWork<PhysicalPreparedDocumentNavigation>>,
-    initial_builds: HashMap<NavigationWorkId, ContextWork<PhysicalInitialDocumentBuild>>,
-    built_initial_documents: HashMap<NavigationWorkId, ContextWork<PhysicalBuiltInitialDocument>>,
+    work: HashMap<NavigationWorkId, NavigationWorkEntry>,
 }
 
 impl NavigationWorkRegistry {
@@ -65,67 +81,81 @@ impl NavigationWorkRegistry {
 
     fn insert_load(
         &mut self,
-        context: BrowserContextId,
+        context: BrowserContextHandle,
         load: PhysicalNavigationLoad,
-    ) -> NavigationWorkId {
+    ) -> BrowserNavigationLoad {
         let id = self.allocate();
-        self.loads.insert(
+        let contents = WebContentsHandle::new(context.id, load.web_contents_id());
+        let handle = BrowserNavigationLoad::new(context, id, &load);
+        self.work.insert(
             id,
-            ContextWork {
-                context,
-                value: load,
+            NavigationWorkEntry {
+                contents,
+                value: NavigationWork::Load(Box::new(load)),
             },
         );
-        id
+        handle
+    }
+
+    // Keep the physical owner entry while its payload is running. Retirement
+    // removes this entry, so a late callback cannot resurrect the operation.
+    fn begin(&mut self, id: NavigationWorkId) -> Result<NavigationWork, String> {
+        let entry = self.work.get_mut(&id).ok_or_else(unavailable)?;
+        match std::mem::replace(&mut entry.value, NavigationWork::InFlight) {
+            NavigationWork::InFlight => Err(unavailable()),
+            value => Ok(value),
+        }
+    }
+
+    fn finish(&mut self, id: NavigationWorkId, value: NavigationWork) -> Result<(), String> {
+        if let Some(entry) = self.work.get_mut(&id)
+            && matches!(entry.value, NavigationWork::InFlight)
+        {
+            entry.value = value;
+            return Ok(());
+        }
+        value.retire();
+        Err(unavailable())
+    }
+
+    fn take(&mut self, id: NavigationWorkId) -> Result<NavigationWorkEntry, String> {
+        self.work.remove(&id).ok_or_else(unavailable)
     }
 
     fn remove(&mut self, id: NavigationWorkId) {
-        self.loads.remove(&id);
-        self.prepared_responses.remove(&id);
-        self.materializations.remove(&id);
-        self.prepared_documents.remove(&id);
-        self.initial_builds.remove(&id);
-        if let Some(built) = self.built_initial_documents.remove(&id) {
-            tokio::task::spawn_local(built.value.retire());
+        if let Some(entry) = self.work.remove(&id) {
+            entry.value.retire();
         }
     }
 
     pub(super) fn remove_context(&mut self, context: BrowserContextId) {
-        self.loads.retain(|_, work| work.context != context);
-        self.prepared_responses
-            .retain(|_, work| work.context != context);
-        self.materializations
-            .retain(|_, work| work.context != context);
-        self.prepared_documents
-            .retain(|_, work| work.context != context);
-        self.initial_builds
-            .retain(|_, work| work.context != context);
-        let built = self
-            .built_initial_documents
-            .iter()
-            .filter_map(|(id, work)| (work.context == context).then_some(*id))
-            .collect::<Vec<_>>();
-        for id in built {
-            if let Some(work) = self.built_initial_documents.remove(&id) {
-                tokio::task::spawn_local(work.value.retire());
-            }
+        for (_, entry) in self
+            .work
+            .extract_if(|_, entry| entry.contents.context() == context)
+        {
+            entry.value.retire();
+        }
+    }
+
+    pub(super) fn remove_web_contents(&mut self, contents: WebContentsHandle) {
+        for (_, entry) in self.work.extract_if(|_, entry| entry.contents == contents) {
+            entry.value.retire();
         }
     }
 
     pub(super) fn clear(&mut self) {
-        self.loads.clear();
-        self.prepared_responses.clear();
-        self.materializations.clear();
-        self.prepared_documents.clear();
-        self.initial_builds.clear();
-        for (_, built) in self.built_initial_documents.drain() {
-            tokio::task::spawn_local(built.value.retire());
+        for (_, entry) in self.work.drain() {
+            entry.value.retire();
         }
     }
 }
 
 fn unavailable() -> String {
     "Browser navigation operation is unavailable".to_owned()
+}
+
+fn initial_document_cancelled() -> String {
+    "InitialDocumentPageBuildCancelled".to_owned()
 }
 
 fn receive_error() -> anyhow::Error {
@@ -199,13 +229,15 @@ impl BrowserNavigationLoad {
         self.context
             .browser
             .execute(move |browser| {
-                browser
+                let entry = browser
                     .navigation_work
-                    .loads
+                    .work
                     .get(&id)
-                    .ok_or_else(unavailable)?
-                    .value
-                    .validate_request(&raw_url)
+                    .ok_or_else(unavailable)?;
+                let NavigationWork::Load(load) = &entry.value else {
+                    return Err(unavailable());
+                };
+                load.validate_request(&raw_url)
                     .map_err(|error| error.to_string())
             })
             .map_err(anyhow::Error::msg)?
@@ -226,23 +258,21 @@ impl BrowserNavigationLoad {
             .context
             .browser
             .execute(move |browser| {
-                let work = browser
-                    .navigation_work
-                    .loads
-                    .remove(&id)
-                    .ok_or_else(unavailable)?;
+                let NavigationWork::Load(mut value) = browser.navigation_work.begin(id)? else {
+                    return Err(unavailable());
+                };
                 let local_sender = browser.local_sender.clone();
                 let (completion_tx, completion) = oneshot::channel();
                 tokio::task::spawn_local(async move {
-                    let ContextWork { context, mut value } = work;
                     let result = value
                         .fetch_navigation(&method, &raw_url, body, request_headers)
                         .await;
                     let _ = local_sender.send(Box::new(move |browser| {
-                        browser
+                        let result = browser
                             .navigation_work
-                            .loads
-                            .insert(id, ContextWork { context, value });
+                            .finish(id, NavigationWork::Load(value))
+                            .map_err(anyhow::Error::msg)
+                            .and(result);
                         let _ = completion_tx.send(result);
                     }));
                 });
@@ -266,23 +296,21 @@ impl BrowserNavigationLoad {
             .context
             .browser
             .execute(move |browser| {
-                let work = browser
-                    .navigation_work
-                    .loads
-                    .remove(&id)
-                    .ok_or_else(unavailable)?;
+                let NavigationWork::Load(value) = browser.navigation_work.begin(id)? else {
+                    return Err(unavailable());
+                };
                 let local_sender = browser.local_sender.clone();
                 let (completion_tx, completion) = oneshot::channel();
                 tokio::task::spawn_local(async move {
-                    let ContextWork { context, value } = work;
                     let result = value
                         .fetch_intercepted_response(&method, &raw_url, body, headers, auth)
                         .await;
                     let _ = local_sender.send(Box::new(move |browser| {
-                        browser
+                        let result = browser
                             .navigation_work
-                            .loads
-                            .insert(id, ContextWork { context, value });
+                            .finish(id, NavigationWork::Load(value))
+                            .map_err(anyhow::Error::msg)
+                            .and(result);
                         let _ = completion_tx.send(result);
                     }));
                 });
@@ -306,23 +334,21 @@ impl BrowserNavigationLoad {
             .context
             .browser
             .execute(move |browser| {
-                let work = browser
-                    .navigation_work
-                    .loads
-                    .remove(&id)
-                    .ok_or_else(unavailable)?;
+                let NavigationWork::Load(value) = browser.navigation_work.begin(id)? else {
+                    return Err(unavailable());
+                };
                 let local_sender = browser.local_sender.clone();
                 let (completion_tx, completion) = oneshot::channel();
                 tokio::task::spawn_local(async move {
-                    let ContextWork { context, value } = work;
                     let result = value
                         .fetch_intercepted_auth_response(&method, &raw_url, body, headers, auth)
                         .await;
                     let _ = local_sender.send(Box::new(move |browser| {
-                        browser
+                        let result = browser
                             .navigation_work
-                            .loads
-                            .insert(id, ContextWork { context, value });
+                            .finish(id, NavigationWork::Load(value))
+                            .map_err(anyhow::Error::msg)
+                            .and(result);
                         let _ = completion_tx.send(result);
                     }));
                 });
@@ -354,15 +380,12 @@ impl BrowserNavigationLoad {
             .context
             .browser
             .execute(move |browser| {
-                let work = browser
-                    .navigation_work
-                    .loads
-                    .remove(&id)
-                    .ok_or_else(unavailable)?;
+                let NavigationWork::Load(mut value) = browser.navigation_work.begin(id)? else {
+                    return Err(unavailable());
+                };
                 let local_sender = browser.local_sender.clone();
                 let (completion_tx, completion) = oneshot::channel();
                 tokio::task::spawn_local(async move {
-                    let ContextWork { context, mut value } = work;
                     let result = value
                         .prepare_document_response_async(
                             requested_url,
@@ -379,26 +402,26 @@ impl BrowserNavigationLoad {
                         )
                         .await;
                     let _ = local_sender.send(Box::new(move |browser| {
-                        let result = match result {
-                            Ok(prepared) => {
-                                let renderer_token = prepared.renderer_devtools_agent_token();
-                                let inspection = prepared.inspection_configuration_endpoint();
-                                browser.navigation_work.prepared_responses.insert(
-                                    id,
-                                    ContextWork {
-                                        context,
-                                        value: prepared,
-                                    },
-                                );
-                                Ok(BrowserPreparedNavigationResponse {
-                                    context: context_handle,
-                                    work: Some(id),
-                                    renderer_token,
-                                    inspection,
-                                })
-                            }
-                            Err(error) => Err(error.to_string()),
-                        };
+                        let result =
+                            result
+                                .map_err(|error| error.to_string())
+                                .and_then(|prepared| {
+                                    let renderer_token = prepared.renderer_devtools_agent_token();
+                                    let inspection = prepared.inspection_configuration_endpoint();
+                                    browser.navigation_work.finish(
+                                        id,
+                                        NavigationWork::PreparedResponse(Box::new(prepared)),
+                                    )?;
+                                    Ok(BrowserPreparedNavigationResponse {
+                                        context: context_handle,
+                                        work: Some(id),
+                                        renderer_token,
+                                        inspection,
+                                    })
+                                });
+                        if result.is_err() {
+                            browser.navigation_work.remove(id);
+                        }
                         let _ = completion_tx.send(result);
                     }));
                 });
@@ -602,18 +625,21 @@ impl BrowserInitialDocumentBuild {
     }
 
     pub fn start_preparation(&mut self) -> anyhow::Result<()> {
-        let work = self.work.ok_or_else(|| anyhow::anyhow!(unavailable()))?;
+        let work = self
+            .work
+            .ok_or_else(|| anyhow::anyhow!(initial_document_cancelled()))?;
         self.context
             .browser
             .execute(move |browser| {
-                browser
+                let entry = browser
                     .navigation_work
-                    .initial_builds
+                    .work
                     .get_mut(&work)
-                    .ok_or_else(unavailable)?
-                    .value
-                    .start_preparation()
-                    .map_err(|error| error.to_string())
+                    .ok_or_else(initial_document_cancelled)?;
+                let NavigationWork::InitialBuild(build) = &mut entry.value else {
+                    return Err(unavailable());
+                };
+                build.start_preparation().map_err(|error| error.to_string())
             })
             .map_err(anyhow::Error::msg)?
             .map_err(anyhow::Error::msg)
@@ -623,41 +649,39 @@ impl BrowserInitialDocumentBuild {
         let id = self
             .work
             .take()
-            .ok_or_else(|| anyhow::anyhow!(unavailable()))?;
+            .ok_or_else(|| anyhow::anyhow!(initial_document_cancelled()))?;
         let context_handle = self.context.clone();
         let completion = self
             .context
             .browser
             .execute(move |browser| {
-                let work = browser
+                let NavigationWork::InitialBuild(value) = browser
                     .navigation_work
-                    .initial_builds
-                    .remove(&id)
-                    .ok_or_else(unavailable)?;
+                    .begin(id)
+                    .map_err(|_| initial_document_cancelled())?
+                else {
+                    return Err(unavailable());
+                };
                 let local_sender = browser.local_sender.clone();
                 let (completion_tx, completion) = oneshot::channel();
                 tokio::task::spawn_local(async move {
-                    let ContextWork { context, value } = work;
                     let result = value.materialize().await;
                     let _ = local_sender.send(Box::new(move |browser| {
-                        let result = match result {
-                            Ok(built) => {
-                                let key = built.key();
-                                browser.navigation_work.built_initial_documents.insert(
-                                    id,
-                                    ContextWork {
-                                        context,
-                                        value: built,
-                                    },
-                                );
-                                Ok(BrowserBuiltInitialDocument {
-                                    context: context_handle,
-                                    work: Some(id),
-                                    key,
-                                })
-                            }
-                            Err(error) => Err(error.to_string()),
-                        };
+                        let result = result.map_err(|error| error.to_string()).and_then(|built| {
+                            let key = built.key();
+                            browser
+                                .navigation_work
+                                .finish(id, NavigationWork::BuiltInitialDocument(Box::new(built)))
+                                .map_err(|_| initial_document_cancelled())?;
+                            Ok(BrowserBuiltInitialDocument {
+                                context: context_handle,
+                                work: Some(id),
+                                key,
+                            })
+                        });
+                        if result.is_err() {
+                            browser.navigation_work.remove(id);
+                        }
                         let _ = completion_tx.send(result);
                     }));
                 });
@@ -698,12 +722,12 @@ impl BrowserBuiltInitialDocument {
         let completion = self.context.browser.execute(move |browser| {
             let built = browser
                 .navigation_work
-                .built_initial_documents
-                .remove(&work)
+                .take(work)
+                .ok()
                 .map(|work| work.value);
             let (completion_tx, completion) = oneshot::channel();
             tokio::task::spawn_local(async move {
-                if let Some(built) = built {
+                if let Some(NavigationWork::BuiltInitialDocument(built)) = built {
                     built.retire().await;
                 }
                 let _ = completion_tx.send(());
@@ -782,34 +806,28 @@ impl BrowserDocumentMaterialization {
             .context
             .browser
             .execute(move |browser| {
-                let work = browser
-                    .navigation_work
-                    .materializations
-                    .remove(&id)
-                    .ok_or_else(unavailable)?;
+                let NavigationWork::Materialization(value) = browser.navigation_work.begin(id)?
+                else {
+                    return Err(unavailable());
+                };
                 let local_sender = browser.local_sender.clone();
                 let (completion_tx, completion) = oneshot::channel();
                 tokio::task::spawn_local(async move {
-                    let ContextWork { context, value } = work;
                     let result = value.materialize().await;
                     let _ = local_sender.send(Box::new(move |browser| {
-                        let result = match result {
-                            Ok(BuiltDocumentPage {
-                                page,
-                                page_creation_diagnostics,
-                                page_creation_artifacts,
-                                pending_download,
-                            }) => {
+                        let result = result.map_err(|error| error.to_string()).and_then(
+                            |BuiltDocumentPage {
+                                 page,
+                                 page_creation_diagnostics,
+                                 page_creation_artifacts,
+                                 pending_download,
+                             }| {
                                 let navigation = page.navigation();
                                 let web_contents = page.web_contents_id();
                                 let renderer = page.renderer_residence();
-                                browser.navigation_work.prepared_documents.insert(
-                                    id,
-                                    ContextWork {
-                                        context,
-                                        value: page,
-                                    },
-                                );
+                                browser
+                                    .navigation_work
+                                    .finish(id, NavigationWork::PreparedDocument(Box::new(page)))?;
                                 Ok(BuiltDocumentPage {
                                     page: BrowserPreparedDocumentNavigation {
                                         context: context_handle,
@@ -822,9 +840,11 @@ impl BrowserDocumentMaterialization {
                                     page_creation_artifacts,
                                     pending_download,
                                 })
-                            }
-                            Err(error) => Err(error.to_string()),
-                        };
+                            },
+                        );
+                        if result.is_err() {
+                            browser.navigation_work.remove(id);
+                        }
                         let _ = completion_tx.send(result);
                     }));
                 });
@@ -920,11 +940,11 @@ impl BrowserContextHandle {
                     let key = build.key();
                     let inspection = build.inspection_endpoint();
                     let work = browser.navigation_work.allocate();
-                    browser.navigation_work.initial_builds.insert(
+                    browser.navigation_work.work.insert(
                         work,
-                        ContextWork {
-                            context: context_handle.id,
-                            value: *build,
+                        NavigationWorkEntry {
+                            contents: handle,
+                            value: NavigationWork::InitialBuild(build),
                         },
                     );
                     Ok(BrowserInitialDocumentAdmission::Build(Box::new(
@@ -954,31 +974,31 @@ impl BrowserContextHandle {
         let context_handle = self.clone();
         let fallback_context = self.clone();
         match self.browser.execute(move |browser| {
-            let Some(stored) = browser
-                .navigation_work
-                .built_initial_documents
-                .remove(&work)
-            else {
+            let Ok(stored) = browser.navigation_work.take(work) else {
                 return Err(Box::new(BrowserBuiltInitialDocument {
                     context: context_handle,
                     work: None,
                     key,
                 }));
             };
-            if stored.context != context_handle.id {
-                browser
-                    .navigation_work
-                    .built_initial_documents
-                    .insert(work, stored);
+            if stored.contents.context() != context_handle.id {
+                browser.navigation_work.work.insert(work, stored);
                 return Err(Box::new(BrowserBuiltInitialDocument {
                     context: context_handle,
                     work: Some(work),
                     key,
                 }));
             }
+            let NavigationWork::BuiltInitialDocument(value) = stored.value else {
+                return Err(Box::new(BrowserBuiltInitialDocument {
+                    context: context_handle,
+                    work: None,
+                    key,
+                }));
+            };
             let committed = match browser.context_mut(context_handle.id) {
-                Ok(context) => context.commit_initial_document(stored.value),
-                Err(_) => Err(Box::new(stored.value)),
+                Ok(context) => context.commit_initial_document(*value),
+                Err(_) => Err(value),
             };
             match committed {
                 Ok(PhysicalCommittedInitialDocument {
@@ -993,11 +1013,11 @@ impl BrowserContextHandle {
                     inspection_endpoint,
                 }),
                 Err(stale) => {
-                    browser.navigation_work.built_initial_documents.insert(
+                    browser.navigation_work.work.insert(
                         work,
-                        ContextWork {
-                            context: context_handle.id,
-                            value: *stale,
+                        NavigationWorkEntry {
+                            contents: stored.contents,
+                            value: NavigationWork::BuiltInitialDocument(stale),
                         },
                     );
                     Err(Box::new(BrowserBuiltInitialDocument {
@@ -1029,14 +1049,7 @@ impl BrowserContextHandle {
             let load = browser
                 .context_mut(context_handle.id)?
                 .start_navigation_load(handle, navigation, policy, inherited)?;
-            let work = browser.navigation_work.insert_load(context_handle.id, load);
-            let load = &browser
-                .navigation_work
-                .loads
-                .get(&work)
-                .expect("inserted navigation load")
-                .value;
-            Ok(BrowserNavigationLoad::new(context_handle, work, load))
+            Ok(browser.navigation_work.insert_load(context_handle, load))
         })?
     }
 
@@ -1051,15 +1064,8 @@ impl BrowserContextHandle {
                 .context_mut(context_handle.id)?
                 .start_claimed_navigation_request(request, inherited)?;
             let (load, requested_url, method, body, headers) = work.into_owner_parts();
-            let id = browser.navigation_work.insert_load(context_handle.id, load);
-            let stored = &browser
-                .navigation_work
-                .loads
-                .get(&id)
-                .expect("inserted intercepted navigation load")
-                .value;
             Ok(BrowserInterceptedNavigationLoad::new(
-                BrowserNavigationLoad::new(context_handle, id, stored),
+                browser.navigation_work.insert_load(context_handle, load),
                 requested_url,
                 method,
                 body,
@@ -1079,14 +1085,7 @@ impl BrowserContextHandle {
             let load = browser
                 .context_mut(context_handle.id)?
                 .start_navigation_load_for_interception(permit, policy, inherited)?;
-            let id = browser.navigation_work.insert_load(context_handle.id, load);
-            let stored = &browser
-                .navigation_work
-                .loads
-                .get(&id)
-                .expect("inserted intercepted navigation load")
-                .value;
-            Ok(BrowserNavigationLoad::new(context_handle, id, stored))
+            Ok(browser.navigation_work.insert_load(context_handle, load))
         })?
     }
 
@@ -1109,21 +1108,15 @@ impl BrowserContextHandle {
         let id = load.take_work()?;
         let context = self.id;
         self.browser.execute(move |browser| {
-            let load = browser
-                .navigation_work
-                .loads
-                .remove(&id)
-                .ok_or_else(unavailable)?;
-            if load.context != context {
+            let load = browser.navigation_work.take(id)?;
+            if load.contents.context() != context {
                 return Err("navigation auth belongs to another BrowserContext".to_owned());
             }
-            let work = PhysicalInterceptedNavigationLoad::new(
-                load.value,
-                requested_url,
-                method,
-                body,
-                headers,
-            );
+            let NavigationWork::Load(load) = load.value else {
+                return Err(unavailable());
+            };
+            let work =
+                PhysicalInterceptedNavigationLoad::new(*load, requested_url, method, body, headers);
             browser
                 .context_mut(context)?
                 .pause_navigation_auth(work.with_response(response))
@@ -1143,16 +1136,9 @@ impl BrowserContextHandle {
                     .take_navigation_auth(permit)?;
                 let (work, response) = response.into_parts();
                 let (load, requested_url, method, body, headers) = work.into_owner_parts();
-                let id = browser.navigation_work.insert_load(context_handle.id, load);
-                let stored = &browser
-                    .navigation_work
-                    .loads
-                    .get(&id)
-                    .expect("restored intercepted navigation load")
-                    .value;
                 Some(BrowserInterceptedNavigationResponse {
                     work: BrowserInterceptedNavigationLoad::new(
-                        BrowserNavigationLoad::new(context_handle, id, stored),
+                        browser.navigation_work.insert_load(context_handle, load),
                         requested_url,
                         method,
                         body,
@@ -1179,28 +1165,27 @@ impl BrowserContextHandle {
         let work = page.take_work()?;
         let context_handle = self.clone();
         self.browser.execute(move |browser| {
-            let prepared = browser
-                .navigation_work
-                .prepared_responses
-                .remove(&work)
-                .ok_or_else(unavailable)?;
-            if prepared.context != context_handle.id {
-                return Err("navigation response belongs to another BrowserContext".to_owned());
+            let prepared = browser.navigation_work.take(work)?;
+            if prepared.contents != handle {
+                return Err("navigation response belongs to another WebContents".to_owned());
             }
+            let NavigationWork::PreparedResponse(prepared) = prepared.value else {
+                return Err(unavailable());
+            };
             let materialization = browser
                 .context_mut(context_handle.id)?
                 .start_document_materialization(
                     handle,
                     navigation,
-                    prepared.value,
+                    *prepared,
                     destination,
                     inherited,
                 )?;
-            browser.navigation_work.materializations.insert(
+            browser.navigation_work.work.insert(
                 work,
-                ContextWork {
-                    context: context_handle.id,
-                    value: materialization,
+                NavigationWorkEntry {
+                    contents: handle,
+                    value: NavigationWork::Materialization(Box::new(materialization)),
                 },
             );
             Ok(BrowserDocumentMaterialization {
@@ -1220,17 +1205,16 @@ impl BrowserContextHandle {
         let work = prepared.take_work()?;
         let context = self.id;
         self.browser.execute(move |browser| {
-            let prepared = browser
-                .navigation_work
-                .prepared_documents
-                .remove(&work)
-                .ok_or_else(unavailable)?;
-            if prepared.context != context {
+            let prepared = browser.navigation_work.take(work)?;
+            if prepared.contents.context() != context {
                 return Err("navigation document belongs to another BrowserContext".to_owned());
             }
+            let NavigationWork::PreparedDocument(prepared) = prepared.value else {
+                return Err(unavailable());
+            };
             let commit = browser
                 .context_mut(context)?
-                .commit_document_navigation(prepared.value)?;
+                .commit_document_navigation(*prepared)?;
             let (completion_tx, completion) = oneshot::channel();
             tokio::task::spawn_local(async move {
                 commit.retirement.close().await;
