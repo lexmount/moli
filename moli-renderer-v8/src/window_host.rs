@@ -114,6 +114,20 @@ struct WindowRequestIdleCallbackArgs<'s> {
     options: Option<v8::Local<'s, v8::Value>>,
 }
 
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Window.cancelAnimationFrame")]
+struct WindowCancelAnimationFrameArgs {
+    #[webidl(required, converter = "unsigned_long")]
+    handle: u32,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "Window.cancelIdleCallback")]
+struct WindowCancelIdleCallbackArgs {
+    #[webidl(required, converter = "unsigned_long")]
+    handle: u32,
+}
+
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "IdleDeadline", enumerable)]
 struct IdleDeadlinePrototypeDeclaration {
@@ -711,16 +725,54 @@ pub(super) fn window_clear_timer_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
-        return;
-    };
     let id_val = args.get(0);
     let id = id_val.number_value(scope).unwrap_or(0.0) as u32;
+    cancel_window_timer_for_receiver(scope, args.this(), id);
+}
+
+pub(super) fn window_cancel_animation_frame_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<WindowCancelAnimationFrameArgs>(scope, &args) else {
+        return;
+    };
+    cancel_window_timer_for_receiver(scope, args.this(), parsed.handle);
+}
+
+pub(super) fn window_cancel_idle_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<WindowCancelIdleCallbackArgs>(scope, &args) else {
+        return;
+    };
+    cancel_window_timer_for_receiver(scope, args.this(), parsed.handle);
+}
+
+fn cancel_window_timer_for_receiver<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    receiver: v8::Local<'s, v8::Object>,
+    id: u32,
+) {
     if id == 0 {
         return;
     }
+    let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) else {
+        return;
+    };
     let runtime = unsafe { &mut *host_ptr };
-    let _ = runtime.cancel_window_timer_for_receiver(scope, args.this(), id);
+    let _ = runtime.cancel_window_timer_for_receiver(scope, receiver, id);
 }
 
 pub(super) fn window_request_animation_frame_callback<'s>(

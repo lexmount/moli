@@ -311,3 +311,45 @@ fn animation_frame_and_idle_callbacks_require_callable_webidl_values() {
         "TypeError|TypeError"
     );
 }
+
+#[test]
+fn animation_frame_and_idle_cancellation_use_required_unsigned_long_handles() {
+    let mut vm = new_storage_test_vm("https://window-cancel-callback-conversion.test/");
+    assert_eq!(
+        vm.eval(
+            r#"
+            (() => {
+              const probe = callback => {
+                try {
+                  return `return:${String(callback())}`;
+                } catch (error) {
+                  return `throw:${error && error.name}`;
+                }
+              };
+              const facts = {};
+              for (const [label, cancel] of [
+                ["animation", cancelAnimationFrame],
+                ["idle", cancelIdleCallback]
+              ]) {
+                let conversions = 0;
+                facts[label] = {
+                  missing: probe(() => cancel.call(window)),
+                  wrongReceiver: probe(() => cancel.call({}, 0)),
+                  symbol: probe(() => cancel.call(window, Symbol("handle"))),
+                  object: probe(() => cancel.call(window, {
+                    valueOf() {
+                      conversions++;
+                      return 0;
+                    }
+                  })),
+                  conversions
+                };
+              }
+              return JSON.stringify(facts);
+            })()
+            "#,
+        )
+        .expect("Window cancellation callback Web IDL conversion result"),
+        r#"{"animation":{"missing":"throw:TypeError","wrongReceiver":"throw:TypeError","symbol":"throw:TypeError","object":"return:undefined","conversions":1},"idle":{"missing":"throw:TypeError","wrongReceiver":"throw:TypeError","symbol":"throw:TypeError","object":"return:undefined","conversions":1}}"#
+    );
+}
