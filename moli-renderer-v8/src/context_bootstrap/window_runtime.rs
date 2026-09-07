@@ -33,7 +33,6 @@ pub(super) use navigator::{
     MEDIA_DEVICES_BRAND_SLOT, PERMISSIONS_BRAND_SLOT, build_legacy_storage_info_object,
     build_legacy_storage_quota_object, build_navigator_ua_data_object,
     global_caches_getter_callback, navigator_get_battery_callback, navigator_java_enabled_callback,
-    navigator_media_devices_enumerate_devices_callback,
     navigator_media_devices_get_user_media_callback, navigator_permissions_query_callback,
     navigator_send_beacon_callback, navigator_storage_estimate_callback,
     navigator_storage_get_directory_callback, navigator_storage_persist_callback,

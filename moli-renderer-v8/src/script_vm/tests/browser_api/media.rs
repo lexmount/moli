@@ -2143,7 +2143,7 @@ fn zhihu_probe_media_devices_surface_exposes_promise_methods() {
               const proto = Object.getPrototypeOf(devices);
               const fakeDevices = Object.create(MediaDevices.prototype);
               const summarizeMethodDescriptor = name => {
-                const descriptor = Object.getOwnPropertyDescriptor(devices, name);
+                const descriptor = Object.getOwnPropertyDescriptor(proto, name);
                 return [
                   !!descriptor,
                   typeof descriptor?.value,

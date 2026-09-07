@@ -3564,24 +3564,6 @@ fn build_storage_usage_details_object<'s>(
     .expect("StorageUsageDetails declaration should bind")
 }
 
-pub(in crate::context_bootstrap) fn navigator_media_devices_enumerate_devices_callback<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    args: v8::FunctionCallbackArguments<'s>,
-    mut rv: v8::ReturnValue<'_, v8::Value>,
-) {
-    let Some(resolver) = v8::PromiseResolver::new(scope) else {
-        return;
-    };
-    if !media_devices_receiver_branded(scope, args.this()) {
-        reject_type_error(scope, resolver, "Illegal invocation");
-        rv.set(resolver.get_promise(scope).into());
-        return;
-    }
-    let devices = v8::Array::new(scope, 0);
-    let _ = resolver.resolve(scope, devices.into());
-    rv.set(resolver.get_promise(scope).into());
-}
-
 pub(in crate::context_bootstrap) fn navigator_media_devices_get_user_media_callback<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,

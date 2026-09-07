@@ -1,9 +1,7 @@
 use super::super::window_runtime::{
-    MEDIA_DEVICES_BRAND_SLOT, PERMISSIONS_BRAND_SLOT, build_legacy_storage_quota_object,
-    build_navigator_ua_data_object, install_initial_service_worker_ready_promise,
-    navigator_get_battery_callback, navigator_java_enabled_callback,
-    navigator_media_devices_enumerate_devices_callback,
-    navigator_media_devices_get_user_media_callback, navigator_permissions_query_callback,
+    PERMISSIONS_BRAND_SLOT, build_legacy_storage_quota_object, build_navigator_ua_data_object,
+    install_initial_service_worker_ready_promise, navigator_get_battery_callback,
+    navigator_java_enabled_callback, navigator_permissions_query_callback,
     navigator_send_beacon_callback, navigator_service_worker_controller_getter_callback,
     navigator_service_worker_controllerchange_handler_getter_callback,
     navigator_service_worker_controllerchange_handler_setter_callback,
@@ -29,6 +27,7 @@ use super::geolocation::{build_geolocation_object, install_geolocation_template_
 use super::media_capabilities::{
     build_media_capabilities_object, install_media_capabilities_template_bindings,
 };
+use super::media_devices::{build_media_devices_object, install_media_devices_template_bindings};
 use super::navigator_subobjects::{NavigatorSubobject, ensure_navigator_subobject};
 use crate::document_runtime::DomHandle;
 use crate::native_bridge::OwnerDispatchScope;
@@ -407,19 +406,6 @@ struct NavigatorUaDataPrototypeMethodsDeclaration {
 
     #[webapi(method, length = 1, callback = navigator_ua_data_get_high_entropy_values_callback)]
     get_high_entropy_values: (),
-}
-
-#[derive(Default, WebApiObject)]
-#[webapi(interface = "MediaDevices")]
-struct MediaDevicesObjectDeclaration {
-    #[webapi(slot = MEDIA_DEVICES_BRAND_SLOT, init = true)]
-    brand: (),
-
-    #[webapi(method, enumerable, length = 0, callback = navigator_media_devices_enumerate_devices_callback)]
-    enumerate_devices: (),
-
-    #[webapi(method, enumerable, length = 1, callback = navigator_media_devices_get_user_media_callback)]
-    get_user_media: (),
 }
 
 #[derive(Default, WebApiObject)]
@@ -821,6 +807,7 @@ pub(in crate::context_bootstrap) fn install_navigator_template_bindings<'s>(
     install_media_capabilities_template_bindings(scope, template, interface_name);
     let prototype = template.prototype_template(scope);
     match interface_name {
+        "MediaDevices" => install_media_devices_template_bindings(scope, template),
         "Navigator" => {
             NavigatorRuntimeDataPrototypeDeclaration::initialize_prototype_template(
                 scope, prototype,
@@ -854,6 +841,7 @@ fn filter_navigator_secure_context_exposure<'s>(
 ) -> Result<()> {
     if !secure_context {
         delete_object_property(scope, prototype, "clipboard")?;
+        delete_object_property(scope, prototype, "mediaDevices")?;
         delete_object_property(scope, prototype, "storage")?;
         delete_object_property(scope, prototype, "storageBuckets")?;
         delete_object_property(scope, prototype, "serviceWorker")?;
@@ -998,9 +986,8 @@ pub(super) fn build_lazy_navigator_subobject_in_current_realm<'s>(
         | NavigatorSubobject::WebkitPersistentStorage => {
             build_legacy_storage_quota_object(scope)?.into()
         }
-        NavigatorSubobject::MediaDevices => MediaDevicesObjectDeclaration::default()
-            .bind(scope)
-            .map_err(|error| anyhow!("failed to bind MediaDevices object: {error}"))?
+        NavigatorSubobject::MediaDevices => build_media_devices_object(scope)
+            .ok_or_else(|| anyhow!("failed to bind MediaDevices object"))?
             .into(),
         NavigatorSubobject::ServiceWorker => {
             build_service_worker_container(scope, owner_child, owner_popup)?.into()
