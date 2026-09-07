@@ -10,7 +10,6 @@ use moli_protocol::{
     devtools_runtime::{DevToolsCommand, DevToolsError, DevToolsErrorKind},
 };
 use tokio::{
-    sync::mpsc,
     task::JoinHandle,
     time::{Instant as TokioInstant, sleep_until},
 };
@@ -169,7 +168,6 @@ impl CdpScheduler {
     pub(crate) async fn start_devtools_runtime_command_with_deferred_reply_progress(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        runtime_response_ready_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
         command: DevToolsCommand,
     ) -> DevToolsRuntimeCommandProgress {
         let protocol_output = ProtocolOutputSequence::empty();
@@ -179,7 +177,6 @@ impl CdpScheduler {
             .await;
         self.continue_devtools_runtime_command_until_deferred_reply_or_complete(
             receivers,
-            runtime_response_ready_tx,
             step,
             protocol_output,
         )
@@ -198,7 +195,6 @@ impl CdpScheduler {
     pub(crate) async fn advance_devtools_runtime_deferred_reply_after_renderer_response(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        runtime_response_ready_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
         pending: Box<PendingDevToolsRuntimeDeferredReplyExecution>,
         response: RuntimeInspectorResponseReady,
     ) -> DevToolsRuntimeCommandProgress {
@@ -209,12 +205,7 @@ impl CdpScheduler {
             .await
         {
             return self
-                .complete_devtools_runtime_deferred_reply(
-                    receivers,
-                    runtime_response_ready_tx,
-                    pending,
-                    protocol_output,
-                )
+                .complete_devtools_runtime_deferred_reply(receivers, pending, protocol_output)
                 .await;
         }
         DevToolsRuntimeCommandProgress::PendingDeferredReply {
@@ -236,7 +227,6 @@ impl CdpScheduler {
     async fn continue_devtools_runtime_command_until_deferred_reply_or_complete(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        runtime_response_ready_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
         mut step: DevToolsRuntimeCommandTaskStep,
         mut protocol_output: ProtocolOutputSequence,
     ) -> DevToolsRuntimeCommandProgress {
@@ -293,15 +283,14 @@ impl CdpScheduler {
                             .take_scheduler_deferred_inspector_reply_receiver()
                         {
                             Some(response_rx) => RuntimeResponseReadyWaitHandle::new(
-                                start_devtools_runtime_response_ready_wait(
+                                self.spawn_runtime_inspector_response_wait(
                                     command_id,
                                     session_id,
                                     response_rx,
-                                    runtime_response_ready_tx,
                                 ),
                             ),
                             None => {
-                                let _ = runtime_response_ready_tx.send(
+                                let _ = self.runtime_inspector_response_ready_sender().send(
                                     RuntimeInspectorResponseReady::new(
                                         command_id,
                                         session_id.as_deref(),
@@ -573,7 +562,6 @@ impl CdpScheduler {
     async fn complete_devtools_runtime_deferred_reply(
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
-        runtime_response_ready_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
         pending: PendingDevToolsRuntimeDeferredReplyExecution,
         protocol_output: ProtocolOutputSequence,
     ) -> DevToolsRuntimeCommandProgress {
@@ -591,7 +579,6 @@ impl CdpScheduler {
             .await;
         self.continue_devtools_runtime_command_until_deferred_reply_or_complete(
             receivers,
-            runtime_response_ready_tx,
             step,
             protocol_output,
         )
@@ -659,23 +646,25 @@ impl Drop for RuntimeResponseReadyWaitHandle {
     }
 }
 
-fn start_devtools_runtime_response_ready_wait(
-    command_id: u64,
-    session_id: Option<String>,
-    response_rx: RuntimeInspectorAsyncCompletionReceiver,
-    response_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-) -> JoinHandle<()> {
-    let response_tx = response_tx.clone();
-    tokio::task::spawn_local(async move {
-        let response = response_rx
-            .await
-            .map_err(|_| "RuntimeDeferredInspectorResponseCanceled".to_owned());
-        let _ = response_tx.send(RuntimeInspectorResponseReady::new(
-            command_id,
-            session_id.as_deref(),
-            response,
-        ));
-    })
+impl CdpScheduler {
+    pub(super) fn spawn_runtime_inspector_response_wait(
+        &self,
+        command_id: u64,
+        session_id: Option<String>,
+        response_rx: RuntimeInspectorAsyncCompletionReceiver,
+    ) -> JoinHandle<()> {
+        let response_tx = self.runtime_inspector_response_ready_sender();
+        tokio::task::spawn_local(async move {
+            let response = response_rx
+                .await
+                .map_err(|_| "RuntimeDeferredInspectorResponseCanceled".to_owned());
+            let _ = response_tx.send(RuntimeInspectorResponseReady::new(
+                command_id,
+                session_id.as_deref(),
+                response,
+            ));
+        })
+    }
 }
 
 async fn wait_until_runtime_deadline(deadline: Option<TokioInstant>) {

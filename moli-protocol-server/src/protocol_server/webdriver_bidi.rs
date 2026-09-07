@@ -183,7 +183,6 @@ async fn handle_bidi_session_socket_local(
         initial_storage_partition,
         navigation_runtime_config,
     );
-    actor.install_runtime_response_ready_sender(&mut scheduler);
     let mut adapter_scheduler = ProtocolAdapterScheduler::default();
     loop {
         let output = scheduler.drain_browser_events().await;
@@ -254,7 +253,7 @@ async fn handle_bidi_session_socket_local(
                     break;
                 }
             }
-            maybe_response = actor.runtime_response_ready_rx.recv() => {
+            maybe_response = receivers.runtime_inspector_response_ready_rx.recv() => {
                 let Some(response) = maybe_response else {
                     break;
                 };
@@ -290,8 +289,6 @@ pub(in crate::protocol_server) struct BidiSocketActor {
     input_action_states: BTreeMap<String, ClassicActionState>,
     pending_navigation_response: Option<BidiPendingNavigationResponse>,
     pending_runtime_command: Option<BidiPendingRuntimeCommand>,
-    runtime_response_ready_tx: mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
-    runtime_response_ready_rx: mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>,
 }
 
 pub(in crate::protocol_server) enum BidiSocketActorInput {
@@ -302,24 +299,13 @@ pub(in crate::protocol_server) enum BidiSocketActorInput {
 
 impl BidiSocketActor {
     pub(in crate::protocol_server) fn new(socket: WebSocket, web_socket_url: String) -> Self {
-        let (runtime_response_ready_tx, runtime_response_ready_rx) = mpsc::unbounded_channel();
         Self {
             socket,
             bidi: BidiConnectionState::with_web_socket_url(web_socket_url),
             input_action_states: BTreeMap::new(),
             pending_navigation_response: None,
             pending_runtime_command: None,
-            runtime_response_ready_tx,
-            runtime_response_ready_rx,
         }
-    }
-
-    pub(in crate::protocol_server) fn install_runtime_response_ready_sender(
-        &self,
-        scheduler: &mut CdpScheduler,
-    ) {
-        scheduler
-            .set_runtime_inspector_response_ready_sender(self.runtime_response_ready_tx.clone());
     }
 
     pub(in crate::protocol_server) fn attach_existing_session(
@@ -377,13 +363,15 @@ impl BidiSocketActor {
 
     /// Receives the BiDi-side inputs of an attached Classic session.
     ///
-    /// The shared adapter scheduler remains outside the socket actor so a
-    /// Classic-to-BiDi mode switch cannot replace its exact load residence.
+    /// The adapter scheduler and Runtime completion ingress remain outside the
+    /// socket actor so a Classic-to-BiDi mode switch cannot replace an exact
+    /// load residence or orphan a renderer callback.
     /// Selection order intentionally remains socket, adapter terminal/turn,
     /// then Runtime response, matching the pre-unification attached-session
     /// contract.
     pub(in crate::protocol_server) async fn recv_attached_input(
         &mut self,
+        runtime_response_ready_rx: &mut mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>,
         adapter_scheduler: &mut ProtocolAdapterScheduler,
         page_javascript_blocked: bool,
     ) -> BidiSocketActorInput {
@@ -393,7 +381,7 @@ impl BidiSocketActor {
             input = adapter_scheduler.recv_input(), if !page_javascript_blocked => {
                 BidiSocketActorInput::AdapterScheduler(input)
             }
-            response = self.runtime_response_ready_rx.recv() => {
+            response = runtime_response_ready_rx.recv() => {
                 BidiSocketActorInput::RuntimeResponseReady(response.map(Box::new))
             }
         }
@@ -415,7 +403,6 @@ impl BidiSocketActor {
             session_registry,
             &mut self.pending_navigation_response,
             &mut self.pending_runtime_command,
-            &self.runtime_response_ready_tx,
             message,
         )
         .await
@@ -583,10 +570,7 @@ impl BidiSocketActor {
             .expect("pending runtime command should carry scheduler state");
         let progress = scheduler
             .advance_devtools_runtime_deferred_reply_after_renderer_response(
-                receivers,
-                &self.runtime_response_ready_tx,
-                pending,
-                response,
+                receivers, pending, response,
             )
             .await;
         self.apply_pending_runtime_progress(scheduler, receivers, pending_command, progress)
@@ -644,7 +628,6 @@ async fn handle_bidi_socket_message(
     session_registry: &SharedBidiSessionRegistry,
     pending_navigation_response: &mut Option<BidiPendingNavigationResponse>,
     pending_runtime_command: &mut Option<BidiPendingRuntimeCommand>,
-    runtime_response_ready_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
     message: Result<Message, axum::Error>,
 ) -> bool {
     let payload: Result<serde_json::Value, _> = match message {
@@ -782,7 +765,6 @@ async fn handle_bidi_socket_message(
                 start_bidi_devtools_command(
                     scheduler,
                     receivers,
-                    runtime_response_ready_tx,
                     bidi,
                     dispatch,
                     pending_navigation_candidate
@@ -2089,7 +2071,6 @@ async fn replay_existing_bidi_realm_created_events_for_context(
 async fn start_bidi_devtools_command(
     scheduler: &mut CdpScheduler,
     receivers: &mut CdpSchedulerEventReceivers,
-    runtime_response_ready_tx: &mpsc::UnboundedSender<RuntimeInspectorResponseReady>,
     bidi: &BidiConnectionState,
     mut dispatch: BidiDevToolsCommandDispatch,
     background_command_id: Option<u64>,
@@ -2168,7 +2149,6 @@ async fn start_bidi_devtools_command(
         return match scheduler
             .start_devtools_runtime_command_with_deferred_reply_progress(
                 receivers,
-                runtime_response_ready_tx,
                 dispatch.command,
             )
             .await

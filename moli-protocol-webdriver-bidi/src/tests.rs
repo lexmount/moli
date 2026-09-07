@@ -5758,18 +5758,18 @@ fn context_scoped_service_worker_protocol_events_use_stable_owner_realm() {
     assert_eq!(events[0]["method"], json!("script.realmCreated"));
     assert_eq!(
         events[0]["params"]["realm"],
-        json!("service-worker-TID-service-worker")
+        realm_created["params"]["context"]["uniqueId"]
     );
     assert_eq!(events[0]["params"]["type"], json!("service-worker"));
     assert_eq!(events[1]["method"], json!("log.entryAdded"));
     assert_eq!(
         events[1]["params"]["source"]["realm"],
-        json!("service-worker-TID-service-worker")
+        realm_created["params"]["context"]["uniqueId"]
     );
     assert_eq!(events[2]["method"], json!("script.realmDestroyed"));
     assert_eq!(
         events[2]["params"]["realm"],
-        json!("service-worker-TID-service-worker")
+        realm_created["params"]["context"]["uniqueId"]
     );
 }
 
