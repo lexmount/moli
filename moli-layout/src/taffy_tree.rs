@@ -5,12 +5,13 @@ use style::Atom;
 use taffy::{
     AbsoluteAxis, AlignContent, AlignContentKeyword, AlignmentSafety, AutoSizeBehavior,
     AvailableSpace, BlockContext, BlockFormattingContext, BoxSizing, CacheTree, Clear,
-    DetailedGridInfo, Dimension, Display, FloatDirection, Layout, LayoutBlockContainer,
-    LayoutFlexboxContainer, LayoutGridContainer, LayoutInput, LayoutOutput, LayoutPartialTree,
-    LeafLayoutContext, Line, MaybeMath, MaybeResolve, NodeId, Point, ResolveOrZero, RoundTree,
-    RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree, TraverseTree,
-    compute_block_layout, compute_cached_layout, compute_flexbox_layout, compute_grid_layout,
-    compute_hidden_layout, compute_leaf_layout_with_context, compute_root_layout, round_layout,
+    DetailedGridInfo, Dimension, Display, FlexDirection, FloatDirection, Layout,
+    LayoutBlockContainer, LayoutFlexboxContainer, LayoutGridContainer, LayoutInput, LayoutOutput,
+    LayoutPartialTree, LeafLayoutContext, Line, MaybeMath, MaybeResolve, NodeId, Point,
+    ResolveOrZero, RoundTree, RunMode, Size, SizingMode, SizingPurpose, Style, TraversePartialTree,
+    TraverseTree, compute_block_layout, compute_cached_layout, compute_flexbox_layout,
+    compute_grid_layout, compute_hidden_layout, compute_leaf_layout_with_context,
+    compute_root_layout, round_layout,
 };
 
 use crate::{
@@ -21,7 +22,11 @@ use crate::{
         InlineObjectRole, break_inline_lines, build_inline_fragments, build_inline_line_placements,
         measure_inline_lines, relative_atomic_inset_offset, reset_inline_layout_for_probe,
     },
-    positioned::resolve_absolute_axis_margins,
+    positioned::{
+        FlexCrossAxisStaticContext, HorizontalStaticEdge, PhysicalStaticPosition,
+        VerticalStaticEdge, flex_main_axis_static_edge, physical_static_position_from_logical,
+        resolve_absolute_axis_margins,
+    },
     replaced::measure_replaced,
     style::{InlineDirection, resolve_stylo_calc_value},
     table::{compute_table_layout, prepare_table_layout_trees},
@@ -29,7 +34,7 @@ use crate::{
 };
 
 pub(crate) struct PreparedWorldLayout {
-    positioned_static_placeholders: Vec<PositionedStaticPlaceholder>,
+    positioned_static_sources: Vec<PositionedStaticSource>,
     numeric_unrounded_layouts: Vec<Layout>,
     numeric_viewport_layout: Layout,
     feedback_invalidation_marks: Vec<bool>,
@@ -145,10 +150,10 @@ where
     world.viewport_layout.unrounded_layout = Layout::with_order(0);
     world.viewport_layout.final_layout = Layout::with_order(0);
     update_viewport_layout_style(world, viewport);
-    let positioned_static_placeholders = prepare_layout_tree(world);
+    let positioned_static_sources = prepare_layout_tree(world);
     prepare_table_layout_trees(world);
     let mut prepared = PreparedWorldLayout {
-        positioned_static_placeholders,
+        positioned_static_sources,
         numeric_unrounded_layouts: Vec::with_capacity(world.boxes.len()),
         numeric_viewport_layout: Layout::with_order(0),
         feedback_invalidation_marks: vec![false; world.boxes.len()],
@@ -223,7 +228,7 @@ where
     );
     prepared.capture_numeric_geometry(world);
     physicalize_vertical_block_flow(world);
-    finish_block_positioned_layout(world, viewport, &prepared.positioned_static_placeholders);
+    finish_positioned_static_layout(world, viewport, &prepared.positioned_static_sources);
     finish_inline_positioned_layout(world, viewport);
     finish_form_control_contents(world);
     finish_outside_list_markers(world);
@@ -385,11 +390,11 @@ fn scale_layout(layout: Layout, factor: f32) -> Layout {
     }
 }
 
-fn prepare_layout_tree<N>(world: &mut LayoutWorld<N>) -> Vec<PositionedStaticPlaceholder>
+fn prepare_layout_tree<N>(world: &mut LayoutWorld<N>) -> Vec<PositionedStaticSource>
 where
     N: Copy + Debug + Eq + Hash,
 {
-    let mut positioned_static_placeholders = Vec::new();
+    let mut positioned_static_sources = Vec::new();
     let root = world.root;
     world.viewport_layout.children.push(root);
 
@@ -445,7 +450,16 @@ where
             && world.boxes[id.index()].style.has_auto_inset_axis()
             && inline_owner.is_none();
         if needs_static_position {
-            if original_parent_uses_block_layout(world, original_parent) {
+            if world.boxes[original_parent.index()]
+                .style
+                .display()
+                .is_flex_container()
+            {
+                positioned_static_sources.push(PositionedStaticSource::FlexContainer {
+                    child: id,
+                    container: original_parent,
+                });
+            } else if original_parent_uses_block_layout(world, original_parent) {
                 let placeholder_style = world.boxes[id.index()]
                     .style
                     .positioned_static_placeholder();
@@ -470,10 +484,10 @@ where
                 world.boxes[original_parent.index()]
                     .layout_children
                     .push(placeholder);
-                positioned_static_placeholders.push(PositionedStaticPlaceholder {
+                positioned_static_sources.push(PositionedStaticSource::BlockPlaceholder {
                     child: id,
                     placeholder,
-                    original_parent,
+                    container: original_parent,
                 });
             } else {
                 push_layout_diagnostic(
@@ -514,7 +528,7 @@ where
         children.sort_by_key(|child| world.boxes[child.index()].style.order());
         world.boxes[parent_index].layout_children = children;
     }
-    positioned_static_placeholders
+    positioned_static_sources
 }
 
 fn original_parent_uses_block_layout<N>(world: &LayoutWorld<N>, parent: LayoutBoxId) -> bool
@@ -861,60 +875,177 @@ struct PositionedContainingArea {
 }
 
 #[derive(Clone, Copy, Debug)]
-struct PositionedStaticPlaceholder {
-    child: LayoutBoxId,
-    placeholder: LayoutBoxId,
-    original_parent: LayoutBoxId,
+enum PositionedStaticSource {
+    /// A block formatting context computes the hypothetical position through
+    /// a zero-sized out-of-flow probe in the original formatting parent.
+    BlockPlaceholder {
+        child: LayoutBoxId,
+        placeholder: LayoutBoxId,
+        container: LayoutBoxId,
+    },
+    /// Flex alignment contributes a static-position point and edge pair even
+    /// when the flex container is not the child's absolute containing block.
+    FlexContainer {
+        child: LayoutBoxId,
+        container: LayoutBoxId,
+    },
 }
 
-/// Applies block-container static positions gathered by zero-sized absolute
-/// placeholders in the original numeric parent. This is the block analogue
-/// of Parley's out-of-flow inline placeholder and keeps the real box attached
-/// to its actual absolute/fixed containing block.
-fn finish_block_positioned_layout<N>(
+/// Resolves static-position contributions after the normal-flow formatting
+/// parents have their final numeric geometry. The real positioned box remains
+/// attached to its CSS containing block throughout numeric layout.
+fn finish_positioned_static_layout<N>(
     world: &mut LayoutWorld<N>,
     viewport: PaintViewport,
-    placeholders: &[PositionedStaticPlaceholder],
+    sources: &[PositionedStaticSource],
 ) where
     N: Copy + Debug + Eq + Hash,
 {
-    for placeholder in placeholders {
-        let placeholder_layout = world.boxes[placeholder.placeholder.index()].unrounded_layout;
-        let parent_origin = unrounded_global_origin(world, placeholder.original_parent);
-        let parent_direction = world.boxes[placeholder.original_parent.index()]
-            .style
-            .taffy
-            .direction;
-        let parent_is_rtl = parent_direction == taffy::Direction::Rtl;
-        let static_local_x = if parent_is_rtl {
-            placeholder_layout.location.x
-                + placeholder_layout.size.width
-                + placeholder_layout.margin.right
-        } else {
-            placeholder_layout.location.x - placeholder_layout.margin.left
+    for source in sources {
+        let (child, static_global) = match *source {
+            PositionedStaticSource::BlockPlaceholder {
+                child,
+                placeholder,
+                container,
+            } => (child, block_static_position(world, placeholder, container)),
+            PositionedStaticSource::FlexContainer { child, container } => {
+                (child, flex_static_position(world, child, container))
+            }
         };
-        let static_global = Point {
-            x: parent_origin.x + static_local_x,
-            y: parent_origin.y + placeholder_layout.location.y - placeholder_layout.margin.top,
-        };
-        let area = positioned_containing_area(world, placeholder.child, viewport);
-        let static_in_area = Point {
-            x: static_global.x - area.origin.x,
-            y: static_global.y - area.origin.y,
-        };
-        let numeric_parent_origin = world.boxes[placeholder.child.index()]
+        let area = positioned_containing_area(world, child, viewport);
+        let static_in_area = static_global.relative_to(area.origin);
+        let numeric_parent_origin = world.boxes[child.index()]
             .layout_parent
             .map(|parent| unrounded_global_origin(world, parent))
             .unwrap_or(Point::ZERO);
-        apply_inline_static_position(
-            world,
-            placeholder.child,
-            area,
-            static_in_area,
-            parent_is_rtl,
-            numeric_parent_origin,
-        );
+        apply_static_position(world, child, area, static_in_area, numeric_parent_origin);
     }
+}
+
+fn block_static_position<N>(
+    world: &LayoutWorld<N>,
+    placeholder: LayoutBoxId,
+    container: LayoutBoxId,
+) -> PhysicalStaticPosition
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let placeholder_layout = world.boxes[placeholder.index()].unrounded_layout;
+    let container_origin = unrounded_global_origin(world, container);
+    let is_rtl = world.boxes[container.index()].style.taffy.direction == taffy::Direction::Rtl;
+    let (x, horizontal_edge) = if is_rtl {
+        (
+            placeholder_layout.location.x
+                + placeholder_layout.size.width
+                + placeholder_layout.margin.right,
+            HorizontalStaticEdge::Right,
+        )
+    } else {
+        (
+            placeholder_layout.location.x - placeholder_layout.margin.left,
+            HorizontalStaticEdge::Left,
+        )
+    };
+    PhysicalStaticPosition::new(
+        Point {
+            x: container_origin.x + x,
+            y: container_origin.y + placeholder_layout.location.y - placeholder_layout.margin.top,
+        },
+        horizontal_edge,
+        VerticalStaticEdge::Top,
+    )
+}
+
+fn flex_static_position<N>(
+    world: &LayoutWorld<N>,
+    child: LayoutBoxId,
+    container: LayoutBoxId,
+) -> PhysicalStaticPosition
+where
+    N: Copy + Debug + Eq + Hash,
+{
+    let container_box = &world.boxes[container.index()];
+    let child_box = &world.boxes[child.index()];
+    let container_layout = container_box.unrounded_layout;
+    let scrollbar = world.get_scrollbar_insets(container.to_taffy());
+    let container_origin = unrounded_global_origin(world, container);
+    let content_origin = Point {
+        x: container_origin.x
+            + container_layout.border.left
+            + scrollbar.left
+            + container_layout.padding.left,
+        y: container_origin.y
+            + container_layout.border.top
+            + scrollbar.top
+            + container_layout.padding.top,
+    };
+    let content_size = Size {
+        width: (container_layout.size.width
+            - container_layout.border.left
+            - container_layout.border.right
+            - scrollbar.left
+            - scrollbar.right
+            - container_layout.padding.left
+            - container_layout.padding.right)
+            .max(0.0),
+        height: (container_layout.size.height
+            - container_layout.border.top
+            - container_layout.border.bottom
+            - scrollbar.top
+            - scrollbar.bottom
+            - container_layout.padding.top
+            - container_layout.padding.bottom)
+            .max(0.0),
+    };
+    let flex_direction = container_box.style.taffy.flex_direction;
+    let is_column = matches!(
+        flex_direction,
+        FlexDirection::Column | FlexDirection::ColumnReverse
+    );
+    let is_reverse = matches!(
+        flex_direction,
+        FlexDirection::RowReverse | FlexDirection::ColumnReverse
+    );
+    let container_writing_mode = container_box.style.writing_mode();
+    let physical_cross_axis = if is_column {
+        container_writing_mode.inline_axis()
+    } else {
+        container_writing_mode.block_axis()
+    };
+    let child_layout = child_box.unrounded_layout;
+    let child_cross_margin_size = match physical_cross_axis {
+        AbsoluteAxis::Horizontal => child_layout.margin.left + child_layout.margin.right,
+        AbsoluteAxis::Vertical => child_layout.margin.top + child_layout.margin.bottom,
+    };
+    let cross_overflows = child_layout.size.get_abs(physical_cross_axis) + child_cross_margin_size
+        > content_size.get_abs(physical_cross_axis);
+    let main_edge =
+        flex_main_axis_static_edge(container_box.style.taffy.justify_content, is_reverse);
+    let cross_edge = FlexCrossAxisStaticContext {
+        align_self: child_box.style.taffy.align_self,
+        align_items: container_box.style.taffy.align_items,
+        flex_wrap: container_box.style.taffy.flex_wrap,
+        child_writing_mode: child_box.style.writing_mode(),
+        child_direction: child_box.style.taffy.direction,
+        container_writing_mode,
+        container_direction: container_box.style.taffy.direction,
+        physical_axis: physical_cross_axis,
+        overflows: cross_overflows,
+    }
+    .resolve();
+    let (inline_edge, block_edge) = if is_column {
+        (cross_edge, main_edge)
+    } else {
+        (main_edge, cross_edge)
+    };
+    physical_static_position_from_logical(
+        content_origin,
+        content_size,
+        container_writing_mode,
+        container_box.style.taffy.direction,
+        inline_edge,
+        block_edge,
+    )
 }
 
 /// Completes positioned descendants whose hypothetical position came from an
@@ -965,12 +1096,19 @@ where
                 numeric_parent_origin,
             );
         } else {
-            apply_inline_static_position(
+            apply_static_position(
                 world,
                 child,
                 area,
-                static_in_area,
-                area.direction == taffy::Direction::Rtl && static_position.inline_level,
+                PhysicalStaticPosition::new(
+                    static_in_area,
+                    if area.direction == taffy::Direction::Rtl && static_position.inline_level {
+                        HorizontalStaticEdge::Right
+                    } else {
+                        HorizontalStaticEdge::Left
+                    },
+                    VerticalStaticEdge::Top,
+                ),
                 numeric_parent_origin,
             );
         }
@@ -1084,12 +1222,11 @@ where
     origin
 }
 
-fn apply_inline_static_position<N>(
+fn apply_static_position<N>(
     world: &mut LayoutWorld<N>,
     child: LayoutBoxId,
     area: PositionedContainingArea,
-    static_position: Point<f32>,
-    static_position_at_inline_end: bool,
+    static_position: PhysicalStaticPosition,
     numeric_parent_origin: Point<f32>,
 ) where
     N: Copy + Debug + Eq + Hash,
@@ -1101,17 +1238,12 @@ fn apply_inline_static_position<N>(
         return;
     }
     let layout = &mut world.boxes[child.index()].unrounded_layout;
+    let origin = static_position.margin_box_origin(layout.size, layout.margin);
     if both_horizontal_insets_auto {
-        let x = if static_position_at_inline_end {
-            static_position.x - layout.size.width - layout.margin.right
-        } else {
-            static_position.x + layout.margin.left
-        };
-        layout.location.x = area.origin.x + x - numeric_parent_origin.x;
+        layout.location.x = area.origin.x + origin.x - numeric_parent_origin.x;
     }
     if both_vertical_insets_auto {
-        layout.location.y =
-            area.origin.y + static_position.y + layout.margin.top - numeric_parent_origin.y;
+        layout.location.y = area.origin.y + origin.y - numeric_parent_origin.y;
     }
 }
 
