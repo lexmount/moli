@@ -111,6 +111,55 @@ async fn navigate(
 }
 
 #[tokio::test]
+async fn retired_context_rejects_late_renderer_lifecycle_without_affecting_peer() {
+    let service = BrowserService::start().unwrap();
+    let (context, contents) = context_with_contents(&service);
+    let document = navigate(&context, contents, "data:text/html,retiring").await;
+    let renderer = context.document_renderer_residence(document).unwrap();
+    let snapshot = context
+        .document_lifecycle_snapshot(document)
+        .unwrap()
+        .unwrap();
+    let event = crate::page::RendererDocumentLifecycleEvent {
+        frame: snapshot.frame,
+        document: snapshot.document,
+        epoch: snapshot.epoch,
+        sequence: u64::MAX,
+        timestamp_micros: 100,
+        kind: crate::page::RendererDocumentLifecycleEventKind::Terminated {
+            last_reached: Some(crate::page::RendererDocumentLifecycleMilestone::Load),
+            reason: crate::page::RendererDocumentTerminationReason::RestartedByDocumentOpen,
+        },
+    };
+    assert!(context.remove().unwrap());
+    let (peer, peer_contents) = context_with_contents(&service);
+    let peer_document = navigate(&peer, peer_contents, "data:text/html,surviving").await;
+    assert!(
+        context
+            .apply_renderer_document_lifecycle(renderer, event)
+            .is_none()
+    );
+    assert!(
+        peer.apply_renderer_document_lifecycle(renderer, event)
+            .is_none()
+    );
+    assert_eq!(
+        peer.document_handle(peer_contents).unwrap(),
+        Some(peer_document)
+    );
+    assert_eq!(
+        peer.document_url(peer_document).unwrap().as_str(),
+        "data:text/html,surviving"
+    );
+    service.shutdown();
+    assert!(
+        context
+            .apply_renderer_document_lifecycle(renderer, event)
+            .is_none()
+    );
+}
+
+#[tokio::test]
 async fn browser_service_navigates_queries_replaces_and_closes_without_devtools() {
     let server = FixtureServer::spawn().await.unwrap();
     let service = BrowserService::start().unwrap();

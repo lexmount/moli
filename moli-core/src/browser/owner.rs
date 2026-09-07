@@ -1029,9 +1029,12 @@ impl BrowserContextHandle {
         renderer_page: super::RendererPageResidenceIdentity,
         event: crate::page::RendererDocumentLifecycleEvent,
     ) -> Option<super::web_contents::DocumentLifecycleEvent> {
-        self.update_live(move |context| {
-            context.apply_renderer_document_lifecycle(renderer_page, event)
-        })
+        // Renderer and Browser events use independent channels. A publication
+        // selected before Context disposal may reach this boundary afterwards;
+        // absence must reject the occurrence, not revive or panic on its owner.
+        self.update(move |context| context.apply_renderer_document_lifecycle(renderer_page, event))
+            .ok()
+            .flatten()
     }
 
     forward_context_read! {

@@ -1210,12 +1210,13 @@ impl CdpConnection {
         self.target_host_lifecycle_observer = Some(observer);
     }
 
-    pub fn set_runtime_inspector_response_ready_sender(
+    /// Binds the scheduler's completion ingress once for this connection's
+    /// lifetime. Frontend attach/detach must not replace the receiver while
+    /// renderer callbacks still hold its sender.
+    pub fn bind_runtime_inspector_response_ready(
         &mut self,
-        sender: RuntimeInspectorResponseReadySender,
-    ) {
-        self.scheduler_hooks
-            .set_runtime_inspector_response_ready_sender(sender);
+    ) -> Option<tokio::sync::mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>> {
+        self.scheduler_hooks.bind_runtime_inspector_response_ready()
     }
 
     pub fn set_background_navigation_completion_sender(
@@ -1247,7 +1248,7 @@ impl CdpConnection {
         self.scheduler_hooks.background_event_sender()
     }
 
-    pub(crate) fn runtime_inspector_response_ready_sender(
+    pub fn runtime_inspector_response_ready_sender(
         &self,
     ) -> Option<RuntimeInspectorResponseReadySender> {
         self.scheduler_hooks

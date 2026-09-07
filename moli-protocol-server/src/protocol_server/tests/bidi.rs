@@ -737,6 +737,102 @@ async fn websocket_bidi_attached_classic_session_title_waits_for_script_triggere
 }
 
 #[tokio::test]
+async fn websocket_bidi_classic_reattach_preserves_runtime_channel_delivery() {
+    let (addr, server) = spawn_test_protocol_server().await;
+    let session = classic_new_session_on_server(addr).await;
+    let execute_url = format!("/session/{session}/execute/sync");
+    let initialized = classic_request_on_server_with_body(
+        addr,
+        "POST",
+        &execute_url,
+        json!({"script": "globalThis.attachmentMarker = 41; return attachmentMarker;", "args": []}),
+    )
+    .await;
+    assert_eq!(initialized["value"], 41);
+    let mut original_context = None;
+
+    for attachment in ["first", "second"] {
+        let mut socket = connect_classic_session_bidi_socket(addr, &session).await;
+        let tree = send_bidi_command(&mut socket, 1, "browsingContext.getTree", json!({})).await;
+        let context = tree["result"]["contexts"][0]["context"]
+            .as_str()
+            .expect("Classic-owned context")
+            .to_owned();
+        assert_eq!(original_context.get_or_insert(context.clone()), &context);
+        let subscribed = send_bidi_command(
+            &mut socket,
+            2,
+            "session.subscribe",
+            json!({"events": ["script.message"], "contexts": [context]}),
+        )
+        .await;
+        assert_eq!(subscribed["type"], "success");
+        let registered = send_bidi_command(
+            &mut socket,
+            3,
+            "script.callFunction",
+            json!({
+                "functionDeclaration": "(channel) => { globalThis.emitForAttachment = channel; return attachmentMarker; }",
+                "target": {"context": context},
+                "awaitPromise": true,
+                "arguments": [{"type": "channel", "value": {"channel": attachment}}]
+            }),
+        )
+        .await;
+        assert_eq!(registered["type"], "success", "{registered:?}");
+        assert_eq!(registered["result"]["result"]["value"], 41);
+
+        // The HTTP command drives a listener installed by BiDi. Its completion
+        // must still reach the scheduler's ingress after the socket is replaced.
+        let emitted = classic_request_on_server_with_body(
+            addr,
+            "POST",
+            &execute_url,
+            json!({"script": "emitForAttachment(arguments[0]); return attachmentMarker;", "args": [attachment]}),
+        )
+        .await;
+        assert_eq!(emitted["value"], 41);
+        let mut messages = recv_until_match(&mut socket, |message| {
+            message["method"] == "script.message" && message["params"]["channel"] == attachment
+        })
+        .await;
+        let event = messages.pop().expect("matched attachment's script.message");
+        assert_eq!(
+            event["params"]["data"],
+            json!({"type": "string", "value": attachment})
+        );
+        assert_eq!(event["params"]["source"]["context"], context);
+
+        socket.close(None).await.unwrap();
+        let closed = timeout(Duration::from_secs(2), socket.next())
+            .await
+            .expect("detached socket must terminate before reattachment");
+        assert!(matches!(
+            closed,
+            Some(Ok(WsMessage::Close(_))) | None | Some(Err(_))
+        ));
+        let detached = classic_request_on_server_with_body(
+            addr,
+            "POST",
+            &execute_url,
+            json!({"script": "return attachmentMarker;", "args": []}),
+        )
+        .await;
+        assert_eq!(detached["value"], 41);
+    }
+
+    let deleted = classic_request_on_server_with_body(
+        addr,
+        "DELETE",
+        &format!("/session/{session}"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(deleted, json!({"value": null}));
+    abort_test_cdp_server(server).await;
+}
+
+#[tokio::test]
 async fn websocket_bidi_existing_classic_session_preload_channel_mutation_observer_emits_message() {
     let (cdp_addr, protocol_server) = spawn_test_protocol_server().await;
     let session_id = classic_new_session_on_server(cdp_addr).await;

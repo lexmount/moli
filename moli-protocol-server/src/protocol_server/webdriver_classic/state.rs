@@ -1094,7 +1094,6 @@ async fn handle_classic_session_runtime_request(
                 let _ = response_tx.send(false);
                 return ClassicSessionRuntimeRequestOutcome::Continue;
             }
-            actor.install_runtime_response_ready_sender(scheduler);
             actor.set_file_prompt_handler_for_script_commands(file_prompt_handler.as_deref());
             let _ = response_tx.send(true);
             ClassicSessionRuntimeRequestOutcome::AttachedBidi(Box::new(ClassicAttachedBidiSocket {
@@ -1429,6 +1428,7 @@ async fn classic_session_runtime_loop(
                         }
                     }
                     actor_input = attached.actor.recv_attached_input(
+                        &mut receivers.runtime_inspector_response_ready_rx,
                         &mut adapter_scheduler,
                         page_javascript_blocked,
                     ) => {
@@ -1557,6 +1557,16 @@ async fn classic_session_runtime_loop(
                     let _ = adapter_scheduler
                         .advance_input(&mut scheduler, input)
                         .await;
+                }
+                response = receivers.runtime_inspector_response_ready_rx.recv() => {
+                    let Some(response) = response else {
+                        break;
+                    };
+                    // The completion ingress belongs to the session runtime,
+                    // not its optional socket. Retire registered callbacks even
+                    // between BiDi attachments; unmatched canceled work stays
+                    // internal and cannot become a later frontend's reply.
+                    let _ = scheduler.route_registered_runtime_inspector_response(response);
                 }
                 request = rx.recv() => {
                     let Some(request) = request else {

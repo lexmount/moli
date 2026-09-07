@@ -235,6 +235,8 @@ pub(crate) struct CdpSchedulerEventReceivers {
     pub(crate) background_event_rx: CdpBackgroundEventReceiver,
     pub(crate) background_navigation_completion_rx: CdpBackgroundNavigationCompletionReceiver,
     pub(crate) renderer_publication_rx: CdpRendererPublicationReceiver,
+    pub(crate) runtime_inspector_response_ready_rx:
+        mpsc::UnboundedReceiver<RuntimeInspectorResponseReady>,
 }
 
 /// One move-owned scheduler input selected from the independent producer
@@ -500,12 +502,10 @@ impl CdpScheduler {
             .set_automation_javascript_dialog_handler_enabled(enabled)
     }
 
-    pub(crate) fn set_runtime_inspector_response_ready_sender(
-        &mut self,
-        sender: RuntimeInspectorResponseReadySender,
-    ) {
+    fn runtime_inspector_response_ready_sender(&self) -> RuntimeInspectorResponseReadySender {
         self.conn
-            .set_runtime_inspector_response_ready_sender(sender);
+            .runtime_inspector_response_ready_sender()
+            .expect("scheduler must bind its completion ingress before dispatch")
     }
 
     fn register_page_screencast(
@@ -802,12 +802,17 @@ impl CdpScheduler {
         scheduler
             .conn
             .set_renderer_publication_sender(renderer_publication_tx);
+        let runtime_inspector_response_ready_rx = scheduler
+            .conn
+            .bind_runtime_inspector_response_ready()
+            .expect("new scheduler must own the connection's completion ingress");
         (
             scheduler,
             CdpSchedulerEventReceivers {
                 background_event_rx,
                 background_navigation_completion_rx,
                 renderer_publication_rx,
+                runtime_inspector_response_ready_rx,
             },
         )
     }
