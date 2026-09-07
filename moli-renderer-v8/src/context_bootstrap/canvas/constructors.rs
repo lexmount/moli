@@ -61,10 +61,11 @@ pub(crate) fn offscreen_canvas_rendering_context_2d_constructor_callback<'s>(
 }
 
 pub(crate) fn webgl_rendering_context_constructor_callback<'s>(
-    _scope: &mut v8::PinScope<'s, '_>,
+    scope: &mut v8::PinScope<'s, '_>,
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    super::webgl::init_webgl_context_object(scope, args.this());
     rv.set(args.this().into());
 }
 

@@ -7,6 +7,11 @@ use crate::{
 use moli_webapi_declare::{WebApiObject, WebApiValue};
 
 const WEBGL_HANDLE_KIND_SLOT: &str = "__moliWebGlHandleKind";
+const WEBGL_VIEWPORT_SLOT: &str = "__moliWebGlViewport";
+const WEBGL_ERROR_SLOT: &str = "__moliWebGlError";
+const WEBGL_VIEWPORT: u32 = 0x0BA2;
+const WEBGL_INVALID_VALUE: u32 = 0x0501;
+const WEBGL_MAX_VIEWPORT_DIMS: [i32; 2] = [8192, 8192];
 const WEBGL2_CONTEXT_BRAND_SLOT: &str = "__moliWebGl2ContextBrand";
 const WEBGL2_DRAWING_BUFFER_COLOR_SPACE_SLOT: &str = "__moliWebGl2DrawingBufferColorSpace";
 const WEBGL2_UNPACK_COLOR_SPACE_SLOT: &str = "__moliWebGl2UnpackColorSpace";
@@ -35,6 +40,28 @@ struct WebGlGetExtensionArgs {
 struct WebGlGetParameterArgs {
     #[webidl(required)]
     pname: u32,
+}
+
+#[derive(webidl::WebIdlArgs)]
+#[webidl(prefix = "WebGLRenderingContext.viewport")]
+struct WebGlViewportArgs {
+    #[webidl(required)]
+    x: i32,
+    #[webidl(required)]
+    y: i32,
+    #[webidl(required)]
+    width: i32,
+    #[webidl(required)]
+    height: i32,
+}
+
+#[derive(WebApiObject)]
+#[webapi(interface = "Object")]
+struct WebGlContextStateDeclaration<'s> {
+    #[webapi(slot = WEBGL_VIEWPORT_SLOT)]
+    viewport: v8::Local<'s, v8::Array>,
+    #[webapi(slot = WEBGL_ERROR_SLOT)]
+    error: u32,
 }
 
 #[derive(webidl::WebIdlArgs)]
@@ -125,6 +152,9 @@ struct WebGl2ContextObjectDeclaration {
 }
 
 pub(crate) const WEBGL_CONSTANTS: &[(&str, u32)] = &[
+    ("VIEWPORT", WEBGL_VIEWPORT),
+    ("NO_ERROR", 0),
+    ("INVALID_VALUE", WEBGL_INVALID_VALUE),
     ("DEPTH_TEST", 0x0B71),
     ("LEQUAL", 0x0203),
     ("COLOR_BUFFER_BIT", 0x4000),
@@ -345,13 +375,11 @@ pub(crate) fn webgl_get_parameter_callback<'s>(
         return;
     };
     match parsed.pname {
+        WEBGL_VIEWPORT => return_webgl_viewport(scope, args.this(), &mut rv),
         0x846D | 0x846E => rv.set(
             webgl_array_value(scope, &[1, 1]).unwrap_or_else(|| v8::Array::new(scope, 0).into()),
         ),
-        0x0D3A => rv.set(
-            webgl_array_value(scope, &[300, 150])
-                .unwrap_or_else(|| v8::Array::new(scope, 0).into()),
-        ),
+        0x0D3A => rv.set(webgl_int32_array(scope, &WEBGL_MAX_VIEWPORT_DIMS)),
         0x0D52..=0x0D55 => rv.set(v8::Integer::new(scope, 8).into()),
         0x0D56 => rv.set(v8::Integer::new(scope, 24).into()),
         0x0D57 => rv.set(v8::Integer::new(scope, 0).into()),
@@ -378,6 +406,7 @@ pub(crate) fn webgl2_get_parameter_callback<'s>(
         return;
     };
     match parsed.pname {
+        WEBGL_VIEWPORT => return_webgl_viewport(scope, args.this(), &mut rv),
         0x8B9B => rv.set(v8::Integer::new(scope, 0x1908).into()),
         0x8B9A => rv.set(v8::Integer::new(scope, 0x1401).into()),
         0x8073 => rv.set(v8::Integer::new(scope, 2048).into()),
@@ -409,7 +438,7 @@ pub(crate) fn webgl2_get_parameter_callback<'s>(
         }
         0x86A3 => rv.set(webgl_uint32_array(scope, &[])),
         0x0D33 | 0x84E8 | 0x851C => rv.set(v8::Integer::new(scope, 8192).into()),
-        0x0D3A => rv.set(webgl_int32_array(scope, &[8192, 8192])),
+        0x0D3A => rv.set(webgl_int32_array(scope, &WEBGL_MAX_VIEWPORT_DIMS)),
         0x846D | 0x846E => rv.set(webgl_int32_array(scope, &[1, 1])),
         0x0D52..=0x0D55 => rv.set(v8::Integer::new(scope, 8).into()),
         0x0D56 => rv.set(v8::Integer::new(scope, 24).into()),
@@ -566,12 +595,124 @@ pub(crate) fn webgl_get_attrib_location_callback(
     rv.set(v8::Integer::new(scope, 0).into());
 }
 
-pub(crate) fn webgl_zero_callback(
-    scope: &mut v8::PinScope<'_, '_>,
-    _args: v8::FunctionCallbackArguments<'_>,
+pub(crate) fn webgl_get_error_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    rv.set(v8::Integer::new(scope, 0).into());
+    let Some(error) = get_private_value(scope, args.this(), WEBGL_ERROR_SLOT) else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    rv.set(error);
+    set_private_value(
+        scope,
+        args.this(),
+        WEBGL_ERROR_SLOT,
+        v8::Integer::new(scope, 0).into(),
+    );
+}
+
+pub(crate) fn webgl_viewport_callback<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    _rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    if get_private_value(scope, args.this(), WEBGL_VIEWPORT_SLOT).is_none() {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    }
+    let Some(parsed) = webidl::parse_args::<WebGlViewportArgs>(scope, &args) else {
+        return;
+    };
+    if parsed.width < 0 || parsed.height < 0 {
+        // GL errors preserve the previous viewport and remain pending until
+        // getError consumes them. WebIDL conversion failures throw instead.
+        set_private_value(
+            scope,
+            args.this(),
+            WEBGL_ERROR_SLOT,
+            v8::Integer::new_from_unsigned(scope, WEBGL_INVALID_VALUE).into(),
+        );
+        return;
+    }
+    set_webgl_viewport(
+        scope,
+        args.this(),
+        [
+            parsed.x,
+            parsed.y,
+            parsed.width.min(WEBGL_MAX_VIEWPORT_DIMS[0]),
+            parsed.height.min(WEBGL_MAX_VIEWPORT_DIMS[1]),
+        ],
+    );
+}
+
+fn set_webgl_viewport<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+    values: [i32; 4],
+) {
+    let values = values.map(|value| v8::Integer::new(scope, value).into());
+    let viewport = v8::Array::new_with_elements(scope, &values);
+    set_private_value(scope, context, WEBGL_VIEWPORT_SLOT, viewport.into());
+}
+
+fn return_webgl_viewport<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+    rv: &mut v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(viewport) = get_private_value(scope, context, WEBGL_VIEWPORT_SLOT)
+        .and_then(|value| v8::Local::<v8::Array>::try_from(value).ok())
+    else {
+        throw_type_error(scope, "Illegal invocation");
+        return;
+    };
+    let values = [0, 1, 2, 3].map(|index| {
+        viewport
+            .get_index(scope, index)
+            .and_then(|value| value.int32_value(scope))
+            .unwrap_or_default()
+    });
+    // Each query returns a copy; mutating or detaching the result cannot
+    // change the context's GL state. This does not claim GPU raster support.
+    rv.set(webgl_int32_array(scope, &values));
+}
+
+pub(super) fn init_webgl_context_object<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) {
+    let values = [0, 0, 300, 150].map(|value| v8::Integer::new(scope, value).into());
+    let viewport = v8::Array::new_with_elements(scope, &values);
+    WebGlContextStateDeclaration::new(viewport, 0)
+        .initialize(scope, context)
+        .expect("WebGL context state should initialize");
+}
+
+pub(super) fn initialize_attached_webgl_viewport<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+    context: v8::Local<'s, v8::Object>,
+) {
+    if get_private_value(scope, context, WEBGL_VIEWPORT_SLOT).is_none() {
+        return;
+    }
+    // Only context creation takes the canvas dimensions as the initial
+    // viewport. Resizing the drawing buffer must not reset viewport state.
+    if let Some((width, height)) = super::backing_store::canvas_like_dimensions(scope, canvas) {
+        set_webgl_viewport(
+            scope,
+            context,
+            [
+                0,
+                0,
+                width.min(WEBGL_MAX_VIEWPORT_DIMS[0] as u32) as i32,
+                height.min(WEBGL_MAX_VIEWPORT_DIMS[1] as u32) as i32,
+            ],
+        );
+    }
 }
 
 pub(crate) fn webgl_boolean_callback(
@@ -690,6 +831,7 @@ pub(super) fn init_webgl2_context_object<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     object: v8::Local<'s, v8::Object>,
 ) {
+    init_webgl_context_object(scope, object);
     WebGl2ContextObjectDeclaration::new("srgb".to_owned(), "srgb".to_owned())
         .initialize(scope, object)
         .expect("WebGL2RenderingContext declaration should initialize object");

@@ -4,12 +4,14 @@ use super::objects::{
 };
 use super::*;
 use crate::util::{
-    callback_data_index_value, callback_data_item, get_private_value, set_private_value,
+    callback_data_index_value, callback_data_item, get_private_value, set_private_value, v8str,
 };
 use crate::webidl;
 use moli_webapi_declare::{WebApiFunctionTemplate, WebApiObject};
 
 const OFFSCREEN_CANVAS_BRAND_SLOT: &str = "__moliOffscreenCanvasBrand";
+const OFFSCREEN_CANVAS_CONTEXT_SLOT: &str = "__moliOffscreenCanvasContext";
+const OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT: &str = "__moliOffscreenCanvasContextKind";
 
 #[derive(WebApiObject)]
 #[webapi(interface = "OffscreenCanvas")]
@@ -151,22 +153,43 @@ pub(crate) fn offscreen_canvas_get_context_callback<'s>(
         rv.set_null();
         return;
     };
-    let value = (match kind {
-        CanvasContextKind::TwoD => super::backing_store::canvas_2d_context(scope, args.this())
-            .or_else(|| build_offscreen_2d_context_object(scope))
-            .map(Into::into),
-        CanvasContextKind::WebGl => build_webgl_context_object(scope).map(Into::into),
-        CanvasContextKind::WebGl2 => build_webgl2_context_object(scope).map(Into::into),
-    })
-    .unwrap_or_else(|| v8::null(scope).into());
-    if matches!(
-        kind,
-        CanvasContextKind::TwoD | CanvasContextKind::WebGl | CanvasContextKind::WebGl2
-    ) && let Ok(context) = v8::Local::<v8::Object>::try_from(value)
-    {
-        attach_canvas_like_context_object(scope, args.this(), context);
+    if let Some(context) = get_private_value(scope, args.this(), OFFSCREEN_CANVAS_CONTEXT_SLOT) {
+        let same_kind = get_private_value(scope, args.this(), OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT)
+            .and_then(|value| value.to_string(scope))
+            .is_some_and(|value| value.to_rust_string_lossy(scope) == kind.label());
+        if same_kind {
+            rv.set(context);
+        } else {
+            rv.set_null();
+        }
+        return;
     }
-    rv.set(value);
+    let context = match kind {
+        CanvasContextKind::TwoD => build_offscreen_2d_context_object(scope),
+        CanvasContextKind::WebGl => build_webgl_context_object(scope),
+        CanvasContextKind::WebGl2 => build_webgl2_context_object(scope),
+    };
+    let Some(context) = context else {
+        rv.set_null();
+        return;
+    };
+    // Reacquiring a context must retain its GL state, and an OffscreenCanvas
+    // cannot switch context modes after the first successful acquisition.
+    set_private_value(
+        scope,
+        args.this(),
+        OFFSCREEN_CANVAS_CONTEXT_SLOT,
+        context.into(),
+    );
+    let kind = v8str(scope, kind.label());
+    set_private_value(
+        scope,
+        args.this(),
+        OFFSCREEN_CANVAS_CONTEXT_KIND_SLOT,
+        kind.into(),
+    );
+    attach_canvas_like_context_object(scope, args.this(), context);
+    rv.set(context.into());
 }
 
 pub(crate) fn offscreen_canvas_convert_to_blob_callback<'s>(

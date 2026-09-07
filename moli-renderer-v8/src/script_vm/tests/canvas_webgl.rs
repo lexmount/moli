@@ -109,6 +109,18 @@ fn create_image_bitmap_matches_chromium_offscreen_canvas_and_close_contract() {
 }
 
 #[test]
+fn webgl_viewport_state_matches_chromium_on_html_and_offscreen_contexts() {
+    let mut vm = new_storage_test_vm("https://webgl-viewport.test/");
+    let result = vm
+        .eval(include_str!("../../../tests/fixtures/webgl-viewport.js"))
+        .expect("WebGL viewport state matrix should pass");
+    assert_eq!(
+        result,
+        r#"["html:webgl","offscreen:webgl","html:webgl2","offscreen:webgl2"]"#
+    );
+}
+
+#[test]
 fn webgl_context_exposes_context_attributes_and_loss_state() {
     let mut vm = new_storage_test_vm("https://webgl-surface.test/");
 
@@ -435,7 +447,7 @@ fn webgl_fingerprint_pipeline_methods_are_available() {
 
     assert_eq!(
         result,
-        r#"{"methods":["function","function","function","function","function"],"handles":["object","object","object","object"],"attrib":0,"constants":[34962,35044,35633,35632,5],"descriptor":[34962,true,false,false],"ownerCanvas":{"same":true,"ownEnumerable":false,"dataUrl":"string","hashTail":"SuQmCC"},"parameters":{"line":[1,1],"viewport":[300,150],"redBits":8,"vendor":"","version":"WebGL 1.0","missing":null},"precision":{"precision":23,"rangeMin":127,"rangeMax":127},"shaderStatus":true,"programStatus":true,"shaderLog":"","error":0}"#
+        r#"{"methods":["function","function","function","function","function"],"handles":["object","object","object","object"],"attrib":0,"constants":[34962,35044,35633,35632,5],"descriptor":[34962,true,false,false],"ownerCanvas":{"same":true,"ownEnumerable":false,"dataUrl":"string","hashTail":"SuQmCC"},"parameters":{"line":[1,1],"viewport":[8192,8192],"redBits":8,"vendor":"","version":"WebGL 1.0","missing":null},"precision":{"precision":23,"rangeMin":127,"rangeMax":127},"shaderStatus":true,"programStatus":true,"shaderLog":"","error":0}"#
     );
 }
 

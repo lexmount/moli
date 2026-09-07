@@ -145,6 +145,13 @@ workers can partition that selected list with the one-based
 
 The current suite is a strong core smoke gate, not a complete Playwright compatibility suite.
 
+The default `webgl-viewport` group was calibrated on 2026-09-07 against
+Debian `/usr/bin/chromium` 145.0.7632.116. It uses the same fixture as the
+renderer tests to check WebGL1/2 on HTML and
+Offscreen canvases: viewport initialization, setter/conversion errors, copied
+Int32Array queries, context isolation, context reacquisition, resize retention,
+and clamping to the advertised maximum. It is not a GPU rendering test.
+
 Covered well:
 
 - The default raw `debugger-breakpoints`, `runtime-exception`, and

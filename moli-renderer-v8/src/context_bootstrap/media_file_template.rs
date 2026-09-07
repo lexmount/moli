@@ -37,10 +37,11 @@ use super::canvas::{
     webgl_create_framebuffer_callback, webgl_create_program_callback,
     webgl_create_renderbuffer_callback, webgl_create_shader_callback,
     webgl_get_attrib_location_callback, webgl_get_context_attributes_callback,
-    webgl_get_extension_callback, webgl_get_parameter_callback, webgl_get_shader_info_log_callback,
-    webgl_get_shader_precision_format_callback, webgl_get_supported_extensions_callback,
-    webgl_is_context_lost_callback, webgl_lose_context_noop_callback, webgl_noop_callback,
-    webgl_uniform_location_callback, webgl_zero_callback, webgl2_color_space_getter_callback,
+    webgl_get_error_callback, webgl_get_extension_callback, webgl_get_parameter_callback,
+    webgl_get_shader_info_log_callback, webgl_get_shader_precision_format_callback,
+    webgl_get_supported_extensions_callback, webgl_is_context_lost_callback,
+    webgl_lose_context_noop_callback, webgl_noop_callback, webgl_uniform_location_callback,
+    webgl_viewport_callback, webgl2_color_space_getter_callback,
     webgl2_color_space_setter_callback, webgl2_get_extension_callback,
     webgl2_get_internalformat_parameter_callback, webgl2_get_parameter_callback,
     webgl2_get_supported_extensions_callback,
@@ -414,6 +415,9 @@ struct CanvasGradientTemplateMethodsDeclaration {
 #[derive(WebApiFunctionTemplate)]
 #[webapi(name = "WebGLRenderingContext", enumerable)]
 struct WebGlRenderingContextTemplateMethodsDeclaration {
+    #[webapi(method = "viewport", length = 4, callback = webgl_viewport_callback)]
+    viewport: (),
+
     #[webapi(method = "clearColor", length = 4, callback = webgl_noop_callback)]
     clear_color: (),
 
@@ -502,7 +506,7 @@ struct WebGlRenderingContextTemplateMethodsDeclaration {
     #[webapi(method = "drawArrays", length = 3, callback = webgl_noop_callback)]
     draw_arrays: (),
 
-    #[webapi(method = "getError", length = 0, callback = webgl_zero_callback)]
+    #[webapi(method = "getError", length = 0, callback = webgl_get_error_callback)]
     get_error: (),
 
     #[webapi(method = "getShaderParameter", length = 2, callback = webgl_boolean_callback)]

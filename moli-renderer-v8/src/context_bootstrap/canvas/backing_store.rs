@@ -26,6 +26,9 @@ pub(crate) fn attach_canvas_like_context_object<'s>(
     canvas: v8::Local<'s, v8::Object>,
     context: v8::Local<'s, v8::Object>,
 ) {
+    if canvas_owner_from_context(scope, context).is_none() {
+        super::webgl::initialize_attached_webgl_viewport(scope, canvas, context);
+    }
     let _ = CanvasContextOwnerDeclaration::new(canvas).initialize(scope, context);
     set_private_value(scope, context, CANVAS_OWNER_SLOT, canvas.into());
     if get_private_value(scope, context, super::CANVAS_CONTEXT_FILL_STYLE_SLOT).is_some() {
@@ -214,7 +217,7 @@ fn remove_html_canvas_pixels<'s>(
     let _ = unsafe { &mut *runtime_ptr }.remove_canvas_pixels(handle);
 }
 
-fn canvas_like_dimensions<'s>(
+pub(super) fn canvas_like_dimensions<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
 ) -> Option<(u32, u32)> {
