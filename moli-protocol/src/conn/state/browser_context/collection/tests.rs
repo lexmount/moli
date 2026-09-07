@@ -7,6 +7,76 @@ use std::{
 };
 
 #[test]
+fn reused_devtools_ids_do_not_reuse_browser_object_identities() {
+    let first_context = BrowserContext::new("BID-reused".to_owned());
+    let second_context = BrowserContext::new("BID-reused".to_owned());
+    assert_ne!(
+        first_context.browser_context_id(),
+        second_context.browser_context_id()
+    );
+
+    let mut context = first_context;
+    context.set_active_target_id("TID-reused");
+    let first_web_contents = context.active_page_target().web_contents_id();
+    let first_main_frame_slot = context.active_page_target().main_frame_slot_id();
+    let first_handle = context
+        .web_contents_handle_for_target("TID-reused")
+        .unwrap();
+    drop(
+        context
+            .browser_context
+            .close_web_contents(first_handle)
+            .unwrap(),
+    );
+    drop(
+        context
+            .take_closed_web_contents_projection(first_handle)
+            .unwrap(),
+    );
+
+    context.set_active_target_id("TID-reused");
+    assert_ne!(
+        context.active_page_target().web_contents_id(),
+        first_web_contents
+    );
+    assert_ne!(
+        context.active_page_target().main_frame_slot_id(),
+        first_main_frame_slot
+    );
+}
+
+#[test]
+fn navigation_lifetime_survives_devtools_target_rekey_but_not_recreation() {
+    let mut context = BrowserContext::new("CTX-nav-rekey".to_owned());
+    context.set_active_target_id("TID-before");
+    let navigation = context
+        .start_document_navigation_for_active_target("LOADER-reused".to_owned())
+        .unwrap();
+    let cancellation = context
+        .document_navigation_cancellation_handle(&navigation)
+        .unwrap();
+    assert!(context.rekey_active_target("TID-after"));
+    assert!(context.accepts_pending_document_navigation_event(&navigation));
+    assert!(context.arm_background_navigation_completion(&navigation, None));
+    context.commit_document_navigation_if_matches(&navigation);
+    assert!(context.settle_background_navigation_completion(&navigation));
+    assert!(!cancellation.is_cancelled());
+    assert!(context.accepts_document_body_completion_event(&navigation));
+
+    let handle = context.web_contents_handle_for_target("TID-after").unwrap();
+    drop(context.browser_context.close_web_contents(handle).unwrap());
+    drop(context.take_closed_web_contents_projection(handle).unwrap());
+    context.set_active_target_id("TID-after");
+    let replacement = context
+        .start_document_navigation_for_active_target("LOADER-reused".to_owned())
+        .unwrap();
+    assert_ne!(navigation, replacement);
+    assert!(!context.accepts_document_body_completion_event(&navigation));
+    assert!(!context.settle_background_navigation_completion(&navigation));
+    assert!(context.accepts_pending_document_navigation_event(&replacement));
+}
+
+#[test]
 fn window_and_crash_state_outlive_the_devtools_projection() {
     let mut context = BrowserContext::new("BID-window".into());
     context.set_active_target_id("TID-window");
@@ -246,7 +316,9 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     let dialog_scope = slot.javascript_dialog_scope_observer();
     let handle = context.web_contents_handle_for_target("TID-close").unwrap();
 
-    let (mut projection, closing) = context.begin_web_contents_close(handle).unwrap();
+    let closing = context.browser_context.close_web_contents(handle).unwrap();
+    let mut projection = context.take_closed_web_contents_projection(handle).unwrap();
+    projection.runtime_slot.retire_for_target_close();
     assert!(!context.browser_context.contains_web_contents(handle));
     assert!(context.page_targets.is_empty());
     assert_eq!(context.selected_web_contents_id(), None);
@@ -270,7 +342,12 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     // Cancellation of the teardown future must not resurrect either authority.
     drop(closing);
     assert!(build.materialize().await.is_err());
-    assert!(context.begin_web_contents_close(handle).is_err());
+    assert!(context.browser_context.close_web_contents(handle).is_err());
+    assert!(
+        context
+            .take_closed_web_contents_projection(handle)
+            .is_none()
+    );
     drop(projection);
 }
 

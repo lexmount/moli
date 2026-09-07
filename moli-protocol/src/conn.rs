@@ -112,7 +112,7 @@ pub(crate) use bidi_channel_work::{
     BidiChannelPageOwner,
 };
 pub(crate) use browser_context::{
-    PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
+    PageCloseNotifications, PageLifecycleEventsEnableResult, SessionOwnerInspectorEnableResult,
     SessionOwnerRuntimeFrontendEnableResult, TargetNavigationLoadInputs,
 };
 pub(crate) use command_owner_scope::CommandOwnerScope;

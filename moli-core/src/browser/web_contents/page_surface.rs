@@ -151,9 +151,7 @@ impl PageSurface {
             .map(|metrics| viewport_surface_install_script(&metrics.viewport_surface(), true))
             .unwrap_or_default();
         let max_touch_points = self.max_touch_points();
-        let document_has_focus = self.document_has_focus();
-        let document_hidden = self.document_hidden();
-        let document_visibility_state = self.document_visibility_state();
+        let visibility_script = self.visibility_script();
         let window_fullscreen = self.window_fullscreen();
 
         format!(
@@ -285,20 +283,9 @@ impl PageSurface {
                 defineGetter(navigator, 'onLine', () => currentNavigatorOnline());
                 defineGetter(navigator, 'maxTouchPoints', () => maxTouchPoints);
                 if (document) {{
-                    // The renderer's Document bridge currently installs these
-                    // surfaces as own accessors, so surface updates must shadow
-                    // the document object directly for staged/background
-                    // overrides to win in the same realm.
-                    defineGetter(document, 'hidden', () => {document_hidden});
-                    defineGetter(document, 'visibilityState', () => {document_visibility_state});
                     defineGetter(document, 'webkitIsFullScreen', () => {window_fullscreen});
-                    try {{
-                        Object.defineProperty(document, 'hasFocus', {{
-                            configurable: true,
-                            value: () => {document_has_focus}
-                        }});
-                    }} catch (_error) {{}}
                 }}
+                {visibility_script}
             }})();",
             geolocation_override = geolocation_override
                 .and_then(EmulatedGeolocationOverrideState::position)
@@ -317,10 +304,27 @@ impl PageSurface {
                 .unwrap_or_else(|| "null".to_owned()),
             viewport_surface_script = viewport_surface_script,
             max_touch_points = max_touch_points,
-            document_hidden = document_hidden,
-            document_visibility_state = json!(document_visibility_state),
-            document_has_focus = document_has_focus,
             window_fullscreen = window_fullscreen,
+        )
+    }
+
+    /// Selection must not reinstall unrelated network, viewport or location policy.
+    pub(crate) fn visibility_script(&self) -> String {
+        format!(
+            "(() => {{
+                if (!globalThis.document) return;
+                const defineGetter = (obj, key, getter) => {{
+                    try {{ Object.defineProperty(obj, key, {{ configurable: true, get: getter }}); }} catch (_error) {{}}
+                }};
+                defineGetter(document, 'hidden', () => {hidden});
+                defineGetter(document, 'visibilityState', () => {visibility});
+                try {{
+                    Object.defineProperty(document, 'hasFocus', {{ configurable: true, value: () => {focus} }});
+                }} catch (_error) {{}}
+            }})();",
+            hidden = self.document_hidden(),
+            visibility = json!(self.document_visibility_state()),
+            focus = self.document_has_focus(),
         )
     }
 }
@@ -394,6 +398,39 @@ mod tests {
                 .await
                 .unwrap(),
             json!({"type": "string", "value": "[false,1,false,true,true,false]"})
+        );
+        page.run_page_surface_override_script_async(
+            &contents
+                .page_surface(true, None, None, None)
+                .visibility_script(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            page.evaluate_runtime_expression_async(expression)
+                .await
+                .unwrap(),
+            json!({"type": "string", "value": "[false,1,true,false,true,false]"}),
+            "selection must preserve offline, touch and window policy"
+        );
+        page.evaluate_runtime_expression_async(
+            "Object.defineProperty(document, 'hidden', {configurable: false, value: false}); 0",
+        )
+        .await
+        .unwrap();
+        page.run_page_surface_override_script_async(
+            &contents
+                .page_surface(false, None, None, None)
+                .visibility_script(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            page.evaluate_runtime_expression_async(expression)
+                .await
+                .unwrap(),
+            json!({"type": "string", "value": "[false,1,false,false,true,false]"}),
+            "a non-configurable page property must not suppress updates to the other properties"
         );
         page.close_async().await.unwrap();
     }

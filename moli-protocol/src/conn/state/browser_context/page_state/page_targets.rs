@@ -36,26 +36,23 @@ impl PendingWebContentsSelection {
 }
 
 impl BrowserContext {
-    pub(in crate::conn) fn begin_web_contents_close(
+    pub(in crate::conn) fn take_closed_web_contents_projection(
         &mut self,
         handle: WebContentsHandle,
-    ) -> Result<(PageAgentHost, moli_core::browser::PendingWebContentsClose), String> {
+    ) -> Option<PageAgentHost> {
+        if handle.context() != self.browser_context.id()
+            || self.browser_context.contains_web_contents(handle)
+        {
+            return None;
+        }
         let target_id = self
             .page_targets
-            .get_for_web_contents(handle.id())
-            .map(PageAgentHost::target_id)
-            .ok_or_else(|| "WebContents projection unavailable".to_owned())?
+            .get_for_web_contents(handle.id())?
+            .target_id()
             .to_owned();
-        let closing = self.browser_context.close_web_contents(handle)?;
-        let mut target = self
-            .page_targets
-            .remove(&target_id)
-            .expect("retired WebContents must retain its resolved projection until removal");
-        target.runtime_slot.retire_for_target_close();
         self.forget_target_popup_id_for_target(&target_id);
-        Ok((target, closing))
+        self.page_targets.remove(&target_id)
     }
-
     pub(crate) fn stage_background_target(
         &mut self,
         target_id: String,
@@ -452,18 +449,6 @@ impl BrowserContext {
         )
     }
 
-    pub(crate) fn last_selectable_background_target_id(&self) -> Option<String> {
-        self.background_targets()
-            .rev()
-            .find(|target| self.target_has_loaded_page(target.target_id()))
-            .map(|target| target.target_id().to_owned())
-            .or_else(|| {
-                self.background_targets()
-                    .next_back()
-                    .map(|target| target.target_id().to_owned())
-            })
-    }
-
     pub(crate) fn start_select_web_contents(
         &mut self,
         selected: WebContentsHandle,
@@ -675,30 +660,7 @@ impl BrowserContext {
         let mut infos = self
             .page_targets
             .iter()
-            .map(|target| DevToolsTargetInfo {
-                target_id: Some(DevToolsTargetId::from(target.target_id())),
-                kind: DevToolsTargetKind::Page,
-                title: target
-                    .owner_state
-                    .committed_document_title()
-                    .unwrap_or_default()
-                    .to_owned(),
-                url: target.target_url().to_owned(),
-                attached: target.has_session()
-                    || target
-                        .devtools_sessions
-                        .attached_session_ids()
-                        .next()
-                        .is_some(),
-                opener_id: None,
-                opener_frame_id: target
-                    .opener_frame_id
-                    .as_deref()
-                    .map(crate::devtools_runtime::DevToolsFrameId::from),
-                can_access_opener: false,
-                browser_context_id: Some(DevToolsBrowserContextId::from(self.id.as_str())),
-                moli_popup_id: None,
-            })
+            .map(|target| self.retired_page_target_info(target))
             .collect::<Vec<_>>();
         infos.extend(
             self.shared_worker_targets
@@ -716,6 +678,36 @@ impl BrowserContext {
                 .map(|target| self.service_worker_devtools_target_info(target)),
         );
         infos
+    }
+
+    pub(in crate::conn) fn retired_page_target_info(
+        &self,
+        target: &PageAgentHost,
+    ) -> DevToolsTargetInfo {
+        DevToolsTargetInfo {
+            target_id: Some(DevToolsTargetId::from(target.target_id())),
+            kind: DevToolsTargetKind::Page,
+            title: target
+                .owner_state
+                .committed_document_title()
+                .unwrap_or_default()
+                .to_owned(),
+            url: target.target_url().to_owned(),
+            attached: target.has_session()
+                || target
+                    .devtools_sessions
+                    .attached_session_ids()
+                    .next()
+                    .is_some(),
+            opener_id: None,
+            opener_frame_id: target
+                .opener_frame_id
+                .as_deref()
+                .map(crate::devtools_runtime::DevToolsFrameId::from),
+            can_access_opener: false,
+            browser_context_id: Some(DevToolsBrowserContextId::from(self.id.as_str())),
+            moli_popup_id: None,
+        }
     }
 
     pub(crate) fn shared_worker_target(&self, target_id: &str) -> Option<&SharedWorkerTargetState> {
@@ -1266,7 +1258,17 @@ mod tests {
         let renamed_opener = context
             .web_contents_handle_for_target("TID-renamed-opener")
             .unwrap();
-        drop(context.begin_web_contents_close(renamed_opener).unwrap());
+        drop(
+            context
+                .browser_context
+                .close_web_contents(renamed_opener)
+                .unwrap(),
+        );
+        drop(
+            context
+                .take_closed_web_contents_projection(renamed_opener)
+                .unwrap(),
+        );
         context.stage_background_target(
             "TID-orphan-popup".into(),
             None,
@@ -1357,12 +1359,32 @@ mod tests {
         let replacement_opener = context
             .web_contents_handle_for_target("TID-opener")
             .unwrap();
-        drop(context.begin_web_contents_close(replacement_opener));
+        drop(
+            context
+                .browser_context
+                .close_web_contents(replacement_opener)
+                .unwrap(),
+        );
+        drop(
+            context
+                .take_closed_web_contents_projection(replacement_opener)
+                .unwrap(),
+        );
         let popup = context.target_info("TID-popup").unwrap();
         assert_eq!(popup["openerId"], "TID-renamed");
         assert_eq!(popup["canAccessOpener"], true);
 
-        drop(context.begin_web_contents_close(opener_handle));
+        drop(
+            context
+                .browser_context
+                .close_web_contents(opener_handle)
+                .unwrap(),
+        );
+        drop(
+            context
+                .take_closed_web_contents_projection(opener_handle)
+                .unwrap(),
+        );
         context.set_active_target_id("TID-renamed");
         let popup = context.target_info("TID-popup").unwrap();
         assert!(popup.get("openerId").is_none());
@@ -1395,7 +1417,17 @@ mod tests {
         let replacement = context
             .web_contents_handle_for_target("TID-window")
             .unwrap();
-        drop(context.begin_web_contents_close(replacement));
+        drop(
+            context
+                .browser_context
+                .close_web_contents(replacement)
+                .unwrap(),
+        );
+        drop(
+            context
+                .take_closed_web_contents_projection(replacement)
+                .unwrap(),
+        );
         assert_eq!(
             context.target_id_for_window_name("report"),
             Some("TID-renamed")
@@ -1409,7 +1441,8 @@ mod tests {
             context.target_id_for_window_name("renamed-report"),
             Some("TID-renamed")
         );
-        drop(context.begin_web_contents_close(handle));
+        drop(context.browser_context.close_web_contents(handle).unwrap());
+        drop(context.take_closed_web_contents_projection(handle).unwrap());
         context.set_active_target_id("TID-renamed");
         assert_eq!(context.target_id_for_window_name("renamed-report"), None);
     }

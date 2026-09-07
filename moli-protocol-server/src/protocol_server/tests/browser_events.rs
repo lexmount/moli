@@ -22,6 +22,15 @@ pub(super) async fn server_with_browser() -> (
 
 #[tokio::test]
 async fn websocket_native_context_disposal_retires_pending_calls_and_exact_sessions() {
+    native_lifetime_retirement(false).await;
+}
+
+#[tokio::test]
+async fn websocket_native_web_contents_close_retires_pending_calls_and_exact_sessions() {
+    native_lifetime_retirement(true).await;
+}
+
+async fn native_lifetime_retirement(close_page: bool) {
     let (addr, server, browser) = server_with_browser().await;
     let (mut socket, _) =
         connect_async(format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"))
@@ -41,6 +50,15 @@ async fn websocket_native_context_disposal_retires_pending_calls_and_exact_sessi
         panic!("expected the new physical Context");
     };
     let target = cdp_create_attached_target(&mut socket, 3, &context_id).await;
+    let handle = browser
+        .subscribe()
+        .unwrap()
+        .0
+        .web_contents
+        .into_iter()
+        .find(|handle| handle.context() == context)
+        .unwrap();
+    let peer = cdp_create_attached_target(&mut socket, 100, &context_id).await;
     send_cdp_command(
         &mut socket,
         5,
@@ -60,15 +78,46 @@ async fn websocket_native_context_disposal_retires_pending_calls_and_exact_sessi
     })
     .await;
 
-    assert!(browser.remove_context(context).unwrap());
-    let (mut failed, mut detached, mut destroyed) = (false, false, false);
+    send_cdp_command(&mut socket, 105, "Fetch.enable", Some(&target.session_id),
+        json!({"patterns": [{"urlPattern": "*", "resourceType": "Document", "requestStage": "Request"}]})).await;
+    let navigation_fixture = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let navigation_url = format!(
+        "http://{}/paused-close",
+        navigation_fixture.local_addr().unwrap()
+    );
+    send_cdp_command_without_wait(
+        &mut socket,
+        106,
+        "Page.navigate",
+        Some(&target.session_id),
+        json!({"url": navigation_url}),
+    )
+    .await;
+    recv_until_match(&mut socket, |message| {
+        message["method"] == "Fetch.requestPaused" && message["sessionId"] == target.session_id
+    })
+    .await;
+
+    if close_page {
+        browser
+            .close_web_contents(handle)
+            .unwrap()
+            .close_async()
+            .await;
+        assert!(browser.contains_context(context));
+    } else {
+        assert!(browser.remove_context(context).unwrap());
+    }
+    let (mut failed, mut navigation_failed, mut detached, mut destroyed) =
+        (false, false, false, false);
     let mut observed = recv_until_match(&mut socket, |message| {
         failed |= message["id"] == 6 && message.get("error").is_some();
+        navigation_failed |= message["id"] == 106 && message.get("error").is_some();
         detached |= message["method"] == "Target.detachedFromTarget"
             && message["params"]["sessionId"] == target.session_id;
         destroyed |= message["method"] == "Target.targetDestroyed"
             && message["params"]["targetId"] == target.target_id;
-        failed && detached && destroyed
+        failed && navigation_failed && detached && destroyed
     })
     .await;
     let targets = send_cdp_command(&mut socket, 7, "Target.getTargets", None, json!({})).await;
@@ -79,9 +128,20 @@ async fn websocket_native_context_disposal_retires_pending_calls_and_exact_sessi
             .any(|info| info["targetId"] == DEFAULT_TARGET_ID)
     );
     assert!(live.iter().all(|info| info["targetId"] != target.target_id));
+    assert_eq!(
+        live.iter().any(|info| info["targetId"] == peer.target_id),
+        close_page
+    );
     observed.extend(targets);
     assert_eq!(
         observed.iter().filter(|message| message["id"] == 6).count(),
+        1
+    );
+    assert_eq!(
+        observed
+            .iter()
+            .filter(|message| message["id"] == 106)
+            .count(),
         1
     );
     assert_eq!(
@@ -107,6 +167,23 @@ async fn websocket_native_context_disposal_retires_pending_calls_and_exact_sessi
             .iter()
             .any(|message| message["id"] == 8 && message.get("error").is_some())
     );
+    if close_page {
+        let peer_result = send_cdp_command(
+            &mut socket,
+            104,
+            "Runtime.evaluate",
+            Some(&peer.session_id),
+            json!({"expression": "73"}),
+        )
+        .await;
+        assert!(
+            peer_result
+                .iter()
+                .any(|message| message["id"] == 104 && message["result"]["result"]["value"] == 73),
+            "{peer_result:?}"
+        );
+        assert!(browser.close_web_contents(handle).is_err());
+    }
     // A protocol-initiated disposal has already retired its projection. Its
     // later Browser event must not duplicate Target/session destruction.
     let protocol_context = cdp_create_browser_context(&mut socket, 9).await;
@@ -130,6 +207,26 @@ async fn websocket_native_context_disposal_retires_pending_calls_and_exact_sessi
             .count(),
         1
     );
+    for method in ["Page.close", "Target.closeTarget"] {
+        let context_id = cdp_create_browser_context(&mut socket, 20).await;
+        let page = cdp_create_attached_target(&mut socket, 21, &context_id).await;
+        let mut closed = send_cdp_command(
+            &mut socket,
+            23,
+            method,
+            (method == "Page.close").then_some(page.session_id.as_str()),
+            json!({"targetId": page.target_id}),
+        )
+        .await;
+        closed
+            .extend(send_cdp_command(&mut socket, 24, "Target.getTargets", None, json!({})).await);
+        for (event, key, value) in [
+            ("Target.targetDestroyed", "targetId", &page.target_id),
+            ("Target.detachedFromTarget", "sessionId", &page.session_id),
+        ] {
+            assert_eq!(closed.iter().filter(|message| message["method"] == event && message["params"][key] == *value).count(), 1, "{method}: {closed:?}");
+        }
+    }
     assert_eq!(
         closed
             .iter()
@@ -146,6 +243,15 @@ async fn websocket_native_context_disposal_retires_pending_calls_and_exact_sessi
 
 #[tokio::test]
 async fn websocket_bidi_observes_native_context_disposal_without_another_command() {
+    bidi_observes_native_retirement(false).await;
+}
+
+#[tokio::test]
+async fn websocket_bidi_observes_native_web_contents_close_without_another_command() {
+    bidi_observes_native_retirement(true).await;
+}
+
+async fn bidi_observes_native_retirement(close_page: bool) {
     let (addr, server, browser) = server_with_browser().await;
     let (_, mut events) = browser.subscribe().unwrap();
     let (mut socket, _) = connect_async(format!("ws://{addr}/session")).await.unwrap();
@@ -204,7 +310,24 @@ async fn websocket_bidi_observes_native_context_disposal_without_another_command
         json!({"events": ["browsingContext.contextDestroyed"]}),
     )
     .await;
-    assert!(browser.remove_context(context).unwrap());
+    if close_page {
+        let handle = browser
+            .subscribe()
+            .unwrap()
+            .0
+            .web_contents
+            .into_iter()
+            .find(|handle| handle.context() == context)
+            .unwrap();
+        browser
+            .close_web_contents(handle)
+            .unwrap()
+            .close_async()
+            .await;
+        assert!(browser.contains_context(context));
+    } else {
+        assert!(browser.remove_context(context).unwrap());
+    }
     recv_until_match(&mut socket, |message| {
         message["method"] == "browsingContext.contextDestroyed"
             && message["params"]["context"] == target

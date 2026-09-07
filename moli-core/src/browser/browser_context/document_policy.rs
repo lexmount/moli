@@ -363,6 +363,30 @@ impl BrowserContext {
         })
     }
 
+    pub(in crate::browser) fn start_selected_document_visibility_update(
+        &self,
+        handle: crate::browser::WebContentsHandle,
+    ) -> Option<PendingPageCommand> {
+        if self
+            .web_contents_has_pending_javascript_dialog(handle)
+            .ok()?
+        {
+            return None;
+        }
+        let contents = self.web_contents(handle).ok()?;
+        let document = contents.main_frame.current_document.as_ref()?;
+        let source = contents
+            .page_surface(true, None, None, None)
+            .visibility_script();
+        document
+            .page
+            .start_page_surface_override_script(&source)
+            .map_err(
+                |error| tracing::warn!(%error, "failed to activate surviving WebContents surface"),
+            )
+            .ok()
+    }
+
     pub fn page_surface_for_web_contents(
         &self,
         handle: crate::browser::WebContentsHandle,

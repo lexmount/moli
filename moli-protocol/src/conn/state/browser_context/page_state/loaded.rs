@@ -278,9 +278,12 @@ impl BrowserContext {
         let Some(handle) = self.selected_web_contents_handle() else {
             return false;
         };
-        let Ok((_projection, closing)) = self.begin_web_contents_close(handle) else {
+        let Ok(closing) = self.browser_context.close_web_contents(handle) else {
             return false;
         };
+        if let Some(mut projection) = self.take_closed_web_contents_projection(handle) {
+            projection.runtime_slot.retire_for_target_close();
+        }
         closing.close_async().await;
         true
     }

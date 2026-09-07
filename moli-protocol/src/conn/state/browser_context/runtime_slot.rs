@@ -123,7 +123,7 @@ impl TargetRuntimeSlot {
 
     /// Browser retirement has already invalidated the Document. Stop this
     /// projection's producers and waiters before awaiting renderer teardown.
-    pub(super) fn retire_for_target_close(&mut self) {
+    pub(in crate::conn) fn retire_for_target_close(&mut self) {
         self.javascript_dialog_scope.retire();
         self.page_slot.retire_for_target_close();
         self.transition_renderer_channel_for_page_absence(TargetPageAbsenceReason::TargetClosed);
