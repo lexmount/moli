@@ -105,6 +105,7 @@ impl JsContextHost {
         resolved_url: &str,
         entry_seed: NavigationHistoryEntrySeed,
         increments_joint_history: bool,
+        initiator_url: Option<Url>,
     ) -> bool {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return false;
@@ -112,6 +113,10 @@ impl JsContextHost {
         let Some(url) = Url::parse(resolved_url).ok() else {
             return false;
         };
+        self.reject_replaced_service_worker_child_client_navigation(
+            handle,
+            "The navigation was canceled.".to_owned(),
+        );
         if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
             entry.replace_navigation_entry_seed_and_clear_pending_history_increment(entry_seed);
             if increments_joint_history {
@@ -121,14 +126,15 @@ impl JsContextHost {
         if self
             .set_child_browsing_context_pending_navigation(
                 handle,
-                ChildBrowsingContextBootstrap::Url(url),
-                None,
+                ChildBrowsingContextBootstrap::Url(url.clone()),
+                initiator_url,
                 false,
             )
             .is_none()
         {
             return false;
         }
+        self.register_reserved_service_worker_child_client_for_navigation(handle, &url);
         self.queue_child_browsing_context_navigation_commit(handle)
     }
 
@@ -191,24 +197,49 @@ impl JsContextHost {
         self.queue_child_browsing_context_navigation_commit(handle)
     }
 
-    pub(crate) fn mark_child_browsing_context_top_level_history_increment(
-        &mut self,
+    pub(crate) fn child_browsing_context_has_pending_cross_document_traversal(
+        &self,
         handle: DomHandle,
-    ) {
-        if let Some(entry) = self.child_browsing_contexts.get_mut(&handle) {
-            entry.mark_pending_top_level_history_length_increment();
-        }
-    }
-
-    pub(crate) fn queue_child_browsing_context_reload_from_existing_seed(
-        &mut self,
-        handle: DomHandle,
-        resolved_url: &str,
-        initiator_url: Option<Url>,
     ) -> bool {
-        let Some(url) = Url::parse(resolved_url).ok() else {
+        let Some(entry) = self.child_browsing_contexts.get(&handle) else {
             return false;
         };
-        self.queue_child_browsing_context_navigation_to_url(handle, &url, initiator_url)
+        if !entry.has_pending_navigation_or_document_load() {
+            return false;
+        }
+        let pending = entry.navigation_entry_seed();
+        // The pending activation describes the destination, not the active
+        // Document's last navigation. A traversal must also change position.
+        pending.current_index != entry.committed_navigation_entry_seed().current_index
+            && pending
+                .activation
+                .as_ref()
+                .and_then(|activation| activation.navigation_type.as_deref())
+                == Some("traverse")
+    }
+
+    pub(crate) fn cancel_pending_child_browsing_context_navigation(&mut self, handle: DomHandle) {
+        let Some(entry) = self.child_browsing_contexts.get_mut(&handle) else {
+            return;
+        };
+        if !entry.has_pending_navigation_or_document_load() {
+            return;
+        }
+        entry.clear_pending_navigation();
+        entry.clear_pending_top_level_history_length_increment();
+        entry.restore_navigation_entry_seed_from_committed();
+        self.retire_current_child_navigation_commit_task(handle);
+        self.clear_pending_form_submission_child_target(handle);
+        self.reject_replaced_service_worker_child_client_navigation(
+            handle,
+            "The navigation was canceled.".to_owned(),
+        );
+        if let Some(navigation_load) = self.current_child_navigation_load(handle) {
+            let _ =
+                self.finish_child_frame_navigation_without_load_dispatch(handle, navigation_load);
+        }
+        // Removing the request's owner also makes an already-arriving network
+        // completion stale; it must never install a Document after cancellation.
+        self.clear_pending_child_document_loads_for_handle(handle);
     }
 }

@@ -23,8 +23,8 @@ use super::navigation_lifecycle::{
     settle_navigation_transition_finished_local,
 };
 use super::navigation_mutation::{
-    apply_local_window_location_navigation, apply_navigation_navigate_same_document,
-    sync_local_document_front_from_window, update_navigation_current_entry_for_same_document,
+    apply_navigation_navigate_same_document, sync_local_document_front_from_window,
+    update_navigation_current_entry_for_same_document,
 };
 use super::navigation_reload::{NavigationReloadAdmission, navigation_reload_admission};
 use super::navigation_result::{
@@ -670,29 +670,34 @@ fn navigate_location_object_with_source_element_and_child_navigate_event<'s>(
         {
             return;
         }
-        if !is_javascript_url {
-            sync_location_object(scope, location, resolved.as_str());
-            apply_local_window_location_navigation(scope, owner, &resolved, kind);
-        }
         if let Some(host_ptr) = host_ptr {
             let host = unsafe { &mut *host_ptr };
             let initiator_url =
                 explicit_initiator_url.or_else(|| location_navigation_initiator_url(scope, host));
-            if matches!(kind, LocationNavigationKind::Assign) && !is_javascript_url {
-                host.mark_child_browsing_context_top_level_history_increment(handle);
-            }
-            if matches!(kind, LocationNavigationKind::Reload) {
-                host.queue_child_browsing_context_reload_from_existing_seed(
-                    handle,
-                    resolved.as_str(),
-                    initiator_url,
-                );
-            } else {
+            if is_javascript_url {
                 host.queue_child_browsing_context_navigation_without_seed_update(
                     handle,
                     resolved.as_str(),
                     initiator_url,
                 );
+            } else {
+                // A cross-document navigation only prepares the next history
+                // entry. The old Document's Location, history state and entry
+                // identity remain visible until the replacement commits.
+                let entry_seed = if matches!(kind, LocationNavigationKind::Reload) {
+                    history_entry_seed_for_reload(scope, owner)
+                } else {
+                    history_entry_seed_for_cross_document_location(scope, owner, &resolved, kind)
+                };
+                if let Some(entry_seed) = entry_seed {
+                    host.queue_deferred_child_browsing_context_navigation_from_entry_seed(
+                        handle,
+                        resolved.as_str(),
+                        entry_seed,
+                        matches!(kind, LocationNavigationKind::Assign),
+                        initiator_url,
+                    );
+                }
             }
         }
         return;
