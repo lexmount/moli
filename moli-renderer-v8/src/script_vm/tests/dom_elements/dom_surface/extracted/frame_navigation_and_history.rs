@@ -3770,3 +3770,41 @@ async fn child_meta_refresh_after_same_document_navigation_uses_child_referrer()
         Some(child_url.as_str())
     );
 }
+
+#[test]
+fn main_window_indexed_child_deletion_is_live_and_not_cached() {
+    let mut vm = new_storage_test_vm("https://window-indexed-delete.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  const frame = document.createElement('iframe');
+  frame.srcdoc = '';
+  let absentDeletesSucceeded = true;
+  for (let i = 0; i < 1e5; i++) {
+    absentDeletesSucceeded &&= delete window[0];
+  }
+  (document.body || document.documentElement || document).appendChild(frame);
+  const presentAfterAbsent = delete window[0];
+  let presentDeletesFailed = true;
+  for (let i = 0; i < 1e5; i++) {
+    presentDeletesFailed &&= !delete window[0];
+  }
+  frame.remove();
+  return JSON.stringify({
+    absentDeletesSucceeded,
+    presentAfterAbsent,
+    presentDeletesFailed,
+    absentAfterPresent: delete window[0]
+  });
+})()
+"#,
+        )
+        .expect("live Window indexed deletion probe should evaluate");
+
+    assert_eq!(
+        result,
+        r#"{"absentDeletesSucceeded":true,"presentAfterAbsent":false,"presentDeletesFailed":true,"absentAfterPresent":true}"#
+    );
+}
