@@ -373,9 +373,11 @@ pub(crate) fn install_window_own_template_bindings<'s>(
     window_template.set_indexed_property_handler(
         v8::IndexedPropertyHandlerConfiguration::new()
             .getter(window_indexed_property_getter)
+            .setter(window_indexed_property_setter)
             .query(window_indexed_property_query)
             .deleter(window_indexed_property_deleter)
             .enumerator(window_indexed_property_enumerator)
+            .definer(window_indexed_property_definer)
             .descriptor(window_indexed_property_descriptor),
     );
     // Window is a [Global] WebIDL interface. Blink installs its members on the
