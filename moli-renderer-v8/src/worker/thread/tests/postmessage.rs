@@ -72,6 +72,21 @@ async fn worker_console_capture_does_not_serialize_or_coerce_page_objects() {
 }
 
 #[tokio::test]
+async fn worker_does_not_expose_window_only_webrtc_event_interfaces() {
+    ensure_v8();
+    let mut handle = spawn_worker(
+        r#"postMessage([typeof RTCPeerConnectionIceEvent, typeof RTCDataChannelEvent]); close();"#
+            .into(),
+        "test://webrtc-event-exposure".into(),
+    );
+    let msg = timeout(TIMEOUT, handle.recv())
+        .await
+        .expect("timed out waiting for worker WebRTC event exposure")
+        .expect("channel closed");
+    assert_eq!(expect_post_json(msg), r#"["undefined","undefined"]"#);
+}
+
+#[tokio::test]
 async fn worker_postmessage_to_parent() {
     ensure_v8();
     let mut handle = spawn_worker(

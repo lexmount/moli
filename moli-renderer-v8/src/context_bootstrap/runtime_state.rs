@@ -1948,6 +1948,8 @@ pub(crate) fn finish_context_bootstrap(
         ("RTCPeerConnection", "RTCPeerConnection"),
         ("RTCIceCandidate", "RTCIceCandidate"),
         ("RTCSessionDescription", "RTCSessionDescription"),
+        ("RTCPeerConnectionIceEvent", "RTCPeerConnectionIceEvent"),
+        ("RTCDataChannelEvent", "RTCDataChannelEvent"),
         ("RTCRtpReceiver", "RTCRtpReceiver"),
         ("RTCDataChannel", "RTCDataChannel"),
         ("Blob", "Blob"),
