@@ -1,8 +1,8 @@
 use super::*;
 #[tokio::test]
 async fn browser_context_cookie_manager_surface_projects_live_effective_browser_context() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test(
         "BID-cookie-manager-context",
         "TID-cookie-manager-context",
     ));
@@ -20,7 +20,7 @@ async fn browser_context_cookie_manager_surface_projects_live_effective_browser_
     conn.browser_context
         .as_mut()
         .unwrap()
-        .set_loaded_page_async(navigation.page)
+        .commit_active_navigation_for_test(navigation.page)
         .await;
 
     conn.browser_context
@@ -162,8 +162,8 @@ async fn browser_context_cookie_manager_surface_projects_live_effective_browser_
 
 #[tokio::test]
 async fn browser_context_cookie_manager_surface_tracks_schemeful_site_relationships() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test(
         "BID-cookie-manager-schemeful-context",
         "TID-cookie-manager-schemeful-context",
     ));
@@ -181,7 +181,7 @@ async fn browser_context_cookie_manager_surface_tracks_schemeful_site_relationsh
     conn.browser_context
         .as_mut()
         .unwrap()
-        .set_loaded_page_async(navigation.page)
+        .commit_active_navigation_for_test(navigation.page)
         .await;
 
     conn.browser_context
@@ -272,8 +272,8 @@ async fn browser_context_cookie_manager_surface_tracks_schemeful_site_relationsh
 
 #[tokio::test]
 async fn browser_context_cookie_manager_surface_tracks_redirected_navigation_transition() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test(
         "BID-cookie-manager-redirected-navigation",
         "TID-cookie-manager-redirected-navigation",
     ));
@@ -313,7 +313,7 @@ async fn browser_context_cookie_manager_surface_tracks_redirected_navigation_tra
     conn.browser_context
         .as_mut()
         .unwrap()
-        .set_loaded_page_async(navigation.page)
+        .commit_active_navigation_for_test(navigation.page)
         .await;
 
     let context = conn
@@ -358,8 +358,8 @@ async fn browser_context_cookie_manager_surface_tracks_redirected_navigation_tra
 #[tokio::test]
 async fn browser_context_cookie_manager_surface_distinguishes_same_document_url_updates_from_redirects()
  {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test(
         "BID-cookie-manager-same-document-transition",
         "TID-cookie-manager-same-document-transition",
     ));
@@ -377,7 +377,7 @@ async fn browser_context_cookie_manager_surface_distinguishes_same_document_url_
     conn.browser_context
         .as_mut()
         .unwrap()
-        .set_loaded_page_async(navigation.page)
+        .commit_active_navigation_for_test(navigation.page)
         .await;
 
     conn.evaluate_runtime_expression_with_await_async(
@@ -436,8 +436,8 @@ async fn browser_context_cookie_manager_surface_distinguishes_same_document_url_
 
 #[tokio::test]
 async fn browser_context_cookie_manager_surface_projects_navigation_initiator_relationships() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test(
         "BID-cookie-manager-navigation-initiator",
         "TID-cookie-manager-navigation-initiator",
     ));
@@ -456,7 +456,7 @@ async fn browser_context_cookie_manager_surface_projects_navigation_initiator_re
     conn.browser_context
         .as_mut()
         .unwrap()
-        .set_loaded_page_async(initial_navigation.page)
+        .commit_active_navigation_for_test(initial_navigation.page)
         .await;
 
     let next_navigation = conn
@@ -473,7 +473,7 @@ async fn browser_context_cookie_manager_surface_projects_navigation_initiator_re
     conn.browser_context
         .as_mut()
         .unwrap()
-        .set_loaded_page_async(next_navigation.page)
+        .commit_active_navigation_for_test(next_navigation.page)
         .await;
 
     let context = conn

@@ -67,16 +67,14 @@ fn service_worker_inspector_command_output_plan(
 mod tests {
     use moli_core::page::RendererServiceWorkerVersionStatus;
 
-    use crate::{
-        conn::{BrowserContext, ServiceWorkerTargetState},
-        testing::TestContext,
-    };
+    use crate::{conn::ServiceWorkerTargetState, testing::TestContext};
     use serde_json::json;
 
     #[tokio::test]
     async fn inspector_enable_and_disable_toggle_browser_context_state() {
         let mut ctx = TestContext::new();
-        ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+        ctx.conn.browser_context =
+            Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
         ctx.process_async(json!({"id": 1, "method": "Inspector.enable"}))
             .await;
@@ -110,7 +108,7 @@ mod tests {
     #[tokio::test]
     async fn inspector_enable_replays_target_crashed_for_crashed_target() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.attach_active_session("SID-1");
         {
             let context = &mut bc;
@@ -138,7 +136,7 @@ mod tests {
     #[tokio::test]
     async fn inspector_enable_replays_crash_to_exact_attached_session() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-primary");
         assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
@@ -178,7 +176,7 @@ mod tests {
     #[tokio::test]
     async fn inspector_enable_replays_background_target_crash_without_activation() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active");
         bc.attach_active_session("SID-active");
         bc.register_page_target_url_fixture(
@@ -214,7 +212,7 @@ mod tests {
     #[tokio::test]
     async fn inspector_enable_replays_target_crashed_for_stopped_service_worker() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         let mut target = ServiceWorkerTargetState::new(
             41,
             7,
@@ -263,7 +261,7 @@ mod tests {
     #[tokio::test]
     async fn inspector_enable_and_disable_stage_background_target_session_state() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-A");
+        let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-A");
         bc.attach_active_session("SID-active");
         bc.register_page_target_fixture(
             "TID-B".into(),

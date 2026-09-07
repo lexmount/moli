@@ -32,13 +32,7 @@ async fn same_context_targets_allocate_document_start_script_identifiers_target_
             "background": true, "browserContextId": "BID-9-SCRIPT-ID", "url": "about:blank#second"}
     }))
     .await;
-    let created = ctx.take_one();
-    assert_eq!(created["method"], "Target.targetCreated");
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    ctx.expect_result(104195, json!({ "targetId": second_target_id }), None);
+    let second_target_id = take_created_target_id(&mut ctx, 104195);
 
     ctx.process_async(json!({
         "id": 104196,
@@ -414,13 +408,7 @@ async fn same_context_targets_remove_only_their_own_pre_document_script_identifi
             "background": true, "browserContextId": "BID-9-SCRIPT-REMOVE", "url": "about:blank#second"}
     }))
     .await;
-    let created = ctx.take_one();
-    assert_eq!(created["method"], "Target.targetCreated");
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    ctx.expect_result(104201, json!({ "targetId": second_target_id }), None);
+    let second_target_id = take_created_target_id(&mut ctx, 104201);
 
     ctx.process_async(json!({
         "id": 104202,
@@ -576,13 +564,7 @@ async fn same_context_targets_remove_only_their_own_utility_pre_document_script_
             "background": true, "browserContextId": "BID-9-UTILITY-SCRIPT-REMOVE", "url": "about:blank#second"}
     }))
     .await;
-    let created = ctx.take_one();
-    assert_eq!(created["method"], "Target.targetCreated");
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    ctx.expect_result(104210, json!({ "targetId": second_target_id }), None);
+    let second_target_id = take_created_target_id(&mut ctx, 104210);
 
     ctx.process_async(json!({
         "id": 104211,
@@ -759,13 +741,7 @@ async fn same_context_targets_remove_only_their_own_utility_binding_definition_a
             "background": true, "browserContextId": "BID-9-UTILITY-BINDING-REMOVE", "url": "about:blank#second"}
     }))
     .await;
-    let created = ctx.take_one();
-    assert_eq!(created["method"], "Target.targetCreated");
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    ctx.expect_result(104220, json!({ "targetId": second_target_id }), None);
+    let second_target_id = take_created_target_id(&mut ctx, 104220);
 
     ctx.process_async(json!({
         "id": 104221,
@@ -955,13 +931,7 @@ async fn same_context_targets_remove_only_their_own_main_world_binding_definitio
             "background": true, "browserContextId": "BID-9-MAIN-BINDING-REMOVE", "url": "about:blank#second"}
     }))
     .await;
-    let created = ctx.take_one();
-    assert_eq!(created["method"], "Target.targetCreated");
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    ctx.expect_result(104231, json!({ "targetId": second_target_id }), None);
+    let second_target_id = take_created_target_id(&mut ctx, 104231);
 
     ctx.process_async(json!({
         "id": 104232,
@@ -1157,13 +1127,7 @@ async fn same_context_targets_remove_only_their_own_dual_world_binding_definitio
             "background": true, "browserContextId": "BID-9-DUAL-BINDING-REMOVE", "url": "about:blank#second"}
     }))
     .await;
-    let created = ctx.take_one();
-    assert_eq!(created["method"], "Target.targetCreated");
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    ctx.expect_result(104243, json!({ "targetId": second_target_id }), None);
+    let second_target_id = take_created_target_id(&mut ctx, 104243);
 
     ctx.process_async(json!({
         "id": 104244,

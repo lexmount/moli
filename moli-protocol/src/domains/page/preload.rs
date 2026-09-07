@@ -1756,7 +1756,7 @@ mod protocol_neutral_tests {
     };
     use serde_json::json;
 
-    use crate::conn::{CdpConnection, Cmd, DocumentStartScript, TargetOwnerState};
+    use crate::conn::{Cmd, DocumentStartScript, TargetOwnerState};
 
     use super::{
         PageCommandTaskStep, build_cdp_add_preload_script_command,
@@ -2056,7 +2056,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_preload_entry_routes_add_command_to_owner_error() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({"source": "globalThis.ready = true;"});
         let cmd = Cmd::for_test(
             Some(43),

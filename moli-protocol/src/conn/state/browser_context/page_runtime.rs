@@ -1,49 +1,407 @@
 use super::BrowserContext;
-use moli_core::page::{CompletedPageCommand, PendingPageCommand, RendererCommandTurnOutput};
-use std::time::Duration;
 
-mod document_commands;
-mod document_queries;
-mod emulation;
-mod input;
-pub(crate) use emulation::PagePolicyUpdateKind;
-mod network_commands;
-mod resource_commands;
-pub(crate) use input::PageInputCommand;
-pub(crate) use network_commands::NetworkPolicyUpdateKind;
+pub(crate) use moli_core::browser::{
+    BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
+    CompletedAppManifestPublication, CompletedCaptureDocumentImage,
+    CompletedCaptureDocumentScreencastFrame, CompletedCaptureDocumentSnapshot,
+    CompletedChildFrameLifecycleWork, CompletedChildFrameNavigation,
+    CompletedChildFrameTreeSnapshot, CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
+    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
+    CompletedDocumentDiagnosticsSnapshot, CompletedDocumentFetchCommand,
+    CompletedDocumentInputCommand, CompletedDocumentLifecycleStop, CompletedDocumentPolicyBatch,
+    CompletedDocumentPolicyUpdate, CompletedDocumentResourceRuntimeUpdate,
+    CompletedDocumentResourceTextSearch, CompletedDocumentStorageKeySnapshot,
+    CompletedNavigationHistoryReset, CompletedNetworkResourceLoadPreparation,
+    CompletedSetDocumentContent, CompletedTopLevelHistoryTraversal,
+    CompletedTopLevelSameDocumentNavigation, DocumentFetchCommand, DocumentFetchCommandOutcome,
+    DocumentPolicyUpdate, DocumentRuntimePolicyReconciliation, DocumentSnapshot, PageInputCommand,
+    PendingAppManifestLoadPreparation, PendingAppManifestPublication, PendingCaptureDocumentImage,
+    PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
+    PendingChildFrameLifecycleWork, PendingChildFrameNavigation, PendingChildFrameTreeSnapshot,
+    PendingDocumentAutofillTrigger, PendingDocumentBlobRead, PendingDocumentCookieOwnerSnapshot,
+    PendingDocumentCspBypassUpdate, PendingDocumentDiagnosticsSnapshot,
+    PendingDocumentFetchCommand, PendingDocumentInputCommand, PendingDocumentLifecycleStop,
+    PendingDocumentPolicyBatch, PendingDocumentPolicyUpdate, PendingDocumentResourceRuntimeUpdate,
+    PendingDocumentResourceTextSearch, PendingDocumentStorageKeySnapshot,
+    PendingNavigationHistoryReset, PendingNetworkResourceLoadPreparation,
+    PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
+    PendingTopLevelSameDocumentNavigation,
+};
 
 impl BrowserContext {
-    pub(in crate::conn) fn observe_renderer_page_state(
-        &mut self,
-        snapshot: &std::sync::Arc<moli_renderer_v8::RendererPageState>,
-    ) -> bool {
-        self.physical
-            .web_contents
-            .values_mut()
-            .any(|contents| contents.observe_renderer_page_state(snapshot))
+    pub(crate) fn start_document_diagnostics_snapshot(
+        &self,
+        document: moli_core::browser::DocumentHandle,
+    ) -> Result<PendingDocumentDiagnosticsSnapshot, String> {
+        self.browser_context
+            .start_document_diagnostics_snapshot(document)
     }
 
-    pub(crate) fn start_target_fetch_interception_update(
+    pub(crate) fn start_document_policy_batch_with_surface(
         &mut self,
-        target_id: &str,
+        document: moli_core::browser::DocumentHandle,
+        updates: Vec<DocumentPolicyUpdate>,
+        foreground: bool,
+        global_network_conditions: Option<moli_core::browser::EmulatedNetworkConditions>,
+        global_geolocation: Option<&moli_core::browser::EmulatedGeolocationOverrideState>,
+    ) -> PendingDocumentPolicyBatch {
+        self.browser_context
+            .start_document_policy_batch_with_surface(
+                document,
+                updates,
+                foreground,
+                self.navigator_queries_for_web_contents(document.web_contents()),
+                global_network_conditions,
+                global_geolocation,
+            )
+    }
+
+    pub(crate) fn start_document_policy_update(
+        &mut self,
+        document: moli_core::browser::DocumentHandle,
+        update: DocumentPolicyUpdate,
+    ) -> Result<PendingDocumentPolicyUpdate, String> {
+        self.browser_context
+            .start_document_policy_update(document, update)
+    }
+
+    pub(crate) fn start_document_page_surface_update(
+        &mut self,
+        document: moli_core::browser::DocumentHandle,
+        foreground: bool,
+        global_network_conditions: Option<moli_core::browser::EmulatedNetworkConditions>,
+        global_geolocation: Option<&moli_core::browser::EmulatedGeolocationOverrideState>,
+    ) -> Result<PendingDocumentPolicyBatch, String> {
+        self.browser_context.start_document_page_surface_update(
+            document,
+            foreground,
+            self.navigator_queries_for_web_contents(document.web_contents()),
+            global_network_conditions,
+            global_geolocation,
+        )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_document_policy_update(
+        &mut self,
+        completed: CompletedDocumentPolicyUpdate,
+    ) -> Result<(), String> {
+        self.browser_context
+            .finish_document_policy_update(completed)
+    }
+
+    pub(crate) fn start_web_contents_fetch_interception_update(
+        &mut self,
+        web_contents: moli_core::browser::WebContentsHandle,
         enabled: bool,
         resource_type: Option<moli_core::page::SubresourceResourceType>,
-    ) -> Result<Option<PendingPageCommand>, String> {
-        self.web_contents_for_target_mut(target_id)
-            .ok_or_else(|| "WebContents unavailable".to_owned())?
-            .start_fetch_interception_update(enabled, resource_type)
+        accept_stale_completion: bool,
+    ) -> Result<Option<PendingDocumentFetchCommand>, String> {
+        self.browser_context
+            .start_web_contents_fetch_interception_update(
+                web_contents,
+                enabled,
+                resource_type,
+                accept_stale_completion,
+            )
     }
 
-    pub(crate) fn install_target_fetch_interception_policy(
+    pub(in crate::conn) fn install_web_contents_fetch_interception_policy(
         &mut self,
-        target_id: &str,
+        web_contents: moli_core::browser::WebContentsHandle,
         enabled: bool,
         resource_type: Option<moli_core::page::SubresourceResourceType>,
     ) -> Result<(), String> {
-        self.web_contents_for_target_mut(target_id)
-            .ok_or_else(|| "WebContents unavailable".to_owned())?
-            .install_fetch_interception_policy(enabled, resource_type);
-        Ok(())
+        self.browser_context
+            .install_web_contents_fetch_interception_policy(web_contents, enabled, resource_type)
+    }
+
+    pub(in crate::conn) fn invalidate_selected_resource_runtime(&mut self) {
+        self.browser_context.invalidate_selected_resource_runtime();
+    }
+
+    pub(in crate::conn) fn configure_selected_navigation_policy(
+        &mut self,
+        defaults: moli_fetch::FetchConfig,
+        global_headers: &moli_fetch::RequestHeaders,
+        global_network_conditions: Option<moli_core::browser::EmulatedNetworkConditions>,
+    ) -> Result<(), String> {
+        self.browser_context.configure_selected_navigation_policy(
+            defaults,
+            global_headers,
+            global_network_conditions,
+        )
+    }
+
+    pub(in crate::conn) fn ensure_web_contents_resource_request_client(
+        &mut self,
+        web_contents: moli_core::browser::WebContentsHandle,
+        defaults: moli_fetch::FetchConfig,
+        global_headers: &moli_fetch::RequestHeaders,
+        global_network_conditions: Option<moli_core::browser::EmulatedNetworkConditions>,
+    ) -> Result<moli_core::network::ResourceRequestClient, String> {
+        self.browser_context
+            .ensure_web_contents_resource_request_client(
+                web_contents,
+                defaults,
+                global_headers,
+                global_network_conditions,
+            )
+    }
+
+    pub(in crate::conn) fn start_web_contents_resource_runtime_rebuild(
+        &mut self,
+        web_contents: moli_core::browser::WebContentsHandle,
+        defaults: moli_fetch::FetchConfig,
+        global_headers: &moli_fetch::RequestHeaders,
+        global_network_conditions: Option<moli_core::browser::EmulatedNetworkConditions>,
+    ) -> Result<Option<PendingDocumentResourceRuntimeUpdate>, String> {
+        self.browser_context
+            .start_web_contents_resource_runtime_rebuild(
+                web_contents,
+                defaults,
+                global_headers,
+                global_network_conditions,
+            )
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_document_diagnostics_snapshot(
+        &mut self,
+        completed: CompletedDocumentDiagnosticsSnapshot,
+    ) -> Result<moli_core::page::RendererPageDiagnosticsSnapshot, String> {
+        self.browser_context
+            .finish_document_diagnostics_snapshot(completed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_document_cookie_owner_snapshot(
+        &self,
+        document: moli_core::browser::DocumentHandle,
+    ) -> Result<PendingDocumentCookieOwnerSnapshot, String> {
+        self.browser_context
+            .start_document_cookie_owner_snapshot(document)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_document_cookie_owner_snapshot(
+        &mut self,
+        completed: CompletedDocumentCookieOwnerSnapshot,
+    ) -> Result<moli_core::page::DocumentCookieOwnerSnapshot, String> {
+        self.browser_context
+            .finish_document_cookie_owner_snapshot(completed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_document_autofill_trigger(
+        &self,
+        document: moli_core::browser::DocumentHandle,
+        request: moli_core::page::RendererAutofillTriggerRequest,
+    ) -> Result<PendingDocumentAutofillTrigger, String> {
+        self.browser_context
+            .start_document_autofill_trigger(document, request)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_document_autofill_trigger(
+        &mut self,
+        completed: CompletedDocumentAutofillTrigger,
+    ) -> Result<moli_core::page::RendererAutofillTriggerOutcome, String> {
+        self.browser_context
+            .finish_document_autofill_trigger(completed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_document_lifecycle_stop(
+        &self,
+        document: moli_core::browser::DocumentHandle,
+    ) -> Result<PendingDocumentLifecycleStop, String> {
+        self.browser_context.start_document_lifecycle_stop(document)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finish_document_lifecycle_stop(
+        &mut self,
+        completed: CompletedDocumentLifecycleStop,
+    ) -> Result<moli_core::page::RendererCommandTurnOutput, String> {
+        self.browser_context
+            .finish_document_lifecycle_stop(completed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn crash_web_contents_renderer_from_io(
+        &self,
+        web_contents: moli_core::browser::WebContentsHandle,
+    ) -> Result<(), String> {
+        self.browser_context
+            .crash_web_contents_renderer_from_io(web_contents)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn document_subresource_network_records(
+        &self,
+        document: moli_core::browser::DocumentHandle,
+    ) -> Result<Vec<moli_core::page::SubresourceNetworkRecord>, String> {
+        self.browser_context
+            .document_subresource_network_records(document)
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn target_runtime_heap_usage_for_test(
+        &mut self,
+        target_id: &str,
+    ) -> Result<moli_core::page::RendererRuntimeHeapUsage, String> {
+        let document = self
+            .document_handle_for_target(target_id)
+            .ok_or("NoDocumentLoaded")?;
+        self.browser_context
+            .document_runtime_heap_usage_for_test(document)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) fn target_idle_override_for_test(
+        &self,
+        target_id: &str,
+    ) -> Result<Option<moli_core::page::EmulatedIdleOverride>, String> {
+        let document = self
+            .document_handle_for_target(target_id)
+            .ok_or("NoDocumentLoaded")?;
+        self.browser_context
+            .document_idle_override_for_test(document)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn target_cached_observable_output_for_test(
+        &self,
+        target_id: &str,
+    ) -> Option<Vec<moli_core::page::ScriptObservableOutputItem>> {
+        self.browser_context
+            .document_observable_output_snapshot(self.document_handle_for_target(target_id)?)
+            .ok()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn evaluate_target_expression_for_test(
+        &mut self,
+        target_id: &str,
+        expression: &str,
+        await_promise: bool,
+    ) -> Result<serde_json::Value, String> {
+        let document = self
+            .document_handle_for_target(target_id)
+            .ok_or("NoDocumentLoaded")?;
+        self.browser_context
+            .evaluate_document_expression_for_test(document, expression, await_promise)
+            .await
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn serialize_target_html_for_test(
+        &mut self,
+        target_id: &str,
+    ) -> Result<String, String> {
+        let document = self
+            .document_handle_for_target(target_id)
+            .ok_or("NoDocumentLoaded")?;
+        let completion = self
+            .browser_context
+            .start_capture_document_snapshot(document)?
+            .wait()
+            .await;
+        Ok(self
+            .browser_context
+            .finish_capture_document_snapshot(completion)?
+            .html)
+    }
+
+    #[cfg(test)]
+    pub(in crate::conn) fn resource_request_client_for_test(
+        &mut self,
+        target_id: &str,
+        defaults: moli_fetch::FetchConfig,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
+    ) -> Result<moli_core::network::ResourceRequestClient, String> {
+        let web_contents = self
+            .web_contents_handle_for_target(target_id)
+            .ok_or("WebContents unavailable")?;
+        self.browser_context
+            .ensure_web_contents_resource_request_client(
+                web_contents,
+                defaults,
+                &browser_globals.extra_headers,
+                browser_globals.network_conditions,
+            )
+    }
+
+    pub(crate) fn document_handle_for_target(
+        &self,
+        target_id: &str,
+    ) -> Option<moli_core::browser::DocumentHandle> {
+        self.document_handle_for_web_contents(self.web_contents_handle_for_target(target_id)?)
+            .ok()
+            .flatten()
+    }
+
+    pub(crate) fn document_handle_for_web_contents(
+        &self,
+        handle: moli_core::browser::WebContentsHandle,
+    ) -> Result<Option<moli_core::browser::DocumentHandle>, String> {
+        self.browser_context
+            .document_handle_for_web_contents(handle)
+    }
+
+    pub(in crate::conn) fn target_has_navigation_engine(&self, target_id: &str) -> bool {
+        self.web_contents_handle_for_target(target_id)
+            .is_some_and(|handle| {
+                self.browser_context
+                    .web_contents_has_navigation_engine(handle)
+            })
+    }
+
+    pub(crate) fn page_navigation_fetch_config(
+        &self,
+        target_id: &str,
+    ) -> Option<moli_fetch::FetchConfig> {
+        self.browser_context
+            .web_contents_navigation_fetch_config(self.web_contents_handle_for_target(target_id)?)
+    }
+
+    pub(in crate::conn) fn page_navigation_layout_policy(
+        &self,
+        target_id: &str,
+    ) -> Option<moli_core::LayoutPolicy> {
+        self.browser_context
+            .web_contents_navigation_layout_policy(self.web_contents_handle_for_target(target_id)?)
+    }
+
+    pub(in crate::conn) fn page_navigation_renderer_owner_id(
+        &self,
+        target_id: &str,
+    ) -> Option<u64> {
+        self.browser_context
+            .web_contents_navigation_renderer_owner_id(
+                self.web_contents_handle_for_target(target_id)?,
+            )
+    }
+
+    #[cfg(test)]
+    pub(in crate::conn) fn page_navigation_browser_context_runtime_id_for_test(
+        &self,
+        target_id: &str,
+    ) -> Option<moli_core::RendererBrowserContextRuntimeId> {
+        self.browser_context
+            .web_contents_navigation_browser_context_runtime_id_for_test(
+                self.web_contents_handle_for_target(target_id)?,
+            )
+    }
+
+    pub(in crate::conn) fn page_navigation_diagnostics(
+        &self,
+        target_id: &str,
+    ) -> Option<moli_core::runtime::NavigationEngineDiagnostics> {
+        self.browser_context
+            .web_contents_navigation_diagnostics(self.web_contents_handle_for_target(target_id)?)
     }
 
     #[cfg(test)]
@@ -51,199 +409,17 @@ impl BrowserContext {
         &self,
         target_id: &str,
     ) -> Option<(bool, Option<moli_core::page::SubresourceResourceType>)> {
-        Some(
-            self.web_contents_for_target(target_id)?
-                .fetch_subresource_interception(),
-        )
-    }
-
-    pub(crate) fn finish_target_fetch_interception_update(
-        &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
-    ) -> Result<(), String> {
-        let Some(page) = self.loaded_page_for_target_mut(target_id) else {
-            return Ok(());
-        };
-        if !completion.is_from_page(page) {
-            return Err("Renderer Page changed".to_owned());
-        }
-        page.finish_set_fetch_subresource_interception(completion)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn settle_target_page_command_turn(
-        &mut self,
-        target_id: &str,
-        document_id: moli_core::browser::DocumentId,
-        completion: CompletedPageCommand,
-    ) -> RendererCommandTurnOutput {
-        if self.target_document_id(target_id) == Some(document_id)
-            && let Some(page) = self.loaded_page_for_target_mut(target_id)
-        {
-            return page.finish_page_command_turn(completion);
-        }
-        completion.into_output()
-    }
-
-    pub(crate) fn start_target_page_diagnostics_snapshot(
-        &self,
-        target_id: &str,
-    ) -> Result<PendingPageCommand, String> {
-        self.loaded_page_for_target(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_page_diagnostics_snapshot()
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn finish_target_page_diagnostics_snapshot(
-        &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
-    ) -> Result<moli_core::page::RendererPageDiagnosticsSnapshot, String> {
-        self.loaded_page_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .finish_page_diagnostics_snapshot(completion)
-            .map_err(|error| error.to_string())
-    }
-
-    pub(crate) fn start_target_service_worker_bypass_refresh(
-        &mut self,
-        target_id: &str,
-    ) -> Result<Option<PendingPageCommand>, String> {
-        let Some(contents) = self.web_contents_for_target_mut(target_id) else {
-            return Ok(None);
-        };
-        let Some(document) = contents.main_frame.current_document.as_mut() else {
-            return Ok(None);
-        };
-        document
-            .page
-            .start_set_bypass_service_worker(contents.network_request_policy.bypass_service_worker)
-            .map(Some)
-            .map_err(|error| format!("failed to update page service worker bypass: {error}"))
-    }
-
-    pub(crate) fn start_target_blocked_urls_refresh(
-        &mut self,
-        target_id: &str,
-    ) -> Result<Option<PendingPageCommand>, String> {
-        let Some(contents) = self.web_contents_for_target_mut(target_id) else {
-            return Ok(None);
-        };
-        let Some(document) = contents.main_frame.current_document.as_mut() else {
-            return Ok(None);
-        };
-        document
-            .page
-            .start_set_blocked_url_patterns(&contents.network_request_policy.blocked_url_patterns)
-            .map(Some)
-            .map_err(|error| format!("failed to update page blocked URLs: {error}"))
-    }
-
-    pub(crate) fn start_target_extra_headers_refresh(
-        &mut self,
-        target_id: &str,
-    ) -> Result<Option<PendingPageCommand>, String> {
-        let headers = self.effective_extra_headers_for_target(target_id);
-        let Some(page) = self.loaded_page_for_target_mut(target_id) else {
-            return Ok(None);
-        };
-        page.start_set_extra_http_headers(&headers)
-            .map(Some)
-            .map_err(|error| format!("failed to update page extra HTTP headers: {error}"))
-    }
-
-    pub(crate) fn start_target_network_request_policy_refresh(
-        &mut self,
-        target_id: &str,
-    ) -> Result<Option<PendingPageCommand>, String> {
-        let headers = self.effective_extra_headers_for_target(target_id);
-        let Some(contents) = self.web_contents_for_target_mut(target_id) else {
-            return Ok(None);
-        };
-        let Some(document) = contents.main_frame.current_document.as_mut() else {
-            return Ok(None);
-        };
-        let policy = &contents.network_request_policy;
-        document
-            .page
-            .start_set_network_request_policy(
-                &headers,
-                policy.bypass_service_worker,
-                policy.cache_disabled,
-                &policy.blocked_url_patterns,
+        self.browser_context
+            .web_contents_fetch_interception_for_test(
+                self.web_contents_handle_for_target(target_id)?,
             )
-            .map(Some)
-            .map_err(|error| format!("failed to replay page network request policy: {error}"))
-    }
-
-    pub(crate) fn start_target_network_offline_refresh(
-        &mut self,
-        target_id: &str,
-    ) -> Result<Option<PendingPageCommand>, String> {
-        let Some(contents) = self.web_contents_for_target_mut(target_id) else {
-            return Ok(None);
-        };
-        let Some(document) = contents.main_frame.current_document.as_mut() else {
-            return Ok(None);
-        };
-        document
-            .page
-            .start_set_network_offline(contents.network_offline)
-            .map(Some)
-            .map_err(|error| format!("set emulated network conditions failed: {error}"))
+            .ok()
     }
 
     #[cfg(test)]
     pub(crate) async fn reset_selected_resource_runtime_async(&mut self) -> bool {
-        let Some(contents) = self
-            .physical
-            .selected_web_contents_id()
-            .and_then(|id| self.physical.web_contents.get_mut(&id))
-        else {
-            return false;
-        };
-        if !contents.has_navigation_engine() {
-            return false;
-        }
-        contents.reset_resource_runtime_for_test().await;
-        true
-    }
-
-    pub(crate) fn start_target_child_frame_lifecycle_work(
-        &mut self,
-        target_id: &str,
-        timeout: Duration,
-    ) -> Result<PendingPageCommand, String> {
-        let storage = self.physical.storage_partition.handles.clone();
-        self.web_contents_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .start_child_frame_lifecycle_work(&storage, timeout)
-    }
-
-    pub(crate) fn complete_target_child_frame_lifecycle_work(
-        &mut self,
-        target_id: &str,
-        completion: CompletedPageCommand,
-    ) -> Result<(bool, RendererCommandTurnOutput), String> {
-        let completed = self
-            .web_contents_for_target_mut(target_id)
-            .ok_or("NoDocumentLoaded")?
-            .complete_child_frame_lifecycle_work(completion)?;
-        self.ingest_owner_page_observable_output_updates_for_target(target_id);
-        Ok(completed)
-    }
-
-    pub(crate) async fn target_page_diagnostics_snapshot_async(
-        &mut self,
-        target_id: &str,
-    ) -> Result<moli_core::page::RendererPageDiagnosticsSnapshot, String> {
-        let Some(page) = self.loaded_page_for_target_mut(target_id) else {
-            return Ok(Default::default());
-        };
-        page.page_diagnostics_snapshot_async()
+        self.browser_context
+            .reset_selected_resource_runtime_for_test()
             .await
-            .map_err(|error| error.to_string())
     }
 }

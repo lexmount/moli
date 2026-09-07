@@ -1,4 +1,4 @@
-use moli_core::browser::DownloadBody;
+use moli_core::browser::{DownloadBody, WebContentsHandle};
 #[cfg(test)]
 use moli_core::page::RendererPageCreationArtifacts;
 use moli_core::page::{
@@ -6,8 +6,6 @@ use moli_core::page::{
 };
 use serde::Serialize;
 use serde_json::Value;
-#[cfg(test)]
-use std::sync::Arc;
 use url::Url;
 
 use crate::conn::{CommandOwnerScope, ResponseCommitReady};
@@ -191,13 +189,11 @@ pub struct LoadedNavigation<P = Page> {
     pub response_from_cache: bool,
     pub initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
     pub renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
-    #[cfg(test)]
-    pub(crate) main_document_commit: Option<Arc<RendererMainDocumentCommit>>,
     pub(crate) document_progress_transfer: CompletedDocumentProgressTransfer,
     pub(crate) network_error_page: Option<NetworkErrorPageNavigation>,
 }
 
-impl LoadedNavigation {
+impl<P> LoadedNavigation<P> {
     #[cfg(test)]
     pub(crate) fn response_body(&self) -> String {
         self.document_progress_transfer
@@ -298,6 +294,7 @@ pub struct NavigationDispatchState {
     pub(crate) redirect_headers: Option<moli_fetch::RequestHeaders>,
     pub navigate_id: Option<u64>,
     pub(crate) owner: CommandOwnerScope,
+    pub(crate) web_contents: WebContentsHandle,
     pub(crate) result_projection: NavigationResultProjection,
     pub frame_id: String,
     pub session_id: Option<String>,
@@ -318,6 +315,14 @@ pub struct NavigationDispatchState {
 }
 
 impl NavigationDispatchState {
+    #[cfg(test)]
+    pub(crate) fn detached_web_contents_for_test() -> WebContentsHandle {
+        WebContentsHandle::new(
+            moli_core::browser::BrowserContextId::allocate(),
+            moli_core::browser::WebContentsId::allocate(),
+        )
+    }
+
     pub(crate) fn clone_request_body_bytes(&self) -> Option<Vec<u8>> {
         self.request_body_bytes
             .clone()

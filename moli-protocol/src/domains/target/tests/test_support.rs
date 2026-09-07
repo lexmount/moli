@@ -5,12 +5,13 @@ use moli_shared_worker::SharedWorkerInstanceId;
 // Helper: quickly set up a browser context with a given id, optional
 // target_id, optional session_id, and optional url.
 pub(super) fn load_bc(ctx: &mut TestContext, bc_id: &str) {
-    ctx.conn
-        .install_browser_context_fixture_for_test(BrowserContext::new(bc_id.into()));
+    ctx.conn.install_browser_context_fixture_for_test(
+        ctx.conn.new_browser_context_fixture_for_test(bc_id),
+    );
 }
 
 pub(super) fn load_bc_with_target(ctx: &mut TestContext, bc_id: &str, target_id: &str) {
-    let mut bc = BrowserContext::new(bc_id.into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test(bc_id);
     bc.set_active_target_id(target_id);
     ctx.conn.install_browser_context_fixture_for_test(bc);
 }
@@ -202,34 +203,11 @@ pub(super) async fn load_bc_with_titled_page_async(
     // client setup explicitly in the harness instead of relying on createTarget
     // to emit discovery events unconditionally.
     enable_root_target_discovery_for_test(ctx);
-    let mut bc = BrowserContext::new(bc_id.into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test(bc_id);
     bc.set_active_target_id(target_id);
     ctx.conn.insert_browser_context(bc);
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(&format!("data:text/html,{html}"))
-        .await
-        .expect("page should load");
-    let renderer_page = crate::conn::RendererPageResidenceIdentity::from_page(&page);
-    let url = page.final_url().as_str().to_owned();
-    let bc = ctx
-        .conn
-        .browser_context
-        .as_mut()
-        .expect("loaded Target fixture must retain its BrowserContext owner");
-    bc.set_target_url(url);
-    let _ = bc.replace_active_page_for_test(Some(page));
-    // Even this lightweight Target-domain fixture owns a real renderer Page
-    // with a concrete output stream. Bind that stream before any later test
-    // turn consumes its queued `Opened`/publication records; resolving the
-    // owner from the then-current Page would be wrong after navigation has
-    // replaced this initial fixture.
-    let page_owner = ctx
-        .conn
-        .target_page_residence_identity_for_session(None)
-        .expect("loaded Target fixture must have an exact Page owner");
-    ctx.conn
-        .bind_renderer_page_output_owner(renderer_page, page_owner);
+    ctx.install_quiet_navigation_fixture_for_session_owner(&format!("data:text/html,{html}"), None)
+        .await;
 }
 
 pub(super) fn enable_root_target_discovery_for_test(ctx: &mut TestContext) {

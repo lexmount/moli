@@ -37,8 +37,13 @@ use url::Url;
 use super::input;
 use crate::conn::{
     BackgroundProtocolEvent, CapturedBody, CdpSessionRoute, CommandDispatchContext,
-    CommandOwnerScope, NETWORK_ERROR_PAGE_URL, PageLifecycleEventsEnableResult,
-    PageScreencastConfig, PageScreencastFormat,
+    CommandOwnerScope, CompletedCaptureDocumentImage, CompletedCaptureDocumentScreencastFrame,
+    CompletedCaptureDocumentSnapshot, CompletedDocumentCspBypassUpdate,
+    CompletedDocumentLifecycleStop, CompletedNavigationHistoryReset, CompletedSetDocumentContent,
+    NETWORK_ERROR_PAGE_URL, PageLifecycleEventsEnableResult, PageScreencastConfig,
+    PageScreencastFormat, PendingCaptureDocumentImage, PendingCaptureDocumentScreencastFrame,
+    PendingCaptureDocumentSnapshot, PendingDocumentCspBypassUpdate, PendingDocumentLifecycleStop,
+    PendingNavigationHistoryReset, PendingSetDocumentContent,
 };
 use crate::conn::{CdpConnection, Cmd, EmulatedViewportSurface};
 pub(crate) use crate::conn::{DEFAULT_LOADER_ID as LOADER_ID, monotonic_timestamp_seconds};
@@ -78,14 +83,13 @@ pub(in crate::domains) async fn dispose_primary_session_target_state_async(
         session_key: moli_page_types::DevToolsSessionKey::Primary,
     } = plan.target()
     {
-        let reset_result = match conn.browser_context_by_id_mut(browser_context_id) {
-            Some(browser_context) => {
-                browser_context
-                    .reset_primary_page_session_target_state_async(target_id, session_id)
-                    .await
-            }
-            None => Ok(false),
-        };
+        let reset_result = conn
+            .reset_primary_page_session_target_state_async(
+                browser_context_id,
+                target_id,
+                session_id,
+            )
+            .await;
         reset_result.and_then(|found| {
             anyhow::ensure!(
                 found,
@@ -169,6 +173,14 @@ const PRINT_TO_PDF_LAYOUT_DISABLED_MESSAGE: &str =
 const PRINT_TO_PDF_UNSUPPORTED_MESSAGE: &str =
     "Page.printToPDF is not supported: PDF generation is not implemented.";
 
+fn capture_document_image_error(error: String) -> String {
+    if error == "Document changed" {
+        "capture screenshot completed for a stale renderer attachment".into()
+    } else {
+        error
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FrameTreeCommandOutputKind {
     FrameTree,
@@ -196,6 +208,7 @@ enum PendingPageCommandKind {
     AddScriptToEvaluateOnNewDocument(preload::PendingAddScriptToEvaluateOnNewDocumentCommand),
     GetFrameTree {
         output_kind: FrameTreeCommandOutputKind,
+        document: moli_core::browser::DocumentHandle,
         target_id: String,
         target_loader_id: String,
         target_url: String,
@@ -208,27 +221,26 @@ enum PendingPageCommandKind {
     SearchInResource(resource_search::PendingSearchInResourceCommand),
     GetAppManifest(app_manifest::PendingGetAppManifestCommand),
     ResetNavigationHistory {
-        page: crate::conn::TargetPageResidenceIdentity,
-        pending: PendingPageCommand,
+        pending: PendingNavigationHistoryReset,
     },
     SetDocumentContent {
-        pending: PendingPageCommand,
+        pending: PendingSetDocumentContent,
     },
     SetBypassContentSecurityPolicy {
-        pending: PendingPageCommand,
+        pending: PendingDocumentCspBypassUpdate,
     },
     SameDocumentNavigate(Box<navigation::PendingSameDocumentNavigateCommand>),
     CaptureSnapshot {
-        pending: PendingPageCommand,
+        pending: PendingCaptureDocumentSnapshot,
     },
     GetLayoutMetrics {
         pending: PendingPageCommand,
     },
     CaptureScreenshot {
-        pending: PendingPageCommand,
+        pending: PendingCaptureDocumentImage,
     },
     PrintToPdf {
-        pending: PendingPageCommand,
+        pending: PendingCaptureDocumentImage,
         options: pdf::RasterPdfOptions,
         transfer_mode: DevToolsPrintToPdfTransferMode,
     },
@@ -238,9 +250,15 @@ enum PendingPageCommandKind {
     ContinueNavigationWithoutRequestPause(
         Box<navigation::PendingContinueNavigationWithoutRequestPauseCommand>,
     ),
-    StopLoading,
-    Crash,
-    Close,
+    StopLoading {
+        pending: Option<PendingDocumentLifecycleStop>,
+    },
+    Crash {
+        web_contents: Option<moli_core::browser::WebContentsHandle>,
+    },
+    Close {
+        web_contents: Option<moli_core::browser::WebContentsHandle>,
+    },
     CreateIsolatedWorld(preload::PendingCreateIsolatedWorldCommand),
 }
 
@@ -265,6 +283,7 @@ enum CompletedPageCommandKind {
     AddScriptToEvaluateOnNewDocument(preload::CompletedAddScriptToEvaluateOnNewDocumentCommand),
     GetFrameTree {
         output_kind: FrameTreeCommandOutputKind,
+        document: moli_core::browser::DocumentHandle,
         target_id: String,
         target_loader_id: String,
         target_url: String,
@@ -277,27 +296,26 @@ enum CompletedPageCommandKind {
     SearchInResource(Box<resource_search::CompletedSearchInResourceCommand>),
     GetAppManifest(Box<app_manifest::CompletedGetAppManifestCommand>),
     ResetNavigationHistory {
-        page: crate::conn::TargetPageResidenceIdentity,
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: CompletedNavigationHistoryReset,
     },
     SetDocumentContent {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: CompletedSetDocumentContent,
     },
     SetBypassContentSecurityPolicy {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: CompletedDocumentCspBypassUpdate,
     },
     SameDocumentNavigate(Box<navigation::CompletedSameDocumentNavigateCommand>),
     CaptureSnapshot {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: CompletedCaptureDocumentSnapshot,
     },
     GetLayoutMetrics {
         completed: Box<Result<CompletedPageCommand, String>>,
     },
     CaptureScreenshot {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: CompletedCaptureDocumentImage,
     },
     PrintToPdf {
-        completed: Box<Result<CompletedPageCommand, String>>,
+        completed: CompletedCaptureDocumentImage,
         options: pdf::RasterPdfOptions,
         transfer_mode: DevToolsPrintToPdfTransferMode,
     },
@@ -307,9 +325,15 @@ enum CompletedPageCommandKind {
     ContinueNavigationWithoutRequestPause(
         Box<navigation::CompletedContinueNavigationWithoutRequestPauseCommand>,
     ),
-    StopLoading,
-    Crash,
-    Close,
+    StopLoading {
+        completed: Option<CompletedDocumentLifecycleStop>,
+    },
+    Crash {
+        web_contents: Option<moli_core::browser::WebContentsHandle>,
+    },
+    Close {
+        web_contents: Option<moli_core::browser::WebContentsHandle>,
+    },
     CreateIsolatedWorld(Box<preload::CompletedCreateIsolatedWorldCommand>),
 }
 
@@ -328,25 +352,32 @@ impl CompletedPageCommandKind {
             Self::AppendDefaultDocumentStartScript { completed, .. }
             | Self::RemoveDocumentStartScript { completed }
             | Self::GetFrameTree { completed, .. }
-            | Self::ResetNavigationHistory { completed, .. }
-            | Self::SetDocumentContent { completed }
-            | Self::SetBypassContentSecurityPolicy { completed }
-            | Self::CaptureSnapshot { completed }
             | Self::GetLayoutMetrics { completed }
-            | Self::CaptureScreenshot { completed }
-            | Self::PrintToPdf { completed, .. } => direct(completed),
+            => direct(completed),
+            Self::ResetNavigationHistory { completed } => {
+                completed.renderer_output_predecessor()
+            }
+            Self::SetBypassContentSecurityPolicy { completed } => {
+                completed.renderer_output_predecessor()
+            }
+            Self::SetDocumentContent { completed } => completed.renderer_output_predecessor(),
+            Self::CaptureSnapshot { completed } => completed.renderer_output_predecessor(),
+            Self::CaptureScreenshot { completed }
+            | Self::PrintToPdf { completed, .. } => completed.renderer_output_predecessor(),
             Self::SearchInResource(completed) => completed.renderer_output_predecessor(),
             Self::GetAppManifest(completed) => completed.renderer_output_predecessor(),
             Self::SameDocumentNavigate(completed) => completed.renderer_output_predecessor(),
             Self::TraverseSameDocumentHistory(completed) => completed.renderer_output_predecessor(),
             Self::ChildFrameNavigate(completed) => completed.renderer_output_predecessor(),
+            Self::StopLoading { completed } => completed
+                .as_ref()
+                .and_then(CompletedDocumentLifecycleStop::renderer_output_predecessor),
             Self::BringToFront { .. }
             | Self::AddScriptToEvaluateOnNewDocument(_)
             | Self::Navigate(_)
             | Self::ContinueNavigationWithoutRequestPause(_)
-            | Self::StopLoading
-            | Self::Crash
-            | Self::Close
+            | Self::Crash { .. }
+            | Self::Close { .. }
             // createIsolatedWorld may restart on a replacement renderer attachment. Its
             // completion handler records the fence only after rejecting a stale completion,
             // so an abandoned stream cannot become the predecessor of the final response.
@@ -391,9 +422,9 @@ impl PendingPageCommandDispatch {
             | PendingPageCommandKind::TraverseSameDocumentHistory(_)
             | PendingPageCommandKind::ChildFrameNavigate(_)
             | PendingPageCommandKind::ContinueNavigationWithoutRequestPause(_)
-            | PendingPageCommandKind::StopLoading
-            | PendingPageCommandKind::Crash
-            | PendingPageCommandKind::Close
+            | PendingPageCommandKind::StopLoading { .. }
+            | PendingPageCommandKind::Crash { .. }
+            | PendingPageCommandKind::Close { .. }
             | PendingPageCommandKind::CreateIsolatedWorld(_) => None,
         }
     }
@@ -424,6 +455,7 @@ impl PendingPageCommandDispatch {
             }
             PendingPageCommandKind::GetFrameTree {
                 output_kind,
+                document,
                 target_id,
                 target_loader_id,
                 target_url,
@@ -434,6 +466,7 @@ impl PendingPageCommandDispatch {
                 pending,
             } => CompletedPageCommandKind::GetFrameTree {
                 output_kind,
+                document,
                 target_id,
                 target_loader_id,
                 target_url,
@@ -449,20 +482,19 @@ impl PendingPageCommandDispatch {
             PendingPageCommandKind::GetAppManifest(pending) => {
                 CompletedPageCommandKind::GetAppManifest(Box::new(pending.wait().await))
             }
-            PendingPageCommandKind::ResetNavigationHistory { page, pending } => {
+            PendingPageCommandKind::ResetNavigationHistory { pending } => {
                 CompletedPageCommandKind::ResetNavigationHistory {
-                    page,
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: pending.wait().await,
                 }
             }
             PendingPageCommandKind::SetDocumentContent { pending } => {
                 CompletedPageCommandKind::SetDocumentContent {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: pending.wait().await,
                 }
             }
             PendingPageCommandKind::SetBypassContentSecurityPolicy { pending } => {
                 CompletedPageCommandKind::SetBypassContentSecurityPolicy {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: pending.wait().await,
                 }
             }
             PendingPageCommandKind::SameDocumentNavigate(pending) => {
@@ -470,7 +502,7 @@ impl PendingPageCommandDispatch {
             }
             PendingPageCommandKind::CaptureSnapshot { pending } => {
                 CompletedPageCommandKind::CaptureSnapshot {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: pending.wait().await,
                 }
             }
             PendingPageCommandKind::GetLayoutMetrics { pending } => {
@@ -480,7 +512,7 @@ impl PendingPageCommandDispatch {
             }
             PendingPageCommandKind::CaptureScreenshot { pending } => {
                 CompletedPageCommandKind::CaptureScreenshot {
-                    completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                    completed: pending.wait().await,
                 }
             }
             PendingPageCommandKind::PrintToPdf {
@@ -488,7 +520,7 @@ impl PendingPageCommandDispatch {
                 options,
                 transfer_mode,
             } => CompletedPageCommandKind::PrintToPdf {
-                completed: Box::new(pending.wait().await.map_err(|error| error.to_string())),
+                completed: pending.wait().await,
                 options,
                 transfer_mode,
             },
@@ -508,9 +540,20 @@ impl PendingPageCommandDispatch {
                     pending.wait().await,
                 ))
             }
-            PendingPageCommandKind::StopLoading => CompletedPageCommandKind::StopLoading,
-            PendingPageCommandKind::Crash => CompletedPageCommandKind::Crash,
-            PendingPageCommandKind::Close => CompletedPageCommandKind::Close,
+            PendingPageCommandKind::StopLoading { pending } => {
+                CompletedPageCommandKind::StopLoading {
+                    completed: match pending {
+                        Some(pending) => Some(pending.wait().await),
+                        None => None,
+                    },
+                }
+            }
+            PendingPageCommandKind::Crash { web_contents } => {
+                CompletedPageCommandKind::Crash { web_contents }
+            }
+            PendingPageCommandKind::Close { web_contents } => {
+                CompletedPageCommandKind::Close { web_contents }
+            }
             PendingPageCommandKind::CreateIsolatedWorld(pending) => {
                 CompletedPageCommandKind::CreateIsolatedWorld(Box::new(pending.wait().await))
             }
@@ -1298,7 +1341,6 @@ impl PageOutputProjectionStep {
                 input::emit_download_activity_background_events_async(
                     conn,
                     &mut events,
-                    &owner,
                     prepared_outputs,
                     context.command,
                 )
@@ -1591,11 +1633,13 @@ fn disable_page_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutpu
     if !conn.disable_page_domain_for_session_owner(cmd.session_id) {
         return CommandOutputPlan::error(-31998, "BrowserContextNotLoaded");
     }
-    let dialog_handler_enabled = conn
+    let browser_context_id = conn
         .navigation_load_inputs_for_session_owner(cmd.session_id)
-        .renderer_runtime
-        .runtime()
-        .javascript_dialog_handler_enabled();
+        .browser_context_id;
+    let dialog_handler_enabled = browser_context_id
+        .as_deref()
+        .and_then(|id| conn.browser_context_by_id(id))
+        .is_some_and(crate::conn::BrowserContext::javascript_dialog_handler_enabled);
     if let Err(error) =
         start_set_javascript_dialog_handler_enabled(conn, cmd.session_id, dialog_handler_enabled)
     {
@@ -1613,23 +1657,10 @@ fn start_set_javascript_dialog_handler_enabled(
     enabled: bool,
 ) -> Result<(), String> {
     let owner = CommandOwnerScope::capture(conn, session_id);
-    let route = conn
-        .loaded_document_owner_identity_for_owner(&owner)
-        .or_else(|| {
-            let context = conn.browser_context.as_ref()?;
-            let target_id = context.active_target_id()?;
-            context
-                .target_has_loaded_page(target_id)
-                .then(|| (context.id.clone(), target_id.to_owned()))
-        });
-    if let Some((context_id, target_id)) = route
-        && let Some(context) = conn.browser_context_by_id(&context_id)
-    {
-        return context
-            .start_set_javascript_dialog_handler_enabled_for_target(&target_id, enabled)
-            .map(|_| ());
-    }
-    Ok(())
+    let Ok(document) = conn.loaded_browser_document_for_owner(&owner) else {
+        return Ok(());
+    };
+    conn.set_document_javascript_dialog_handler_enabled(document, enabled)
 }
 
 fn set_lifecycle_events_enabled_command(
@@ -1725,16 +1756,10 @@ fn try_start_set_bypass_csp_command(
         ));
     };
     let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
-    let Ok((page_context_id, page_target_id)) = conn.resolve_document_command_owner(&owner_scope)
-    else {
+    let Ok(document) = conn.resolve_browser_document_for_owner(&owner_scope) else {
         return PageCommandTaskStep::Complete(CommandOutputPlan::success());
     };
-    let page_context = conn
-        .browser_context_by_id(&page_context_id)
-        .expect("admitted document context remains registered");
-    match page_context
-        .start_set_bypass_content_security_policy_for_target(&page_target_id, effective_bypass)
-    {
+    match conn.start_document_csp_bypass_update(document, effective_bypass) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id: cmd.id,
             owner_scope,
@@ -1842,14 +1867,14 @@ pub struct PendingPageScreencastCapture {
     session_id: Option<String>,
     generation: i32,
     owner_scope: CommandOwnerScope,
-    pending: PendingPageCommand,
+    pending: Box<PendingCaptureDocumentScreencastFrame>,
 }
 
 pub struct CompletedPageScreencastCapture {
     session_id: Option<String>,
     generation: i32,
     owner_scope: CommandOwnerScope,
-    completed: Result<Box<CompletedPageCommand>, String>,
+    completed: CompletedCaptureDocumentScreencastFrame,
 }
 
 impl CompletedPageScreencastCapture {
@@ -1868,12 +1893,7 @@ impl PendingPageScreencastCapture {
             session_id: self.session_id,
             generation: self.generation,
             owner_scope: self.owner_scope,
-            completed: self
-                .pending
-                .wait()
-                .await
-                .map(Box::new)
-                .map_err(|error| error.to_string()),
+            completed: (*self.pending).wait().await,
         }
     }
 }
@@ -2023,12 +2043,8 @@ impl CdpConnection {
             max_height: config.max_height(),
             known_visual_state,
         };
-        let pending = match self.resolve_document_command_owner(&owner_scope) {
-            Ok((page_context_id, page_target_id)) => match self
-                .browser_context_by_id(&page_context_id)
-                .expect("admitted document context remains registered")
-                .start_capture_screencast_frame_for_target(&page_target_id, request)
-            {
+        let pending = match self.resolve_browser_document_for_owner(&owner_scope) {
+            Ok(document) => match self.start_capture_document_screencast_frame(document, request) {
                 Ok(pending) => pending,
                 Err(error) => {
                     tracing::debug!(?error, "failed to start screencast frame capture");
@@ -2049,7 +2065,7 @@ impl CdpConnection {
             session_id,
             generation,
             owner_scope,
-            pending,
+            pending: Box::new(pending),
         })
     }
 
@@ -2070,53 +2086,21 @@ impl CdpConnection {
             return PageScreencastCaptureCompletion::Stale;
         }
 
-        let frame = match completed {
-            Ok(completion) => {
-                let (page_context_id, page_target_id) =
-                    match self.resolve_document_command_owner(&owner_scope) {
-                        Ok(route) => route,
-                        Err(_) => {
-                            let _ = self.complete_page_screencast_capture_for_owner(
-                                &owner_scope,
-                                generation,
-                                false,
-                            );
-                            return PageScreencastCaptureCompletion::Retry;
-                        }
-                    };
-                let page_context = self
-                    .browser_context_by_id_mut(&page_context_id)
-                    .expect("admitted document context remains registered");
-                match page_context
-                    .finish_capture_screencast_frame_for_target(&page_target_id, *completion)
+        let frame = match self.finish_capture_document_screencast_frame(completed) {
+            Ok(RendererCaptureScreencastFrameReply::Captured(frame)) => frame,
+            Ok(RendererCaptureScreencastFrameReply::Unchanged) => {
+                if self.complete_page_screencast_capture_for_owner(&owner_scope, generation, false)
+                    != Some(true)
                 {
-                    Ok(RendererCaptureScreencastFrameReply::Captured(frame)) => frame,
-                    Ok(RendererCaptureScreencastFrameReply::Unchanged) => {
-                        if self.complete_page_screencast_capture_for_owner(
-                            &owner_scope,
-                            generation,
-                            false,
-                        ) != Some(true)
-                        {
-                            return PageScreencastCaptureCompletion::Stale;
-                        }
-                        return PageScreencastCaptureCompletion::Unchanged;
-                    }
-                    Ok(
-                        RendererCaptureScreencastFrameReply::LayoutDisabled
-                        | RendererCaptureScreencastFrameReply::NoDocument,
-                    )
-                    | Err(_) => {
-                        let _ = self.complete_page_screencast_capture_for_owner(
-                            &owner_scope,
-                            generation,
-                            false,
-                        );
-                        return PageScreencastCaptureCompletion::Retry;
-                    }
+                    return PageScreencastCaptureCompletion::Stale;
                 }
+                return PageScreencastCaptureCompletion::Unchanged;
             }
-            Err(_) => {
+            Ok(
+                RendererCaptureScreencastFrameReply::LayoutDisabled
+                | RendererCaptureScreencastFrameReply::NoDocument,
+            )
+            | Err(_) => {
                 let _ = self.complete_page_screencast_capture_for_owner(
                     &owner_scope,
                     generation,
@@ -2529,9 +2513,7 @@ mod producer_tests {
     };
     use serde_json::{Value, json};
 
-    use crate::conn::{
-        BackgroundProtocolEvent, BrowserContext, CdpConnection, CdpTargetFilter, CommandOwnerScope,
-    };
+    use crate::conn::{BackgroundProtocolEvent, CdpConnection, CdpTargetFilter, CommandOwnerScope};
     use crate::devtools_runtime::{AutomationEvent, NavigationFrameEventKind};
     use crate::domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext};
     use crate::domains::input::{InputPreparedOutputSlot, InputPreparedOutputs};
@@ -2587,13 +2569,18 @@ mod producer_tests {
         assert!(initial_events.is_empty());
     }
 
-    fn page_residence_identity_for_test(
+    async fn page_residence_identity_for_test(
         conn: &mut CdpConnection,
         session_id: &str,
     ) -> crate::conn::TargetPageResidenceIdentity {
         let owner = crate::conn::CommandOwnerScope::capture(conn, Some(session_id));
-        if conn.current_document_id_for_owner(&owner).is_none() {
-            conn.replace_document_fixture_for_owner_test(&owner);
+        if conn.resolve_browser_document_for_owner(&owner).is_err() {
+            conn.install_navigation_fixture_for_session_owner_for_test(
+                "about:blank",
+                Some(session_id),
+            )
+            .await
+            .expect("test target should materialize an exact Browser Document");
         }
         conn.target_page_residence_identity_for_session(Some(session_id))
             .expect("test target should expose a Page residence identity")
@@ -2733,7 +2720,7 @@ mod producer_tests {
         url: &str,
     ) -> TestContext {
         let mut ctx = TestContext::new();
-        let mut context = BrowserContext::new(context_id.into());
+        let mut context = ctx.conn.new_browser_context_fixture_for_test(context_id);
         context.set_active_target_id(target_id);
         context.attach_active_session(session_id);
         ctx.conn.install_browser_context_fixture_for_test(context);
@@ -2816,12 +2803,12 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active");
         bc.attach_active_session("SID-1");
         conn.install_browser_context_fixture_for_test(bc);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-1");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-1").await;
         let source_document = renderer_document_identity_for_test(1, 1);
         let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
         let mut prepared =
@@ -2882,8 +2869,9 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_dialog_output_stays_with_its_exact_protocol_attachment() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-dialog-attachment".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-dialog-attachment");
         browser_context.set_active_target_id("TID-dialog-attachment");
         browser_context.attach_active_session("SID-primary");
         assert!(
@@ -2893,7 +2881,7 @@ mod producer_tests {
             )
         );
         conn.install_browser_context_fixture_for_test(browser_context);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-attached");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-attached").await;
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
@@ -2941,8 +2929,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn detached_source_attachment_dismisses_prepared_child_dialog() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-dialog-detached".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-dialog-detached");
         browser_context.set_active_target_id("TID-dialog-detached");
         browser_context.attach_active_session("SID-primary");
         assert!(
@@ -2956,7 +2944,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
-                    page_residence_identity_for_test(&mut conn, "SID-detached"),
+                    page_residence_identity_for_test(&mut conn, "SID-detached").await,
                     Some("SID-detached"),
                     javascript_dialog_scope_for_test(&conn, "SID-detached"),
                     "TID-dialog-detached",
@@ -2997,8 +2985,9 @@ mod producer_tests {
     async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
         const POPUP_ID: u64 = 76;
 
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-popup-stale-source".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-popup-stale-source");
         browser_context.set_active_target_id("TID-popup-stale-source");
         browser_context.attach_active_session("SID-primary");
         assert!(
@@ -3009,7 +2998,7 @@ mod producer_tests {
         );
         conn.install_browser_context_fixture_for_test(browser_context);
         conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach());
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-source");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-source").await;
         let source_document = renderer_document_identity_for_test(1, 1);
         let completion = RendererJavaScriptDialogCompletion::pending();
         let mut dialog_output =
@@ -3094,13 +3083,13 @@ mod producer_tests {
     async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
         const POPUP_ID: u64 = 77;
 
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-popup-dialog".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-popup-dialog");
         browser_context.set_active_target_id("TID-opener");
         browser_context.attach_active_session("SID-opener");
         conn.install_browser_context_fixture_for_test(browser_context);
         conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach());
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener").await;
         let source_dialog_scope = javascript_dialog_scope_for_test(&conn, "SID-opener");
         let source_document = renderer_document_identity_for_test(1, 1);
         let completion = RendererJavaScriptDialogCompletion::pending();
@@ -3248,12 +3237,12 @@ mod producer_tests {
     async fn unattached_popup_dialog_is_dismissed_without_opener_fallback() {
         const POPUP_ID: u64 = 78;
 
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-popup-no-session".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-popup-no-session");
         browser_context.set_active_target_id("TID-opener-no-session");
         browser_context.attach_active_session("SID-opener-no-session");
         conn.install_browser_context_fixture_for_test(browser_context);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener-no-session");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener-no-session").await;
         let source_document = renderer_document_identity_for_test(1, 1);
         let completion = RendererJavaScriptDialogCompletion::pending();
         let mut prepared =
@@ -3323,8 +3312,8 @@ mod producer_tests {
 
     #[test]
     fn renderer_document_epoch_change_retires_page_dialog_scope_once() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-dialog-epoch".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-dialog-epoch");
         bc.set_active_target_id("TID-dialog-epoch");
         bc.attach_active_session("SID-dialog-epoch");
         conn.install_browser_context_fixture_for_test(bc);
@@ -3370,12 +3359,12 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn javascript_dialog_prepared_action_dismisses_replacement_page_output() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-dialog-stale-page".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-dialog-stale-page");
         bc.set_active_target_id("TID-dialog-stale-page");
         bc.attach_active_session("SID-dialog-stale-page");
         conn.install_browser_context_fixture_for_test(bc);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-stale-page");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-stale-page").await;
         let completion = moli_core::page::RendererJavaScriptDialogCompletion::pending();
         let dialog = renderer_javascript_dialog_for_test(
             renderer_document_identity_for_test(1, 1),
@@ -3424,12 +3413,12 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn javascript_dialog_prepared_action_dismisses_retired_dialog_scope() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-dialog-generation".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-dialog-generation");
         bc.set_active_target_id("TID-dialog-generation");
         bc.attach_active_session("SID-dialog-generation");
         conn.install_browser_context_fixture_for_test(bc);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-generation");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-generation").await;
         let completion = moli_core::page::RendererJavaScriptDialogCompletion::pending();
         let dialog = renderer_javascript_dialog_for_test(
             renderer_document_identity_for_test(1, 1),
@@ -3471,13 +3460,13 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn javascript_dialog_projection_uses_captured_url_and_frame() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-dialog-source".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-dialog-source");
         bc.set_active_target_id("TID-dialog-source");
         bc.set_target_url("https://example.test/current-before-capture".to_owned());
         bc.attach_active_session("SID-dialog-source");
         conn.install_browser_context_fixture_for_test(bc);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-source");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-source").await;
         let dialog = RendererPendingJavaScriptDialog::new(
             RendererJavaScriptDialogId::new(9),
             renderer_document_identity_for_test(2, 3),
@@ -3526,7 +3515,7 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
         conn.configure_download_policy(
             None,
@@ -3537,7 +3526,7 @@ mod producer_tests {
             Some(true),
         )
         .unwrap();
-        let mut bc = BrowserContext::new("BID-activity-order".into());
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-activity-order");
         bc.set_active_target_id("TID-activity-order");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-activity-order");
@@ -3553,7 +3542,8 @@ mod producer_tests {
             "TID-activity-order",
             source_document,
         );
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-activity-order");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-activity-order").await;
+        let download_owner = CommandOwnerScope::for_session("SID-activity-order");
 
         let mut prepared =
             ProtocolOutputPayloads::from_slot(InputPreparedOutputSlot::from_outputs(
@@ -3570,13 +3560,15 @@ mod producer_tests {
             ));
         prepared.extend_payload(
             InputPreparedOutputSlot::from_outputs(
-                InputPreparedOutputs::from_download_activations_for_test(vec![
-                    RendererPendingDownloadActivation {
+                InputPreparedOutputs::from_download_activations_for_test(
+                    &conn,
+                    &download_owner,
+                    vec![RendererPendingDownloadActivation {
                         url: "https://example.test/report.txt".to_owned(),
                         suggested_filename: Some("report.txt".to_owned()),
                         response: None,
-                    },
-                ]),
+                    }],
+                ),
             )
             .into(),
         );
@@ -3729,7 +3721,7 @@ mod producer_tests {
         prepared.extend_payload(
             super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_same_document_navigations_for_test(
-                    page_residence_identity_for_test(conn, "SID-later-activity-order"),
+                    page_residence_identity_for_test(conn, "SID-later-activity-order").await,
                     vec![document_sourced_same_document_navigation_for_test(
                         source_document,
                         "https://example.test/page#ordered",
@@ -3741,7 +3733,7 @@ mod producer_tests {
         prepared.extend_payload(
             super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_top_level_location_navigation_for_test(
-                    page_residence_identity_for_test(conn, "SID-later-activity-order"),
+                    page_residence_identity_for_test(conn, "SID-later-activity-order").await,
                     Some(RendererDocumentSourcedTopLevelLocationNavigation::new(
                         source_document,
                         "data:text/html,%3Cmain%3Eordered-location%3C/main%3E".to_owned(),
@@ -3860,8 +3852,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn browser_initiated_child_frame_completion_omits_renderer_request_events() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -3944,8 +3936,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_frame_activity_emits_navigation_before_init_before_lifecycle_terminal() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -4017,8 +4009,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_frame_activity_fans_out_page_events_to_enabled_attached_session() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-child-page-fanout".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-child-page-fanout");
         bc.set_active_target_id("TID-child-page-fanout");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-primary");
@@ -4084,8 +4076,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_frame_activity_projects_sandboxed_about_blank_from_document_url() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://top.example/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -4149,8 +4141,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_frame_activity_emits_document_network_events_from_prepared_load() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -4291,8 +4283,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn stale_child_document_response_emits_network_without_navigation_or_lifecycle() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -4418,8 +4410,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_document_network_without_body_records_known_no_data() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         conn.install_browser_context_fixture_for_test(bc);
@@ -4471,8 +4463,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -4557,8 +4549,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_child_frame_activity_does_not_follow_replacement_page_residence() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-child-page-owner".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-child-page-owner");
         browser_context.set_active_target_id("TID-child-page-owner");
         browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-page-owner");
@@ -4595,8 +4587,9 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_child_frame_activity_does_not_follow_root_document_open_replacement() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-child-root-document".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-child-root-document");
         browser_context.set_active_target_id("TID-child-root-document");
         browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-root-document");
@@ -4635,8 +4628,9 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_child_frame_activity_keeps_root_document_route_until_delivery() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-child-delivery-route".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-child-delivery-route");
         browser_context.set_active_target_id("TID-child-delivery-route");
         browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-delivery-route");
@@ -4686,8 +4680,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_child_frame_activity_does_not_follow_detached_protocol_session() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-child-session".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-child-session");
         browser_context.set_active_target_id("TID-child-session");
         browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-session");
@@ -4729,8 +4723,8 @@ mod producer_tests {
 
     #[test]
     fn child_frame_tree_emission_deduplicates_attach_and_removes_owner_state_on_detach() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("about:blank".to_owned());
         bc.attach_active_session("SID-1");
@@ -4791,8 +4785,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_frame_activity_drain_requires_prepared_output() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -4813,13 +4807,13 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn popup_activation_creates_target_and_schedules_navigation_without_page_readback() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active");
         bc.attach_active_session("SID-1");
         conn.install_browser_context_fixture_for_test(bc);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-1");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-1").await;
         let source_document = renderer_document_identity_for_test(1, 1);
         let mut out = Vec::new();
         let mut prepared =
@@ -4883,7 +4877,7 @@ mod producer_tests {
                     .background_targets()
                     .next()
                     .and_then(|target| context.target_document_url(target.target_id()))
-                    .is_some_and(moli_url::is_about_blank)
+                    .is_some_and(|url| moli_url::is_about_blank(&url))
             },
             "target creation should install only the initial empty Document"
         );
@@ -4898,12 +4892,12 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn popup_activation_publishes_automation_lifecycle_without_cdp_discovery() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-automation".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-automation");
         bc.set_active_target_id("TID-opener");
         bc.attach_active_session("SID-opener");
         conn.install_browser_context_fixture_for_test(bc);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener").await;
         let source_document = renderer_document_identity_for_test(1, 1);
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
@@ -5024,7 +5018,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_same_document_navigations_for_test(
-                    page_residence_identity_for_test(conn, "SID-1"),
+                    page_residence_identity_for_test(conn, "SID-1").await,
                     vec![document_sourced_same_document_navigation_for_test(
                         source_document,
                         "https://example.test/page#prepared",
@@ -5182,7 +5176,8 @@ mod producer_tests {
             .target_root_document_lifecycle_identity_for_owner(&session)
             .unwrap();
         let owner =
-            page_residence_identity_for_test(&mut ctx.conn, "SID-document-open-same-document");
+            page_residence_identity_for_test(&mut ctx.conn, "SID-document-open-same-document")
+                .await;
         ctx.process_async(json!({"id": 810, "sessionId": "SID-document-open-same-document",
             "method": "Runtime.evaluate", "params": {"expression": "document.open(); document.write('<title>replacement</title>'); document.close()"}
         })).await;
@@ -5226,8 +5221,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn stale_page_residence_same_document_navigation_cannot_mutate_replacement() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-stale-page-same-document".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-stale-page-same-document");
         bc.set_active_target_id("TID-stale-page-same-document");
         bc.set_target_url("https://example.test/replacement".to_owned());
         bc.attach_active_session("SID-stale-page-same-document");
@@ -5240,7 +5235,12 @@ mod producer_tests {
             "TID-stale-page-same-document",
             source_document,
         );
-        let owner = page_residence_identity_for_test(&mut conn, "SID-stale-page-same-document");
+        let owner =
+            page_residence_identity_for_test(&mut conn, "SID-stale-page-same-document").await;
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .set_target_url("https://example.test/replacement".to_owned());
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-stale-page-same-document"),
@@ -5276,8 +5276,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_top_level_location_navigation_waits_for_its_scheduler_turn() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-location".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-location");
         bc.set_active_target_id("TID-location");
         bc.set_target_url("about:blank".to_owned());
         bc.attach_active_session("SID-location");
@@ -5289,7 +5289,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_top_level_location_navigation_for_test(
-                    page_residence_identity_for_test(&mut conn, "SID-location"),
+                    page_residence_identity_for_test(&mut conn, "SID-location").await,
                     Some(RendererDocumentSourcedTopLevelLocationNavigation::new(
                         source_document,
                         target_url.clone(),
@@ -5350,8 +5350,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn document_open_replacement_keeps_requested_top_level_navigation() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-document-open-location".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-document-open-location");
         bc.set_active_target_id("TID-document-open-location");
         bc.set_target_url("https://example.test/source".to_owned());
         bc.attach_active_session("SID-document-open-location");
@@ -5365,7 +5365,7 @@ mod producer_tests {
             "TID-document-open-location",
             source_document,
         );
-        let owner = page_residence_identity_for_test(&mut conn, "SID-document-open-location");
+        let owner = page_residence_identity_for_test(&mut conn, "SID-document-open-location").await;
         bind_renderer_document_for_test(
             &mut conn,
             "SID-document-open-location",
@@ -5415,8 +5415,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn stale_page_residence_top_level_navigation_cannot_replace_current_page() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-stale-page-location".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-stale-page-location");
         bc.set_active_target_id("TID-stale-page-location");
         bc.set_target_url("https://example.test/replacement".to_owned());
         bc.attach_active_session("SID-stale-page-location");
@@ -5429,7 +5429,11 @@ mod producer_tests {
             "TID-stale-page-location",
             source_document,
         );
-        let owner = page_residence_identity_for_test(&mut conn, "SID-stale-page-location");
+        let owner = page_residence_identity_for_test(&mut conn, "SID-stale-page-location").await;
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .set_target_url("https://example.test/replacement".to_owned());
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-stale-page-location"),
@@ -5796,21 +5800,17 @@ fn try_start_page_capture_snapshot_command(
             "unsupported snapshot format.",
         ));
     }
-    let (page_context_id, page_target_id) = match conn
-        .resolve_document_command_owner(&CommandOwnerScope::capture(conn, cmd.session_id))
-    {
-        Ok(route) => route,
+    let owner_scope = CommandOwnerScope::capture(conn, cmd.session_id);
+    let document = match conn.resolve_browser_document_for_owner(&owner_scope) {
+        Ok(document) => document,
         Err(message) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
         }
     };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("admitted document context remains registered");
-    match page_context.start_serialize_html_for_target(&page_target_id) {
+    match conn.start_capture_document_snapshot(document) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id: cmd.id,
-            owner_scope: CommandOwnerScope::capture(conn, cmd.session_id),
+            owner_scope,
             kind: Box::new(PendingPageCommandKind::CaptureSnapshot { pending }),
         }),
         Err(error) => PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -6426,9 +6426,7 @@ async fn devtools_frame_tree_for_current_owner_async(
             Vec::new(),
         ));
     }
-    let Some((page_context_id, page_target_id)) =
-        conn.loaded_document_owner_identity_for_owner(owner)
-    else {
+    let Ok(document) = conn.resolve_browser_document_for_owner(owner) else {
         return Ok(frame_tree_payload(
             target_id,
             target_loader_id,
@@ -6441,10 +6439,9 @@ async fn devtools_frame_tree_for_current_owner_async(
         ));
     };
     let target_mime_type = main_document_mime_type(
-        conn.browser_context_by_id(&page_context_id)
-            .expect("resolved document context remains registered")
-            .target_response_headers(&page_target_id)
-            .expect("loaded document headers"),
+        &conn
+            .document_response_headers(document)
+            .map_err(devtools_frame_tree_error)?,
     );
     let inspector_session_id = conn.target_renderer_runtime_inspector_session_id_for_owner(owner);
     let pending = conn
@@ -6765,25 +6762,20 @@ fn try_start_page_set_document_content_command(
     if let Err(message) = conn.ensure_document_accessible_for_session_owner(session_id) {
         return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
     }
-    let Some((page_context_id, page_target_id)) = conn
-        .loaded_document_owner_identity_for_owner(&CommandOwnerScope::capture(conn, session_id))
-    else {
-        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-            -32000,
-            "No Document instance to set HTML for",
-        ));
+    let owner_scope = CommandOwnerScope::capture(conn, session_id);
+    let document = match conn.loaded_browser_document_for_owner(&owner_scope) {
+        Ok(document) => document,
+        Err(_) => {
+            return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32000,
+                "No Document instance to set HTML for",
+            ));
+        }
     };
-    let page_context = conn
-        .browser_context_by_id(&page_context_id)
-        .expect("resolved document context remains registered");
-    match page_context.start_set_document_content_for_target(
-        &page_target_id,
-        params.frame_id.into(),
-        params.html,
-    ) {
+    match conn.start_set_document_content(document, params.frame_id.into(), params.html) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id: cmd.id,
-            owner_scope: CommandOwnerScope::capture(conn, session_id),
+            owner_scope,
             kind: Box::new(PendingPageCommandKind::SetDocumentContent { pending }),
         }),
         Err(error) => PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -6885,16 +6877,12 @@ fn start_devtools_capture_screenshot_command(
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let owner_scope = CommandOwnerScope::capture(conn, session_id);
     let base_background_color = conn.default_background_color_for_owner(&owner_scope);
-    let (page_context_id, page_target_id) =
-        match conn.resolve_document_command_owner(&CommandOwnerScope::capture(conn, session_id)) {
-            Ok(route) => route,
-            Err(message) => {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-            }
-        };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("admitted document context remains registered");
+    let document = match conn.resolve_browser_document_for_owner(&owner_scope) {
+        Ok(document) => document,
+        Err(message) => {
+            return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+        }
+    };
     let format = match command.format.as_deref() {
         None | Some("png") => RendererScreenshotFormat::Png,
         Some("jpeg") => RendererScreenshotFormat::Jpeg,
@@ -6938,7 +6926,7 @@ fn start_devtools_capture_screenshot_command(
         max_width: None,
         max_height: None,
     };
-    match page_context.start_capture_screenshot_with_request_for_target(&page_target_id, request) {
+    match conn.start_capture_document_image(document, request) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
             owner_scope,
@@ -6984,16 +6972,12 @@ fn start_devtools_print_to_pdf_command(
         .unwrap_or(DevToolsPrintToPdfTransferMode::ReturnAsBase64);
     let session_id = command.context.session_id.as_ref().map(|id| id.as_str());
     let owner_scope = CommandOwnerScope::capture(conn, session_id);
-    let (page_context_id, page_target_id) =
-        match conn.resolve_document_command_owner(&CommandOwnerScope::capture(conn, session_id)) {
-            Ok(route) => route,
-            Err(message) => {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
-            }
-        };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("admitted document context remains registered");
+    let document = match conn.resolve_browser_document_for_owner(&owner_scope) {
+        Ok(document) => document,
+        Err(message) => {
+            return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
+        }
+    };
     let request = RendererCaptureScreenshotRequest {
         base_background_color: [255; 4],
         purpose: RendererScreenshotPurpose::Print {
@@ -7006,7 +6990,7 @@ fn start_devtools_print_to_pdf_command(
         max_width: None,
         max_height: None,
     };
-    match page_context.start_capture_screenshot_with_request_for_target(&page_target_id, request) {
+    match conn.start_capture_document_image(document, request) {
         Ok(pending) => PageCommandTaskStep::Pending(PendingPageCommandDispatch {
             command_id,
             owner_scope,
@@ -7076,9 +7060,7 @@ fn start_devtools_get_frame_tree_command(
             &[],
         ));
     }
-    let Some((page_context_id, page_target_id)) =
-        conn.loaded_document_owner_identity_for_owner(&owner)
-    else {
+    let Ok(document) = conn.resolve_browser_document_for_owner(&owner) else {
         return PageCommandTaskStep::Complete(get_frame_tree_command_output_plan(
             output_kind,
             target_id,
@@ -7092,14 +7074,12 @@ fn start_devtools_get_frame_tree_command(
             &[],
         ));
     };
-    let page_context = conn
-        .browser_context_by_id_mut(&page_context_id)
-        .expect("resolved document context remains registered");
-    let target_mime_type = main_document_mime_type(
-        page_context
-            .target_response_headers(&page_target_id)
-            .expect("loaded document headers"),
-    );
+    let target_mime_type = match conn.document_response_headers(document) {
+        Ok(headers) => main_document_mime_type(&headers),
+        Err(error) => {
+            return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
+        }
+    };
     let inspector_session_id = conn.target_renderer_runtime_inspector_session_id_for_owner(&owner);
     let pending = conn
         .renderer_inspection_binding_for_owner(&owner, RendererInspectorCommandRoute::MainThread)
@@ -7116,6 +7096,7 @@ fn start_devtools_get_frame_tree_command(
             owner_scope: owner,
             kind: Box::new(PendingPageCommandKind::GetFrameTree {
                 output_kind,
+                document,
                 target_id,
                 target_loader_id,
                 target_url,
@@ -7142,7 +7123,7 @@ mod protocol_neutral_tests {
     };
     use serde_json::{Value, json};
 
-    use crate::conn::{CdpConnection, Cmd};
+    use crate::conn::Cmd;
 
     use super::{
         PageCommandTaskStep, build_cdp_capture_screenshot_command,
@@ -7153,7 +7134,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_frame_tree_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(120),
@@ -7176,7 +7157,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_routes_get_frame_tree_command_to_page_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(121),
@@ -7202,7 +7183,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_layout_metrics_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(122),
@@ -7225,7 +7206,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_routes_get_layout_metrics_command_to_page_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(123),
@@ -7254,7 +7235,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_handle_javascript_dialog_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "accept": false,
             "promptText": "typed text"
@@ -7283,7 +7264,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_routes_handle_javascript_dialog_command_to_page_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "accept": true
         });
@@ -7317,7 +7298,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_capture_screenshot_builds_requested_capture_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "format": "png",
             "quality": 100,
@@ -7352,7 +7333,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_capture_screenshot_preserves_page_clip() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "format": "png",
             "clip": {
@@ -7387,7 +7368,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_rejects_unsupported_capture_screenshot_format() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "format": "webp"
         });
@@ -7413,7 +7394,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_capture_screenshot_rejects_invalid_quality_and_clip() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         for (id, params, expected_message) in [
             (
                 132,
@@ -7454,7 +7435,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_validates_capture_screenshot_target_before_unsupported() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let command = DevToolsCaptureScreenshotCommand {
             context: DevToolsCommandContext {
                 protocol: DevToolsProtocol::WebDriverBidi,
@@ -7487,7 +7468,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_print_to_pdf_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "landscape": true,
             "printBackground": true,
@@ -7537,7 +7518,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_reports_layout_disabled_without_placeholder_payload() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(130),
@@ -7571,7 +7552,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_validates_print_to_pdf_target_before_unsupported() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let command = DevToolsPrintToPdfCommand {
             context: DevToolsCommandContext {
                 protocol: DevToolsProtocol::WebDriverBidi,
@@ -7769,8 +7750,8 @@ pub(crate) async fn complete_pending_page_command(
                 command_context,
             );
         }
-        CompletedPageCommandKind::ResetNavigationHistory { page, completed } => {
-            return navigation::complete_reset_navigation_history_command(conn, &page, *completed);
+        CompletedPageCommandKind::ResetNavigationHistory { completed } => {
+            return navigation::complete_reset_navigation_history_command(conn, completed);
         }
         CompletedPageCommandKind::AddScriptToEvaluateOnNewDocument(completed) => {
             return preload::complete_pending_add_script_to_evaluate_on_new_document_command(
@@ -7783,28 +7764,7 @@ pub(crate) async fn complete_pending_page_command(
             .await;
         }
         CompletedPageCommandKind::SetBypassContentSecurityPolicy { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            let Some((page_context_id, page_target_id)) =
-                conn.loaded_document_owner_identity_for_owner(&owner_scope)
-            else {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "NoDocumentLoaded",
-                ));
-            };
-            let page_context = conn
-                .browser_context_by_id_mut(&page_context_id)
-                .expect("resolved document context remains registered");
-            if let Err(error) = page_context
-                .finish_set_bypass_content_security_policy_for_target(&page_target_id, completion)
-            {
+            if let Err(error) = conn.finish_document_csp_bypass_update(completed) {
                 return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                     -32000,
                     error.to_string(),
@@ -7813,37 +7773,13 @@ pub(crate) async fn complete_pending_page_command(
             CommandOutputPlan::success()
         }
         CompletedPageCommandKind::SetDocumentContent { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
-            let (result, output) = {
-                let Some((page_context_id, page_target_id)) =
-                    conn.loaded_document_owner_identity_for_owner(&owner_scope)
-                else {
+            let (result, output) = match conn.finish_set_document_content(completed) {
+                Ok(completed) => completed,
+                Err(error) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
-                        "No Document instance to set HTML for",
+                        error.to_string(),
                     ));
-                };
-                let page_context = conn
-                    .browser_context_by_id_mut(&page_context_id)
-                    .expect("resolved document context remains registered");
-                match page_context.finish_set_document_content_command_turn_for_target(
-                    &page_target_id,
-                    completion,
-                ) {
-                    Ok(completed) => completed,
-                    Err(error) => {
-                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                            -32000,
-                            error.to_string(),
-                        ));
-                    }
                 }
             };
             command_context.consume_renderer_command_turn_output(output);
@@ -7862,7 +7798,6 @@ pub(crate) async fn complete_pending_page_command(
         CompletedPageCommandKind::SameDocumentNavigate(completed) => {
             return navigation::complete_pending_same_document_navigate_command(
                 conn,
-                &owner_scope,
                 *completed,
                 command_context,
             )
@@ -7870,6 +7805,7 @@ pub(crate) async fn complete_pending_page_command(
         }
         CompletedPageCommandKind::GetFrameTree {
             output_kind,
+            document,
             target_id,
             target_loader_id,
             target_url,
@@ -7896,22 +7832,30 @@ pub(crate) async fn complete_pending_page_command(
                     &[],
                 ));
             }
-            let Some((page_context_id, page_target_id)) =
-                conn.loaded_document_owner_identity_for_owner(&owner_scope)
-            else {
-                return PageCommandTaskStep::Complete(get_frame_tree_command_output_plan(
-                    output_kind,
-                    target_id,
-                    target_loader_id,
-                    target_url,
-                    target_unreachable_url,
-                    target_security_origin,
-                    target_secure_context_type,
-                    target_mime_type,
-                    Vec::new(),
-                    &[],
-                ));
-            };
+            match conn.ensure_browser_document_current(document) {
+                Ok(()) => {}
+                Err(message)
+                    if matches!(message.as_str(), "Document changed" | "NoDocumentLoaded") =>
+                {
+                    return PageCommandTaskStep::Complete(get_frame_tree_command_output_plan(
+                        output_kind,
+                        target_id,
+                        target_loader_id,
+                        target_url,
+                        target_unreachable_url,
+                        target_security_origin,
+                        target_secure_context_type,
+                        target_mime_type,
+                        Vec::new(),
+                        &[],
+                    ));
+                }
+                Err(message) => {
+                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                        -32000, message,
+                    ));
+                }
+            }
             let child_frames = match *completed {
                 Ok(completion) => {
                     if let Err(message) =
@@ -7938,9 +7882,14 @@ pub(crate) async fn complete_pending_page_command(
                     ));
                 }
             };
-            let page_context = conn
-                .browser_context_by_id(&page_context_id)
-                .expect("resolved document context remains registered");
+            let resource_records = match conn.document_subresource_network_records(document) {
+                Ok(records) => records,
+                Err(message) => {
+                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
+                        -32000, message,
+                    ));
+                }
+            };
             get_frame_tree_command_output_plan(
                 output_kind,
                 target_id,
@@ -7951,48 +7900,22 @@ pub(crate) async fn complete_pending_page_command(
                 target_secure_context_type,
                 target_mime_type,
                 child_frames,
-                page_context
-                    .target_subresource_network_records(&page_target_id)
-                    .expect("loaded document resource records"),
+                &resource_records,
             )
         }
         CompletedPageCommandKind::CaptureSnapshot { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
+            let snapshot = match conn.finish_capture_document_snapshot(completed) {
+                Ok(snapshot) => snapshot,
+                Err(error) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
-                        format!("Failed to serialize page snapshot: {message}"),
+                        format!("Failed to serialize page snapshot: {error}"),
                     ));
                 }
             };
-            let Some((page_context_id, page_target_id)) =
-                conn.loaded_document_owner_identity_for_owner(&owner_scope)
-            else {
-                return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    "NoDocumentLoaded",
-                ));
-            };
-            let page_context = conn
-                .browser_context_by_id_mut(&page_context_id)
-                .expect("resolved document context remains registered");
-            let html =
-                match page_context.finish_serialize_html_for_target(&page_target_id, completion) {
-                    Ok(html) => html,
-                    Err(error) => {
-                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                            -32000,
-                            format!("Failed to serialize page snapshot: {error}"),
-                        ));
-                    }
-                };
-            let url = page_context
-                .target_document_url(&page_target_id)
-                .expect("loaded document URL")
-                .as_str()
-                .to_owned();
-            CommandOutputPlan::result(json!({ "data": build_mhtml_snapshot(&url, &html) }))
+            CommandOutputPlan::result(json!({
+                "data": build_mhtml_snapshot(&snapshot.url, &snapshot.html),
+            }))
         }
         CompletedPageCommandKind::GetLayoutMetrics { completed } => {
             let completion = match *completed {
@@ -8022,28 +7945,7 @@ pub(crate) async fn complete_pending_page_command(
             }
         }
         CompletedPageCommandKind::CaptureScreenshot { completed } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to capture page screenshot: {message}"),
-                    ));
-                }
-            };
-            let (page_context_id, page_target_id) =
-                match conn.resolve_document_command_owner(&owner_scope) {
-                    Ok(route) => route,
-                    Err(message) => {
-                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                            -32000, message,
-                        ));
-                    }
-                };
-            let page_context = conn
-                .browser_context_by_id_mut(&page_context_id)
-                .expect("admitted document context remains registered");
-            match page_context.finish_capture_screenshot_for_target(&page_target_id, completion) {
+            match conn.finish_capture_document_image(completed) {
                 Ok(RendererCaptureScreenshotReply::Captured(image)) => {
                     CommandOutputPlan::from_devtools_result(
                         DevToolsCommandResult::CaptureScreenshot(DevToolsCaptureScreenshotResult {
@@ -8062,7 +7964,10 @@ pub(crate) async fn complete_pending_page_command(
                 }
                 Err(error) => CommandOutputPlan::error(
                     -32000,
-                    format!("Failed to capture page screenshot: {error}"),
+                    format!(
+                        "Failed to capture page screenshot: {}",
+                        capture_document_image_error(error)
+                    ),
                 ),
             }
         }
@@ -8071,30 +7976,7 @@ pub(crate) async fn complete_pending_page_command(
             options,
             transfer_mode,
         } => {
-            let completion = match *completed {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to capture PDF content: {message}"),
-                    ));
-                }
-            };
-            let (page_context_id, page_target_id) =
-                match conn.resolve_document_command_owner(&owner_scope) {
-                    Ok(route) => route,
-                    Err(message) => {
-                        return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                            -32000, message,
-                        ));
-                    }
-                };
-            let page_context = conn
-                .browser_context_by_id_mut(&page_context_id)
-                .expect("admitted document context remains registered");
-            let image = match page_context
-                .finish_capture_screenshot_for_target(&page_target_id, completion)
-            {
+            let image = match conn.finish_capture_document_image(completed) {
                 Ok(RendererCaptureScreenshotReply::Captured(image)) => image,
                 Ok(RendererCaptureScreenshotReply::LayoutDisabled) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -8111,7 +7993,10 @@ pub(crate) async fn complete_pending_page_command(
                 Err(error) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
                         -32000,
-                        format!("Failed to capture PDF content: {error}"),
+                        format!(
+                            "Failed to capture PDF content: {}",
+                            capture_document_image_error(error)
+                        ),
                     ));
                 }
             };
@@ -8198,28 +8083,32 @@ pub(crate) async fn complete_pending_page_command(
             )
             .await;
         }
-        CompletedPageCommandKind::StopLoading => {
+        CompletedPageCommandKind::StopLoading { completed } => {
             return termination::complete_stop_loading_command_dispatch(
                 conn,
                 command_id,
                 &owner_scope,
-            )
-            .await;
-        }
-        CompletedPageCommandKind::Crash => {
-            return termination::complete_crash_command_dispatch(
-                conn,
-                command_id,
-                &owner_scope,
+                completed,
                 command_context,
             )
             .await;
         }
-        CompletedPageCommandKind::Close => {
+        CompletedPageCommandKind::Crash { web_contents } => {
+            return termination::complete_crash_command_dispatch(
+                conn,
+                command_id,
+                &owner_scope,
+                web_contents,
+                command_context,
+            )
+            .await;
+        }
+        CompletedPageCommandKind::Close { web_contents } => {
             return termination::complete_close_command_dispatch(
                 conn,
                 command_id,
                 &owner_scope,
+                web_contents,
                 command_context,
             )
             .await;

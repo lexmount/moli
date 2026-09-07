@@ -368,10 +368,7 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use crate::{
-        conn::{BrowserContext, CdpCommandTaskStep},
-        testing::TestContext,
-    };
+    use crate::{conn::CdpCommandTaskStep, testing::TestContext};
 
     // Full-workspace CI runs these renderer-owner tests alongside CPU-heavy
     // suites. Keep the guard diagnostic, but allow the same scheduling
@@ -477,7 +474,7 @@ mod tests {
     }
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
-        let mut browser_context = BrowserContext::new("BID-1".into());
+        let mut browser_context = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         browser_context.set_active_target_id("TID-1".to_owned());
         browser_context.set_target_url("data:text/html,dom-debugger-test".to_owned());
         browser_context.attach_active_session("SID-1".to_owned());

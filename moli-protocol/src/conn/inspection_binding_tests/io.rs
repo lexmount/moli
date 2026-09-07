@@ -37,8 +37,8 @@ async fn blob_inspection_round_trip(start_before_move: bool) {
     ctx.conn.commit_declared_session_fixtures_for_test();
     let object_id = blob_object(&mut ctx, Some(session)).await;
     let owner = CommandOwnerScope::capture(&ctx.conn, Some(session));
-    let take_document = |ctx: &mut TestContext| take_inspection_document(&mut ctx.conn, &owner);
-    let mut document = (!start_before_move).then(|| take_document(&mut ctx));
+    let document_handle = |ctx: &mut TestContext| inspection_document_handle(&ctx.conn, &owner);
+    let mut document = (!start_before_move).then(|| document_handle(&mut ctx));
     let raw = json!({"id": 2, "sessionId": session, "method": "IO.resolveBlob", "params": {
         "objectId": object_id,
     }})
@@ -49,9 +49,9 @@ async fn blob_inspection_round_trip(start_before_move: bool) {
         "Blob inspection must start through the live session binding without a Protocol Document"
     );
     if start_before_move {
-        document = Some(take_document(&mut ctx));
+        document = Some(document_handle(&mut ctx));
     }
-    let mut document = document.unwrap();
+    let document = document.unwrap();
     let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
     let response = messages
         .iter()
@@ -63,22 +63,19 @@ async fn blob_inspection_round_trip(start_before_move: bool) {
     );
     let uuid = response["result"]["uuid"].as_str().unwrap();
     let completed = document
-        .page
-        .start_blob_bytes_for_uuid(uuid.to_owned())
+        .start_blob_bytes_for_uuid_for_test(uuid.to_owned())
         .unwrap()
         .wait()
-        .await
-        .unwrap();
+        .await;
     let bytes = document
-        .page
-        .finish_blob_bytes_for_uuid(completed)
+        .finish_blob_bytes_for_uuid_for_test(completed)
         .unwrap()
         .unwrap();
     assert_eq!(
         &*bytes, b"bound blob",
         "the reply must resolve the actual session object"
     );
-    assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
+    assert!(ctx.conn.has_loaded_page_for_owner(&owner));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -100,7 +97,7 @@ async fn blob_inspection_rejects_frozen_reply_after_rebind() {
     };
     let completed = pending.wait().await;
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let old_document = take_inspection_document(&mut ctx.conn, &owner);
+    let old_document = inspection_document_handle(&ctx.conn, &owner);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<title>replacement</title>",
         None,

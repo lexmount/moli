@@ -27,6 +27,7 @@ fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchS
         redirect_headers: None,
         navigate_id: Some(1),
         owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
+        web_contents: NavigationDispatchState::detached_web_contents_for_test(),
         result_projection: NavigationResultProjection::Cdp(
             json!({"frameId": "TID-1", "loaderId": "LID-0000000001"}),
         ),
@@ -1006,16 +1007,6 @@ fn active_target_state_groups_runtime_fetch_and_owner_state() {
 }
 
 #[test]
-#[should_panic(
-    expected = "replace_loaded_page(None) is not a valid production transition; use clear_loaded_page_with_reason"
-)]
-fn replace_loaded_page_rejects_implicit_no_page_transition() {
-    let mut context = BrowserContext::new("CTX-reject-implicit-absence".into());
-    context.set_active_target_id("TID-reject-implicit-absence");
-    let _ = context.replace_active_page_for_test(None);
-}
-
-#[test]
 fn background_target_owns_fetch_state() {
     let mut context = BrowserContext::new("CTX-projection-state".into());
     assert!(context.register_page_target_url_fixture("TID-A".into(), None, "about:blank".into()));
@@ -1227,7 +1218,7 @@ fn seed_initial_cookies_keeps_store_available_after_lock_holder_panic() {
         panic!("panic while holding cookie store lock");
     }));
 
-    super::browser_context::seed_initial_cookies(
+    moli_core::browser::seed_initial_cookies_for_test(
         &cookie_store,
         vec![stored_cookie("sid", "seeded")],
     );
@@ -1264,7 +1255,8 @@ fn browser_context_clears_origin_site_data_through_partition_owner() {
     );
     assert_eq!(context.snapshot_cookies().len(), 2);
     {
-        let mut store = context.web_storage_store_for_test().lock();
+        let store_handle = context.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert!(store.set_item(&storage_key, "local", "1"));
         assert!(store.set_item(&sibling_storage_key, "local", "2"));
     }
@@ -1285,7 +1277,8 @@ fn browser_context_clears_origin_site_data_through_partition_owner() {
     let cookies = context.snapshot_cookies();
     assert_eq!(cookies.len(), 1);
     assert_eq!(cookies[0].name, "sibling");
-    let mut store = context.web_storage_store_for_test().lock();
+    let store_handle = context.web_storage_store_for_test();
+    let mut store = store_handle.lock();
     assert_eq!(store.get_item(&storage_key, "local"), None);
     assert_eq!(
         store.get_item(&sibling_storage_key, "local"),
@@ -1335,7 +1328,10 @@ fn reused_devtools_ids_do_not_reuse_browser_object_identities() {
     context.set_active_target_id("TID-reused");
     let first_web_contents = context.active_page_target().web_contents_id();
     let first_main_frame_slot = context.active_page_target().main_frame_slot_id();
-    drop(context.take_page_target_for_close("TID-reused"));
+    let first_handle = context
+        .web_contents_handle_for_target("TID-reused")
+        .unwrap();
+    drop(context.begin_web_contents_close(first_handle));
 
     context.set_active_target_id("TID-reused");
     assert_ne!(
@@ -1366,7 +1362,8 @@ fn navigation_lifetime_survives_devtools_target_rekey_but_not_recreation() {
     assert!(!cancellation.is_cancelled());
     assert!(context.accepts_document_body_completion_event(&navigation));
 
-    drop(context.take_page_target_for_close("TID-after"));
+    let handle = context.web_contents_handle_for_target("TID-after").unwrap();
+    drop(context.begin_web_contents_close(handle));
     context.set_active_target_id("TID-after");
     let replacement = context
         .start_document_navigation_for_active_target("LOADER-reused".to_owned())

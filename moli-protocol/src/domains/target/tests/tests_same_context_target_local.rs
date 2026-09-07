@@ -198,23 +198,11 @@ async fn popup_target_diagnostics_report_distinct_page_vm_document_isolates() {
         browser_context.attach_active_session("SID-popup-opener");
     }
 
-    let opener_page = ctx
-        .conn
-        .load_page_via_runtime_async(
-            "data:text/html,<!doctype html><title>opener</title><body>opener</body>",
-        )
-        .await
-        .expect("opener page should load");
-    let opener_url = opener_page.final_url().as_str().to_owned();
-    {
-        let browser_context = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should remain active");
-        browser_context.set_target_url(opener_url);
-        browser_context.replace_loaded_page(Some(opener_page));
-    }
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<!doctype html><title>opener</title><body>opener</body>",
+        Some("SID-popup-opener"),
+    )
+    .await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -1837,7 +1825,7 @@ async fn detach_from_target_clears_background_target_session() {
         "detaching the session should keep the background target itself addressable"
     );
     assert!(
-        bc.loaded_page().is_some(),
+        bc.has_loaded_page(),
         "detaching a background target session should keep the active loaded page active"
     );
 }
@@ -1958,7 +1946,7 @@ async fn close_target_aborts_paused_request_stage_navigation() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -2053,7 +2041,7 @@ async fn close_target_aborts_paused_runtime_fetch_subresource() {
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2182,7 +2170,7 @@ async fn close_target_aborts_paused_response_stage_runtime_xhr_subresource() {
     let page_url = format!("http://{addr}/page");
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2350,7 +2338,7 @@ async fn close_target_aborts_paused_runtime_xhr_auth_subresource() {
     let page_url = format!("http://{addr}/page");
     let protected_url = format!("http://{addr}/protected");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);

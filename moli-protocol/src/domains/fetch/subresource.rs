@@ -592,8 +592,8 @@ mod tests {
     use url::Url;
 
     use crate::conn::{
-        BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope,
-        PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
+        BackgroundProtocolEvent, CommandOwnerScope, PendingSubresourceFetchOwnerKind,
+        PendingSubresourceFetchRequest,
     };
     use crate::devtools_runtime::{AutomationEvent, DevToolsNetworkResourceType};
     use crate::domains::network::{
@@ -695,8 +695,8 @@ mod tests {
 
     #[test]
     fn prepared_subresource_fetch_pause_pairs_emit_network_then_fetch_per_item() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_page_target_fixture_for_test("BID-1", "TID-active");
         browser_context.set_active_document_fixture_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
@@ -771,8 +771,8 @@ mod tests {
 
     #[test]
     fn fetch_pause_does_not_synthesize_cookie_extra_info() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_page_target_fixture_for_test("BID-1", "TID-active");
         browser_context.set_active_document_fixture_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
@@ -813,8 +813,8 @@ mod tests {
 
     #[test]
     fn prepared_subresource_fetch_pause_does_not_emit_after_page_replacement() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_page_target_fixture_for_test("BID-1", "TID-active");
         browser_context.set_active_document_fixture_for_test(1);
         conn.install_browser_context_fixture_for_test(browser_context);
         let page_owner = conn
@@ -864,8 +864,8 @@ mod tests {
 
     #[test]
     fn prepared_subresource_fetch_pause_can_emit_for_background_owner() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-active");
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-active");
         bc.register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),

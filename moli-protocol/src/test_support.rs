@@ -14,6 +14,29 @@ use crate::{
     conn::{CdpConnection, NavigationId, RendererPageResidenceIdentity},
 };
 
+/// Starts an isolated Browser owner for a protocol test.
+pub fn connection() -> CdpConnection {
+    connection_with_config(
+        crate::CdpInitialStoragePartition::memory(),
+        Default::default(),
+    )
+}
+
+pub fn connection_with_config(
+    partition: crate::CdpInitialStoragePartition,
+    config: moli_core::runtime::NavigationRuntimeConfig,
+) -> CdpConnection {
+    let browser =
+        moli_core::browser::BrowserService::start().expect("test Browser owner should start");
+    CdpConnection::new(browser.handle(), partition, config)
+}
+
+pub fn connection_with_fetch_config(config: moli_fetch::FetchConfig) -> CdpConnection {
+    let mut runtime_config = moli_core::runtime::NavigationRuntimeConfig::default();
+    *runtime_config.fetch_config_mut() = config;
+    connection_with_config(crate::CdpInitialStoragePartition::memory(), runtime_config)
+}
+
 /// Opaque exact-token fixture for scheduler tests that need a real
 /// target-owned background navigation request.
 pub struct BackgroundNavigationRequestFixture {

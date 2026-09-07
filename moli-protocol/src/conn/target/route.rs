@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn committed_page_session_route_is_stable_across_foreground_selection() {
-        let mut connection = CdpConnection::new();
+        let mut connection = crate::test_support::connection();
         let mut browser_context = BrowserContext::new("BID-route".to_owned());
         browser_context.set_active_target_id("TID-a");
         browser_context.attach_active_session("SID-a");
@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn target_binding_is_not_globally_routable_before_session_commit() {
-        let mut connection = CdpConnection::new();
+        let mut connection = crate::test_support::connection();
         let mut browser_context = BrowserContext::new_with_page_for_test("BID-route", "TID-page");
         browser_context.attach_active_session("SID-prepared");
         connection.browser_context = Some(browser_context);

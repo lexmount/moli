@@ -1289,7 +1289,9 @@ async fn session_route_finds_committed_browser_page_and_worker_sessions() {
         Some("SID-shared-active"),
     );
 
-    let mut inactive = BrowserContext::new("BID-B".to_owned());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-B".to_owned());
     inactive.set_active_target_id("TID-000000000C".to_owned());
     inactive.attach_active_session("SID-inactive");
     inactive.register_page_target_fixture(
@@ -2410,32 +2412,15 @@ async fn session_cleanup_exception_keeps_peer_alive(primary: bool) {
     let before = page_renderer_inspector_session_count(&mut ctx, "before failed cleanup").await;
     // Fail the real resource-owner boundary without terminating this Page or
     // its peer Inspector. Restoring the live engine makes the same cleanup retryable.
-    let mut retired_owner = moli_core::runtime::RendererBrowserContextRuntime::new();
-    let retired_engine =
-        moli_core::runtime::NavigationEngine::new_with_fetch_config_and_browser_context_access(
-            Default::default(),
-            retired_owner.owner_access(),
-            moli_page_types::OptionalResourceFetchMask::NONE,
-            true,
-        )
+    let context = ctx.conn.browser_context.as_ref().unwrap();
+    let cleanup_target_id = context.active_target_id_owned().unwrap();
+    let handle = context
+        .web_contents_handle_for_target(&cleanup_target_id)
         .unwrap();
-    retired_owner.shutdown_and_join();
-    let cleanup_target_id = ctx
+    let restore_engine = ctx
         .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .active_target_id_owned()
+        .suspend_navigation_resource_owner_for_test(handle)
         .unwrap();
-    let original_engine = std::mem::replace(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .page_navigation_engine_mut(&cleanup_target_id)
-            .unwrap(),
-        retired_engine,
-    );
 
     ctx.process_async(
         json!({"id": 7, "method": "Target.detachFromTarget", "params": {
@@ -2513,12 +2498,7 @@ async fn session_cleanup_exception_keeps_peer_alive(primary: bool) {
         json!(true),
         "failed cleanup retry must preserve later peer policy"
     );
-    *ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .page_navigation_engine_mut(&cleanup_target_id)
-        .unwrap() = original_engine;
+    restore_engine.await;
     ctx.process_async(
         json!({"id": 8, "sessionId": "SID-cleanup-peer", "method": "Runtime.evaluate", "params": {
             "expression": "document.body.textContent",
@@ -2536,10 +2516,8 @@ async fn session_cleanup_exception_keeps_peer_alive(primary: bool) {
         }})).await;
         ctx.expect_result(73, json!({}), Some("SID-cleanup-peer"));
         ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
             .reset_primary_page_session_target_state_async(
+                "BID-cleanup-exception",
                 "TID-cleanup-exception",
                 "SID-cleanup-exception",
             )
@@ -2617,11 +2595,16 @@ async fn closed_renderer_session_cleanup(method: &str, params: Value) {
 
     // Close the actual receiver before disposal, as the old fail-close tests
     // did. A cleanup error still is not authority to retire the Browser Page.
-    ctx.conn
+    let web_contents = ctx
+        .conn
         .browser_context
-        .as_mut()
+        .as_ref()
         .unwrap()
-        .crash_target_renderer_from_io("TID-closed-cleanup");
+        .web_contents_handle_for_target("TID-closed-cleanup")
+        .expect("target should own WebContents");
+    ctx.conn
+        .crash_browser_web_contents_renderer_from_io(web_contents)
+        .expect("target WebContents should remain live");
     ctx.process_async(
         json!({"id": 2, "method": "Target.detachFromTarget", "params": {
             "targetId": "TID-closed-cleanup", "sessionId": "SID-closed-cleanup",
@@ -2899,7 +2882,7 @@ async fn detach_from_target_neutrally_resumes_paused_request_stage_navigation() 
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -2967,6 +2950,7 @@ async fn detach_from_target_neutrally_resumes_paused_request_stage_navigation() 
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
     assert_eq!(
         bc.target_document_url("TID-000000000A")
+            .as_ref()
             .map(url::Url::as_str),
         Some(url.as_str())
     );

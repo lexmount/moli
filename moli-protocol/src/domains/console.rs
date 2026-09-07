@@ -146,7 +146,7 @@ pub(in crate::domains) fn pending_console_activity_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use crate::conn::{BrowserContext, CdpCommandTaskStep};
+    use crate::conn::CdpCommandTaskStep;
     use crate::domains::observable_output::{
         ObservableOutputProjectionStep,
         observable_backlog_activity_outputs_for_session_owner as observable_backlog_activity_outputs,
@@ -181,7 +181,7 @@ mod tests {
     }
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,console-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
@@ -280,7 +280,9 @@ mod tests {
     }
 
     fn load_shared_worker_target(ctx: &mut TestContext, session_id: &str) {
-        let mut bc = BrowserContext::new("BID-shared".to_owned());
+        let mut bc = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-shared".to_owned());
         let mut target = crate::conn::SharedWorkerTargetState::new(
             moli_core::RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(91),
@@ -362,8 +364,9 @@ mod tests {
             .browser_context
             .as_ref()
             .expect("browser context should be loaded");
-        let page = bc.loaded_page().expect("page should be loaded");
-        let script_execution = page.script_execution();
+        let script_execution = bc
+            .loaded_document_script_execution_for_test()
+            .expect("page should be loaded");
         let snapshot = super::pending_console_activity_snapshot(super::ConsoleActivitySource {
             observable: bc
                 .active_page_target()
@@ -551,7 +554,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn console_enable_stages_background_target_session_state() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         bc.stage_background_target(

@@ -55,15 +55,16 @@ async fn native_history_reset_completion_survives_selection_and_session_detach()
         panic!("history reset must execute on the Browser Document");
     };
     let completed = pending.wait().await;
-    assert!(
+    assert!({
+        let handle = ctx
+            .conn
+            .browser_web_contents_for_target("TID-native-background")
+            .unwrap();
         ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .select_page_target_async("TID-native-background")
+            .select_browser_web_contents_async(handle)
             .await
-            .unwrap()
-    );
+            .is_ok()
+    });
     let peer = ctx
         .conn
         .browser_context
@@ -119,15 +120,14 @@ async fn native_input_completion_keeps_its_document_after_selection_and_session_
         panic!("input must be admitted to the original Browser document");
     };
     let completed = pending.wait().await;
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .select_page_target_async("TID-native-background")
-            .await
-            .unwrap()
-    );
+    let handle = ctx
+        .conn
+        .browser_web_contents_for_target("TID-native-background")
+        .unwrap();
+    ctx.conn
+        .select_browser_web_contents_async(handle)
+        .await
+        .unwrap();
     ctx.process_async(
         json!({"id": 23, "method": "Target.detachFromTarget", "params": {
             "targetId": "TID-dom-inspection", "sessionId": "SID-native-original",
@@ -177,15 +177,14 @@ async fn native_diagnostics_completion_keeps_exact_documents_after_selection_and
         .wait()
         .await
         .unwrap();
-    assert!(
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .unwrap()
-            .select_page_target_async("TID-native-background")
-            .await
-            .unwrap()
-    );
+    let handle = ctx
+        .conn
+        .browser_web_contents_for_target("TID-native-background")
+        .unwrap();
+    ctx.conn
+        .select_browser_web_contents_async(handle)
+        .await
+        .unwrap();
     ctx.process_async(
         json!({"id": 31, "method": "Target.detachFromTarget", "params": {
             "targetId": "TID-dom-inspection", "sessionId": "SID-native-original",
@@ -257,14 +256,19 @@ async fn browser_native_commands_do_not_require_a_live_inspector_session() {
     }})).await;
     assert!(ctx.take_response_by_id(1).get("error").is_none());
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let (context_id, target_id) = ctx.conn.resolve_document_command_owner(&owner).unwrap();
+    let (context_id, target_id) = ctx
+        .conn
+        .loaded_document_owner_identity_for_owner(&owner)
+        .unwrap();
     let context = ctx.conn.browser_context_by_id(&context_id).unwrap();
     let residence = context
         .target_renderer_page_residence_identity(&target_id)
         .unwrap();
-    let pending_capture = context
-        .start_capture_screenshot_with_request_for_target(
-            &target_id,
+    let document = ctx.conn.resolve_browser_document_for_owner(&owner).unwrap();
+    let pending_capture = ctx
+        .conn
+        .start_capture_document_image(
+            document,
             moli_core::page::RendererCaptureScreenshotRequest::viewport_png(),
         )
         .unwrap();
@@ -279,14 +283,17 @@ async fn browser_native_commands_do_not_require_a_live_inspector_session() {
         .await
         .unwrap();
 
-    let completion = pending_capture.wait().await.unwrap();
-    let context = ctx.conn.browser_context_by_id_mut(&context_id).unwrap();
-    assert!(residence.matches_residence(completion.page_state().renderer_residence()));
+    let completion = pending_capture.wait().await;
     assert!(
-        context
-            .finish_capture_screenshot_for_target(&target_id, completion)
-            .is_ok(),
+        ctx.conn.finish_capture_document_image(completion).is_ok(),
         "session detach must not cancel already admitted Browser capture"
+    );
+    assert_eq!(
+        ctx.conn
+            .browser_context_by_id(&context_id)
+            .unwrap()
+            .target_renderer_page_residence_identity(&target_id),
+        Some(residence)
     );
 
     ctx.process_async(json!({"id": 2, "method": "Input.insertText", "params": {"text": "native"}}))
@@ -356,4 +363,94 @@ async fn native_capture_rejects_a_foreign_page_without_devtools_attachments() {
         .await
         .unwrap();
     assert!(first.finish_capture_screenshot(completion).is_ok());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completed_browser_document_command_cannot_retarget_a_replacement_document() {
+    let mut ctx = dom_context().await;
+    let owner = CommandOwnerScope::capture(&ctx.conn, None);
+    let document = ctx.conn.resolve_browser_document_for_owner(&owner).unwrap();
+    let completed = ctx
+        .conn
+        .start_capture_document_snapshot(document)
+        .unwrap()
+        .wait()
+        .await;
+
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<title>replacement-document</title>",
+        None,
+    )
+    .await;
+
+    assert!(matches!(
+        ctx.conn.finish_capture_document_snapshot(completed),
+        Err(error) if error == "Document changed"
+    ));
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .target_document_title("TID-dom-inspection")
+            .as_deref(),
+        Some("replacement-document")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn app_manifest_fetch_cannot_publish_into_a_replacement_document() {
+    let mut ctx = dom_context().await;
+    ctx.install_buffered_navigation_fixture_for_session_owner(
+        url::Url::parse("https://manifest.example/page").unwrap(),
+        r#"<!doctype html><link rel="manifest" href="data:application/manifest+json,%7B%7D"><title>manifest-owner</title>"#
+            .into(),
+        None,
+    )
+    .await;
+
+    let raw = json!({"id": 801, "method": "Page.getAppManifest"}).to_string();
+    let CdpCommandTaskStep::Pending(prepare) = ctx.conn.start_command_dispatch(&raw) else {
+        panic!("app manifest inspection must start on the original document");
+    };
+    let CdpCommandTaskStep::Pending(fetch) = ctx
+        .conn
+        .complete_pending_command_dispatch(prepare.wait().await)
+        .await
+    else {
+        panic!("an external app manifest must enter the browser fetch stage");
+    };
+    let fetched = fetch.wait().await;
+
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<title>replacement-manifest-owner</title>",
+        None,
+    )
+    .await;
+
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(fetched).await
+    else {
+        panic!("a stale app manifest fetch must not publish into the replacement document");
+    };
+    let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+    let response = messages
+        .iter()
+        .find(|message| message["id"] == json!(801))
+        .expect("app manifest response");
+    assert_eq!(response["error"]["code"], json!(-32000), "{response}");
+    assert_eq!(
+        response["error"]["message"],
+        json!("Failed to publish app manifest result: Document changed"),
+        "the fetched result must retain its originating Browser Document: {response}"
+    );
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .target_document_title("TID-dom-inspection")
+            .as_deref(),
+        Some("replacement-manifest-owner")
+    );
 }

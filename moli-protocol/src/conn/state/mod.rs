@@ -1,11 +1,9 @@
-mod bounds;
 mod browser_context;
 mod browser_identity;
 mod dedicated_worker_target;
 mod devtools_renderer_channel;
 mod devtools_session;
 mod document_lifecycle_observer;
-mod emulation;
 mod fetch;
 mod identity;
 mod inspector;
@@ -25,19 +23,24 @@ mod shared_worker_target;
 mod target_state;
 #[cfg(test)]
 mod tests;
-mod web_contents;
-pub(in crate::conn) use web_contents::{AdmittedNavigationLoad, PreparedNavigationResponse};
-pub(in crate::conn) use web_contents::{
-    BuiltInitialDocument, InitialDocumentAdmission, InitialDocumentBuildKey,
-    InitialDocumentPageBuildWaiter,
+pub(crate) use moli_core::browser::web_contents::{
+    ClaimedNavigationRequest, NavigationInterceptionPermit, NavigationRequestInterception,
 };
-pub(crate) use web_contents::{
-    ClaimedNavigationRequest, InterceptedNavigationLoad, InterceptedNavigationResponse,
-    NavigationInterceptionPermit, NavigationRequestInterception,
+pub(in crate::conn) use moli_core::browser::web_contents::{
+    InitialDocumentBuildKey, InitialDocumentPageBuildWaiter,
 };
-
-#[cfg(test)]
-pub(in crate::conn) use web_contents::DocumentHost;
+pub(in crate::conn) use moli_core::browser::{
+    BrowserBuiltInitialDocument as BuiltInitialDocument,
+    BrowserInitialDocumentAdmission as InitialDocumentAdmission,
+};
+pub(crate) use moli_core::browser::{
+    BrowserInterceptedNavigationLoad as InterceptedNavigationLoad,
+    BrowserInterceptedNavigationResponse as InterceptedNavigationResponse,
+};
+pub(in crate::conn) use moli_core::browser::{
+    BrowserNavigationLoad as AdmittedNavigationLoad,
+    BrowserPreparedNavigationResponse as PreparedNavigationResponse,
+};
 
 // Re-export everything so `use super::state::*` paths continue to work.
 
@@ -69,8 +72,6 @@ pub(crate) use document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
 };
 
-pub use bounds::BrowserWindowBounds;
-
 pub(crate) use page_resource::MainDocumentResourceSnapshot;
 #[cfg(test)]
 pub(crate) use page_slot::TargetPageSlot;
@@ -90,6 +91,21 @@ pub(crate) use javascript_dialog::TargetJavaScriptDialog;
 pub(crate) use javascript_dialog::{
     TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver,
     TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
+};
+pub(crate) use moli_core::browser::BrowserPreparedDocumentNavigation as PreparedDocumentNavigation;
+#[cfg(test)]
+pub(crate) use moli_core::browser::web_contents::JavaScriptDialogKey;
+pub(in crate::conn) use moli_core::browser::web_contents::PageSurface;
+pub(crate) use moli_core::browser::web_contents::SameDocumentNavigationCommitted;
+pub(crate) use moli_core::browser::web_contents::{
+    CommittedDocumentLifecycle, DocumentLifecycleEvent, DocumentNavigationDestination,
+};
+pub(crate) use moli_core::browser::web_contents::{
+    EmulationPolicy, EmulationPolicyChange, SessionStorageNamespace, WindowSurface,
+    WindowSurfaceState,
+};
+pub(crate) use moli_core::browser::web_contents::{
+    JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogSnapshot,
 };
 pub(crate) use pending_renderer_command::{
     DuplicatePendingRendererCommand, PreparedRendererCallDispatch, PreparedRendererCallTermination,
@@ -114,46 +130,57 @@ pub(crate) use shared_worker_attachment::{
     TargetSharedWorkerProtocolAttachmentIdentity, TargetSharedWorkerProtocolAttachmentRetirement,
 };
 pub(crate) use shared_worker_target::SharedWorkerTargetState;
-#[cfg(test)]
-pub(crate) use web_contents::JavaScriptDialogKey;
-pub(crate) use web_contents::SameDocumentNavigationCommitted;
-pub(crate) use web_contents::{
-    CommittedDocumentLifecycle, DocumentLifecycleEvent, DocumentNavigationDestination,
-    PreparedDocumentNavigation,
-};
-pub(crate) use web_contents::{
-    EmulationPolicy, EmulationPolicyChange, SessionStorageNamespace, WindowSurface,
-    WindowSurfaceState,
-};
-pub(crate) use web_contents::{
-    JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogSnapshot,
-};
-pub(in crate::conn) use web_contents::{PageSurface, WindowOpener};
 
 pub use browser_context::BrowserContext;
-#[cfg(test)]
-pub(crate) use browser_context::BrowserContextResourceStorageHandles;
 pub(crate) use browser_context::{
+    BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
+    CompletedAppManifestPublication, CompletedCaptureDocumentImage,
+    CompletedCaptureDocumentScreencastFrame, CompletedCaptureDocumentSnapshot,
+    CompletedChildFrameNavigation, CompletedChildFrameTreeSnapshot,
+    CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
+    CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
+    CompletedDocumentDiagnosticsSnapshot, CompletedDocumentFetchCommand,
+    CompletedDocumentInputCommand, CompletedDocumentLifecycleStop, CompletedDocumentPolicyUpdate,
+    CompletedDocumentResourceRuntimeUpdate, CompletedDocumentResourceTextSearch,
+    CompletedDocumentStorageKeySnapshot, CompletedNavigationHistoryReset,
+    CompletedNetworkResourceLoadPreparation, CompletedSetDocumentContent,
+    CompletedTopLevelHistoryTraversal, CompletedTopLevelSameDocumentNavigation,
+    DocumentFetchCommand, DocumentFetchCommandOutcome, DocumentPolicyUpdate,
+    DocumentRuntimePolicyReconciliation, PendingAppManifestLoadPreparation,
+    PendingAppManifestPublication, PendingCaptureDocumentImage,
+    PendingCaptureDocumentScreencastFrame, PendingCaptureDocumentSnapshot,
+    PendingChildFrameLifecycleWork, PendingChildFrameNavigation, PendingChildFrameTreeSnapshot,
+    PendingDocumentAutofillTrigger, PendingDocumentBlobRead, PendingDocumentCookieOwnerSnapshot,
+    PendingDocumentCspBypassUpdate, PendingDocumentDiagnosticsSnapshot,
+    PendingDocumentFetchCommand, PendingDocumentInputCommand, PendingDocumentLifecycleStop,
+    PendingDocumentPolicyBatch, PendingDocumentPolicyUpdate, PendingDocumentResourceRuntimeUpdate,
+    PendingDocumentResourceTextSearch, PendingDocumentStorageKeySnapshot,
+    PendingNavigationHistoryReset, PendingNetworkResourceLoadPreparation,
+    PendingSetDocumentContent, PendingTopLevelHistoryTraversal,
+    PendingTopLevelSameDocumentNavigation,
+};
+pub(crate) use browser_context::{LoadedNavigationPageCommit, PageInputCommand};
+#[cfg(test)]
+pub(crate) use moli_core::browser::BrowserContextResourceStorageHandles;
+pub(crate) use moli_core::browser::{
     BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles, ContextNetworkPolicy,
     SiteDataClearOptions,
 };
-pub(crate) use browser_context::{
+pub(crate) use moli_core::browser::{
     CompletedContextPermissionUpdate, PendingContextPermissionUpdate,
 };
-pub(crate) use browser_context::{
-    LoadedNavigationPageCommit, NetworkPolicyUpdateKind, PageInputCommand, PagePolicyUpdateKind,
+
+pub use moli_core::browser::web_contents::PageNavigationHistoryEntry;
+pub(crate) use moli_core::browser::web_contents::{
+    HistoryTraversalDestination, InitialDocumentCreator, InitialDocumentSnapshot,
+    ResolvedHistoryTraversal,
 };
 
-pub use web_contents::PageNavigationHistoryEntry;
-pub(crate) use web_contents::{
-    HistoryTraversalDestination, InitialDocument, InitialDocumentCreator, ResolvedHistoryTraversal,
-};
-
-pub use emulation::{
+pub use moli_core::browser::{
     EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
     EmulatedMediaOverrides,
 };
-pub(crate) use emulation::{EmulatedNetworkConditions, EmulatedViewportSurface};
+pub(crate) use moli_core::browser::{EmulatedNetworkConditions, EmulatedViewportSurface};
 pub use page_agent_host::PageAgentHost;
 pub(crate) use target_state::{
     PendingBidiChannelListener, PendingInspectorAwait, TargetOwnerState,

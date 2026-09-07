@@ -197,7 +197,7 @@ mod protocol_neutral_tests {
     use crate::devtools_runtime::DevToolsProtocol;
     use serde_json::{Value, json};
 
-    use crate::conn::{CdpConnection, Cmd};
+    use crate::conn::Cmd;
     use crate::domains::storage::StorageCommandTaskStep;
 
     use super::{
@@ -208,7 +208,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_network_get_cookies_builds_protocol_neutral_command_with_urls() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "urls": [
                 "https://example.com/",
@@ -246,7 +246,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_network_get_cookies_rejects_invalid_url_params_before_owner_entry() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "urls": ["not a url"]
         });
@@ -272,7 +272,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn network_get_cookies_routes_to_shared_storage_entry() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(144),
@@ -296,7 +296,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_network_delete_cookies_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "name": "sid",
             "url": "https://example.com/",
@@ -340,7 +340,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn network_delete_cookies_routes_to_shared_storage_entry() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({ "name": "sid" });
         let cmd = Cmd::for_test(
             Some(148),
@@ -364,7 +364,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn network_clear_browser_cookies_routes_to_shared_storage_entry() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(154),
@@ -388,7 +388,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn network_set_cookie_routes_to_shared_storage_entry() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "name": "sid",
             "value": "1",

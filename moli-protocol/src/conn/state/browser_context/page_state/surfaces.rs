@@ -4,22 +4,37 @@ use crate::conn::state::PageSurface;
 use crate::conn::{BrowserContext, DocumentStartScript, EmulatedViewportSurface, PageAgentHost};
 #[cfg(test)]
 use moli_cookie_jar::{BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides};
+use moli_core::browser::WebContentsHandle;
 
 impl BrowserContext {
     pub(crate) fn navigator_overrides_for_target(
         &self,
         target_id: &str,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
     ) -> Option<moli_page_types::NavigatorOverrides> {
         let target = self.page_target(target_id)?;
         Some(
-            self.page_surface_for_state(target, self.is_active_target(target_id))
-                .navigator_overrides(),
+            self.page_surface_for_state(
+                target,
+                self.is_active_target(target_id),
+                browser_globals.network_conditions,
+                browser_globals.geolocation.as_ref(),
+            )
+            .navigator_overrides(),
         )
     }
 
-    pub(crate) fn active_navigator_overrides(&self) -> moli_page_types::NavigatorOverrides {
-        self.page_surface_for_state(self.active_page_target(), true)
-            .navigator_overrides()
+    pub(crate) fn active_navigator_overrides(
+        &self,
+        browser_globals: &crate::conn::BrowserGlobalOverrides,
+    ) -> moli_page_types::NavigatorOverrides {
+        self.page_surface_for_state(
+            self.active_page_target(),
+            true,
+            browser_globals.network_conditions,
+            browser_globals.geolocation.as_ref(),
+        )
+        .navigator_overrides()
     }
 
     pub(crate) fn document_activity_for_target(
@@ -28,16 +43,16 @@ impl BrowserContext {
     ) -> Option<moli_page_types::DocumentActivity> {
         let target = self.page_target(target_id)?;
         Some(
-            self.page_surface_for_state(target, self.is_active_target(target_id))
+            self.page_surface_for_state(target, self.is_active_target(target_id), None, None)
                 .document_activity(),
         )
     }
 
     pub(crate) fn active_document_activity(&self) -> moli_page_types::DocumentActivity {
         self.page_targets
-            .active(self.physical.selected_web_contents_id())
+            .active(self.browser_context.selected_web_contents_id())
             .map(|target| {
-                self.page_surface_for_state(target, true)
+                self.page_surface_for_state(target, true, None, None)
                     .document_activity()
             })
             .unwrap_or_default()
@@ -51,16 +66,23 @@ impl BrowserContext {
     ) -> bool {
         if let Some(host) = self
             .page_targets
-            .active_mut(self.physical.selected_web_contents_id())
+            .active_mut(self.browser_context.selected_web_contents_id())
         {
             let state = host;
             if !mutate(&mut state.document_cookie_manager_surface) {
                 return false;
             }
-            let surface = state.document_cookie_manager_surface.clone();
+            let overrides = state
+                .document_cookie_manager_surface
+                .snapshot()
+                .policy
+                .overrides;
             let target_id = state.target_id().to_owned();
-            if let Some(page) = self.loaded_page_for_target_mut(&target_id) {
-                surface.apply_to_page_async(page).await;
+            if let Some(document) = self.document_handle_for_target(&target_id) {
+                let _ = self
+                    .browser_context
+                    .apply_document_cookie_facade_overrides_for_test(document, Some(overrides))
+                    .await;
             }
         } else if !mutate(&mut self.default_document_cookie_manager_surface) {
             return false;
@@ -73,25 +95,9 @@ impl BrowserContext {
         &self,
     ) -> BrowserContextCookieManagerSurfaceSnapshot {
         self.page_targets
-            .active(self.physical.selected_web_contents_id())
+            .active(self.browser_context.selected_web_contents_id())
             .map(|host| host.document_cookie_manager_surface.snapshot())
             .unwrap_or_else(|| self.default_document_cookie_manager_surface.snapshot())
-    }
-
-    pub fn document_start_script_descriptors(&self) -> Vec<DocumentStartScript> {
-        let mut scripts = Vec::new();
-        scripts.extend(self.default_document_start_script_descriptors());
-        let target_id = self.active_target_id();
-        scripts.extend(
-            self.active_page_target()
-                .owner_state
-                .document_start_scripts
-                .iter()
-                .map(|(identifier, script)| {
-                    Self::target_document_start_script_descriptor(target_id, identifier, script)
-                }),
-        );
-        scripts
     }
 
     pub(crate) fn default_document_start_script_descriptors(&self) -> Vec<DocumentStartScript> {
@@ -201,33 +207,38 @@ impl BrowserContext {
 
     pub(crate) fn merged_extra_headers_for_target_policy(
         &self,
+        global_headers: &moli_fetch::RequestHeaders,
         target_headers: &moli_fetch::RequestHeaders,
     ) -> moli_fetch::RequestHeaders {
         merge_extra_header_layers(&[
-            &self.global_extra_headers,
+            global_headers,
             &self.network_policy().extra_headers,
             target_headers,
         ])
     }
 
-    pub fn effective_extra_headers(&self) -> moli_fetch::RequestHeaders {
+    pub fn effective_extra_headers(
+        &self,
+        global_headers: &moli_fetch::RequestHeaders,
+    ) -> moli_fetch::RequestHeaders {
         let target_headers = self
             .page_targets
-            .active(self.physical.selected_web_contents_id())
+            .active(self.browser_context.selected_web_contents_id())
             .map(|target| self.effective_policy_for_target(target.target_id()))
             .unwrap_or_default();
-        self.merged_extra_headers_for_target_policy(target_headers.extra_headers())
+        self.merged_extra_headers_for_target_policy(global_headers, target_headers.extra_headers())
     }
 
     pub(crate) fn effective_extra_headers_for_target(
         &self,
         target_id: &str,
+        global_headers: &moli_fetch::RequestHeaders,
     ) -> moli_fetch::RequestHeaders {
         let target_headers = self
             .page_target(target_id)
             .map(|target| self.effective_policy_for_target(target.target_id()))
             .unwrap_or_default();
-        self.merged_extra_headers_for_target_policy(target_headers.extra_headers())
+        self.merged_extra_headers_for_target_policy(global_headers, target_headers.extra_headers())
     }
 
     pub fn viewport_width(&self) -> u32 {
@@ -273,72 +284,62 @@ impl BrowserContext {
     }
 
     pub fn document_has_focus(&self) -> bool {
-        self.page_surface_for_state(self.active_page_target(), true)
+        self.page_surface_for_state(self.active_page_target(), true, None, None)
             .document_has_focus()
     }
 
     pub fn document_hidden(&self) -> bool {
-        self.page_surface_for_state(self.active_page_target(), true)
+        self.page_surface_for_state(self.active_page_target(), true, None, None)
             .document_hidden()
     }
 
     pub fn document_visibility_state(&self) -> &'static str {
-        self.page_surface_for_state(self.active_page_target(), true)
+        self.page_surface_for_state(self.active_page_target(), true, None, None)
             .document_visibility_state()
     }
 
-    // Context default resolution stays in this residence until Commit 7;
-    // source generation itself only reads the embedded Browser object.
-    fn page_surface_for_state(&self, state: &PageAgentHost, foreground: bool) -> PageSurface {
+    fn page_surface_for_state(
+        &self,
+        state: &PageAgentHost,
+        foreground: bool,
+        global_network_conditions: Option<crate::conn::EmulatedNetworkConditions>,
+        global_geolocation: Option<&crate::conn::EmulatedGeolocationOverrideState>,
+    ) -> PageSurface {
         let mut surface = self
-            .web_contents_for_target(state.target_id())
-            .expect("live WebContents")
-            .page_surface(
+            .page_surface_for_web_contents(
+                WebContentsHandle::new(self.browser_context_id(), state.web_contents_id()),
                 foreground,
-                self.emulation_defaults()
-                    .network_conditions
-                    .or(self.global_network_conditions),
-                self.emulation_defaults()
-                    .geolocation
-                    .as_ref()
-                    .or(self.global_geolocation_override.as_ref()),
-                self.emulation_defaults().device_metrics.as_ref(),
-            );
+                global_network_conditions,
+                global_geolocation,
+            )
+            .expect("live WebContents");
         surface.navigator_queries = state.devtools_sessions.navigator_emulation.effective();
         surface
     }
 
-    pub(crate) async fn apply_background_target_surface_overrides_async(
-        &mut self,
-        target_id: &str,
-    ) -> anyhow::Result<bool> {
-        let overrides = self
-            .navigator_overrides_for_target(target_id)
-            .expect("resolved background target retains navigator state");
-        let activity = self
-            .document_activity_for_target(target_id)
-            .expect("resolved background target retains document activity");
-        let Some(page) = self.loaded_page_for_target_mut(target_id) else {
-            return Ok(false);
-        };
-        page.set_navigator_overrides_async(&overrides).await?;
-        page.set_document_activity_async(activity).await?;
-        Ok(true)
+    pub(in crate::conn) fn navigator_queries_for_web_contents(
+        &self,
+        handle: WebContentsHandle,
+    ) -> moli_page_types::NavigatorQueryOverrides {
+        self.page_targets
+            .get_for_web_contents(handle.id())
+            .map(|target| target.devtools_sessions.navigator_emulation.effective())
+            .unwrap_or_default()
     }
 
-    pub(crate) async fn apply_surface_overrides_to_loaded_page_async(
-        &mut self,
-    ) -> anyhow::Result<()> {
-        let overrides = self.active_navigator_overrides();
-        let activity = self.active_document_activity();
-        let Some(target_id) = self.active_target_id_owned() else {
-            return Ok(());
-        };
-        let Some(page) = self.loaded_page_for_target_mut(&target_id) else {
-            return Ok(());
-        };
-        page.set_navigator_overrides_async(&overrides).await?;
-        page.set_document_activity_async(activity).await
+    pub(in crate::conn::state::browser_context) fn page_surface_for_web_contents(
+        &self,
+        handle: WebContentsHandle,
+        foreground: bool,
+        global_network_conditions: Option<crate::conn::EmulatedNetworkConditions>,
+        global_geolocation: Option<&crate::conn::EmulatedGeolocationOverrideState>,
+    ) -> Result<PageSurface, String> {
+        self.browser_context.page_surface_for_web_contents(
+            handle,
+            foreground,
+            global_network_conditions,
+            global_geolocation,
+        )
     }
 
     #[cfg(test)]
@@ -399,7 +400,7 @@ impl BrowserContext {
     }
 }
 
-use crate::conn::state::web_contents::merge_extra_header_layers;
+use moli_core::browser::web_contents::merge_extra_header_layers;
 
 #[cfg(test)]
 mod tests {
@@ -414,30 +415,57 @@ mod tests {
             "TID-background-window",
             crate::conn::EmulationPolicyChange::FocusEnabled(true),
         );
-        context.set_target_window_surface_state(
-            "TID-background-window",
-            WindowSurfaceState::Minimized,
-        );
-        let id = context.selected_web_contents_id().unwrap();
+        let handle = context
+            .web_contents_handle_for_target("TID-background-window")
+            .unwrap();
+        context
+            .update_web_contents_window_surface(
+                handle,
+                Some(WindowSurfaceState::Minimized),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
         drop(
             context
                 .page_targets
                 .remove("TID-background-window")
                 .unwrap(),
         );
-        let contents = context.physical.web_contents.get_mut(&id).unwrap();
-        let minimized = contents.page_surface(false, None, None, None);
+        let minimized = context
+            .browser_context
+            .page_surface_for_web_contents(handle, false, None, None)
+            .unwrap();
         assert!(minimized.document_has_focus());
         assert!(
             minimized.document_hidden(),
             "focus emulation must not unminimize a window"
         );
 
-        contents.window.surface.state = WindowSurfaceState::Fullscreen;
-        let fullscreen = contents.page_surface(false, None, None, None);
+        context
+            .browser_context
+            .update_web_contents_window_surface(
+                handle,
+                Some(WindowSurfaceState::Fullscreen),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let fullscreen = context
+            .browser_context
+            .page_surface_for_web_contents(handle, false, None, None)
+            .unwrap();
         assert!(!fullscreen.document_hidden());
         assert_eq!(
-            contents.window.surface.state,
+            context
+                .browser_context
+                .web_contents_window_surface(handle)
+                .unwrap()
+                .state,
             WindowSurfaceState::Fullscreen
         );
     }

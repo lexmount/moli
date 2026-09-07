@@ -19,6 +19,7 @@ use axum::{
 use moli_cookie_jar::StoredCookie;
 use moli_core::{
     LayoutPolicy, OptionalResourceFetchMask,
+    browser::BrowserService,
     runtime::{NavigationRuntimeConfig, storage_partition::StoragePartitionState},
 };
 use moli_fetch::FetchConfig;
@@ -159,6 +160,7 @@ impl ProtocolServer {
         )?;
 
         let cdp_owner_registry = app_state.cdp_owner_registry.clone();
+        let browser_service = app_state.browser_service.clone();
         let app = build_router(app_state);
 
         let listener = listener.tap_io(|tcp_stream| {
@@ -166,6 +168,7 @@ impl ProtocolServer {
         });
         let result = axum::serve(listener, app).await;
         cdp_owner_registry.shutdown().await;
+        browser_service.shutdown();
         result.context("protocol server failed")
     }
 }
@@ -737,6 +740,7 @@ fn is_websocket_upgrade_request(request: &Request<Body>) -> bool {
 
 #[derive(Clone)]
 struct AppState {
+    browser_service: BrowserService,
     browser_ws_url: String,
     page_ws_url: String,
     bidi_ws_url: String,
@@ -781,13 +785,13 @@ impl AppState {
         navigation_runtime_config: NavigationRuntimeConfig,
         screencast_interval_ms: u32,
     ) -> anyhow::Result<Self> {
-        Ok(Self::from_parts(
+        Self::from_parts(
             addr,
             SharedCookieProfile::from_storage_partition(storage_partition.clone()),
             storage_partition,
             navigation_runtime_config,
             screencast_interval_ms,
-        ))
+        )
     }
 
     fn from_parts(
@@ -796,11 +800,13 @@ impl AppState {
         storage_partition: Arc<StoragePartitionState>,
         navigation_runtime_config: NavigationRuntimeConfig,
         screencast_interval_ms: u32,
-    ) -> Self {
+    ) -> anyhow::Result<Self> {
+        let browser_service = BrowserService::start().map_err(anyhow::Error::msg)?;
         let cdp_agent_host_directory = SharedCdpAgentHostDirectory::default();
         let cdp_target_id_allocator = Arc::new(AtomicU64::new(0));
         let cdp_tab_target_id_allocator = Arc::new(AtomicU64::new(0));
         let cdp_owner_registry = SharedCdpOwnerRegistry::new(
+            browser_service.handle(),
             cdp_agent_host_directory.clone(),
             cdp_target_id_allocator,
             cdp_tab_target_id_allocator,
@@ -809,7 +815,8 @@ impl AppState {
             navigation_runtime_config.clone(),
             screencast_interval_ms,
         );
-        Self {
+        Ok(Self {
+            browser_service,
             browser_ws_url: format!("ws://{addr}/devtools/browser/{DEFAULT_BROWSER_ID}"),
             page_ws_url: format!("ws://{addr}/devtools/page/{DEFAULT_TARGET_ID}"),
             bidi_ws_url: format!("ws://{addr}/session"),
@@ -826,7 +833,7 @@ impl AppState {
             optional_resource_fetch_mask: navigation_runtime_config.optional_resource_fetch_mask(),
             subframe_loading_enabled: navigation_runtime_config.subframe_loading_enabled(),
             layout_policy: navigation_runtime_config.layout_policy(),
-        }
+        })
     }
 
     fn initial_storage_partition(

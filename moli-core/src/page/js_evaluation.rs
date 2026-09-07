@@ -227,6 +227,25 @@ impl Page {
         )
         .await
     }
+
+    pub fn start_page_surface_override_script(&self, source: &str) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::RunPageSurfaceOverrideScript {
+            source: source.to_owned(),
+        })
+    }
+
+    pub fn finish_page_surface_override_script(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<()> {
+        let reply = self.finish_page_command(completion);
+        expect_page_reply!(
+            reply,
+            "run page surface override script",
+            "a unit reply",
+            RendererPageReply::Unit => Ok(()),
+        )
+    }
 }
 
 // Decoding a frozen inspection reply requires no Browser Page residence.

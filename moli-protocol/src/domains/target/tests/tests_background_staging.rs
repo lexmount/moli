@@ -1422,19 +1422,15 @@ async fn same_context_background_session_can_clear_its_own_emulated_media_before
             "background": true, "browserContextId": "BID-9-PRE-MEDIA-CLEAR", "url": "about:blank#second"}
     }))
     .await;
-    let created = ctx.take_one();
-    assert_eq!(created["method"], "Target.targetCreated");
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    let attached = ctx.take_one();
-    assert_eq!(attached["method"], "Target.attachedToTarget");
+    let second_target_id = take_created_target_id(&mut ctx, 10419443);
+    let attached = ctx.take_first_matching("second target attachment", |message| {
+        message["method"] == json!("Target.attachedToTarget")
+            && message["params"]["targetInfo"]["targetId"] == json!(second_target_id)
+    });
     let second_session_id = attached["params"]["sessionId"]
         .as_str()
         .expect("second target session id")
         .to_owned();
-    ctx.expect_result(10419443, json!({ "targetId": second_target_id }), None);
 
     ctx.process_async(json!({
         "id": 10419444,
@@ -5421,11 +5417,13 @@ async fn same_context_named_popup_reuse_navigates_and_activates_loaded_owner() {
     )
     .await;
     ctx.enable_background_navigation_scheduler_for_test();
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .remember_target_window_name("reportWindow", &owner.target_id);
+    let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
+    let handle = browser_context
+        .web_contents_handle_for_target(&owner.target_id)
+        .unwrap();
+    browser_context
+        .set_web_contents_window_name(handle, Some("reportWindow".into()))
+        .unwrap();
 
     ctx.process_async(json!({
         "id": 1041949446,

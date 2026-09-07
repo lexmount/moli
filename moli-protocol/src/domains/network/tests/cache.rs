@@ -112,7 +112,9 @@ async fn cached_subresource_reload_emits_served_from_cache_before_response() {
     let cache_dir = unique_cdp_cache_dir("subresource-served-from-cache");
     let mut fetch_config = FetchConfig::default();
     fetch_config.set_http_cache_dir(Some(cache_dir.display().to_string()));
-    let mut ctx = TestContext::from_conn(CdpConnection::new_with_fetch_config(fetch_config));
+    let mut ctx = TestContext::from_conn(crate::test_support::connection_with_fetch_config(
+        fetch_config,
+    ));
     let mut browser_context = ctx.conn.new_browser_context("BID-1".to_owned());
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
@@ -274,7 +276,9 @@ async fn cached_main_document_navigation_emits_served_from_cache_before_response
     let cache_dir = unique_cdp_cache_dir("main-document-served-from-cache");
     let mut fetch_config = FetchConfig::default();
     fetch_config.set_http_cache_dir(Some(cache_dir.display().to_string()));
-    let mut ctx = TestContext::from_conn(CdpConnection::new_with_fetch_config(fetch_config));
+    let mut ctx = TestContext::from_conn(crate::test_support::connection_with_fetch_config(
+        fetch_config,
+    ));
     let mut browser_context = ctx.conn.new_browser_context("BID-1".to_owned());
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
@@ -443,7 +447,7 @@ async fn clear_browser_cache_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn clear_browser_cache_clears_response_body_and_stream_artifacts() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.record_captured_response_body("REQ-1".to_owned(), "body".to_owned(), [None]);
     bc.insert_io_stream("STREAM-1".to_owned(), b"payload".to_vec(), 0);
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -474,7 +478,7 @@ async fn clear_browser_cache_clears_configured_disk_http_cache() {
 
     let mut fetch_config = FetchConfig::default();
     fetch_config.set_http_cache_dir(Some(cache_dir.display().to_string()));
-    let mut ctx = TestContext::from_conn(crate::conn::CdpConnection::new_with_fetch_config(
+    let mut ctx = TestContext::from_conn(crate::test_support::connection_with_fetch_config(
         fetch_config,
     ));
     let browser_context = ctx.conn.new_browser_context("BID-1".into());
@@ -508,7 +512,7 @@ async fn clear_browser_cache_uses_browser_context_http_cache_owner() {
 
     let mut fetch_config = FetchConfig::default();
     fetch_config.set_http_cache_dir(None);
-    let mut ctx = TestContext::from_conn(crate::conn::CdpConnection::new_with_fetch_config(
+    let mut ctx = TestContext::from_conn(crate::test_support::connection_with_fetch_config(
         fetch_config,
     ));
     let browser_context = BrowserContext::new_with_storage_partition_and_http_cache(
@@ -618,12 +622,12 @@ fn new_ephemeral_browser_context_inherits_effective_http_cache_owner() {
     fetch_config.set_http_cache_dir(Some(cache_dir.display().to_string()));
     fetch_config.set_http_cache_max_bytes(Some(77));
 
-    let conn = crate::conn::CdpConnection::new_with_fetch_config(fetch_config);
+    let conn = crate::test_support::connection_with_fetch_config(fetch_config);
     let browser_context = conn.new_ephemeral_browser_context("BID-ephemeral".to_owned());
 
     assert_eq!(
         browser_context.http_cache_configuration_for_test(),
-        (Some(cache_dir.as_path()), Some(77))
+        (Some(cache_dir), Some(77))
     );
 }
 
@@ -641,19 +645,19 @@ fn new_browser_context_inherits_effective_http_cache_owner() {
     fetch_config.set_http_cache_dir(Some(cache_dir.display().to_string()));
     fetch_config.set_http_cache_max_bytes(Some(77));
 
-    let conn = crate::conn::CdpConnection::new_with_fetch_config(fetch_config);
+    let conn = crate::test_support::connection_with_fetch_config(fetch_config);
     let browser_context = conn.new_browser_context("BID-default".to_owned());
 
     assert_eq!(
         browser_context.http_cache_configuration_for_test(),
-        (Some(cache_dir.as_path()), Some(77))
+        (Some(cache_dir), Some(77))
     );
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     let url = Url::parse("https://example.test/document").unwrap();
     bc.register_pending_fetch_response_navigation(
         "INT-1".to_owned(),
@@ -663,6 +667,7 @@ async fn clear_browser_cache_keeps_pending_response_navigation_transfer() {
             redirect_headers: None,
             navigate_id: Some(1),
             owner: crate::conn::CommandOwnerScope::for_session("SID-1"),
+            web_contents: NavigationDispatchState::detached_web_contents_for_test(),
             result_projection: crate::conn::NavigationResultProjection::Cdp(
                 json!({"frameId": "TID-1", "loaderId": LOADER_ID}),
             ),
@@ -728,7 +733,7 @@ async fn set_cache_disabled_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_cache_disabled_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 21,
@@ -741,7 +746,7 @@ async fn set_cache_disabled_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_cache_disabled_updates_browser_context_state() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 219,
@@ -784,7 +789,7 @@ async fn set_cache_disabled_updates_browser_context_state() {
 #[tokio::test(flavor = "multi_thread")]
 async fn devtools_set_cache_behavior_global_updates_existing_targets_and_default() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-active".to_owned());
     bc.register_page_target_fixture(
         "TID-background".to_owned(),
@@ -831,17 +836,13 @@ async fn devtools_set_cache_behavior_global_updates_existing_targets_and_default
             .expect("background target should retain its network policy")
             .cache_disabled()
     );
-    assert!(
-        ctx.conn
-            .new_browser_context("BID-future".to_owned())
-            .global_cache_disabled
-    );
+    assert!(ctx.conn.browser_global_overrides.cache_disabled);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn devtools_set_cache_behavior_contexts_only_updates_requested_targets() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-active".to_owned());
     bc.register_page_target_fixture(
         "TID-background".to_owned(),
@@ -885,17 +886,13 @@ async fn devtools_set_cache_behavior_contexts_only_updates_requested_targets() {
             .expect("background target should retain its network policy")
             .cache_disabled()
     );
-    assert!(
-        !ctx.conn
-            .new_browser_context("BID-future".to_owned())
-            .global_cache_disabled
-    );
+    assert!(!ctx.conn.browser_global_overrides.cache_disabled);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn devtools_set_cache_behavior_rejects_unknown_context() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     let error = ctx
         .conn
@@ -928,7 +925,7 @@ async fn devtools_set_cache_behavior_rejects_unknown_context() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn devtools_set_cache_behavior_without_contexts_sets_future_default() {
+async fn devtools_set_cache_behavior_without_contexts_applies_to_future_target() {
     let mut ctx = TestContext::new();
 
     ctx.conn
@@ -951,10 +948,13 @@ async fn devtools_set_cache_behavior_without_contexts_sets_future_default() {
         .0
         .expect("global cache behavior should be accepted before contexts exist");
 
+    assert!(ctx.conn.browser_global_overrides.cache_disabled);
+    ctx.conn.install_default_browser_target();
+    let context = ctx.conn.browser_context.as_ref().expect("future context");
     assert!(
-        ctx.conn
-            .new_browser_context("BID-future".to_owned())
-            .global_cache_disabled
+        context
+            .effective_policy_for_target(context.active_target_id().expect("future target"))
+            .cache_disabled()
     );
 }
 #[tokio::test(flavor = "multi_thread")]
@@ -971,7 +971,7 @@ async fn set_bypass_service_worker_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_bypass_service_worker_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     ctx.process_async(json!({
         "id": 25,
         "method": "Network.setBypassServiceWorker",
@@ -983,7 +983,7 @@ async fn set_bypass_service_worker_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_bypass_service_worker_updates_browser_context_state() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 239,

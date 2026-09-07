@@ -2,8 +2,8 @@ use super::BrowserContext;
 use crate::conn::state::devtools_session::DevToolsNetworkSessionState;
 use crate::conn::state::javascript_dialog::TargetJavaScriptDialogState;
 use crate::conn::state::page_agent_host::PageAgentHost;
-use crate::conn::state::web_contents::NetworkRequestPolicy;
 use crate::domains::audits_output_state::TargetAuditsSessionState;
+use moli_core::browser::web_contents::NetworkRequestPolicy;
 use moli_core::page::V8InspectorSessionState;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -72,10 +72,23 @@ impl PageAgentHost {
 }
 
 impl BrowserContext {
+    fn dismiss_javascript_dialog_projection_for_session(
+        &mut self,
+        target_id: &str,
+        session_key: &moli_page_types::DevToolsSessionKey,
+    ) {
+        let projections =
+            self.take_projected_javascript_dialogs_for_session(target_id, session_key);
+        self.dismiss_projected_javascript_dialogs(projections);
+    }
+
     pub(crate) fn bypass_content_security_policy_for_target(&self, target_id: &str) -> bool {
-        self.web_contents_for_target(target_id)
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("resolved WebContents must remain live");
+        self.browser_context
+            .web_contents_bypass_content_security_policy(handle)
             .expect("resolved WebContents must remain live")
-            .bypass_content_security_policy
     }
 
     // Value-only bridge until AgentHost/BrowserHandle install (Commits 14/22).
@@ -86,9 +99,12 @@ impl BrowserContext {
             .expect("resolved target projection must remain live")
             .devtools_sessions
             .page_bypass_csp_enabled();
-        self.web_contents_for_target_mut(target_id)
-            .expect("resolved WebContents must remain live")
-            .set_bypass_content_security_policy(bypass);
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("resolved WebContents must remain live");
+        self.browser_context
+            .set_web_contents_bypass_content_security_policy(handle, bypass)
+            .expect("resolved WebContents must remain live");
     }
 
     pub(crate) fn set_devtools_bypass_csp_enabled_for_target(
@@ -112,7 +128,7 @@ impl BrowserContext {
         target_id: &str,
         session_key: &moli_page_types::DevToolsSessionKey,
     ) {
-        self.dismiss_devtools_javascript_dialogs_for_target(target_id, session_key);
+        self.dismiss_javascript_dialog_projection_for_session(target_id, session_key);
         let state = &mut self
             .page_targets
             .get_mut(target_id)
@@ -145,13 +161,11 @@ impl BrowserContext {
         let Some(mut removed) = removed else {
             return false;
         };
-        self.dismiss_javascript_dialog_projections_for_target(
-            target_id,
-            removed
-                .page_session_state
-                .javascript_dialog_state
-                .take_pending(),
-        );
+        let projections = removed
+            .page_session_state
+            .javascript_dialog_state
+            .take_pending();
+        self.dismiss_projected_javascript_dialogs(projections);
         self.install_effective_content_security_policy_for_target(target_id);
         true
     }
@@ -161,20 +175,28 @@ impl BrowserContext {
     pub(crate) fn browser_identity_override_for_target(
         &self,
         target_id: &str,
-    ) -> Option<&moli_browser_profile::BrowserIdentityProfile> {
-        self.web_contents_for_target(target_id)
+    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("resolved WebContents must remain live");
+        self.browser_context
+            .web_contents_browser_identity_override(handle)
             .expect("resolved WebContents must remain live")
-            .browser_identity_override
-            .as_ref()
     }
 
     pub(crate) fn effective_policy_for_target(&self, target_id: &str) -> EffectiveTargetPolicy {
-        let contents = &self
-            .web_contents_for_target(target_id)
+        let handle = self
+            .web_contents_handle_for_target(target_id)
             .expect("resolved WebContents must remain live");
         EffectiveTargetPolicy {
-            network_request: contents.network_request_policy.clone(),
-            browser_identity_override: contents.browser_identity_override.clone(),
+            network_request: self
+                .browser_context
+                .web_contents_network_request_policy(handle)
+                .expect("resolved WebContents must remain live"),
+            browser_identity_override: self
+                .browser_context
+                .web_contents_browser_identity_override(handle)
+                .expect("resolved WebContents must remain live"),
         }
     }
 
@@ -190,9 +212,12 @@ impl BrowserContext {
         let mut headers = projection.base_network_request_policy.extra_headers.clone();
         overlay_extra_headers(&mut headers, &policy.extra_headers);
         policy.extra_headers = headers;
-        self.web_contents_for_target_mut(target_id)
-            .expect("resolved WebContents must remain live")
-            .set_network_request_policy(policy);
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("resolved WebContents must remain live");
+        self.browser_context
+            .set_web_contents_network_request_policy(handle, policy)
+            .expect("resolved WebContents must remain live");
     }
 
     pub(crate) fn set_base_cache_disabled_for_target(&mut self, target_id: &str, disabled: bool) {
@@ -202,6 +227,17 @@ impl BrowserContext {
             .base_network_request_policy
             .cache_disabled = disabled;
         self.install_effective_network_request_policy_for_target(target_id);
+    }
+
+    pub(in crate::conn) fn apply_browser_cache_disabled(&mut self, disabled: bool) {
+        let target_ids = self
+            .page_targets
+            .iter()
+            .map(|target| target.target_id().to_owned())
+            .collect::<Vec<_>>();
+        for target_id in target_ids {
+            self.set_base_cache_disabled_for_target(&target_id, disabled);
+        }
     }
 
     pub(crate) fn set_base_extra_headers_for_target(
@@ -218,22 +254,31 @@ impl BrowserContext {
     }
 
     pub(crate) fn network_offline_for_target(&self, target_id: &str) -> bool {
-        self.web_contents_for_target(target_id)
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("resolved WebContents must remain live");
+        self.browser_context
+            .web_contents_network_offline(handle)
             .expect("resolved WebContents must remain live")
-            .network_offline
     }
 
     // Value-only bridge until AgentHost/BrowserHandle install (Commits 14/22).
     pub(crate) fn set_network_offline_for_target(&mut self, target_id: &str, offline: bool) {
-        self.web_contents_for_target_mut(target_id)
-            .expect("resolved WebContents must remain live")
-            .set_network_offline(offline);
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("resolved WebContents must remain live");
+        self.browser_context
+            .set_web_contents_network_offline(handle, offline)
+            .expect("resolved WebContents must remain live");
     }
 
     pub(crate) fn tls_verify_host_override_for_target(&self, target_id: &str) -> Option<bool> {
-        self.web_contents_for_target(target_id)
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("resolved WebContents must remain live");
+        self.browser_context
+            .web_contents_tls_verify_host_override(handle)
             .expect("resolved WebContents must remain live")
-            .tls_verify_host_override
     }
 
     // Value-only bridge until AgentHost/BrowserHandle install (Commits 14/22).
@@ -242,9 +287,12 @@ impl BrowserContext {
         target_id: &str,
         enabled: Option<bool>,
     ) {
-        self.web_contents_for_target_mut(target_id)
-            .expect("resolved WebContents must remain live")
-            .set_tls_verify_host_override(enabled);
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("resolved WebContents must remain live");
+        self.browser_context
+            .set_web_contents_tls_verify_host_override(handle, enabled)
+            .expect("resolved WebContents must remain live");
     }
 
     // Like request policy, this value-only bridge is replaced by the typed
@@ -263,9 +311,12 @@ impl BrowserContext {
                     .base_browser_identity
                     .profile_owned()
             });
-        self.web_contents_for_target_mut(target_id)
-            .expect("resolved WebContents must remain live")
-            .set_browser_identity_override(identity);
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("resolved WebContents must remain live");
+        self.browser_context
+            .set_web_contents_browser_identity_override(handle, identity)
+            .expect("resolved WebContents must remain live");
     }
 
     pub(crate) fn set_base_browser_identity_override_for_target(
@@ -394,22 +445,24 @@ impl BrowserContext {
         &mut self,
         target_id: &str,
         locale_override: Option<String>,
-    ) -> Result<(), &'static str> {
-        self.web_contents_for_target(target_id)
-            .expect("resolved WebContents must remain live")
-            .environment_owner
-            .set_locale(locale_override.as_deref())
+    ) -> Result<(), String> {
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("live WebContents");
+        self.browser_context
+            .set_web_contents_locale_override(handle, locale_override)
     }
 
     pub(crate) fn set_base_timezone_override_for_target(
         &mut self,
         target_id: &str,
         timezone_override: Option<String>,
-    ) -> Result<(), &'static str> {
-        self.web_contents_for_target(target_id)
-            .expect("resolved WebContents must remain live")
-            .environment_owner
-            .set_timezone(timezone_override.as_deref())
+    ) -> Result<(), String> {
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("live WebContents");
+        self.browser_context
+            .set_web_contents_timezone_override(handle, timezone_override)
     }
 
     pub(crate) fn clear_devtools_network_state_for_target(
@@ -438,34 +491,23 @@ impl BrowserContext {
         self.install_effective_browser_identity_for_target(target_id);
     }
 
-    pub(crate) fn has_pending_javascript_dialog_for_target(&self, target_id: &str) -> bool {
-        !self
-            .web_contents_for_target(target_id)
-            .expect("resolved WebContents must remain live")
-            .javascript_dialogs
-            .is_empty()
-    }
-
     pub(crate) fn has_non_default_session_state_for_target(&self, target_id: &str) -> bool {
         let projection = self
             .page_targets
             .get(target_id)
             .expect("resolved target projection must remain live");
-        let contents = self
-            .web_contents_for_target(target_id)
+        let handle = self
+            .web_contents_handle_for_target(target_id)
             .expect("resolved WebContents must remain live");
         projection.devtools_sessions.has_non_default_state()
             || projection.runtime_slot.primary_network_events_enabled()
             || projection.base_network_request_policy != BaseNetworkRequestPolicy::default()
-            || contents.network_offline
             || projection.base_browser_identity
                 != crate::conn::state::BaseBrowserIdentityOverrideState::default()
-            || contents.browser_identity_override.is_some()
-            || contents.tls_verify_host_override.is_some()
-            || contents.bypass_content_security_policy
-            || contents.environment_owner.has_override()
-            || contents.emulation_policy != crate::conn::state::EmulationPolicy::default()
-            || contents.network_request_policy != NetworkRequestPolicy::default()
+            || self
+                .browser_context
+                .web_contents_has_non_default_policy(handle)
+                .expect("resolved WebContents must remain live")
             || projection.input_intercept_drags_enabled
             || projection.input_drag_intercepted
             || projection.css_enabled
@@ -799,19 +841,11 @@ pub(in crate::conn::state) struct BaseNetworkRequestPolicy {
     extra_headers: moli_fetch::RequestHeaders,
 }
 
-impl BaseNetworkRequestPolicy {
-    pub(in crate::conn::state) fn with_cache_disabled(cache_disabled: bool) -> Self {
-        Self {
-            cache_disabled,
-            ..Self::default()
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{PageScreencastConfig, PageScreencastFormat, PageScreencastSessionState};
     use crate::conn::BrowserContext;
+    use moli_core::browser::WebContentsHandle;
     use moli_page_types::DevToolsSessionKey;
 
     fn policy_context(target_id: &str) -> BrowserContext {
@@ -831,12 +865,30 @@ mod tests {
         );
         context.set_network_offline_for_target(target_id, true);
         let contents_id = context.selected_web_contents_id().unwrap();
+        let handle = WebContentsHandle::new(context.browser_context_id(), contents_id);
         drop(context.page_targets.remove(target_id).unwrap());
-        let contents = context.physical.web_contents.get_mut(&contents_id).unwrap();
-        assert!(contents.bypass_content_security_policy);
-        contents.set_bypass_content_security_policy(false);
-        assert!(!contents.bypass_content_security_policy);
-        assert!(contents.network_offline);
+        assert!(
+            context
+                .browser_context
+                .web_contents_bypass_content_security_policy(handle)
+                .unwrap()
+        );
+        context
+            .browser_context
+            .set_web_contents_bypass_content_security_policy(handle, false)
+            .unwrap();
+        assert!(
+            !context
+                .browser_context
+                .web_contents_bypass_content_security_policy(handle)
+                .unwrap()
+        );
+        assert!(
+            context
+                .browser_context
+                .web_contents_network_offline(handle)
+                .unwrap()
+        );
     }
 
     #[test]
@@ -847,14 +899,32 @@ mod tests {
         context.set_network_offline_for_target(target_id, true);
         let id = context.selected_web_contents_id().unwrap();
         let contents_id = context.selected_web_contents_id().unwrap();
+        let handle = WebContentsHandle::new(context.browser_context_id(), contents_id);
         drop(context.page_targets.remove(target_id).unwrap());
-        let contents = context.physical.web_contents.get_mut(&contents_id).unwrap();
-        assert_eq!(contents.id(), id);
-        assert_eq!(contents.tls_verify_host_override, Some(false));
+        assert_eq!(handle.id(), id);
+        assert_eq!(
+            context
+                .browser_context
+                .web_contents_tls_verify_host_override(handle),
+            Ok(Some(false))
+        );
         for enabled in [Some(true), None] {
-            contents.set_tls_verify_host_override(enabled);
-            assert_eq!(contents.tls_verify_host_override, enabled);
-            assert!(contents.network_offline);
+            context
+                .browser_context
+                .set_web_contents_tls_verify_host_override(handle, enabled)
+                .unwrap();
+            assert_eq!(
+                context
+                    .browser_context
+                    .web_contents_tls_verify_host_override(handle),
+                Ok(enabled)
+            );
+            assert!(
+                context
+                    .browser_context
+                    .web_contents_network_offline(handle)
+                    .unwrap()
+            );
         }
     }
 
@@ -868,13 +938,32 @@ mod tests {
         assert!(context.network_offline_for_target(target_id));
         let id = context.selected_web_contents_id().unwrap();
         let contents_id = context.selected_web_contents_id().unwrap();
+        let handle = WebContentsHandle::new(context.browser_context_id(), contents_id);
         drop(context.page_targets.remove(target_id).unwrap());
-        let contents = context.physical.web_contents.get_mut(&contents_id).unwrap();
-        assert_eq!(contents.id(), id);
-        assert!(contents.network_offline);
-        contents.set_network_offline(false);
-        assert!(!contents.network_offline);
-        assert!(contents.network_request_policy.cache_disabled);
+        assert_eq!(handle.id(), id);
+        assert!(
+            context
+                .browser_context
+                .web_contents_network_offline(handle)
+                .unwrap()
+        );
+        context
+            .browser_context
+            .set_web_contents_network_offline(handle, false)
+            .unwrap();
+        assert!(
+            !context
+                .browser_context
+                .web_contents_network_offline(handle)
+                .unwrap()
+        );
+        assert!(
+            context
+                .browser_context
+                .web_contents_network_request_policy(handle)
+                .unwrap()
+                .cache_disabled
+        );
     }
 
     #[test]
@@ -898,13 +987,14 @@ mod tests {
             .unwrap()
             .clone();
         let snapshot = context.effective_policy_for_target(target_id);
+        let handle = context.web_contents_handle_for_target(target_id).unwrap();
         context
-            .web_contents_for_target_mut(target_id)
-            .unwrap()
-            .set_browser_identity_override(Some(base.clone()));
+            .browser_context
+            .set_web_contents_browser_identity_override(handle, Some(base.clone()))
+            .unwrap();
         assert_eq!(
             context.browser_identity_override_for_target(target_id),
-            Some(&base)
+            Some(base.clone())
         );
         assert_eq!(
             context
@@ -919,14 +1009,35 @@ mod tests {
         assert_eq!(snapshot.browser_identity_override(), Some(&installed));
         let id = context.selected_web_contents_id().unwrap();
         let contents_id = context.selected_web_contents_id().unwrap();
+        let handle = WebContentsHandle::new(context.browser_context_id(), contents_id);
         drop(context.page_targets.remove(target_id).unwrap());
-        let contents = context.physical.web_contents.get_mut(&contents_id).unwrap();
-        assert_eq!(contents.id(), id);
-        assert_eq!(contents.browser_identity_override, Some(base));
-        contents.set_browser_identity_override(Some(installed.clone()));
-        assert_eq!(contents.browser_identity_override, Some(installed));
-        contents.set_browser_identity_override(None);
-        assert!(contents.browser_identity_override.is_none());
+        assert_eq!(handle.id(), id);
+        assert_eq!(
+            context
+                .browser_context
+                .web_contents_browser_identity_override(handle),
+            Ok(Some(base))
+        );
+        context
+            .browser_context
+            .set_web_contents_browser_identity_override(handle, Some(installed.clone()))
+            .unwrap();
+        assert_eq!(
+            context
+                .browser_context
+                .web_contents_browser_identity_override(handle),
+            Ok(Some(installed))
+        );
+        context
+            .browser_context
+            .set_web_contents_browser_identity_override(handle, None)
+            .unwrap();
+        assert_eq!(
+            context
+                .browser_context
+                .web_contents_browser_identity_override(handle),
+            Ok(None)
+        );
     }
 
     #[test]
@@ -955,7 +1066,7 @@ mod tests {
         assert_eq!(profile.navigator_platform(), "TestPlatform");
         assert_eq!(
             context.browser_identity_override_for_target(target_id),
-            Some(profile)
+            Some(profile.clone())
         );
         assert_eq!(
             context.active_page_target().reported_user_agent_override(),
@@ -1010,10 +1121,11 @@ mod tests {
             cache_disabled: false,
             ..installed.clone()
         };
+        let handle = context.web_contents_handle_for_target(target_id).unwrap();
         context
-            .web_contents_for_target_mut(target_id)
-            .unwrap()
-            .set_network_request_policy(independent.clone());
+            .browser_context
+            .set_web_contents_network_request_policy(handle, independent.clone())
+            .unwrap();
         assert_eq!(
             context
                 .effective_policy_for_target(target_id)
@@ -1030,12 +1142,25 @@ mod tests {
         );
         let id = context.selected_web_contents_id().unwrap();
         let contents_id = context.selected_web_contents_id().unwrap();
+        let handle = WebContentsHandle::new(context.browser_context_id(), contents_id);
         drop(context.page_targets.remove(target_id).unwrap());
-        let contents = context.physical.web_contents.get_mut(&contents_id).unwrap();
-        assert_eq!(contents.id(), id);
-        assert_eq!(contents.network_request_policy, independent);
-        contents.set_network_request_policy(installed.clone());
-        assert_eq!(contents.network_request_policy, installed);
+        assert_eq!(handle.id(), id);
+        assert_eq!(
+            context
+                .browser_context
+                .web_contents_network_request_policy(handle),
+            Ok(independent)
+        );
+        context
+            .browser_context
+            .set_web_contents_network_request_policy(handle, installed.clone())
+            .unwrap();
+        assert_eq!(
+            context
+                .browser_context
+                .web_contents_network_request_policy(handle),
+            Ok(installed)
+        );
     }
 
     #[test]
@@ -1140,8 +1265,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn base_environment_claims_survive_projection_drop() {
+    #[tokio::test]
+    async fn base_environment_claims_survive_projection_drop() {
         let target_id = "TID-environment";
         let mut context = policy_context(target_id);
         context
@@ -1150,27 +1275,38 @@ mod tests {
         context
             .set_base_timezone_override_for_target(target_id, Some("Europe/Paris".into()))
             .unwrap();
-        let id = context.selected_web_contents_id().unwrap();
+        let handle = context.web_contents_handle_for_target(target_id).unwrap();
         drop(context.page_targets.remove(target_id).unwrap());
-        let contents = context.physical.web_contents.shift_remove(&id).unwrap();
+        let contents = context.browser_context;
         assert_eq!(
-            contents.environment_owner.locale().as_deref(),
+            contents
+                .web_contents_locale_override(handle)
+                .unwrap()
+                .as_deref(),
             Some("fr-FR")
         );
         assert_eq!(
-            contents.environment_owner.timezone().as_deref(),
+            contents
+                .web_contents_timezone_override(handle)
+                .unwrap()
+                .as_deref(),
             Some("Europe/Paris")
         );
         contents
-            .environment_owner
-            .set_timezone(Some("Asia/Tokyo"))
+            .set_web_contents_timezone_override(handle, Some("Asia/Tokyo".into()))
             .unwrap();
         assert_eq!(
-            contents.environment_owner.locale().as_deref(),
+            contents
+                .web_contents_locale_override(handle)
+                .unwrap()
+                .as_deref(),
             Some("fr-FR")
         );
         assert_eq!(
-            contents.environment_owner.timezone().as_deref(),
+            contents
+                .web_contents_timezone_override(handle)
+                .unwrap()
+                .as_deref(),
             Some("Asia/Tokyo")
         );
         let peer = moli_core::ProcessEnvironmentOwner::default();
@@ -1182,7 +1318,11 @@ mod tests {
             peer.set_timezone(Some("Europe/Berlin")),
             Err("Timezone override is already in effect")
         );
-        drop(contents);
+        contents
+            .close_web_contents(handle)
+            .unwrap()
+            .close_async()
+            .await;
         peer.set_locale(Some("de-DE")).unwrap();
         peer.set_timezone(Some("Europe/Berlin")).unwrap();
     }
@@ -1239,11 +1379,20 @@ mod tests {
                 .is_err()
         );
         assert!(
-            !context
-                .web_contents_for_target(target_id)
+            context
+                .browser_context
+                .web_contents_locale_override(
+                    context.web_contents_handle_for_target(target_id).unwrap()
+                )
                 .unwrap()
-                .environment_owner
-                .has_override()
+                .is_none()
+                && context
+                    .browser_context
+                    .web_contents_timezone_override(
+                        context.web_contents_handle_for_target(target_id).unwrap()
+                    )
+                    .unwrap()
+                    .is_none()
         );
         assert_eq!(
             context

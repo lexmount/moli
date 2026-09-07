@@ -4,20 +4,48 @@
 //! CDP wire identifiers and their numeric representation does not define an
 //! ordering relationship.
 
+mod browser_context;
+mod captured_body;
 mod document_lifecycle;
 mod document_lifetime;
 mod downloads;
+mod emulation;
+mod navigation_error;
+mod owner;
+pub use navigation_error::{
+    NavigationNetworkError, NavigationNetworkErrorKind, NavigationRequestBlocked,
+};
 mod permissions;
 mod renderer_residence;
+mod service_workers;
+pub mod web_contents;
 
+pub use browser_context::*;
+pub use captured_body::{
+    CapturedBody, CapturedBodyChunkReader, CapturedBodyWriter, DEFAULT_BODY_MATERIALIZE_LIMIT,
+    ensure_materialize_limit,
+};
 pub use document_lifecycle::DocumentLifecycle;
 pub use document_lifetime::{DocumentLifetime, DocumentLifetimeObserver, DocumentRetirement};
 pub use downloads::{
     DownloadAccessError, DownloadBehavior, DownloadBody, DownloadManager, DownloadMetadata,
     DownloadObservation, DownloadPolicy, DownloadSnapshot, DownloadState,
 };
+pub use emulation::{
+    EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
+    EmulatedMediaOverrides, EmulatedNetworkConditions, EmulatedViewportSurface,
+};
+pub use owner::{
+    BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserContextHandle,
+    BrowserDocumentMaterialization, BrowserDocumentNavigationCommit, BrowserHandle,
+    BrowserInitialDocumentAdmission, BrowserInitialDocumentBuild, BrowserInterceptedNavigationLoad,
+    BrowserInterceptedNavigationResponse, BrowserNavigationLoad, BrowserPreparedDocumentNavigation,
+    BrowserPreparedNavigationResponse, BrowserService, PendingDocumentRetirement,
+    PendingWebContentsClose, WebContentsCreation,
+};
 pub use permissions::{PermissionDefaults, PermissionOverrides};
 pub use renderer_residence::RendererPageResidenceIdentity;
+pub use service_workers::ServiceWorkerCommand;
 
 /// Navigation semantics, independent of the protocol that requested the load.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -91,6 +119,60 @@ define_browser_identity!(
     "browser request id",
     "Identity of one browser-owned request decision, independent of protocol request IDs."
 );
+
+/// Stable routing capability for one browser-owned WebContents.
+///
+/// This carries only physical Browser identities. Frontend target and session
+/// identifiers are deliberately resolved before this capability is created.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct WebContentsHandle {
+    context: BrowserContextId,
+    web_contents: WebContentsId,
+}
+
+impl WebContentsHandle {
+    pub const fn new(context: BrowserContextId, web_contents: WebContentsId) -> Self {
+        Self {
+            context,
+            web_contents,
+        }
+    }
+
+    pub const fn context(self) -> BrowserContextId {
+        self.context
+    }
+
+    pub const fn id(self) -> WebContentsId {
+        self.web_contents
+    }
+}
+
+/// Exact routing capability for one replaceable browser-owned Document.
+///
+/// A delayed operation must present this complete capability again at commit;
+/// matching only the stable WebContents is insufficient after navigation.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct DocumentHandle {
+    web_contents: WebContentsHandle,
+    document: DocumentId,
+}
+
+impl DocumentHandle {
+    pub const fn new(web_contents: WebContentsHandle, document: DocumentId) -> Self {
+        Self {
+            web_contents,
+            document,
+        }
+    }
+
+    pub const fn web_contents(self) -> WebContentsHandle {
+        self.web_contents
+    }
+
+    pub const fn id(self) -> DocumentId {
+        self.document
+    }
+}
 
 static NEXT_BROWSER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
@@ -175,5 +257,17 @@ mod tests {
             size_of::<Option<BrowserSequence>>(),
             size_of::<BrowserSequence>()
         );
+    }
+
+    #[test]
+    fn document_handle_preserves_the_complete_physical_route() {
+        let context = BrowserContextId::allocate();
+        let contents = WebContentsId::allocate();
+        let document = DocumentId::allocate();
+        let handle = DocumentHandle::new(WebContentsHandle::new(context, contents), document);
+
+        assert_eq!(handle.web_contents().context(), context);
+        assert_eq!(handle.web_contents().id(), contents);
+        assert_eq!(handle.id(), document);
     }
 }

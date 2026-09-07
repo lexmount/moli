@@ -165,10 +165,13 @@ async fn rust_cdp_chromium_target_create_browser_context_proxy_server_is_recorde
         .expect("browserContextId")
         .to_owned();
 
+    let policy = ctx
+        .conn
+        .browser_context_by_id(&browser_context_id)
+        .map(BrowserContext::network_policy)
+        .expect("created BrowserContext");
     assert_eq!(
-        ctx.conn
-            .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.network_policy().http_proxy.as_deref()),
+        policy.http_proxy.as_deref(),
         Some("http://proxy.example:8080")
     );
 }
@@ -193,10 +196,13 @@ async fn rust_cdp_chromium_target_create_browser_context_proxy_bypass_normalizes
         .expect("browserContextId")
         .to_owned();
 
+    let policy = ctx
+        .conn
+        .browser_context_by_id(&browser_context_id)
+        .map(BrowserContext::network_policy)
+        .expect("created BrowserContext");
     assert_eq!(
-        ctx.conn
-            .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.network_policy().http_no_proxy.as_deref()),
+        policy.http_no_proxy.as_deref(),
         Some("localhost,.example.com")
     );
 }
@@ -304,7 +310,7 @@ async fn rust_cdp_chromium_target_dispose_context_clears_context_scoped_download
     assert_eq!(
         ctx.conn
             .download_policy_for_browser_context(Some(&browser_context_id)),
-        &moli_core::browser::DownloadPolicy::default()
+        moli_core::browser::DownloadPolicy::default()
     );
     assert!(
         !ctx.conn

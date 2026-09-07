@@ -75,9 +75,14 @@ impl CdpConnection {
                 )
             })
             .collect();
-        if let Err(error) = self
-            .apply_background_target_surface_overrides_async(previous_target_id)
-            .await
+        let previous = self.browser_web_contents_for_target(previous_target_id);
+        if let Err(error) = async {
+            let previous = previous?;
+            self.apply_browser_page_surface_async(previous, false)
+                .await
+                .map(drop)
+        }
+        .await
         {
             tracing::warn!(
                 target_id = previous_target_id,
@@ -102,11 +107,19 @@ impl CdpConnection {
             .deactivated_target_id()
             .map(|active_target_id| self.page_screencast_session_ids_for_target(active_target_id))
             .unwrap_or_default();
-        let Some(browser_context) = self.browser_context.as_mut() else {
-            anyhow::bail!("BrowserContextNotLoaded");
+        let handle = {
+            let Some(browser_context) = self.browser_context.as_ref() else {
+                anyhow::bail!("BrowserContextNotLoaded");
+            };
+            let Some(handle) = browser_context.web_contents_handle_for_target(target_id) else {
+                return Ok(None);
+            };
+            handle
         };
-        let selected = browser_context.select_page_target_async(target_id).await?;
-        if !selected {
+        if let Err(error) = self.select_browser_web_contents_async(handle).await {
+            return Err(anyhow::anyhow!(error));
+        }
+        if self.browser_context.is_none() {
             return Ok(None);
         }
         self.refresh_active_browser_context_loader();

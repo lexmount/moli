@@ -1310,6 +1310,58 @@ async fn navigation_bootstraps_browser_history_length_before_author_scripts() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn pending_same_document_navigation_cannot_finish_on_a_replacement_document() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(
+        &mut ctx,
+        "BID-stale-same-document",
+        "TID-stale-same-document",
+        "SID-stale-same-document",
+        "about:blank",
+    );
+    let original_url = "data:text/html,<title>navigation-owner</title>";
+    ctx.install_navigation_fixture_for_session_owner(original_url, Some("SID-stale-same-document"))
+        .await;
+
+    let raw = json!({
+        "id": 90_121,
+        "method": "Page.navigate",
+        "sessionId": "SID-stale-same-document",
+        "params": { "url": format!("{original_url}#fragment") }
+    })
+    .to_string();
+    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+        panic!("same-document navigation should start on the original Document");
+    };
+    let completed = pending.wait().await;
+
+    let replacement_url = "data:text/html,<title>replacement-navigation-owner</title>";
+    ctx.install_navigation_fixture_for_session_owner(
+        replacement_url,
+        Some("SID-stale-same-document"),
+    )
+    .await;
+
+    let CdpCommandTaskStep::Complete(outcome) =
+        ctx.conn.complete_pending_command_dispatch(completed).await
+    else {
+        panic!("stale same-document navigation must not continue on the replacement Document");
+    };
+    let (messages, _) = ctx.route_completed_command_outcome_for_test(outcome).await;
+    let response = messages
+        .iter()
+        .find(|message| message["id"] == json!(90_121))
+        .expect("same-document navigation response");
+    assert_eq!(response["error"]["code"], json!(-32000), "{response}");
+    assert_eq!(response["error"]["message"], json!("Document changed"));
+    assert_eq!(
+        ctx.conn.browser_context.as_ref().unwrap().target_url(),
+        replacement_url,
+        "the outgoing navigation must not mutate its replacement",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn navigation_history_supports_playwright_back_forward_commands() {
     let mut ctx = TestContext::new();
     load_bc_with_session(&mut ctx, "BID-1", "TID-1", "SID-1", "about:blank");
@@ -1856,16 +1908,8 @@ async fn get_navigation_history_completes_through_command_dispatch() {
         "SID-HISTORY-COMPLETE",
         page_url,
     );
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .replace_active_page_for_test(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(page_url, None)
+        .await;
 
     let raw = json!({
         "id": 1209,
@@ -1919,16 +1963,8 @@ async fn reset_navigation_history_prunes_browser_and_renderer_history() {
         "SID-RESET-HISTORY",
         &page_url,
     );
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(&page_url)
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .replace_active_page_for_test(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(&page_url, None)
+        .await;
 
     ctx.process_async(json!({
         "id": 1210,
@@ -2241,7 +2277,9 @@ async fn get_navigation_history_targets_loaded_background_owner_without_activati
     let mut ctx = TestContext::new();
     let background_url = "data:text/html,<title>Background History</title><main>background</main>";
 
-    let mut bc = BrowserContext::new("BID-1".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
@@ -2284,7 +2322,9 @@ async fn reset_navigation_history_targets_loaded_background_owner_without_activa
     let mut ctx = TestContext::new();
     let background_url =
         "data:text/html,<title>Background Reset History</title><main>background</main>";
-    let mut browser_context = BrowserContext::new("BID-reset-background".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-reset-background".to_owned());
     browser_context.set_active_target_id("TID-active".to_owned());
     browser_context.attach_active_session("SID-active".to_owned());
     browser_context
@@ -2339,7 +2379,9 @@ async fn reset_navigation_history_targets_loaded_background_owner_without_activa
 #[tokio::test(flavor = "multi_thread")]
 async fn navigate_to_history_entry_targets_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());
@@ -2419,18 +2461,15 @@ async fn get_navigation_history_targets_inactive_loaded_owner_without_activation
         "about:blank",
     );
     let inactive_url = "data:text/html,<title>Inactive History</title><main>inactive</main>";
-    let page = ctx
+    let mut inactive = ctx
         .conn
-        .load_page_via_runtime_async(inactive_url)
-        .await
-        .expect("inactive page should load");
-    let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+        .new_browser_context_fixture_for_test("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
-    inactive.set_target_url(page.final_url().as_str().to_owned());
-    inactive.replace_active_page_for_test(Some(page));
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.install_navigation_fixture_for_session_owner(inactive_url, Some("SID-inactive"))
+        .await;
 
     ctx.process_async(json!({
         "id": 16,
@@ -2522,7 +2561,9 @@ async fn navigation_history_marks_reload_as_reload_transition() {
 #[tokio::test(flavor = "multi_thread")]
 async fn navigate_targets_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<body>active</body>".to_owned());
@@ -2565,7 +2606,9 @@ async fn navigate_targets_background_owner_without_activation() {
 #[tokio::test(flavor = "multi_thread")]
 async fn navigate_targets_inactive_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());
@@ -2748,7 +2791,7 @@ async fn reload_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn reload_without_target_loaded_errors() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     ctx.process_async(json!({"id": 14, "method": "Page.reload"}))
         .await;
     ctx.expect_error(14, -31998, "TargetNotLoaded");
@@ -6990,7 +7033,9 @@ async fn reload_targets_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let page_url = format!("http://{addr}/page");
 
-    let mut bc = BrowserContext::new("BID-1".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<title>Active</title><main>active</main>".to_owned());

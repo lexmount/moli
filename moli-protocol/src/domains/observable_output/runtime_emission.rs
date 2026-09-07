@@ -170,7 +170,7 @@ mod tests {
         RuntimeConsoleMessageSnapshot,
     };
 
-    use crate::conn::{BrowserContext, DocumentId};
+    use crate::conn::DocumentId;
 
     use super::{
         advance_runtime_observable_cursors_to_current_for_session_owner,
@@ -213,13 +213,13 @@ mod tests {
 
     #[test]
     fn prepared_source_presence_requires_runtime_frontend_enabled_and_unemitted_summary() {
-        let mut conn = crate::conn::CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         assert!(
             retain_unemitted_runtime_observable_prepared_source(&conn, prepared_source()).is_none(),
             "source presence should require a browser context"
         );
 
-        conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+        conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
         assert!(
             retain_unemitted_runtime_observable_prepared_source(&conn, prepared_source()).is_none(),
             "source presence should require Runtime.enable"
@@ -262,8 +262,8 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_observable_cursor_advance_uses_stored_source_queue_without_page_readback() {
-        let mut conn = crate::conn::CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
         let source_snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(7),
@@ -313,10 +313,11 @@ mod tests {
 
     #[test]
     fn runtime_observable_attached_session_uses_own_browser_context() {
-        let mut conn = crate::conn::CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-active".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context =
+            Some(conn.new_browser_context_fixture_for_test("BID-active".to_owned()));
 
-        let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+        let mut inactive = conn.new_browser_context_fixture_for_test("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
         inactive
             .active_page_target_mut()

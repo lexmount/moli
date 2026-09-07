@@ -2046,7 +2046,7 @@ fn trace_command(
 #[cfg(test)]
 mod tests {
     use moli_core::RendererRuntimeInspectorAsyncCompletion;
-    use moli_protocol::CdpConnection;
+
     use serde_json::json;
 
     use super::*;
@@ -2132,7 +2132,7 @@ mod tests {
 
     #[test]
     fn unmatched_runtime_inspector_response_is_not_downgraded_to_protocol_output() {
-        let mut scheduler = CdpScheduler::new(CdpConnection::new());
+        let mut scheduler = CdpScheduler::new(moli_protocol::test_support::connection());
 
         let output = route_unmatched_runtime_inspector_response(
             &mut scheduler,

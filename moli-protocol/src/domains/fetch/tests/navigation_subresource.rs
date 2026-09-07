@@ -70,13 +70,14 @@ async fn request_stage_navigation_request_paused_includes_synthesized_cookie_hea
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     let url = format!("http://{addr}/page");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let jar_handle = bc.cookie_store_for_test();
+        let mut jar = jar_handle.lock();
         jar.store_response_headers(
             &Url::parse(&url).unwrap(),
             &[("set-cookie".to_owned(), b"sid=req-nav; Path=/page".to_vec())],
@@ -147,7 +148,7 @@ fetch('/api', { method: 'POST', body: 'nav-payload' })
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -369,7 +370,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -531,7 +532,7 @@ window.addEventListener('load', () => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -692,7 +693,7 @@ window.postMessage('go', '*');
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -858,7 +859,7 @@ document.body.setAttribute('data-trigger', '1');
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -1023,7 +1024,7 @@ observer.observe(document.getElementById('target'));
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -1185,7 +1186,7 @@ setTimeout(() => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -1360,7 +1361,7 @@ const id = setInterval(() => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -1533,7 +1534,7 @@ queueMicrotask(() => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -1694,7 +1695,7 @@ Promise.resolve().then(() => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -1856,7 +1857,7 @@ setTimeout(() => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -2036,7 +2037,7 @@ const id = setInterval(() => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -2210,7 +2211,7 @@ queueMicrotask(() => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -2372,7 +2373,7 @@ Promise.resolve().then(() => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -2534,7 +2535,7 @@ requestIdleCallback(deadline => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -2692,7 +2693,7 @@ requestIdleCallback(() => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -2856,7 +2857,7 @@ requestAnimationFrame(() => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -3012,7 +3013,7 @@ requestAnimationFrame(() => {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -3164,7 +3165,7 @@ fetch('/api').catch(() => {});
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -3240,7 +3241,7 @@ async fn continue_with_auth_default_aborts_pending_navigation() {
 
     let mut ctx = TestContext::new();
     ctx.conn
-        .install_browser_context_fixture_for_test(attached_browser_context());
+        .install_browser_context_fixture_for_test(attached_browser_context(&ctx.conn));
     let url = format!("http://{addr}/auth");
 
     ctx.process_async(json!({
@@ -3335,7 +3336,7 @@ async fn continue_with_auth_success_clears_pending_auth_navigation() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -3443,7 +3444,7 @@ async fn continue_with_auth_retries_navigation_with_basic_proxy_credentials() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -3538,7 +3539,7 @@ async fn continue_with_auth_retries_navigation_with_digest_proxy_credentials() {
     .await;
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -3682,7 +3683,7 @@ async fn cancel_https_proxy_connect_auth_emits_407_without_extra_info_and_fails_
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -3832,7 +3833,7 @@ async fn continue_with_auth_handles_multi_round_basic_navigation_challenge() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -3964,7 +3965,7 @@ async fn continue_with_auth_handles_digest_navigation_challenge() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -4095,7 +4096,7 @@ async fn continue_with_auth_handles_multi_round_digest_navigation_challenge() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();

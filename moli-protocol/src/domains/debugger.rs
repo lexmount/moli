@@ -32,27 +32,21 @@ mod tests {
 
     use serde_json::{Value, json};
 
-    use crate::conn::{BrowserContext, CommandOwnerScope};
+    use crate::conn::CommandOwnerScope;
     use crate::testing::TestContext;
 
     async fn with_loaded_document(ctx: &mut TestContext) {
-        ctx.conn
-            .insert_browser_context(BrowserContext::new("BID-debugger".into()));
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .set_active_target_id("TID-debugger");
-        let page = ctx
+        let mut browser_context = ctx
             .conn
-            .load_page_via_runtime_async("data:text/html,<body>debugger</body>")
-            .await
-            .expect("load debugger test page");
+            .new_browser_context_fixture_for_test("BID-debugger");
+        browser_context.set_active_target_id("TID-debugger");
         ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .replace_active_page_for_test(Some(page));
+            .install_browser_context_fixture_for_test(browser_context);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<body>debugger</body>",
+            None,
+        )
+        .await;
     }
 
     async fn command(ctx: &mut TestContext, message: Value, command_id: u64) -> Value {

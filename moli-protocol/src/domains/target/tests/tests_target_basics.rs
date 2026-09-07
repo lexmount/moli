@@ -6,7 +6,7 @@ async fn get_browser_contexts_returns_active_and_inactive_ids() {
     load_bc(&mut ctx, "BID-A");
     ctx.conn
         .inactive_browser_contexts
-        .push(BrowserContext::new("BID-B".into()));
+        .push(ctx.conn.new_browser_context_fixture_for_test("BID-B"));
 
     ctx.process_async(json!({"id": 5, "method": "Target.getBrowserContexts"}))
         .await;
@@ -136,7 +136,9 @@ async fn cross_document_navigation_keeps_target_session_and_replaces_page_reside
 #[tokio::test(flavor = "multi_thread")]
 async fn close_active_target_fails_only_active_owner_pending_awaits() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-await-owner".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-await-owner");
     bc.set_active_target_id("TID-active-await".to_owned());
     bc.attach_active_session("SID-active-await".to_owned());
     assert!(bc.assign_attached_session_to_target(
@@ -253,7 +255,7 @@ async fn create_browser_context_preserves_non_loopback_proxy_bypass_entries() {
 async fn attach_to_target_selects_inactive_browser_context() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-A", "TID-A");
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B");
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);
@@ -295,7 +297,7 @@ async fn attach_to_target_selects_inactive_browser_context() {
 async fn attach_to_target_creates_attached_session_and_keeps_target_context_active() {
     let mut ctx = TestContext::new();
     load_bc_with_target(&mut ctx, "BID-A", "TID-A");
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B");
     inactive.attach_active_session("SID-B");
     ctx.conn
@@ -361,7 +363,7 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -452,7 +454,7 @@ async fn dispose_browser_context_aborts_paused_runtime_fetch_subresource() {
     let page_url = format!("http://{addr}/page");
     let data_url = format!("http://{addr}/data");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -543,8 +545,9 @@ async fn dispose_browser_context_aborts_paused_runtime_fetch_subresource() {
 async fn create_target_for_inactive_browser_context_keeps_previously_active_context() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-A");
-    ctx.conn
-        .push_inactive_browser_context_fixture_for_test(BrowserContext::new("BID-B".into()));
+    ctx.conn.push_inactive_browser_context_fixture_for_test(
+        ctx.conn.new_browser_context_fixture_for_test("BID-B"),
+    );
 
     ctx.process_async(json!({
         "id": 1010,
@@ -782,7 +785,7 @@ async fn page_bring_to_front_on_inactive_context_restores_previous_context() {
         .unwrap()
         .attach_active_session("SID-active-a");
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = ctx.conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-active-b".to_owned());
     inactive.attach_active_session("SID-active-b".to_owned());
     ctx.conn
@@ -927,19 +930,15 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_activation() 
             "background": true, "browserContextId": "BID-9", "url": "about:blank#second"}
     }))
     .await;
-    let created = ctx.take_one();
-    assert_eq!(created["method"], "Target.targetCreated");
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    let attached = ctx.take_one();
-    assert_eq!(attached["method"], "Target.attachedToTarget");
+    let second_target_id = take_created_target_id(&mut ctx, 1034);
+    let attached = ctx.take_first_matching("background target attachment", |message| {
+        message["method"] == json!("Target.attachedToTarget")
+            && message["params"]["targetInfo"]["targetId"] == json!(second_target_id)
+    });
     let session_id = attached["params"]["sessionId"]
         .as_str()
         .expect("background session id")
         .to_owned();
-    ctx.expect_result(1034, json!({ "targetId": second_target_id }), None);
 
     ctx.process_async(json!({
         "id": 1035,
@@ -994,8 +993,11 @@ async fn page_stop_loading_aborts_background_pending_fetch_without_activation() 
     let navigation = take_response_by_id(&mut ctx, 1037);
     assert_eq!(navigation["sessionId"], json!(session_id));
     assert_eq!(navigation["error"]["message"], json!("Navigation stopped"));
-    let failed = ctx.take_one();
-    assert_eq!(failed["method"], json!("Network.loadingFailed"));
+    let failed = ctx.take_first_matching("stopped background navigation failure", |message| {
+        message["method"] == json!("Network.loadingFailed")
+            && message["sessionId"] == json!(session_id)
+            && message["params"]["requestId"] == network_id
+    });
     assert_eq!(failed["sessionId"], json!(session_id));
     assert_eq!(failed["params"]["requestId"], network_id);
     assert_eq!(failed["params"]["errorText"], json!("Navigation stopped"));
@@ -1786,7 +1788,7 @@ async fn same_context_targets_do_not_replay_bare_isolated_worlds_after_switching
         .expect("first target page should initialize");
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        let _ = bc.replace_active_page_for_test(Some(first_page));
+        let _ = bc.commit_active_navigation_for_test(first_page).await;
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state

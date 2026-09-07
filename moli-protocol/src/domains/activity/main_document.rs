@@ -570,12 +570,13 @@ impl MainDocumentNavigationActivity {
         pending_download: Option<RendererPendingDownloadActivation>,
     ) {
         let mut command_context = CommandDispatchContext::default();
-        let error = if let Some(download) = pending_download {
+        let error = if let Some(download) = pending_download.and_then(|download| {
+            conn.prepare_download_activation(&self.state.owner, self.state.web_contents, download)
+        }) {
             let mut download_events = Vec::new();
             let error = conn
-                .handle_pending_download_activation_inline_async(
+                .handle_prepared_download_activation_inline_async(
                     &mut download_events,
-                    &self.state.owner,
                     download,
                     &mut command_context,
                 )
@@ -936,6 +937,7 @@ mod tests {
             redirect_headers: None,
             navigate_id: Some(77),
             owner: CommandOwnerScope::for_session("SID-nav"),
+            web_contents: NavigationDispatchState::detached_web_contents_for_test(),
             result_projection: NavigationResultProjection::Cdp(
                 json!({ "frameId": "FRAME-1", "loaderId": "LID-1" }),
             ),
@@ -960,8 +962,9 @@ mod tests {
         CommittedRendererDocumentBinding,
         RendererDocumentLifecycleEvent,
     ) {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-deferred-load-observer".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-deferred-load-observer".to_owned());
         browser_context.set_active_target_id("TID-deferred-load-observer");
         browser_context.attach_active_session("SID-nav");
         browser_context.set_target_url("https://example.test/start".to_owned());
@@ -1101,8 +1104,8 @@ mod tests {
 
     #[test]
     fn navigation_activity_error_drains_progress_before_error_response() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new_with_page_for_test("BID-1", "TID-page");
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_page_target_fixture_for_test("BID-1", "TID-page");
         browser_context.attach_active_session("SID-page");
         browser_context
             .active_page_target_mut()
@@ -1143,7 +1146,7 @@ mod tests {
     }
 
     fn failed_navigation_messages(navigation: anyhow::Result<NavigationLoadOutcome>) -> Vec<Value> {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let mut browser_context = BrowserContext::new("BID-1".to_owned());
         browser_context.set_active_target_id("TID-page");
         browser_context.attach_active_session("SID-page");
@@ -1367,7 +1370,7 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .page_domain_enabled = true;
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.install_browser_context_fixture_for_test(browser_context);
         let state = navigation_state();
         let activity = MainDocumentNavigationActivity::new(
@@ -1461,7 +1464,7 @@ mod tests {
             .expect("old navigation token");
         browser_context.commit_document_navigation_if_matches(&old_token);
 
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.install_browser_context_fixture_for_test(browser_context);
         let activity = MainDocumentNavigationActivity::new(
             navigation_state(),
@@ -1513,7 +1516,7 @@ mod tests {
             .expect("navigation token");
         browser_context.commit_document_navigation_if_matches(&token);
 
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.install_browser_context_fixture_for_test(browser_context);
         let activity = MainDocumentNavigationActivity::new(
             navigation_state(),

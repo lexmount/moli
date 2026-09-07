@@ -12,8 +12,8 @@ use super::{
     },
     session::{InspectorSessionState, TargetPageSessionState, TargetRuntimeSessionState},
     target_state::{PendingInspectorAwait, TargetPendingInspectorAwaitRegistry},
-    web_contents::NetworkRequestPolicy,
 };
+use moli_core::browser::web_contents::NetworkRequestPolicy;
 use moli_core::{
     network::WebStorageMutationSubscription,
     page::{
@@ -1800,5 +1800,35 @@ mod tests {
                 .is_none(),
             "primary disposal must also be exactly once"
         );
+    }
+}
+
+#[cfg(test)]
+mod emulation_policy_tests {
+    use crate::conn::EmulationPolicy;
+    #[test]
+    fn handler_disable_uses_raw_state_for_conditional_target_resets() {
+        let mut effective = EmulationPolicy {
+            focus_emulation_enabled: true,
+            script_execution_disabled: true,
+            emulated_media: crate::conn::EmulatedMediaOverrides {
+                color_scheme: Some("dark".to_owned()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let mut raw = crate::conn::DevToolsEmulationSessionState::default();
+
+        effective.apply_changes(raw.disable_policy_changes());
+
+        assert!(
+            effective.focus_emulation_enabled,
+            "an untouched handler must not clear another session's focus setting"
+        );
+        assert!(
+            effective.emulated_media.color_scheme.is_none(),
+            "Blink clears the shared media override on every handler disable"
+        );
+        assert!(!effective.script_execution_disabled);
     }
 }

@@ -346,7 +346,7 @@ async fn navigation_header_override_expires_on_redirect_before_auth_retry() {
     });
     let mut ctx = TestContext::new();
     ctx.conn
-        .install_browser_context_fixture_for_test(attached_browser_context());
+        .install_browser_context_fixture_for_test(attached_browser_context(&ctx.conn));
     ctx.enable_page_events_for_test(Some("SID-1"));
     ctx.conn
         .set_global_extra_headers(moli_fetch::RequestHeaders::from_bytes(vec![(

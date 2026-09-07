@@ -21,10 +21,9 @@ async fn session_detach_reaches_renderer_without_protocol_document() {
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
     // Both child sessions have already used the binding. Browser-owned work
     // must not inherit either frontend or resurrect its V8 session on detach.
-    let mut document = take_inspection_document(&mut ctx.conn, &owner);
+    let document = inspection_document_handle(&ctx.conn, &owner);
     let before = document
-        .page
-        .runtime_heap_usage_async()
+        .runtime_heap_usage_for_test()
         .await
         .unwrap()
         .moli
@@ -47,8 +46,7 @@ async fn session_detach_reaches_renderer_without_protocol_document() {
     // This real owner command is sequenced after detach finalization. The
     // frontend acknowledgement alone cannot prove that V8 cleanup happened.
     let after = document
-        .page
-        .runtime_heap_usage_async()
+        .runtime_heap_usage_for_test()
         .await
         .unwrap()
         .moli
@@ -66,6 +64,6 @@ async fn session_detach_reaches_renderer_without_protocol_document() {
     .await;
     let surviving = ctx.take_response_by_id(4);
     assert_eq!(surviving["result"]["result"]["value"], json!("value"));
-    assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
+    assert!(ctx.conn.has_loaded_page_for_owner(&owner));
     drop(document);
 }

@@ -736,7 +736,7 @@ mod tests {
     }
 
     async fn with_loaded_document_async(ctx: &mut TestContext, html: &str) {
-        let mut bc = crate::conn::BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         ctx.conn.install_browser_context_fixture_for_test(bc);
         ctx.install_navigation_fixture_for_session_owner(&format!("data:text/html,{html}"), None)
@@ -954,7 +954,9 @@ mod tests {
     async fn css_loaded_page_methods_target_background_owner_without_activation() {
         let mut ctx = TestContext::new();
 
-        let mut bc = BrowserContext::new("BID-A".to_owned());
+        let mut bc = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-A".to_owned());
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         bc.register_page_target_url_fixture(
@@ -1083,12 +1085,16 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn css_loaded_page_methods_target_inactive_owner_without_activation() {
         let mut ctx = TestContext::new();
-        let mut active = BrowserContext::new("BID-active".to_owned());
+        let mut active = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-active".to_owned());
         active.set_active_target_id("TID-active".to_owned());
         active.attach_active_session("SID-active".to_owned());
         ctx.conn.install_browser_context_fixture_for_test(active);
 
-        let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+        let mut inactive = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
         inactive.set_target_url("about:blank".to_owned());
         inactive.attach_active_session("SID-inactive".to_owned());
@@ -1165,9 +1171,8 @@ mod tests {
     #[tokio::test]
     async fn css_enable_and_disable_toggle_browser_context_state() {
         let mut ctx = TestContext::new();
-        ctx.conn.browser_context = Some(crate::conn::BrowserContext::new_with_page_for_test(
-            "BID-1", "TID-1",
-        ));
+        ctx.conn.browser_context =
+            Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
         ctx.process_async(json!({"id": 101, "method": "CSS.enable"}))
             .await;
@@ -1610,24 +1615,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn pending_css_command_keeps_background_owner_route_across_completion() {
         let mut ctx = TestContext::new();
-        let active_page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<html><head><style>body { color: red; }</style></head><body></body></html>",
-            )
-            .await
-            .expect("active page should load");
-        let background_page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<html><head><style>body { color: green; }</style></head><body></body></html>",
-            )
-            .await
-            .expect("background page should load");
 
-        let mut browser_context = BrowserContext::new("BID-css-owner-route".to_owned());
+        let mut browser_context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-css-owner-route".to_owned());
         browser_context.set_active_target_id("TID-css-active".to_owned());
-        browser_context.replace_active_page_for_test(Some(active_page));
         browser_context.stage_background_target(
             "TID-css-background".to_owned(),
             None,
@@ -1635,11 +1627,20 @@ mod tests {
             None,
             None,
         );
-        browser_context.replace_target_page_for_test("TID-css-background", Some(background_page));
         ctx.conn
             .install_browser_context_fixture_for_test(browser_context);
 
         let background_session = attach_page_session_async(&mut ctx, "TID-css-background").await;
+        ctx.install_quiet_navigation_fixture_for_session_owner(
+            "data:text/html,<html><head><style>body { color: red; }</style></head><body></body></html>",
+            None,
+        )
+        .await;
+        ctx.install_quiet_navigation_fixture_for_session_owner(
+            "data:text/html,<html><head><style>body { color: green; }</style></head><body></body></html>",
+            Some(&background_session),
+        )
+        .await;
         let active_style_sheet_id = inline_style_sheet_id_for_session_async(&mut ctx, None).await;
         let style_sheet_id =
             inline_style_sheet_id_for_session_async(&mut ctx, Some(&background_session)).await;

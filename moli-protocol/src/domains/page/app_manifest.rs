@@ -1,16 +1,19 @@
 use chromiumoxide_cdp::cdp::browser_protocol::page::GetAppManifestParams;
+use moli_core::browser::DocumentHandle;
 use moli_core::page::{
-    CompletedPageCommand, PendingPageCommand, RendererAppManifest, RendererAppManifestDisplayMode,
-    RendererAppManifestLoadOutcome, RendererAppManifestLoadPreparation,
-    RendererAppManifestOrientation, RendererAppManifestQueryResult,
-    RendererPreparedAppManifestLoad,
+    RendererAppManifest, RendererAppManifestDisplayMode, RendererAppManifestLoadOutcome,
+    RendererAppManifestLoadPreparation, RendererAppManifestOrientation,
+    RendererAppManifestQueryResult, RendererPreparedAppManifestLoad,
 };
 use serde_json::{Map, Value, json};
 
 use super::{PageCommandTaskStep, PendingPageCommandDispatch, PendingPageCommandKind};
 use crate::{
-    conn::CommandDispatchContext,
-    conn::{CdpConnection, Cmd, CommandOwnerScope},
+    conn::{
+        BrowserAppManifestLoadPreparation, CdpConnection, Cmd, CommandDispatchContext,
+        CommandOwnerScope, CompletedAppManifestLoadPreparation, CompletedAppManifestPublication,
+        PendingAppManifestLoadPreparation, PendingAppManifestPublication,
+    },
     domains::{
         command_output::CommandOutputPlan,
         network::{
@@ -21,19 +24,25 @@ use crate::{
 };
 
 enum PendingGetAppManifestWork {
-    Prepare(PendingPageCommand),
-    Fetch(Box<RendererPreparedAppManifestLoad>),
+    Prepare(PendingAppManifestLoadPreparation),
+    Fetch {
+        document: DocumentHandle,
+        pending: Box<RendererPreparedAppManifestLoad>,
+    },
     Publish {
-        pending: PendingPageCommand,
+        pending: PendingAppManifestPublication,
         result: Box<RendererAppManifestQueryResult>,
     },
 }
 
 enum CompletedGetAppManifestWork {
-    Prepare(Result<CompletedPageCommand, String>),
-    Fetch(Box<RendererAppManifestLoadOutcome>),
+    Prepare(CompletedAppManifestLoadPreparation),
+    Fetch {
+        document: DocumentHandle,
+        outcome: Box<RendererAppManifestLoadOutcome>,
+    },
     Publish {
-        completion: Result<CompletedPageCommand, String>,
+        completion: CompletedAppManifestPublication,
         result: Box<RendererAppManifestQueryResult>,
     },
 }
@@ -51,16 +60,13 @@ pub(super) struct CompletedGetAppManifestCommand {
 impl CompletedGetAppManifestCommand {
     pub(super) fn renderer_output_predecessor(&self) -> Option<moli_core::RendererOutputFence> {
         match &self.work {
-            CompletedGetAppManifestWork::Prepare(Ok(completion))
-            | CompletedGetAppManifestWork::Publish {
-                completion: Ok(completion),
-                ..
-            } => completion.renderer_output_predecessor(),
-            CompletedGetAppManifestWork::Prepare(Err(_))
-            | CompletedGetAppManifestWork::Fetch(_)
-            | CompletedGetAppManifestWork::Publish {
-                completion: Err(_), ..
-            } => None,
+            CompletedGetAppManifestWork::Prepare(completion) => {
+                completion.renderer_output_predecessor()
+            }
+            CompletedGetAppManifestWork::Publish { completion, .. } => {
+                completion.renderer_output_predecessor()
+            }
+            CompletedGetAppManifestWork::Fetch { .. } => None,
         }
     }
 }
@@ -68,15 +74,18 @@ impl CompletedGetAppManifestCommand {
 impl PendingGetAppManifestCommand {
     pub(super) async fn wait(self) -> CompletedGetAppManifestCommand {
         let work = match self.work {
-            PendingGetAppManifestWork::Prepare(pending) => CompletedGetAppManifestWork::Prepare(
-                pending.wait().await.map_err(|error| error.to_string()),
-            ),
-            PendingGetAppManifestWork::Fetch(pending) => {
-                CompletedGetAppManifestWork::Fetch(Box::new((*pending).execute().await))
+            PendingGetAppManifestWork::Prepare(pending) => {
+                CompletedGetAppManifestWork::Prepare(pending.wait().await)
+            }
+            PendingGetAppManifestWork::Fetch { document, pending } => {
+                CompletedGetAppManifestWork::Fetch {
+                    document,
+                    outcome: Box::new((*pending).execute().await),
+                }
             }
             PendingGetAppManifestWork::Publish { pending, result } => {
                 CompletedGetAppManifestWork::Publish {
-                    completion: pending.wait().await.map_err(|error| error.to_string()),
+                    completion: pending.wait().await,
                     result,
                 }
             }
@@ -99,13 +108,9 @@ pub(super) fn try_start_get_app_manifest_command(
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32602, error));
         }
     };
-    let pending = match conn
-        .resolve_document_command_owner(&CommandOwnerScope::capture(conn, cmd.session_id))
-    {
-        Ok((context_id, target_id)) => conn
-            .browser_context_by_id(&context_id)
-            .expect("admitted document context remains registered")
-            .start_target_app_manifest_load(&target_id),
+    let owner = CommandOwnerScope::capture(conn, cmd.session_id);
+    let pending = match conn.resolve_browser_document_for_owner(&owner) {
+        Ok(document) => conn.start_app_manifest_load_preparation(document),
         Err(message) => {
             return PageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, message));
         }
@@ -113,7 +118,7 @@ pub(super) fn try_start_get_app_manifest_command(
     match pending {
         Ok(pending) => pending_step(
             cmd.id,
-            CommandOwnerScope::capture(conn, cmd.session_id),
+            owner,
             PendingGetAppManifestCommand {
                 manifest_id: params.manifest_id,
                 work: PendingGetAppManifestWork::Prepare(pending),
@@ -135,22 +140,7 @@ pub(super) fn complete_get_app_manifest_command(
 ) -> PageCommandTaskStep {
     match completed.work {
         CompletedGetAppManifestWork::Prepare(completion) => {
-            let completion = match completion {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to inspect app manifest: {message}"),
-                    ));
-                }
-            };
-            let preparation = match conn.resolve_document_command_owner(owner).and_then(
-                |(context_id, target_id)| {
-                    conn.browser_context_by_id_mut(&context_id)
-                        .ok_or("NoDocumentLoaded")?
-                        .finish_target_app_manifest_load_preparation(&target_id, completion)
-                },
-            ) {
+            let preparation = match conn.finish_app_manifest_load_preparation(completion) {
                 Ok(preparation) => preparation,
                 Err(message) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -159,6 +149,10 @@ pub(super) fn complete_get_app_manifest_command(
                     ));
                 }
             };
+            let BrowserAppManifestLoadPreparation {
+                document,
+                preparation,
+            } = preparation;
             match preparation {
                 RendererAppManifestLoadPreparation::Complete(result) => {
                     PageCommandTaskStep::Complete(result_plan(
@@ -171,24 +165,14 @@ pub(super) fn complete_get_app_manifest_command(
                     owner.clone(),
                     PendingGetAppManifestCommand {
                         manifest_id: completed.manifest_id,
-                        work: PendingGetAppManifestWork::Fetch(pending),
+                        work: PendingGetAppManifestWork::Fetch { document, pending },
                     },
                 ),
             }
         }
-        CompletedGetAppManifestWork::Fetch(outcome) => {
+        CompletedGetAppManifestWork::Fetch { document, outcome } => {
             let (result, publication) = (*outcome).into_parts();
-            let pending = match conn.resolve_document_command_owner(owner) {
-                Ok((context_id, target_id)) => conn
-                    .browser_context_by_id(&context_id)
-                    .expect("admitted document context remains registered")
-                    .start_target_app_manifest_publication(&target_id, publication),
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000, message,
-                    ));
-                }
-            };
+            let pending = conn.start_app_manifest_publication(document, publication);
             match pending {
                 Ok(pending) => pending_step(
                     command_id,
@@ -208,22 +192,7 @@ pub(super) fn complete_get_app_manifest_command(
             }
         }
         CompletedGetAppManifestWork::Publish { completion, result } => {
-            let completion = match completion {
-                Ok(completion) => completion,
-                Err(message) => {
-                    return PageCommandTaskStep::Complete(CommandOutputPlan::error(
-                        -32000,
-                        format!("Failed to publish app manifest result: {message}"),
-                    ));
-                }
-            };
-            let output = match conn.resolve_document_command_owner(owner).and_then(
-                |(context_id, target_id)| {
-                    conn.browser_context_by_id_mut(&context_id)
-                        .ok_or("NoDocumentLoaded")?
-                        .finish_target_app_manifest_publication(&target_id, completion)
-                },
-            ) {
+            let output = match conn.finish_app_manifest_publication(completion) {
                 Ok(output) => output,
                 Err(message) => {
                     return PageCommandTaskStep::Complete(CommandOutputPlan::error(

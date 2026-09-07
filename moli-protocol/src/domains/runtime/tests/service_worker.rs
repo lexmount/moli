@@ -12,7 +12,9 @@ use moli_core::page::{
 };
 
 fn load_service_worker_target(ctx: &mut TestContext, session_id: &str) {
-    let mut bc = BrowserContext::new("BID-service".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-service".to_owned());
     let mut target = service_worker_target();
     target.attach_session(session_id.to_owned());
     bc.insert_service_worker_target(target);
@@ -20,7 +22,9 @@ fn load_service_worker_target(ctx: &mut TestContext, session_id: &str) {
 }
 
 fn load_unattached_service_worker_target(ctx: &mut TestContext) {
-    let mut bc = BrowserContext::new("BID-service".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-service".to_owned());
     bc.insert_service_worker_target(service_worker_target());
     ctx.conn.install_browser_context_fixture_for_test(bc);
 }
@@ -98,17 +102,19 @@ fn service_worker_fetch_diagnostic(internal_id: u64) -> RendererServiceWorkerFet
     }
 }
 
+fn service_worker_pause_on_start(ctx: &TestContext) -> bool {
+    ctx.conn
+        .browser_context
+        .as_ref()
+        .expect("browser context should exist")
+        .service_worker_pause_on_start()
+}
+
 #[tokio::test]
 async fn target_auto_attach_wait_for_debugger_toggles_service_worker_pause_on_start() {
     let mut ctx = TestContext::new();
     load_service_worker_target(&mut ctx, "SID-service-worker");
-    let runtime = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context should exist")
-        .renderer_runtime();
-    assert!(!runtime.service_worker_pause_on_start_for_devtools());
+    assert!(!service_worker_pause_on_start(&ctx));
 
     ctx.process_async(json!({
         "id": 78,
@@ -120,7 +126,7 @@ async fn target_auto_attach_wait_for_debugger_toggles_service_worker_pause_on_st
     }))
     .await;
     ctx.expect_result(78, json!({}), None);
-    assert!(runtime.service_worker_pause_on_start_for_devtools());
+    assert!(service_worker_pause_on_start(&ctx));
 
     ctx.process_async(json!({
         "id": 79,
@@ -132,20 +138,14 @@ async fn target_auto_attach_wait_for_debugger_toggles_service_worker_pause_on_st
     }))
     .await;
     ctx.expect_result(79, json!({}), None);
-    assert!(!runtime.service_worker_pause_on_start_for_devtools());
+    assert!(!service_worker_pause_on_start(&ctx));
 }
 
 #[tokio::test]
 async fn target_auto_attach_wait_for_debugger_respects_service_worker_filter() {
     let mut ctx = TestContext::new();
     load_service_worker_target(&mut ctx, "SID-service-worker");
-    let runtime = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context should exist")
-        .renderer_runtime();
-    assert!(!runtime.service_worker_pause_on_start_for_devtools());
+    assert!(!service_worker_pause_on_start(&ctx));
 
     ctx.process_async(json!({
         "id": 80,
@@ -163,7 +163,7 @@ async fn target_auto_attach_wait_for_debugger_respects_service_worker_filter() {
     ctx.expect_result(80, json!({}), None);
 
     assert!(
-        !runtime.service_worker_pause_on_start_for_devtools(),
+        !service_worker_pause_on_start(&ctx),
         "waitForDebuggerOnStart must not pause Service Workers when the target filter excludes them"
     );
     assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 0);
@@ -173,17 +173,11 @@ async fn target_auto_attach_wait_for_debugger_respects_service_worker_filter() {
 async fn service_worker_pause_on_start_waits_for_last_owner() {
     let mut ctx = TestContext::new();
     load_unattached_service_worker_target(&mut ctx);
-    let runtime = ctx
-        .conn
-        .browser_context
-        .as_ref()
-        .expect("browser context should exist")
-        .renderer_runtime();
-    assert!(!runtime.service_worker_pause_on_start_for_devtools());
+    assert!(!service_worker_pause_on_start(&ctx));
     assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 0);
 
     crate::domains::target::set_service_worker_pause_on_start_owner(&mut ctx.conn, None, true);
-    assert!(runtime.service_worker_pause_on_start_for_devtools());
+    assert!(service_worker_pause_on_start(&ctx));
     assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 1);
 
     crate::domains::target::set_service_worker_pause_on_start_owner(
@@ -191,12 +185,12 @@ async fn service_worker_pause_on_start_waits_for_last_owner() {
         Some("SID-service-worker-owner"),
         true,
     );
-    assert!(runtime.service_worker_pause_on_start_for_devtools());
+    assert!(service_worker_pause_on_start(&ctx));
     assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 2);
 
     crate::domains::target::set_service_worker_pause_on_start_owner(&mut ctx.conn, None, false);
     assert!(
-        runtime.service_worker_pause_on_start_for_devtools(),
+        service_worker_pause_on_start(&ctx),
         "one remaining DevTools owner must keep new Service Worker targets paused"
     );
     assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 1);
@@ -206,7 +200,7 @@ async fn service_worker_pause_on_start_waits_for_last_owner() {
         Some("SID-service-worker-owner"),
         false,
     );
-    assert!(!runtime.service_worker_pause_on_start_for_devtools());
+    assert!(!service_worker_pause_on_start(&ctx));
     assert_eq!(ctx.conn.service_worker_pause_on_start_owner_count(), 0);
 }
 

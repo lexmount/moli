@@ -27,10 +27,11 @@ fn permission_settings(conn: &CdpConnection, context: &str) -> Vec<String> {
 
 #[test]
 fn permission_scope_order_tracks_writes_instead_of_fixed_scope_precedence() {
-    let mut conn = CdpConnection::default();
-    conn.browser_context = Some(BrowserContext::new("BID-first".into()));
-    conn.inactive_browser_contexts
-        .push(BrowserContext::new("BID-second".into()));
+    let mut conn = crate::test_support::connection();
+    let first = conn.new_browser_context_fixture_for_test("BID-first");
+    let second = conn.new_browser_context_fixture_for_test("BID-second");
+    conn.install_browser_context_fixture_for_test(first);
+    conn.push_inactive_browser_context_fixture_for_test(second);
 
     set_permission(&mut conn, None, "denied");
     set_permission(&mut conn, Some("BID-first"), "granted");
@@ -52,23 +53,27 @@ fn permission_scope_order_tracks_writes_instead_of_fixed_scope_precedence() {
         permission_settings(&conn, "BID-first"),
         ["prompt", "denied"]
     );
-    conn.inactive_browser_contexts
-        .push(BrowserContext::new("BID-later".into()));
+    let later = conn.new_browser_context_fixture_for_test("BID-later");
+    conn.push_inactive_browser_context_fixture_for_test(later);
     assert_eq!(permission_settings(&conn, "BID-later"), ["prompt"]);
 }
 
 #[test]
 fn permission_resets_preserve_other_scopes_and_do_not_materialize_pages() {
-    let mut conn = CdpConnection::new_with_deferred_navigation_runtime(
+    let mut conn = crate::test_support::connection_with_config(
         CdpInitialStoragePartition::memory(),
         NavigationRuntimeConfig::default(),
     );
     set_permission(&mut conn, None, "denied");
     assert!(conn.browser_context.is_none());
-    assert!(!conn.standalone_navigation_engine.is_materialized());
-    conn.browser_context = Some(BrowserContext::new("BID-first".into()));
-    conn.inactive_browser_contexts
-        .push(BrowserContext::new("BID-second".into()));
+    assert_eq!(
+        conn.moli_memory_diagnostics()["isolateScope"]["estimatedRendererOwnerCount"],
+        json!(0)
+    );
+    let first = conn.new_browser_context_fixture_for_test("BID-first");
+    let second = conn.new_browser_context_fixture_for_test("BID-second");
+    conn.install_browser_context_fixture_for_test(first);
+    conn.push_inactive_browser_context_fixture_for_test(second);
     set_permission(&mut conn, Some("BID-first"), "granted");
     set_permission(&mut conn, Some("BID-second"), "prompt");
 
@@ -89,22 +94,25 @@ fn permission_resets_preserve_other_scopes_and_do_not_materialize_pages() {
         conn.browser_contexts()
             .all(|context| context.page_targets.is_empty())
     );
-    assert!(!conn.standalone_navigation_engine.is_materialized());
+    assert_eq!(
+        conn.moli_memory_diagnostics()["isolateScope"]["estimatedRendererOwnerCount"],
+        json!(0)
+    );
 }
 
 #[test]
 fn permission_rules_leave_the_connection_with_their_context() {
-    let mut conn = CdpConnection::default();
-    conn.browser_context = Some(BrowserContext::new("same-context".into()));
+    let mut conn = crate::test_support::connection();
+    let original = conn.new_browser_context_fixture_for_test("same-context");
+    conn.install_browser_context_fixture_for_test(original);
     set_permission(&mut conn, None, "denied");
     set_permission(&mut conn, Some("same-context"), "granted");
     assert_eq!(conn.permission_override_count(), 2);
 
     // No disposal handler or ID-keyed cleanup is allowed to be necessary.
-    let removed = conn
-        .browser_context
-        .replace(BrowserContext::new("same-context".into()))
-        .unwrap();
+    let removed = conn.browser_context.take().unwrap();
+    let replacement = conn.new_browser_context_fixture_for_test("same-context");
+    conn.install_browser_context_fixture_for_test(replacement);
     assert_ne!(
         removed.browser_context_id(),
         conn.browser_context.as_ref().unwrap().browser_context_id()
@@ -113,7 +121,7 @@ fn permission_rules_leave_the_connection_with_their_context() {
     assert_eq!(conn.permission_override_count(), 1);
     assert_eq!(
         removed
-            .permission_snapshot(&conn.permission_defaults)
+            .permission_snapshot()
             .iter()
             .map(|entry| entry.setting.as_str())
             .collect::<Vec<_>>(),
@@ -140,7 +148,9 @@ async fn current_permission(ctx: &mut TestContext) -> String {
 #[tokio::test(flavor = "multi_thread")]
 async fn permission_update_order_and_context_reset_reach_live_and_replacement_documents() {
     let mut ctx = TestContext::new();
-    let mut context = BrowserContext::new("BID-permission-live".into());
+    let mut context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-permission-live");
     context.set_active_target_id("TID-permission-live");
     ctx.conn.install_browser_context_fixture_for_test(context);
     ctx.install_navigation_fixture_for_session_owner("data:text/html,<title>first</title>", None)
@@ -171,7 +181,9 @@ async fn permission_update_order_and_context_reset_reach_live_and_replacement_do
 }
 
 async fn loaded_permission_context(ctx: &mut TestContext, title: &str) {
-    let mut context = BrowserContext::new("BID-permission-live".into());
+    let mut context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-permission-live");
     context.set_active_target_id("TID-permission-live");
     ctx.conn.install_browser_context_fixture_for_test(context);
     ctx.install_navigation_fixture_for_session_owner(
@@ -226,9 +238,8 @@ async fn permission_completion_preserves_its_ack_without_observing_a_replacement
             .browser_context
             .as_ref()
             .unwrap()
-            .loaded_page()
-            .unwrap()
-            .document_title(),
+            .loaded_document_title_for_test()
+            .unwrap(),
         "replacement"
     );
     assert_eq!(current_permission(&mut ctx).await, "denied");

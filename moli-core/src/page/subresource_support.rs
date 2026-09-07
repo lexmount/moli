@@ -1,8 +1,8 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use url::Url;
 
 use super::protocol_support::{PendingSubresourceContinueOutcome, SubresourceAuthCredentials};
-use super::{CompletedPageCommand, Page, PendingPageCommand};
+use super::{CompletedPageCommand, Page, PendingPageCommand, RendererCommandTurnOutput};
 use super::{RendererPendingJavaScriptDialog, RendererSyntheticResponseBody};
 use crate::RendererOutputFence;
 use crate::renderer::{RendererPageCommand, RendererPageReply};
@@ -12,16 +12,19 @@ impl Page {
         self.handle.take_pending_modal_javascript_dialogs()
     }
 
-    pub async fn stop_document_lifecycle_async(&mut self) -> Result<()> {
-        let reply = self
-            .dispatch_page_command_async(RendererPageCommand::StopDocumentLifecycle)
-            .await?;
-        expect_page_reply!(
-            reply,
-            "stop document lifecycle page command",
-            "a unit reply",
-            RendererPageReply::Unit => Ok(()),
-        )
+    pub fn start_stop_document_lifecycle(&self) -> Result<PendingPageCommand> {
+        self.start_page_command(RendererPageCommand::StopDocumentLifecycle)
+    }
+
+    pub fn finish_stop_document_lifecycle(
+        &mut self,
+        completion: CompletedPageCommand,
+    ) -> Result<RendererCommandTurnOutput> {
+        let output = self.finish_page_command_turn(completion);
+        if !matches!(output.completion().reply(), RendererPageReply::Unit) {
+            bail!("stop document lifecycle page command expected a unit reply");
+        }
+        Ok(output)
     }
 
     pub async fn continue_pending_subresource_fetch_async(

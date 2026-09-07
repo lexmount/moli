@@ -6,8 +6,8 @@ use serde_json::{Value, json};
 use std::str::FromStr;
 
 use crate::conn::{
-    BrowserWindowBounds, CdpConnection, Cmd, CompletedContextPermissionUpdate,
-    PendingContextPermissionUpdate,
+    CdpConnection, Cmd, CommandOwnerScope, CompletedContextPermissionUpdate,
+    PendingContextPermissionUpdate, WindowSurface, WindowSurfaceState,
 };
 use crate::devtools_runtime::{
     DevToolsCommand, DevToolsCommandResult, DevToolsError, DevToolsErrorKind,
@@ -18,8 +18,6 @@ use crate::domains::command_output::CommandOutputPlan;
 use crate::version;
 use moli_core::browser::DownloadPolicy;
 use moli_core::page::PermissionOverrideRegistration;
-
-const DEV_TOOLS_WINDOW_ID: u32 = 1_923_710_101;
 
 /// Disables Browser-domain observation owned by one DevTools session.
 pub(in crate::domains) fn dispose_session_handler(conn: &mut CdpConnection, session_id: &str) {
@@ -133,7 +131,7 @@ pub(crate) fn try_start_browser_command_dispatch(
     match action {
         BrowserAction::GetVersion => BrowserCommandTaskStep::Complete(get_version(conn)),
         BrowserAction::GetWindowForTarget => {
-            BrowserCommandTaskStep::Complete(get_window_for_target(conn))
+            BrowserCommandTaskStep::Complete(get_window_for_target(conn, cmd))
         }
         BrowserAction::SetWindowBounds => {
             BrowserCommandTaskStep::Complete(set_window_bounds(conn, cmd))
@@ -161,32 +159,46 @@ fn get_version(conn: &CdpConnection) -> CommandOutputPlan {
     }))
 }
 
-fn bounds_json(bounds: &BrowserWindowBounds) -> Value {
-    let mut value = json!({
-        "windowState": bounds.window_state,
-    });
-    let object = value
-        .as_object_mut()
-        .expect("browser bounds json must be an object");
-    if let Some(left) = bounds.left {
-        object.insert("left".to_owned(), json!(left));
-    }
-    if let Some(top) = bounds.top {
-        object.insert("top".to_owned(), json!(top));
-    }
-    if let Some(width) = bounds.width {
-        object.insert("width".to_owned(), json!(width));
-    }
-    if let Some(height) = bounds.height {
-        object.insert("height".to_owned(), json!(height));
-    }
-    value
+fn bounds_json(surface: WindowSurface) -> Value {
+    json!({
+        "windowState": surface.state.label(),
+        "left": surface.x,
+        "top": surface.y,
+        "width": surface.width,
+        "height": surface.height,
+    })
 }
 
-fn get_window_for_target(conn: &CdpConnection) -> CommandOutputPlan {
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GetWindowForTargetParams {
+    #[serde(default)]
+    target_id: Option<String>,
+}
+
+fn get_window_for_target(conn: &CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPlan {
+    let params = match cmd.get_params::<GetWindowForTargetParams>() {
+        Ok(Some(params)) => params,
+        Ok(None) => GetWindowForTargetParams::default(),
+        Err(_) => return CommandOutputPlan::error(-32602, "InvalidParams"),
+    };
+    let handle = match params.target_id {
+        Some(target_id) => conn.browser_web_contents_for_target(&target_id),
+        None => {
+            conn.browser_web_contents_for_owner(&CommandOwnerScope::capture(conn, cmd.session_id))
+        }
+    };
+    let handle = match handle {
+        Ok(handle) => handle,
+        Err(message) => return CommandOutputPlan::error(-32000, message),
+    };
+    let surface = match conn.browser_window_surface(handle) {
+        Ok(surface) => surface,
+        Err(message) => return CommandOutputPlan::error(-32000, message),
+    };
     CommandOutputPlan::result(json!({
-        "windowId": DEV_TOOLS_WINDOW_ID,
-        "bounds": bounds_json(&conn.window_bounds)
+        "windowId": handle.id().get(),
+        "bounds": bounds_json(surface)
     }))
 }
 
@@ -248,9 +260,13 @@ fn set_window_bounds(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPl
         }
     };
 
-    if *params.window_id.inner() != i64::from(DEV_TOOLS_WINDOW_ID) {
+    let Ok(window_id) = u64::try_from(*params.window_id.inner()) else {
         return CommandOutputPlan::error(-32602, "InvalidParams");
-    }
+    };
+    let handle = match conn.browser_web_contents_for_window_id(window_id) {
+        Ok(handle) => handle,
+        Err(_) => return CommandOutputPlan::error(-32602, "InvalidParams"),
+    };
 
     let left = match optional_i64_to_i32(params.bounds.left) {
         Ok(left) => left,
@@ -276,12 +292,17 @@ fn set_window_bounds(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutputPl
             return CommandOutputPlan::error(-32602, "InvalidParams");
         }
     };
-    conn.window_bounds.left = left;
-    conn.window_bounds.top = top;
-    conn.window_bounds.width = width;
-    conn.window_bounds.height = height;
-    if let Some(window_state) = params.bounds.window_state {
-        conn.window_bounds.window_state = window_state.as_ref().to_owned();
+    let state = match params.bounds.window_state {
+        Some(window_state) => match WindowSurfaceState::from_label(window_state.as_ref()) {
+            Some(state) => Some(state),
+            None => return CommandOutputPlan::error(-32602, "InvalidParams"),
+        },
+        None => None,
+    };
+    if let Err(message) =
+        conn.update_browser_window_surface(handle, state, width, height, left, top)
+    {
+        return CommandOutputPlan::error(-32000, message);
     }
 
     CommandOutputPlan::success()

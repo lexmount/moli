@@ -53,7 +53,7 @@ impl TargetSessionOwnerMut<'_> {
         &mut self,
         locale_override: Option<String>,
         fallback_identity: &moli_browser_profile::BrowserIdentityProfile,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), String> {
         self.browser_context
             .set_base_locale_override_for_target(&self.target_id, locale_override.clone())?;
         self.browser_context
@@ -68,7 +68,7 @@ impl TargetSessionOwnerMut<'_> {
     fn set_base_timezone_override(
         &mut self,
         timezone_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), String> {
         self.browser_context
             .set_base_timezone_override_for_target(&self.target_id, timezone_override)
     }
@@ -89,7 +89,7 @@ impl TargetSessionOwnerRef<'_> {
         Some(
             target
                 .devtools_sessions
-                .emulation_disposal_is_effectively_noop(&self.session_key, effective),
+                .emulation_disposal_is_effectively_noop(&self.session_key, &effective),
         )
     }
 
@@ -160,7 +160,7 @@ impl CdpConnection {
         &mut self,
         owner: &crate::conn::CommandOwnerScope,
         locale_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), String> {
         let fallback_identity = self.base_browser_identity.clone();
         self.target_session_owner_mut_for_owner(owner)
             .ok_or("BrowserContextNotLoaded")?
@@ -171,7 +171,7 @@ impl CdpConnection {
         &mut self,
         owner: &crate::conn::CommandOwnerScope,
         timezone_override: Option<String>,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), String> {
         self.target_session_owner_mut_for_owner(owner)
             .ok_or("BrowserContextNotLoaded")?
             .set_base_timezone_override(timezone_override)

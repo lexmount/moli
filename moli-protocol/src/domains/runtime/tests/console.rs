@@ -54,7 +54,9 @@ async fn runtime_discard_console_entries_suppresses_buffered_runtime_events() {
 async fn runtime_discard_console_entries_is_page_target_local() {
     let mut ctx = TestContext::new();
 
-    let mut browser_context = BrowserContext::new("BID-1".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
     browser_context.set_active_target_id("TID-active");
     browser_context.attach_active_session("SID-active");
     browser_context.register_page_target_url_fixture(
@@ -816,7 +818,7 @@ async fn heap_profiler_moli_diagnostics_reports_dedicated_worker_isolates() {
 }
 
 #[tokio::test]
-async fn heap_profiler_moli_reset_idle_engine_only_resets_without_loaded_page() {
+async fn heap_profiler_moli_reset_idle_engine_does_not_create_an_unowned_engine() {
     let mut ctx = TestContext::new();
     with_loaded_document_async(&mut ctx, "<!doctype html><p>loaded</p>").await;
 
@@ -843,8 +845,16 @@ async fn heap_profiler_moli_reset_idle_engine_only_resets_without_loaded_page() 
     let idle_response = take_response_by_id(&mut ctx, 206_819);
     assert_eq!(
         idle_response["result"]["reset"],
-        json!(true),
-        "closed target should leave the engine eligible for idle reset: {idle_response:?}"
+        json!(false),
+        "closing the WebContents leaves no standalone engine to replace: {idle_response:?}"
+    );
+    assert_eq!(
+        idle_response["result"]["reason"],
+        json!("no-standalone-engine")
+    );
+    assert_eq!(
+        ctx.conn.moli_memory_diagnostics()["isolateScope"]["estimatedRendererOwnerCount"],
+        json!(0)
     );
 }
 #[tokio::test(flavor = "multi_thread")]

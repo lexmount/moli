@@ -1044,7 +1044,7 @@ mod tests {
     use url::Url;
 
     use crate::{
-        conn::{CdpConnection, CommandOwnerScope},
+        conn::CommandOwnerScope,
         devtools_runtime::{AutomationEvent, DevToolsNetworkResourceType},
         domains::network::{
             NetworkPreparedOutputs, PendingSubresourceNetworkActivity,
@@ -1088,7 +1088,7 @@ mod tests {
             .pending_network_backlog_delivery_snapshot_from_backlog(&mut prepared)
             .expect("XHR output should produce a delivery snapshot");
         let mut events = Vec::new();
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.install_default_browser_target();
         let owner = crate::conn::CommandOwnerScope::capture(&conn, None);
         emit_network_delivery_snapshot(&mut conn, &mut events, &owner, "FRAME-1", 1.0, snapshot);

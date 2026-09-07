@@ -198,8 +198,10 @@ fn app_state_storage_partition_backing_derives_initial_partition_from_owner() ->
     )?;
     let initial_storage_partition =
         state.initial_storage_partition(vec![stored_cookie("owner-cookie", "owner-value")]);
-    let mut conn =
-        moli_protocol::CdpConnection::new_with_initial_storage_partition(initial_storage_partition);
+    let mut conn = moli_protocol::test_support::connection_with_config(
+        initial_storage_partition,
+        Default::default(),
+    );
 
     assert!(conn.snapshot_profile_backed_cookies().is_none());
     conn.install_default_browser_target();

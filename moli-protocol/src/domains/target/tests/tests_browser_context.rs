@@ -6,7 +6,7 @@ async fn get_browser_contexts_returns_ids() {
     let mut ctx = TestContext::new();
     load_bc(&mut ctx, "BID-X");
     ctx.conn
-        .insert_browser_context(BrowserContext::new("BID-Y".into()));
+        .insert_browser_context(ctx.conn.new_browser_context_fixture_for_test("BID-Y"));
     ctx.process_async(json!({"id": 5, "method": "Target.getBrowserContexts"}))
         .await;
     ctx.expect_result(5, json!({ "browserContextIds": ["BID-X", "BID-Y"] }), None);
@@ -106,7 +106,7 @@ async fn dispose_browser_context_success() {
     assert!(ctx.conn.browser_context.is_none());
     assert_eq!(
         ctx.conn.download_policy_for_browser_context(Some("BID-20")),
-        &moli_core::browser::DownloadPolicy::default()
+        moli_core::browser::DownloadPolicy::default()
     );
     assert!(
         !ctx.conn
@@ -118,7 +118,7 @@ async fn dispose_browser_context_success() {
 #[tokio::test(flavor = "multi_thread")]
 async fn dispose_browser_context_emits_detached_events_for_attached_target() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-20".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-20");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-000000000A");
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -790,7 +790,7 @@ async fn dispose_browser_context_aborts_paused_request_stage_navigation() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -873,7 +873,9 @@ async fn dispose_browser_context_aborts_root_session_navigation_without_target_s
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-root-dispose".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-root-dispose");
     bc.set_active_target_id("TID-root-dispose");
     bc.active_page_target_mut()
         .runtime_slot
@@ -963,7 +965,7 @@ async fn dispose_browser_context_aborts_paused_runtime_fetch_subresource() {
     let page_url = format!("http://{addr}/page");
     let data_url = format!("http://{addr}/data");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);

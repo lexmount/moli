@@ -362,6 +362,18 @@ mod tests {
         ObservableOutputProjectionStep, ObservableRuntimePreparedItems,
     };
 
+    async fn install_navigation(
+        ctx: &mut TestContext,
+        browser_context: BrowserContext,
+        session_id: &str,
+        raw_url: &str,
+    ) {
+        ctx.conn
+            .install_browser_context_fixture_for_test(browser_context);
+        ctx.install_navigation_fixture_for_session_owner(raw_url, Some(session_id))
+            .await;
+    }
+
     async fn runtime_observable_source_snapshot(
         ctx: &mut TestContext,
     ) -> RendererPageDiagnosticsSnapshot {
@@ -371,9 +383,14 @@ mod tests {
             .as_mut()
             .expect("browser context should be loaded");
         let target_id = bc.active_target_id_owned().unwrap();
+        let document = bc
+            .document_handle_for_target(&target_id)
+            .expect("active target should have an exact Document");
+        let completed = bc
+            .start_document_diagnostics_snapshot(document)
+            .expect("runtime console messages should load");
         let snapshot = bc
-            .target_page_diagnostics_snapshot_async(&target_id)
-            .await
+            .finish_document_diagnostics_snapshot(completed.wait().await)
             .expect("runtime console messages should load");
         let console_messages = snapshot
             .runtime_observable_source()
@@ -403,16 +420,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn observable_emission_plan_prepares_console_log_payloads_and_advances_cursors() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,observable-emission-plan-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
-            .await
-            .expect("test page should load");
-        let _ = bc.replace_active_page_for_test(Some(page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
@@ -421,7 +432,13 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .page_session_state
             .log_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        install_navigation(
+            &mut ctx,
+            bc,
+            "SID-1",
+            "data:text/html,<!doctype html><body></body>",
+        )
+        .await;
 
         let queue = TargetObservableOutputQueue::for_test(vec![
             ScriptObservableOutputItem::ConsoleMessage("warn: planned".to_owned()),
@@ -540,23 +557,21 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn observable_projection_context_carries_captured_slots_to_emitter() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,observable-projection-context-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.warn('prepared context')</script>",
-            )
-            .await
-            .expect("test page should load");
-        let _ = bc.replace_active_page_for_test(Some(page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        install_navigation(
+            &mut ctx,
+            bc,
+            "SID-1",
+            "data:text/html,<!doctype html><script>console.warn('prepared context')</script>",
+        )
+        .await;
 
         let mut prepared_slot =
             observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
@@ -600,23 +615,21 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_console_backlog_range_is_bounded_by_prepare_time_watermark() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,observable-prepared-range-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.warn('prepared')</script>",
-            )
-            .await
-            .expect("test page should load");
-        let _ = bc.replace_active_page_for_test(Some(page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        install_navigation(
+            &mut ctx,
+            bc,
+            "SID-1",
+            "data:text/html,<!doctype html><script>console.warn('prepared')</script>",
+        )
+        .await;
 
         let mut prepared_slot =
             observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
@@ -662,40 +675,35 @@ mod tests {
     async fn prepared_console_backlog_range_is_bound_to_document_id() {
         let mut ctx = TestContext::new();
         let page_url = "data:text/html,observable-prepared-attachment-test";
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url(page_url.to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        let first_page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.warn('old')</script>",
-            )
-            .await
-            .expect("first test page should load");
-        let _ = bc.replace_loaded_page(Some(first_page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        install_navigation(
+            &mut ctx,
+            bc,
+            "SID-1",
+            "data:text/html,<!doctype html><script>console.warn('old')</script>",
+        )
+        .await;
 
         let mut prepared_slot =
             observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
-        let second_page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.warn('new')</script>",
-            )
-            .await
-            .expect("second test page should load");
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><script>console.warn('new')</script>",
+            Some("SID-1"),
+        )
+        .await;
         {
             let bc = ctx
                 .conn
                 .browser_context
                 .as_mut()
                 .expect("browser context should remain loaded");
-            let _ = bc.replace_loaded_page(Some(second_page));
             bc.set_target_url(page_url.to_owned());
             bc.active_page_target_mut().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
@@ -725,26 +733,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_console_backlog_emits_for_background_owner_session() {
         let mut ctx = TestContext::new();
-        let active_page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.warn('active owner')</script>",
-            )
-            .await
-            .expect("active test page should load");
-        let background_page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.warn('background owner')</script>",
-            )
-            .await
-            .expect("background test page should load");
-
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active".to_owned());
         bc.set_target_url("data:text/html,active-owner".to_owned());
         bc.attach_active_session("SID-active".to_owned());
-        let _ = bc.replace_loaded_page(Some(active_page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
@@ -755,13 +747,22 @@ mod tests {
             TargetIdentityState::with_url("data:text/html,background-owner".to_owned()),
             TargetPageSlot::empty_for_test_fixture(),
         );
-        bc.replace_target_page_for_test("TID-background", Some(background_page));
         bc.background_target_mut("TID-background")
             .expect("background target must exist")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
         ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><script>console.warn('active owner')</script>",
+            Some("SID-active"),
+        )
+        .await;
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><script>console.warn('background owner')</script>",
+            Some("SID-background"),
+        )
+        .await;
 
         assert_eq!(
             observable_backlog_activity_outputs(&ctx.conn, Some("SID-background"))
@@ -815,26 +816,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn target_activation_preserves_page_attachment_ownership_without_retargeting_output() {
         let mut ctx = TestContext::new();
-        let active_page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.warn('old active owner')</script>",
-            )
-            .await
-            .expect("active test page should load");
-        let activated_page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.warn('activated owner')</script>",
-            )
-            .await
-            .expect("activated test page should load");
-
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active".to_owned());
         bc.set_target_url("data:text/html,old-active-owner".to_owned());
         bc.attach_active_session("SID-active".to_owned());
-        let _ = bc.replace_loaded_page(Some(active_page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
@@ -845,13 +830,22 @@ mod tests {
             TargetIdentityState::with_url("data:text/html,activated-owner".to_owned()),
             TargetPageSlot::empty_for_test_fixture(),
         );
-        bc.replace_target_page_for_test("TID-activated", Some(activated_page));
         bc.background_target_mut("TID-activated")
             .expect("background target must exist")
             .devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .console_enabled = true;
         ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><script>console.warn('old active owner')</script>",
+            Some("SID-active"),
+        )
+        .await;
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><script>console.warn('activated owner')</script>",
+            Some("SID-activated"),
+        )
+        .await;
 
         let (old_active_attachment, activated_attachment) = {
             let bc = ctx.conn.browser_context.as_ref().expect("browser context");
@@ -868,15 +862,14 @@ mod tests {
             observable_backlog_activity_outputs(&ctx.conn, None).into_prepared_slot();
         let mut old_active_owner_prepared = old_active_prepared.clone();
 
-        assert!(
-            ctx.conn
-                .browser_context
-                .as_mut()
-                .expect("browser context")
-                .select_page_target_async("TID-activated")
-                .await
-                .expect("target activation should succeed")
-        );
+        let handle = ctx
+            .conn
+            .browser_web_contents_for_target("TID-activated")
+            .expect("target WebContents");
+        ctx.conn
+            .select_browser_web_contents_async(handle)
+            .await
+            .expect("target activation should succeed");
 
         {
             let bc = ctx.conn.browser_context.as_ref().expect("browser context");
@@ -941,21 +934,21 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_runtime_observable_range_is_bounded_by_source_summary() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,observable-runtime-prepared-range-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
-            .await
-            .expect("test page should load");
-        let _ = bc.replace_loaded_page(Some(page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        install_navigation(
+            &mut ctx,
+            bc,
+            "SID-1",
+            "data:text/html,<!doctype html><body></body>",
+        )
+        .await;
         ctx.sent.clear();
         ctx.conn
             .evaluate_runtime_expression_with_await_async("console.warn('runtime prepared')", false)
@@ -1000,21 +993,21 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_runtime_observable_uses_source_payload_without_page_readback() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,observable-runtime-source-payload-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
-            .await
-            .expect("test page should load");
-        let _ = bc.replace_loaded_page(Some(page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        install_navigation(
+            &mut ctx,
+            bc,
+            "SID-1",
+            "data:text/html,<!doctype html><body></body>",
+        )
+        .await;
         ctx.sent.clear();
 
         let snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
@@ -1056,21 +1049,21 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_runtime_observable_uses_stored_source_queue_payload() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,observable-runtime-stored-source-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
-            .await
-            .expect("test page should load");
-        let _ = bc.replace_loaded_page(Some(page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        install_navigation(
+            &mut ctx,
+            bc,
+            "SID-1",
+            "data:text/html,<!doctype html><body></body>",
+        )
+        .await;
 
         let snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
             RendererRuntimeObservableSourceSummary::from_source_messages(
@@ -1111,16 +1104,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn renderer_runtime_agent_ownership_suppresses_runtime_console_source_fallback() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,observable-runtime-agent-owner-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
-            .await
-            .expect("test page should load");
-        let _ = bc.replace_loaded_page(Some(page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
@@ -1129,7 +1116,13 @@ mod tests {
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
             .renderer_runtime_agent_owns_page_console_api_events = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        install_navigation(
+            &mut ctx,
+            bc,
+            "SID-1",
+            "data:text/html,<!doctype html><body></body>",
+        )
+        .await;
 
         let console_only_snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
             RendererRuntimeObservableSourceSummary::from_source_messages(
@@ -1187,23 +1180,21 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn runtime_observable_drain_requires_prepared_source_payload() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,observable-runtime-no-source-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.log('live page only')</script>",
-            )
-            .await
-            .expect("test page should load");
-        let _ = bc.replace_loaded_page(Some(page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        install_navigation(
+            &mut ctx,
+            bc,
+            "SID-1",
+            "data:text/html,<!doctype html><script>console.log('live page only')</script>",
+        )
+        .await;
         {
             let context = ctx.conn.browser_context.as_mut().unwrap();
             let target_id = context.active_target_id_owned().unwrap();
@@ -1227,21 +1218,21 @@ mod tests {
     async fn prepared_runtime_observable_source_payload_is_bound_to_document_id() {
         let mut ctx = TestContext::new();
         let page_url = "data:text/html,observable-runtime-source-payload-attachment-test";
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url(page_url.to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        let first_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
-            .await
-            .expect("first test page should load");
-        let _ = bc.replace_loaded_page(Some(first_page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        install_navigation(
+            &mut ctx,
+            bc,
+            "SID-1",
+            "data:text/html,<!doctype html><body></body>",
+        )
+        .await;
 
         let snapshot = RendererPageDiagnosticsSnapshot::from_runtime_observable_source(
             RendererRuntimeObservableSourceSummary::from_source_messages(
@@ -1253,18 +1244,17 @@ mod tests {
         let mut prepared_slot =
             observable_source_activity_outputs(&mut ctx.conn, &snapshot, None).into_prepared_slot();
 
-        let second_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
-            .await
-            .expect("second test page should load");
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><body></body>",
+            Some("SID-1"),
+        )
+        .await;
         {
             let bc = ctx
                 .conn
                 .browser_context
                 .as_mut()
                 .expect("browser context should remain loaded");
-            let _ = bc.replace_loaded_page(Some(second_page));
             bc.set_target_url(page_url.to_owned());
             bc.active_page_target_mut().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
@@ -1289,21 +1279,21 @@ mod tests {
     async fn prepared_runtime_observable_range_is_bound_to_document_id() {
         let mut ctx = TestContext::new();
         let page_url = "data:text/html,observable-runtime-attachment-test";
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url(page_url.to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        let first_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
-            .await
-            .expect("first test page should load");
-        let _ = bc.replace_loaded_page(Some(first_page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
             .runtime_frontend_enabled = true;
-        ctx.conn.install_browser_context_fixture_for_test(bc);
+        install_navigation(
+            &mut ctx,
+            bc,
+            "SID-1",
+            "data:text/html,<!doctype html><body></body>",
+        )
+        .await;
         ctx.sent.clear();
         ctx.conn
             .evaluate_runtime_expression_with_await_async("console.warn('runtime old')", false)
@@ -1315,18 +1305,17 @@ mod tests {
             observable_source_activity_outputs(&mut ctx.conn, &old_snapshot, None)
                 .into_prepared_slot();
 
-        let second_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
-            .await
-            .expect("second test page should load");
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><body></body>",
+            Some("SID-1"),
+        )
+        .await;
         {
             let bc = ctx
                 .conn
                 .browser_context
                 .as_mut()
                 .expect("browser context should remain loaded");
-            let _ = bc.replace_loaded_page(Some(second_page));
             bc.set_target_url(page_url.to_owned());
             bc.active_page_target_mut().devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary]
@@ -1362,8 +1351,8 @@ mod tests {
 
     #[tokio::test]
     async fn observable_emission_plan_prepares_runtime_payloads_and_advances_cursors() {
-        let mut conn = crate::conn::CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
         let runtime_plan = ObservableActivityEmissionPlan::from_runtime_prepared_items(
             ObservableRuntimePreparedItems::for_test(
                 vec![
@@ -1433,8 +1422,8 @@ mod tests {
 
     #[tokio::test]
     async fn observable_runtime_plan_advances_lifecycle_cursor_without_emittable_items() {
-        let mut conn = crate::conn::CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
         let runtime_plan = ObservableActivityEmissionPlan::from_runtime_prepared_items(
             ObservableRuntimePreparedItems::for_test(
                 Vec::new(),

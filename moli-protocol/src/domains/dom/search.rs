@@ -249,11 +249,11 @@ mod protocol_neutral_tests {
     use crate::devtools_runtime::DevToolsProtocol;
     use serde_json::{Value, json};
 
-    use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
+    use crate::conn::{Cmd, CommandOwnerScope};
 
     #[test]
     fn cdp_perform_search_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "query": "article.result",
             "includeUserAgentShadowDOM": true
@@ -278,7 +278,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_entry_keeps_perform_search_without_loaded_page_on_sync_empty_path() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "query": ".hit"
         });
@@ -305,7 +305,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_search_results_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "searchId": "search-1",
             "fromIndex": 2,
@@ -336,7 +336,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_discard_search_results_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "searchId": "search-2"
         });
@@ -363,7 +363,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_discard_search_results_keeps_invalid_params_as_noop_success_path() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(112),

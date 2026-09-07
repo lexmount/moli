@@ -6,7 +6,7 @@ edition = "2024"
 build = "build.rs"
 
 [features]
-test-support = []
+test-support = ["moli-core/test-support"]
 
 [dependencies]
 anyhow = "1.0.100"

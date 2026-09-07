@@ -6,14 +6,12 @@ async fn complete_child_frame_lifecycle(ctx: &mut TestContext) {
         .conn
         .start_child_frame_lifecycle_work_for_owner(owner, std::time::Duration::from_secs(2))
         .expect("loaded page should expose child-frame lifecycle work");
-    let completed = pending
-        .wait()
-        .await
-        .expect("child-frame lifecycle work should complete");
+    let completed = pending.wait().await;
     assert!(
         ctx.conn
-            .complete_child_frame_lifecycle_work_for_session_owner(completed)
-            .expect("child-frame lifecycle completion should apply"),
+            .finish_document_child_frame_lifecycle_work(completed)
+            .expect("child-frame lifecycle completion should apply")
+            .0,
         "child-frame lifecycle should settle before inspecting final frame metadata"
     );
 }
@@ -228,16 +226,8 @@ async fn get_frame_tree_uses_owner_element_id_when_frame_name_is_empty() {
     let mut ctx = TestContext::new();
     let page_url = "data:text/html,<iframe id='id-only' srcdoc=\"<p>child</p>\"></iframe>";
     load_bc_with_target(&mut ctx, "BID-ID-FALLBACK", "FID-ID-FALLBACK", page_url);
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .replace_active_page_for_test(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(page_url, None)
+        .await;
     complete_child_frame_lifecycle(&mut ctx).await;
 
     ctx.process_async(json!({"id": 15, "method": "Page.getFrameTree"}))
@@ -262,7 +252,7 @@ async fn get_frame_tree_projects_sandboxed_about_blank_from_document_url() {
         .expect("page should load");
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        let _ = bc.replace_active_page_for_test(Some(page));
+        let _ = bc.commit_active_navigation_for_test(page).await;
         bc.set_target_security_origin("https://top.example".into());
         bc.set_target_secure_context_type("Secure".into());
     }
@@ -290,7 +280,7 @@ async fn get_frame_tree_recurses_into_nested_child_frames() {
         .expect("page should load");
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        let _ = bc.replace_active_page_for_test(Some(page));
+        let _ = bc.commit_active_navigation_for_test(page).await;
         bc.set_target_security_origin("https://top.example".into());
         bc.set_target_secure_context_type("Secure".into());
     }
@@ -348,7 +338,7 @@ async fn get_frame_tree_projects_nested_sandboxed_srcdoc_from_document_urls() {
         .expect("page should load");
     {
         let bc = ctx.conn.browser_context.as_mut().expect("browser context");
-        let _ = bc.replace_active_page_for_test(Some(page));
+        let _ = bc.commit_active_navigation_for_test(page).await;
         bc.set_target_security_origin("https://top.example".into());
         bc.set_target_secure_context_type("Secure".into());
     }
@@ -431,16 +421,8 @@ async fn get_frame_tree_can_complete_through_pending_command_dispatch() {
         "SID-PENDING-FRAME-TREE",
         page_url,
     );
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .replace_active_page_for_test(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(page_url, None)
+        .await;
 
     let raw = json!({
         "id": 1203,
@@ -483,16 +465,8 @@ async fn pending_get_frame_tree_after_page_unload_returns_empty_target_tree() {
         "SID-PENDING-FRAME-TREE-UNLOAD",
         page_url,
     );
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .replace_active_page_for_test(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(page_url, None)
+        .await;
 
     let raw = json!({
         "id": 1206,
@@ -536,12 +510,71 @@ async fn pending_get_frame_tree_after_page_unload_returns_empty_target_tree() {
         "unloaded page should match the legacy empty child frame tree path: {response}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pending_get_frame_tree_cannot_read_a_replacement_document() {
+    let mut ctx = TestContext::new();
+    let page_url = "data:text/html,<iframe name='outgoing-child'></iframe>";
+    load_bc_with_session(
+        &mut ctx,
+        "BID-PENDING-FRAME-TREE-REPLACED",
+        "TID-PENDING-FRAME-TREE-REPLACED",
+        "SID-PENDING-FRAME-TREE-REPLACED",
+        page_url,
+    );
+    ctx.install_quiet_navigation_fixture_for_session_owner(page_url, None)
+        .await;
+
+    let raw = json!({
+        "id": 1207,
+        "method": "Page.getFrameTree",
+        "sessionId": "SID-PENDING-FRAME-TREE-REPLACED"
+    })
+    .to_string();
+    let pending = ctx
+        .conn
+        .try_start_pending_command_dispatch(&raw)
+        .expect("Page.getFrameTree should start against the outgoing Document");
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<title>replacement</title><iframe name='replacement-child'></iframe>",
+        None,
+    )
+    .await;
+
+    let (messages, scheduler_events) =
+        complete_pending_command_task_for_test(&mut ctx, pending).await;
+    assert!(scheduler_events.is_empty());
+    let response = messages
+        .iter()
+        .find(|message| message["id"] == json!(1207))
+        .expect("Page.getFrameTree response");
+    assert_eq!(
+        response["result"]["frameTree"]["frame"]["id"],
+        json!("TID-PENDING-FRAME-TREE-REPLACED")
+    );
+    assert!(
+        response["result"]["frameTree"].get("childFrames").is_none(),
+        "an outgoing snapshot must not be combined with replacement Document state: {response}"
+    );
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .target_document_title("TID-PENDING-FRAME-TREE-REPLACED")
+            .as_deref(),
+        Some("replacement")
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn get_frame_tree_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
     let page_url = "data:text/html,<iframe name='background-child'></iframe>";
 
-    let mut bc = BrowserContext::new("BID-1".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<body>active</body>".to_owned());
@@ -587,7 +620,9 @@ async fn get_frame_tree_targets_loaded_background_owner_without_activation() {
 async fn get_frame_tree_targets_inactive_loaded_owner_without_activation() {
     let mut ctx = TestContext::new();
     let page_url = "data:text/html,<iframe name='inactive-child'></iframe>";
-    let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());

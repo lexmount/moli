@@ -218,7 +218,7 @@ impl PreparedProtocolOutputs {
             }
             RendererOwnerAction::Download(activation) => {
                 crate::domains::input::InputPreparedOutputs::from_renderer_download_activation(
-                    activation,
+                    conn, owner, activation,
                 )
                 .append_to_output_sink(&mut prepared);
             }

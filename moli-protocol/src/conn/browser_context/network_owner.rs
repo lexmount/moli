@@ -2,13 +2,15 @@ use super::target_session_owner::{TargetSessionOwnerMut, TargetSessionOwnerRef};
 use super::*;
 use crate::conn::CdpSessionRoute;
 use crate::conn::{CapturedBody, TargetRuntimeSlot};
+use crate::conn::{
+    DocumentPolicyUpdate, PendingDocumentPolicyUpdate, PendingDocumentResourceRuntimeUpdate,
+};
 use crate::devtools_runtime::DevToolsNetworkDataType;
 use crate::domains::network::{
     CapturedRequestBody, CapturedResponseBody, CollectedNetworkDataArtifact,
     NetworkBacklogPreferredRequestId, PendingNetworkBacklogDeliverySnapshot,
     TargetNetworkBacklogPreparedDelivery,
 };
-use moli_core::page::PendingPageCommand;
 use moli_page_types::DevToolsSessionKey;
 
 struct TargetNetworkListenerOwnerMut<'a> {
@@ -163,61 +165,115 @@ impl TargetSessionOwnerMut<'_> {
     fn start_set_cache_disabled(
         mut self,
         cache_disabled: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+        global_extra_headers: &moli_fetch::RequestHeaders,
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         self.mutate_network_policy_session_state(|state| {
             state.cache_disabled = cache_disabled;
         });
-        self.start_replay_effective_network_request_policy()
+        self.start_replay_effective_network_request_policy(global_extra_headers)
     }
 
     fn start_set_bypass_service_worker(
         mut self,
         bypass_service_worker: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         self.mutate_network_policy_session_state(|state| {
             state.bypass_service_worker = bypass_service_worker;
         });
-        self.browser_context
-            .start_target_service_worker_bypass_refresh(&self.target_id)
+        let effective = self
+            .browser_context
+            .effective_policy_for_target(&self.target_id);
+        self.start_document_policy_update(DocumentPolicyUpdate::BypassServiceWorker(
+            effective.bypass_service_worker(),
+        ))
     }
 
     fn start_set_blocked_url_patterns(
         mut self,
         blocked_url_patterns: Vec<String>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         self.mutate_network_policy_session_state(|state| {
             state.blocked_url_patterns = blocked_url_patterns;
         });
-        self.browser_context
-            .start_target_blocked_urls_refresh(&self.target_id)
+        let effective = self
+            .browser_context
+            .effective_policy_for_target(&self.target_id);
+        self.start_document_policy_update(DocumentPolicyUpdate::BlockedUrls(
+            effective.blocked_url_patterns().to_vec(),
+        ))
     }
 
     fn start_set_extra_http_headers(
         mut self,
         extra_headers: moli_fetch::RequestHeaders,
-    ) -> Result<Option<PendingPageCommand>, String> {
+        global_extra_headers: &moli_fetch::RequestHeaders,
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         self.mutate_network_policy_session_state(|state| {
             state.extra_headers = extra_headers;
         });
-        self.browser_context
-            .start_target_extra_headers_refresh(&self.target_id)
+        self.start_effective_extra_http_headers_update(global_extra_headers)
     }
 
     fn start_set_target_extra_http_headers(
-        self,
+        mut self,
         extra_headers: moli_fetch::RequestHeaders,
-    ) -> Result<Option<PendingPageCommand>, String> {
+        global_extra_headers: &moli_fetch::RequestHeaders,
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         self.browser_context
             .set_base_extra_headers_for_target(&self.target_id, extra_headers);
+        self.start_effective_extra_http_headers_update(global_extra_headers)
+    }
+
+    fn start_effective_extra_http_headers_update(
+        &mut self,
+        global_extra_headers: &moli_fetch::RequestHeaders,
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        let headers = self
+            .browser_context
+            .effective_extra_headers_for_target(&self.target_id, global_extra_headers);
+        let Some(document) = self
+            .browser_context
+            .document_handle_for_target(&self.target_id)
+        else {
+            return Ok(None);
+        };
         self.browser_context
-            .start_target_extra_headers_refresh(&self.target_id)
+            .start_document_policy_update(document, DocumentPolicyUpdate::ExtraHttpHeaders(headers))
+            .map(Some)
     }
 
     fn start_replay_effective_network_request_policy(
         &mut self,
-    ) -> Result<Option<PendingPageCommand>, String> {
+        global_extra_headers: &moli_fetch::RequestHeaders,
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        let effective = self
+            .browser_context
+            .effective_policy_for_target(&self.target_id);
+        let headers = self.browser_context.merged_extra_headers_for_target_policy(
+            global_extra_headers,
+            effective.extra_headers(),
+        );
+        self.start_document_policy_update(DocumentPolicyUpdate::NetworkRequestPolicy {
+            extra_headers: headers,
+            bypass_service_worker: effective.bypass_service_worker(),
+            cache_disabled: effective.cache_disabled(),
+            blocked_url_patterns: effective.blocked_url_patterns().to_vec(),
+        })
+    }
+
+    fn start_document_policy_update(
+        &mut self,
+        update: DocumentPolicyUpdate,
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        let Some(document) = self
+            .browser_context
+            .document_handle_for_target(&self.target_id)
+        else {
+            return Ok(None);
+        };
         self.browser_context
-            .start_target_network_request_policy_refresh(&self.target_id)
+            .start_document_policy_update(document, update)
+            .map(Some)
     }
 
     fn set_devtools_browser_identity_override(
@@ -261,11 +317,24 @@ impl TargetSessionOwnerMut<'_> {
     fn start_set_network_offline(
         self,
         offline: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        let Some(handle) = self
+            .browser_context
+            .web_contents_handle_for_target(&self.target_id)
+        else {
+            return Ok(None);
+        };
         self.browser_context
-            .set_network_offline_for_target(&self.target_id, offline);
+            .set_web_contents_network_offline(handle, offline)?;
+        let Some(document) = self
+            .browser_context
+            .document_handle_for_target(&self.target_id)
+        else {
+            return Ok(None);
+        };
         self.browser_context
-            .start_target_network_offline_refresh(&self.target_id)
+            .start_document_policy_update(document, DocumentPolicyUpdate::NetworkOffline(offline))
+            .map(Some)
     }
 }
 
@@ -539,32 +608,18 @@ impl CdpConnection {
     }
 
     pub(crate) fn set_global_cache_disabled(&mut self, cache_disabled: bool) {
-        self.global_cache_disabled = cache_disabled;
+        self.browser_global_overrides.cache_disabled = cache_disabled;
         for browser_context in self
             .browser_context
             .iter_mut()
             .chain(self.inactive_browser_contexts.iter_mut())
         {
-            browser_context.global_cache_disabled = cache_disabled;
-            let targets = browser_context
-                .page_targets
-                .iter()
-                .map(|target| target.target_id().to_owned())
-                .collect::<Vec<_>>();
-            for target_id in targets {
-                browser_context.set_base_cache_disabled_for_target(&target_id, cache_disabled);
-            }
+            browser_context.apply_browser_cache_disabled(cache_disabled);
         }
     }
 
     pub(crate) fn set_global_extra_headers(&mut self, extra_headers: moli_fetch::RequestHeaders) {
-        self.global_extra_headers = extra_headers.clone();
-        if let Some(browser_context) = self.browser_context.as_mut() {
-            browser_context.global_extra_headers = extra_headers.clone();
-        }
-        for browser_context in &mut self.inactive_browser_contexts {
-            browser_context.global_extra_headers = extra_headers.clone();
-        }
+        self.browser_global_overrides.extra_headers = extra_headers;
     }
 
     pub(crate) fn disable_network_listener_for_session_owner(
@@ -579,11 +634,12 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         cache_disabled: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        let global_extra_headers = self.browser_global_overrides.extra_headers.clone();
         let Some(owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
-        owner.start_set_cache_disabled(cache_disabled)
+        owner.start_set_cache_disabled(cache_disabled, &global_extra_headers)
     }
 
     pub(crate) fn set_cache_disabled_for_target(
@@ -608,7 +664,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         bypass_service_worker: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         let Some(owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -619,7 +675,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         blocked_url_patterns: Vec<String>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         let Some(owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -630,28 +686,30 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         extra_headers: moli_fetch::RequestHeaders,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        let global_extra_headers = self.browser_global_overrides.extra_headers.clone();
         let Some(owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
-        owner.start_set_extra_http_headers(extra_headers)
+        owner.start_set_extra_http_headers(extra_headers, &global_extra_headers)
     }
 
     pub(crate) fn start_set_target_extra_http_headers_for_owner(
         &mut self,
         command_owner: &crate::conn::CommandOwnerScope,
         extra_headers: moli_fetch::RequestHeaders,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
+        let global_extra_headers = self.browser_global_overrides.extra_headers.clone();
         let Some(owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
-        owner.start_set_target_extra_http_headers(extra_headers)
+        owner.start_set_target_extra_http_headers(extra_headers, &global_extra_headers)
     }
 
     pub(crate) fn start_replay_effective_network_request_policy_for_session_owner(
         &mut self,
         session_id: Option<&str>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         if matches!(
             self.session_route(session_id),
             Some(
@@ -662,17 +720,18 @@ impl CdpConnection {
         ) {
             return Ok(None);
         }
+        let global_extra_headers = self.browser_global_overrides.extra_headers.clone();
         let Some(mut owner) = self.target_session_owner_mut(session_id) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
-        owner.start_replay_effective_network_request_policy()
+        owner.start_replay_effective_network_request_policy(&global_extra_headers)
     }
 
     pub(crate) fn start_set_base_user_agent_override_for_owner(
         &mut self,
         command_owner: &crate::conn::CommandOwnerScope,
         user_agent: Option<String>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentResourceRuntimeUpdate>, String> {
         let browser_identity = user_agent.as_ref().map(|user_agent| {
             moli_browser_profile::BrowserIdentityProfile::new(
                 user_agent.clone(),
@@ -700,7 +759,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         browser_identity: Option<moli_browser_profile::BrowserIdentityProfile>,
-    ) -> Option<Result<Option<PendingPageCommand>, String>> {
+    ) -> Option<Result<Option<PendingDocumentResourceRuntimeUpdate>, String>> {
         let is_browser_session = matches!(
             self.session_route(session_id),
             Some(CdpSessionRoute::Browser)
@@ -728,7 +787,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         browser_identity: Option<crate::conn::DevToolsBrowserIdentityOverride>,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentResourceRuntimeUpdate>, String> {
         let non_page_identity = browser_identity
             .as_ref()
             .map(crate::conn::DevToolsBrowserIdentityOverride::to_browser_identity);
@@ -752,7 +811,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         enabled: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentResourceRuntimeUpdate>, String> {
         if session_id.is_none()
             || matches!(
                 self.session_route(session_id),
@@ -779,7 +838,7 @@ impl CdpConnection {
         &mut self,
         session_id: Option<&str>,
         offline: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         let owner = crate::conn::CommandOwnerScope::capture(self, session_id);
         self.start_set_network_offline_for_owner(&owner, offline)
     }
@@ -788,7 +847,7 @@ impl CdpConnection {
         &mut self,
         command_owner: &crate::conn::CommandOwnerScope,
         offline: bool,
-    ) -> Result<Option<PendingPageCommand>, String> {
+    ) -> Result<Option<PendingDocumentPolicyUpdate>, String> {
         let Some(owner) = self.target_session_owner_mut_for_owner(command_owner) else {
             return Err("BrowserContextNotLoaded".to_owned());
         };
@@ -801,8 +860,9 @@ mod tests {
     use super::*;
 
     fn connection_with_background_attached_session() -> CdpConnection {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-background".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-background".to_owned());
         browser_context.register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
@@ -814,6 +874,69 @@ mod tests {
         );
         conn.install_browser_context_fixture_for_test(browser_context);
         conn
+    }
+
+    #[test]
+    fn browser_globals_apply_to_context_inserted_after_configuration() {
+        let mut conn = crate::test_support::connection();
+        conn.set_global_extra_headers(vec![("X-Browser".into(), "global".into())].into());
+        conn.set_global_network_conditions(Some(crate::conn::EmulatedNetworkConditions::offline()));
+        conn.set_global_geolocation_override(Some(
+            crate::conn::EmulatedGeolocationOverrideState::Position(
+                crate::conn::EmulatedGeolocationOverride {
+                    latitude: 12.5,
+                    longitude: 34.5,
+                    accuracy: 1.0,
+                    altitude: None,
+                    altitude_accuracy: None,
+                    heading: None,
+                    speed: None,
+                },
+            ),
+        ));
+        conn.set_global_cache_disabled(true);
+
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-late".to_owned());
+        browser_context.set_active_target_id("TID-late");
+        browser_context.attach_active_session("SID-late");
+        conn.insert_browser_context(browser_context);
+
+        let inputs = conn.navigation_load_inputs_for_session_owner(Some("SID-late"));
+        assert_eq!(
+            inputs.extra_http_headers,
+            vec![("X-Browser".into(), "global".into())].into()
+        );
+        assert!(inputs.network_offline);
+        // This fixture inserts the Context without registering its wire session.
+        // Resolve the exact Page route for the native policy, just as the
+        // former inspection-preload assertion did.
+        let inputs = conn.navigation_load_inputs_for_owner(
+            &crate::conn::CommandOwnerScope::for_route(CdpSessionRoute::PageTarget {
+                browser_context_id: "BID-late".into(),
+                target_id: "TID-late".into(),
+                session_key: DevToolsSessionKey::Primary,
+            }),
+        );
+        assert_eq!(inputs.navigator_overrides.online, Some(false));
+        assert_eq!(
+            inputs.navigator_overrides.geolocation,
+            Some(moli_page_types::GeolocationPositionOverride {
+                latitude: 12.5,
+                longitude: 34.5,
+                accuracy: 1.0,
+                altitude: None,
+                altitude_accuracy: None,
+                heading: None,
+                speed: None,
+            })
+        );
+        assert!(
+            conn.browser_context
+                .as_ref()
+                .unwrap()
+                .effective_policy_for_target("TID-late")
+                .cache_disabled()
+        );
     }
 
     #[tokio::test]
@@ -848,11 +971,14 @@ mod tests {
             ("SID-attached", Some(false), false),
             ("SID-background", None, true),
         ] {
+            conn.reset_primary_page_session_target_state_async(
+                "BID-background",
+                "TID-background",
+                session,
+            )
+            .await
+            .unwrap();
             let context = conn.browser_context.as_mut().unwrap();
-            context
-                .reset_primary_page_session_target_state_async("TID-background", session)
-                .await
-                .unwrap();
             let target = context.page_target("TID-background").unwrap();
             assert!(target.is_session("SID-background"));
             assert_eq!(
@@ -946,23 +1072,30 @@ mod tests {
         let mut conn = connection_with_background_attached_session();
         conn.start_set_network_offline_for_session_owner(Some("SID-attached"), true)
             .unwrap();
-        let context = conn.browser_context.as_mut().unwrap();
-        context
-            .reset_primary_page_session_target_state_async("TID-background", "SID-attached")
-            .await
-            .unwrap();
+        conn.reset_primary_page_session_target_state_async(
+            "BID-background",
+            "TID-background",
+            "SID-attached",
+        )
+        .await
+        .unwrap();
+        let context = conn.browser_context.as_ref().unwrap();
         assert!(context.network_offline_for_target("TID-background"));
-        context
-            .reset_primary_page_session_target_state_async("TID-background", "SID-background")
-            .await
-            .unwrap();
+        conn.reset_primary_page_session_target_state_async(
+            "BID-background",
+            "TID-background",
+            "SID-background",
+        )
+        .await
+        .unwrap();
+        let context = conn.browser_context.as_ref().unwrap();
         assert!(!context.network_offline_for_target("TID-background"));
     }
 
     #[test]
     fn subresource_fetch_network_request_ids_are_connection_global_across_target_owners() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-mixed".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-mixed".to_owned());
         browser_context.set_active_target_id("TID-active".to_owned());
         browser_context.attach_active_session("SID-active".to_owned());
         browser_context.register_page_target_url_fixture(
@@ -1216,8 +1349,9 @@ mod tests {
 
     #[test]
     fn network_target_listener_can_be_disabled_after_enable() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-network".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context =
+            Some(conn.new_browser_context_fixture_for_test("BID-network".to_owned()));
         conn.browser_context
             .as_mut()
             .expect("browser context")

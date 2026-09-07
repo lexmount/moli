@@ -7,8 +7,6 @@ use moli_cookie_jar::{
 };
 use url::Url;
 
-#[cfg(test)]
-use moli_core::page::Page;
 use moli_core::page::{
     DocumentCookieBrowserContextSnapshot, DocumentCookieCacheLookupResult,
     DocumentCookieFacadeTelemetrySnapshot, DocumentCookieFirstOperation,
@@ -982,9 +980,5 @@ impl BrowserContextCookieManagerSurface {
 
     pub(crate) fn clear_policy_browser_context_overrides(&mut self) -> bool {
         self.policy_surface.clear_browser_context_overrides()
-    }
-
-    pub(crate) async fn apply_to_page_async(&self, page: &mut Page) {
-        self.policy_surface.apply_to_page_async(page).await;
     }
 }

@@ -9,7 +9,7 @@ mod cdp_projection;
 pub mod conn;
 pub mod devtools_runtime;
 pub mod domains;
-#[cfg(feature = "test-support")]
+#[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 #[cfg(test)]
 pub mod testing;

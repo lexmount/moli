@@ -1,12 +1,13 @@
-use moli_core::{
-    network::WebStorageAreaKind,
-    page::{ChildFrameTreeSnapshot, CompletedPageCommand, PendingPageCommand},
-};
+use moli_core::{network::WebStorageAreaKind, page::ChildFrameTreeSnapshot};
 use serde_json::json;
 use url::Url;
 
 use crate::{
-    conn::{BrowserContextPageStorageHandles, CdpConnection, Cmd, CommandOwnerScope},
+    conn::{
+        BrowserContextPageStorageHandles, CdpConnection, Cmd, CommandOwnerScope,
+        CompletedChildFrameTreeSnapshot, CompletedDocumentStorageKeySnapshot,
+        PendingChildFrameTreeSnapshot, PendingDocumentStorageKeySnapshot,
+    },
     domains::{actions::DomStorageAction, command_output::CommandOutputPlan},
 };
 
@@ -18,14 +19,12 @@ pub(crate) struct PendingDomStorageCommandDispatch {
     command_id: Option<u64>,
     session_id: Option<String>,
     kind: PendingDomStorageCommandKind,
-    pending: PendingPageCommand,
 }
 
 pub(crate) struct CompletedDomStorageCommandDispatch {
     command_id: Option<u64>,
     session_id: Option<String>,
-    kind: PendingDomStorageCommandKind,
-    completed: Result<CompletedPageCommand, String>,
+    kind: CompletedDomStorageCommandKind,
 }
 
 pub(crate) enum DomStorageCommandTaskStep {
@@ -38,11 +37,28 @@ enum PendingDomStorageCommandKind {
         owner_scope: CommandOwnerScope,
         storage_id: DomStorageId,
         operation: DomStorageOperation,
+        pending: PendingDocumentStorageKeySnapshot,
     },
     ResolveChildFrames {
         owner_scope: CommandOwnerScope,
         storage_id: DomStorageId,
         operation: DomStorageOperation,
+        pending: PendingChildFrameTreeSnapshot,
+    },
+}
+
+enum CompletedDomStorageCommandKind {
+    ResolveTopFrame {
+        owner_scope: CommandOwnerScope,
+        storage_id: DomStorageId,
+        operation: DomStorageOperation,
+        completed: CompletedDocumentStorageKeySnapshot,
+    },
+    ResolveChildFrames {
+        owner_scope: CommandOwnerScope,
+        storage_id: DomStorageId,
+        operation: DomStorageOperation,
+        completed: CompletedChildFrameTreeSnapshot,
     },
 }
 
@@ -56,11 +72,34 @@ enum DomStorageOperation {
 
 impl PendingDomStorageCommandDispatch {
     pub(crate) async fn wait(self) -> CompletedDomStorageCommandDispatch {
+        let kind = match self.kind {
+            PendingDomStorageCommandKind::ResolveTopFrame {
+                owner_scope,
+                storage_id,
+                operation,
+                pending,
+            } => CompletedDomStorageCommandKind::ResolveTopFrame {
+                owner_scope,
+                storage_id,
+                operation,
+                completed: pending.wait().await,
+            },
+            PendingDomStorageCommandKind::ResolveChildFrames {
+                owner_scope,
+                storage_id,
+                operation,
+                pending,
+            } => CompletedDomStorageCommandKind::ResolveChildFrames {
+                owner_scope,
+                storage_id,
+                operation,
+                completed: pending.wait().await,
+            },
+        };
         CompletedDomStorageCommandDispatch {
             command_id: self.command_id,
             session_id: self.session_id,
-            kind: self.kind,
-            completed: self.pending.wait().await.map_err(|error| error.to_string()),
+            kind,
         }
     }
 }
@@ -217,11 +256,8 @@ fn start_storage_operation(
         ));
     }
 
-    if let Ok((context_id, target_id)) = conn.resolve_document_command_owner(&owner_scope) {
-        let context = conn
-            .browser_context_by_id(&context_id)
-            .expect("admitted document context remains registered");
-        return match context.start_document_storage_key_snapshot_for_target(&target_id) {
+    if let Ok(document) = conn.resolve_browser_document_for_owner(&owner_scope) {
+        return match conn.start_document_storage_key_snapshot(document) {
             Ok(pending) => {
                 DomStorageCommandTaskStep::Pending(Box::new(PendingDomStorageCommandDispatch {
                     command_id: cmd.id,
@@ -230,8 +266,8 @@ fn start_storage_operation(
                         owner_scope,
                         storage_id,
                         operation,
+                        pending,
                     },
-                    pending,
                 }))
             }
             Err(error) => DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(
@@ -261,31 +297,32 @@ pub(crate) fn complete_pending_dom_storage_command(
     conn: &mut CdpConnection,
     completed: CompletedDomStorageCommandDispatch,
 ) -> DomStorageCommandTaskStep {
-    match completed.kind {
-        PendingDomStorageCommandKind::ResolveTopFrame {
+    let CompletedDomStorageCommandDispatch {
+        command_id,
+        session_id,
+        kind,
+    } = completed;
+    match kind {
+        CompletedDomStorageCommandKind::ResolveTopFrame {
             owner_scope,
             storage_id,
             operation,
+            completed,
         } => complete_top_frame_resolution(
             conn,
-            completed.command_id,
-            completed.session_id,
+            command_id,
+            session_id,
             owner_scope,
             storage_id,
             operation,
-            completed.completed,
+            completed,
         ),
-        PendingDomStorageCommandKind::ResolveChildFrames {
+        CompletedDomStorageCommandKind::ResolveChildFrames {
             owner_scope,
             storage_id,
             operation,
-        } => complete_child_frame_resolution(
-            conn,
-            owner_scope,
-            storage_id,
-            operation,
-            completed.completed,
-        ),
+            completed,
+        } => complete_child_frame_resolution(conn, owner_scope, storage_id, operation, completed),
     }
 }
 
@@ -296,29 +333,16 @@ fn complete_top_frame_resolution(
     owner_scope: CommandOwnerScope,
     storage_id: DomStorageId,
     operation: DomStorageOperation,
-    completed: Result<CompletedPageCommand, String>,
+    completed: CompletedDocumentStorageKeySnapshot,
 ) -> DomStorageCommandTaskStep {
-    let completion = match completed {
-        Ok(completion) => completion,
+    let document = completed.document();
+    let storage_key = match conn.finish_document_storage_key_snapshot(completed) {
+        Ok(storage_key) => storage_key,
         Err(error) => {
-            return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
-        }
-    };
-    let storage_key = {
-        let Ok((context_id, target_id)) = conn.resolve_document_command_owner(&owner_scope) else {
-            return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
-        };
-        let context = conn
-            .browser_context_by_id_mut(&context_id)
-            .expect("admitted document context remains registered");
-        match context.finish_document_storage_key_snapshot_for_target(&target_id, completion) {
-            Ok(storage_key) => storage_key,
-            Err(error) => {
-                return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    error.to_string(),
-                ));
-            }
+            return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32000,
+                error.to_string(),
+            ));
         }
     };
 
@@ -332,14 +356,7 @@ fn complete_top_frame_resolution(
         ));
     }
 
-    let child_pending = {
-        let Ok((context_id, target_id)) = conn.resolve_document_command_owner(&owner_scope) else {
-            return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
-        };
-        conn.browser_context_by_id(&context_id)
-            .expect("admitted document context remains registered")
-            .start_child_frame_tree_snapshot_for_target(&target_id)
-    };
+    let child_pending = conn.start_child_frame_tree_snapshot(document);
     match child_pending {
         Ok(pending) => {
             DomStorageCommandTaskStep::Pending(Box::new(PendingDomStorageCommandDispatch {
@@ -349,8 +366,8 @@ fn complete_top_frame_resolution(
                     owner_scope,
                     storage_id,
                     operation,
+                    pending,
                 },
-                pending,
             }))
         }
         Err(error) => {
@@ -364,29 +381,15 @@ fn complete_child_frame_resolution(
     owner_scope: CommandOwnerScope,
     storage_id: DomStorageId,
     operation: DomStorageOperation,
-    completed: Result<CompletedPageCommand, String>,
+    completed: CompletedChildFrameTreeSnapshot,
 ) -> DomStorageCommandTaskStep {
-    let completion = match completed {
-        Ok(completion) => completion,
+    let child_frames = match conn.finish_child_frame_tree_snapshot(completed) {
+        Ok(child_frames) => child_frames,
         Err(error) => {
-            return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(-32000, error));
-        }
-    };
-    let child_frames = {
-        let Ok((context_id, target_id)) = conn.resolve_document_command_owner(&owner_scope) else {
-            return DomStorageCommandTaskStep::Complete(frame_not_found_plan());
-        };
-        let context = conn
-            .browser_context_by_id_mut(&context_id)
-            .expect("admitted document context remains registered");
-        match context.finish_child_frame_tree_snapshot_for_target(&target_id, completion) {
-            Ok(child_frames) => child_frames,
-            Err(error) => {
-                return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(
-                    -32000,
-                    error.to_string(),
-                ));
-            }
+            return DomStorageCommandTaskStep::Complete(CommandOutputPlan::error(
+                -32000,
+                error.to_string(),
+            ));
         }
     };
     let Some(storage_key) = matching_child_frame_storage_key(&storage_id, &child_frames) else {

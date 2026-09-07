@@ -373,16 +373,8 @@ async fn get_resource_tree_reports_observed_frame_subresources() {
         "SID-RESOURCE-TREE",
         &document_url,
     );
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(&document_url)
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .replace_active_page_for_test(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(&document_url, None)
+        .await;
 
     ctx.process_async(json!({
         "id": 1,
@@ -569,16 +561,8 @@ async fn frame_and_resource_trees_report_main_document_response_mime() {
         "SID-XML-RESOURCE-TREE",
         &document_url,
     );
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(&document_url)
-        .await
-        .expect("XML page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .replace_active_page_for_test(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(&document_url, None)
+        .await;
 
     for (id, method) in [(11, "Page.getResourceTree"), (12, "Page.getFrameTree")] {
         ctx.process_async(json!({
@@ -991,7 +975,7 @@ async fn search_in_resource_accepts_an_empty_cached_child_document() {
     let cache_dir = unique_resource_search_cache_dir();
     let mut fetch_config = moli_fetch::FetchConfig::default();
     fetch_config.set_http_cache_dir(Some(cache_dir.display().to_string()));
-    let mut ctx = TestContext::from_conn(crate::conn::CdpConnection::new_with_fetch_config(
+    let mut ctx = TestContext::from_conn(crate::test_support::connection_with_fetch_config(
         fetch_config,
     ));
     load_bc_with_session(

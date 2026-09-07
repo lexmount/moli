@@ -102,7 +102,7 @@ impl CommandOwnerScope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::BrowserContext;
+
     use crate::devtools_runtime::{
         DevToolsCommandContext, DevToolsProtocol, DevToolsSessionId, DevToolsTargetId,
     };
@@ -118,8 +118,8 @@ mod tests {
 
     #[test]
     fn root_page_scope_freezes_the_concrete_active_target() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-scope".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-scope".to_owned());
         browser_context.set_active_target_id("TID-original");
         conn.install_browser_context_fixture_for_test(browser_context);
 
@@ -137,7 +137,7 @@ mod tests {
 
     #[test]
     fn root_scope_without_a_browser_context_has_explicit_browser_authority() {
-        let conn = CdpConnection::default();
+        let conn = crate::test_support::connection();
 
         let scope = CommandOwnerScope::capture(&conn, None);
 
@@ -146,8 +146,9 @@ mod tests {
 
     #[test]
     fn root_scope_without_a_page_has_explicit_browser_context_authority() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-empty".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context =
+            Some(conn.new_browser_context_fixture_for_test("BID-empty".to_owned()));
 
         let scope = CommandOwnerScope::capture(&conn, None);
 
@@ -161,8 +162,8 @@ mod tests {
 
     #[test]
     fn explicit_target_preserves_matching_attached_session_authority() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new_with_page_for_test("BID-owner", "TID-owner");
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_page_target_fixture_for_test("BID-owner", "TID-owner");
         browser_context.attach_active_session("SID-primary");
         assert!(
             browser_context
@@ -180,9 +181,8 @@ mod tests {
 
     #[test]
     fn explicit_target_routes_protocol_neutral_session_and_rejects_wrong_cdp_attachment() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context =
-            BrowserContext::new_with_page_for_test("BID-owner", "TID-primary");
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_page_target_fixture_for_test("BID-owner", "TID-primary");
         browser_context.attach_active_session("SID-primary");
         assert!(browser_context.register_page_target_url_fixture(
             "TID-background".to_owned(),

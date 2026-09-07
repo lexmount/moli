@@ -555,7 +555,7 @@ mod tests {
         RendererRuntimeObservableSourceSummary, RuntimeConsoleMessageSnapshot,
     };
 
-    use crate::conn::{BrowserContext, CommandOwnerScope};
+    use crate::conn::CommandOwnerScope;
     use crate::domains::observable_output::output_queue::TargetObservableOutputQueue;
     use crate::testing::TestContext;
 
@@ -566,8 +566,8 @@ mod tests {
     };
 
     fn runtime_lifecycle_error_audience(enabled_session_ids: &[&str]) -> Vec<Option<String>> {
-        let mut conn = crate::conn::CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-runtime-lifecycle".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-runtime-lifecycle".to_owned());
         bc.set_active_target_id("TID-runtime-lifecycle".to_owned());
         bc.set_target_url("https://example.test/runtime-lifecycle".to_owned());
         bc.attach_active_session("SID-runtime-a".to_owned());
@@ -602,8 +602,8 @@ mod tests {
 
     #[test]
     fn observable_source_outputs_own_runtime_observable_presence() {
-        let mut conn = crate::conn::CdpConnection::default();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.set_active_document_fixture_for_test(1);
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -648,8 +648,8 @@ mod tests {
 
     #[test]
     fn observable_source_sync_is_independent_from_runtime_emission() {
-        let mut conn = crate::conn::CdpConnection::default();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.set_target_url("data:text/html,console-only-source".to_owned());
         bc.set_active_document_fixture_for_test(1);
         bc.active_page_target_mut().devtools_sessions
@@ -701,8 +701,8 @@ mod tests {
 
     #[test]
     fn observable_source_outputs_require_concrete_runtime_prepared_items() {
-        let mut conn = crate::conn::CdpConnection::default();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.set_active_document_fixture_for_test(1);
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -729,18 +729,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn observable_prepared_outputs_keep_console_api_out_of_log_backlog() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,observable-backlog-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.warn('observable')</script>",
-            )
-            .await
-            .expect("test page should load");
-        let _ = bc.replace_active_page_for_test(Some(page));
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .console_output_session_state
@@ -750,6 +742,11 @@ mod tests {
             .page_session_state
             .log_enabled = true;
         ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><script>console.warn('observable')</script>",
+            Some("SID-1"),
+        )
+        .await;
 
         let outputs = observable_backlog_activity_outputs(&ctx.conn, None);
         assert_eq!(

@@ -2,7 +2,7 @@ use super::*;
 
 #[tokio::test]
 async fn process_message_invalid_json_and_invalid_method_cases_match_current_cdp_entrypoint() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
     let parse_error = conn.process_message_messages_only_for_test("invalid").await;
     assert_eq!(
@@ -51,8 +51,8 @@ async fn process_message_invalid_json_and_invalid_method_cases_match_current_cdp
 
 #[tokio::test]
 async fn session_scoped_unknown_domain_error_keeps_session_id() {
-    let mut conn = CdpConnection::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut conn = crate::test_support::connection();
+    let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     conn.install_browser_context_fixture_for_test(bc);
@@ -74,8 +74,8 @@ async fn session_scoped_unknown_domain_error_keeps_session_id() {
 
 #[tokio::test]
 async fn session_scoped_unknown_method_error_keeps_session_id() {
-    let mut conn = CdpConnection::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut conn = crate::test_support::connection();
+    let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     conn.install_browser_context_fixture_for_test(bc);
@@ -97,7 +97,7 @@ async fn session_scoped_unknown_method_error_keeps_session_id() {
 
 #[tokio::test]
 async fn browser_and_tab_sessions_do_not_fall_through_to_the_active_page() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
     conn.install_default_browser_target();
     conn.register_browser_session("SID-browser".to_owned());
     let default_tab_target_id = conn.default_tab_target_id().to_owned();
@@ -131,8 +131,8 @@ async fn browser_and_tab_sessions_do_not_fall_through_to_the_active_page() {
 
 #[tokio::test]
 async fn session_scoped_handler_error_keeps_session_id_even_when_domain_uses_plain_error_helper() {
-    let mut conn = CdpConnection::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut conn = crate::test_support::connection();
+    let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     conn.install_browser_context_fixture_for_test(bc);
@@ -154,8 +154,8 @@ async fn session_scoped_handler_error_keeps_session_id_even_when_domain_uses_pla
 
 #[tokio::test]
 async fn puppeteer_bootstrap_domains_are_session_scoped_noops() {
-    let mut conn = CdpConnection::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut conn = crate::test_support::connection();
+    let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     conn.install_browser_context_fixture_for_test(bc);
@@ -183,7 +183,7 @@ async fn puppeteer_bootstrap_domains_are_session_scoped_noops() {
 
 #[tokio::test]
 async fn startup_session_id_uses_startup_dispatch_without_browser_context() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
     let generic = conn
         .process_message_messages_only_for_test(
@@ -212,7 +212,7 @@ async fn startup_session_id_uses_startup_dispatch_without_browser_context() {
         "about:blank"
     );
 
-    conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1"));
     let still_startup = conn
         .process_message_messages_only_for_test(
             r#"{"id":4,"method":"Hi.there","sessionId":"STARTUP"}"#,

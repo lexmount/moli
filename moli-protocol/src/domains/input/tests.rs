@@ -1,5 +1,5 @@
 use super::*;
-use crate::conn::{BrowserContext, CdpCommandTaskStep, CommandDispatchContext};
+use crate::conn::{CdpCommandTaskStep, CommandDispatchContext};
 use crate::testing::{TestContext, wait_until_frame_stopped_loading};
 use moli_core::LayoutPolicy;
 
@@ -11,7 +11,7 @@ const INPUT_HIT_X: u32 = 20;
 const INPUT_HIT_Y: u32 = 20;
 
 async fn with_loaded_document(ctx: &mut TestContext, html: &str) {
-    let mut bc = BrowserContext::new("BID-I".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-I");
     bc.set_active_target_id("TID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
     let data_url = format!("data:text/html,{html}");
@@ -276,17 +276,19 @@ async fn completed_mouse_event_does_not_restore_replaced_page_state() {
         .conn
         .target_page_residence_identity_for_session(None)
         .expect("the original Page should have a residence identity");
+    let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
+    let document = ctx
+        .conn
+        .resolve_browser_document_for_owner(&command_owner)
+        .expect("the original Document should resolve exactly");
     let pending = ctx
         .conn
-        .browser_context
-        .as_ref()
-        .unwrap()
-        .start_target_input_command(
-            original_owner.target_id().unwrap(),
+        .start_document_input_command(
+            document,
             crate::conn::PageInputCommand::Mouse {
                 x: INPUT_HIT_X.into(),
                 y: INPUT_HIT_Y.into(),
-                event_name: "mousemove",
+                event_name: "mousemove".to_owned(),
                 button: -1,
                 buttons: None,
                 click_count: 0,
@@ -345,9 +347,13 @@ async fn pending_mouse_event_acknowledges_when_page_is_replaced_before_renderer_
         .target_page_residence_identity_for_session(None)
         .expect("the original Page should have a residence identity");
     let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
+    let document = ctx
+        .conn
+        .resolve_browser_document_for_owner(&command_owner)
+        .expect("the original Document should resolve exactly");
     let document_lifetime_observer = ctx
         .conn
-        .capture_document_lifetime_for_owner(&command_owner)
+        .observe_browser_document_lifetime(document)
         .expect("the original Page should expose its attachment lifetime");
 
     let replacement_url = "data:text/html,<body>replacement-before-completion</body>";
@@ -388,9 +394,13 @@ async fn completed_renderer_ack_wins_when_page_replacement_is_already_observable
     with_loaded_document(&mut ctx, "<body>origin</body>").await;
 
     let command_owner = CommandOwnerScope::capture(&ctx.conn, None);
+    let document = ctx
+        .conn
+        .resolve_browser_document_for_owner(&command_owner)
+        .expect("the original Document should resolve exactly");
     let document_lifetime_observer = ctx
         .conn
-        .capture_document_lifetime_for_owner(&command_owner)
+        .observe_browser_document_lifetime(document)
         .expect("the original Page should expose its attachment lifetime");
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<body>replacement-after-ack</body>",
@@ -431,7 +441,7 @@ fn renderer_host_ack_cleanup_is_limited_to_mouse_and_key_callbacks() {
 #[tokio::test(flavor = "multi_thread")]
 async fn coordinate_mouse_event_without_document_still_reports_no_document_loaded() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-I".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-I");
     bc.set_active_target_id("TID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -618,7 +628,7 @@ async fn touch_tap_and_drag_commands_hit_test_real_layout() {
 #[tokio::test(flavor = "multi_thread")]
 async fn coordinate_input_invalid_params_keep_session_id() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-I".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-I");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);

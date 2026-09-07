@@ -13,25 +13,24 @@ fn context_download_policy_outlives_the_devtools_projection() {
         projection.attach_active_session("SID-download");
         projection.automation_download_events_enabled = Some(true);
         projection.set_download_policy(Some(policy.clone()));
-        projection.physical
+        projection.browser_context
     };
-    assert_eq!(physical.download_policy.as_ref(), Some(&policy));
+    assert_eq!(physical.download_policy(), Some(policy.clone()));
     assert!(
         physical
-            .download_policy
-            .as_ref()
+            .download_policy()
             .unwrap()
             .behavior
             .allows_download()
     );
-    assert_eq!(physical.web_contents.len(), 1);
+    assert_eq!(physical.web_contents_count(), 1);
 }
 
 #[test]
 fn context_header_defaults_preserve_layer_order_and_clear_fallback() {
     let header = |name: &str, value: &str| (name.to_owned(), value.to_owned());
     let mut context = BrowserContext::new("CTX-headers".into());
-    context.global_extra_headers =
+    let global_headers: moli_fetch::RequestHeaders =
         vec![header("X-Order", "global"), header("X-Global", "1")].into();
     context.set_default_extra_headers(
         vec![
@@ -44,7 +43,7 @@ fn context_header_defaults_preserve_layer_order_and_clear_fallback() {
     let page_headers: moli_fetch::RequestHeaders =
         vec![header("X-Order", "page"), header("X-Page", "1")].into();
     assert_eq!(
-        context.merged_extra_headers_for_target_policy(&page_headers),
+        context.merged_extra_headers_for_target_policy(&global_headers, &page_headers),
         vec![
             header("X-Global", "1"),
             header("X-Context", "1"),
@@ -55,7 +54,7 @@ fn context_header_defaults_preserve_layer_order_and_clear_fallback() {
     );
     context.set_default_extra_headers(Default::default());
     assert_eq!(
-        context.merged_extra_headers_for_target_policy(&page_headers),
+        context.merged_extra_headers_for_target_policy(&global_headers, &page_headers),
         vec![
             header("X-Global", "1"),
             header("X-Order", "page"),
@@ -64,8 +63,8 @@ fn context_header_defaults_preserve_layer_order_and_clear_fallback() {
         .into()
     );
     assert_eq!(
-        context.effective_extra_headers(),
-        context.global_extra_headers
+        context.effective_extra_headers(&global_headers),
+        global_headers
     );
     assert!(!context.has_active_target());
 }
@@ -74,6 +73,8 @@ fn context_header_defaults_preserve_layer_order_and_clear_fallback() {
 fn context_header_defaults_outlive_projection_without_replacing_network_policy() {
     let headers: moli_fetch::RequestHeaders =
         vec![("X-Context".to_owned(), "context".to_owned())].into();
+    let global_headers: moli_fetch::RequestHeaders =
+        vec![("X-Global".into(), "global".into())].into();
     let expected = ContextNetworkPolicy {
         http_proxy: Some("http://proxy.example:8080".into()),
         http_no_proxy: Some(String::new()),
@@ -83,7 +84,6 @@ fn context_header_defaults_outlive_projection_without_replacing_network_policy()
     let physical = {
         let mut projection = BrowserContext::new_with_page_for_test("CTX-headers", "page-headers");
         projection.attach_active_session("session-headers");
-        projection.global_extra_headers = vec![("X-Global".into(), "global".into())].into();
         projection.set_network_policy(ContextNetworkPolicy {
             extra_headers: Default::default(),
             ..expected.clone()
@@ -101,8 +101,8 @@ fn context_header_defaults_outlive_projection_without_replacing_network_policy()
             expected.tls_verify_host
         );
         assert_eq!(
-            projection.effective_extra_headers(),
-            projection.global_extra_headers
+            projection.effective_extra_headers(&global_headers),
+            global_headers
         );
         assert_eq!(snapshot, expected);
         projection.set_default_extra_headers(headers);
@@ -110,9 +110,9 @@ fn context_header_defaults_outlive_projection_without_replacing_network_policy()
             projection.detach_active_session().as_deref(),
             Some("session-headers")
         );
-        projection.physical
+        projection.browser_context
     };
-    assert_eq!(physical.network_policy, expected);
+    assert_eq!(physical.network_policy(), expected);
     let other = BrowserContext::new("CTX-other".into());
     assert!(other.network_policy().extra_headers.is_empty());
 }
@@ -133,7 +133,7 @@ fn context_browser_identity_preserves_independent_inputs_and_update_time_fallbac
                 .unwrap();
             assert_eq!(
                 context.reported_active_user_agent_override(),
-                Some("Base-UA")
+                Some("Base-UA".to_owned())
             );
             context.set_default_user_agent_override(Some("Context-UA".into()), &fallback);
         } else {
@@ -151,7 +151,7 @@ fn context_browser_identity_preserves_independent_inputs_and_update_time_fallbac
             Some(&combined)
         );
         assert_eq!(
-            context.physical.environment_owner.locale().as_deref(),
+            context.browser_context.default_locale_override().as_deref(),
             Some("fr-FR")
         );
         assert!(!context.has_active_target());
@@ -159,14 +159,14 @@ fn context_browser_identity_preserves_independent_inputs_and_update_time_fallbac
         context.set_default_user_agent_override(None, &next_fallback);
         assert_eq!(
             context.default_browser_identity_override(),
-            Some(&BrowserIdentityProfile::new("Next-UA", "fr-FR"))
+            Some(BrowserIdentityProfile::new("Next-UA", "fr-FR"))
         );
         assert_eq!(
             context.reported_active_user_agent_override(),
-            Some("Next-UA")
+            Some("Next-UA".to_owned())
         );
         assert_eq!(
-            context.physical.environment_owner.locale().as_deref(),
+            context.browser_context.default_locale_override().as_deref(),
             Some("fr-FR")
         );
         context
@@ -174,7 +174,7 @@ fn context_browser_identity_preserves_independent_inputs_and_update_time_fallbac
             .unwrap();
         assert!(context.default_browser_identity_override().is_none());
         assert!(context.reported_active_user_agent_override().is_none());
-        assert!(context.physical.environment_owner.locale().is_none());
+        assert!(context.browser_context.default_locale_override().is_none());
 
         context.set_default_user_agent_override(Some("Context-UA".into()), &fallback);
         context
@@ -185,9 +185,9 @@ fn context_browser_identity_preserves_independent_inputs_and_update_time_fallbac
             .unwrap();
         assert_eq!(
             context.default_browser_identity_override(),
-            Some(&BrowserIdentityProfile::new("Context-UA", "de-DE"))
+            Some(BrowserIdentityProfile::new("Context-UA", "de-DE"))
         );
-        assert!(context.physical.environment_owner.locale().is_none());
+        assert!(context.browser_context.default_locale_override().is_none());
         assert_eq!(snapshot, combined);
         context.set_default_user_agent_override(None, &next_fallback);
         assert!(context.default_browser_identity_override().is_none());
@@ -217,13 +217,13 @@ fn context_browser_identity_outlives_projection() {
             projection.detach_active_session().as_deref(),
             Some("session-identity")
         );
-        projection.physical
+        projection.browser_context
     };
-    assert_eq!(physical.browser_identity_override.as_ref(), Some(&expected));
     assert_eq!(
-        physical.environment_owner.locale().as_deref(),
-        Some("fr-FR")
+        physical.browser_identity_override().as_ref(),
+        Some(&expected)
     );
+    assert_eq!(physical.default_locale_override().as_deref(), Some("fr-FR"));
     let other = BrowserContext::new("CTX-other".into());
     assert!(other.default_browser_identity_override().is_none());
 }
@@ -267,14 +267,15 @@ fn context_emulation_defaults_outlive_projection_without_inherited_mirrors() {
 
         projection.set_default_timezone_override(None).unwrap();
         projection.set_default_network_conditions(None);
-        projection.global_network_conditions = Some(EmulatedNetworkConditions::offline());
-        assert!(projection.effective_active_network_offline());
+        assert!(
+            projection.effective_active_network_offline(Some(EmulatedNetworkConditions::offline()))
+        );
         assert!(projection.set_default_device_metrics(resized.clone()));
         assert_eq!(
             projection.detach_active_session().as_deref(),
             Some("session-emulation")
         );
-        (projection.physical, snapshot)
+        (projection.browser_context, snapshot)
     };
     assert_eq!(
         snapshot,
@@ -284,13 +285,10 @@ fn context_emulation_defaults_outlive_projection_without_inherited_mirrors() {
             device_metrics: Some(metrics),
         }
     );
+    assert_eq!(physical.default_locale_override().as_deref(), Some("fr-FR"));
+    assert_eq!(physical.default_timezone_override(), None);
     assert_eq!(
-        physical.environment_owner.locale().as_deref(),
-        Some("fr-FR")
-    );
-    assert_eq!(physical.environment_owner.timezone(), None);
-    assert_eq!(
-        physical.emulation_defaults,
+        physical.emulation_defaults(),
         ContextEmulationDefaults {
             network_conditions: None,
             device_metrics: Some(resized),
@@ -300,7 +298,7 @@ fn context_emulation_defaults_outlive_projection_without_inherited_mirrors() {
     let other = BrowserContext::new("CTX-other".into());
     assert_eq!(
         other.emulation_defaults(),
-        &ContextEmulationDefaults::default()
+        ContextEmulationDefaults::default()
     );
 }
 
@@ -314,19 +312,19 @@ fn physical_storage_operations_outlive_protocol_projection() {
     let sibling_origin = sibling.origin().ascii_serialization();
     let sibling_key = moli_storage_key::MoliStorageKey::first_party_from_url(&sibling, None)
         .serialized_storage_key();
-    let mut physical = {
+    let physical = {
         let projection = BrowserContext::new_with_page_for_test("CTX-storage", "page-storage");
         {
-            let mut store = projection.web_storage_store_for_test().lock();
+            let storage = projection.web_storage_store_for_test();
+            let mut store = storage.lock();
             assert!(store.set_item(&key_a, "local", "aaa"));
             assert!(store.set_item(&key_b, "local", "bb"));
             assert!(store.set_item(&sibling_key, "local", "c"));
         }
-        projection.physical
+        projection.browser_context
     };
-    let partition = &mut physical.storage_partition;
     assert_eq!(
-        partition.usage_for_origin(&origin_key).unwrap(),
+        physical.storage_usage_for_origin(&origin_key).unwrap(),
         OriginStorageUsage {
             local_storage_usage: 5,
             indexed_db_usage: 0,
@@ -339,34 +337,42 @@ fn physical_storage_operations_outlive_protocol_projection() {
         ..Default::default()
     };
     let key = moli_storage_key::deserialize_serialized_storage_key(&key_a).unwrap();
-    partition
+    physical
         .clear_site_data_for_storage_key(&key, options)
         .unwrap();
     assert_eq!(
-        partition.usage_for_origin(&origin_key).unwrap().total_usage,
+        physical
+            .storage_usage_for_origin(&origin_key)
+            .unwrap()
+            .total_usage,
         2
     );
     {
-        let mut store = partition.web_storage_store().lock();
+        let storage = physical.web_storage_store_for_test();
+        let mut store = storage.lock();
         assert_eq!(store.get_item(&key_a, "local"), None);
         assert_eq!(store.get_item(&key_b, "local"), Some("bb".into()));
         assert!(store.set_item(&key_a, "local", "aaa"));
     }
-    partition
+    physical
         .clear_site_data_for_origin(&origin, options)
         .unwrap();
     assert_eq!(
-        partition.usage_for_origin(&origin_key).unwrap().total_usage,
+        physical
+            .storage_usage_for_origin(&origin_key)
+            .unwrap()
+            .total_usage,
         0
     );
     assert_eq!(
-        partition
-            .usage_for_origin(&sibling_origin)
+        physical
+            .storage_usage_for_origin(&sibling_origin)
             .unwrap()
             .total_usage,
         1
     );
-    let mut store = partition.web_storage_store().lock();
+    let storage = physical.web_storage_store_for_test();
+    let mut store = storage.lock();
     assert_eq!(store.get_item(&key_a, "local"), None);
     assert_eq!(store.get_item(&key_b, "local"), None);
     assert_eq!(store.get_item(&sibling_key, "local"), Some("c".into()));
@@ -391,100 +397,44 @@ fn context_network_policy_outlives_page_and_protocol_projection() {
             projection.detach_active_session().as_deref(),
             Some("session-policy")
         );
-        (projection.physical, before_tls_change)
+        (projection.browser_context, before_tls_change)
     };
     assert_eq!(before_tls_change, expected);
     assert_eq!(
-        physical.network_policy,
+        physical.network_policy(),
         ContextNetworkPolicy {
             tls_verify_host: Some(true),
             ..expected
         }
     );
     let other = BrowserContext::new("CTX-other".into());
-    assert_ne!(physical.id, other.browser_context_id());
-    assert_eq!(other.network_policy(), &ContextNetworkPolicy::default());
+    assert_ne!(physical.id(), other.browser_context_id());
+    assert_eq!(other.network_policy(), ContextNetworkPolicy::default());
 }
 
 #[test]
-fn physical_context_storage_and_runtime_outlive_protocol_projection() {
-    let (mut physical, id, runtime_id, local_storage) = {
+fn physical_context_storage_outlives_protocol_projection() {
+    let (physical, id, runtime_id, local_storage) = {
         let mut projection = BrowserContext::new_with_page_for_test("CTX-owner", "page-owner");
         projection.bind_page_navigation_engines(NavigationRuntimeConfig::default(), None);
         projection.set_storage_quota_override("https://example.test".into(), 123.0);
         let id = projection.browser_context_id();
-        let runtime_id = projection.renderer_runtime().id();
+        let runtime_id = projection.browser_context.renderer_runtime_id_for_test();
         let local_storage = projection.web_storage_store_for_test().clone();
         // Moving the sole Browser owner out lets the protocol shell and its
         // legacy embedded page/engine go away without retiring the context.
-        (projection.physical, id, runtime_id, local_storage)
+        (projection.browser_context, id, runtime_id, local_storage)
     };
-    assert_eq!(physical.id, id);
-    assert_eq!(physical.renderer_runtime().id(), runtime_id);
+    assert_eq!(physical.id(), id);
+    assert_eq!(physical.renderer_runtime_id_for_test(), runtime_id);
     assert!(Arc::ptr_eq(
-        physical.storage_partition.web_storage_store(),
+        &physical.web_storage_store_for_test(),
         &local_storage
     ));
     assert_eq!(
-        physical
-            .storage_partition
-            .storage_quota_for_origin("https://example.test"),
+        physical.storage_quota_for_origin("https://example.test"),
         (123.0, true)
     );
-    physical
-        .storage_partition
-        .clear_storage_quota_override("https://example.test");
-    assert!(
-        !physical
-            .storage_partition
-            .storage_quota_for_origin("https://example.test")
-            .1
-    );
-    let engine = physical.new_page_navigation_engine(
-        physical
-            .page_navigation_runtime_config
-            .clone()
-            .expect("Browser-owned configuration"),
-    );
-    let access = physical.renderer_runtime_owner_access();
-    drop(engine);
-    drop(physical);
-    assert!(
-        NavigationEngine::new_with_runtime_config_and_browser_context_access(
-            NavigationRuntimeConfig::default(),
-            access,
-        )
-        .is_err(),
-        "a retained runtime handle must not resurrect a retired Browser context"
-    );
-}
-
-#[test]
-fn context_runtime_teardown_handoff_retains_exactly_one_owner() {
-    let mut projection = BrowserContext::new("CTX-teardown".into());
-    let access = projection.renderer_runtime_owner_access();
-    let mut root = projection
-        .take_renderer_runtime_owner_for_teardown()
-        .unwrap();
-    assert!(
-        projection
-            .take_renderer_runtime_owner_for_teardown()
-            .is_none()
-    );
-    drop(projection);
-
-    let engine = NavigationEngine::new_with_runtime_config_and_browser_context_access(
-        NavigationRuntimeConfig::default(),
-        access.clone(),
-    )
-    .expect("the moved teardown participant is still the live owner");
-    drop(engine);
-    root.shutdown_and_join();
-    assert!(
-        NavigationEngine::new_with_runtime_config_and_browser_context_access(
-            NavigationRuntimeConfig::default(),
-            access,
-        )
-        .is_err()
-    );
+    physical.clear_storage_quota_override("https://example.test");
+    assert!(!physical.storage_quota_for_origin("https://example.test").1);
 }

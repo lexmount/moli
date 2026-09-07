@@ -355,7 +355,7 @@ async fn close_target_emits_detached_events() {
 #[tokio::test(flavor = "multi_thread")]
 async fn close_target_without_inspector_enabled_emits_inspector_detached_event() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -383,7 +383,9 @@ async fn close_target_without_inspector_enabled_emits_inspector_detached_event()
 #[tokio::test(flavor = "multi_thread")]
 async fn close_target_invalidates_runtime_context_and_object_without_active_page_fallback() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-runtime-close".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-runtime-close");
     bc.set_active_target_id("TID-active");
     bc.attach_active_session("SID-active");
     bc.register_page_target_url_fixture(
@@ -595,7 +597,7 @@ async fn close_target_aborts_paused_request_stage_navigation() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut().devtools_sessions[moli_page_types::DevToolsSessionKey::Primary]
@@ -690,7 +692,7 @@ async fn close_target_aborts_paused_runtime_fetch_subresource() {
     let page_url = format!("http://{addr}/page");
     let api_url = format!("http://{addr}/api");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -819,7 +821,7 @@ async fn close_target_aborts_paused_response_stage_runtime_xhr_subresource() {
     let page_url = format!("http://{addr}/page");
     let xhr_url = format!("http://{addr}/xhr");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -987,7 +989,7 @@ async fn close_target_aborts_paused_runtime_xhr_auth_subresource() {
     let page_url = format!("http://{addr}/page");
     let protected_url = format!("http://{addr}/protected");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);

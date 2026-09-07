@@ -16,6 +16,7 @@ wpt-extensions = ["moli-renderer-v8/wpt-extensions"]
 [dependencies]
 anyhow = "1.0.100"
 http = "1"
+indexmap = "2.6"
 moli-crypto = { path = "../moli-crypto" }
 moli-header-field = { path = "../moli-header-field" }
 moli-browser-profile = { path = "../moli-browser-profile" }
@@ -24,6 +25,8 @@ moli-parser = { path = "../moli-parser" }
 moli-page-types = { path = "../moli-page-types" }
 moli-renderer-v8 = { path = "../moli-renderer-v8" }
 moli-selector = { path = "../moli-selector" }
+moli-shared-worker = { path = "../moli-shared-worker" }
+moli-site = { path = "../moli-site" }
 moli-storage-key = { path = "../moli-storage-key" }
 moli-storage-service = { path = "../moli-storage-service" }
 moli-url = { path = "../moli-url" }

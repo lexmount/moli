@@ -1,8 +1,8 @@
 use super::*;
 #[test]
 fn browser_context_document_cookie_facade_snapshot_tracks_shared_cookie_store_generation() {
-    let mut conn = CdpConnection::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-cookie-facade", "TID-cookie-facade");
+    let mut conn = crate::test_support::connection();
+    let mut bc = conn.new_page_target_fixture_for_test("BID-cookie-facade", "TID-cookie-facade");
     bc.set_target_url("https://example.com/app".into());
     conn.install_browser_context_fixture_for_test(bc);
 
@@ -61,8 +61,8 @@ fn browser_context_document_cookie_facade_snapshot_tracks_shared_cookie_store_ge
 
 #[tokio::test]
 async fn browser_context_document_cookie_facade_snapshot_projects_cookie_get_freshness_state() {
-    let mut conn = CdpConnection::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-cookie-facade", "TID-cookie-facade");
+    let mut conn = crate::test_support::connection();
+    let mut bc = conn.new_page_target_fixture_for_test("BID-cookie-facade", "TID-cookie-facade");
     bc.set_target_url("https://example.com/app".into());
     conn.install_browser_context_fixture_for_test(bc);
 
@@ -80,7 +80,7 @@ async fn browser_context_document_cookie_facade_snapshot_projects_cookie_get_fre
     conn.browser_context
         .as_mut()
         .unwrap()
-        .set_loaded_page_async(navigation.page)
+        .commit_active_navigation_for_test(navigation.page)
         .await;
 
     let before_read = conn

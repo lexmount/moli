@@ -164,12 +164,8 @@ pub(in crate::domains) fn set_service_worker_pause_on_start_owner(
 
 fn sync_dedicated_worker_pause_on_start_for_devtools(conn: &CdpConnection) {
     let pause = conn.dedicated_worker_pause_on_start_for_devtools();
-    let runtimes = conn
-        .browser_contexts()
-        .map(BrowserContext::renderer_runtime)
-        .collect::<Vec<_>>();
-    for runtime in runtimes {
-        runtime.set_dedicated_worker_pause_on_start_for_devtools(pause);
+    for context in conn.browser_contexts() {
+        context.set_dedicated_worker_pause_on_start(pause);
     }
 }
 
@@ -267,7 +263,7 @@ enum PendingTargetCommandKind {
         command: DevToolsCloseTargetCommand,
     },
     DisposeBrowserContext {
-        browser_context_id: String,
+        disposal: Result<browser_context_disposal::BrowserContextDisposal, DevToolsError>,
     },
     SendMessageToTarget {
         message: String,
@@ -311,7 +307,7 @@ enum CompletedTargetCommandKind {
         command: DevToolsCloseTargetCommand,
     },
     DisposeBrowserContext {
-        browser_context_id: String,
+        disposal: Result<browser_context_disposal::BrowserContextDisposal, DevToolsError>,
     },
     SendMessageToTarget {
         message: String,
@@ -366,8 +362,8 @@ impl PendingTargetCommandDispatch {
             PendingTargetCommandKind::CloseTarget { command } => {
                 CompletedTargetCommandKind::CloseTarget { command }
             }
-            PendingTargetCommandKind::DisposeBrowserContext { browser_context_id } => {
-                CompletedTargetCommandKind::DisposeBrowserContext { browser_context_id }
+            PendingTargetCommandKind::DisposeBrowserContext { disposal } => {
+                CompletedTargetCommandKind::DisposeBrowserContext { disposal }
             }
             PendingTargetCommandKind::SendMessageToTarget {
                 message,
@@ -441,9 +437,9 @@ pub(crate) fn try_start_target_command_dispatch(
             Some(attachment::start_detach_from_target_command(cmd))
         }
         Some(TargetAction::CloseTarget) => Some(closing::start_close_target_command(conn, cmd)),
-        Some(TargetAction::DisposeBrowserContext) => {
-            Some(browser_context::start_dispose_browser_context_command(cmd))
-        }
+        Some(TargetAction::DisposeBrowserContext) => Some(
+            browser_context::start_dispose_browser_context_command(conn, cmd),
+        ),
         Some(TargetAction::SendMessageToTarget) => {
             Some(attachment::start_send_message_to_target_command(cmd))
         }
@@ -801,11 +797,11 @@ pub(crate) async fn complete_pending_target_command(
                 closing::complete_close_target_command_async(conn, command, command_context).await,
             );
         }
-        CompletedTargetCommandKind::DisposeBrowserContext { browser_context_id } => {
+        CompletedTargetCommandKind::DisposeBrowserContext { disposal } => {
             return TargetCommandTaskStep::Complete(
                 browser_context::complete_dispose_browser_context_command_async(
                     conn,
-                    browser_context_id,
+                    disposal,
                     command_context,
                 )
                 .await,
@@ -887,12 +883,12 @@ fn pending_close_target_command(
 fn pending_dispose_browser_context_command(
     command_id: Option<u64>,
     session_id: Option<&str>,
-    browser_context_id: String,
+    disposal: Result<browser_context_disposal::BrowserContextDisposal, DevToolsError>,
 ) -> TargetCommandTaskStep {
     TargetCommandTaskStep::Pending(PendingTargetCommandDispatch {
         command_id,
         session_id: session_id.map(str::to_owned),
-        kind: Box::new(PendingTargetCommandKind::DisposeBrowserContext { browser_context_id }),
+        kind: Box::new(PendingTargetCommandKind::DisposeBrowserContext { disposal }),
     })
 }
 
@@ -1078,7 +1074,7 @@ mod devtools_runtime_entry_tests {
 
     #[tokio::test]
     async fn devtools_target_entry_routes_create_target_to_initial_document_lifecycle_work() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let step = start_devtools_target_command(
             &mut conn,
             Some(41),
@@ -1125,7 +1121,7 @@ mod devtools_runtime_entry_tests {
 
     #[tokio::test]
     async fn attach_to_target_completion_plan_preserves_typed_attached_sidecar() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let plan = attachment::complete_attach_to_target_command_async(
             &mut conn,
             TargetAttachSessionCommit::direct(
@@ -1181,8 +1177,9 @@ mod devtools_runtime_entry_tests {
 
     #[tokio::test]
     async fn devtools_target_close_drains_runtime_ready_events_without_serializing_them() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-runtime-ready-close".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-runtime-ready-close".to_owned());
         browser_context.set_active_target_id("TID-runtime-ready-close");
         browser_context.attach_active_session("SID-runtime-ready-close");
         assert!(browser_context.assign_attached_session_to_target(
@@ -1190,14 +1187,11 @@ mod devtools_runtime_entry_tests {
             "SID-runtime-ready-close-attached".to_owned(),
         ));
         conn.install_browser_context_fixture_for_test(browser_context);
-        let page = conn
-            .load_page_via_runtime_async("data:text/html,<p>runtime ready close</p>")
-            .await
-            .expect("page should load");
-        conn.browser_context
-            .as_mut()
-            .expect("browser context")
-            .replace_active_page_for_test(Some(page));
+        conn.install_navigation_fixture_for_session_owner_for_test(
+            "data:text/html,<p>runtime ready close</p>",
+            None,
+        )
+        .await;
         conn.register_pending_inspector_await(7101, Some("SID-runtime-ready-close"));
         assert!(
             conn.claim_pending_inspector_await_for_scheduler_deferred_reply(
@@ -1284,7 +1278,7 @@ mod devtools_runtime_entry_tests {
 
     #[test]
     fn immediate_create_target_staging_does_not_emit_target_created_before_initial_document() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
         let (result, protocol_events) =
             execute_immediate_devtools_target_command_with_protocol_events(
@@ -1319,7 +1313,7 @@ mod devtools_runtime_entry_tests {
 
     #[test]
     fn devtools_target_entry_routes_close_target_to_pending_command() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let step = start_devtools_target_command(
             &mut conn,
             Some(42),
@@ -1345,7 +1339,7 @@ mod devtools_runtime_entry_tests {
 
     #[test]
     fn devtools_target_entry_routes_activate_target_to_pending_command() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let step = start_devtools_target_command(
             &mut conn,
             Some(43),
@@ -1371,7 +1365,7 @@ mod devtools_runtime_entry_tests {
 
     #[tokio::test]
     async fn devtools_target_entry_routes_get_targets_to_shared_result() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let create_step = start_devtools_target_command(
             &mut conn,
             Some(40),
@@ -1409,7 +1403,7 @@ mod devtools_runtime_entry_tests {
 
     #[tokio::test]
     async fn devtools_target_entry_routes_get_client_windows_to_shared_result() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let first_create_step = start_devtools_target_command(
             &mut conn,
             Some(46),
@@ -1466,7 +1460,7 @@ mod devtools_runtime_entry_tests {
 
     #[test]
     fn devtools_target_entry_routes_get_target_info_to_shared_result() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let step = start_devtools_target_command(
             &mut conn,
             Some(45),

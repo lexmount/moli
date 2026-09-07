@@ -39,7 +39,6 @@ fn failing_streamed_document(
         request_headers: navigation.request_headers.clone(),
         response,
         network_observation_journal: Default::default(),
-        body_progress_source: Default::default(),
         prepared_document: None,
     }
 }
@@ -104,7 +103,7 @@ async fn fetch_body_stream_read_preserves_error_type_and_paused_transfer() {
 
 fn navigation_fixture() -> (TestContext, NavigationDispatchState) {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-1".to_owned());
+    let mut browser_context = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
     browser_context
@@ -112,7 +111,15 @@ fn navigation_fixture() -> (TestContext, NavigationDispatchState) {
         .expect("fixture navigation should start");
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
+    let web_contents = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .web_contents_handle_for_target("TID-1")
+        .unwrap();
     let navigation = NavigationDispatchState {
+        web_contents,
         redirect_chain: Vec::new(),
         redirect_headers: None,
         navigate_id: Some(1),
@@ -164,21 +171,29 @@ async fn offline_navigation_loaders_preserve_typed_error_causes_through_context(
             .await
             .err()
             .expect("offline document load must fail"),
-        load.fetch_intercepted_response(method, url, None, headers.clone(), None)
-            .await
-            .expect_err("offline streaming response fetch must fail"),
-        load.fetch_intercepted_auth_response(
-            method,
-            url,
+        moli_core::browser::BrowserInterceptedNavigationLoad::new(
+            ctx.conn.admit_navigation_load(&navigation).unwrap(),
+            navigation.requested_url.clone(),
+            method.clone(),
             None,
             headers.clone(),
-            SubresourceAuthCredentials {
-                target: SubresourceAuthTarget::Server,
-                scheme: SubresourceAuthScheme::Basic,
-                username: "test-user".to_owned(),
-                password: "test-password".to_owned(),
-            },
         )
+        .fetch_streaming(None)
+        .await
+        .expect_err("offline streaming response fetch must fail"),
+        moli_core::browser::BrowserInterceptedNavigationLoad::new(
+            ctx.conn.admit_navigation_load(&navigation).unwrap(),
+            navigation.requested_url.clone(),
+            method.clone(),
+            None,
+            headers.clone(),
+        )
+        .fetch_auth(SubresourceAuthCredentials {
+            target: SubresourceAuthTarget::Server,
+            scheme: SubresourceAuthScheme::Basic,
+            username: "test-user".to_owned(),
+            password: "test-password".to_owned(),
+        })
         .await
         .expect_err("offline authenticated response fetch must fail"),
     ];
@@ -226,9 +241,20 @@ async fn navigation_error_document_uses_typed_failure_request_after_context() {
         matches!(outcome, NavigationLoadOutcome::ResponseCommitReady(_)),
         "network failure must prepare an error document commit"
     );
+    let NavigationLoadOutcome::ResponseCommitReady(response) = outcome else {
+        unreachable!()
+    };
+    let token = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .unwrap()
+        .pending_navigation_id_for_loader("TID-1", "LID-test")
+        .unwrap();
     let loaded = ctx
         .conn
-        .commit_navigation_load_outcome_for_owner_async(&navigation.owner, outcome)
+        .start_response_document_materialization_for_owner(&navigation.owner, token, *response)
+        .unwrap()
         .await
         .expect("error document should commit");
     assert_eq!(loaded.requested_url, unreachable_url);
