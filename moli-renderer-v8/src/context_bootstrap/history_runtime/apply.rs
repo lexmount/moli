@@ -4,7 +4,7 @@ use super::super::location_runtime::{
 use super::super::navigation_entry::{
     history_entries, history_index, navigation_current_entry, navigation_current_entry_index,
     navigation_entries_share_document, navigation_entry_initial_index,
-    navigation_entry_joint_top_index, navigation_entry_url_value,
+    navigation_entry_joint_top_index, navigation_entry_key_value, navigation_entry_url_value,
     restore_current_navigation_entry_scroll_position, set_history_index, set_history_state,
     sync_navigation_current_entry_from_history_entry,
 };
@@ -19,7 +19,7 @@ use super::super::navigation_serialize::sync_child_navigation_entry_seed_from_ow
 use super::super::navigation_window::{
     navigation_document_has_opaque_origin, runtime_top_window_owner, runtime_window_is_global,
     runtime_window_owner, window_history_for_holder, window_location_for_holder,
-    window_navigation_for_holder,
+    window_navigation_for_holder, window_task_target_for_runtime_owner,
 };
 use super::super::*;
 use super::results::{resolve_pending_navigation_committed, resolve_pending_navigation_finished};
@@ -95,6 +95,13 @@ pub(in crate::context_bootstrap) fn apply_history_entry_commit<'s>(
         .unwrap_or_else(|| v8::null(scope).into());
     let url = navigation_entry_url_value(scope, entry).unwrap_or_else(|| "about:blank".to_owned());
     set_history_index(scope, history, index);
+    if let Some(host_ptr) = context_host_ptr_from_global_bridge(scope) {
+        let host = unsafe { &mut *host_ptr };
+        if let Some(target) = window_task_target_for_runtime_owner(scope, host, owner) {
+            let entry_key = navigation_entry_key_value(scope, entry);
+            host.commit_active_history_delta_position(target, index, entry_key);
+        }
+    }
     set_history_state(scope, history, state);
 
     let location = window_location_for_holder(scope, owner)?;

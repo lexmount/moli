@@ -39,6 +39,7 @@ impl RendererPageHistoryTraversalTaskId {
 /// source.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum RendererPageHistoryTraversalTaskKind {
+    ByDelta,
     SameDocument,
     ChildCrossDocument,
 }

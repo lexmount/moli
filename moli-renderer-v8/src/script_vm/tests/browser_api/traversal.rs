@@ -1,12 +1,188 @@
 use super::*;
 
-#[test]
-fn top_level_history_back_delegates_to_the_browser_history_controller() {
+#[tokio::test]
+async fn history_delta_calls_keep_separate_tasks_and_resolve_targets_when_run() {
+    for (child, prefix) in [(false, "#"), (false, "/"), (true, "#"), (true, "/")] {
+        for (calls, expected, final_hash) in [
+            ("h.back(); h.forward();", ["[2]", "[2,3]"], "#3"),
+            ("h.back(); h.back();", ["[2]", "[2,1]"], "#1"),
+            ("h.forward(); h.back();", ["[]", "[2]"], "#2"),
+            (
+                "h.back(); h.pushState(4, '', '#4'); h.back();",
+                ["[2]", "[2,3]"],
+                "#3",
+            ),
+            ("h.go(-10); h.go(-2);", ["[]", "[1]"], "#1"),
+        ] {
+            let server = StaticHttpServer::spawn(usize::from(child)).await;
+            let parent_url = server.url_for_host("history-delta.test", "/page");
+            let loader = static_http_loader([server.resolve_entry("history-delta.test")]);
+            let mut vm =
+                new_storage_page_task_executor_test_vm_with_loader(parent_url.as_str(), &loader);
+            vm.eval(&format!(
+                r#"
+                globalThis.__historyOwner = window;
+                globalThis.__historyReady = true;
+                if ({child}) {{
+                  __historyReady = false;
+                  const frame = document.createElement('iframe');
+                  frame.onload = () => {{
+                    __historyOwner = frame.contentWindow;
+                    __historyReady = true;
+                  }};
+                  frame.src = '/child.html';
+                  document.body.appendChild(frame);
+                }}
+                'created'
+                "#,
+            ))
+            .expect("history fixture should create its Window");
+            advance_page_task_executor_until_eval_equals(
+                &mut vm,
+                &loader,
+                "String(__historyReady)",
+                "true",
+                "child history must belong to a loaded, fully active document",
+            )
+            .await;
+            vm.eval(&format!(
+                r#"
+                globalThis.__historyEvents = [];
+                const h = __historyOwner.history;
+                h.replaceState(0, '', '{prefix}0');
+                for (let i = 1; i <= 3; ++i) h.pushState(i, '', '{prefix}' + i);
+                __historyOwner.addEventListener('popstate', event => __historyEvents.push(event.state));
+                {calls}
+                JSON.stringify(__historyEvents)
+                "#,
+            ))
+            .map(|events| assert_eq!(events, "[]", "traversals must not run synchronously"))
+            .expect("history delta fixture should queue its calls");
+            for events in expected {
+                assert!(
+                    vm.run_one_history_traversal_executor_turn(&loader)
+                        .await
+                        .expect("each History call should own one selected task"),
+                    "child={child}, calls={calls}, expected={events}"
+                );
+                assert_eq!(
+                    vm.eval("JSON.stringify(__historyEvents)").unwrap(),
+                    events,
+                    "child={child}, calls={calls}"
+                );
+            }
+            assert_eq!(
+                vm.eval(if prefix == "#" {
+                    "__historyOwner.location.hash"
+                } else {
+                    "__historyOwner.location.pathname"
+                })
+                .unwrap(),
+                final_hash.replace('#', prefix),
+                "child={child}, calls={calls}"
+            );
+            assert!(
+                !vm.run_one_history_traversal_executor_turn(&loader)
+                    .await
+                    .expect("all History delta tasks should be consumed")
+            );
+            assert_eq!(server.finish().await.len(), usize::from(child));
+        }
+    }
+}
+
+#[tokio::test]
+async fn history_delta_target_does_not_include_later_popstate_listener_navigations() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+        "https://history-delta-listener.test/page",
+        &loader,
+    );
+    vm.eval(
+        r#"
+        globalThis.__historyEvents = [];
+        history.replaceState(0, '', '#0');
+        for (let i = 1; i <= 3; ++i) history.pushState(i, '', '#' + i);
+        addEventListener('popstate', event => {
+          __historyEvents.push(event.state);
+          if (__historyEvents.length === 1) history.pushState(4, '', '#4');
+        });
+        history.back();
+        history.back();
+        'queued'
+        "#,
+    )
+    .expect("reentrant history fixture should queue both deltas");
+    for expected in ["[2]|#4", "[2,1]|#1"] {
+        assert!(
+            vm.run_one_history_traversal_executor_turn(&loader)
+                .await
+                .expect("each delta should run against the then-current history")
+        );
+        assert_eq!(
+            vm.eval("JSON.stringify(__historyEvents) + '|' + location.hash")
+                .unwrap(),
+            expected
+        );
+    }
+}
+
+#[tokio::test]
+async fn history_delta_calls_follow_commits_not_canceled_or_reentrant_requests() {
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    for cancel_first in [false, true] {
+        let mut vm = new_storage_page_task_executor_test_vm_with_loader(
+            "https://history-delta-commit.test/page",
+            &loader,
+        );
+        vm.eval(&format!(r#"
+            globalThis.__historyEvents = [];
+            history.replaceState(0, '', '#0');
+            for (let i = 1; i <= 3; ++i) history.pushState(i, '', '#' + i);
+            addEventListener('popstate', event => {{
+              __historyEvents.push(event.state);
+              if (!{cancel_first} && __historyEvents.length === 1) history.back();
+            }});
+            if ({cancel_first}) navigation.addEventListener('navigate', event => event.preventDefault(), {{once: true}});
+            history.back();
+            history.back();
+            'queued'
+        "#)).expect("history traversal commit fixture should queue both requests");
+        let expected = if cancel_first {
+            vec!["[]", "[2]"]
+        } else {
+            vec!["[2]", "[2,1]", "[2,1,0]"]
+        };
+        for events in expected {
+            assert!(
+                vm.run_one_history_traversal_executor_turn(&loader)
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(vm.eval("JSON.stringify(__historyEvents)").unwrap(), events);
+        }
+        assert!(
+            !vm.run_one_history_traversal_executor_turn(&loader)
+                .await
+                .unwrap()
+        );
+    }
+}
+
+#[tokio::test]
+async fn top_level_history_back_delegates_to_the_browser_history_controller() {
     let url = "https://browser-owned-history.test/current";
-    let mut vm = new_storage_test_vm(url);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(url, &loader);
 
     vm.eval("history.back(); 'queued'")
         .expect("hidden renderer bookkeeping entry should delegate to the browser");
+    assert!(vm.take_pending_top_level_history_traversal().is_none());
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
     assert!(!vm.has_pending_location_navigation());
     assert_eq!(
         vm.take_pending_top_level_history_traversal()
@@ -25,6 +201,12 @@ fn top_level_history_back_delegates_to_the_browser_history_controller() {
     );
     vm.eval("history.back(); 'queued'")
         .expect("unknown browser-side back entry should queue");
+    assert!(vm.take_pending_top_level_history_traversal().is_none());
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
 
     assert!(!vm.has_pending_location_navigation());
     assert_eq!(
@@ -36,6 +218,12 @@ fn top_level_history_back_delegates_to_the_browser_history_controller() {
 
     vm.eval("history.forward(); 'queued'")
         .expect("unknown browser-side forward entry should queue");
+    assert!(vm.take_pending_top_level_history_traversal().is_none());
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
     assert_eq!(
         vm.take_pending_top_level_history_traversal()
             .expect("browser-owned forward traversal request")
@@ -44,15 +232,23 @@ fn top_level_history_back_delegates_to_the_browser_history_controller() {
     );
 }
 
-#[test]
-fn top_level_navigation_intents_keep_one_last_writer_state() {
+#[tokio::test]
+async fn top_level_navigation_intents_keep_one_last_writer_state_after_traversal_tasks() {
     let url = "https://browser-owned-history.test/current";
-    let mut vm = new_storage_test_vm(url);
+    let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
+    let mut vm = new_storage_page_task_executor_test_vm_with_loader(url, &loader);
     vm.install_navigation_bootstrap_entry(Some(moli_page_types::initial_navigation_history_seed(
         false, url,
     )));
 
-    vm.eval("history.back(); location.assign('/location-wins'); 'queued'")
+    vm.eval("history.back(); 'queued'")
+        .expect("history traversal should queue before the Location assignment");
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
+    vm.eval("location.assign('/location-wins'); 'queued'")
         .expect("location navigation should replace the history traversal intent");
     assert!(vm.take_pending_top_level_history_traversal().is_none());
     assert_eq!(
@@ -65,6 +261,13 @@ fn top_level_navigation_intents_keep_one_last_writer_state() {
 
     vm.eval("location.assign('/history-loses-location'); history.forward(); 'queued'")
         .expect("history traversal should replace the location navigation intent");
+    assert!(vm.has_pending_location_navigation());
+    assert!(vm.take_pending_top_level_history_traversal().is_none());
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .unwrap()
+    );
     assert!(!vm.has_pending_location_navigation());
     assert_eq!(
         vm.take_pending_top_level_history_traversal()
@@ -1345,7 +1548,7 @@ result.finished.catch(error => __lmClosedHistoryRoute.push("finished:" + error.n
 }
 
 #[tokio::test]
-async fn history_back_calls_from_default_and_isolated_world_coalesce_per_window() {
+async fn history_back_calls_from_default_and_isolated_world_keep_separate_tasks() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
     let mut vm =
         new_storage_page_task_executor_test_vm_with_loader("https://example.com/base", &loader);
@@ -1379,9 +1582,16 @@ history.pushState(null, "", "#two");
             .await
             .expect("default realm traversal should run")
     );
+    assert_eq!(vm.eval("location.hash").unwrap(), "#one");
+    assert!(
+        vm.run_one_history_traversal_executor_turn(&loader)
+            .await
+            .expect("isolated realm traversal should run separately")
+    );
+    assert_eq!(vm.eval("location.hash").unwrap(), "");
     assert!(
         !vm.run_one_history_traversal_executor_turn(&loader)
             .await
-            .expect("history source should be drained after one Window traversal position")
+            .expect("history source should be drained after both Window traversal tasks")
     );
 }
