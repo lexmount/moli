@@ -286,6 +286,21 @@ impl RendererDevToolsIoCommandEnvelope {
         }
     }
 
+    pub(crate) fn required_active_page_for_interrupt(&self) -> Option<crate::runtime::PageId> {
+        match &self.payload {
+            // Session teardown mutates PageVm-owned Inspector state. An IO
+            // interrupt may do that only while this exact Page is bound on
+            // the suspended owner stack; an idle Page is finalized by the
+            // already-scheduled owner wake instead.
+            RendererDevToolsIoCommandPayload::FinalizeSessionDetach { token, .. } => {
+                Some(token.page_id())
+            }
+            RendererDevToolsIoCommandPayload::Inspector(_)
+            | RendererDevToolsIoCommandPayload::PerformanceGetMetrics { .. }
+            | RendererDevToolsIoCommandPayload::SetScriptExecutionDisabled { .. } => None,
+        }
+    }
+
     pub(crate) fn inspector_envelope(&self) -> Option<&RendererInspectorCommandEnvelope> {
         match &self.payload {
             RendererDevToolsIoCommandPayload::Inspector(envelope) => Some(envelope),

@@ -1,4 +1,4 @@
-use crate::conn::{CdpConnection, CdpSessionRoute, CommandOwnerScope, PageTargetHost};
+use crate::conn::{CdpConnection, CdpSessionRoute, CommandOwnerScope, PageAgentHost};
 use moli_page_types::DevToolsSessionKey;
 
 pub(super) struct TargetSessionOwner {
@@ -33,7 +33,7 @@ impl CdpConnection {
     pub(crate) fn mutate_target_page_state_for_session(
         &mut self,
         session_id: Option<&str>,
-        f: impl FnOnce(&mut PageTargetHost),
+        f: impl FnOnce(&mut PageAgentHost),
     ) -> bool {
         self.target_session_owner_mut(session_id)
             .map(|mut owner| owner.mutate_page_state(|state, _| f(state)))

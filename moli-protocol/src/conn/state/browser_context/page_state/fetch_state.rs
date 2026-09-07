@@ -1,6 +1,6 @@
 #[cfg(test)]
 use crate::conn::fetch_support::OpenBodyStreamError;
-use crate::conn::{BrowserContext, ConnectionNetworkRequestIdAllocator, PageTargetHost};
+use crate::conn::{BrowserContext, ConnectionNetworkRequestIdAllocator, PageAgentHost};
 #[cfg(test)]
 use crate::conn::{
     DocumentBodySource, NavigationDispatchState, NavigationId, PausedDocumentTransfer,
@@ -12,29 +12,29 @@ fn document_navigation_loader_id(sequence: u64) -> String {
 }
 
 impl BrowserContext {
-    pub(crate) fn page_target(&self, target_id: &str) -> Option<&PageTargetHost> {
+    pub(crate) fn page_target(&self, target_id: &str) -> Option<&PageAgentHost> {
         self.page_targets.get(target_id)
     }
 
-    pub(crate) fn page_target_mut(&mut self, target_id: &str) -> Option<&mut PageTargetHost> {
+    pub(crate) fn page_target_mut(&mut self, target_id: &str) -> Option<&mut PageAgentHost> {
         self.page_targets.get_mut(target_id)
     }
 
-    pub fn background_target(&self, target_id: &str) -> Option<&PageTargetHost> {
+    pub fn background_target(&self, target_id: &str) -> Option<&PageAgentHost> {
         (!self.is_active_target(target_id))
             .then(|| self.page_target(target_id))
             .flatten()
     }
 
     #[cfg(test)]
-    pub(crate) fn background_target_mut(&mut self, target_id: &str) -> Option<&mut PageTargetHost> {
+    pub(crate) fn background_target_mut(&mut self, target_id: &str) -> Option<&mut PageAgentHost> {
         if self.is_active_target(target_id) {
             return None;
         }
         self.page_target_mut(target_id)
     }
 
-    pub(crate) fn background_targets(&self) -> impl DoubleEndedIterator<Item = &PageTargetHost> {
+    pub(crate) fn background_targets(&self) -> impl DoubleEndedIterator<Item = &PageAgentHost> {
         self.page_targets
             .background(self.physical.selected_web_contents_id())
     }
@@ -327,7 +327,7 @@ impl BrowserContext {
     }
 }
 
-impl PageTargetHost {
+impl PageAgentHost {
     pub(crate) fn prepare_document_navigation_request_ids(
         &mut self,
         network_request_id_allocator: &mut ConnectionNetworkRequestIdAllocator,

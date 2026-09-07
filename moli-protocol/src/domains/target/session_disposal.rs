@@ -8,10 +8,8 @@ fn prepare_session_disposal(
     detachment: TargetSessionDetachCleanupPlan,
 ) -> anyhow::Result<(SessionDisposalPlan, TargetSessionDetachCleanupPlan)> {
     let session_id = detachment.session_id();
-    let route = conn
-        .session_route(Some(session_id))
-        .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
-    let plan = SessionDisposalPlan::for_session_route(session_id, &route)
+    let plan = conn
+        .session_disposal_plan(session_id)
         .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
     anyhow::ensure!(
         plan.target_id() == Some(detachment.target_id()),
@@ -24,10 +22,8 @@ fn prepare_browser_session_disposal(
     conn: &CdpConnection,
     session_id: &str,
 ) -> anyhow::Result<SessionDisposalPlan> {
-    let route = conn
-        .session_route(Some(session_id))
-        .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
-    let plan = SessionDisposalPlan::for_session_route(session_id, &route)
+    let plan = conn
+        .session_disposal_plan(session_id)
         .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
     anyhow::ensure!(
         matches!(plan.target(), SessionDisposalTarget::Browser),
@@ -175,10 +171,8 @@ pub(super) async fn dispose_primary_page_session_preserving_frontend_async(
     protocol_events: &mut Vec<BackgroundProtocolEvent>,
     session_id: &str,
 ) -> anyhow::Result<Option<moli_core::RendererOutputFence>> {
-    let route = conn
-        .session_route(Some(session_id))
-        .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
-    let plan = SessionDisposalPlan::for_session_route(session_id, &route)
+    let plan = conn
+        .session_disposal_plan(session_id)
         .ok_or_else(|| anyhow::anyhow!("InvalidSessionId"))?;
     if !matches!(
         plan.target(),

@@ -15,7 +15,7 @@ use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurface;
 /// DevTools projection of a stable Browser page and its main-frame slot.
 /// Browser ownership and foreground selection belong to the physical Context.
 #[derive(Debug)]
-pub struct PageTargetHost {
+pub struct PageAgentHost {
     target_id: String,
     web_contents_id: WebContentsId,
     main_frame_slot_id: MainFrameSlotId,
@@ -38,7 +38,7 @@ pub struct PageTargetHost {
     pub(crate) owner_state: TargetOwnerState,
 }
 
-impl PageTargetHost {
+impl PageAgentHost {
     pub(crate) fn new(
         target_id: String,
         primary_session_id: Option<String>,
@@ -159,11 +159,11 @@ impl PageTargetHost {
 
 /// DevTools page projections. The Browser collection owns selection and close.
 #[derive(Debug, Default)]
-pub(crate) struct PageTargetRegistry {
-    hosts: IndexMap<String, PageTargetHost>,
+pub(crate) struct PageAgentHostRegistry {
+    hosts: IndexMap<String, PageAgentHost>,
 }
 
-impl PageTargetRegistry {
+impl PageAgentHostRegistry {
     #[cfg(test)]
     pub(crate) fn is_empty(&self) -> bool {
         self.hosts.is_empty()
@@ -173,14 +173,14 @@ impl PageTargetRegistry {
         self.hosts.len()
     }
 
-    pub(crate) fn active(&self, selected: Option<WebContentsId>) -> Option<&PageTargetHost> {
+    pub(crate) fn active(&self, selected: Option<WebContentsId>) -> Option<&PageAgentHost> {
         self.get_for_web_contents(selected?)
     }
 
     pub(crate) fn active_mut(
         &mut self,
         selected: Option<WebContentsId>,
-    ) -> Option<&mut PageTargetHost> {
+    ) -> Option<&mut PageAgentHost> {
         let id = selected?;
         self.iter_mut().find(|host| host.web_contents_id() == id)
     }
@@ -188,19 +188,19 @@ impl PageTargetRegistry {
     pub(in crate::conn) fn get_for_web_contents(
         &self,
         id: WebContentsId,
-    ) -> Option<&PageTargetHost> {
+    ) -> Option<&PageAgentHost> {
         self.iter().find(|host| host.web_contents_id() == id)
     }
 
-    pub(crate) fn get(&self, target_id: &str) -> Option<&PageTargetHost> {
+    pub(crate) fn get(&self, target_id: &str) -> Option<&PageAgentHost> {
         self.hosts.get(target_id)
     }
 
-    pub(crate) fn get_mut(&mut self, target_id: &str) -> Option<&mut PageTargetHost> {
+    pub(crate) fn get_mut(&mut self, target_id: &str) -> Option<&mut PageAgentHost> {
         self.hosts.get_mut(target_id)
     }
 
-    pub(crate) fn insert(&mut self, host: PageTargetHost) -> bool {
+    pub(crate) fn insert(&mut self, host: PageAgentHost) -> bool {
         let target_id = host.target_id().to_owned();
         if self.hosts.contains_key(&target_id) {
             return false;
@@ -209,7 +209,7 @@ impl PageTargetRegistry {
         true
     }
 
-    pub(crate) fn remove(&mut self, target_id: &str) -> Option<PageTargetHost> {
+    pub(crate) fn remove(&mut self, target_id: &str) -> Option<PageAgentHost> {
         self.hosts.shift_remove(target_id)
     }
 
@@ -227,18 +227,18 @@ impl PageTargetRegistry {
         true
     }
 
-    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &PageTargetHost> {
+    pub(crate) fn iter(&self) -> impl DoubleEndedIterator<Item = &PageAgentHost> {
         self.hosts.values()
     }
 
-    pub(crate) fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut PageTargetHost> {
+    pub(crate) fn iter_mut(&mut self) -> impl DoubleEndedIterator<Item = &mut PageAgentHost> {
         self.hosts.values_mut()
     }
 
     pub(crate) fn background(
         &self,
         active_id: Option<WebContentsId>,
-    ) -> impl DoubleEndedIterator<Item = &PageTargetHost> {
+    ) -> impl DoubleEndedIterator<Item = &PageAgentHost> {
         self.iter()
             .filter(move |host| Some(host.web_contents_id()) != active_id)
     }

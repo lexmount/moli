@@ -1,7 +1,7 @@
 #[cfg(test)]
 use crate::conn::cookie_manager_surface::BrowserContextCookieManagerSurfaceSnapshot;
 use crate::conn::state::PageSurface;
-use crate::conn::{BrowserContext, DocumentStartScript, EmulatedViewportSurface, PageTargetHost};
+use crate::conn::{BrowserContext, DocumentStartScript, EmulatedViewportSurface, PageAgentHost};
 #[cfg(test)]
 use moli_cookie_jar::{BrowserCookieFacadeContextOverrides, BrowserCookieFacadeOverrides};
 
@@ -258,7 +258,7 @@ impl BrowserContext {
 
     // Context default resolution stays in this residence until Commit 7;
     // source generation itself only reads the embedded Browser object.
-    fn page_surface_for_state(&self, state: &PageTargetHost, foreground: bool) -> PageSurface {
+    fn page_surface_for_state(&self, state: &PageAgentHost, foreground: bool) -> PageSurface {
         self.web_contents_for_target(state.target_id())
             .expect("live WebContents")
             .page_surface(
@@ -289,7 +289,7 @@ impl BrowserContext {
 
     pub(crate) fn generated_surface_override_script_for_background_state(
         &self,
-        state: &PageTargetHost,
+        state: &PageAgentHost,
     ) -> String {
         self.page_surface_for_state(state, false).script()
     }

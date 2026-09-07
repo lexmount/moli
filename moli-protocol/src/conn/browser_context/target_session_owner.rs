@@ -4,9 +4,10 @@ use crate::conn::DocumentStartScript;
 #[cfg(test)]
 use crate::conn::state::BrowserContextResourceStorageHandles;
 use crate::conn::state::{
-    BrowserContextPageStorageHandles, DevToolsSessionState, PageNavigationHistoryEntry,
-    PageTargetHost, RendererMainDocumentCommitSeed, TargetFetchConfig, TargetOwnerState,
-    TargetPageResidenceIdentity, TargetRuntimeSessionState, TargetRuntimeSlot, WindowSurfaceState,
+    BrowserContextPageStorageHandles, DevToolsSessionState, PageAgentHost,
+    PageNavigationHistoryEntry, RendererMainDocumentCommitSeed, TargetFetchConfig,
+    TargetOwnerState, TargetPageResidenceIdentity, TargetRuntimeSessionState, TargetRuntimeSlot,
+    WindowSurfaceState,
 };
 use crate::conn::{
     BackgroundProtocolEvent, CommandOwnerScope, ConnectionNetworkRequestIdAllocator,
@@ -507,7 +508,7 @@ impl<'a> TargetSessionOwnerRef<'a> {
             .target_navigation_history_entry_url(&self.target_id, entry_id)
     }
 
-    fn target(&self) -> &'a crate::conn::PageTargetHost {
+    fn target(&self) -> &'a crate::conn::PageAgentHost {
         self.browser_context
             .page_target(&self.target_id)
             .expect("resolved Page target owner must remain live")
@@ -661,19 +662,19 @@ impl TargetSessionStateMut<'_> {
 }
 
 impl<'a> TargetSessionOwnerMut<'a> {
-    fn target(&self) -> &crate::conn::PageTargetHost {
+    fn target(&self) -> &crate::conn::PageAgentHost {
         self.browser_context
             .page_target(&self.target_id)
             .expect("resolved Page target owner must remain live")
     }
 
-    fn target_mut(&mut self) -> &mut crate::conn::PageTargetHost {
+    fn target_mut(&mut self) -> &mut crate::conn::PageAgentHost {
         self.browser_context
             .page_target_mut(&self.target_id)
             .expect("resolved Page target owner must remain live")
     }
 
-    fn into_target_mut(self) -> &'a mut crate::conn::PageTargetHost {
+    fn into_target_mut(self) -> &'a mut crate::conn::PageAgentHost {
         self.browser_context
             .page_target_mut(&self.target_id)
             .expect("resolved Page target owner must remain live")
@@ -703,7 +704,7 @@ impl<'a> TargetSessionOwnerMut<'a> {
 
     pub(super) fn mutate_page_state<T>(
         &mut self,
-        f: impl FnOnce(&mut PageTargetHost, &DevToolsSessionKey) -> T,
+        f: impl FnOnce(&mut PageAgentHost, &DevToolsSessionKey) -> T,
     ) -> T {
         let session_key = self.session_key.clone();
         f(self.target_mut(), &session_key)
@@ -1520,6 +1521,17 @@ impl CdpConnection {
         Some(
             self.target_session_owner_ref_for_owner(owner)?
                 .owner_identity(),
+        )
+    }
+
+    pub(crate) fn page_agent_host_main_frame_slot_for_owner(
+        &self,
+        owner: &CommandOwnerScope,
+    ) -> Option<moli_core::browser::MainFrameSlotId> {
+        Some(
+            self.target_session_owner_ref_for_owner(owner)?
+                .target()
+                .main_frame_slot_id(),
         )
     }
 

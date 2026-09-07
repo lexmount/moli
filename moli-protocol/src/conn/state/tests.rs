@@ -45,7 +45,7 @@ fn test_navigation_dispatch_state(fetch_request_id: &str) -> NavigationDispatchS
 }
 
 #[test]
-fn page_target_host_owns_session_state_directly() {
+fn page_agent_host_owns_session_state_directly() {
     let mut context = BrowserContext::new("CTX-session-state".into());
     context.set_active_target_id("TID-state-test");
     let target = context.active_page_target_mut();

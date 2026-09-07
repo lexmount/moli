@@ -13,7 +13,7 @@ pub(in crate::conn) use browser_context::javascript_dialog;
 mod navigation_outcome;
 mod page_resource;
 pub(in crate::conn) use browser_context::page_slot;
-mod page_target_host;
+mod page_agent_host;
 mod pending_renderer_command;
 mod profiler;
 pub(in crate::conn) use browser_context::runtime_slot;
@@ -92,9 +92,9 @@ pub(crate) use javascript_dialog::{
     TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
 };
 pub(crate) use pending_renderer_command::{
-    DuplicatePendingRendererCommand, PendingRendererCommandKey, PreparedRendererCallDispatch,
-    PreparedRendererCallTermination, RegisterRendererCallError, RendererCommandCorrelation,
-    RendererCommandDescriptor, RendererCommandReplay,
+    DuplicatePendingRendererCommand, PreparedRendererCallDispatch, PreparedRendererCallTermination,
+    RegisterRendererCallError, RendererCommandCorrelation, RendererCommandDescriptor,
+    RendererCommandReplay,
 };
 pub(crate) use profiler::{ProfilerAction, ProfilerInspectorCommand};
 pub(crate) use service_worker_lifetime::{
@@ -156,7 +156,7 @@ pub use emulation::{
 pub(crate) use emulation::{
     EmulatedNetworkConditions, EmulatedViewportSurface, viewport_surface_install_script,
 };
-pub use page_target_host::PageTargetHost;
+pub use page_agent_host::PageAgentHost;
 pub(crate) use target_state::{
     PendingBidiChannelListener, PendingInspectorAwait, TargetOwnerState,
 };

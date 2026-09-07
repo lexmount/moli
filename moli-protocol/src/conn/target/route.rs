@@ -177,7 +177,7 @@ impl CdpConnection {
             .as_deref()
             == Some(target_id)
             || self
-                .target_control
+                .agent_hosts
                 .auto_attached_target_ids_for_owner(Some(session_id))
                 .iter()
                 .any(|attached_target_id| attached_target_id == target_id)
@@ -185,9 +185,7 @@ impl CdpConnection {
 
     pub(crate) fn session_route(&self, session_id: Option<&str>) -> Option<CdpSessionRoute> {
         let session_id = session_id?;
-        self.target_control
-            .attached_session_route(session_id)
-            .cloned()
+        self.agent_hosts.attached_session_route(session_id).cloned()
     }
 
     pub(crate) fn target_session_route_for_target_id(
@@ -313,7 +311,7 @@ mod tests {
             target_id: "TID-a".to_owned(),
             session_key: DevToolsSessionKey::Primary,
         };
-        connection.target_control.commit_attached_session(
+        connection.agent_hosts.commit_attached_session(
             "SID-a".to_owned(),
             None,
             "TID-a",

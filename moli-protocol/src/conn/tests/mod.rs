@@ -712,7 +712,7 @@ async fn memory_diagnostics_reports_page_vm_document_isolate_model() {
     assert_eq!(
         diagnostics["isolateScope"]["loadedDocumentRendererOwnerCount"],
         json!(2),
-        "each loaded PageTargetHost owns an independently schedulable renderer owner"
+        "each loaded PageAgentHost owns an independently schedulable renderer owner"
     );
     assert_eq!(
         diagnostics["isolateScope"]["estimatedDocumentIsolateCount"],
@@ -900,7 +900,7 @@ async fn memory_diagnostics_excludes_empty_page_hosts_from_document_isolates() {
     let empty_page_engine = conn
         .browser_context_by_id("BID-empty-page")
         .and_then(|context| context.page_navigation_engine("TID-empty-page"))
-        .expect("empty PageTargetHost must own its navigation engine");
+        .expect("empty PageAgentHost must own its navigation engine");
     assert!(
         !empty_page_engine.shares_renderer_owner_with(conn.standalone_navigation_engine.ensure()),
         "test setup must keep a distinct renderer owner without a loaded document"
@@ -1099,10 +1099,10 @@ fn memory_diagnostics_counts_isolated_page_engines_by_renderer_owner() {
         .browser_context
         .as_ref()
         .and_then(|context| context.page_navigation_engine("TID-shared-diagnostics-bg"))
-        .expect("background PageTargetHost must own an engine");
+        .expect("background PageAgentHost must own an engine");
     assert!(
         !background.shares_renderer_owner_with(active),
-        "same-context PageTargetHost engines must remain independently schedulable"
+        "same-context PageAgentHost engines must remain independently schedulable"
     );
 
     let diagnostics = conn.moli_memory_diagnostics();
@@ -1110,7 +1110,7 @@ fn memory_diagnostics_counts_isolated_page_engines_by_renderer_owner() {
     assert_eq!(
         diagnostics["connection"]["pageNavigationEngineCount"],
         json!(2),
-        "each PageTargetHost must expose one resident NavigationEngine"
+        "each PageAgentHost must expose one resident NavigationEngine"
     );
     assert_eq!(
         diagnostics["isolateScope"]["pageNavigationEngineRendererOwnerCount"],
@@ -1165,7 +1165,7 @@ fn page_navigation_engines_remain_target_local_across_selection() {
             .browser_identity()
             .user_agent(),
         "Moli/Page-First",
-        "selection must not replace or move a PageTargetHost engine"
+        "selection must not replace or move a PageAgentHost engine"
     );
     assert_eq!(
         conn.browser_context

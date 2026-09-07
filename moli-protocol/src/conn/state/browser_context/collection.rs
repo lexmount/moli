@@ -1,6 +1,6 @@
 use super::BrowserContext;
 use crate::conn::state::{
-    PageTargetHost, TargetIdentityState,
+    PageAgentHost, TargetIdentityState,
     page_slot::TargetPageSlot,
     web_contents::{
         EmulationPolicy, EmulationPolicyChange, WebContents, WindowSurface, WindowSurfaceState,
@@ -81,7 +81,7 @@ impl BrowserContext {
             return false;
         }
         let id = contents.id();
-        let mut projection = PageTargetHost::new(
+        let mut projection = PageAgentHost::new(
             target_id,
             primary_session_id,
             identity,
@@ -118,7 +118,7 @@ impl BrowserContext {
         let Some(id) = self
             .page_targets
             .get(target_id)
-            .map(PageTargetHost::web_contents_id)
+            .map(PageAgentHost::web_contents_id)
         else {
             return false;
         };

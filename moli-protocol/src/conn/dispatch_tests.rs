@@ -9151,6 +9151,9 @@ async fn agent_host_dispatch_exposes_only_actual_renderer_fallthrough_binding() 
     let expected_document = conn
         .current_document_id_for_owner(&owner)
         .expect("loaded page should have a current Document");
+    let expected_main_frame_slot = conn
+        .page_agent_host_main_frame_slot_for_owner(&owner)
+        .expect("loaded Page AgentHost should retain its main-frame slot");
     let expected_attachment = conn
         .current_renderer_agent_attachment_id_for_owner(&owner)
         .expect("loaded page should have a renderer attachment");
@@ -9166,6 +9169,7 @@ async fn agent_host_dispatch_exposes_only_actual_renderer_fallthrough_binding() 
     assert_eq!(
         dispatch.binding(),
         &RendererDispatchBinding::Page(RendererPageDispatchBinding {
+            main_frame_slot: expected_main_frame_slot,
             document: expected_document,
             attachment: expected_attachment,
         })
@@ -9188,6 +9192,7 @@ async fn agent_host_dispatch_exposes_only_actual_renderer_fallthrough_binding() 
     assert_eq!(
         dispatch.binding(),
         &RendererDispatchBinding::Page(RendererPageDispatchBinding {
+            main_frame_slot: expected_main_frame_slot,
             document: expected_document,
             attachment: expected_attachment,
         })

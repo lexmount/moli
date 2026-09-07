@@ -22,8 +22,8 @@ use crate::{
     runtime::{
         RendererDevToolsIoCommandKind, RendererDevToolsIoCommandPayload,
         RendererDevToolsMainNestedDispatch, RendererOwnerReply,
-        RendererRuntimeInspectorResponseSender, detach_session_from_page,
-        dispatch_nested_main_page_command,
+        RendererRuntimeInspectorResponseSender, active_nested_main_page_id,
+        detach_session_from_page, dispatch_nested_main_page_command,
     },
 };
 use interrupt::{
@@ -265,7 +265,11 @@ impl RendererInspectorSessionExecutorLocal {
     }
 
     fn dispatch_next_io_command_from_interrupt(&self) {
-        let Some(command) = self.target.io_ref().claim_for_interrupt() else {
+        let Some(command) = self
+            .target
+            .io_ref()
+            .claim_for_interrupt_on_active_page(active_nested_main_page_id())
+        else {
             return;
         };
         let session_key = command.ticket().session();

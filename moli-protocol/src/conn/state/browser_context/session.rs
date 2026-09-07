@@ -1,7 +1,7 @@
 use super::BrowserContext;
 use crate::conn::state::devtools_session::DevToolsNetworkSessionState;
 use crate::conn::state::javascript_dialog::TargetJavaScriptDialogState;
-use crate::conn::state::page_target_host::PageTargetHost;
+use crate::conn::state::page_agent_host::PageAgentHost;
 use crate::conn::state::web_contents::NetworkRequestPolicy;
 use crate::domains::audits_output_state::TargetAuditsSessionState;
 use moli_core::page::V8InspectorSessionState;
@@ -59,7 +59,7 @@ impl TargetPerformanceSessionState {
     }
 }
 
-impl PageTargetHost {
+impl PageAgentHost {
     pub(crate) fn reported_user_agent_override(&self) -> Option<&str> {
         self.devtools_sessions
             .reported_user_agent_override()

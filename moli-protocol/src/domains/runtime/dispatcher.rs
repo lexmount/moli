@@ -2260,7 +2260,7 @@ fn pre_register_runtime_await_if_needed(
         owner,
         object_group,
     )?;
-    conn.register_runtime_await_job_for_owner(command_id, owner, object_group, action);
+    conn.trace_runtime_await_started(command_id, owner, object_group, action);
     conn.trace_runtime_await_pending_registered(command_id, owner.session_id());
     Ok(Some(command_id))
 }

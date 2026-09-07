@@ -7,19 +7,20 @@ use crate::devtools_runtime::{
 };
 
 use super::{
-    CommittedAttachSession, DetachedTargetSession, PreparedAttachSession, TargetClosureCleanupPlan,
-    TargetClosurePlan, TargetEventPlan, TargetHandlerStore, TargetHostDelta, TargetSessionRegistry,
+    CommittedAttachSession, DetachedTargetSession, DevToolsSessionHandlerSet,
+    PreparedAttachSession, TargetClosureCleanupPlan, TargetClosurePlan, TargetEventPlan,
+    TargetHandlerStore, TargetHostDelta, TargetSessionRegistry,
 };
 use crate::conn::{BackgroundProtocolEvent, CdpSessionRoute, CdpTargetFilter};
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct TargetControlPlane {
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct DevToolsAgentHostRegistry {
     sessions: TargetSessionRegistry,
     graph: TargetGraph,
     handlers: TargetHandlerStore,
 }
 
-impl TargetControlPlane {
+impl DevToolsAgentHostRegistry {
     pub(crate) fn register_tab(&mut self, tab_target_id: String, primary_page_target_id: String) {
         self.graph
             .register_tab(tab_target_id, primary_page_target_id);
@@ -468,6 +469,13 @@ impl TargetControlPlane {
         self.sessions.attached_session_route(session_id)
     }
 
+    pub(crate) fn attached_session_handler_set(
+        &self,
+        session_id: &str,
+    ) -> Option<DevToolsSessionHandlerSet> {
+        self.sessions.attached_session_handler_set(session_id)
+    }
+
     pub(crate) fn browser_session_count(&self) -> usize {
         self.sessions.browser_session_count()
     }
@@ -567,7 +575,7 @@ fn target_detached_event(
 
 #[cfg(test)]
 mod tests {
-    use crate::conn::{CdpSessionRoute, CdpTargetFilter, TargetControlPlane};
+    use crate::conn::{CdpSessionRoute, CdpTargetFilter, DevToolsAgentHostRegistry};
     use crate::devtools_runtime::{DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind};
 
     fn target_info(target_id: &str, kind: DevToolsTargetKind) -> DevToolsTargetInfo {
@@ -587,18 +595,18 @@ mod tests {
 
     #[test]
     fn target_crashed_events_only_reach_discovery_owners_that_reported_the_host() {
-        let mut control = TargetControlPlane::default();
-        control.set_discover_targets(None, CdpTargetFilter::default_target_discovery());
-        control.set_discover_targets(
+        let mut registry = DevToolsAgentHostRegistry::default();
+        registry.set_discover_targets(None, CdpTargetFilter::default_target_discovery());
+        registry.set_discover_targets(
             Some("SID-reported"),
             CdpTargetFilter::default_target_discovery(),
         );
-        control.set_discover_targets(
+        registry.set_discover_targets(
             Some("SID-unreported"),
             CdpTargetFilter::default_target_discovery(),
         );
         assert_eq!(
-            control
+            registry
                 .initial_target_created_events_for_owner(
                     None,
                     vec![target_info("TID-page", DevToolsTargetKind::Page)],
@@ -607,7 +615,7 @@ mod tests {
             1
         );
         assert_eq!(
-            control
+            registry
                 .initial_target_created_events_for_owner(
                     Some("SID-reported"),
                     vec![target_info("TID-page", DevToolsTargetKind::Page)],
@@ -617,7 +625,7 @@ mod tests {
         );
 
         let events =
-            control.target_crashed_events_for_all_discovery_owners("TID-page", "crashed", 5);
+            registry.target_crashed_events_for_all_discovery_owners("TID-page", "crashed", 5);
         assert_eq!(events.len(), 2);
         let messages = events
             .into_iter()
@@ -633,7 +641,7 @@ mod tests {
         assert_eq!(messages[1]["sessionId"], "SID-reported");
 
         assert!(
-            control
+            registry
                 .target_crashed_events_for_all_discovery_owners("TID-never-reported", "crashed", 5,)
                 .is_empty()
         );
@@ -641,15 +649,15 @@ mod tests {
 
     #[test]
     fn commit_auto_attached_session_event_records_committed_session_plan() {
-        let mut control = TargetControlPlane::default();
+        let mut registry = DevToolsAgentHostRegistry::default();
         let route = CdpSessionRoute::PageTarget {
             browser_context_id: "BID-1".to_owned(),
             target_id: "TID-page".to_owned(),
             session_key: moli_page_types::DevToolsSessionKey::Primary,
         };
 
-        control.ensure_owner(Some("SID-tab"));
-        let plan = control.commit_attached_session_event(
+        registry.ensure_owner(Some("SID-tab"));
+        let plan = registry.commit_attached_session_event(
             "SID-page".to_owned(),
             Some("SID-tab"),
             "TID-page",
@@ -660,11 +668,11 @@ mod tests {
         );
 
         assert_eq!(
-            control.attached_sessions_for_target("TID-page"),
+            registry.attached_sessions_for_target("TID-page"),
             vec!["SID-page".to_owned()]
         );
         assert_eq!(
-            control.auto_attached_sessions_for_owner(Some("SID-tab")),
+            registry.auto_attached_sessions_for_owner(Some("SID-tab")),
             vec!["SID-page".to_owned()]
         );
 
@@ -683,13 +691,13 @@ mod tests {
 
     #[test]
     fn detach_attached_session_event_plan_records_detached_session() {
-        let mut control = TargetControlPlane::default();
+        let mut registry = DevToolsAgentHostRegistry::default();
         let route = CdpSessionRoute::PageTarget {
             browser_context_id: "BID-1".to_owned(),
             target_id: "TID-page".to_owned(),
             session_key: moli_page_types::DevToolsSessionKey::Primary,
         };
-        control.commit_attached_session_event(
+        registry.commit_attached_session_event(
             "SID-page".to_owned(),
             Some("SID-owner"),
             "TID-page",
@@ -699,7 +707,7 @@ mod tests {
             target_info("TID-page", DevToolsTargetKind::Page),
         );
 
-        let plan = control
+        let plan = registry
             .detach_attached_session_event_plan(
                 "SID-page",
                 Some("Target closed"),
@@ -707,7 +715,7 @@ mod tests {
             )
             .expect("attached session should detach");
 
-        assert!(control.attached_sessions_for_target("TID-page").is_empty());
+        assert!(registry.attached_sessions_for_target("TID-page").is_empty());
         let detached_sessions = plan.detached_sessions();
         assert_eq!(detached_sessions.len(), 1);
         let detached = &detached_sessions[0];
@@ -727,9 +735,9 @@ mod tests {
 
     #[test]
     fn target_closure_attached_sessions_event_plan_detaches_all_target_sessions() {
-        let mut control = TargetControlPlane::default();
+        let mut registry = DevToolsAgentHostRegistry::default();
         for session_id in ["SID-a", "SID-b"] {
-            control.commit_attached_session_event(
+            registry.commit_attached_session_event(
                 session_id.to_owned(),
                 None,
                 "TID-page",
@@ -744,13 +752,13 @@ mod tests {
             );
         }
 
-        let plan = control.detach_target_closure_attached_sessions_event_plan(
+        let plan = registry.detach_target_closure_attached_sessions_event_plan(
             "TID-page",
             Some("Target closed"),
             None,
         );
 
-        assert!(control.attached_sessions_for_target("TID-page").is_empty());
+        assert!(registry.attached_sessions_for_target("TID-page").is_empty());
         assert_eq!(
             plan.detached_sessions()
                 .iter()
@@ -763,9 +771,9 @@ mod tests {
 
     #[test]
     fn target_closure_cleanup_event_plan_detaches_declared_sessions() {
-        let mut control = TargetControlPlane::default();
+        let mut registry = DevToolsAgentHostRegistry::default();
         for session_id in ["SID-primary", "SID-attached"] {
-            control.commit_attached_session_event(
+            registry.commit_attached_session_event(
                 session_id.to_owned(),
                 None,
                 "TID-page",
@@ -780,7 +788,7 @@ mod tests {
             );
         }
 
-        let plan = control.detach_target_closure_cleanup_event_plan(
+        let plan = registry.detach_target_closure_cleanup_event_plan(
             crate::conn::TargetClosureCleanupPlan::new(
                 "TID-page",
                 Some("Render process gone."),
@@ -789,7 +797,7 @@ mod tests {
             None,
         );
 
-        assert!(control.attached_sessions_for_target("TID-page").is_empty());
+        assert!(registry.attached_sessions_for_target("TID-page").is_empty());
         assert_eq!(
             plan.detached_sessions()
                 .iter()
@@ -802,9 +810,9 @@ mod tests {
 
     #[test]
     fn rollback_attached_session_without_event_clears_session_indexes() {
-        let mut control = TargetControlPlane::default();
-        control.ensure_owner(Some("SID-tab"));
-        control.commit_attached_session_event(
+        let mut registry = DevToolsAgentHostRegistry::default();
+        registry.ensure_owner(Some("SID-tab"));
+        registry.commit_attached_session_event(
             "SID-page".to_owned(),
             Some("SID-tab"),
             "TID-page",
@@ -818,21 +826,21 @@ mod tests {
             target_info("TID-page", DevToolsTargetKind::Page),
         );
 
-        let rollback_plan = control.rollback_attached_session_without_event("SID-page");
+        let rollback_plan = registry.rollback_attached_session_without_event("SID-page");
         assert_eq!(
             rollback_plan.rolled_back_session_ids(),
             &["SID-page".to_owned()]
         );
         assert!(rollback_plan.into_background_events().is_empty());
 
-        assert!(control.attached_sessions_for_target("TID-page").is_empty());
+        assert!(registry.attached_sessions_for_target("TID-page").is_empty());
         assert!(
-            control
+            registry
                 .auto_attached_sessions_for_owner(Some("SID-tab"))
                 .is_empty()
         );
         assert!(
-            control
+            registry
                 .rollback_attached_session_without_event("SID-page")
                 .rolled_back_session_ids()
                 .is_empty()

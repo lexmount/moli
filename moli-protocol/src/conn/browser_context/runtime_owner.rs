@@ -398,7 +398,7 @@ impl CdpConnection {
         session_id: &str,
         route: &CdpSessionRoute,
     ) -> Option<()> {
-        if self.target_control.attached_session_route(session_id) == Some(route) {
+        if self.agent_hosts.attached_session_route(session_id) == Some(route) {
             return Some(());
         }
         let target_id = match route {
@@ -407,7 +407,7 @@ impl CdpConnection {
             | CdpSessionRoute::ServiceWorkerTarget { target_id, .. } => target_id.clone(),
             _ => return None,
         };
-        self.target_control.commit_attached_session(
+        self.agent_hosts.commit_attached_session(
             session_id.to_owned(),
             None,
             &target_id,

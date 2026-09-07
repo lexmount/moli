@@ -2,7 +2,9 @@ use crate::conn::{BackgroundProtocolEvent, CdpSessionRoute};
 use crate::devtools_runtime::DevToolsTargetInfo;
 use moli_page_types::DevToolsSessionKey;
 
-use super::{CommittedAttachSession, DetachedTargetSession, TargetHostDelta};
+use super::{
+    CommittedAttachSession, DetachedTargetSession, DevToolsSessionHandlerSet, TargetHostDelta,
+};
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct TargetEventPlan {
@@ -305,19 +307,35 @@ impl PreparedTargetAttach {
 pub(crate) struct SessionDisposalPlan {
     session_id: String,
     target: SessionDisposalTarget,
+    handler_set: DevToolsSessionHandlerSet,
 }
 
 impl SessionDisposalPlan {
-    /// Freezes the exact binding that must remain alive while every domain
-    /// handler disables its session-owned state.
-    ///
-    /// Callers must execute the domain cleanup phase before committing this
-    /// plan's binding removal. Keeping both phases tied to one value prevents
-    /// detach paths from resolving the session again after asynchronous work.
-    pub(crate) fn for_session_route(session_id: &str, route: &CdpSessionRoute) -> Option<Self> {
+    /// Attach rollback has no committed registry entry, so it derives the
+    /// otherwise immutable handler set from the prepared route.
+    fn for_uncommitted_session_route(session_id: &str, route: &CdpSessionRoute) -> Option<Self> {
+        let target = SessionDisposalTarget::from_route(route)?;
         Some(Self {
             session_id: session_id.to_owned(),
-            target: SessionDisposalTarget::from_route(route)?,
+            handler_set: DevToolsSessionHandlerSet::for_route(route)?,
+            target,
+        })
+    }
+
+    pub(crate) fn for_attached_session(
+        session_id: &str,
+        route: &CdpSessionRoute,
+        handler_set: DevToolsSessionHandlerSet,
+    ) -> Option<Self> {
+        let target = SessionDisposalTarget::from_route(route)?;
+        debug_assert_eq!(
+            Some(handler_set),
+            DevToolsSessionHandlerSet::for_route(route)
+        );
+        Some(Self {
+            session_id: session_id.to_owned(),
+            target,
+            handler_set,
         })
     }
 
@@ -331,6 +349,10 @@ impl SessionDisposalPlan {
 
     pub(crate) fn target(&self) -> &SessionDisposalTarget {
         &self.target
+    }
+
+    pub(crate) fn handler_set(&self) -> DevToolsSessionHandlerSet {
+        self.handler_set
     }
 
     pub(crate) fn target_id(&self) -> Option<&str> {
@@ -451,7 +473,8 @@ pub(crate) struct TargetAttachRollbackPlan {
 impl TargetAttachRollbackPlan {
     pub(crate) fn from_prepared_attach_session(prepared: &TargetAttachSessionCommit) -> Self {
         let session_id = prepared.session_id().to_owned();
-        let cleanup_plan = SessionDisposalPlan::for_session_route(&session_id, prepared.route());
+        let cleanup_plan =
+            SessionDisposalPlan::for_uncommitted_session_route(&session_id, prepared.route());
         Self {
             session_id,
             cleanup_plan,
@@ -474,18 +497,25 @@ pub(crate) enum TargetAutoAttachedSessionDetachPlan {
 }
 
 impl TargetAutoAttachedSessionDetachPlan {
+    #[cfg(test)]
     pub(crate) fn from_session_route(
         session_id: impl Into<String>,
         route: CdpSessionRoute,
     ) -> Self {
         let session_id = session_id.into();
-        if matches!(route, CdpSessionRoute::Browser) {
-            return Self::Rollback { session_id };
-        }
-        match SessionDisposalPlan::for_session_route(&session_id, &route) {
-            Some(cleanup_plan) => Self::Detach { cleanup_plan },
+        match SessionDisposalPlan::for_uncommitted_session_route(&session_id, &route) {
+            Some(cleanup_plan) => Self::from_session_disposal_plan(cleanup_plan),
             None => Self::Rollback { session_id },
         }
+    }
+
+    pub(crate) fn from_session_disposal_plan(cleanup_plan: SessionDisposalPlan) -> Self {
+        if matches!(cleanup_plan.target(), SessionDisposalTarget::Browser) {
+            return Self::Rollback {
+                session_id: cleanup_plan.session_id().to_owned(),
+            };
+        }
+        Self::Detach { cleanup_plan }
     }
 
     pub(crate) fn session_id(&self) -> &str {
@@ -606,15 +636,17 @@ mod tests {
 
     #[test]
     fn target_binding_cleanup_plan_maps_route_to_cleanup_action() {
-        let browser =
-            SessionDisposalPlan::for_session_route("SID-browser", &CdpSessionRoute::Browser)
-                .expect("Browser sessions require domain cleanup");
+        let browser = SessionDisposalPlan::for_uncommitted_session_route(
+            "SID-browser",
+            &CdpSessionRoute::Browser,
+        )
+        .expect("Browser sessions require domain cleanup");
         assert_eq!(browser.target(), &SessionDisposalTarget::Browser);
         assert_eq!(browser.browser_context_id(), None);
         assert_eq!(browser.target_id(), None);
 
         assert_eq!(
-            SessionDisposalPlan::for_session_route(
+            SessionDisposalPlan::for_uncommitted_session_route(
                 "SID-active",
                 &CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
@@ -632,7 +664,7 @@ mod tests {
         );
 
         assert_eq!(
-            SessionDisposalPlan::for_session_route(
+            SessionDisposalPlan::for_uncommitted_session_route(
                 "SID-bg",
                 &CdpSessionRoute::PageTarget {
                     browser_context_id: "BID-1".to_owned(),
@@ -650,7 +682,7 @@ mod tests {
         );
 
         assert_eq!(
-            SessionDisposalPlan::for_session_route(
+            SessionDisposalPlan::for_uncommitted_session_route(
                 "SID-tab",
                 &CdpSessionRoute::TabTarget {
                     browser_context_id: "BID-1".to_owned(),

@@ -526,9 +526,8 @@ pub(crate) use popup_navigation_work::{
     PopupTargetNavigationKind, PopupTargetNavigationOwnerAction,
 };
 pub(crate) use runtime_eval::{
-    ClaimedPendingInspectorAwait, ClaimedPendingInspectorAwaitOwner, RuntimeBindingCallEvent,
-    RuntimeEnableReplayEvent, renderer_command_turn_frontend_protocol_response,
-    runtime_remote_object_ids_in_map,
+    ClaimedPendingInspectorAwait, RuntimeBindingCallEvent, RuntimeEnableReplayEvent,
+    renderer_command_turn_frontend_protocol_response, runtime_remote_object_ids_in_map,
 };
 pub use runtime_eval::{
     CompletedMoliDiagnosticsDispatch, CompletedRuntimeBindingPageCommandDispatch,
@@ -561,7 +560,7 @@ pub use state::{
     DownloadNavigation, EmulatedDeviceMetrics, EmulatedGeolocationOverride,
     EmulatedGeolocationOverrideState, EmulatedMediaOverrides, IsolatedWorldDefinition,
     LoadedNavigation, NavigationDispatchState, NavigationLoadOutcome, NavigationRequestLoadPolicy,
-    PageNavigationHistoryEntry, PageTargetHost, RuntimeBindingDefinition, TargetInfo, URL_BASE,
+    PageAgentHost, PageNavigationHistoryEntry, RuntimeBindingDefinition, TargetInfo, URL_BASE,
 };
 pub(crate) use state::{
     BrowserContextPageStorageHandles, BrowserContextStoragePartitionHandles,
@@ -573,13 +572,13 @@ pub(crate) use state::{
     EmulatedViewportSurface, EmulationPolicyChange, InitialDocumentCreator,
     InspectorCommandDispatch, NETWORK_ERROR_PAGE_URL, NavigationId, NavigationResultProjection,
     NavigationSourceDocumentSecurityContext, NetworkErrorPageNavigation, PageScreencastConfig,
-    PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait,
-    PendingRendererCommandKey, PerformanceTimeDomain, PreparedRendererCallDispatch, ProfilerAction,
-    ProfilerInspectorCommand, RendererAgentBinding, RendererCommandCorrelation,
-    RendererCommandDescriptor, RendererCommandReplay, RendererDocumentLifecycleObservation,
-    RendererDocumentLifecycleObserver, RendererMainDocumentCommitSeed,
-    RendererPageResidenceIdentity, ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState,
-    SharedWorkerTargetState, SiteDataClearOptions, TargetIdentityState, TargetOwnerState,
+    PageScreencastFormat, PendingBidiChannelListener, PendingInspectorAwait, PerformanceTimeDomain,
+    PreparedRendererCallDispatch, ProfilerAction, ProfilerInspectorCommand, RendererAgentBinding,
+    RendererCommandCorrelation, RendererCommandDescriptor, RendererCommandReplay,
+    RendererDocumentLifecycleObservation, RendererDocumentLifecycleObserver,
+    RendererMainDocumentCommitSeed, RendererPageResidenceIdentity,
+    ServiceWorkerRuntimeExceptionSnapshot, ServiceWorkerTargetState, SharedWorkerTargetState,
+    SiteDataClearOptions, TargetIdentityState, TargetOwnerState,
     TargetPageProtocolAttachmentIdentity, TargetPageResidenceIdentity, TargetPageSessionState,
     TargetPreparedJavaScriptDialog, TargetPreparedJavaScriptDialogRoute,
     TargetRootDocumentProtocolAttachmentIdentity, TargetRuntimeSlot,
@@ -601,13 +600,14 @@ pub(crate) use state::{
     TargetRuntimeSessionState,
 };
 pub(crate) use state::{HistoryTraversalDestination, ResolvedHistoryTraversal};
-pub(crate) use target::{
-    PreparedTargetAttach, PreparedTargetHostClosure, PreparedTargetHostDelta, SessionDisposalPlan,
-    SessionDisposalTarget, TargetAttachSessionCommit, TargetClosureCleanupPlan, TargetEventPlan,
-    TargetSessionDetachCleanupPlan,
-};
 use target::{
-    TargetClosurePlan, TargetControlPlane, TargetHostDelta, target_destroyed_automation_events,
+    DevToolsAgentHostRegistry, TargetClosurePlan, TargetHostDelta,
+    target_destroyed_automation_events,
+};
+pub(crate) use target::{
+    DevToolsSessionHandlerSet, PreparedTargetAttach, PreparedTargetHostClosure,
+    PreparedTargetHostDelta, SessionDisposalPlan, SessionDisposalTarget, TargetAttachSessionCommit,
+    TargetClosureCleanupPlan, TargetEventPlan, TargetSessionDetachCleanupPlan,
 };
 pub(crate) use top_level_navigation_work::TopLevelLocationNavigationOwnerAction;
 
@@ -827,44 +827,6 @@ impl DeferredMainDocumentLoadPredecessorCandidate {
             .expect("post-load publication ordering is only valid for a Page stream"),
             renderer_document: source_document,
         })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct RuntimeAwaitJob {
-    command_id: u64,
-    owner: CommandOwnerScope,
-    object_group: Option<String>,
-    action: &'static str,
-}
-
-impl RuntimeAwaitJob {
-    pub(crate) fn new(
-        command_id: u64,
-        owner: &CommandOwnerScope,
-        object_group: Option<&str>,
-        action: &'static str,
-    ) -> Self {
-        Self {
-            command_id,
-            owner: owner.clone(),
-            object_group: object_group.map(str::to_owned),
-            action,
-        }
-    }
-
-    pub(crate) fn trace_fields(&self) -> serde_json::Value {
-        json!({
-            "commandId": self.command_id,
-            "sessionId": self.owner.session_id(),
-            "ownerRoute": self.owner.explicit_route().map(|route| format!("{route:?}")),
-            "objectGroup": self.object_group,
-            "action": self.action,
-        })
-    }
-
-    pub(crate) fn session_id(&self) -> Option<String> {
-        self.owner.session_id().map(str::to_owned)
     }
 }
 
@@ -1195,7 +1157,7 @@ pub struct CdpConnection {
     // additional attached sessions. A randomized HashMap iteration order made that
     // choice vary between otherwise identical processes.
     auto_attach_owner_sessions: IndexMap<Option<String>, AutoAttachOwnerPolicy>,
-    target_control: TargetControlPlane,
+    agent_hosts: DevToolsAgentHostRegistry,
     default_target_lifecycle: DefaultTargetLifecycle,
     service_worker_auto_attach_related_owners: Vec<ServiceWorkerAutoAttachRelatedOwner>,
     service_worker_pause_on_start_owner_sessions: HashSet<Option<String>>,
@@ -1210,10 +1172,6 @@ pub struct CdpConnection {
     next_page_domain_subscription_generation: u64,
     next_internal_runtime_command_id: u64,
     network_request_id_allocator: ConnectionNetworkRequestIdAllocator,
-    pending_runtime_await_jobs: HashMap<PendingRendererCommandKey, RuntimeAwaitJob>,
-    claimed_pending_inspector_await_owners:
-        HashMap<PendingRendererCommandKey, ClaimedPendingInspectorAwaitOwner>,
-
     // Browser profile, permissions, download and global IO state.
     pub window_bounds: BrowserWindowBounds,
     download_policy: moli_core::browser::DownloadPolicy,
@@ -1247,7 +1205,7 @@ pub struct CdpConnection {
     scheduler_state: CdpConnectionSchedulerState,
 
     // Standalone navigation state for commands that have no concrete Page
-    // owner. Every page-owned engine lives in its stable PageTargetHost.
+    // owner. Every page-owned engine lives in its stable PageAgentHost.
     standalone_navigation_engine: StandaloneNavigationEngineSlot,
 }
 
@@ -1277,7 +1235,7 @@ impl Drop for CdpConnection {
             root.terminate_renderer_producers_for_owner_shutdown();
         }
 
-        // Dropping contexts releases every PageTargetHost and its Page state.
+        // Dropping contexts releases every PageAgentHost and its Page state.
         drop(contexts);
 
         // RenderRuntimeOwner joins happen when the last JsRuntime-backed
@@ -1327,7 +1285,7 @@ impl CdpConnection {
         if let Some((browser_context_id, target_id)) = active_owner {
             return self
                 .ensure_page_navigation_engine_for_target(&browser_context_id, &target_id)
-                .expect("active PageTargetHost navigation engine disappeared");
+                .expect("active PageAgentHost navigation engine disappeared");
         }
         self.standalone_navigation_engine.ensure_mut()
     }
@@ -1505,7 +1463,7 @@ impl CdpConnection {
             target_info_change_events_enabled: false,
             target_discovery_filter: None,
             auto_attach_owner_sessions: IndexMap::new(),
-            target_control: TargetControlPlane::default(),
+            agent_hosts: DevToolsAgentHostRegistry::default(),
             default_target_lifecycle: DefaultTargetLifecycle::default(),
             service_worker_auto_attach_related_owners: Vec::new(),
             service_worker_pause_on_start_owner_sessions: HashSet::new(),
@@ -1525,8 +1483,6 @@ impl CdpConnection {
             next_page_domain_subscription_generation: 0,
             next_internal_runtime_command_id: 902_000_000,
             network_request_id_allocator: ConnectionNetworkRequestIdAllocator::default(),
-            pending_runtime_await_jobs: HashMap::new(),
-            claimed_pending_inspector_await_owners: HashMap::new(),
             base_browser_identity,
             global_extra_headers: Vec::new(),
             global_browser_identity_override: None,
@@ -2535,7 +2491,6 @@ impl CdpConnection {
             "commandId": command_id,
             "sessionId": session_id,
             "fields": fields,
-            "pendingRuntimeAwaitJobCount": self.pending_runtime_await_jobs.len(),
         }));
     }
 
@@ -3100,7 +3055,7 @@ impl CdpConnection {
             "connection": {
                 "hasActiveBrowserContext": self.browser_context.is_some(),
                 "inactiveBrowserContextCount": self.inactive_browser_contexts.len(),
-                "browserSessionIdCount": self.target_control.browser_session_count(),
+                "browserSessionIdCount": self.agent_hosts.browser_session_count(),
                 "globalIoStreamCount": self.global_io_streams.len(),
                 "tracing": self.tracing_state.diagnostics(),
                 "permissionOverrideCount": self.permission_override_count(),
@@ -3330,7 +3285,7 @@ impl CdpConnection {
         if let Some(page_target_id) = self.primary_page_target_id_for_tab_target_id(target_id) {
             let page_target_info = self.devtools_page_or_worker_target_info(page_target_id)?;
             return self
-                .target_control
+                .agent_hosts
                 .tab_target_info_for_page_target_info(page_target_info);
         }
         self.devtools_page_or_worker_target_info(target_id)
@@ -3350,7 +3305,7 @@ impl CdpConnection {
         let mut target_infos = Vec::new();
         if let Some(page_target_info) = self.default_target_lifecycle.placeholder_page_info() {
             if let Some(tab_target_info) = self
-                .target_control
+                .agent_hosts
                 .tab_target_info_for_page_target_info(page_target_info.clone())
             {
                 target_infos.push(tab_target_info);
@@ -3364,7 +3319,7 @@ impl CdpConnection {
                         browser_context.target_popup_id(target_id.as_str());
                 }
                 if let Some(tab_target_info) = self
-                    .target_control
+                    .agent_hosts
                     .tab_target_info_for_page_target_info(page_or_worker_target_info.clone())
                 {
                     target_infos.push(tab_target_info);
@@ -3443,7 +3398,7 @@ impl CdpConnection {
         } else {
             self.gen_tab_target_id()
         };
-        self.target_control
+        self.agent_hosts
             .register_tab(tab_target_id.clone(), page_target_id.to_owned());
         for target_id in [&tab_target_id, page_target_id] {
             if let Some(target_info) = self.target_info_for_host_delta(target_id) {
@@ -3457,7 +3412,7 @@ impl CdpConnection {
 
     #[doc(hidden)]
     pub fn tab_target_id_for_page_target_id(&self, page_target_id: &str) -> Option<&str> {
-        self.target_control
+        self.agent_hosts
             .tab_target_id_for_page_target_id(page_target_id)
     }
 
@@ -3465,12 +3420,12 @@ impl CdpConnection {
         &self,
         tab_target_id: &str,
     ) -> Option<&str> {
-        self.target_control
+        self.agent_hosts
             .primary_page_target_id_for_tab_target_id(tab_target_id)
     }
 
     pub(crate) fn primary_session_id_for_tab_target_id(&self, tab_target_id: &str) -> Option<&str> {
-        self.target_control
+        self.agent_hosts
             .primary_session_id_for_tab_target_id(tab_target_id)
     }
 
@@ -3480,7 +3435,7 @@ impl CdpConnection {
         session_id: String,
         is_attached_session: bool,
     ) -> bool {
-        self.target_control.assign_session_to_tab_target(
+        self.agent_hosts.assign_session_to_tab_target(
             tab_target_id,
             session_id,
             is_attached_session,
@@ -3488,7 +3443,7 @@ impl CdpConnection {
     }
 
     pub(crate) fn remove_tab_session(&mut self, session_id: &str) -> Option<String> {
-        self.target_control.remove_tab_session(session_id)
+        self.agent_hosts.remove_tab_session(session_id)
     }
 
     pub(crate) fn remove_tab_for_page_target(
@@ -3496,7 +3451,7 @@ impl CdpConnection {
         page_target_id: &str,
     ) -> Option<TargetClosurePlan> {
         let closure_plan = self
-            .target_control
+            .agent_hosts
             .remove_tab_by_page_target_id(page_target_id)?;
         for target_id in closure_plan.destroyed_target_ids() {
             self.notify_target_host_lifecycle(CdpTargetHostLifecycleDelta::Destroyed {
@@ -3541,7 +3496,7 @@ impl CdpConnection {
     }
 
     pub(crate) fn tab_target_id_for_session_id(&self, session_id: &str) -> Option<&str> {
-        self.target_control.tab_target_id_for_session_id(session_id)
+        self.agent_hosts.tab_target_id_for_session_id(session_id)
     }
 
     pub(crate) fn browser_context_id_for_tab_target_id(
@@ -3565,7 +3520,7 @@ impl CdpConnection {
         if page_target_info.kind != DevToolsTargetKind::Page {
             return None;
         }
-        self.target_control
+        self.agent_hosts
             .tab_target_info_for_page_target_info(page_target_info.clone())
     }
 
@@ -3582,7 +3537,7 @@ impl CdpConnection {
         let root_filter = owner_session_id
             .is_none()
             .then(|| filter.to_devtools_entries());
-        self.target_control
+        self.agent_hosts
             .set_discover_targets(owner_session_id, filter);
         if let Some(root_filter) = root_filter {
             self.target_discovery_enabled = true;
@@ -3607,7 +3562,7 @@ impl CdpConnection {
     }
 
     pub(crate) fn clear_target_discovery_for_owner(&mut self, owner_session_id: Option<&str>) {
-        self.target_control.clear_discover_targets(owner_session_id);
+        self.agent_hosts.clear_discover_targets(owner_session_id);
         if owner_session_id.is_none() {
             self.target_discovery_enabled = false;
             self.target_info_change_events_enabled = false;
@@ -3639,8 +3594,7 @@ impl CdpConnection {
         &self,
         owner_session_id: Option<&str>,
     ) -> Option<Vec<DevToolsTargetFilterEntry>> {
-        self.target_control
-            .discover_filter_entries(owner_session_id)
+        self.agent_hosts.discover_filter_entries(owner_session_id)
     }
 
     pub(crate) fn initial_target_created_events_for_discovery_owner(
@@ -3648,23 +3602,23 @@ impl CdpConnection {
         owner_session_id: Option<&str>,
         target_infos: Vec<DevToolsTargetInfo>,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.target_control
+        self.agent_hosts
             .initial_target_created_events_for_owner(owner_session_id, target_infos)
     }
 
     pub(crate) fn has_any_target_discovery(&self) -> bool {
-        self.target_control.has_any_discovery()
+        self.agent_hosts.has_any_discovery()
     }
 
     pub(crate) fn has_any_target_info_observer(&self) -> bool {
-        self.target_control.has_any_target_info_observer()
+        self.agent_hosts.has_any_target_info_observer()
     }
 
     fn exact_target_created_events_for_all_discovery_owners(
         &mut self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.target_control
+        self.agent_hosts
             .target_created_events_for_all_discovery_owners(target_info)
     }
 
@@ -3673,7 +3627,7 @@ impl CdpConnection {
     }
 
     fn target_created_event_plan_for_target_delta(&mut self, target_id: &str) -> TargetEventPlan {
-        let deltas = self.target_control.target_created_deltas(target_id);
+        let deltas = self.agent_hosts.target_created_deltas(target_id);
         self.target_host_delta_events(deltas)
     }
 
@@ -3753,7 +3707,7 @@ impl CdpConnection {
             return TargetEventPlan::default();
         };
         TargetEventPlan::from_background_events(
-            self.target_control
+            self.agent_hosts
                 .target_info_changed_events_for_all_discovery_owners(target_info),
         )
     }
@@ -3778,7 +3732,7 @@ impl CdpConnection {
     pub(crate) fn prepare_target_host_closure(&self, target_id: &str) -> PreparedTargetHostClosure {
         let mut detached_info_deltas = Vec::new();
         let mut destroyed_deltas = Vec::new();
-        for delta in self.target_control.target_destroyed_deltas(target_id) {
+        for delta in self.agent_hosts.target_destroyed_deltas(target_id) {
             let target_id = delta.target_id().to_owned();
             let Some(target_info) = self.target_info_for_host_delta(&target_id) else {
                 continue;
@@ -3852,7 +3806,7 @@ impl CdpConnection {
         &self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.target_control
+        self.agent_hosts
             .target_info_changed_events_for_all_observer_owners(target_info)
     }
 
@@ -3860,7 +3814,7 @@ impl CdpConnection {
         &mut self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.target_control
+        self.agent_hosts
             .target_destroyed_events_for_all_discovery_owners(target_info)
     }
 
@@ -3870,7 +3824,7 @@ impl CdpConnection {
         status: &str,
         error_code: i32,
     ) -> Vec<BackgroundProtocolEvent> {
-        self.target_control
+        self.agent_hosts
             .target_crashed_events_for_all_discovery_owners(target_id, status, error_code)
     }
 
@@ -3887,13 +3841,13 @@ impl CdpConnection {
         &self,
         target_info: DevToolsTargetInfo,
     ) -> Vec<DevToolsTargetInfo> {
-        self.target_control
+        self.agent_hosts
             .project_page_tab_target_infos_for_destruction(target_info)
     }
 
     #[cfg(test)]
     pub(crate) fn tab_target_count(&self) -> usize {
-        self.target_control.len()
+        self.agent_hosts.len()
     }
 
     #[cfg(test)]
@@ -3903,7 +3857,7 @@ impl CdpConnection {
     }
 
     fn has_registered_target_id(&self, target_id: &str) -> bool {
-        self.target_control.contains_tab_or_page_relation(target_id)
+        self.agent_hosts.contains_tab_or_page_relation(target_id)
             || self
                 .browser_contexts()
                 .any(|context| context.devtools_target_info(target_id).is_some())
@@ -3949,7 +3903,7 @@ impl CdpConnection {
             }
         }
         if !self
-            .target_control
+            .agent_hosts
             .contains_tab_or_page_relation(&default_target_id)
         {
             self.register_top_level_page_target(&default_target_id);

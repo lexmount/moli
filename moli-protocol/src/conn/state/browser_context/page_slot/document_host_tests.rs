@@ -671,8 +671,10 @@ async fn document_replacement_dismisses_dialog_without_protocol_session_cleanup(
 async fn browser_drop_dismisses_dialog_even_when_session_snapshot_survives() {
     let browser = Browser::new(BrowserConfig::default()).unwrap();
     let (mut owner, completion) = page_with_installed_dialog_for_test(&browser).await;
-    let snapshot = owner.active_page_target().devtools_sessions
+    let dialog_projection_snapshot = owner.active_page_target().devtools_sessions
         [moli_page_types::DevToolsSessionKey::Primary]
+        .page_session_state
+        .javascript_dialog_state
         .clone();
     let id = owner.selected_web_contents_id().unwrap();
     drop(owner.page_targets.remove(TARGET).unwrap());
@@ -683,10 +685,10 @@ async fn browser_drop_dismisses_dialog_even_when_session_snapshot_survives() {
 
     assert!(
         !completion.finish(true, "late reply".into()),
-        "Browser drop must dismiss the dialog even if a cloned session projection survives"
+        "Browser drop must dismiss the dialog even if a dialog projection snapshot survives"
     );
     assert!(!completion.wait().accepted);
-    drop(snapshot);
+    drop(dialog_projection_snapshot);
 }
 
 #[tokio::test]

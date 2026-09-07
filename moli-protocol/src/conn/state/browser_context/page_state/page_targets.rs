@@ -3,7 +3,7 @@
 use crate::conn::state::{SessionStorageNamespace, TargetPageAbsenceReason};
 use crate::conn::state::{page_slot::TargetPageSlot, web_contents::WebContents};
 use crate::conn::{
-    BrowserContext, DedicatedWorkerTargetState, InitialDocumentCreator, PageTargetHost,
+    BrowserContext, DedicatedWorkerTargetState, InitialDocumentCreator, PageAgentHost,
     ServiceWorkerTargetState, SharedWorkerTargetState, TargetIdentityState,
 };
 use crate::devtools_runtime::{
@@ -16,7 +16,7 @@ impl BrowserContext {
         &mut self,
         target_id: &str,
     ) -> Option<(
-        PageTargetHost,
+        PageAgentHost,
         crate::conn::state::web_contents::ClosingWebContents,
     )> {
         let id = self.page_targets.get(target_id)?.web_contents_id();
@@ -159,7 +159,7 @@ impl BrowserContext {
             .id();
         self.page_targets
             .get_for_web_contents(id)
-            .map(PageTargetHost::target_id)
+            .map(PageAgentHost::target_id)
     }
 
     pub(crate) fn has_attached_child_frame_id(&self, frame_id: &str) -> bool {
@@ -171,7 +171,7 @@ impl BrowserContext {
     pub(crate) fn remember_target_window_name(&mut self, target_name: &str, target_id: &str) {
         let Some(id) = self
             .page_target(target_id)
-            .map(PageTargetHost::web_contents_id)
+            .map(PageAgentHost::web_contents_id)
         else {
             return;
         };
@@ -291,7 +291,7 @@ impl BrowserContext {
         self.page_targets
             .iter()
             .find(|target| target.devtools_sessions.attached(session_id).is_some())
-            .map(PageTargetHost::target_id)
+            .map(PageAgentHost::target_id)
     }
 
     pub(crate) fn attached_session_ids_for_target(&self, target_id: &str) -> Vec<String> {
@@ -1518,7 +1518,7 @@ mod tests {
     }
 
     #[test]
-    fn page_target_host_keeps_protocol_and_owner_state_together() {
+    fn page_agent_host_keeps_protocol_and_owner_state_together() {
         let mut context = BrowserContext::new("BC-1".to_owned());
         context.stage_background_target(
             "TID-bg".to_owned(),
