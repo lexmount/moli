@@ -687,6 +687,7 @@ pub(crate) struct DocumentPolicyContainer {
     pub(crate) credentialless: bool,
     pub(crate) credentialless_storage_nonce: Option<moli_storage_key::OpaqueOriginNonce>,
     pub(crate) sandbox: DocumentSandboxPolicy,
+    pub(crate) permissions_policy: crate::permissions_policy::DocumentPermissionsPolicy,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

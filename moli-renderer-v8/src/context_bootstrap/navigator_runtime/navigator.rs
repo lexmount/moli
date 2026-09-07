@@ -23,6 +23,7 @@ use super::clipboard::{build_clipboard_object, install_clipboard_template_bindin
 use super::collections::{
     build_navigator_plugin_collections, install_navigator_collection_template_bindings,
 };
+use super::gamepad::navigator_get_gamepads_callback;
 use super::geolocation::{build_geolocation_object, install_geolocation_template_bindings};
 use super::media_capabilities::{
     build_media_capabilities_object, install_media_capabilities_template_bindings,
@@ -211,6 +212,9 @@ struct NavigatorRuntimeDataPrototypeDeclaration {
 #[derive(Default, WebApiFunctionTemplate)]
 #[webapi(name = "Navigator")]
 struct NavigatorPrototypeMethodsDeclaration {
+    #[webapi(method, enumerable, length = 0, callback = navigator_get_gamepads_callback)]
+    get_gamepads: (),
+
     #[webapi(method, enumerable, length = 0, callback = navigator_java_enabled_callback)]
     java_enabled: (),
 

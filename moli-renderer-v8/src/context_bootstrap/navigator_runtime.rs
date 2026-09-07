@@ -1,5 +1,6 @@
 mod clipboard;
 mod collections;
+mod gamepad;
 mod geolocation;
 mod media_capabilities;
 mod media_devices;

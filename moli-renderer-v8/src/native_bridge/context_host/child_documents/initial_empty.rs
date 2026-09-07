@@ -36,6 +36,15 @@ impl JsContextHost {
                     .map(|entry| entry.document_policy_container_snapshot())
             })
             .unwrap_or_else(|| self.document_policy_container().clone());
+        if let Some(parent_document) = self
+            .dom_host()
+            .node(handle)
+            .and_then(crate::dom::native::Node::owner_document)
+            && let Some(permissions_policy) =
+                self.document_permissions_policy_for_document_handle(parent_document)
+        {
+            policy_container.permissions_policy = permissions_policy;
+        }
         policy_container.document_referrer =
             self.document_url_for_child_context(handle).to_string();
         policy_container

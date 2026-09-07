@@ -224,6 +224,13 @@ impl ChildBrowsingContextEntry {
         self.document_policy_container.clone()
     }
 
+    pub(super) fn set_document_permissions_policy(
+        &mut self,
+        policy: crate::permissions_policy::DocumentPermissionsPolicy,
+    ) {
+        self.document_policy_container.permissions_policy = policy;
+    }
+
     pub(super) fn owner_credentialless(&self) -> bool {
         self.credentialless
     }
@@ -329,6 +336,10 @@ impl ChildBrowsingContextEntry {
             .content_security_reporting_endpoints = policy_container
             .content_security_reporting_endpoints
             .clone();
+        self.document_policy_container.permissions_policy = self
+            .document_policy_container
+            .permissions_policy
+            .intersect(policy_container.permissions_policy);
         self.set_document_credentialless_state(credentialless, credentialless_storage_nonce);
         self.set_document_sandbox_policy(sandbox);
     }
@@ -367,6 +378,10 @@ impl ChildBrowsingContextEntry {
             .policy_container
             .content_security_reporting_endpoints
             .clone();
+        self.document_policy_container.permissions_policy = self
+            .document_policy_container
+            .permissions_policy
+            .intersect(snapshot.policy_container.permissions_policy);
         self.set_document_credentialless_state(credentialless, credentialless_storage_nonce);
         self.set_document_sandbox_policy(sandbox);
     }

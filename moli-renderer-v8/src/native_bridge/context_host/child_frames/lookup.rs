@@ -436,6 +436,8 @@ impl JsContextHost {
         if !self.child_browsing_contexts.contains_key(&handle) {
             return None;
         };
+        let permissions_policy =
+            self.child_browsing_context_permissions_policy_for_navigation(handle, &bootstrap);
         let Some(navigation) = self.replace_child_navigation_load(handle) else {
             tracing::warn!(
                 ?handle,
@@ -444,6 +446,7 @@ impl JsContextHost {
             return None;
         };
         let entry = self.child_browsing_contexts.get_mut(&handle)?;
+        entry.set_document_permissions_policy(permissions_policy);
         entry.set_pending_navigation(bootstrap, reflects_window_state);
         self.note_child_frame_load_started_for_parent(handle);
         Some(navigation)

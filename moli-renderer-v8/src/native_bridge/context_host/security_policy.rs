@@ -124,6 +124,48 @@ impl JsContextHost {
         )
     }
 
+    pub(crate) fn document_permissions_policy_for_owner(
+        &self,
+        owner: OwnerDispatchScope,
+    ) -> Option<crate::permissions_policy::DocumentPermissionsPolicy> {
+        match owner {
+            OwnerDispatchScope::Top => Some(self.document_policy_container().permissions_policy),
+            OwnerDispatchScope::Child(handle) => self
+                .frame_owner_current_child_snapshot(handle)
+                .map(|snapshot| {
+                    snapshot
+                        .settings
+                        .document_policy_container
+                        .permissions_policy
+                }),
+            OwnerDispatchScope::LightweightPopup(popup_id) => self
+                .lightweight_popup_policy_container(popup_id)
+                .map(|policy| policy.permissions_policy),
+        }
+    }
+
+    pub(crate) fn document_permissions_policy_for_document_handle(
+        &self,
+        document: DomHandle,
+    ) -> Option<crate::permissions_policy::DocumentPermissionsPolicy> {
+        if document == self.document_handle() {
+            return Some(self.document_policy_container().permissions_policy);
+        }
+        if let Some(popup_id) = self.lightweight_popup_id_for_document_handle(document) {
+            return self
+                .lightweight_popup_policy_container(popup_id)
+                .map(|policy| policy.permissions_policy);
+        }
+        let child_handle = self.child_browsing_context_host_for_document_handle(document)?;
+        let snapshot = self.frame_owner_current_child_snapshot(child_handle)?;
+        (snapshot.document_handle == document).then_some(
+            snapshot
+                .settings
+                .document_policy_container
+                .permissions_policy,
+        )
+    }
+
     pub(crate) fn trusted_types_for_script_requirements_for_owner(
         &self,
         owner: OwnerDispatchScope,

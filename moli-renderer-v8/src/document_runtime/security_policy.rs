@@ -162,6 +162,11 @@ impl DocumentPolicyContainer {
                     headers,
                     final_url,
                 ),
+            permissions_policy:
+                crate::permissions_policy::DocumentPermissionsPolicy::from_navigation_response_headers(
+                    headers,
+                    final_url,
+                ),
             ..Self::default()
         }
     }

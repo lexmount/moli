@@ -683,6 +683,34 @@ impl JsContextHost {
         credentialless.then(|| self.ensure_top_document_credentialless_storage_nonce())
     }
 
+    pub(in crate::native_bridge::context_host) fn child_browsing_context_permissions_policy_for_navigation(
+        &self,
+        handle: DomHandle,
+        bootstrap: &ChildBrowsingContextBootstrap,
+    ) -> crate::permissions_policy::DocumentPermissionsPolicy {
+        let parent_document = self
+            .dom_host()
+            .node(handle)
+            .and_then(crate::dom::native::Node::owner_document)
+            .unwrap_or_else(|| self.document_handle());
+        let parent_url = self.document_url_for_handle(parent_document);
+        let parent_policy = self
+            .document_permissions_policy_for_document_handle(parent_document)
+            .unwrap_or_else(|| self.document_policy_container().permissions_policy);
+        let child_url = Self::child_browsing_context_bootstrap_url(bootstrap)
+            .unwrap_or_else(|| parent_url.clone());
+        let is_iframe = self.dom_host().is_html_element_named(handle, "iframe");
+        let allow = is_iframe
+            .then(|| self.dom_host().get_attribute(handle, "allow"))
+            .flatten();
+        parent_policy.delegated_to_child(
+            &parent_url,
+            &child_url,
+            bootstrap.security_origin_inherited(),
+            allow.as_deref(),
+        )
+    }
+
     pub(crate) fn child_browsing_context_is_same_origin_with_top(&self, handle: DomHandle) -> bool {
         self.top_window_can_access_child(handle)
     }
