@@ -210,10 +210,10 @@ impl BrowserContext {
 
     #[cfg(test)]
     pub(crate) async fn remove_active_page_target_async(&mut self) -> bool {
-        let Some(target_id) = self.active_target_id_owned() else {
+        let Some(handle) = self.selected_web_contents_handle() else {
             return false;
         };
-        let Some((_projection, closing)) = self.take_page_target_for_close(&target_id) else {
+        let Ok((_projection, closing)) = self.begin_web_contents_close(handle) else {
             return false;
         };
         closing.close_async().await;

@@ -256,7 +256,9 @@ enum PendingPageCommandKind {
     Crash {
         web_contents: Option<moli_core::browser::WebContentsHandle>,
     },
-    Close,
+    Close {
+        web_contents: Option<moli_core::browser::WebContentsHandle>,
+    },
     CreateIsolatedWorld(preload::PendingCreateIsolatedWorldCommand),
 }
 
@@ -329,7 +331,9 @@ enum CompletedPageCommandKind {
     Crash {
         web_contents: Option<moli_core::browser::WebContentsHandle>,
     },
-    Close,
+    Close {
+        web_contents: Option<moli_core::browser::WebContentsHandle>,
+    },
     CreateIsolatedWorld(Box<preload::CompletedCreateIsolatedWorldCommand>),
 }
 
@@ -373,7 +377,7 @@ impl CompletedPageCommandKind {
             | Self::Navigate(_)
             | Self::ContinueNavigationWithoutRequestPause(_)
             | Self::Crash { .. }
-            | Self::Close
+            | Self::Close { .. }
             // createIsolatedWorld may restart on a replacement renderer attachment. Its
             // completion handler records the fence only after rejecting a stale completion,
             // so an abandoned stream cannot become the predecessor of the final response.
@@ -420,7 +424,7 @@ impl PendingPageCommandDispatch {
             | PendingPageCommandKind::ContinueNavigationWithoutRequestPause(_)
             | PendingPageCommandKind::StopLoading { .. }
             | PendingPageCommandKind::Crash { .. }
-            | PendingPageCommandKind::Close
+            | PendingPageCommandKind::Close { .. }
             | PendingPageCommandKind::CreateIsolatedWorld(_) => None,
         }
     }
@@ -547,7 +551,9 @@ impl PendingPageCommandDispatch {
             PendingPageCommandKind::Crash { web_contents } => {
                 CompletedPageCommandKind::Crash { web_contents }
             }
-            PendingPageCommandKind::Close => CompletedPageCommandKind::Close,
+            PendingPageCommandKind::Close { web_contents } => {
+                CompletedPageCommandKind::Close { web_contents }
+            }
             PendingPageCommandKind::CreateIsolatedWorld(pending) => {
                 CompletedPageCommandKind::CreateIsolatedWorld(Box::new(pending.wait().await))
             }
@@ -7981,11 +7987,12 @@ pub(crate) async fn complete_pending_page_command(
             )
             .await;
         }
-        CompletedPageCommandKind::Close => {
+        CompletedPageCommandKind::Close { web_contents } => {
             return termination::complete_close_command_dispatch(
                 conn,
                 command_id,
                 &owner_scope,
+                web_contents,
                 command_context,
             )
             .await;

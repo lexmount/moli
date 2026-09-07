@@ -1115,12 +1115,18 @@ impl CdpConnection {
             .await
     }
 
-    async fn close_page_target_for_target_close_async(
+    pub(crate) async fn close_web_contents_for_target_close_async(
         &mut self,
         target_id: &str,
+        handle: moli_core::browser::WebContentsHandle,
         out: &mut Vec<BackgroundProtocolEvent>,
         reason: &'static str,
     ) -> Option<ClosedPageTarget> {
+        let context = self.browser_context_by_browser_id(handle.context())?;
+        if context.web_contents_handle_for_target(target_id) != Some(handle) {
+            return None;
+        }
+        let was_selected = context.selected_web_contents_handle() == Some(handle);
         let primary_route = self.target_session_route_for_target_id(target_id)?;
         let primary_owner = CommandOwnerScope::for_route(primary_route);
         let session_owners = self
@@ -1145,8 +1151,8 @@ impl CdpConnection {
         out.extend(claimed_await_events);
 
         let (closing, primary_session_id, attached_session_ids, collected_network_data_artifacts) = {
-            let browser_context = self.browser_context.as_mut()?;
-            let (target, closing) = browser_context.take_page_target_for_close(target_id)?;
+            let browser_context = self.browser_context_by_browser_id_mut(handle.context())?;
+            let (target, closing) = browser_context.begin_web_contents_close(handle).ok()?;
             let collected_network_data_artifacts =
                 target.runtime_slot.collected_network_data_artifacts();
             let attached_session_ids = target
@@ -1165,47 +1171,22 @@ impl CdpConnection {
         closing.close_async().await;
         self.record_collected_network_data_artifacts(collected_network_data_artifacts);
 
-        Some(ClosedPageTarget {
+        let closed = ClosedPageTarget {
             target_id: target_id.to_owned(),
             primary_session_id,
             attached_session_ids,
-        })
-    }
-
-    pub(crate) async fn close_background_page_target_for_target_close_async(
-        &mut self,
-        target_id: &str,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        reason: &'static str,
-    ) -> Option<ClosedPageTarget> {
-        let is_background = self
-            .browser_context
-            .as_ref()
-            .is_some_and(|browser_context| {
-                browser_context.page_target(target_id).is_some()
-                    && !browser_context.is_active_target(target_id)
-            });
-        if !is_background {
-            return None;
+        };
+        if !was_selected {
+            return Some(closed);
         }
-        self.close_page_target_for_target_close_async(target_id, out, reason)
-            .await
-    }
 
-    pub(crate) async fn close_active_page_target_for_target_close_async(
-        &mut self,
-        out: &mut Vec<BackgroundProtocolEvent>,
-        reason: &'static str,
-    ) -> Option<ClosedPageTarget> {
-        let target_id = self.browser_context.as_ref()?.active_target_id_owned()?;
-        let closed = self
-            .close_page_target_for_target_close_async(&target_id, out, reason)
-            .await?;
-        let selected = self.browser_context.as_ref().and_then(|browser_context| {
-            let target_id = browser_context.last_selectable_background_target_id()?;
-            let handle = browser_context.web_contents_handle_for_target(&target_id)?;
-            Some((target_id, handle))
-        });
+        let selected = self
+            .browser_context_by_browser_id(handle.context())
+            .and_then(|browser_context| {
+                let target_id = browser_context.last_selectable_background_target_id()?;
+                let handle = browser_context.web_contents_handle_for_target(&target_id)?;
+                Some((target_id, handle))
+            });
         let selected_target_id = if let Some((target_id, handle)) = selected {
             if let Err(error) = self.select_browser_web_contents_async(handle).await {
                 tracing::warn!(%error, "failed to update selected WebContents surface after close");
@@ -1214,7 +1195,13 @@ impl CdpConnection {
         } else {
             None
         };
-        self.refresh_active_browser_context_loader();
+        if self
+            .browser_context
+            .as_ref()
+            .is_some_and(|context| context.browser_context_id() == handle.context())
+        {
+            self.refresh_active_browser_context_loader();
+        }
         if let Some(selected_target_id) = selected_target_id {
             self.notify_target_host_activated(&selected_target_id);
             out.extend(
@@ -1252,7 +1239,10 @@ impl CdpConnection {
         if let Some(browser_context_id) = browser_context_id {
             let target = self
                 .browser_context_by_id_mut(&browser_context_id)
-                .and_then(|browser_context| browser_context.take_page_target_for_close(target_id));
+                .and_then(|browser_context| {
+                    let handle = browser_context.web_contents_handle_for_target(target_id)?;
+                    browser_context.begin_web_contents_close(handle).ok()
+                });
             if let Some((target, closing)) = target {
                 page_session_ids.extend(
                     target

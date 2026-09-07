@@ -3490,6 +3490,127 @@ async fn close_command_background_events_keep_target_detached_sidecar() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn close_completion_cannot_retarget_a_reused_target_id() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(
+        &mut ctx,
+        "BID-close-completion",
+        "TID-close-completion",
+        "SID-close-completion",
+        "about:blank",
+    );
+    let old_web_contents = ctx
+        .conn
+        .browser_web_contents_for_target("TID-close-completion")
+        .unwrap();
+
+    let raw = json!({
+        "id": 248,
+        "method": "Page.close",
+        "sessionId": "SID-close-completion"
+    })
+    .to_string();
+    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+        panic!("Page.close should start through pending dispatch");
+    };
+
+    load_bc_with_session(
+        &mut ctx,
+        "BID-close-completion",
+        "TID-close-completion",
+        "SID-close-completion",
+        "about:blank",
+    );
+    let replacement = ctx
+        .conn
+        .browser_web_contents_for_target("TID-close-completion")
+        .unwrap();
+    assert_ne!(replacement, old_web_contents);
+
+    let CdpCommandTaskStep::Complete(outcome) = ctx
+        .conn
+        .complete_pending_command_dispatch(pending.wait().await)
+        .await
+    else {
+        panic!("stale Page.close completion should settle with an error");
+    };
+    let (_, _, _, _, scheduler_events, _) = outcome.into_renderer_owner_turn_parts();
+    assert!(scheduler_events.is_empty());
+    assert_eq!(
+        ctx.conn
+            .browser_web_contents_for_target("TID-close-completion")
+            .unwrap(),
+        replacement
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn delayed_close_cannot_retarget_a_reused_target_id() {
+    let mut ctx = TestContext::new();
+    load_bc_with_session(
+        &mut ctx,
+        "BID-delayed-close",
+        "TID-delayed-close",
+        "SID-delayed-close",
+        "about:blank",
+    );
+    let old_web_contents = ctx
+        .conn
+        .browser_web_contents_for_target("TID-delayed-close")
+        .unwrap();
+
+    let raw = json!({
+        "id": 248,
+        "method": "Page.close",
+        "sessionId": "SID-delayed-close"
+    })
+    .to_string();
+    let CdpCommandTaskStep::Pending(pending) = ctx.conn.start_command_dispatch(&raw) else {
+        panic!("Page.close should publish delayed termination work");
+    };
+    let CdpCommandTaskStep::Complete(outcome) = ctx
+        .conn
+        .complete_pending_command_dispatch(pending.wait().await)
+        .await
+    else {
+        panic!("Page.close pending dispatch should complete");
+    };
+    let (_, _, _, _, scheduler_events, _) = outcome.into_renderer_owner_turn_parts();
+    let [CdpSchedulerEvent::ProtocolWorkPublished { work }] =
+        <[_; 1]>::try_from(scheduler_events).unwrap()
+    else {
+        unreachable!("array pattern fixes the only event kind")
+    };
+
+    load_bc_with_session(
+        &mut ctx,
+        "BID-delayed-close",
+        "TID-delayed-close",
+        "SID-delayed-close",
+        "about:blank",
+    );
+    let replacement = ctx
+        .conn
+        .browser_web_contents_for_target("TID-delayed-close")
+        .unwrap();
+    assert_ne!(replacement, old_web_contents);
+
+    let outcome = ctx
+        .conn
+        .complete_ready_protocol_scheduler_work_turn(work)
+        .await;
+    let (events, nested_scheduler_events) = outcome.into_protocol_event_parts();
+    assert!(events.is_empty());
+    assert!(nested_scheduler_events.is_empty());
+    assert_eq!(
+        ctx.conn
+            .browser_web_contents_for_target("TID-delayed-close")
+            .unwrap(),
+        replacement
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn set_bypass_csp_accepts_valid_params_and_returns_empty_result() {
     let mut ctx = TestContext::new();
     ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(

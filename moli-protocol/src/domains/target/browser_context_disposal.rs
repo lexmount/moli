@@ -10,6 +10,7 @@ const INSPECTOR_DETACHED_REASON: &str = "Render process gone.";
 
 struct PageTargetDisposal {
     target_id: String,
+    web_contents: moli_core::browser::WebContentsHandle,
     fetch_owner_session_id: Option<Option<String>>,
     host_closure: PreparedTargetHostClosure,
 }
@@ -56,6 +57,9 @@ impl BrowserContextDisposal {
                 PageTargetDisposal {
                     fetch_owner_session_id,
                     host_closure: conn.prepare_target_host_closure(&target_id),
+                    web_contents: browser_context
+                        .web_contents_handle_for_target(&target_id)
+                        .expect("prepared Page target must retain its exact WebContents"),
                     target_id,
                 }
             })
@@ -245,24 +249,14 @@ async fn close_page_target(
     page_target: PageTargetDisposal,
 ) {
     let target_id = page_target.target_id;
-    let is_active_target = conn
-        .browser_context
-        .as_ref()
-        .is_some_and(|browser_context| browser_context.is_active_target(&target_id));
-    let closed = if is_active_target {
-        conn.close_active_page_target_for_target_close_async(
-            out.background_events_mut(),
-            DISPOSE_REASON,
-        )
-        .await
-    } else {
-        conn.close_background_page_target_for_target_close_async(
+    let closed = conn
+        .close_web_contents_for_target_close_async(
             &target_id,
+            page_target.web_contents,
             out.background_events_mut(),
             DISPOSE_REASON,
         )
-        .await
-    };
+        .await;
     let Some(closed) = closed else {
         tracing::warn!(
             target_id,

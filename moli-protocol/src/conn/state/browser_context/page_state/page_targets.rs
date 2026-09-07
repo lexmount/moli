@@ -36,22 +36,30 @@ impl PendingWebContentsSelection {
 }
 
 impl BrowserContext {
-    pub(in crate::conn) fn take_page_target_for_close(
+    pub(in crate::conn) fn begin_web_contents_close(
         &mut self,
-        target_id: &str,
-    ) -> Option<(
-        PageAgentHost,
-        crate::conn::state::web_contents::ClosingWebContents,
-    )> {
-        let id = self.page_targets.get(target_id)?.web_contents_id();
-        let closing = self.physical.close_web_contents(id)?;
+        handle: WebContentsHandle,
+    ) -> Result<
+        (
+            PageAgentHost,
+            crate::conn::state::web_contents::ClosingWebContents,
+        ),
+        String,
+    > {
+        let target_id = self
+            .page_targets
+            .get_for_web_contents(handle.id())
+            .map(PageAgentHost::target_id)
+            .ok_or_else(|| "WebContents projection unavailable".to_owned())?
+            .to_owned();
+        let closing = self.physical.close_web_contents(handle)?;
         let mut target = self
             .page_targets
-            .remove(target_id)
+            .remove(&target_id)
             .expect("retired WebContents must retain its resolved projection until removal");
         target.runtime_slot.retire_for_target_close();
-        self.forget_target_popup_id_for_target(target_id);
-        Some((target, closing))
+        self.forget_target_popup_id_for_target(&target_id);
+        Ok((target, closing))
     }
 
     pub(crate) fn stage_background_target(
@@ -1213,11 +1221,10 @@ mod tests {
         );
         assert!(!Arc::ptr_eq(&opener_storage, &popup_storage));
 
-        drop(
-            context
-                .take_page_target_for_close("TID-renamed-opener")
-                .unwrap(),
-        );
+        let renamed_opener = context
+            .web_contents_handle_for_target("TID-renamed-opener")
+            .unwrap();
+        drop(context.begin_web_contents_close(renamed_opener).unwrap());
         context.stage_background_target(
             "TID-orphan-popup".into(),
             None,
@@ -1305,12 +1312,15 @@ mod tests {
             context.target_info("TID-popup").unwrap()["openerId"],
             "TID-renamed"
         );
-        drop(context.take_page_target_for_close("TID-opener"));
+        let replacement_opener = context
+            .web_contents_handle_for_target("TID-opener")
+            .unwrap();
+        drop(context.begin_web_contents_close(replacement_opener));
         let popup = context.target_info("TID-popup").unwrap();
         assert_eq!(popup["openerId"], "TID-renamed");
         assert_eq!(popup["canAccessOpener"], true);
 
-        drop(context.take_page_target_for_close("TID-renamed"));
+        drop(context.begin_web_contents_close(opener_handle));
         context.set_active_target_id("TID-renamed");
         let popup = context.target_info("TID-popup").unwrap();
         assert!(popup.get("openerId").is_none());
@@ -1340,7 +1350,10 @@ mod tests {
             context.target_id_for_window_name("report"),
             Some("TID-renamed")
         );
-        drop(context.take_page_target_for_close("TID-window"));
+        let replacement = context
+            .web_contents_handle_for_target("TID-window")
+            .unwrap();
+        drop(context.begin_web_contents_close(replacement));
         assert_eq!(
             context.target_id_for_window_name("report"),
             Some("TID-renamed")
@@ -1354,7 +1367,7 @@ mod tests {
             context.target_id_for_window_name("renamed-report"),
             Some("TID-renamed")
         );
-        drop(context.take_page_target_for_close("TID-renamed"));
+        drop(context.begin_web_contents_close(handle));
         context.set_active_target_id("TID-renamed");
         assert_eq!(context.target_id_for_window_name("renamed-report"), None);
     }
