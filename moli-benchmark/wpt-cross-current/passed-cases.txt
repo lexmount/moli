@@ -7004,6 +7004,7 @@ html/webappapis/scripting/processing-model-2/body-onerror-compile-error.html
 html/webappapis/scripting/processing-model-2/body-onerror-runtime-error.html
 html/webappapis/scripting/processing-model-2/compile-error-cross-origin-setInterval.html
 html/webappapis/scripting/processing-model-2/compile-error-cross-origin-setTimeout.html
+html/webappapis/scripting/processing-model-2/compile-error-cross-origin.html
 html/webappapis/scripting/processing-model-2/compile-error-data-url.html
 html/webappapis/scripting/processing-model-2/compile-error-in-attribute.html
 html/webappapis/scripting/processing-model-2/compile-error-in-body-onerror.html
@@ -7016,6 +7017,7 @@ html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job
 html/webappapis/scripting/processing-model-2/integration-with-the-javascript-job-queue/promise-job-entry.html
 html/webappapis/scripting/processing-model-2/runtime-error-cross-origin-setInterval.html
 html/webappapis/scripting/processing-model-2/runtime-error-cross-origin-setTimeout.html
+html/webappapis/scripting/processing-model-2/runtime-error-cross-origin.html
 html/webappapis/scripting/processing-model-2/runtime-error-data-url.html
 html/webappapis/scripting/processing-model-2/runtime-error-in-attribute.html
 html/webappapis/scripting/processing-model-2/runtime-error-in-body-onerror.html
