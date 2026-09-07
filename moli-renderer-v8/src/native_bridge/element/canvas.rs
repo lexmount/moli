@@ -9,7 +9,10 @@ use crate::{
 };
 
 use super::super::node::node_runtime_and_handle_from_object_or_detached;
-use super::{element_attribute, set_reflected_attribute};
+use super::{
+    element_attribute, html_element_getter_receiver, html_element_setter_receiver,
+    set_reflected_attribute,
+};
 
 const CANVAS_CONTEXT_KIND_SLOT: &str = "__moliCanvasContextKind";
 const CANVAS_CONTEXT_2D_SLOT: &str = "__moliCanvasContext2D";
@@ -36,6 +39,11 @@ pub(crate) fn html_canvas_width_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if html_element_getter_receiver(scope, args.this(), "HTMLCanvasElement", "width", "canvas")
+        .is_none()
+    {
+        return;
+    }
     rv.set_uint32(canvas_dimension_value(scope, args.this(), "width", 300));
 }
 
@@ -44,6 +52,11 @@ pub(crate) fn html_canvas_width_setter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if html_element_setter_receiver(scope, args.this(), "HTMLCanvasElement", "width", "canvas")
+        .is_none()
+    {
+        return;
+    }
     let canvas = args.this();
     let _ = set_canvas_dimension_attribute(
         scope,
@@ -62,6 +75,11 @@ pub(crate) fn html_canvas_height_getter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if html_element_getter_receiver(scope, args.this(), "HTMLCanvasElement", "height", "canvas")
+        .is_none()
+    {
+        return;
+    }
     rv.set_uint32(canvas_dimension_value(scope, args.this(), "height", 150));
 }
 
@@ -70,6 +88,11 @@ pub(crate) fn html_canvas_height_setter_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'s, v8::Value>,
 ) {
+    if html_element_setter_receiver(scope, args.this(), "HTMLCanvasElement", "height", "canvas")
+        .is_none()
+    {
+        return;
+    }
     let canvas = args.this();
     let _ = set_canvas_dimension_attribute(
         scope,
