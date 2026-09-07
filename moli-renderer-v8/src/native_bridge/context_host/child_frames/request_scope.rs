@@ -151,6 +151,14 @@ impl JsContextHost {
         Some((entry.frame_id().to_owned(), document_url))
     }
 
+    pub(crate) fn child_browsing_context_request_origin(
+        &self,
+        handle: DomHandle,
+    ) -> Option<String> {
+        let document_url = self.child_browsing_context_current_url(handle)?;
+        self.child_browsing_context_document_origin_for_url(handle, &document_url)
+    }
+
     pub(crate) fn active_child_subresource_request_scope(
         &self,
     ) -> Option<(DomHandle, String, Url)> {

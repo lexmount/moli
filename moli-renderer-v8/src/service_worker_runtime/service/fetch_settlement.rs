@@ -100,6 +100,9 @@ fn configure_service_worker_network_fallback_request(
             job.network_context.resource_type,
         ))
         .with_subframe_context(job.network_context.frame_id.is_some());
+    if let Some(request_origin) = job.metadata.request_origin.clone() {
+        request = request.with_request_origin(request_origin);
+    }
     if service_worker_fetch_is_navigation_request(job) {
         request = if job.network_context.frame_id.is_some() {
             request.with_subframe_navigation_cookie_context()

@@ -8,6 +8,7 @@ pub(super) struct PreparedWindowFetchRequest {
     pub(super) connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
     pub(super) csp_report_context: crate::network_host::WindowCspReportRequestContext,
     pub(super) document_url: url::Url,
+    pub(super) request_origin: moli_url::WebOrigin,
     pub(super) network_partition_key: Option<String>,
     pub(super) document_referrer_policy: Option<String>,
     pub(super) policy_context: crate::types::SubresourcePolicyContext,
@@ -53,6 +54,8 @@ pub(super) fn prepare_window_fetch_request<'s>(
         .ok_or_else(|| "fetch: Document resource loader is unavailable".to_owned())?;
     let (frame_id, document_url) = subresource_request_scope_for_owner(scope, host, request_scope)
         .ok_or_else(|| "fetch: Window execution context owner is retired".to_owned())?;
+    let request_origin = subresource_request_origin_for_owner(scope, host, request_scope)
+        .ok_or_else(|| "fetch: Window request origin is unavailable".to_owned())?;
     let connect_policy = host
         .document_connect_policy_snapshot_for_owner(request_scope)
         .ok_or_else(|| "fetch: document policy context is unavailable".to_owned())?;
@@ -78,6 +81,7 @@ pub(super) fn prepare_window_fetch_request<'s>(
         connect_policy,
         csp_report_context,
         document_url,
+        request_origin,
         network_partition_key,
         document_referrer_policy,
         policy_context,

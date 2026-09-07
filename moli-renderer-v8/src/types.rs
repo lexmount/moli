@@ -217,6 +217,7 @@ pub(super) struct PendingWindowFetchContinuation {
     keepalive: bool,
     connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
     csp_report_context: crate::network_host::WindowCspReportRequestContext,
+    request_origin: moli_url::WebOrigin,
 }
 
 enum PendingWindowFetchPromise {
@@ -230,12 +231,14 @@ impl PendingWindowFetchContinuation {
         keepalive: bool,
         connect_policy: crate::document_runtime::DocumentConnectPolicySnapshot,
         csp_report_context: crate::network_host::WindowCspReportRequestContext,
+        request_origin: moli_url::WebOrigin,
     ) -> Self {
         Self {
             promise: PendingWindowFetchPromise::Active(resolver),
             keepalive,
             connect_policy,
             csp_report_context,
+            request_origin,
         }
     }
 
@@ -275,6 +278,10 @@ impl PendingWindowFetchContinuation {
 
     pub(super) fn csp_report_context(&self) -> &crate::network_host::WindowCspReportRequestContext {
         &self.csp_report_context
+    }
+
+    pub(super) fn request_origin(&self) -> &moli_url::WebOrigin {
+        &self.request_origin
     }
 }
 
@@ -519,6 +526,13 @@ pub(super) struct PendingSubresourceFetchState {
 }
 
 impl PendingSubresourceFetchState {
+    pub(super) fn request_origin(&self) -> moli_url::WebOrigin {
+        self.continuation
+            .window_fetch()
+            .map(|fetch| fetch.request_origin().clone())
+            .unwrap_or_else(|| moli_url::WebOrigin::from_url(&self.info.document_url))
+    }
+
     pub(super) fn detach_keepalive_window_fetch(&mut self) -> bool {
         let PendingSubresourceExecutionContext::WindowFetch(context) = &self.execution_context
         else {

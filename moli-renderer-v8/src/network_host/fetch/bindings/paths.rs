@@ -11,9 +11,10 @@ pub(super) fn record_intercepted_fetch(
     resolver: v8::Local<'_, v8::PromiseResolver>,
     prepared: PreparedWindowFetchRequest,
 ) {
-    let request_cookie_report = observe_subresource_request_cookie_report(
+    let request_cookie_report = observe_subresource_request_cookie_report_for_origin(
         prepared.resource_loader.request_client(),
         &prepared.document_url,
+        &prepared.request_origin,
         &prepared.resolved_url,
         &prepared.method,
         prepared.credentials_mode,
@@ -24,6 +25,7 @@ pub(super) fn record_intercepted_fetch(
         prepared.keepalive,
         prepared.connect_policy,
         prepared.csp_report_context,
+        prepared.request_origin,
         prepared.credentials_mode,
         prepared.request_mode,
         prepared.network_partition_key,
@@ -203,6 +205,7 @@ pub(super) fn spawn_network_fetch(
     )
     .map_err(|error| error.to_string())?
     .with_initiator_url(&prepared.document_url)
+    .with_request_origin(prepared.request_origin.clone())
     .with_request_mode(prepared.request_mode)
     .with_credentials_mode(prepared.credentials_mode)
     .with_network_partition_key(prepared.network_partition_key.clone())
@@ -219,9 +222,10 @@ pub(super) fn spawn_network_fetch(
         .with_browser_request_metadata(BrowserRequestMetadata::Fetch)
         .with_subframe_context(prepared.frame_id.is_some());
 
-    let request_cookie_report = observe_subresource_request_cookie_report(
+    let request_cookie_report = observe_subresource_request_cookie_report_for_origin(
         prepared.resource_loader.request_client(),
         &prepared.document_url,
+        &prepared.request_origin,
         &prepared.resolved_url,
         &prepared.method,
         prepared.credentials_mode,
@@ -234,8 +238,8 @@ pub(super) fn spawn_network_fetch(
     };
     let cancel_handle = FetchCancelHandle::new();
     let requires_preflight = prepared.request_mode != moli_fetch::RequestMode::NoCors
-        && crate::network_host::cors_preflight_request_headers(
-            &prepared.document_url,
+        && crate::network_host::cors_preflight_request_headers_for_origin(
+            &prepared.request_origin,
             &prepared.resolved_url,
             &prepared.method,
             &prepared.cors_preflight_request_headers,
@@ -247,6 +251,7 @@ pub(super) fn spawn_network_fetch(
         prepared.keepalive,
         prepared.connect_policy,
         prepared.csp_report_context,
+        prepared.request_origin.clone(),
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.request_mode,

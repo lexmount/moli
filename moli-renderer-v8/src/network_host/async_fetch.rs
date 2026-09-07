@@ -324,14 +324,14 @@ fn validate_actual_cors_response_parts(
     response_url: &url::Url,
     response_headers: &[(String, String)],
 ) -> Result<(), String> {
-    let Some(initiator_url) = request.cookie_context.initiator_url.as_ref() else {
+    let Some(request_origin) = request.request_origin() else {
         return Ok(());
     };
     if request.request_mode == RequestMode::NoCors {
         return Ok(());
     }
-    validate_cors_response(
-        initiator_url,
+    validate_cors_response_for_origin(
+        &request_origin,
         response_url,
         response_headers,
         request.credentials_mode,
@@ -420,10 +420,10 @@ async fn run_cors_preflight_if_needed(
     preflight_request_headers: &[(String, String)],
     preflight_observer: Option<&CorsPreflightNetworkObserver>,
 ) -> Result<(), String> {
-    if let Some(initiator_url) = request.cookie_context.initiator_url.clone()
+    if let Some(request_origin) = request.request_origin()
         && request.request_mode != RequestMode::NoCors
-        && let Some(preflight_headers) = cors_preflight_request_headers(
-            &initiator_url,
+        && let Some(preflight_headers) = cors_preflight_request_headers_for_origin(
+            &request_origin,
             &request.url,
             &request.method,
             preflight_request_headers,
@@ -433,9 +433,12 @@ async fn run_cors_preflight_if_needed(
         let mut preflight_request =
             Request::new("OPTIONS", request.url.as_str(), None, preflight_headers)
                 .map_err(|error| format!("cors preflight: failed to build request: {error}"))?
-                .with_initiator_url(&initiator_url)
                 .with_credentials_mode(RequestCredentialsMode::SameOrigin)
                 .with_network_partition_key(request.network_partition_key().map(str::to_owned));
+        if let Some(initiator_url) = request.cookie_context.initiator_url.as_ref() {
+            preflight_request = preflight_request.with_initiator_url(initiator_url);
+        }
+        preflight_request = preflight_request.with_request_origin(request_origin.clone());
         if let Some(metadata) = request.browser_request_metadata() {
             preflight_request = preflight_request.with_browser_request_metadata(metadata);
         } else {
@@ -475,8 +478,8 @@ async fn run_cors_preflight_if_needed(
                 preflight_response.final_url
             ));
         }
-        validate_cors_preflight_response(
-            &initiator_url,
+        validate_cors_preflight_response_for_origin(
+            &request_origin,
             &preflight_response.final_url,
             &request.method,
             preflight_request_headers,

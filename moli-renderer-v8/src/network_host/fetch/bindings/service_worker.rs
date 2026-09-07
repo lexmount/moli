@@ -26,9 +26,10 @@ pub(super) fn dispatch_service_worker_fetch(
         return Ok(None);
     }
 
-    let request_cookie_report = observe_subresource_request_cookie_report(
+    let request_cookie_report = observe_subresource_request_cookie_report_for_origin(
         prepared.resource_loader.request_client(),
         &prepared.document_url,
+        &prepared.request_origin,
         &prepared.resolved_url,
         &prepared.method,
         prepared.credentials_mode,
@@ -41,8 +42,8 @@ pub(super) fn dispatch_service_worker_fetch(
         policy_context: prepared.policy_context,
     };
     let requires_preflight = prepared.request_mode != moli_fetch::RequestMode::NoCors
-        && crate::network_host::cors_preflight_request_headers(
-            &prepared.document_url,
+        && crate::network_host::cors_preflight_request_headers_for_origin(
+            &prepared.request_origin,
             &prepared.resolved_url,
             &prepared.method,
             &prepared.cors_preflight_request_headers,
@@ -55,6 +56,7 @@ pub(super) fn dispatch_service_worker_fetch(
         prepared.keepalive,
         prepared.connect_policy.clone(),
         prepared.csp_report_context.clone(),
+        prepared.request_origin.clone(),
         Some(cancel_handle.clone()),
         prepared.credentials_mode,
         prepared.request_mode,
@@ -93,6 +95,7 @@ pub(super) fn dispatch_service_worker_fetch(
             referrer_policy: prepared.referrer_policy.clone(),
             integrity: prepared.integrity.clone(),
             keepalive: prepared.keepalive,
+            request_origin: Some(prepared.request_origin.clone()),
         },
     );
     let dispatch = ServiceWorkerFetchDispatch {

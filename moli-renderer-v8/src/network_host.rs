@@ -135,7 +135,9 @@ pub(crate) use self::request_scope::effective_subresource_policy_context;
 pub(in crate::network_host) use self::request_scope::{
     XHR_CHILD_CONTEXT_HANDLE_SLOT, active_subresource_network_partition_key,
     effective_subresource_referrer_policy, effective_subresource_request_scope,
-    observe_subresource_request_cookie_report, subresource_request_scope_for_owner,
+    observe_subresource_request_cookie_report,
+    observe_subresource_request_cookie_report_for_origin, subresource_request_origin_for_owner,
+    subresource_request_scope_for_owner,
 };
 #[cfg(test)]
 pub(crate) use self::response::materialize_response_object;
@@ -148,16 +150,21 @@ pub(crate) use self::response::{
     build_fetch_response_object_from_subresource_body_for_request_mode,
     build_filtered_cached_response_object,
     build_navigation_preload_response_object_from_stream_for_request_mode,
-    cors_preflight_request_headers, filter_cors_exposed_response_headers,
-    is_cors_policy_failure_message, materialize_response_object_body,
-    materialize_response_object_body_with_chunk_callback, materialize_response_object_head,
+    cors_preflight_request_headers_for_origin, filter_cors_exposed_response_headers,
+    filter_cors_exposed_response_headers_for_origin, is_cors_policy_failure_message,
+    materialize_response_object_body, materialize_response_object_body_with_chunk_callback,
+    materialize_response_object_head,
     materialize_response_object_head_for_service_worker_respond_with,
     materialized_body_bytes_from_value, response_constructor_callback,
-    validate_cors_preflight_response, validate_cors_response,
+    validate_cors_preflight_response_for_origin, validate_cors_response,
+    validate_cors_response_for_origin,
     validate_cross_origin_embedder_and_document_isolation_policy,
     validate_cross_origin_resource_policy, validate_fetch_response_security_policy,
+    validate_fetch_response_security_policy_for_origin,
     validate_fetch_response_security_policy_with_body,
     validate_fetch_response_security_policy_with_body_classified,
+    validate_fetch_response_security_policy_with_body_classified_for_origin,
+    validate_fetch_response_security_policy_with_body_for_origin,
 };
 pub(crate) use self::stylesheet_subresource::{
     StylesheetSubresourceFetchStart, start_stylesheet_subresource_fetch,

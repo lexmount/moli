@@ -14,9 +14,7 @@ use moli_cookie_jar::{
     NetworkCookieRequestContext, SharedBrowserCookieStore, StoredCookieQueryReport,
     StoredCookieSetReport, same_site_urls,
 };
-use moli_url::{
-    is_potentially_trustworthy_url, origin_ascii_serialization, same_origin, tuple_origin_url,
-};
+use moli_url::{WebOrigin, is_potentially_trustworthy_url, same_origin};
 use moli_url_policy::ensure_http_network_transport_url;
 use tracing::debug;
 use url::Url;
@@ -418,21 +416,17 @@ fn request_origin_header_value(
     if !request_needs_origin_header(request, request_url, redirect_chain) {
         return None;
     }
-    let Some(initiator_url) = request.cookie_context.initiator_url.as_ref() else {
+    let Some(request_origin) = request.request_origin() else {
         return Some("null".to_owned());
     };
-    let Some(initiator_origin_url) = tuple_origin_url(initiator_url) else {
+    if request_origin.is_opaque() {
         return Some("null".to_owned());
-    };
+    }
     Some(
-        if request_has_redirect_tainted_origin(
-            initiator_origin_url.as_ref(),
-            &request.url,
-            redirect_chain,
-        ) {
+        if request_has_redirect_tainted_origin(&request_origin, &request.url, redirect_chain) {
             "null".to_owned()
         } else {
-            origin_ascii_serialization(initiator_origin_url.as_ref())
+            request_origin.ascii_serialization().to_owned()
         },
     )
 }
@@ -452,22 +446,18 @@ fn request_needs_origin_header(
         return false;
     }
 
-    let Some(initiator_url) = request.cookie_context.initiator_url.as_ref() else {
+    let Some(request_origin) = request.request_origin() else {
         return true;
     };
-    let Some(initiator_origin_url) = tuple_origin_url(initiator_url) else {
+    if request_origin.is_opaque() {
         return true;
-    };
-    !same_origin(initiator_origin_url.as_ref(), request_url)
-        || request_has_redirect_tainted_origin(
-            initiator_origin_url.as_ref(),
-            &request.url,
-            redirect_chain,
-        )
+    }
+    !request_origin.same_origin_url(request_url)
+        || request_has_redirect_tainted_origin(&request_origin, &request.url, redirect_chain)
 }
 
 fn request_has_redirect_tainted_origin(
-    request_origin_url: &Url,
+    request_origin: &WebOrigin,
     original_request_url: &Url,
     redirect_chain: &[RedirectInfo],
 ) -> bool {
@@ -475,7 +465,7 @@ fn request_has_redirect_tainted_origin(
 
     for redirect in redirect_chain {
         let next_url = &redirect.to_url;
-        if !same_origin(next_url, last_url) && !same_origin(request_origin_url, last_url) {
+        if !same_origin(next_url, last_url) && !request_origin.same_origin_url(last_url) {
             return true;
         }
         last_url = next_url;
@@ -531,14 +521,18 @@ fn append_browser_storage_access_header(
 }
 
 fn request_sec_fetch_site(request: &Request, request_url: &Url) -> String {
-    let Some(initiator_url) = request.cookie_context.initiator_url.as_ref() else {
+    let Some(request_origin) = request.request_origin() else {
         return "none".to_owned();
     };
-    let initiator_url =
-        tuple_origin_url(initiator_url).unwrap_or(std::borrow::Cow::Borrowed(initiator_url));
-    if same_origin(initiator_url.as_ref(), request_url) {
+    if request_origin.is_opaque() {
+        return "cross-site".to_owned();
+    }
+    let Ok(origin_url) = Url::parse(request_origin.ascii_serialization()) else {
+        return "cross-site".to_owned();
+    };
+    if same_origin(&origin_url, request_url) {
         "same-origin".to_owned()
-    } else if same_site_urls(initiator_url.as_ref(), request_url, true) {
+    } else if same_site_urls(&origin_url, request_url, true) {
         "same-site".to_owned()
     } else {
         "cross-site".to_owned()
@@ -1360,6 +1354,30 @@ mod tests {
                 .map(|(_, value)| value.as_str())
                 .collect::<Vec<_>>(),
             vec!["https://explicit.test"]
+        );
+    }
+
+    #[test]
+    fn opaque_request_origin_is_cross_origin_without_hiding_referrer_url() {
+        let config = FetchConfig::default();
+        let request_url = url("https://app.test/data");
+        let request = Request::new("GET", request_url.as_str(), None, Vec::new())
+            .unwrap()
+            .with_initiator_url(&url("https://app.test/sandboxed-frame"))
+            .with_request_origin(moli_url::WebOrigin::Opaque)
+            .with_browser_request_metadata(BrowserRequestMetadata::Fetch);
+
+        let headers =
+            outgoing_request_headers_for_url(&config, &request, &request_url, &Vec::new(), None);
+
+        assert_eq!(header_value(&headers, "origin").as_deref(), Some("null"));
+        assert_eq!(
+            header_value(&headers, "sec-fetch-site").as_deref(),
+            Some("cross-site")
+        );
+        assert_eq!(
+            header_value(&headers, "referer").as_deref(),
+            Some("https://app.test/sandboxed-frame")
         );
     }
 

@@ -1824,6 +1824,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             referrer_policy: init.referrer_policy.unwrap_or(inherited.referrer_policy),
             integrity: init.integrity.unwrap_or(inherited.integrity),
             keepalive: init.keepalive.unwrap_or(inherited.keepalive),
+            request_origin: None,
         };
         (
             url,
@@ -1863,6 +1864,7 @@ pub(in crate::worker) fn resolve_worker_fetch_input<'s>(
             referrer_policy: init.referrer_policy.unwrap_or_default(),
             integrity: init.integrity.unwrap_or_default(),
             keepalive: init.keepalive.unwrap_or(false),
+            request_origin: None,
         };
         (
             url,

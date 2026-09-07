@@ -9,7 +9,7 @@ use moli_cookie_jar::{
     NetworkSiteContextMetadata, NetworkSiteContextTrackMetadata, redirect_types_for_request,
     site_context_downgrade_type,
 };
-use moli_url::same_origin;
+use moli_url::{WebOrigin, same_origin};
 use url::Url;
 
 use crate::{FetchConfig, network_fetch_result::NetworkObservationRecorder};
@@ -33,6 +33,7 @@ pub struct Request {
     pub request_mode: RequestMode,
     pub redirect_mode: RequestRedirectMode,
     pub credentials_mode: RequestCredentialsMode,
+    request_origin: Option<WebOrigin>,
     network_partition_key: Option<String>,
     auth: Option<RequestAuth>,
     pub cookie_context: NetworkCookieRequestContext,
@@ -383,6 +384,7 @@ impl Request {
             request_mode: RequestMode::Navigate,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
+            request_origin: None,
             network_partition_key: None,
             auth: None,
             cookie_context: NetworkCookieRequestContext::top_level_navigation("GET"),
@@ -410,6 +412,7 @@ impl Request {
             request_mode: RequestMode::Navigate,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
+            request_origin: None,
             network_partition_key: None,
             auth: None,
             cookie_context: NetworkCookieRequestContext::top_level_navigation("GET"),
@@ -458,6 +461,7 @@ impl Request {
             request_mode: RequestMode::Cors,
             redirect_mode: RequestRedirectMode::Follow,
             credentials_mode: RequestCredentialsMode::Include,
+            request_origin: None,
             network_partition_key: None,
             auth: None,
             cookie_context: NetworkCookieRequestContext::subresource(method),
@@ -655,10 +659,8 @@ impl Request {
             RequestCredentialsMode::Include => true,
             RequestCredentialsMode::Omit => false,
             RequestCredentialsMode::SameOrigin => self
-                .cookie_context
-                .initiator_url
-                .as_ref()
-                .is_none_or(|initiator_url| same_origin(initiator_url, request_url)),
+                .request_origin()
+                .is_none_or(|origin| origin.same_origin_url(request_url)),
         }
     }
 
@@ -755,6 +757,26 @@ impl Request {
             .cookie_context
             .with_initiator_url(&self.url, initiator_url);
         self
+    }
+
+    /// Override the Fetch request's client origin without changing the
+    /// initiator URL used for referrer and cookie-site calculations.
+    pub fn with_request_origin(mut self, request_origin: WebOrigin) -> Self {
+        self.request_origin = Some(request_origin);
+        self
+    }
+
+    pub fn request_origin(&self) -> Option<WebOrigin> {
+        self.request_origin.clone().or_else(|| {
+            self.cookie_context
+                .initiator_url
+                .as_ref()
+                .map(WebOrigin::from_url)
+        })
+    }
+
+    pub fn explicit_request_origin(&self) -> Option<&WebOrigin> {
+        self.request_origin.as_ref()
     }
 
     pub fn with_site_for_cookies_url(mut self, site_for_cookies_url: &Url) -> Self {

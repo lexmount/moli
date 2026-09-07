@@ -1400,6 +1400,7 @@ impl ScriptVm {
         // up the ambient Page loader here would silently rebind policy/backend
         // to a newer Document identity.
         let loader = pending.load.request_client();
+        let request_origin = pending.request_origin();
         let mut request = moli_fetch::Request::new(
             &request_method,
             request_url.as_str(),
@@ -1407,6 +1408,7 @@ impl ScriptVm {
             request_headers.clone(),
         )?
         .with_initiator_url(&pending.info.document_url)
+        .with_request_origin(request_origin)
         .with_request_mode(pending.request_mode)
         .with_credentials_mode(pending.credentials_mode)
         .with_network_partition_key(pending.network_partition_key.clone())
@@ -1668,6 +1670,7 @@ impl ScriptVm {
             ));
         }
         let loader = pending_fetch.load.request_client();
+        let request_origin = pending_fetch.request_origin();
         let mut request = moli_fetch::Request::new(
             &request_method,
             request_url.as_str(),
@@ -1675,6 +1678,7 @@ impl ScriptVm {
             original_request_headers.clone(),
         )?
         .with_initiator_url(&pending_fetch.info.document_url)
+        .with_request_origin(request_origin)
         .with_request_mode(pending_fetch.request_mode)
         .with_credentials_mode(pending_fetch.credentials_mode)
         .with_auth(auth.into())
@@ -3134,8 +3138,9 @@ impl ScriptVm {
                     return Err(message);
                 }
                 if !skip_fetch_security_validation {
-                    crate::network_host::validate_fetch_response_security_policy_with_body(
+                    crate::network_host::validate_fetch_response_security_policy_with_body_for_origin(
                         &pending.info.document_url,
+                        &pending.request_origin(),
                         &response.final_url,
                         &response.headers,
                         response.body_bytes(),
@@ -3307,8 +3312,9 @@ impl ScriptVm {
                         .or_else(|| {
                             (!skip_fetch_security_validation)
                                 .then(|| {
-                                    crate::network_host::validate_fetch_response_security_policy_with_body(
+                                    crate::network_host::validate_fetch_response_security_policy_with_body_for_origin(
                                         &pending.info.document_url,
+                                        &pending.request_origin(),
                                         &response.final_url,
                                         &response.headers,
                                         response.body_bytes(),
@@ -3591,8 +3597,9 @@ impl ScriptVm {
                         | SubresourceResourceType::Video
                         | SubresourceResourceType::Xhr
                 ) {
-                    let validation = crate::network_host::validate_fetch_response_security_policy_with_body_classified(
+                    let validation = crate::network_host::validate_fetch_response_security_policy_with_body_classified_for_origin(
                         &pending.info.document_url,
+                        &pending.request_origin(),
                         &response.final_url,
                         &response.headers,
                         response.body_bytes(),
@@ -3689,8 +3696,8 @@ impl ScriptVm {
                         SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
                     ) {
                         observable_response.headers =
-                            crate::network_host::filter_cors_exposed_response_headers(
-                                &pending.info.document_url,
+                            crate::network_host::filter_cors_exposed_response_headers_for_origin(
+                                &pending.request_origin(),
                                 &observable_response.final_url,
                                 &observable_response.headers,
                                 pending.credentials_mode,
@@ -4387,8 +4394,9 @@ impl ScriptVm {
                     None
                 }
                 .or_else(|| {
-                    crate::network_host::validate_fetch_response_security_policy(
+                    crate::network_host::validate_fetch_response_security_policy_for_origin(
                         &pending.info.document_url,
+                        &pending.request_origin(),
                         &started.head.final_url,
                         &started.head.headers,
                         pending.request_mode,
@@ -4588,8 +4596,9 @@ impl ScriptVm {
                         | SubresourceResourceType::Xhr
                 )
                 .then(|| {
-                    crate::network_host::validate_fetch_response_security_policy(
+                    crate::network_host::validate_fetch_response_security_policy_for_origin(
                         &pending.info.document_url,
+                        &pending.request_origin(),
                         &started.head.final_url,
                         &started.head.headers,
                         pending.request_mode,
@@ -4780,8 +4789,8 @@ impl ScriptVm {
                 pending.info.resource_type,
                 SubresourceResourceType::Fetch | SubresourceResourceType::Xhr
             ) {
-                observable_head.headers = crate::network_host::filter_cors_exposed_response_headers(
-                    &pending.info.document_url,
+                observable_head.headers = crate::network_host::filter_cors_exposed_response_headers_for_origin(
+                    &pending.request_origin(),
                     &observable_head.final_url,
                     &observable_head.headers,
                     pending.credentials_mode,
@@ -5687,6 +5696,7 @@ impl ScriptVm {
                             trace_fields,
                             record_started,
                         );
+                        let request_origin = streaming.pending.request_origin();
                         if let PendingSubresourceContinuation::Xhr(xhr) =
                             streaming.pending.continuation
                             && let Some(response_body) = xhr_delivery_body
@@ -5706,8 +5716,8 @@ impl ScriptVm {
                             let xhr = v8::Local::new(scope, &xhr);
                             let mut observable_head = streaming.head;
                             observable_head.headers =
-                                crate::network_host::filter_cors_exposed_response_headers(
-                                    &streaming.pending.info.document_url,
+                                crate::network_host::filter_cors_exposed_response_headers_for_origin(
+                                    &request_origin,
                                     &observable_head.final_url,
                                     &observable_head.headers,
                                     streaming.pending.credentials_mode,

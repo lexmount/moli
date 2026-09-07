@@ -17,7 +17,7 @@ impl TupleOrigin {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum WebOrigin {
     Tuple(TupleOrigin),
     Opaque,
@@ -37,6 +37,12 @@ impl WebOrigin {
         } else {
             Self::Opaque
         }
+    }
+
+    pub fn from_ascii_serialization(serialized: &str) -> Self {
+        Url::parse(serialized)
+            .ok()
+            .map_or(Self::Opaque, |url| Self::from_url(&url))
     }
 
     pub fn is_opaque(&self) -> bool {
@@ -62,6 +68,10 @@ impl WebOrigin {
             (Self::Tuple(left), Self::Tuple(right)) => left == right,
             _ => false,
         }
+    }
+
+    pub fn same_origin_url(&self, url: &Url) -> bool {
+        self.same_origin(&Self::from_url(url))
     }
 }
 
@@ -186,6 +196,27 @@ mod tests {
             &url("https://example.test/a"),
             &url("https://other.test/a")
         ));
+    }
+
+    #[test]
+    fn web_origin_compares_directly_with_urls() {
+        let origin = WebOrigin::from_url(&url("https://example.test/document"));
+
+        assert!(origin.same_origin_url(&url("https://example.test/resource")));
+        assert!(!origin.same_origin_url(&url("https://other.test/resource")));
+        assert!(!WebOrigin::Opaque.same_origin_url(&url("https://example.test/resource")));
+    }
+
+    #[test]
+    fn web_origin_rehydrates_tuple_serializations_and_keeps_null_opaque() {
+        assert_eq!(
+            WebOrigin::from_ascii_serialization("https://example.test:8443"),
+            WebOrigin::from_url(&url("https://example.test:8443/path"))
+        );
+        assert_eq!(
+            WebOrigin::from_ascii_serialization("null"),
+            WebOrigin::Opaque
+        );
     }
 
     #[test]

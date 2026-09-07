@@ -305,6 +305,7 @@ fn register_pending_window_fetch_for_test(
         keepalive,
         connect_policy,
         csp_report_context,
+        moli_url::WebOrigin::from_url(&url),
         Some(cancel_handle.clone()),
         moli_fetch::RequestCredentialsMode::SameOrigin,
         moli_fetch::RequestMode::Cors,
@@ -465,6 +466,7 @@ fn register_pending_window_fetch_with_connect_policy_for_test(
         keepalive,
         crate::document_runtime::DocumentConnectPolicySnapshot::from_policy_container(&policy),
         csp_report_context,
+        moli_url::WebOrigin::from_url(&document_url),
         Some(cancel_handle.clone()),
         moli_fetch::RequestCredentialsMode::SameOrigin,
         moli_fetch::RequestMode::Cors,
@@ -1095,6 +1097,14 @@ async fn opaque_child_isolated_world_projects_only_its_own_document() {
             .borrow()
             .child_browsing_context_has_opaque_origin(child_handle),
         "sandbox without allow-same-origin must create an opaque child origin"
+    );
+    assert_eq!(
+        vm._context_host
+            .borrow()
+            .child_browsing_context_request_origin(child_handle)
+            .as_deref(),
+        Some("null"),
+        "sandboxed child subresource requests must use an opaque client origin"
     );
     assert_eq!(
         vm.eval("document.getElementById('opaque-isolated-frame').contentDocument === null")

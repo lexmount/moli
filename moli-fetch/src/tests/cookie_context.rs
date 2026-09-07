@@ -106,6 +106,19 @@ fn request_credentials_mode_controls_cross_origin_cookie_access() {
 }
 
 #[test]
+fn opaque_request_origin_disallows_same_origin_credentials_for_same_url_origin() {
+    let document_url = Url::parse("https://example.com/app/page.html").unwrap();
+    let request_url = Url::parse("https://example.com/api/data").unwrap();
+    let request = Request::new("GET", request_url.as_str(), None, vec![])
+        .unwrap()
+        .with_initiator_url(&document_url)
+        .with_request_origin(moli_url::WebOrigin::Opaque)
+        .with_credentials_mode(RequestCredentialsMode::SameOrigin);
+
+    assert!(!request.allows_credentials_for_url(&request_url));
+}
+
+#[test]
 fn explicit_same_site_override_sets_both_site_context_tracks() {
     let context = NetworkCookieRequestContext::subresource("GET")
         .with_same_site_context(NetworkSameSiteContext::CrossSite);

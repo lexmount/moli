@@ -1,6 +1,6 @@
 use moli_cookie_jar::same_site_urls;
 use moli_fetch::{RequestCredentialsMode, RequestMode};
-use moli_url::{origin_ascii_serialization, same_origin};
+use moli_url::{WebOrigin, origin_ascii_serialization, same_origin};
 use moli_web_mime::{
     response_header_value, response_header_values, should_opaque_response_be_blocked_by_orb,
     should_opaque_response_be_blocked_by_orb_with_body,
@@ -42,14 +42,28 @@ pub(crate) fn validate_cors_response(
     response_headers: &[(String, String)],
     credentials_mode: RequestCredentialsMode,
 ) -> Result<(), String> {
-    if same_origin(document_url, response_url) {
+    validate_cors_response_for_origin(
+        &WebOrigin::from_url(document_url),
+        response_url,
+        response_headers,
+        credentials_mode,
+    )
+}
+
+pub(crate) fn validate_cors_response_for_origin(
+    request_origin: &WebOrigin,
+    response_url: &url::Url,
+    response_headers: &[(String, String)],
+    credentials_mode: RequestCredentialsMode,
+) -> Result<(), String> {
+    if request_origin.same_origin_url(response_url) {
         return Ok(());
     }
     if !matches!(response_url.scheme(), "http" | "https") {
         return Ok(());
     }
 
-    let origin = origin_ascii_serialization(document_url);
+    let origin = request_origin.ascii_serialization();
     let Some(allow_origin) = response_header_value(response_headers, "access-control-allow-origin")
     else {
         return Err(format!(
@@ -117,6 +131,34 @@ pub(crate) fn validate_fetch_response_security_policy(
     }
 }
 
+pub(crate) fn validate_fetch_response_security_policy_for_origin(
+    document_url: &url::Url,
+    request_origin: &WebOrigin,
+    response_url: &url::Url,
+    response_headers: &[(String, String)],
+    request_mode: RequestMode,
+    credentials_mode: RequestCredentialsMode,
+    policy_context: crate::types::SubresourcePolicyContext,
+) -> Result<(), String> {
+    if request_mode == RequestMode::NoCors {
+        validate_fetch_response_security_policy(
+            document_url,
+            response_url,
+            response_headers,
+            request_mode,
+            credentials_mode,
+            policy_context,
+        )
+    } else {
+        validate_cors_response_for_origin(
+            request_origin,
+            response_url,
+            response_headers,
+            credentials_mode,
+        )
+    }
+}
+
 pub(crate) fn validate_fetch_response_security_policy_with_body(
     document_url: &url::Url,
     response_url: &url::Url,
@@ -170,6 +212,60 @@ pub(crate) fn validate_fetch_response_security_policy_with_body_classified(
     } else {
         validate_cors_response(
             document_url,
+            response_url,
+            response_headers,
+            credentials_mode,
+        )
+        .map_err(FetchResponseSecurityViolation::Rejected)
+    }
+}
+
+pub(crate) fn validate_fetch_response_security_policy_with_body_for_origin(
+    document_url: &url::Url,
+    request_origin: &WebOrigin,
+    response_url: &url::Url,
+    response_headers: &[(String, String)],
+    response_body: &[u8],
+    request_mode: RequestMode,
+    credentials_mode: RequestCredentialsMode,
+    policy_context: crate::types::SubresourcePolicyContext,
+) -> Result<(), String> {
+    validate_fetch_response_security_policy_with_body_classified_for_origin(
+        document_url,
+        request_origin,
+        response_url,
+        response_headers,
+        response_body,
+        request_mode,
+        credentials_mode,
+        policy_context,
+    )
+    .map_err(FetchResponseSecurityViolation::into_message)
+}
+
+pub(crate) fn validate_fetch_response_security_policy_with_body_classified_for_origin(
+    document_url: &url::Url,
+    request_origin: &WebOrigin,
+    response_url: &url::Url,
+    response_headers: &[(String, String)],
+    response_body: &[u8],
+    request_mode: RequestMode,
+    credentials_mode: RequestCredentialsMode,
+    policy_context: crate::types::SubresourcePolicyContext,
+) -> Result<(), FetchResponseSecurityViolation> {
+    if request_mode == RequestMode::NoCors {
+        validate_fetch_response_security_policy_with_body_classified(
+            document_url,
+            response_url,
+            response_headers,
+            response_body,
+            request_mode,
+            credentials_mode,
+            policy_context,
+        )
+    } else {
+        validate_cors_response_for_origin(
+            request_origin,
             response_url,
             response_headers,
             credentials_mode,
@@ -360,13 +456,28 @@ pub(crate) fn validate_cross_origin_resource_policy(
     ))
 }
 
+#[cfg(test)]
 pub(crate) fn cors_preflight_request_headers(
     document_url: &url::Url,
     request_url: &url::Url,
     method: &str,
     request_headers: &[(String, String)],
 ) -> Option<Vec<(String, String)>> {
-    if same_origin(document_url, request_url) {
+    cors_preflight_request_headers_for_origin(
+        &WebOrigin::from_url(document_url),
+        request_url,
+        method,
+        request_headers,
+    )
+}
+
+pub(crate) fn cors_preflight_request_headers_for_origin(
+    request_origin: &WebOrigin,
+    request_url: &url::Url,
+    method: &str,
+    request_headers: &[(String, String)],
+) -> Option<Vec<(String, String)>> {
+    if request_origin.same_origin_url(request_url) {
         return None;
     }
     if !matches!(request_url.scheme(), "http" | "https") {
@@ -392,8 +503,27 @@ pub(crate) fn cors_preflight_request_headers(
     Some(headers)
 }
 
+#[cfg(test)]
 pub(crate) fn validate_cors_preflight_response(
     document_url: &url::Url,
+    response_url: &url::Url,
+    requested_method: &str,
+    request_headers: &[(String, String)],
+    response_status: u16,
+    response_headers: &[(String, String)],
+) -> Result<(), String> {
+    validate_cors_preflight_response_for_origin(
+        &WebOrigin::from_url(document_url),
+        response_url,
+        requested_method,
+        request_headers,
+        response_status,
+        response_headers,
+    )
+}
+
+pub(crate) fn validate_cors_preflight_response_for_origin(
+    request_origin: &WebOrigin,
     response_url: &url::Url,
     requested_method: &str,
     request_headers: &[(String, String)],
@@ -405,8 +535,8 @@ pub(crate) fn validate_cors_preflight_response(
             "CORS preflight failed: response status {response_status}"
         ));
     }
-    validate_cors_response(
-        document_url,
+    validate_cors_response_for_origin(
+        request_origin,
         response_url,
         response_headers,
         RequestCredentialsMode::SameOrigin,
@@ -464,7 +594,21 @@ pub(crate) fn filter_cors_exposed_response_headers(
     response_headers: &[(String, String)],
     credentials_mode: RequestCredentialsMode,
 ) -> Vec<(String, String)> {
-    if same_origin(document_url, response_url) {
+    filter_cors_exposed_response_headers_for_origin(
+        &WebOrigin::from_url(document_url),
+        response_url,
+        response_headers,
+        credentials_mode,
+    )
+}
+
+pub(crate) fn filter_cors_exposed_response_headers_for_origin(
+    request_origin: &WebOrigin,
+    response_url: &url::Url,
+    response_headers: &[(String, String)],
+    credentials_mode: RequestCredentialsMode,
+) -> Vec<(String, String)> {
+    if request_origin.same_origin_url(response_url) {
         return response_headers.to_vec();
     }
     if !matches!(response_url.scheme(), "http" | "https") {
@@ -587,6 +731,30 @@ mod tests {
                 &headers,
             ),
             None
+        );
+    }
+
+    #[test]
+    fn opaque_request_origin_requires_null_cors_opt_in_for_same_url_origin() {
+        let response_url = url("https://example.test/data");
+
+        assert!(
+            validate_cors_response_for_origin(
+                &WebOrigin::Opaque,
+                &response_url,
+                &[],
+                RequestCredentialsMode::SameOrigin,
+            )
+            .is_err()
+        );
+        assert!(
+            validate_cors_response_for_origin(
+                &WebOrigin::Opaque,
+                &response_url,
+                &[("Access-Control-Allow-Origin".to_owned(), "null".to_owned(),)],
+                RequestCredentialsMode::SameOrigin,
+            )
+            .is_ok()
         );
     }
 

@@ -488,6 +488,7 @@ pub(crate) struct ServiceWorkerFetchRequestMetadata {
     pub(crate) referrer_policy: String,
     pub(crate) integrity: String,
     pub(crate) keepalive: bool,
+    pub(crate) request_origin: Option<moli_url::WebOrigin>,
 }
 
 impl Default for ServiceWorkerFetchRequestMetadata {
@@ -498,6 +499,7 @@ impl Default for ServiceWorkerFetchRequestMetadata {
             referrer_policy: String::new(),
             integrity: String::new(),
             keepalive: false,
+            request_origin: None,
         }
     }
 }
@@ -520,6 +522,7 @@ pub(crate) fn service_worker_fetch_request_metadata(
             .and_then(|metadata| metadata.integrity.clone())
             .unwrap_or_default(),
         keepalive: false,
+        request_origin: request.explicit_request_origin().cloned(),
     }
 }
 

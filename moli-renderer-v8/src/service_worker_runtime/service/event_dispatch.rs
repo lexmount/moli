@@ -56,7 +56,7 @@ fn navigation_preload_request_for_job(
         } else {
             request.with_top_level_navigation_cookie_context()
         };
-        request
+        let mut request = request
             .with_initiator_url(&job.network_context.document_url)
             .with_request_mode(job.request_mode)
             .with_credentials_mode(job.credentials_mode)
@@ -70,7 +70,11 @@ fn navigation_preload_request_for_job(
             } else {
                 moli_fetch::BrowserNavigationRequestKind::Navigate
             })
-            .with_page_network_policy()
+            .with_page_network_policy();
+        if let Some(request_origin) = job.metadata.request_origin.clone() {
+            request = request.with_request_origin(request_origin);
+        }
+        request
     })
     .map_err(|error| error.to_string())
 }
