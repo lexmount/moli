@@ -108,7 +108,11 @@ pub(crate) use cookie_owner::{
 };
 pub use devtools_command::DevToolsCommandDispatchOutcome;
 pub(crate) use devtools_command::DevToolsCommandExecutionOutput;
-pub use dispatch::{CdpCommandTaskStep, CompletedCdpCommandDispatch, PendingCdpCommandDispatch};
+pub use dispatch::{
+    AgentHostDispatchResult, CdpCommandTaskStep, CompletedCdpCommandDispatch,
+    PendingCdpCommandDispatch, RendererDispatch, RendererDispatchBinding, RendererDispatchLane,
+    RendererPageDispatchBinding,
+};
 pub(crate) use fetch_support::PendingStreamingDocumentResponseNavigation;
 pub(crate) use fetch_support::{
     ClaimedFetchNavigation, ClaimedFetchResponseNavigation, ClaimedSubresourceContinueRequest,
@@ -130,7 +134,7 @@ pub use fetch_support::{
 };
 pub use moli_protocol_cdp::{
     CdpRendererCommandPolicy, CdpRendererCommandReplacement, CdpRendererCommandReplayDispatch,
-    CdpRendererDispatchLane, CdpRequest, ParsedCdpCommand,
+    CdpRequest, ParsedCdpCommand,
 };
 use target::DEFAULT_BROWSER_CONTEXT_ID;
 pub(crate) use target::{

@@ -67,7 +67,7 @@ impl BrowserContext {
             .expect("resolved projection");
         if let Err(error) = target
             .runtime_slot
-            .project_initial_document_inspection(commit.inspection_endpoint)
+            .project_initial_document_inspection(commit.key.document(), commit.inspection_endpoint)
         {
             tracing::warn!(%error, "initial document inspection projection failed");
         }
@@ -367,7 +367,11 @@ impl BrowserContext {
             .expect("resolved target projection");
         let inspection_projection = target
             .runtime_slot
-            .project_committed_document_inspection(commit.navigation, commit.inspection_endpoint)
+            .project_committed_document_inspection(
+                commit.navigation,
+                commit.document,
+                commit.inspection_endpoint,
+            )
             .map(|previous| {
                 if let Some(previous) = previous {
                     let new_attachment = target

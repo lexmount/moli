@@ -1,4 +1,4 @@
-use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope, RendererDispatchLane};
 use crate::domains::actions::AccessibilityAction;
 use crate::domains::command_output::CommandOutputPlan;
 use moli_core::page::{
@@ -27,6 +27,11 @@ pub(crate) struct CompletedAccessibilityCommandDispatch {
 pub(crate) enum AccessibilityCommandDispatchStep {
     Pending(PendingAccessibilityCommandDispatch),
     Complete(CommandOutputPlan),
+}
+
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    cmd.parse_action::<AccessibilityAction>()
+        .is_some_and(AccessibilityAction::queries_tree)
 }
 
 enum PendingAccessibilityCommandKind {
@@ -74,6 +79,12 @@ struct PendingAccessibilityCommandStartError {
 }
 
 impl PendingAccessibilityCommandDispatch {
+    pub(crate) fn renderer_dispatch_lane(&self) -> Option<RendererDispatchLane> {
+        self.pending
+            .renderer_agent_attachment_id()
+            .map(|_| RendererDispatchLane::Main)
+    }
+
     fn from_command(
         conn: &CdpConnection,
         cmd: &Cmd<'_>,

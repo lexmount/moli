@@ -11,19 +11,21 @@ use moli_renderer_v8::{
     RendererRuntimeInspectorMainCommandRoute, RendererRuntimeInspectorResponseSender,
 };
 
-use super::NavigationId;
+use super::{DocumentId, NavigationId};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RendererAgentAttachment {
     id: RendererAgentAttachmentId,
     agent_token: RendererDevToolsAgentToken,
+    document: DocumentId,
 }
 
 impl RendererAgentAttachment {
-    fn new(agent_token: RendererDevToolsAgentToken) -> Self {
+    fn new(document: DocumentId, agent_token: RendererDevToolsAgentToken) -> Self {
         Self {
             id: RendererAgentAttachmentId::allocate(),
             agent_token,
+            document,
         }
     }
 
@@ -33,6 +35,10 @@ impl RendererAgentAttachment {
 
     pub(crate) fn agent_token(self) -> RendererDevToolsAgentToken {
         self.agent_token
+    }
+
+    pub(crate) fn document(self) -> DocumentId {
+        self.document
     }
 }
 
@@ -301,13 +307,14 @@ struct BufferedRendererInspectorBatch {
 impl DevToolsRendererChannel {
     pub(crate) fn attach_current(
         &mut self,
+        document: DocumentId,
         endpoint: RendererInspectionEndpoint,
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
         self.ensure_open()?;
         Ok(self
             .current
             .replace(RendererAgentBinding {
-                attachment: RendererAgentAttachment::new(endpoint.agent_token()),
+                attachment: RendererAgentAttachment::new(document, endpoint.agent_token()),
                 endpoint,
             })
             .map(|previous| previous.attachment()))
@@ -340,9 +347,10 @@ impl DevToolsRendererChannel {
     pub(crate) fn document_committed(
         &mut self,
         navigation: NavigationId,
+        document: DocumentId,
         endpoint: RendererInspectionEndpoint,
     ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
-        let previous = self.attach_current(endpoint)?;
+        let previous = self.attach_current(document, endpoint)?;
         self.inflight_cross_document_navigations
             .retain(|pending| *pending == navigation);
         Ok(previous)
@@ -602,14 +610,21 @@ mod tests {
             .unwrap();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(outgoing.renderer_inspection_endpoint())
+            .attach_current(
+                DocumentId::allocate(),
+                outgoing.renderer_inspection_endpoint(),
+            )
             .unwrap();
         let original = channel.current().unwrap();
         let navigation = NavigationId::allocate();
         channel.navigation_started(navigation).unwrap();
         assert_eq!(
             channel
-                .document_committed(navigation, committed_page.renderer_inspection_endpoint())
+                .document_committed(
+                    navigation,
+                    DocumentId::allocate(),
+                    committed_page.renderer_inspection_endpoint(),
+                )
                 .unwrap(),
             Some(original)
         );
@@ -688,14 +703,14 @@ mod tests {
         let mut channel = DevToolsRendererChannel::default();
 
         assert_eq!(
-            channel.attach_current(page.renderer_inspection_endpoint()),
+            channel.attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint()),
             Ok(None)
         );
         let first = channel.current().expect("first attachment");
         assert_eq!(first.agent_token(), agent);
 
         let replaced = channel
-            .attach_current(page.renderer_inspection_endpoint())
+            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
             .expect("reattach")
             .expect("replaced attachment");
         let second = channel.current().expect("second attachment");
@@ -710,7 +725,7 @@ mod tests {
         let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(page.renderer_inspection_endpoint())
+            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
             .expect("initial attach");
         let current = channel.current();
 
@@ -738,7 +753,7 @@ mod tests {
         let committed = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(page.renderer_inspection_endpoint())
+            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
             .unwrap();
         let original = channel.current().unwrap();
         channel.navigation_started(first).unwrap();
@@ -747,7 +762,11 @@ mod tests {
         // not a second validation/commit state machine.
         assert_eq!(
             channel
-                .document_committed(committed, next_page.renderer_inspection_endpoint())
+                .document_committed(
+                    committed,
+                    DocumentId::allocate(),
+                    next_page.renderer_inspection_endpoint(),
+                )
                 .unwrap(),
             Some(original)
         );
@@ -765,7 +784,7 @@ mod tests {
         let (_browser, page) = inspection_page().await;
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(page.renderer_inspection_endpoint())
+            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
             .unwrap();
         drop(page);
         let binding = channel.current_binding().unwrap();
@@ -793,7 +812,7 @@ mod tests {
         let (_browser, mut page) = inspection_page().await;
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(page.renderer_inspection_endpoint())
+            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
             .unwrap();
         channel
             .detach_current(RendererAgentDetachReason::ExplicitDetach)
@@ -853,7 +872,7 @@ mod tests {
         let agent = page.renderer_devtools_agent_token();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(page.renderer_inspection_endpoint())
+            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
             .expect("initial attach");
         channel
             .navigation_started(request)
@@ -866,7 +885,7 @@ mod tests {
         assert!(channel.is_closed());
         assert_eq!(channel.inflight_navigation_count(), 0);
         assert_eq!(
-            channel.attach_current(page.renderer_inspection_endpoint()),
+            channel.attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint()),
             Err(DevToolsRendererChannelError::Closed)
         );
         assert_eq!(
@@ -874,7 +893,11 @@ mod tests {
             Err(DevToolsRendererChannelError::Closed)
         );
         assert_eq!(
-            channel.document_committed(request, page.renderer_inspection_endpoint()),
+            channel.document_committed(
+                request,
+                DocumentId::allocate(),
+                page.renderer_inspection_endpoint(),
+            ),
             Err(DevToolsRendererChannelError::Closed)
         );
         assert_eq!(channel.close(RendererAgentDetachReason::TargetClosed), None);
@@ -887,7 +910,7 @@ mod tests {
         let agent = page.renderer_devtools_agent_token();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(page.renderer_inspection_endpoint())
+            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
             .expect("initial attach");
 
         let detached = channel
@@ -910,7 +933,7 @@ mod tests {
         let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(page.renderer_inspection_endpoint())
+            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
             .expect("old attach");
         let old_attachment = channel.current().expect("old attachment");
         channel
@@ -924,7 +947,11 @@ mod tests {
                 .is_empty()
         );
         channel
-            .document_committed(request, candidate_page.renderer_inspection_endpoint())
+            .document_committed(
+                request,
+                DocumentId::allocate(),
+                candidate_page.renderer_inspection_endpoint(),
+            )
             .unwrap();
         let current = channel.current().unwrap();
         assert!(
@@ -955,7 +982,7 @@ mod tests {
         let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(page.renderer_inspection_endpoint())
+            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
             .expect("current attach");
         let attachment = channel.current().expect("current attachment");
         channel
@@ -985,7 +1012,7 @@ mod tests {
         let request = NavigationId::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(page.renderer_inspection_endpoint())
+            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
             .expect("current attach");
         let attachment = channel.current().expect("current attachment");
         channel
@@ -1016,11 +1043,11 @@ mod tests {
         let other_agent = RendererDevToolsAgentToken::allocate();
         let mut channel = DevToolsRendererChannel::default();
         channel
-            .attach_current(page.renderer_inspection_endpoint())
+            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
             .expect("first attach");
         let stale = channel.current().expect("first attachment");
         channel
-            .attach_current(page.renderer_inspection_endpoint())
+            .attach_current(DocumentId::allocate(), page.renderer_inspection_endpoint())
             .expect("reattach");
         let current = channel.current().expect("current attachment");
 

@@ -583,6 +583,10 @@ fn collect_moli_diagnostics_pending_snapshots(
 }
 
 impl PendingRuntimeProtocolMessageDispatch {
+    pub(crate) fn renderer_route(&self) -> moli_core::page::RendererInspectorCommandRoute {
+        self.pending.renderer_route()
+    }
+
     pub async fn wait(self) -> Result<CompletedRuntimeProtocolMessageDispatch, String> {
         let completion = self
             .pending
@@ -8048,10 +8052,6 @@ mod tests {
                         let descriptor = if id == 71 {
                             devtools_session_renderer_command_descriptor_for_test(id)
                         } else {
-                            assert_eq!(
-                                frontend.renderer_lane(),
-                                Some(moli_protocol_cdp::CdpRendererDispatchLane::Io)
-                            );
                             RendererCommandDescriptor::set_script_execution_disabled(
                                 payload.clone(),
                                 frontend.renderer_policy(),

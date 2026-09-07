@@ -2,6 +2,10 @@ use crate::conn::{CdpConnection, Cmd, ProfilerAction, ProfilerInspectorCommand};
 use crate::domains::command_output::CommandOutputPlan;
 use crate::domains::runtime::{RuntimeCommandTaskStep, start_profiler_inspector_command_dispatch};
 
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    cmd.parse_action::<ProfilerAction>().is_some()
+}
+
 pub(crate) fn try_start_profiler_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,

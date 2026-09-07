@@ -282,8 +282,9 @@ impl CdpConnection {
             Some(0),
             session_id.as_deref(),
         ) {
-            crate::conn::CdpCommandTaskStep::Complete(outcome) => outcome,
-            crate::conn::CdpCommandTaskStep::Pending(_) => {
+            crate::conn::AgentHostDispatchResult::Complete(outcome) => outcome,
+            crate::conn::AgentHostDispatchResult::PendingService(_)
+            | crate::conn::AgentHostDispatchResult::FallThrough(_) => {
                 unreachable!("a completed Runtime listener plan cannot become pending")
             }
         }
