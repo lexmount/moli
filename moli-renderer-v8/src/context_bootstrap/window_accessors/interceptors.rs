@@ -77,6 +77,19 @@ pub(in crate::context_bootstrap) fn window_indexed_property_query<'s>(
     v8::Intercepted::kYes
 }
 
+pub(in crate::context_bootstrap) fn window_indexed_property_deleter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    index: u32,
+    args: v8::PropertyCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Boolean>,
+) -> v8::Intercepted {
+    if window_indexed_child_handle(scope, args.holder(), index).is_none() {
+        return v8::Intercepted::kNo;
+    }
+    rv.set_bool(false);
+    v8::Intercepted::kYes
+}
+
 pub(in crate::context_bootstrap) fn window_indexed_property_enumerator<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     args: v8::PropertyCallbackArguments<'s>,
