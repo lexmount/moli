@@ -1,4 +1,6 @@
-use super::backing_store::{canvas_like_pixels_copy, canvas_owner_from_context};
+use super::backing_store::{
+    bump_canvas_visual_generation, canvas_like_pixels_copy, canvas_owner_from_context,
+};
 use super::helpers::{canonical_canvas_fill_style, canvas_unrestricted_double_arg};
 use super::recording_store::canvas_recording_state;
 use super::state::canvas_path_state;
@@ -710,7 +712,7 @@ pub(crate) fn canvas_context_fill_rect_callback<'s>(
     let recording = canvas_recording_state(scope, args.this());
     let kurbo_rect = i32_rect_to_kurbo(rect.0, rect.1, rect.2, rect.3);
     recording.borrow_mut().push_fill_rect(kurbo_rect, color);
-    let _ = canvas;
+    bump_canvas_visual_generation(scope, canvas);
 }
 
 pub(crate) fn canvas_context_clear_rect_callback<'s>(
@@ -718,7 +720,7 @@ pub(crate) fn canvas_context_clear_rect_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(_canvas) = canvas_owner_from_context(scope, args.this()) else {
+    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
         return;
     };
     let Some(rect) = normalized_rect(scope, &args, "CanvasRenderingContext2D.clearRect") else {
@@ -727,6 +729,7 @@ pub(crate) fn canvas_context_clear_rect_callback<'s>(
     let recording = canvas_recording_state(scope, args.this());
     let kurbo_rect = i32_rect_to_kurbo(rect.0, rect.1, rect.2, rect.3);
     recording.borrow_mut().push_clear_rect(kurbo_rect);
+    bump_canvas_visual_generation(scope, canvas);
 }
 
 pub(crate) fn canvas_context_rect_callback<'s>(
@@ -1068,6 +1071,9 @@ pub(crate) fn canvas_context_fill_callback<'s>(
     if !require_canvas_context_receiver(scope, args.this(), "fill") {
         return;
     }
+    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
+        return;
+    };
     let path_state = canvas_path_state(scope, args.this());
     let recording = canvas_recording_state(scope, args.this());
     let color = recording_fill_color_with_alpha(scope, args.this());
@@ -1078,6 +1084,7 @@ pub(crate) fn canvas_context_fill_callback<'s>(
         let bez = canvas_path_data_to_bez(&state.paint_path());
         recording.borrow_mut().push_fill_path(bez, color);
     });
+    bump_canvas_visual_generation(scope, canvas);
     rv.set_undefined();
 }
 
@@ -1089,6 +1096,9 @@ pub(crate) fn canvas_context_stroke_callback<'s>(
     if !require_canvas_context_receiver(scope, args.this(), "stroke") {
         return;
     }
+    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
+        return;
+    };
     let path_state = canvas_path_state(scope, args.this());
     let recording = canvas_recording_state(scope, args.this());
     let color = recording_stroke_color(scope, args.this());
@@ -1106,6 +1116,7 @@ pub(crate) fn canvas_context_stroke_callback<'s>(
             .borrow_mut()
             .push_stroke_path(bez, transform, style, color);
     });
+    bump_canvas_visual_generation(scope, canvas);
     rv.set_undefined();
 }
 
@@ -1117,6 +1128,9 @@ pub(crate) fn canvas_context_stroke_rect_callback<'s>(
     if !require_canvas_context_receiver(scope, args.this(), "strokeRect") {
         return;
     }
+    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
+        return;
+    };
     let prefix = "CanvasRenderingContext2D.strokeRect";
     let Some(x) = canvas_required_unrestricted_double_arg(scope, &args, 0, prefix) else {
         rv.set_undefined();
@@ -1150,6 +1164,7 @@ pub(crate) fn canvas_context_stroke_rect_callback<'s>(
     recording
         .borrow_mut()
         .push_stroke_rect(kurbo_rect, transform, style, color);
+    bump_canvas_visual_generation(scope, canvas);
     rv.set_undefined();
 }
 
@@ -1555,13 +1570,14 @@ pub(crate) fn canvas_context_fill_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(_canvas) = canvas_owner_from_context(scope, args.this()) else {
+    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
         return;
     };
     let Some(parsed) = webidl::parse_args::<CanvasContextFillTextArgs>(scope, &args) else {
         return;
     };
     draw_canvas_context_text(scope, args.this(), &parsed.text, parsed.x, parsed.y);
+    bump_canvas_visual_generation(scope, canvas);
 }
 
 pub(crate) fn canvas_context_stroke_text_callback<'s>(
@@ -1569,13 +1585,14 @@ pub(crate) fn canvas_context_stroke_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(_canvas) = canvas_owner_from_context(scope, args.this()) else {
+    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
         return;
     };
     let Some(parsed) = webidl::parse_args::<CanvasContextStrokeTextArgs>(scope, &args) else {
         return;
     };
     draw_canvas_context_text(scope, args.this(), &parsed.text, parsed.x, parsed.y);
+    bump_canvas_visual_generation(scope, canvas);
 }
 
 fn draw_canvas_context_text<'s>(
@@ -1599,7 +1616,7 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(_canvas) = canvas_owner_from_context(scope, args.this()) else {
+    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
         return;
     };
     let Ok(source) = v8::Local::<v8::Object>::try_from(args.get(0)) else {
@@ -1642,6 +1659,7 @@ pub(crate) fn canvas_context_draw_image_callback<'s>(
     recording
         .borrow_mut()
         .push_draw_image(dest, std::sync::Arc::new(source_image), blit, filter);
+    bump_canvas_visual_generation(scope, canvas);
 }
 
 fn html_image_pixels_copy<'s>(
@@ -1840,7 +1858,7 @@ pub(crate) fn canvas_context_put_image_data_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
-    let Some(_canvas) = canvas_owner_from_context(scope, args.this()) else {
+    let Some(canvas) = canvas_owner_from_context(scope, args.this()) else {
         return;
     };
     let (image_data, dx, dy, dirty_rect) = if args.length() >= 7 {
@@ -1906,6 +1924,7 @@ pub(crate) fn canvas_context_put_image_data_callback<'s>(
     recording
         .borrow_mut()
         .push_put_image_data(source_image, dx, dy);
+    bump_canvas_visual_generation(scope, canvas);
 }
 
 pub(crate) fn canvas_context_get_image_data_callback<'s>(

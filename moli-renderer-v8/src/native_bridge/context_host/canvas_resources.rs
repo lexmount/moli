@@ -60,6 +60,12 @@ impl CanvasResourceStore {
     fn elements(&self) -> impl Iterator<Item = DomHandle> + '_ {
         self.pixels_by_element.keys().copied()
     }
+
+    fn touch(&mut self, element: DomHandle) {
+        if self.pixels_by_element.contains_key(&element) {
+            self.visual_generation.bump();
+        }
+    }
 }
 
 impl Default for CanvasResourceStore {
@@ -87,6 +93,10 @@ impl super::JsContextHost {
 
     pub(crate) fn remove_canvas_pixels(&mut self, element: DomHandle) -> bool {
         self.canvas_resources.remove(element)
+    }
+
+    pub(crate) fn touch_canvas_visual_generation(&mut self, element: DomHandle) {
+        self.canvas_resources.touch(element);
     }
 
     pub(crate) fn canvas_pixels_for_layout(

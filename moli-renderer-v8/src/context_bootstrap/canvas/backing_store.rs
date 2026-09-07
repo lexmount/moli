@@ -333,6 +333,16 @@ pub(super) fn publish_canvas_snapshot<'s>(
     );
 }
 
+pub(super) fn bump_canvas_visual_generation<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    canvas: v8::Local<'s, v8::Object>,
+) {
+    let Some((runtime_ptr, handle)) = html_canvas_identity(scope, canvas) else {
+        return;
+    };
+    unsafe { &mut *runtime_ptr }.touch_canvas_visual_generation(handle);
+}
+
 fn remove_html_canvas_pixels<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     canvas: v8::Local<'s, v8::Object>,
