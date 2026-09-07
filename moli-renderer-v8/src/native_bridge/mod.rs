@@ -77,8 +77,9 @@ pub(crate) use element::{
 pub(super) use helpers::*;
 pub(crate) use node::{
     current_or_live_delegate_node_arg_handle, node_or_foreign_arg_handle_allow_detached,
-    node_runtime_and_handle_from_object, node_runtime_and_handle_from_object_or_detached,
-    object_is_node_wrapper_or_detached, validate_pre_insert_handles,
+    node_relevant_context, node_runtime_and_handle_from_object,
+    node_runtime_and_handle_from_object_or_detached, object_is_node_wrapper_or_detached,
+    validate_pre_insert_handles,
 };
 pub(crate) use node::{install_character_data_template_bindings, install_node_template_bindings};
 

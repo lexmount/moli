@@ -283,6 +283,9 @@ pub(super) fn install_canvas_template_bindings<'s>(
         "ImageBitmap" => {
             image_bitmap::install_image_bitmap_template_bindings(scope, template);
         }
+        "TextMetrics" => {
+            context2d::install_text_metrics_template_bindings(scope, template);
+        }
         _ => {}
     }
 }

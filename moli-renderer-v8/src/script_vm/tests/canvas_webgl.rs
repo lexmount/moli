@@ -581,6 +581,85 @@ fn html_canvas_2d_text_methods_are_available_for_fingerprinting_scripts() {
 }
 
 #[test]
+fn canvas_text_metrics_width_is_a_branded_readonly_snapshot() {
+    let mut vm = new_storage_test_vm("https://text-metrics.test/");
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const contexts = [
+                document.createElement('canvas').getContext('2d'),
+                new OffscreenCanvas(1, 1).getContext('2d')
+              ];
+              const descriptor = Object.getOwnPropertyDescriptor(TextMetrics.prototype, 'width');
+              const outcome = callback => {
+                try { callback(); return 'ok'; } catch (error) { return error.name; }
+              };
+              return JSON.stringify({
+                descriptor: [descriptor.get.name, descriptor.get.length,
+                  descriptor.set === undefined, descriptor.enumerable, descriptor.configurable],
+                constructor: outcome(() => new TextMetrics()),
+                results: contexts.map(context => {
+                  context.font = '10px Arial';
+                  const metrics = context.measureText('Hello');
+                  const width = metrics.width;
+                  const ownNames = Object.getOwnPropertyNames(metrics);
+                  metrics.width = -1;
+                  metrics.__moliTextMetricsWidth = -2;
+                  context.font = '20px Arial';
+                  return [
+                    metrics instanceof TextMetrics,
+                    Object.prototype.toString.call(metrics),
+                    ownNames.length, width > 0, metrics.width === width,
+                    context.measureText('Hello').width > width,
+                    context.measureText('').width,
+                    outcome(() => { 'use strict'; metrics.width = 42; }),
+                    outcome(() => descriptor.get.call(Object.create(metrics))),
+                    outcome(() => context.measureText.call({}, 'Hello'))
+                  ];
+                }),
+                fakeReceivers: [null, undefined, {}, TextMetrics.prototype,
+                  { __moliTextMetricsWidth: 1 }].map(value => outcome(() => descriptor.get.call(value)))
+              });
+            })()
+            "#,
+        )
+        .expect("TextMetrics width contract should evaluate");
+    assert_eq!(
+        result,
+        r#"{"descriptor":["get width",0,true,true,true],"constructor":"TypeError","results":[[true,"[object TextMetrics]",0,true,true,true,0,"TypeError","TypeError","TypeError"],[true,"[object TextMetrics]",0,true,true,true,0,"TypeError","TypeError","TypeError"]],"fakeReceivers":["TypeError","TypeError","TypeError","TypeError","TypeError"]}"#
+    );
+}
+
+#[test]
+fn canvas_text_metrics_uses_the_context_realm() {
+    let mut vm = new_storage_test_vm("https://text-metrics-realm.test/");
+    let result = vm
+        .eval(
+            r#"
+            (() => {
+              const frame = document.createElement('iframe');
+              document.appendChild(document.createElement('html')).appendChild(frame);
+              const child = frame.contentWindow;
+              const localContext = document.createElement('canvas').getContext('2d');
+              const childContext = child.document.createElement('canvas').getContext('2d');
+              const local = childContext.measureText.call(localContext, 'Hello');
+              const foreign = localContext.measureText.call(childContext, 'Hello');
+              const getter = Object.getOwnPropertyDescriptor(TextMetrics.prototype, 'width').get;
+              return [
+                Object.getPrototypeOf(local) === TextMetrics.prototype,
+                Object.getPrototypeOf(foreign) === child.TextMetrics.prototype,
+                getter.call(foreign) === foreign.width,
+                foreign.width > 0
+              ].join('|');
+            })()
+            "#,
+        )
+        .expect("TextMetrics should use the canvas context's realm");
+    assert_eq!(result, "true|true|true|true");
+}
+
+#[test]
 fn html_canvas_linear_gradient_surface_is_available_for_fingerprinting_scripts() {
     let mut vm = new_storage_test_vm("https://canvas-linear-gradient-surface.test/");
 

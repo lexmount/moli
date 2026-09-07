@@ -2088,6 +2088,15 @@ impl JsContextHost {
         constructor.get(scope, crate::util::v8str(scope, "prototype").into())
     }
 
+    pub(crate) fn child_browsing_context_relevant_context<'s>(
+        &self,
+        scope: &mut v8::PinScope<'s, '_>,
+        child_handle: DomHandle,
+    ) -> Option<v8::Local<'s, v8::Context>> {
+        let window = self.existing_child_browsing_context_window_wrapper(scope, child_handle)?;
+        window.get_creation_context(scope)
+    }
+
     pub(crate) fn custom_elements_for_registry_key(
         &self,
         key: CustomElementRegistryKey,

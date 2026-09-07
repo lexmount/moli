@@ -25,6 +25,7 @@ use std::str::FromStr;
 
 const DEFAULT_IMAGE_SMOOTHING_QUALITY: &str = "low";
 const CANVAS_CONTEXT_LINE_DASH_SLOT: &str = "__moliCanvasContextLineDash";
+const TEXT_METRICS_WIDTH_SLOT: &str = "__moliTextMetricsWidth";
 
 pub(super) fn reset_canvas_context_state<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -37,10 +38,39 @@ pub(super) fn reset_canvas_context_state<'s>(
 }
 
 #[derive(WebApiObject)]
-#[webapi(interface = "Object")]
+#[webapi(interface = "TextMetrics")]
 struct CanvasTextMetricsDeclaration {
-    #[webapi(data_property)]
+    #[webapi(slot = TEXT_METRICS_WIDTH_SLOT)]
     width: f64,
+}
+
+#[derive(WebApiFunctionTemplate)]
+#[webapi(name = "TextMetrics", enumerable)]
+struct TextMetricsPrototypeDeclaration {
+    #[webapi(accessor_property, getter = text_metrics_width_getter)]
+    width: (),
+}
+
+pub(super) fn install_text_metrics_template_bindings<'s>(
+    scope: &mut v8::PinScope<'s, '_, ()>,
+    template: v8::Local<'s, v8::FunctionTemplate>,
+) {
+    TextMetricsPrototypeDeclaration::initialize_prototype_template(
+        scope,
+        template.prototype_template(scope),
+    );
+}
+
+fn text_metrics_width_getter<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    args: v8::FunctionCallbackArguments<'s>,
+    mut rv: v8::ReturnValue<'_, v8::Value>,
+) {
+    let Some(width) = get_private_value(scope, args.this(), TEXT_METRICS_WIDTH_SLOT) else {
+        throw_type_error(scope, "TextMetrics.width called on incompatible receiver.");
+        return;
+    };
+    rv.set(width);
 }
 
 #[derive(
@@ -1817,6 +1847,9 @@ pub(crate) fn canvas_context_measure_text_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     mut rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !require_canvas_context_receiver(scope, args.this(), "measureText") {
+        return;
+    }
     let Some(parsed) = webidl::parse_args::<CanvasContextMeasureTextArgs>(scope, &args) else {
         return;
     };
@@ -1825,10 +1858,25 @@ pub(crate) fn canvas_context_measure_text_callback<'s>(
     let declaration = CanvasTextMetricsDeclaration {
         width: measure_text_width(&parsed.text, &font),
     };
-    let Ok(metrics) = declaration.bind(scope) else {
+    let relevant_context = canvas_context_relevant_context(scope, args.this())
+        .unwrap_or_else(|| scope.get_current_context());
+    let target_scope = &mut v8::ContextScope::new(scope, relevant_context);
+    let Ok(metrics) = declaration.bind(target_scope) else {
         return;
     };
     rv.set(metrics.into());
+}
+
+fn canvas_context_relevant_context<'s>(
+    scope: &mut v8::PinScope<'s, '_>,
+    context: v8::Local<'s, v8::Object>,
+) -> Option<v8::Local<'s, v8::Context>> {
+    canvas_owner_from_context(scope, context)
+        .and_then(|canvas| {
+            crate::context_bootstrap::shared::node_owner_document_or_self(scope, canvas)
+        })
+        .and_then(|document| crate::native_bridge::node_relevant_context(scope, document))
+        .or_else(|| context.get_creation_context(scope))
 }
 
 pub(crate) fn canvas_context_create_image_data_callback<'s>(
