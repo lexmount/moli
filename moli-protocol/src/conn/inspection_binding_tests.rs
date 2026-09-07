@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use super::{BrowserContext, CdpCommandTaskStep, CommandOwnerScope};
+use super::{CdpCommandTaskStep, CommandOwnerScope};
 use crate::testing::TestContext;
 
 mod document_agents;
@@ -9,15 +9,62 @@ mod lifecycle;
 mod native_commands;
 mod runtime_agents;
 
-pub(super) fn take_inspection_document(
-    conn: &mut super::CdpConnection,
+pub(super) struct InspectionDocumentHandle {
+    context: moli_core::browser::BrowserContextHandle,
+    document: moli_core::browser::DocumentHandle,
+}
+
+impl InspectionDocumentHandle {
+    pub(super) async fn runtime_heap_usage_for_test(
+        &self,
+    ) -> Result<moli_core::page::RendererRuntimeHeapUsage, String> {
+        self.context
+            .document_runtime_heap_usage_for_test(self.document)
+            .await
+    }
+
+    pub(super) async fn evaluate_runtime_expression_for_test(
+        &self,
+        expression: &str,
+        await_promise: bool,
+    ) -> Result<Value, String> {
+        self.context
+            .evaluate_document_expression_for_test(self.document, expression, await_promise)
+            .await
+    }
+
+    pub(super) fn document_title_for_test(&self) -> String {
+        self.context
+            .document_title(self.document)
+            .expect("inspection document must remain current")
+    }
+
+    pub(super) fn start_blob_bytes_for_uuid_for_test(
+        &self,
+        uuid: String,
+    ) -> Result<moli_core::browser::PendingDocumentBlobRead, String> {
+        self.context.start_document_blob_read(self.document, uuid)
+    }
+
+    pub(super) fn finish_blob_bytes_for_uuid_for_test(
+        &self,
+        completed: moli_core::browser::CompletedDocumentBlobRead,
+    ) -> Result<Option<std::sync::Arc<[u8]>>, String> {
+        self.context.finish_document_blob_read(completed)
+    }
+}
+
+pub(super) fn inspection_document_handle(
+    conn: &super::CdpConnection,
     owner: &CommandOwnerScope,
-) -> super::state::DocumentHost {
+) -> InspectionDocumentHandle {
     let (context_id, target_id) = conn.resolved_page_owner_identity_for_owner(owner).unwrap();
-    conn.browser_context_by_id_mut(&context_id)
+    let (context, document) = conn
+        .browser_context_by_id(&context_id)
         .unwrap()
-        .take_document_host_for_inspection_test(&target_id)
-        .unwrap()
+        .inspection_document_handle_for_test(&target_id)
+        .unwrap();
+    InspectionDocumentHandle { context, document }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -68,7 +115,7 @@ async fn dom_inspection_rejects_frozen_replies_and_follow_ups_after_rebind() {
         };
         let completed = pending.wait().await;
         let owner = CommandOwnerScope::capture(&ctx.conn, None);
-        let old_document = take_inspection_document(&mut ctx.conn, &owner);
+        let old_document = inspection_document_handle(&ctx.conn, &owner);
         ctx.install_navigation_fixture_for_session_owner(
             "data:text/html,<body><main id='inspected' data-phase='replacement'>new</main></body>",
             None,
@@ -118,7 +165,9 @@ async fn dom_inspection_rejects_frozen_replies_and_follow_ups_after_rebind() {
 
 async fn dom_context() -> TestContext {
     let mut ctx = TestContext::new();
-    let mut context = BrowserContext::new("BID-dom-inspection".into());
+    let mut context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-dom-inspection");
     context.set_active_target_id("TID-dom-inspection");
     ctx.conn.install_browser_context_fixture_for_test(context);
     ctx.install_navigation_fixture_for_session_owner(
@@ -131,8 +180,8 @@ async fn dom_context() -> TestContext {
 async fn dom_inspection_round_trip(start_before_move: bool) {
     let mut ctx = dom_context().await;
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let take_document = |ctx: &mut TestContext| take_inspection_document(&mut ctx.conn, &owner);
-    let mut document = (!start_before_move).then(|| take_document(&mut ctx));
+    let document_handle = |ctx: &TestContext| inspection_document_handle(&ctx.conn, &owner);
+    let mut document = (!start_before_move).then(|| document_handle(&ctx));
     let raw = json!({"id": 1, "method": "DOM.getDocument", "params": {"depth": -1}}).to_string();
     let step = ctx.conn.start_command_dispatch(&raw);
     assert!(
@@ -140,9 +189,9 @@ async fn dom_inspection_round_trip(start_before_move: bool) {
         "DOM inspection must start on the live binding without a Protocol Document"
     );
     if start_before_move {
-        document = Some(take_document(&mut ctx));
+        document = Some(document_handle(&ctx));
     }
-    let mut document = document.unwrap();
+    let document = document.unwrap();
     let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
     let response = messages
         .iter()
@@ -227,8 +276,7 @@ async fn dom_inspection_round_trip(start_before_move: bool) {
     )
     .await;
     let actual = document
-        .page
-        .evaluate_runtime_expression_without_navigation_follow_with_await_async(
+        .evaluate_runtime_expression_for_test(
             "document.getElementById('inspected').getAttribute('data-phase')",
             false,
         )
@@ -239,7 +287,7 @@ async fn dom_inspection_round_trip(start_before_move: bool) {
         json!("after"),
         "the DOM mutation must reach the actual renderer"
     );
-    assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
+    assert!(ctx.conn.has_loaded_page_for_owner(&owner));
 }
 
 async fn dom_command(ctx: &mut TestContext, id: u64, method: &str, params: Value) -> Value {

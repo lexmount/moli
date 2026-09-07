@@ -32,7 +32,9 @@ async fn complete_command_task_step_for_test(
     ctx.complete_command_task_step_for_test(step).await
 }
 fn load_shared_worker_target(ctx: &mut TestContext, session_id: &str) {
-    let mut bc = BrowserContext::new("BID-shared".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-shared".to_owned());
     let mut target = crate::conn::SharedWorkerTargetState::new(
         moli_core::RendererOwnerLocalHostId::new_for_testing(1),
         SharedWorkerInstanceId::from_u64(81),
@@ -47,7 +49,9 @@ fn load_shared_worker_target(ctx: &mut TestContext, session_id: &str) {
 }
 fn load_dedicated_worker_target(ctx: &mut TestContext, session_id: &str) {
     let browser_context_id = "BID-dedicated".to_owned();
-    let mut bc = BrowserContext::new(browser_context_id.clone());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test(browser_context_id.clone());
     let mut target = crate::conn::DedicatedWorkerTargetState::new(
         crate::conn::TargetPageResidenceIdentity::new_for_test(browser_context_id, None, 1),
         moli_core::RendererOwnerLocalHostId::new_for_testing(1),
@@ -140,14 +144,10 @@ async fn push_loaded_runtime_frontend_enabled_background_context_async(
     session_id: &str,
     html: &str,
 ) {
-    let page = ctx
+    let mut background_context = ctx
         .conn
-        .load_page_via_runtime_async(&format!("data:text/html,{html}"))
-        .await
-        .expect("test background page should load");
-    let mut background_context = crate::conn::BrowserContext::new(browser_context_id.to_owned());
+        .new_browser_context_fixture_for_test(browser_context_id.to_owned());
     background_context.set_active_target_id(target_id.to_owned());
-    let _ = background_context.replace_active_page_for_test(Some(page));
     background_context.attach_active_session(session_id.to_owned());
     background_context
         .active_page_target_mut()
@@ -156,6 +156,11 @@ async fn push_loaded_runtime_frontend_enabled_background_context_async(
         .runtime_frontend_enabled = true;
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(background_context);
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        &format!("data:text/html,{html}"),
+        Some(session_id),
+    )
+    .await;
 }
 async fn with_loaded_runtime_frontend_enabled_background_target_async(
     ctx: &mut TestContext,
@@ -165,7 +170,9 @@ async fn with_loaded_runtime_frontend_enabled_background_target_async(
     background_session_id: &str,
     html: &str,
 ) {
-    let mut browser_context = crate::conn::BrowserContext::new("BID-1".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
     browser_context.set_active_target_id(active_target_id.to_owned());
     browser_context.attach_active_session(active_session_id.to_owned());
     browser_context.register_page_target_url_fixture(

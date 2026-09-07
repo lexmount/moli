@@ -6682,8 +6682,8 @@ mod tests {
     }
 
     fn connection_with_bidi_page_session() -> CdpConnection {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-owner".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-owner".to_owned());
         browser_context.set_active_target_id("TID-active");
         browser_context.attach_active_session("SID-active".to_owned());
         browser_context.set_active_document_fixture_for_test(1);
@@ -6693,8 +6693,8 @@ mod tests {
 
     #[test]
     fn runtime_remote_object_validation_allows_session_local_id_collisions() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-owner".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-owner".to_owned());
         browser_context.set_active_target_id("TID-active");
         browser_context.attach_active_session("SID-active".to_owned());
         assert!(
@@ -6741,7 +6741,9 @@ mod tests {
     #[test]
     fn runtime_remote_object_validation_tolerates_an_empty_browser_context() {
         let mut conn = connection_with_bidi_page_session();
-        conn.insert_browser_context(BrowserContext::new("BID-empty".to_owned()));
+        conn.insert_browser_context(
+            conn.new_browser_context_fixture_for_test("BID-empty".to_owned()),
+        );
 
         assert!(
             conn.validate_runtime_remote_object_ids_for_session_owner(
@@ -6811,7 +6813,9 @@ mod tests {
     async fn frozen_inspector_completion_fixture()
     -> (TestContext, CompletedRuntimeProtocolMessageDispatch) {
         let mut ctx = TestContext::new();
-        let mut context = BrowserContext::new("BID-inspection-output".into());
+        let mut context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-inspection-output");
         context.set_active_target_id("TID-inspection-output");
         ctx.conn.install_browser_context_fixture_for_test(context);
         ctx.install_navigation_fixture_for_session_owner(
@@ -7037,7 +7041,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn inspector_binding_applies_io_script_policy_without_protocol_page_ownership() {
         let mut ctx = TestContext::new();
-        let mut context = BrowserContext::new("BID-inspection-io-policy".into());
+        let mut context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-inspection-io-policy");
         context.set_active_target_id("TID-inspection-io-policy");
         ctx.conn.install_browser_context_fixture_for_test(context);
         ctx.install_navigation_fixture_for_session_owner(
@@ -7046,8 +7052,8 @@ mod tests {
         )
         .await;
         let owner = CommandOwnerScope::capture(&ctx.conn, None);
-        let mut document =
-            crate::conn::inspection_binding_tests::take_inspection_document(&mut ctx.conn, &owner);
+        let document =
+            crate::conn::inspection_binding_tests::inspection_document_handle(&ctx.conn, &owner);
         for (id, disabled) in [(41, true), (42, false)] {
             let raw = json!({ "id": id, "method": "Emulation.setScriptExecutionDisabled",
                 "params": { "value": disabled } })
@@ -7073,13 +7079,12 @@ mod tests {
                     .any(|message| message["id"] == json!(id) && message["result"] == json!({})),
                 "IO policy response: {messages:?}",
             );
-            document.page.evaluate_runtime_expression_without_navigation_follow_with_await_async(
+            document.evaluate_runtime_expression_for_test(
                 "(() => { const script = document.createElement('script'); script.textContent = \"document.documentElement.setAttribute('data-inspection-io', 'ran')\"; document.body.appendChild(script); })()",
                 false,
             ).await.unwrap();
             let actual = document
-                .page
-                .evaluate_runtime_expression_without_navigation_follow_with_await_async(
+                .evaluate_runtime_expression_for_test(
                     "document.documentElement.getAttribute('data-inspection-io')",
                     false,
                 )
@@ -7090,7 +7095,7 @@ mod tests {
                 if disabled { Value::Null } else { json!("ran") }
             );
         }
-        assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
+        assert!(ctx.conn.has_loaded_page_for_owner(&owner));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -7100,7 +7105,9 @@ mod tests {
             try_start_performance_command_dispatch,
         };
         let mut ctx = TestContext::new();
-        let mut context = BrowserContext::new("BID-inspection-io-metrics".into());
+        let mut context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-inspection-io-metrics");
         context.set_active_target_id("TID-inspection-io-metrics");
         ctx.conn.install_browser_context_fixture_for_test(context);
         ctx.install_navigation_fixture_for_session_owner(
@@ -7131,7 +7138,7 @@ mod tests {
             completions.push(pending.wait().await);
         }
         let document =
-            crate::conn::inspection_binding_tests::take_inspection_document(&mut ctx.conn, &owner);
+            crate::conn::inspection_binding_tests::inspection_document_handle(&ctx.conn, &owner);
         for (index, completion) in completions.into_iter().enumerate() {
             if index == 1 {
                 ctx.install_navigation_fixture_for_session_owner(
@@ -7157,7 +7164,7 @@ mod tests {
                     documents >= 1.0,
                     "the exact live binding retains its frozen Browser snapshot"
                 );
-                assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
+                assert!(ctx.conn.has_loaded_page_for_owner(&owner));
             } else {
                 assert_eq!(
                     documents, 0.0,
@@ -7185,7 +7192,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn inspector_binding_applies_emulation_surface_without_protocol_page_ownership() {
         let mut ctx = TestContext::new();
-        let mut context = BrowserContext::new("BID-inspection-emulation".into());
+        let mut context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-inspection-emulation");
         context.set_active_target_id("TID-inspection-emulation");
         ctx.conn.install_browser_context_fixture_for_test(context);
         ctx.install_navigation_fixture_for_session_owner(
@@ -7194,8 +7203,8 @@ mod tests {
         )
         .await;
         let owner = CommandOwnerScope::capture(&ctx.conn, None);
-        let mut document =
-            crate::conn::inspection_binding_tests::take_inspection_document(&mut ctx.conn, &owner);
+        let document =
+            crate::conn::inspection_binding_tests::inspection_document_handle(&ctx.conn, &owner);
         let raw = json!({
             "id": 41,
             "method": "Emulation.setGeolocationOverride",
@@ -7220,12 +7229,12 @@ mod tests {
                 .iter()
                 .any(|message| { message["id"] == json!(41) && message["result"] == json!({}) })
         );
-        let actual = document.page.evaluate_runtime_expression_without_navigation_follow_with_await_async(
+        let actual = document.evaluate_runtime_expression_for_test(
             "new Promise(resolve => navigator.geolocation.getCurrentPosition(position => resolve([position.coords.latitude, position.coords.longitude, position.coords.accuracy].join(',')), error => resolve(error.message)))",
             true,
         ).await.unwrap();
         assert_eq!(actual["value"], json!("48.85837,2.294481,7"));
-        assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
+        assert!(ctx.conn.has_loaded_page_for_owner(&owner));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -7282,7 +7291,9 @@ mod tests {
         start_before_move: bool,
     ) {
         let mut ctx = TestContext::new();
-        let mut context = BrowserContext::new("BID-inspection-enable".into());
+        let mut context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-inspection-enable");
         context.set_active_target_id("TID-inspection-enable");
         ctx.conn.install_browser_context_fixture_for_test(context);
         ctx.install_navigation_fixture_for_session_owner(
@@ -7297,7 +7308,7 @@ mod tests {
                 .unwrap()
         });
         let document =
-            crate::conn::inspection_binding_tests::take_inspection_document(&mut ctx.conn, &owner);
+            crate::conn::inspection_binding_tests::inspection_document_handle(&ctx.conn, &owner);
         let pending = pending.unwrap_or_else(|| {
             ctx.conn
                 .start_runtime_enable_events_for_owner(&owner)
@@ -7324,14 +7335,14 @@ mod tests {
             .conn
             .runtime_session_owner_slot_for_owner(&owner)
             .unwrap();
-        assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
+        assert!(ctx.conn.has_loaded_page_for_owner(&owner));
         assert_eq!(
             slot.observable_output_queue_snapshot()
                 .unwrap()
                 .observable_output_items,
             items
         );
-        assert_eq!(document.page.document_title(), "inspection enable");
+        assert_eq!(document.document_title_for_test(), "inspection enable");
         assert!(
             ctx.conn
                 .target_devtools_session_state_for_owner(&owner)
@@ -7377,7 +7388,9 @@ mod tests {
         deferred_response: bool,
     ) {
         let mut ctx = TestContext::new();
-        let mut context = BrowserContext::new("BID-inspection-binding".into());
+        let mut context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-inspection-binding");
         context.set_active_target_id("TID-inspection-binding");
         ctx.conn.install_browser_context_fixture_for_test(context);
         ctx.install_navigation_fixture_for_session_owner(
@@ -7394,7 +7407,7 @@ mod tests {
         // Simulate the Browser aggregate moving out of the Protocol residence.
         // The physical Document stays alive; no detach/replacement has occurred.
         let document =
-            crate::conn::inspection_binding_tests::take_inspection_document(&mut ctx.conn, &owner);
+            crate::conn::inspection_binding_tests::inspection_document_handle(&ctx.conn, &owner);
         let (method, params) = match lane {
             RendererInspectorCommandRoute::MainThread => {
                 ("Runtime.evaluate", json!({"expression": "42"}))
@@ -7452,8 +7465,8 @@ mod tests {
                 json!(42)
             );
         }
-        assert_eq!(document.page.document_title(), "inspection binding");
-        assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
+        assert_eq!(document.document_title_for_test(), "inspection binding");
+        assert!(ctx.conn.has_loaded_page_for_owner(&owner));
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -7489,7 +7502,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn retired_inspection_endpoint_discards_prepared_renderer_calls() {
         let mut ctx = TestContext::new();
-        let mut context = BrowserContext::new("BID-inspection-retired".into());
+        let mut context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-inspection-retired");
         context.set_active_target_id("TID-inspection-retired");
         ctx.conn.install_browser_context_fixture_for_test(context);
         ctx.install_navigation_fixture_for_session_owner(
@@ -7498,13 +7513,13 @@ mod tests {
         )
         .await;
         let owner = CommandOwnerScope::capture(&ctx.conn, None);
-        let mut root = ctx
-            .conn
-            .browser_context_by_id_mut("BID-inspection-retired")
-            .unwrap()
-            .take_renderer_runtime_owner_for_teardown()
-            .unwrap();
-        root.shutdown_and_join();
+        assert!(
+            ctx.conn
+                .browser_context_by_id("BID-inspection-retired")
+                .unwrap()
+                .remove_from_browser()
+                .expect("physical BrowserContext should be removable")
+        );
 
         for (lane, action) in [
             (RendererInspectorCommandRoute::MainThread, None),
@@ -7529,7 +7544,10 @@ mod tests {
                 ctx.conn
                     .start_renderer_inspection_for_owner(&owner, descriptor, 41, lane, None)
             };
-            assert!(matches!(result, Err(error) if error.contains("Inspector Page is retired")));
+            assert!(
+                result.is_err(),
+                "retired BrowserContext must reject inspection"
+            );
             assert_eq!(
                 ctx.conn
                     .take_renderer_call_for_frontend_for_owner(&owner, 41),
@@ -7565,7 +7583,9 @@ mod tests {
 
     async fn inspector_binding_replays_io_agent(method: &str) {
         let mut ctx = TestContext::new();
-        let mut context = BrowserContext::new("BID-inspection-io-replay".into());
+        let mut context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-inspection-io-replay");
         context.set_active_target_id("TID-inspection-io-replay");
         ctx.conn.install_browser_context_fixture_for_test(context);
         ctx.install_navigation_fixture_for_session_owner(
@@ -7627,7 +7647,7 @@ mod tests {
         // Metrics is layered: Browser snapshot read plus renderer IO dispatch.
         // Script inspection itself must work with only the binding in Protocol.
         let mut document = (method == "Emulation.setScriptExecutionDisabled").then(|| {
-            crate::conn::inspection_binding_tests::take_inspection_document(&mut ctx.conn, &owner)
+            crate::conn::inspection_binding_tests::inspection_document_handle(&ctx.conn, &owner)
         });
         let response_start = ctx.sent.len();
         let events = ctx
@@ -7648,12 +7668,11 @@ mod tests {
         );
         if let Some(document) = document.as_mut() {
             assert_eq!(response["result"], json!({}));
-            document.page.evaluate_runtime_expression_without_navigation_follow_with_await_async(
+            document.evaluate_runtime_expression_for_test(
                 "(() => { const s = document.createElement('script'); s.textContent = \"document.body.setAttribute('data-io-replay', 'ran')\"; document.body.appendChild(s); })()", false,
             ).await.unwrap();
             let actual = document
-                .page
-                .evaluate_runtime_expression_without_navigation_follow_with_await_async(
+                .evaluate_runtime_expression_for_test(
                     "document.body.getAttribute('data-io-replay')",
                     false,
                 )
@@ -7664,7 +7683,7 @@ mod tests {
                 Value::Null,
                 "replayed IO policy must actually disable scripts"
             );
-            assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
+            assert!(ctx.conn.has_loaded_page_for_owner(&owner));
         } else {
             assert!(
                 response["result"]["metrics"]
@@ -7692,7 +7711,9 @@ mod tests {
         params: Value,
     ) {
         let mut ctx = TestContext::new();
-        let mut context = BrowserContext::new("BID-inspection-replay".into());
+        let mut context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-inspection-replay");
         context.set_active_target_id("TID-inspection-replay");
         ctx.conn.install_browser_context_fixture_for_test(context);
         ctx.install_navigation_fixture_for_session_owner(
@@ -7730,7 +7751,7 @@ mod tests {
         assert!(terminations.is_empty());
         assert_eq!(replays.len(), 1);
         let document =
-            crate::conn::inspection_binding_tests::take_inspection_document(&mut ctx.conn, &owner);
+            crate::conn::inspection_binding_tests::inspection_document_handle(&ctx.conn, &owner);
         ctx.conn
             .replay_prepared_renderer_calls_after_navigation_async(replays, current)
             .await
@@ -7749,7 +7770,7 @@ mod tests {
         assert_eq!(response["id"], json!(41));
         assert!(response.get("error").is_none(), "replay failed: {response}");
         assert!(response.get("result").is_some());
-        assert_eq!(document.page.document_title(), "replay");
+        assert_eq!(document.document_title_for_test(), "replay");
     }
 
     fn devtools_session_renderer_command_descriptor_for_test(
@@ -7802,8 +7823,9 @@ mod tests {
 
     #[test]
     fn navigation_termination_consumes_a_devtools_session_frontend_call() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-navigation-termination".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-navigation-termination".to_owned());
         browser_context.set_active_target_id("TID-navigation-termination".to_owned());
         browser_context.attach_active_session("SID-navigation-termination".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -7891,7 +7913,9 @@ mod tests {
             let sessions = [primary_session, Some("SID-replay-a"), Some("SID-replay-z")];
             for failed_session in sessions {
                 let mut ctx = TestContext::new();
-                let mut context = BrowserContext::new("BID-replay-exhaustion".into());
+                let mut context = ctx
+                    .conn
+                    .new_browser_context_fixture_for_test("BID-replay-exhaustion");
                 context.set_active_target_id("TID-replay-exhaustion");
                 if let Some(session) = primary_session {
                     context.attach_active_session(session);
@@ -8099,8 +8123,9 @@ mod tests {
 
     #[test]
     fn navigation_termination_isolated_same_frontend_id_by_devtools_session() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-navigation-sessions".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-navigation-sessions".to_owned());
         browser_context.set_active_target_id("TID-navigation-sessions".to_owned());
         browser_context.attach_active_session("SID-navigation-primary".to_owned());
         assert!(browser_context.assign_attached_session_to_target(
@@ -8211,8 +8236,9 @@ mod tests {
 
     #[test]
     fn navigation_termination_preserves_sessionless_page_response_shape() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-navigation-sessionless".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-navigation-sessionless".to_owned());
         browser_context.set_active_target_id("TID-navigation-sessionless".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
 
@@ -8268,8 +8294,9 @@ mod tests {
 
     #[test]
     fn devtools_session_output_wrong_attachment_does_not_consume_live_correlation() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-attachment-race".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-attachment-race".to_owned());
         browser_context.set_active_target_id("TID-attachment-race".to_owned());
         browser_context.attach_active_session("SID-attachment-race".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -8327,8 +8354,9 @@ mod tests {
 
     #[test]
     fn devtools_session_output_keeps_first_of_duplicate_terminal_responses() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-duplicate-response".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-duplicate-response".to_owned());
         browser_context.set_active_target_id("TID-duplicate-response".to_owned());
         browser_context.attach_active_session("SID-duplicate-response".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -8368,8 +8396,9 @@ mod tests {
 
     #[test]
     fn devtools_session_output_restores_interleaved_calls_without_reordering() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-interleaved-response".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-interleaved-response".to_owned());
         browser_context.set_active_target_id("TID-interleaved-response".to_owned());
         browser_context.attach_active_session("SID-interleaved-response".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -8431,8 +8460,9 @@ mod tests {
 
     #[tokio::test]
     async fn devtools_session_output_restores_only_the_exact_registered_frontend_response() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-session-output".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-session-output".to_owned());
         browser_context.set_active_target_id("TID-session-output".to_owned());
         browser_context.attach_active_session("SID-session-output".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -8513,8 +8543,9 @@ mod tests {
 
     #[test]
     fn devtools_session_output_preserves_remote_object_group_projection() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-session-projection".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-session-projection".to_owned());
         browser_context.set_active_target_id("TID-session-projection".to_owned());
         browser_context.attach_active_session("SID-session-projection".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -8716,7 +8747,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn document_node_snapshot_for_backend_node_id_reads_live_renderer_snapshot() {
         let mut ctx = TestContext::new();
-        let mut browser_context = BrowserContext::new("BID-runtime-node-snapshot".to_owned());
+        let mut browser_context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-runtime-node-snapshot".to_owned());
         browser_context.set_active_target_id("TID-runtime-node-snapshot".to_owned());
         ctx.conn
             .install_browser_context_fixture_for_test(browser_context);
@@ -8855,7 +8888,7 @@ mod tests {
 
     #[test]
     fn route_inspector_notifications_strip_stale_session_id_without_current_session() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         let mut response_events = Vec::new();
         let mut background_events = Vec::new();
 
@@ -8909,7 +8942,7 @@ mod tests {
 
     #[test]
     fn route_inspector_runtime_context_notifications_use_current_session() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         let mut response_events = Vec::new();
         let mut background_events = Vec::new();
 
@@ -8976,8 +9009,8 @@ mod tests {
 
     #[test]
     fn pending_inspector_await_registry_scopes_entries_to_devtools_session() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-owner".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-owner".to_owned());
         browser_context.set_active_target_id("TID-active".to_owned());
         browser_context.attach_active_session("SID-active".to_owned());
         browser_context.register_page_target_url_fixture(
@@ -9056,8 +9089,9 @@ mod tests {
 
     #[test]
     fn same_pending_inspector_await_id_is_isolated_by_devtools_session() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-same-id".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-same-id".to_owned());
         browser_context.set_active_target_id("TID-active".to_owned());
         browser_context.attach_active_session("SID-active".to_owned());
         browser_context.register_page_target_url_fixture(
@@ -9139,8 +9173,9 @@ mod tests {
 
     #[test]
     fn session_detach_settles_claimed_await_before_late_scheduler_completion() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-claimed-detach".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-claimed-detach".to_owned());
         browser_context.set_active_target_id("TID-claimed-detach".to_owned());
         browser_context.attach_active_session("SID-claimed-detach".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -9186,8 +9221,9 @@ mod tests {
 
     #[test]
     fn failed_await_registration_does_not_discard_existing_renderer_owner() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-duplicate-owner".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-duplicate-owner".to_owned());
         browser_context.set_active_target_id("TID-duplicate-owner".to_owned());
         browser_context.attach_active_session("SID-duplicate-owner".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -9232,8 +9268,9 @@ mod tests {
 
     #[test]
     fn bidi_listener_cancellation_discards_correlation_registered_first() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-listener-cancel".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-listener-cancel".to_owned());
         browser_context.set_active_target_id("TID-listener-cancel".to_owned());
         browser_context.attach_active_session("SID-listener-cancel".to_owned());
         browser_context.set_active_document_fixture_for_test(1);
@@ -9275,8 +9312,9 @@ mod tests {
 
     #[test]
     fn non_await_cancellation_releases_frontend_command_id() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-command-cancel".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-command-cancel".to_owned());
         browser_context.set_active_target_id("TID-command-cancel".to_owned());
         browser_context.attach_active_session("SID-command-cancel".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -9305,8 +9343,9 @@ mod tests {
 
     #[tokio::test]
     async fn terminal_session_cleanup_completes_non_await_once_and_releases_frontend_id() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-terminal".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-terminal".to_owned());
         browser_context.set_active_target_id("TID-terminal".to_owned());
         browser_context.attach_active_session("SID-terminal".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -9383,8 +9422,9 @@ mod tests {
 
     #[test]
     fn pending_inspector_await_response_routes_through_owner_runtime_response() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-owner-output".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-owner-output".to_owned());
         browser_context.set_active_target_id("TID-active".to_owned());
         browser_context.attach_active_session("SID-active".to_owned());
         browser_context.register_page_target_url_fixture(

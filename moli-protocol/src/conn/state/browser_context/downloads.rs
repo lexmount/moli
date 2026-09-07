@@ -11,7 +11,9 @@ impl BrowserContext {
         &self,
         web_contents: WebContentsHandle,
     ) -> Option<&str> {
-        self.physical.web_contents(web_contents).ok()?;
+        if !self.browser_context.contains_web_contents(web_contents) {
+            return None;
+        }
         self.page_targets
             .get_for_web_contents(web_contents.id())
             .map(crate::conn::PageAgentHost::target_id)
@@ -29,11 +31,11 @@ impl BrowserContext {
         let client = self.ensure_web_contents_resource_request_client(
             web_contents,
             fetch_defaults,
-            browser_globals,
+            &browser_globals.extra_headers,
+            browser_globals.network_conditions,
         )?;
-        self.physical
-            .downloads
-            .start_request(policy, client, request, suggested_filename)
+        self.browser_context
+            .start_download_request(policy, client, request, suggested_filename)
     }
 
     pub(in crate::conn) fn start_download_response(
@@ -44,23 +46,21 @@ impl BrowserContext {
         headers: Vec<(String, String)>,
         body: DownloadBody,
     ) -> Result<Option<DownloadObservation>, String> {
-        self.physical.web_contents(web_contents)?;
-        self.physical
-            .downloads
-            .start_response(policy, url, headers, body)
+        self.browser_context
+            .start_download_response(web_contents, policy, url, headers, body)
     }
 
     pub(in crate::conn) fn cancel_download(
         &self,
         guid: &str,
     ) -> Option<Result<(), DownloadAccessError>> {
-        self.physical.downloads.cancel(guid)
+        self.browser_context.cancel_download(guid)
     }
 
     pub(in crate::conn) fn read_download_artifact(
         &self,
         guid: &str,
     ) -> Option<Result<tokio::task::JoinHandle<Result<Vec<u8>, String>>, DownloadAccessError>> {
-        self.physical.downloads.read_artifact(guid)
+        self.browser_context.read_download_artifact(guid)
     }
 }

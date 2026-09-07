@@ -3,7 +3,7 @@ use super::*;
 #[tokio::test]
 async fn enable_with_background_event_sender_defers_initial_document_page_build() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.set_target_url("about:blank".into());
@@ -92,7 +92,7 @@ async fn enable_uses_fresh_initial_document_without_adapter() {
 #[tokio::test]
 async fn enable_reports_no_document_without_legacy_materialization_adapter() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.set_target_url("about:blank".into());

@@ -1,6 +1,6 @@
 use super::target_session_owner::TargetSessionOwnerMut;
 use super::*;
-use crate::conn::fetch_support::OpenBodyStreamError;
+use crate::conn::OpenBodyStreamError;
 use crate::conn::state::{
     ClaimedNavigationRequest, InterceptedNavigationResponse, NavigationInterceptionPermit,
     NavigationRequestInterception,
@@ -573,6 +573,8 @@ impl CdpConnection {
         document_navigation_token: Option<crate::conn::NavigationId>,
         navigation: crate::conn::NavigationDispatchState,
         body: crate::conn::DocumentBodySource,
+        body_progress_source: crate::domains::network::MainDocumentBodyProgressSource,
+        prepared_document: Option<Box<crate::conn::PausedResponsePreparedDocument>>,
     ) -> bool {
         let Some((browser_context_id, target_id)) =
             self.resolved_page_owner_identity_for_owner(owner)
@@ -601,7 +603,12 @@ impl CdpConnection {
             .fetch_owner
             .register_pending_fetch_response_navigation(
                 request_id,
-                PendingFetchResponseNavigation::new(navigation, permit),
+                PendingFetchResponseNavigation::new_with_response_projection(
+                    navigation,
+                    permit,
+                    body_progress_source,
+                    prepared_document,
+                ),
             );
         true
     }

@@ -10615,10 +10615,7 @@ mod protocol_neutral_tests {
     use moli_shared_worker::SharedWorkerInstanceId;
     use serde_json::{Value, json};
 
-    use crate::conn::{
-        BrowserContext, CdpConnection, CdpSessionRoute, Cmd, CommandOwnerScope,
-        SharedWorkerTargetState,
-    };
+    use crate::conn::{CdpSessionRoute, Cmd, CommandOwnerScope, SharedWorkerTargetState};
     use crate::domains::actions::ConsoleAction;
     use crate::testing::TestContext;
 
@@ -11561,7 +11558,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_runtime_entry_routes_evaluate_command_to_inspector_error_plan() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({"expression": "1 + 1"});
         let cmd = Cmd::for_test(
             Some(15),
@@ -11591,8 +11588,9 @@ mod protocol_neutral_tests {
 
     #[test]
     fn duplicate_pending_runtime_id_returns_chromium_error_without_replacing_owner() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-duplicate".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-duplicate".to_owned());
         browser_context.set_active_target_id("TID-duplicate".to_owned());
         browser_context.attach_active_session("SID-duplicate".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -11649,21 +11647,18 @@ mod protocol_neutral_tests {
     #[tokio::test]
     async fn duplicate_non_await_v8_command_preserves_original_completion_owner() {
         let mut ctx = TestContext::new();
-        let mut browser_context = BrowserContext::new("BID-console-duplicate".to_owned());
+        let mut browser_context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-console-duplicate".to_owned());
         browser_context.set_active_target_id("TID-console-duplicate".to_owned());
         browser_context.attach_active_session("SID-console-duplicate".to_owned());
         ctx.conn
             .install_browser_context_fixture_for_test(browser_context);
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<p>console duplicate</p>")
-            .await
-            .expect("page should load");
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context")
-            .replace_active_page_for_test(Some(page));
+        ctx.install_quiet_navigation_fixture_for_session_owner(
+            "data:text/html,<p>console duplicate</p>",
+            None,
+        )
+        .await;
 
         let params = json!({});
         let enable = Cmd::for_test(
@@ -11734,8 +11729,9 @@ mod protocol_neutral_tests {
 
     #[test]
     fn shared_worker_runtime_disable_projection_waits_for_success() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-shared".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-shared".to_owned());
         let mut target = SharedWorkerTargetState::new(
             RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(91),

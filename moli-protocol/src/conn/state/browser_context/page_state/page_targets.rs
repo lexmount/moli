@@ -1,7 +1,7 @@
 //! Stable page-target registry behavior and foreground target selection.
 
+use crate::conn::state::page_slot::TargetPageSlot;
 use crate::conn::state::{SessionStorageNamespace, TargetPageAbsenceReason};
-use crate::conn::state::{page_slot::TargetPageSlot, web_contents::WebContents};
 use crate::conn::{
     BrowserContext, DedicatedWorkerTargetState, InitialDocumentCreator, PageAgentHost,
     ServiceWorkerTargetState, SharedWorkerTargetState, TargetIdentityState,
@@ -9,7 +9,7 @@ use crate::conn::{
 use crate::devtools_runtime::{
     DevToolsBrowserContextId, DevToolsTargetId, DevToolsTargetInfo, DevToolsTargetKind,
 };
-use moli_core::browser::WebContentsHandle;
+use moli_core::browser::{WebContentsCreation, WebContentsHandle};
 use moli_core::network::SharedWebStorageStore;
 
 pub(crate) struct PendingWebContentsSelection {
@@ -39,20 +39,14 @@ impl BrowserContext {
     pub(in crate::conn) fn begin_web_contents_close(
         &mut self,
         handle: WebContentsHandle,
-    ) -> Result<
-        (
-            PageAgentHost,
-            crate::conn::state::web_contents::ClosingWebContents,
-        ),
-        String,
-    > {
+    ) -> Result<(PageAgentHost, moli_core::browser::PendingWebContentsClose), String> {
         let target_id = self
             .page_targets
             .get_for_web_contents(handle.id())
             .map(PageAgentHost::target_id)
             .ok_or_else(|| "WebContents projection unavailable".to_owned())?
             .to_owned();
-        let closing = self.physical.close_web_contents(handle)?;
+        let closing = self.browser_context.close_web_contents(handle)?;
         let mut target = self
             .page_targets
             .remove(&target_id)
@@ -112,10 +106,8 @@ impl BrowserContext {
         creator: Option<&InitialDocumentCreator>,
     ) -> Option<SessionStorageNamespace> {
         creator.and_then(|creator| {
-            self.physical
-                .web_contents
-                .get(&creator.web_contents_id())
-                .map(|contents| contents.session_storage.deep_clone())
+            self.browser_context
+                .clone_session_storage_namespace(creator.web_contents_id())
         })
     }
 
@@ -130,20 +122,19 @@ impl BrowserContext {
         session_storage_namespace: Option<SessionStorageNamespace>,
     ) {
         let target_identity = background_target_identity_for_initial_url(&url, creator.as_ref());
-        let mut contents = WebContents::default();
-        contents.begin_initial_empty_document(
+        let mut creation = WebContentsCreation::with_initial_document(
             initial_empty_document_url.unwrap_or_else(|| url.clone()),
             creator,
             initial_empty_document_storage_key,
         );
         if let Some(namespace) = session_storage_namespace {
-            contents.session_storage = namespace;
+            creation = creation.with_session_storage(namespace);
         }
         let inserted = self.register_web_contents_target(
             target_id,
             session_id,
             target_identity,
-            contents,
+            creation,
             TargetPageSlot::empty_for_initial_document_page_build(),
         );
         debug_assert!(inserted, "staged page target id must be unique");
@@ -156,8 +147,7 @@ impl BrowserContext {
         url: String,
         initial_empty_document_url: Option<String>,
     ) {
-        let mut contents = WebContents::default();
-        contents.begin_initial_empty_document(
+        let creation = WebContentsCreation::with_initial_document(
             initial_empty_document_url.unwrap_or_else(|| url.clone()),
             None,
             None,
@@ -166,7 +156,7 @@ impl BrowserContext {
             target_id.clone(),
             session_id,
             TargetIdentityState::with_url(url),
-            contents,
+            creation,
             TargetPageSlot::empty_for_initial_document_page_build(),
         );
         debug_assert!(inserted, "new active page target id must be unique");
@@ -196,16 +186,8 @@ impl BrowserContext {
         target_name: &str,
     ) -> Option<moli_core::browser::WebContentsHandle> {
         let name = Self::reusable_window_open_target_name(target_name)?;
-        let id = self
-            .physical
-            .web_contents
-            .values()
-            .find(|contents| contents.window.name.as_deref() == Some(name))?
-            .id();
-        Some(moli_core::browser::WebContentsHandle::new(
-            self.physical.id,
-            id,
-        ))
+        self.browser_context
+            .web_contents_handle_for_window_name(name)
     }
 
     pub(crate) fn has_attached_child_frame_id(&self, frame_id: &str) -> bool {
@@ -400,7 +382,8 @@ impl BrowserContext {
                 crate::conn::DocumentPolicyUpdate::TimezoneOverride(effective_timezone),
             ],
             is_active,
-            browser_globals,
+            browser_globals.network_conditions,
+            browser_globals.geolocation.as_ref(),
         );
         (true, Some(pending))
     }
@@ -509,8 +492,12 @@ impl BrowserContext {
                 let Some(document) = self.document_handle_for_web_contents(handle)? else {
                     continue;
                 };
-                match self.start_document_page_surface_update(document, foreground, browser_globals)
-                {
+                match self.start_document_page_surface_update(
+                    document,
+                    foreground,
+                    browser_globals.network_conditions,
+                    browser_globals.geolocation.as_ref(),
+                ) {
                     Ok(update) => surface_updates.push(update),
                     Err(error) => {
                         admission_error.get_or_insert(error);
@@ -553,28 +540,37 @@ impl BrowserContext {
             &target_id,
             TargetPageAbsenceReason::InitialDocumentPageBuildPending,
         );
-        self.web_contents_for_target_mut(&target_id)
-            .expect("selected WebContents")
-            .begin_initial_empty_document(initial_url, None, storage_key);
+        let handle = self
+            .web_contents_handle_for_target(&target_id)
+            .expect("selected WebContents");
+        self.browser_context
+            .begin_initial_empty_document(handle, initial_url, None, storage_key)
+            .expect("selected WebContents");
     }
 
     #[cfg(test)]
     pub(crate) fn mark_target_initial_empty_document_materialized(&mut self, target_id: &str) {
-        if let Some(target) = self.web_contents_for_target_mut(target_id) {
-            target.mark_initial_empty_document_materialized();
+        if let Some(handle) = self.web_contents_handle_for_target(target_id) {
+            let _ = self
+                .browser_context
+                .mark_initial_empty_document_materialized_for_test(handle);
         }
     }
 
     pub(crate) fn mark_target_initial_url_replaces_empty_document(&mut self, target_id: &str) {
-        if let Some(target) = self.web_contents_for_target_mut(target_id) {
-            target.mark_next_navigation_history_replace_initial_empty_document();
+        if let Some(handle) = self.web_contents_handle_for_target(target_id) {
+            let _ = self
+                .browser_context
+                .mark_initial_url_replaces_empty_document(handle);
         }
     }
 
     #[cfg(test)]
     pub(crate) fn mark_target_initial_empty_document_exited(&mut self, target_id: &str) {
-        if let Some(target) = self.web_contents_for_target_mut(target_id) {
-            target.mark_initial_empty_document_exited();
+        if let Some(handle) = self.web_contents_handle_for_target(target_id) {
+            let _ = self
+                .browser_context
+                .mark_initial_empty_document_exited_for_test(handle);
         }
     }
 
@@ -586,14 +582,15 @@ impl BrowserContext {
 
     pub(crate) fn devtools_target_info(&self, target_id: &str) -> Option<DevToolsTargetInfo> {
         if let Some(target) = self.page_target(target_id) {
+            let handle = self.web_contents_handle_for_target(target_id)?;
             let opener = self
-                .web_contents_for_target(target_id)?
-                .window
-                .opener
-                .and_then(|opener| {
+                .browser_context
+                .web_contents_opener(handle)
+                .ok()?
+                .and_then(|(web_contents_id, can_access)| {
                     self.page_targets
-                        .get_for_web_contents(opener.web_contents_id)
-                        .map(|target| (target, opener.can_access))
+                        .get_for_web_contents(web_contents_id)
+                        .map(|target| (target, can_access))
                 });
             let attached =
                 target.has_session() || !self.attached_session_ids_for_target(target_id).is_empty();
@@ -605,8 +602,8 @@ impl BrowserContext {
                     .committed_document_title()
                     .map(str::to_owned)
                     .or_else(|| {
-                        self.loaded_page_for_target(target.target_id())
-                            .map(|page| page.document_title())
+                        self.document_handle_for_target(target.target_id())
+                            .and_then(|document| self.browser_context.document_title(document).ok())
                     })
                     .unwrap_or_default(),
                 url: target.target_url().to_owned(),
@@ -1466,16 +1463,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn selecting_another_foreground_target_preserves_page_session_and_owner_state() {
         let mut ctx = TestContext::new();
-        let active_page = ctx
+        let mut context = ctx
             .conn
-            .load_page_via_runtime_async("data:text/html,<title>deactivate-active</title>")
-            .await
-            .expect("active page should load");
-
-        let mut context = BrowserContext::new("BC-deactivate".to_owned());
+            .new_browser_context_fixture_for_test("BC-deactivate".to_owned());
         context.set_active_target_id("TID-deactivate".to_owned());
         context.attach_active_session("SID-deactivate".to_owned());
-        context.set_target_url(active_page.final_url().as_str().to_owned());
         context.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
             .runtime_session_state
@@ -1538,11 +1530,17 @@ mod tests {
             .active_page_target_mut()
             .runtime_slot
             .set_network_request_counters_for_test(77, 88);
+        ctx.conn.install_browser_context_fixture_for_test(context);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<title>deactivate-active</title>",
+            Some("SID-deactivate"),
+        )
+        .await;
+        let mut context = ctx.conn.browser_context.take().unwrap();
         context
             .active_page_target_mut()
             .runtime_slot
             .mark_subresource_records_emitted(None, 0, 3);
-        context.set_loaded_page_async(active_page).await;
         let active_attachment = context
             .active_page_target()
             .runtime_slot
@@ -1592,9 +1590,7 @@ mod tests {
             "changing foreground selection must not reallocate the renderer channel"
         );
         assert_eq!(
-            context
-                .loaded_page_for_target(background_target.target_id())
-                .map(|page| page.renderer_devtools_agent_token()),
+            context.target_document_renderer_agent_for_test(background_target.target_id()),
             Some(active_attachment.agent_token()),
             "the background Page and its renderer channel must retain the same physical agent"
         );
@@ -1792,18 +1788,10 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn select_first_background_target_prefers_first_loaded_target() {
         let mut ctx = TestContext::new();
-        let first_loaded_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<title>first-loaded</title>")
-            .await
-            .expect("first loaded page should load");
-        let second_loaded_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<title>second-loaded</title>")
-            .await
-            .expect("second loaded page should load");
 
-        let mut context = BrowserContext::new("BC-activate-first".to_owned());
+        let mut context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BC-activate-first".to_owned());
         context.stage_background_target(
             "TID-empty".to_owned(),
             Some("SID-empty".to_owned()),
@@ -1825,8 +1813,18 @@ mod tests {
             None,
             None,
         );
-        context.replace_target_page_for_test("TID-first-loaded", Some(first_loaded_page));
-        context.replace_target_page_for_test("TID-second-loaded", Some(second_loaded_page));
+        ctx.conn.install_browser_context_fixture_for_test(context);
+        ctx.install_quiet_navigation_fixture_for_session_owner(
+            "data:text/html,<title>first-loaded</title>",
+            Some("SID-first-loaded"),
+        )
+        .await;
+        ctx.install_quiet_navigation_fixture_for_session_owner(
+            "data:text/html,<title>second-loaded</title>",
+            Some("SID-second-loaded"),
+        )
+        .await;
+        let mut context = ctx.conn.browser_context.take().unwrap();
         let first_attachment = context
             .background_targets()
             .nth(1)
@@ -1888,20 +1886,11 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn active_background_swap_moves_each_target_renderer_channel_with_its_page() {
         let mut ctx = TestContext::new();
-        let active_page = ctx
+        let mut context = ctx
             .conn
-            .load_page_via_runtime_async("data:text/html,<title>active route</title>")
-            .await
-            .expect("active page should load");
-        let background_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<title>background route</title>")
-            .await
-            .expect("background page should load");
-        let mut context = BrowserContext::new("BC-route-swap".to_owned());
+            .new_browser_context_fixture_for_test("BC-route-swap".to_owned());
         context.set_active_target_id("TID-active-route");
         context.attach_active_session("SID-active-route".to_owned());
-        context.set_loaded_page_async(active_page).await;
         context.stage_background_target(
             "TID-background-route".to_owned(),
             Some("SID-background-route".to_owned()),
@@ -1909,7 +1898,18 @@ mod tests {
             None,
             None,
         );
-        context.replace_target_page_for_test("TID-background-route", Some(background_page));
+        ctx.conn.install_browser_context_fixture_for_test(context);
+        ctx.install_quiet_navigation_fixture_for_session_owner(
+            "data:text/html,<title>active route</title>",
+            Some("SID-active-route"),
+        )
+        .await;
+        ctx.install_quiet_navigation_fixture_for_session_owner(
+            "data:text/html,<title>background route</title>",
+            Some("SID-background-route"),
+        )
+        .await;
+        let mut context = ctx.conn.browser_context.take().unwrap();
         let active_attachment = context
             .active_page_target()
             .runtime_slot

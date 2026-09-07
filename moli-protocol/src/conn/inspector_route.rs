@@ -259,7 +259,7 @@ mod tests {
                 false,
                 crate::conn::CapturedBody::from_string("candidate".to_owned()),
             );
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.install_browser_context_fixture_for_test(context);
         let owner = CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
             browser_context_id: "BID-rollback".to_owned(),
@@ -289,7 +289,7 @@ mod tests {
         let mut context = BrowserContext::new("BID-cleanup".to_owned());
         context.set_active_target_id("TID-cleanup");
         context.begin_active_target_initial_empty_document("about:blank".to_owned());
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.install_browser_context_fixture_for_test(context);
         let owner = CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
             browser_context_id: "BID-cleanup".to_owned(),
@@ -421,7 +421,7 @@ mod tests {
         let second = context
             .start_document_navigation_for_target("TID-second", "LOADER-shared".to_owned())
             .unwrap();
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.install_browser_context_fixture_for_test(context);
         let owner = CommandOwnerScope::for_route(crate::conn::CdpSessionRoute::PageTarget {
             browser_context_id: "BID-navigation-route".to_owned(),
@@ -471,7 +471,7 @@ mod tests {
             "TID-background",
             "SID-background-attached".to_owned(),
         ));
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.install_browser_context_fixture_for_test(browser_context);
 
         let filtered = conn.filter_renderer_inspector_batches_for_target_owner(
@@ -499,14 +499,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn inspector_state_updates_require_the_current_attachment_and_agent() {
         let mut ctx = TestContext::new();
-        let page = ctx
+        let mut browser_context = ctx
             .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<title>inspector-state-source-validation</title>",
-            )
-            .await
-            .expect("state source validation page should load");
-        let mut browser_context = BrowserContext::new("BID-state-route".to_owned());
+            .new_browser_context_fixture_for_test("BID-state-route");
         browser_context.set_active_target_id("TID-state-route".to_owned());
         browser_context.attach_active_session("SID-state-primary".to_owned());
         assert!(
@@ -515,14 +510,21 @@ mod tests {
                 "SID-state-attached".to_owned(),
             )
         );
-        browser_context.set_loaded_page_async(page).await;
+        ctx.conn
+            .install_browser_context_fixture_for_test(browser_context);
+        let _ = ctx
+            .conn
+            .install_navigation_fixture_for_session_owner_for_test(
+                "data:text/html,<title>inspector-state-source-validation</title>",
+                None,
+            )
+            .await;
+        let browser_context = ctx.conn.browser_context.as_ref().expect("browser context");
         let current = browser_context
             .active_page_target()
             .runtime_slot
             .current_renderer_attachment()
             .expect("installed page should have a renderer attachment");
-        ctx.conn
-            .install_browser_context_fixture_for_test(browser_context);
 
         let accepted_state = V8InspectorSessionState::from_bytes(vec![1, 2, 3]);
         let mut accepted = batch(DevToolsSessionKey::Primary);

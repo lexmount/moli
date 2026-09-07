@@ -1095,16 +1095,8 @@ async fn window_open_hands_off_session_storage_snapshot_and_initial_storage_key(
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
     let opener_url = format!("http://{addr}/opener");
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(&opener_url)
-        .await
-        .expect("opener page should load");
-    {
-        let browser_context = ctx.conn.browser_context.as_mut().unwrap();
-        browser_context.set_target_url(page.final_url().as_str().to_owned());
-        let _ = browser_context.replace_active_page_for_test(Some(page));
-    }
+    ctx.install_navigation_fixture_for_session_owner(&opener_url, None)
+        .await;
     ctx.enable_background_navigation_scheduler_for_test();
 
     tokio::task::LocalSet::new().run_until(async {
@@ -2188,7 +2180,7 @@ async fn anchor_left_click_activates_popup_while_initial_navigation_waits_for_de
                 "foreground selection must not wait for initial navigation"
             );
             assert!(
-                browser_context.target_document_url(browser_context.active_target_id().unwrap()).is_some_and(moli_url::is_about_blank),
+                browser_context.target_document_url(browser_context.active_target_id().unwrap()).is_some_and(|url| moli_url::is_about_blank(&url)),
                 "waitForDebuggerOnStart should retain the active popup's initial about:blank document"
             );
 
@@ -2299,9 +2291,10 @@ async fn anchor_blank_target_with_rel_opener_preserves_exact_opener() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn create_target_seeds_browser_context_from_connection_cookie_profile() {
-    let mut ctx = TestContext::from_conn(CdpConnection::new_with_initial_cookies(vec![
-        stored_cookie("sid", "seeded"),
-    ]));
+    let mut ctx = TestContext::from_conn(crate::test_support::connection_with_config(
+        crate::CdpInitialStoragePartition::with_cookies(vec![stored_cookie("sid", "seeded")]),
+        Default::default(),
+    ));
     ctx.conn.set_root_target_discovery_enabled(true);
     ctx.process_async(json!({"id": 11, "method": "Target.createTarget",
                        "params": {"url": "about:blank"}}))

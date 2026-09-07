@@ -2,8 +2,8 @@ use super::*;
 
 #[test]
 fn browser_context_document_cookie_facade_snapshot_preview_does_not_bump_cookie_store_generation() {
-    let mut conn = CdpConnection::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-cookie-facade", "TID-cookie-facade");
+    let mut conn = crate::test_support::connection();
+    let mut bc = conn.new_page_target_fixture_for_test("BID-cookie-facade", "TID-cookie-facade");
     bc.set_target_url("https://example.com/app".into());
     conn.install_browser_context_fixture_for_test(bc);
 
@@ -52,9 +52,9 @@ fn browser_context_document_cookie_facade_snapshot_preview_does_not_bump_cookie_
 
 #[test]
 fn browser_context_cookie_boundary_snapshot_aligns_facade_and_storage_generation() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
     let mut bc =
-        BrowserContext::new_with_page_for_test("BID-cookie-boundary", "TID-cookie-boundary");
+        conn.new_page_target_fixture_for_test("BID-cookie-boundary", "TID-cookie-boundary");
     bc.set_target_url("https://example.com/app".into());
     conn.install_browser_context_fixture_for_test(bc);
 
@@ -96,9 +96,9 @@ fn browser_context_cookie_boundary_snapshot_aligns_facade_and_storage_generation
 
 #[test]
 fn connection_cookie_boundary_snapshot_for_sites_keeps_facade_but_filters_storage_slice() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
     let mut bc =
-        BrowserContext::new_with_page_for_test("BID-cookie-boundary", "TID-cookie-boundary");
+        conn.new_page_target_fixture_for_test("BID-cookie-boundary", "TID-cookie-boundary");
     bc.set_target_url("https://sub.example.com/app".into());
     conn.install_browser_context_fixture_for_test(bc);
 
@@ -166,9 +166,9 @@ fn connection_cookie_boundary_snapshot_for_sites_keeps_facade_but_filters_storag
 
 #[test]
 fn browser_context_preview_cookie_boundary_operation_projects_hypothetical_storage_only() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
     let mut bc =
-        BrowserContext::new_with_page_for_test("BID-cookie-boundary", "TID-cookie-boundary");
+        conn.new_page_target_fixture_for_test("BID-cookie-boundary", "TID-cookie-boundary");
     bc.set_target_url("https://example.com/app".into());
     conn.install_browser_context_fixture_for_test(bc);
 
@@ -276,9 +276,9 @@ fn browser_context_preview_cookie_boundary_operation_with_site_target_projects_t
 
 #[test]
 fn connection_apply_cookie_boundary_operation_reports_replaced_and_resulting_boundary() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
     let mut bc =
-        BrowserContext::new_with_page_for_test("BID-cookie-boundary", "TID-cookie-boundary");
+        conn.new_page_target_fixture_for_test("BID-cookie-boundary", "TID-cookie-boundary");
     bc.set_target_url("https://example.com/app".into());
     conn.install_browser_context_fixture_for_test(bc);
 
@@ -321,9 +321,9 @@ fn connection_apply_cookie_boundary_operation_reports_replaced_and_resulting_bou
 
 #[test]
 fn browser_context_site_data_manager_surface_wraps_cookie_boundary_with_reserved_future_storage() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
     let mut bc =
-        BrowserContext::new_with_page_for_test("BID-site-data-manager", "TID-site-data-manager");
+        conn.new_page_target_fixture_for_test("BID-site-data-manager", "TID-site-data-manager");
     bc.set_target_url("https://sub.example.com/app".into());
     conn.install_browser_context_fixture_for_test(bc);
 
@@ -395,9 +395,9 @@ fn browser_context_site_data_manager_surface_wraps_cookie_boundary_with_reserved
 
 #[test]
 fn browser_context_site_data_manager_operation_wraps_cookie_boundary_preview_and_report() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
     let mut bc =
-        BrowserContext::new_with_page_for_test("BID-site-data-manager", "TID-site-data-manager");
+        conn.new_page_target_fixture_for_test("BID-site-data-manager", "TID-site-data-manager");
     bc.set_target_url("https://example.com/app".into());
     conn.install_browser_context_fixture_for_test(bc);
 

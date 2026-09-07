@@ -3636,9 +3636,7 @@ mod worker_target_attachment_tests;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::{
-        BrowserContext, CdpTargetFilter, CdpTargetFilterEntry, DedicatedWorkerTargetState,
-    };
+    use crate::conn::{CdpTargetFilter, CdpTargetFilterEntry, DedicatedWorkerTargetState};
 
     fn runtime_inspector_messages(messages: Vec<Value>) -> Vec<RendererRuntimeInspectorMessage> {
         messages
@@ -3766,8 +3764,8 @@ mod tests {
         TargetPageResidenceIdentity,
         RendererPageResidenceIdentity,
     ) {
-        let mut conn = CdpConnection::default();
-        let mut context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         context.set_active_target_id("TID-page");
         let document_id = context.set_active_document_fixture_for_test(1);
         let owner_page = TargetPageResidenceIdentity::new(
@@ -4803,9 +4801,9 @@ mod tests {
 
     #[test]
     fn shared_worker_target_registration_updates_browser_context_and_emits_when_discovered() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
 
         let mut outputs =
             register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(7))
@@ -4869,8 +4867,8 @@ mod tests {
 
     #[test]
     fn shared_worker_target_registration_tracks_undiscovered_targets_without_events() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
 
         assert!(
             register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(9))
@@ -4892,9 +4890,9 @@ mod tests {
 
     #[test]
     fn service_worker_target_registration_updates_browser_context_and_emits_when_discovered() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
 
         let mut outputs =
             register_service_worker_target(&mut conn, "BID-1", service_worker_info(7))
@@ -4956,10 +4954,10 @@ mod tests {
 
     #[test]
     fn service_worker_target_registration_auto_attaches_when_enabled() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
         conn.set_auto_attach_owner(None, true, true, CdpTargetFilter::default_auto_attach());
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
 
         let outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(9))
             .worker_target_lifecycle_outputs;
@@ -4993,10 +4991,10 @@ mod tests {
 
     #[tokio::test]
     async fn service_worker_target_lifecycle_drain_preserves_typed_target_sidecars() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
         conn.set_auto_attach_owner(None, true, true, CdpTargetFilter::default_auto_attach());
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
 
         let mut outputs =
             register_service_worker_target(&mut conn, "BID-1", service_worker_info(11));
@@ -5060,8 +5058,8 @@ mod tests {
 
     #[tokio::test]
     async fn shared_worker_target_lifecycle_drain_routes_discovery_events_to_owner_session() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
         conn.set_target_discovery_for_owner(
             Some("SID-browser"),
             CdpTargetFilter::default_target_discovery(),
@@ -5123,9 +5121,9 @@ mod tests {
 
     #[test]
     fn service_worker_target_registration_respects_auto_attach_filter() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
         conn.set_auto_attach_owner(None, true, false, target_filter_excluding("service_worker"));
 
         let outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(10))
@@ -5147,8 +5145,8 @@ mod tests {
 
     #[test]
     fn service_worker_target_registration_auto_attaches_related_newer_version() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
         assert!(
             register_service_worker_target(&mut conn, "BID-1", service_worker_info(7)).is_empty()
         );
@@ -5203,10 +5201,10 @@ mod tests {
 
     #[test]
     fn service_worker_auto_attach_related_matching_is_context_scoped_and_preserves_wait() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
         conn.inactive_browser_contexts
-            .push(BrowserContext::new("BID-2".to_owned()));
+            .push(conn.new_browser_context_fixture_for_test("BID-2".to_owned()));
         conn.set_service_worker_auto_attach_related_owner(
             Some("SID-owner"),
             "BID-1",
@@ -5246,8 +5244,8 @@ mod tests {
 
     #[test]
     fn target_creation_projects_starting_only_from_an_exact_live_host() {
-        let mut conn = CdpConnection::default();
-        let mut context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         context.set_active_target_id("TID-page".to_owned());
         context.attach_active_session("SID-page".to_owned());
         context.set_service_worker_domain_enabled(Some("SID-page"), true);
@@ -5289,8 +5287,8 @@ mod tests {
 
     #[test]
     fn service_worker_domain_enabled_session_receives_target_lifecycle_updates() {
-        let mut conn = CdpConnection::default();
-        let mut context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         context.set_active_target_id("TID-page".to_owned());
         context.attach_active_session("SID-page".to_owned());
         context.set_service_worker_domain_enabled(Some("SID-page"), true);
@@ -5396,8 +5394,8 @@ mod tests {
 
     #[test]
     fn service_worker_domain_destroyed_version_keeps_retained_registration() {
-        let mut conn = CdpConnection::default();
-        let mut context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         context.set_active_target_id("TID-page".to_owned());
         context.attach_active_session("SID-page".to_owned());
         context.set_service_worker_domain_enabled(Some("SID-page"), true);
@@ -5438,8 +5436,8 @@ mod tests {
 
     #[test]
     fn service_worker_domain_enabled_session_receives_worker_error_reported() {
-        let mut conn = CdpConnection::default();
-        let mut context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         context.set_active_target_id("TID-page".to_owned());
         context.attach_active_session("SID-page".to_owned());
         context.set_service_worker_domain_enabled(Some("SID-page"), true);
@@ -5480,7 +5478,7 @@ mod tests {
 
     #[test]
     fn service_worker_target_destruction_detaches_session_before_destroyed() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_auto_attach_owner(
             None,
             true,
@@ -5488,7 +5486,7 @@ mod tests {
             crate::conn::CdpTargetFilter::default_auto_attach(),
         );
         conn.set_root_target_discovery_enabled(true);
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
 
         let outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(11))
             .worker_target_lifecycle_outputs;
@@ -5532,7 +5530,7 @@ mod tests {
 
     #[test]
     fn service_worker_target_stopped_retains_target_and_clears_runtime_sessions() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_auto_attach_owner(
             None,
             true,
@@ -5540,7 +5538,7 @@ mod tests {
             crate::conn::CdpTargetFilter::default_auto_attach(),
         );
         conn.set_root_target_discovery_enabled(true);
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
 
         let outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(17))
             .worker_target_lifecycle_outputs;
@@ -5635,7 +5633,7 @@ mod tests {
 
     #[test]
     fn service_worker_target_started_reloads_after_crash_once() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_auto_attach_owner(
             None,
             true,
@@ -5643,7 +5641,7 @@ mod tests {
             crate::conn::CdpTargetFilter::default_auto_attach(),
         );
         conn.set_root_target_discovery_enabled(true);
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
 
         let outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(19))
             .worker_target_lifecycle_outputs;
@@ -5689,7 +5687,7 @@ mod tests {
 
     #[tokio::test]
     async fn service_worker_restart_emits_reload_before_new_runtime_context() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_auto_attach_owner(
             None,
             true,
@@ -5697,7 +5695,7 @@ mod tests {
             crate::conn::CdpTargetFilter::default_auto_attach(),
         );
         conn.set_root_target_discovery_enabled(true);
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
 
         let outputs = register_service_worker_target(&mut conn, "BID-1", service_worker_info(29))
             .worker_target_lifecycle_outputs;
@@ -5850,8 +5848,8 @@ mod tests {
 
     #[test]
     fn service_worker_version_state_updates_without_a_domain_listener() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
         assert!(
             register_service_worker_target(&mut conn, "BID-1", service_worker_info(31)).is_empty(),
             "an undiscovered target without domain listeners should not manufacture output"
@@ -5882,8 +5880,8 @@ mod tests {
 
     #[test]
     fn stale_destroy_cannot_remove_a_restarted_service_worker_version() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
         let _ = register_service_worker_target(&mut conn, "BID-1", service_worker_info(32));
         let old_run = renderer_run();
         let old_run_retirement = record_service_worker_target_stopped(
@@ -5916,8 +5914,8 @@ mod tests {
 
     #[tokio::test]
     async fn retired_run_output_never_replays_into_the_restarted_worker() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         let mut target = ServiceWorkerTargetState::new(
             41,
             33,
@@ -5994,8 +5992,8 @@ mod tests {
 
     #[tokio::test]
     async fn detached_session_id_reuse_does_not_revive_captured_worker_output() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         let mut target = ServiceWorkerTargetState::new(
             41,
             34,
@@ -6040,14 +6038,14 @@ mod tests {
 
     #[test]
     fn shared_worker_target_registration_auto_attaches_when_enabled() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_auto_attach_owner(
             None,
             true,
             false,
             crate::conn::CdpTargetFilter::default_auto_attach(),
         );
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
 
         let outputs =
             register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(11))
@@ -6162,9 +6160,9 @@ mod tests {
 
     #[test]
     fn shared_worker_target_registration_respects_auto_attach_filter() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
         conn.set_auto_attach_owner(None, true, false, target_filter_excluding("shared_worker"));
 
         let outputs =
@@ -6186,8 +6184,8 @@ mod tests {
 
     #[test]
     fn shared_worker_runtime_inspector_messages_route_to_tagged_session_only() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         let instance_id = SharedWorkerInstanceId::from_u64(12);
         let mut target = SharedWorkerTargetState::new(
             moli_core::RendererOwnerLocalHostId::new_for_testing(1),
@@ -6232,8 +6230,8 @@ mod tests {
 
     #[test]
     fn service_worker_console_messages_bind_the_exact_run_and_enabled_sessions() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         let renderer_run = renderer_run();
         let mut target = ServiceWorkerTargetState::new(
             41,
@@ -6305,8 +6303,8 @@ mod tests {
 
     #[test]
     fn service_worker_exception_messages_bind_the_exact_run_and_enabled_sessions() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         let renderer_run = renderer_run();
         let mut target = ServiceWorkerTargetState::new(
             41,
@@ -6411,8 +6409,8 @@ mod tests {
 
     #[test]
     fn service_worker_fetch_diagnostics_bind_the_exact_run_and_enabled_sessions() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         let mut target = ServiceWorkerTargetState::new(
             41,
             25,
@@ -6668,8 +6666,8 @@ mod tests {
 
     #[test]
     fn service_worker_runtime_inspector_messages_bind_and_prepare_the_exact_run() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         let mut target = ServiceWorkerTargetState::new(
             41,
             23,
@@ -6729,7 +6727,7 @@ mod tests {
 
     #[test]
     fn shared_worker_target_destruction_detaches_session_before_destroyed() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_auto_attach_owner(
             None,
             true,
@@ -6737,7 +6735,7 @@ mod tests {
             crate::conn::CdpTargetFilter::default_auto_attach(),
         );
         conn.set_root_target_discovery_enabled(true);
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
 
         let outputs =
             register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(13))
@@ -6779,7 +6777,7 @@ mod tests {
 
     #[tokio::test]
     async fn shared_worker_target_destruction_terminates_all_renderer_calls() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_auto_attach_owner(
             None,
             true,
@@ -6787,7 +6785,7 @@ mod tests {
             crate::conn::CdpTargetFilter::default_auto_attach(),
         );
         conn.set_root_target_discovery_enabled(true);
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
 
         let outputs =
             register_shared_worker_target(&mut conn, "BID-1", None, shared_worker_info(15))
@@ -6902,7 +6900,7 @@ mod tests {
 
     #[test]
     fn late_shared_worker_messages_after_destroy_are_dropped_without_page_fallback() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_auto_attach_owner(
             None,
             true,
@@ -6910,7 +6908,7 @@ mod tests {
             crate::conn::CdpTargetFilter::default_auto_attach(),
         );
         conn.set_root_target_discovery_enabled(true);
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         browser_context.set_active_target_id("TID-page");
         browser_context.attach_active_session("SID-page");
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -7004,8 +7002,8 @@ mod tests {
 
     #[tokio::test]
     async fn shared_worker_target_console_messages_emit_to_target_session_and_advance_cursors() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(conn.new_browser_context_fixture_for_test("BID-1".to_owned()));
         let mut target = SharedWorkerTargetState::new(
             moli_core::RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(17),

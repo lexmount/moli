@@ -154,11 +154,11 @@ pub(crate) fn complete_pending_autofill_command(
 
 #[cfg(test)]
 mod tests {
-    use crate::{conn::BrowserContext, testing::TestContext};
+    use crate::testing::TestContext;
     use serde_json::{Value, json};
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
-        let mut browser_context = BrowserContext::new("BID-1".into());
+        let mut browser_context = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         browser_context.set_active_target_id("TID-1".to_owned());
         browser_context.set_target_url("data:text/html,autofill-test".to_owned());
         browser_context.attach_active_session("SID-1".to_owned());

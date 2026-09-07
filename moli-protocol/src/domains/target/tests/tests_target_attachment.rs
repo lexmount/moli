@@ -1289,7 +1289,9 @@ async fn session_route_finds_committed_browser_page_and_worker_sessions() {
         Some("SID-shared-active"),
     );
 
-    let mut inactive = BrowserContext::new("BID-B".to_owned());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-B".to_owned());
     inactive.set_active_target_id("TID-000000000C".to_owned());
     inactive.attach_active_session("SID-inactive");
     inactive.register_page_target_fixture(
@@ -2871,7 +2873,7 @@ async fn detach_from_target_neutrally_resumes_paused_request_stage_navigation() 
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-9".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-9");
     bc.set_active_target_id("TID-000000000A");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -2939,6 +2941,7 @@ async fn detach_from_target_neutrally_resumes_paused_request_stage_navigation() 
     assert_eq!(bc.active_target_id(), Some("TID-000000000A"));
     assert_eq!(
         bc.target_document_url("TID-000000000A")
+            .as_ref()
             .map(url::Url::as_str),
         Some(url.as_str())
     );

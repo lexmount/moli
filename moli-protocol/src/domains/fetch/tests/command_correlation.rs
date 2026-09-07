@@ -11,15 +11,16 @@ use moli_core::page::SubresourceResourceType;
 
 async fn context_with_loaded_fetch_page() -> TestContext {
     let mut ctx = TestContext::new();
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<title>fetch correlation</title>")
-        .await
-        .expect("fetch correlation page should load");
-    let mut browser_context = attached_browser_context();
-    browser_context.replace_active_page_for_test(Some(page));
+    let mut browser_context = ctx.conn.new_browser_context_fixture_for_test("BID-1");
+    browser_context.set_active_target_id("TID-1".to_owned());
+    browser_context.attach_active_session("SID-1".to_owned());
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
+    ctx.install_navigation_fixture_for_session_owner(
+        "data:text/html,<title>fetch correlation</title>",
+        Some("SID-1"),
+    )
+    .await;
     ctx
 }
 
@@ -61,16 +62,11 @@ async fn fetch_interception_update_rejects_a_replaced_page() {
         .unwrap()
         .wait()
         .await;
-    let replacement = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<title>replacement</title>")
-        .await
-        .unwrap();
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .replace_active_page_for_test(Some(replacement));
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<title>replacement</title>",
+        None,
+    )
+    .await;
     assert!(matches!(
         ctx.conn.finish_document_fetch_command(completion),
         Err(error) if error == "Renderer Page changed"
@@ -183,16 +179,11 @@ async fn subresource_continue_completion_rejects_a_replaced_document() {
         .unwrap();
     let completed = pending.wait().await;
 
-    let replacement = ctx
-        .conn
-        .load_page_via_runtime_async("data:text/html,<title>replacement</title>")
-        .await
-        .unwrap();
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .replace_active_page_for_test(Some(replacement));
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<title>replacement</title>",
+        None,
+    )
+    .await;
 
     assert!(matches!(
         ctx.conn.finish_document_fetch_command(completed),
@@ -323,7 +314,9 @@ async fn assert_correlation_lifetime(
 #[tokio::test(flavor = "multi_thread")]
 async fn deferred_fetch_command_keeps_its_exact_page_for_implicit_work() {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-1".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
     browser_context.set_active_target_id("TID-active".to_owned());
     browser_context.attach_active_session("SID-active".to_owned());
     browser_context.register_page_target_url_fixture(
@@ -354,7 +347,9 @@ async fn deferred_fetch_command_keeps_its_exact_page_for_implicit_work() {
 #[tokio::test(flavor = "multi_thread")]
 async fn deferred_sessionless_fetch_command_freezes_the_active_page_at_admission() {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-sessionless".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-sessionless".to_owned());
     browser_context.set_active_target_id("TID-original".to_owned());
     browser_context.register_page_target_url_fixture(
         "TID-next".to_owned(),

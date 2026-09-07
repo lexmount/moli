@@ -92,7 +92,7 @@ impl TargetSessionOwnerRef<'_> {
         Some(
             session
                 .emulation_session_state
-                .disposal_is_effectively_noop(effective),
+                .disposal_is_effectively_noop(&effective),
         )
     }
 

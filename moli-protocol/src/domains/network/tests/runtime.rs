@@ -79,7 +79,7 @@ async fn runtime_capture_without_network_listener_does_not_advance_subresource_c
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -145,7 +145,7 @@ async fn runtime_script_uses_document_referer_and_script_cdp_initiator() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -246,7 +246,7 @@ async fn runtime_fetch_post_body_is_available_by_network_request_id() {
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-1".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -335,7 +335,7 @@ async fn runtime_form_post_navigation_body_is_available_by_network_request_id() 
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-1".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -420,7 +420,7 @@ async fn websocket_runtime_activity_emits_cdp_websocket_events_without_payload()
     let socket_url = format!("ws://{addr}/socket");
     let socket_literal = serde_json::to_string(&socket_url).unwrap();
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-1".to_owned());
     ctx.conn.insert_browser_context(bc);
@@ -565,7 +565,7 @@ async fn rejected_websocket_handshake_emits_frame_error_then_closed() {
     let socket_url = format!("ws://{addr}/rejected");
     let socket_literal = serde_json::to_string(&socket_url).unwrap();
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-1".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -712,7 +712,7 @@ document.write('<script src="/written.js"><\/script>');
     let page_url = format!("http://{addr}/page");
     let script_url = format!("http://{addr}/written.js");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);

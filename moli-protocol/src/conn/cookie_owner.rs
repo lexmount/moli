@@ -198,22 +198,14 @@ fn browser_context_cookie_manager_surface_snapshot(
     let snapshot = browser_context.raw_cookie_manager_surface_snapshot();
     #[cfg(not(test))]
     let snapshot = BrowserContextCookieManagerSurfaceSnapshot::default();
-    let current_document_url = browser_context
-        .loaded_page()
-        .map(|page| page.final_url().clone());
-    let navigation_initiator_url = browser_context
-        .loaded_page()
-        .and_then(|page| page.navigation_initiator_url().cloned());
-    let requested_document_url = browser_context
-        .loaded_page()
-        .map(|page| page.requested_url().clone());
-    let navigation_was_redirected = browser_context
-        .loaded_page()
-        .is_some_and(|page| page.navigation_redirected());
-    let navigation_redirect_count = browser_context
-        .loaded_page()
-        .map(|page| page.navigation_redirect_count())
-        .unwrap_or(0);
+    let navigation = browser_context.selected_document_navigation_metadata();
+    let current_document_url = navigation.as_ref().map(|state| state.current_url.clone());
+    let navigation_initiator_url = navigation
+        .as_ref()
+        .and_then(|state| state.initiator_url.clone());
+    let requested_document_url = navigation.as_ref().map(|state| state.requested_url.clone());
+    let navigation_was_redirected = navigation.as_ref().is_some_and(|state| state.redirected);
+    let navigation_redirect_count = navigation.as_ref().map_or(0, |state| state.redirect_count);
     let (default_cookie_write_url, default_cookie_write_url_source) =
         browser_context.default_cookie_write_url_with_source();
     let structured_write_backend_status = browser_context_structured_cookie_write_backend_status();
@@ -368,7 +360,7 @@ impl BrowserContext {
             return report;
         }
 
-        self.store_cookie(cookie, request_url.as_ref(), CookieSource::Cdp)
+        self.store_cookie(cookie, request_url.as_ref(), CookieSource::Management)
     }
 
     #[cfg(test)]
@@ -561,8 +553,8 @@ impl BrowserContext {
         // document URL into every `set()` call. Prefer the live page URL when
         // one exists; otherwise fall back to the BrowserContext's current URL.
         if let Some(url) = self
-            .loaded_page()
-            .map(|page| page.final_url().clone())
+            .selected_document_navigation_metadata()
+            .map(|state| state.current_url)
             .filter(|url| matches!(url.scheme(), "http" | "https"))
         {
             return (

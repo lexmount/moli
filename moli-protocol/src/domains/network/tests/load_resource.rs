@@ -454,7 +454,9 @@ async fn load_network_resource_disable_cache_bypasses_and_replaces_fresh_entry()
     ));
     let mut fetch_config = FetchConfig::default();
     fetch_config.set_http_cache_dir(Some(cache_dir.display().to_string()));
-    let mut ctx = TestContext::from_conn(CdpConnection::new_with_fetch_config(fetch_config));
+    let mut ctx = TestContext::from_conn(crate::test_support::connection_with_fetch_config(
+        fetch_config,
+    ));
     install_loaded_page(&mut ctx, &format!("http://{addr}/page")).await;
     let resource_url = format!("http://{addr}/cacheable");
 

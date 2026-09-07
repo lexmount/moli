@@ -32,7 +32,9 @@ async fn dom_snapshot_completes_without_protocol_document() {
 
 async fn document_agent_context() -> TestContext {
     let mut ctx = TestContext::new();
-    let mut context = BrowserContext::new("BID-document-agents".into());
+    let mut context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-document-agents");
     context.set_active_target_id("TID-document-agents");
     ctx.conn.install_browser_context_fixture_for_test(context);
     ctx.install_navigation_fixture_for_session_owner(
@@ -45,8 +47,8 @@ async fn document_agent_context() -> TestContext {
 async fn document_agent_round_trip(method: &str, start_before_move: bool) {
     let mut ctx = document_agent_context().await;
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let take_document = |ctx: &mut TestContext| take_inspection_document(&mut ctx.conn, &owner);
-    let mut document = (!start_before_move).then(|| take_document(&mut ctx));
+    let document_handle = |ctx: &mut TestContext| inspection_document_handle(&ctx.conn, &owner);
+    let mut document = (!start_before_move).then(|| document_handle(&mut ctx));
     let step = ctx.conn.start_command_dispatch(
         &json!({"id": 1, "method": method, "params": {"computedStyles": ["color"]}}).to_string(),
     );
@@ -55,9 +57,9 @@ async fn document_agent_round_trip(method: &str, start_before_move: bool) {
         "{method} must start on its live binding"
     );
     if start_before_move {
-        document = Some(take_document(&mut ctx));
+        document = Some(document_handle(&mut ctx));
     }
-    let mut document = document.unwrap();
+    let document = document.unwrap();
     let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
     let response = messages
         .iter()
@@ -118,8 +120,7 @@ async fn document_agent_round_trip(method: &str, start_before_move: bool) {
                 json!("button { color: rgb(4, 5, 6); }")
             );
             let actual = document
-                .page
-                .evaluate_runtime_expression_without_navigation_follow_with_await_async(
+                .evaluate_runtime_expression_for_test(
                     "getComputedStyle(document.getElementById('inspected')).color",
                     false,
                 )
@@ -188,7 +189,7 @@ async fn document_agent_round_trip(method: &str, start_before_move: bool) {
         }
         _ => unreachable!(),
     }
-    assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
+    assert!(ctx.conn.has_loaded_page_for_owner(&owner));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -216,7 +217,7 @@ async fn document_agents_reject_old_completion_and_follow_up_after_rebind() {
         };
         let completed = pending.wait().await;
         let owner = CommandOwnerScope::capture(&ctx.conn, None);
-        let old_document = take_inspection_document(&mut ctx.conn, &owner);
+        let old_document = inspection_document_handle(&ctx.conn, &owner);
         ctx.install_navigation_fixture_for_session_owner(
             "data:text/html,<button>Replacement</button>",
             None,

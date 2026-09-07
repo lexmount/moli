@@ -36,7 +36,7 @@ async fn async_dispatch_updates_live_request_overrides_for_current_page() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -116,7 +116,7 @@ async fn async_dispatch_updates_live_request_overrides_for_current_page() {
 #[tokio::test(flavor = "multi_thread")]
 async fn async_dispatch_offline_runtime_fetch_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -202,7 +202,7 @@ async fn main_document_navigation_emits_network_events_and_captures_response_bod
 
     let url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -422,7 +422,7 @@ async fn main_document_navigation_applies_extra_http_headers() {
 
     let url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -504,11 +504,12 @@ async fn main_document_navigation_events_include_synthesized_cookie_header() {
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let jar_handle = bc.cookie_store_for_test();
+        let mut jar = jar_handle.lock();
         jar.store_response_headers(
             &Url::parse(&page_url).unwrap(),
             &[("set-cookie".to_owned(), "sid=1; Path=/page".to_owned())],
@@ -600,11 +601,12 @@ async fn main_document_navigation_deduplicates_manual_cookie_header_when_store_s
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let jar_handle = bc.cookie_store_for_test();
+        let mut jar = jar_handle.lock();
         jar.store_response_headers(
             &Url::parse(&page_url).unwrap(),
             &[("set-cookie".to_owned(), "sid=store; Path=/page".to_owned())],
@@ -697,12 +699,13 @@ async fn main_document_navigation_redirect_emits_second_request_with_redirect_re
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.set_target_url(format!("http://localhost:{}/origin", addr.port()));
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let jar_handle = bc.cookie_store_for_test();
+        let mut jar = jar_handle.lock();
         jar.store_response_headers(
             &Url::parse(&final_url).unwrap(),
             &[(
@@ -989,7 +992,7 @@ async fn main_document_critical_client_hint_restart_matches_chromium_network_cha
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1152,12 +1155,13 @@ async fn main_document_multi_hop_redirect_preserves_cookie_downgrade_report() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.set_target_url(format!("http://localhost:{}/origin", addr.port()));
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let jar_handle = bc.cookie_store_for_test();
+        let mut jar = jar_handle.lock();
         jar.store_response_headers(
             &Url::parse(&final_url).unwrap(),
             &[(
@@ -1269,7 +1273,7 @@ async fn browser_initiated_redirect_does_not_fabricate_renderer_navigation_reque
 
     let start_url = format!("http://{addr}/start");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1339,7 +1343,7 @@ async fn main_document_request_cookie_report_is_snapshotted_before_response_sets
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1399,7 +1403,7 @@ async fn first_main_document_transport_failure_commits_error_document() {
 
     let url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-2".to_owned()));
@@ -1637,7 +1641,7 @@ async fn main_document_navigation_failure_emits_one_failed_and_finished_terminal
 
     let url = format!("http://{addr}/missing");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);

@@ -1,8 +1,8 @@
 use super::{LOADER_ID, build_mhtml_snapshot, child_frame_security_identity};
 use crate::conn::{
-    BrowserContext, CdpCommandTaskStep, CdpSchedulerEvent, EmulatedDeviceMetrics,
-    FetchInterceptionPattern, FetchRequestStage, NETWORK_ERROR_PAGE_URL, PendingCdpCommandDispatch,
-    ServiceWorkerTargetState, URL_BASE,
+    CdpCommandTaskStep, CdpSchedulerEvent, EmulatedDeviceMetrics, FetchInterceptionPattern,
+    FetchRequestStage, NETWORK_ERROR_PAGE_URL, PendingCdpCommandDispatch, ServiceWorkerTargetState,
+    URL_BASE,
 };
 use crate::devtools_runtime::{
     AutomationEvent, DevToolsCommand, DevToolsCommandContext, DevToolsCommandResult,
@@ -160,7 +160,7 @@ fn take_main_document_response_pause_after_extra_info(
 }
 
 fn load_bc_with_target(ctx: &mut TestContext, bc_id: &str, target_id: &str, url: &str) {
-    let mut bc = BrowserContext::new(bc_id.into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test(bc_id);
     bc.set_active_target_id(target_id);
     bc.set_target_url(url.into());
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -172,7 +172,7 @@ fn load_bc_with_session(
     session_id: &str,
     url: &str,
 ) {
-    let mut bc = BrowserContext::new(bc_id.into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test(bc_id);
     // Use the same target-staging boundary as production. In particular,
     // about:blank must own an initial-empty-document record before its Page is
     // materialized; setting only target/session/url metadata creates a Page
@@ -195,7 +195,9 @@ fn load_bc_with_session(
     );
 }
 fn load_bc_with_service_worker_target(ctx: &mut TestContext) {
-    let mut bc = BrowserContext::new("BID-service-worker-frame-tree".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-service-worker-frame-tree".to_owned());
     let target = ServiceWorkerTargetState::new(
         3,
         7,

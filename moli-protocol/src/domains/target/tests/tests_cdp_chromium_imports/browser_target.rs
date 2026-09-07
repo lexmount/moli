@@ -430,11 +430,14 @@ async fn rust_cdp_capability_target_browser_context_proxy_and_enumeration() {
             .is_some_and(|ids| ids.iter().any(|id| id == &json!(browser_context_id))),
         "{contexts}"
     );
+    let policy = ctx
+        .conn
+        .browser_context
+        .as_ref()
+        .map(BrowserContext::network_policy)
+        .expect("default BrowserContext");
     assert_eq!(
-        ctx.conn
-            .browser_context
-            .as_ref()
-            .and_then(|context| context.network_policy().http_proxy.as_deref()),
+        policy.http_proxy.as_deref(),
         Some("http://proxy.example:8080")
     );
 }

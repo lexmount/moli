@@ -29,9 +29,8 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use url::Url;
 
-fn attached_browser_context() -> BrowserContext {
-    let mut bc = BrowserContext::new("BID-1".into());
-    bc.set_active_target_id("TID-1");
+fn attached_browser_context(conn: &crate::conn::CdpConnection) -> BrowserContext {
+    let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.attach_active_session("SID-1");
     bc
 }
@@ -42,7 +41,7 @@ async fn with_loaded_http_document(
     session_id: &str,
     target_id: &str,
 ) {
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id(target_id.to_owned());
     bc.attach_active_session(session_id.to_owned());
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -62,7 +61,7 @@ async fn with_loaded_http_background_document(
     background_session_id: &str,
     background_target_id: &str,
 ) {
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id(active_target_id.to_owned());
     bc.attach_active_session(active_session_id.to_owned());
     bc.register_page_target_url_fixture(

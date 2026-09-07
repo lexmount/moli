@@ -77,7 +77,7 @@ impl CdpConnection {
             &frame_id,
             &self.browser_global_overrides.extra_headers,
         );
-        let initiator_url = context.target_document_url(&frame_id).cloned();
+        let initiator_url = context.target_document_url(&frame_id);
         let (policy, automation_events_enabled) =
             self.download_configuration_for_browser_context(web_contents.context())?;
         let event_route = self.download_event_route(owner, automation_events_enabled);
@@ -597,7 +597,7 @@ mod tests {
     use moli_core::page::RendererPendingDownloadActivation;
 
     use crate::{
-        conn::{BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandOwnerScope},
+        conn::{BackgroundProtocolEvent, BrowserContext, CommandOwnerScope},
         devtools_runtime::AutomationEvent,
     };
 
@@ -631,7 +631,7 @@ mod tests {
 
     #[test]
     fn background_download_uses_its_target_and_context_header_layers() {
-        let mut connection = CdpConnection::new();
+        let mut connection = crate::test_support::connection();
         let mut browser_context = BrowserContext::new("BID-download".to_owned());
         browser_context.set_active_target_id("TID-active");
         browser_context.set_default_extra_headers(vec![(
@@ -810,7 +810,7 @@ mod tests {
 
     #[test]
     fn stale_browser_observer_does_not_suppress_automation_download_event() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.set_browser_download_events_enabled_for_session(Some("SID-browser"), true);
         let generation = conn.download_subscriptions.browser_event_observers()[0].1;
         let route = DownloadEventRoute {

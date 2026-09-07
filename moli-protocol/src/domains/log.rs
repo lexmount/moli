@@ -171,7 +171,7 @@ fn append_log_replay_snapshot(
 
 #[cfg(test)]
 mod tests {
-    use crate::conn::BrowserContext;
+
     use crate::devtools_runtime::AutomationEvent;
     use crate::domains::observable_output::{
         ObservableOutputProjectionStep, ObservablePreparedOutputSlot,
@@ -193,7 +193,7 @@ mod tests {
     }
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1".to_owned());
         bc.set_target_url("data:text/html,log-test".to_owned());
         bc.attach_active_session("SID-1".to_owned());
@@ -650,7 +650,7 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn log_enable_stages_background_target_session_state() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         bc.stage_background_target(

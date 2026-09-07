@@ -25,8 +25,8 @@ impl Drop for TestDirectory {
 
 fn fixture() -> (TestDirectory, CdpConnection) {
     let directory = TestDirectory::new();
-    let mut conn = CdpConnection::new();
-    let mut source = BrowserContext::new("CTX-source".into());
+    let mut conn = crate::test_support::connection();
+    let mut source = conn.new_browser_context_fixture_for_test("CTX-source");
     source.set_active_target_id("TID-source");
     source.attach_active_session("SID-source");
     conn.install_browser_context_fixture_for_test(source);
@@ -277,15 +277,16 @@ async fn retiring_context_cancels_download_and_new_same_wire_context_cannot_read
     chunks.send(b"partial".to_vec()).unwrap();
     wait_for(&mut monitor, |snapshot| snapshot.received_bytes == 7).await;
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 1);
-    drop(
-        conn.remove_browser_context_by_id_restoring_active_async("CTX-source", None)
-            .await
-            .unwrap(),
-    );
+    let removed = conn
+        .remove_browser_context_by_id_restoring_active_async("CTX-source", None)
+        .await
+        .unwrap();
+    assert!(removed.remove_from_browser().unwrap());
+    drop(removed);
     assert_eq!(terminal(&mut monitor).await.state, DownloadState::Canceled);
     assert!(cancel.is_cancelled());
     assert_eq!(std::fs::read_dir(&directory.0).unwrap().count(), 0);
-    conn.insert_browser_context(BrowserContext::new("CTX-source".into()));
+    conn.insert_browser_context(conn.new_browser_context_fixture_for_test("CTX-source"));
     assert_eq!(
         conn.cancel_download(monitor.guid()),
         Err("No download item found for the given GUID".into())
@@ -332,7 +333,7 @@ async fn replace_source_download_context(conn: &mut CdpConnection, directory: &T
             .await
             .unwrap(),
     );
-    let mut replacement = BrowserContext::new("CTX-source".into());
+    let mut replacement = conn.new_browser_context_fixture_for_test("CTX-source");
     replacement.set_active_target_id("TID-source");
     replacement.attach_active_session("SID-source");
     conn.install_browser_context_fixture_for_test(replacement);

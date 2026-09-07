@@ -1658,6 +1658,7 @@ pub(super) async fn webdriver_classic_new_session(
     let initial_cookie_snapshot = initial_cookies.clone();
     let initial_storage_partition = state.initial_storage_partition(initial_cookies);
     let runtime = ClassicSessionRuntimeHandle::spawn(
+        state.browser_service.handle(),
         initial_cookie_snapshot,
         initial_storage_partition,
         moli_core::runtime::NavigationRuntimeConfig::new(

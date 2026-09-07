@@ -1287,7 +1287,7 @@ async fn patchright_style_existing_utility_world_binding_install_persists_withou
 #[tokio::test]
 async fn patchright_style_pre_document_add_binding_persists_until_navigation() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(crate::conn::BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     let bc = ctx
         .conn
         .browser_context
@@ -1358,7 +1358,7 @@ async fn patchright_style_pre_document_add_binding_persists_until_navigation() {
 #[tokio::test]
 async fn pre_document_add_binding_completes_through_command_task_without_live_page() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(crate::conn::BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     let bc = ctx
         .conn
         .browser_context
@@ -1421,7 +1421,7 @@ async fn run_if_waiting_for_debugger_completes_through_command_task() {
 #[tokio::test]
 async fn patchright_style_pre_document_remove_binding_succeeds_before_navigation() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(crate::conn::BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     let bc = ctx
         .conn
         .browser_context
@@ -1498,7 +1498,7 @@ async fn patchright_style_pre_document_remove_binding_succeeds_before_navigation
 #[tokio::test]
 async fn pre_document_remove_binding_completes_through_command_task_without_live_page() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(crate::conn::BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     let bc = ctx
         .conn
         .browser_context

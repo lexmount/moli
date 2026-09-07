@@ -16,16 +16,23 @@ impl BrowserContext {
     ) -> bool {
         if let Some(host) = self
             .page_targets
-            .active_mut(self.physical.selected_web_contents_id())
+            .active_mut(self.browser_context.selected_web_contents_id())
         {
             let state = host;
             if !mutate(&mut state.document_cookie_manager_surface) {
                 return false;
             }
-            let surface = state.document_cookie_manager_surface.clone();
+            let overrides = state
+                .document_cookie_manager_surface
+                .snapshot()
+                .policy
+                .overrides;
             let target_id = state.target_id().to_owned();
-            if let Some(page) = self.loaded_page_for_target_mut(&target_id) {
-                surface.apply_to_page_async(page).await;
+            if let Some(document) = self.document_handle_for_target(&target_id) {
+                let _ = self
+                    .browser_context
+                    .apply_document_cookie_facade_overrides_for_test(document, Some(overrides))
+                    .await;
             }
         } else if !mutate(&mut self.default_document_cookie_manager_surface) {
             return false;
@@ -38,7 +45,7 @@ impl BrowserContext {
         &self,
     ) -> BrowserContextCookieManagerSurfaceSnapshot {
         self.page_targets
-            .active(self.physical.selected_web_contents_id())
+            .active(self.browser_context.selected_web_contents_id())
             .map(|host| host.document_cookie_manager_surface.snapshot())
             .unwrap_or_else(|| self.default_document_cookie_manager_surface.snapshot())
     }
@@ -166,7 +173,7 @@ impl BrowserContext {
     ) -> Vec<(String, String)> {
         let target_headers = self
             .page_targets
-            .active(self.physical.selected_web_contents_id())
+            .active(self.browser_context.selected_web_contents_id())
             .map(|target| self.effective_policy_for_target(target.target_id()))
             .unwrap_or_default();
         self.merged_extra_headers_for_target_policy(global_headers, target_headers.extra_headers())
@@ -269,17 +276,12 @@ impl BrowserContext {
         global_network_conditions: Option<crate::conn::EmulatedNetworkConditions>,
         global_geolocation: Option<&crate::conn::EmulatedGeolocationOverrideState>,
     ) -> Result<PageSurface, String> {
-        Ok(self.physical.web_contents(handle)?.page_surface(
+        self.browser_context.page_surface_for_web_contents(
+            handle,
             foreground,
-            self.emulation_defaults()
-                .network_conditions
-                .or(global_network_conditions),
-            self.emulation_defaults()
-                .geolocation
-                .as_ref()
-                .or(global_geolocation),
-            self.emulation_defaults().device_metrics.as_ref(),
-        ))
+            global_network_conditions,
+            global_geolocation,
+        )
     }
 
     pub(crate) fn generated_surface_override_script_for_active_target(
@@ -389,7 +391,7 @@ impl BrowserContext {
     }
 }
 
-use crate::conn::state::web_contents::merge_extra_header_layers;
+use moli_core::browser::web_contents::merge_extra_header_layers;
 
 #[cfg(test)]
 mod tests {
@@ -417,23 +419,37 @@ mod tests {
                 None,
             )
             .unwrap();
-        let id = context.selected_web_contents_id().unwrap();
         drop(
             context
                 .page_targets
                 .remove("TID-background-window")
                 .unwrap(),
         );
-        let contents = context.physical.web_contents.get_mut(&id).unwrap();
-        let minimized = contents.page_surface(false, None, None, None);
+        let minimized = context
+            .browser_context
+            .page_surface_for_web_contents(handle, false, None, None)
+            .unwrap();
         assert!(minimized.document_has_focus());
         assert!(
             minimized.document_hidden(),
             "focus emulation must not unminimize a window"
         );
 
-        contents.window.surface.state = WindowSurfaceState::Fullscreen;
-        let fullscreen = contents.page_surface(false, None, None, None);
+        context
+            .browser_context
+            .update_web_contents_window_surface(
+                handle,
+                Some(WindowSurfaceState::Fullscreen),
+                None,
+                None,
+                None,
+                None,
+            )
+            .unwrap();
+        let fullscreen = context
+            .browser_context
+            .page_surface_for_web_contents(handle, false, None, None)
+            .unwrap();
         assert!(!fullscreen.document_hidden());
         assert!(fullscreen.window_fullscreen());
     }

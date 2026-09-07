@@ -1,7 +1,8 @@
 use super::*;
 #[tokio::test]
 async fn browser_context_document_cookie_facade_snapshot_projects_default_cookie_write_url_owner() {
-    let mut bc = BrowserContext::new_with_page_for_test("BID-cookie-facade", "TID-cookie-facade");
+    let mut conn = crate::test_support::connection();
+    let mut bc = conn.new_page_target_fixture_for_test("BID-cookie-facade", "TID-cookie-facade");
     bc.set_target_url("https://example.com/app".into());
 
     let before_load = bc.document_cookie_facade_snapshot();
@@ -53,7 +54,7 @@ async fn browser_context_document_cookie_facade_snapshot_projects_default_cookie
         before_load.structured_write
     );
 
-    let mut conn = CdpConnection::new();
+    conn.install_browser_context_fixture_for_test(bc);
     let navigation = conn
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://live.example.com/page").unwrap(),
@@ -65,7 +66,8 @@ async fn browser_context_document_cookie_facade_snapshot_projects_default_cookie
         )
         .await
         .expect("navigation should build");
-    bc.set_loaded_page_async(navigation.page).await;
+    let bc = conn.browser_context.as_mut().unwrap();
+    bc.commit_active_navigation_for_test(navigation.page).await;
 
     let after_load = bc.document_cookie_facade_snapshot_async().await;
     let after_load_manager = bc.cookie_manager_surface_snapshot_async().await;

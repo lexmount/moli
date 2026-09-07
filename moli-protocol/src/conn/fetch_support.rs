@@ -1,24 +1,28 @@
 use std::str::FromStr;
 use url::Url;
 
-use super::body_spool::ensure_materialize_limit;
 use super::{
-    CapturedBody, CapturedBodyWriter, CdpConnection, ClaimedNavigationRequest, CommandOwnerScope,
-    DocumentFetchCommand, DocumentFetchCommandOutcome, NavigationDispatchState, NavigationId,
-    NavigationLoadOutcome, PausedResponsePreparedDocument,
+    CapturedBody, CdpConnection, ClaimedNavigationRequest, CommandOwnerScope, DocumentFetchCommand,
+    DocumentFetchCommandOutcome, NavigationDispatchState, NavigationId, NavigationLoadOutcome,
+    PausedResponsePreparedDocument,
 };
 use crate::devtools_runtime::{DevToolsNetworkInterceptId, DevToolsNetworkResourceType};
 use crate::domains::network::MainDocumentBodyProgressSource;
 use moli_cookie_jar::StoredCookieQueryReport;
-use moli_core::browser::NavigationRequestLoadPolicy;
+use moli_core::browser::{
+    NavigationRequestLoadPolicy,
+    web_contents::{
+        DocumentBodySource, PausedDocumentTransfer,
+        PausedResponsePreparedDocument as BrowserPausedResponsePreparedDocument,
+    },
+};
 use moli_core::page::{
     PendingSubresourceContinueOutcome, SubresourceAuthCredentials, SubresourceNetworkRequestHandle,
     SubresourceResourceType,
 };
 use moli_core::runtime::DetachedParserScriptFetchContinuation;
 use moli_fetch::{
-    NetworkFetchResult, NetworkObservationJournal, RawResponse, ResponseHead, StreamingRawResponse,
-    url_pattern_matches,
+    NetworkFetchResult, NetworkObservationJournal, StreamingRawResponse, url_pattern_matches,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, strum::EnumString, strum::IntoStaticStr)]
@@ -569,9 +573,12 @@ pub struct PendingFetchResponseNavigation {
     pub navigation: NavigationDispatchState,
     pub(crate) permit: super::state::NavigationInterceptionPermit,
     active_body_stream_handle: Option<String>,
+    body_progress_source: MainDocumentBodyProgressSource,
+    prepared_document: Option<Box<PausedResponsePreparedDocument>>,
 }
 
 impl PendingFetchResponseNavigation {
+    #[cfg(test)]
     pub(crate) fn new(
         navigation: NavigationDispatchState,
         permit: super::state::NavigationInterceptionPermit,
@@ -580,6 +587,23 @@ impl PendingFetchResponseNavigation {
             navigation,
             permit,
             active_body_stream_handle: None,
+            body_progress_source: MainDocumentBodyProgressSource::default(),
+            prepared_document: None,
+        }
+    }
+
+    pub(crate) fn new_with_response_projection(
+        navigation: NavigationDispatchState,
+        permit: super::state::NavigationInterceptionPermit,
+        body_progress_source: MainDocumentBodyProgressSource,
+        prepared_document: Option<Box<PausedResponsePreparedDocument>>,
+    ) -> Self {
+        Self {
+            navigation,
+            permit,
+            active_body_stream_handle: None,
+            body_progress_source,
+            prepared_document,
         }
     }
 
@@ -632,56 +656,33 @@ impl ClaimedFetchResponseNavigation {
     }
 
     pub(crate) fn into_pending_streaming_document_response_navigation(
-        self,
+        mut self,
     ) -> Result<PendingStreamingDocumentResponseNavigation, Box<Self>> {
-        let Self {
-            request_id,
-            pending,
-            transfer,
-        } = self;
-        let Some(PausedDocumentTransfer {
-            request_load_policy,
-            state,
-        }) = transfer
-        else {
-            return Err(Box::new(Self {
-                request_id,
-                pending,
-                transfer: None,
-            }));
+        let Some(transfer) = self.transfer.take() else {
+            return Err(Box::new(self));
         };
-        match state {
-            PausedDocumentTransferState::Pending {
-                body:
-                    DocumentBodySource::StreamingRaw {
-                        response,
-                        network_observation_journal,
-                        body_progress_source,
-                        prepared_document,
-                        ..
-                    },
-            } => Ok(PendingStreamingDocumentResponseNavigation {
-                permit: pending.permit,
-                request_load_policy,
-                navigation: pending.navigation,
-                response,
-                network_observation_journal,
-                body_progress_source,
-                prepared_document,
-            }),
-            state => Err(Box::new(Self {
-                request_id,
-                pending,
-                transfer: Some(PausedDocumentTransfer {
-                    request_load_policy,
-                    state,
-                }),
-            })),
-        }
+        let streaming = match transfer.into_streaming_response() {
+            Ok(streaming) => streaming,
+            Err(transfer) => {
+                self.transfer = Some(*transfer);
+                return Err(Box::new(self));
+            }
+        };
+        let pending = self.pending;
+        Ok(PendingStreamingDocumentResponseNavigation {
+            permit: pending.permit,
+            request_load_policy: streaming.request_load_policy,
+            navigation: pending.navigation,
+            response: streaming.response,
+            network_observation_journal: streaming.network_observation_journal,
+            body_progress_source: pending.body_progress_source,
+            prepared_document: streaming.prepared_document,
+            prepared_document_projection: pending.prepared_document,
+        })
     }
 
     pub(crate) async fn continue_response_async(
-        self,
+        mut self,
         conn: &mut CdpConnection,
         response_code: Option<u16>,
         response_headers: Vec<(String, String)>,
@@ -693,39 +694,38 @@ impl ClaimedFetchResponseNavigation {
         ),
         Self,
     > {
-        let Self {
-            request_id,
-            pending,
-            transfer,
-        } = self;
-        let Some(transfer) = transfer else {
+        let Some(transfer) = self.transfer.take() else {
             return Ok((
-                Some(pending.permit.navigation()),
-                pending.navigation,
+                Some(self.pending.permit.navigation()),
+                self.pending.navigation,
                 Err("renderer channel navigation was superseded by a newer navigation".to_owned()),
             ));
         };
-        match transfer
-            .continue_response_async(
-                conn,
-                pending.permit,
-                &pending.navigation,
-                response_code,
-                response_headers,
-            )
-            .await
-        {
-            Ok(completed) => Ok((
-                Some(pending.permit.navigation()),
-                pending.navigation,
-                completed,
-            )),
-            Err(transfer) => Err(Self {
-                request_id,
-                pending,
-                transfer: Some(transfer),
-            }),
-        }
+        let (request_load_policy, body) = match transfer.into_pending() {
+            Ok(parts) => parts,
+            Err(transfer) => {
+                self.transfer = Some(*transfer);
+                return Err(self);
+            }
+        };
+        let pending = self.pending;
+        let navigation = continue_document_body_source_async(
+            conn,
+            pending.permit,
+            request_load_policy,
+            &pending.navigation,
+            body,
+            pending.body_progress_source,
+            pending.prepared_document,
+            response_code,
+            response_headers,
+        )
+        .await;
+        Ok((
+            Some(pending.permit.navigation()),
+            pending.navigation,
+            navigation,
+        ))
     }
 
     pub(crate) async fn fulfill_synthetic_async(
@@ -749,21 +749,62 @@ impl ClaimedFetchResponseNavigation {
                 Err("renderer channel navigation was superseded by a newer navigation".to_owned()),
             );
         };
-        let navigation = transfer
-            .fulfill_synthetic_async(
-                conn,
-                pending.permit,
-                &pending.navigation,
-                response_code,
-                response_headers,
-                synthetic_body,
-            )
-            .await;
+        let context = transfer.into_synthetic_response_context();
+        let navigation = fulfill_synthetic_document_response_async(
+            conn,
+            pending.permit,
+            &pending.navigation,
+            context,
+            pending.body_progress_source,
+            response_code,
+            response_headers,
+            synthetic_body,
+        )
+        .await;
         (
             Some(pending.permit.navigation()),
             pending.navigation,
             navigation,
         )
+    }
+
+    pub(crate) async fn continue_response_neutrally_async(
+        self,
+        conn: &mut CdpConnection,
+    ) -> (
+        Option<NavigationId>,
+        NavigationDispatchState,
+        Result<NavigationLoadOutcome, String>,
+    ) {
+        let Self {
+            pending, transfer, ..
+        } = self;
+        let navigation_token = Some(pending.permit.navigation());
+        let Some(transfer) = transfer else {
+            return (
+                navigation_token,
+                pending.navigation,
+                Err("renderer channel navigation was superseded by a newer navigation".to_owned()),
+            );
+        };
+        let navigation = match transfer.finish_body_stream_async().await {
+            Ok((request_load_policy, body)) => {
+                continue_document_body_source_async(
+                    conn,
+                    pending.permit,
+                    request_load_policy,
+                    &pending.navigation,
+                    body,
+                    pending.body_progress_source,
+                    pending.prepared_document,
+                    None,
+                    Vec::new(),
+                )
+                .await
+            }
+            Err((_, message)) => Err(message),
+        };
+        (navigation_token, pending.navigation, navigation)
     }
 
     pub(crate) fn fail(
@@ -784,43 +825,6 @@ impl ClaimedFetchResponseNavigation {
             Err(error_text),
         )
     }
-}
-
-#[derive(Debug)]
-pub struct PausedDocumentTransfer {
-    request_load_policy: NavigationRequestLoadPolicy,
-    state: PausedDocumentTransferState,
-}
-
-#[derive(Debug)]
-enum PausedDocumentTransferState {
-    Pending {
-        body: DocumentBodySource,
-    },
-    ActiveBodyStream {
-        stream: ActiveDocumentBodyStreamState,
-    },
-}
-
-#[derive(Debug)]
-struct ActiveDocumentBodyStreamState {
-    requested_url: Url,
-    request_method: String,
-    request_headers: Vec<(String, String)>,
-    response: StreamingRawResponse,
-    network_observation_journal: NetworkObservationJournal,
-    body_progress_source: MainDocumentBodyProgressSource,
-    captured_body: CapturedBodyWriter,
-    unread_body: Vec<u8>,
-    offset: usize,
-    finished: bool,
-}
-
-#[derive(Debug)]
-pub struct PendingFetchResponseOpenedBodyStream {
-    pub handle: String,
-    pub buffered_bytes: Option<Vec<u8>>,
-    pub transfer: PausedDocumentTransfer,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -903,15 +907,6 @@ impl CompletedFetchResponseBodyStreamReadDispatch {
     }
 }
 
-#[derive(Debug)]
-pub(crate) enum OpenBodyStreamError {
-    NotOpenable(Box<PausedDocumentTransfer>),
-    Failed {
-        transfer: Box<PausedDocumentTransfer>,
-        message: String,
-    },
-}
-
 pub(crate) struct PendingStreamingDocumentResponseNavigation {
     pub(crate) permit: super::state::NavigationInterceptionPermit,
     pub(crate) request_load_policy: NavigationRequestLoadPolicy,
@@ -919,927 +914,188 @@ pub(crate) struct PendingStreamingDocumentResponseNavigation {
     pub(crate) response: StreamingRawResponse,
     pub(crate) network_observation_journal: NetworkObservationJournal,
     pub(crate) body_progress_source: MainDocumentBodyProgressSource,
-    pub(crate) prepared_document: Option<Box<PausedResponsePreparedDocument>>,
+    pub(crate) prepared_document: Option<Box<BrowserPausedResponsePreparedDocument>>,
+    pub(crate) prepared_document_projection: Option<Box<PausedResponsePreparedDocument>>,
 }
 
-impl PausedDocumentTransfer {
-    pub(crate) fn pending(
-        request_load_policy: NavigationRequestLoadPolicy,
-        body: DocumentBodySource,
-    ) -> Self {
-        Self {
-            request_load_policy,
-            state: PausedDocumentTransferState::Pending { body },
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn prepared_renderer_agent_token(
-        &self,
-    ) -> Option<moli_core::page::RendererDevToolsAgentToken> {
-        match &self.state {
-            PausedDocumentTransferState::Pending {
-                body:
-                    DocumentBodySource::StreamingRaw {
-                        prepared_document: Some(prepared_document),
-                        ..
-                    },
-                ..
-            } => Some(prepared_document.renderer_devtools_agent_token()),
-            _ => None,
-        }
-    }
-
-    pub(crate) fn open_body_stream(
-        self,
-        handle: String,
-    ) -> Result<PendingFetchResponseOpenedBodyStream, OpenBodyStreamError> {
-        let Self {
-            request_load_policy,
-            state,
-        } = self;
-        let PausedDocumentTransferState::Pending { body } = state else {
-            return Err(OpenBodyStreamError::NotOpenable(Box::new(Self {
-                request_load_policy,
-                state,
-            })));
-        };
-        match body {
-            DocumentBodySource::StreamingRaw {
-                requested_url,
-                request_method,
-                request_headers,
-                response,
-                network_observation_journal,
-                body_progress_source,
-                prepared_document: _,
-            } => Ok(PendingFetchResponseOpenedBodyStream {
-                handle,
-                buffered_bytes: None,
-                transfer: PausedDocumentTransfer {
-                    request_load_policy,
-                    state: PausedDocumentTransferState::ActiveBodyStream {
-                        stream: ActiveDocumentBodyStreamState::new(
-                            requested_url,
-                            request_method,
-                            request_headers,
-                            response,
-                            network_observation_journal,
-                            body_progress_source,
-                        ),
-                    },
-                },
-            }),
-            DocumentBodySource::BufferedRaw {
-                requested_url,
-                request_method,
-                request_headers,
-                response,
-                network_observation_journal,
-            } => {
-                let bytes = clone_buffered_raw_body_for_paused_reuse(&response);
-                Ok(PendingFetchResponseOpenedBodyStream {
-                    handle,
-                    buffered_bytes: Some(bytes),
-                    transfer: PausedDocumentTransfer::pending(
-                        request_load_policy,
-                        DocumentBodySource::BufferedRaw {
-                            requested_url,
-                            request_method,
-                            request_headers,
-                            response,
-                            network_observation_journal,
-                        },
-                    ),
-                })
-            }
-            DocumentBodySource::CapturedRaw {
-                requested_url,
-                request_method,
-                request_headers,
-                head,
-                body,
-                network_observation_journal,
-                body_progress_source,
-            } => {
-                let bytes = match body.materialize_bytes() {
-                    Ok(bytes) => bytes,
-                    Err(error) => {
-                        return Err(OpenBodyStreamError::Failed {
-                            transfer: Box::new(PausedDocumentTransfer::pending(
-                                request_load_policy,
-                                DocumentBodySource::CapturedRaw {
-                                    requested_url,
-                                    request_method,
-                                    request_headers,
-                                    head,
-                                    body,
-                                    network_observation_journal,
-                                    body_progress_source,
-                                },
-                            )),
-                            message: format!(
-                                "failed to materialize captured response body: {error}"
-                            ),
-                        });
-                    }
-                };
-                Ok(PendingFetchResponseOpenedBodyStream {
-                    handle,
-                    buffered_bytes: Some(bytes),
-                    transfer: PausedDocumentTransfer::pending(
-                        request_load_policy,
-                        DocumentBodySource::CapturedRaw {
-                            requested_url,
-                            request_method,
-                            request_headers,
-                            head,
-                            body,
-                            network_observation_journal,
-                            body_progress_source,
-                        },
-                    ),
-                })
-            }
-        }
-    }
-
-    pub(crate) fn body_stream_offset(&self) -> Option<usize> {
-        match &self.state {
-            PausedDocumentTransferState::ActiveBodyStream { stream, .. } => Some(stream.offset()),
-            PausedDocumentTransferState::Pending { .. } => None,
-        }
-    }
-
-    pub(crate) async fn read_body_stream_async(
-        self,
-        size: Option<usize>,
-    ) -> Result<(Vec<u8>, bool, Self), (Self, String)> {
-        let Self {
-            request_load_policy,
-            state,
-        } = self;
-        let PausedDocumentTransferState::ActiveBodyStream { mut stream } = state else {
-            return Err((
-                Self {
-                    request_load_policy,
-                    state,
-                },
-                "StreamHandleNotFound".to_owned(),
-            ));
-        };
-        match stream.read_async(size).await {
-            Ok((bytes, eof)) => {
-                let state = if eof {
-                    let body = match stream.finish_pending_body_source() {
-                        Ok(body) => body,
-                        Err(message) => {
-                            return Err((
-                                Self {
-                                    request_load_policy,
-                                    state: PausedDocumentTransferState::ActiveBodyStream { stream },
-                                },
-                                message,
-                            ));
-                        }
-                    };
-                    PausedDocumentTransferState::Pending { body }
-                } else {
-                    PausedDocumentTransferState::ActiveBodyStream { stream }
-                };
-                Ok((
-                    bytes,
-                    eof,
-                    Self {
-                        request_load_policy,
-                        state,
-                    },
-                ))
-            }
-            Err(message) => Err((
-                Self {
-                    request_load_policy,
-                    state: PausedDocumentTransferState::ActiveBodyStream { stream },
-                },
-                message,
-            )),
-        }
-    }
-
-    pub(crate) async fn materialize_body_limited_async(
-        self,
-        limit: usize,
-    ) -> Result<(Option<Vec<u8>>, Self), (String, Self)> {
-        let Self {
-            request_load_policy,
-            state,
-        } = self;
-        let PausedDocumentTransferState::Pending { body } = state else {
-            return Ok((
-                None,
-                Self {
-                    request_load_policy,
-                    state,
-                },
-            ));
-        };
-        match body.materialize_body_limited_async(limit).await {
-            Ok((bytes, body)) => Ok((
-                Some(bytes),
-                PausedDocumentTransfer::pending(request_load_policy, body),
-            )),
-            Err((message, body)) => Err((
-                message,
-                PausedDocumentTransfer::pending(request_load_policy, body),
-            )),
-        }
-    }
-
-    pub(crate) async fn continue_response_async(
-        self,
-        conn: &mut CdpConnection,
-        permit: super::state::NavigationInterceptionPermit,
-        navigation: &NavigationDispatchState,
-        response_code: Option<u16>,
-        response_headers: Vec<(String, String)>,
-    ) -> Result<Result<NavigationLoadOutcome, String>, Self> {
-        let Self {
-            request_load_policy,
-            state,
-        } = self;
-        match state {
-            PausedDocumentTransferState::Pending { body } => Ok(body
-                .continue_navigation_async(
-                    conn,
-                    permit,
-                    request_load_policy,
-                    navigation,
-                    response_code,
-                    response_headers,
-                )
-                .await),
-            PausedDocumentTransferState::ActiveBodyStream { stream } => Err(Self {
-                request_load_policy,
-                state: PausedDocumentTransferState::ActiveBodyStream { stream },
-            }),
-        }
-    }
-
-    /// Releases a response pause after its decision provider disappears.
-    ///
-    /// An active DevTools body stream has already consumed part of the wire
-    /// response, so it cannot use the ordinary continue path. Finish capturing
-    /// that stream and resume from the complete body instead of turning a
-    /// session lifecycle event into a Browser navigation failure.
-    pub(crate) async fn continue_response_neutrally_async(
-        self,
-        conn: &mut CdpConnection,
-        permit: super::state::NavigationInterceptionPermit,
-        navigation: &NavigationDispatchState,
-    ) -> Result<NavigationLoadOutcome, String> {
-        let Self {
-            request_load_policy,
-            state,
-        } = self;
-        let body = match state {
-            PausedDocumentTransferState::Pending { body } => body,
-            PausedDocumentTransferState::ActiveBodyStream { mut stream } => {
-                stream.read_async(None).await?;
-                stream.finish_pending_body_source()?
-            }
-        };
-        body.continue_navigation_async(
-            conn,
-            permit,
-            request_load_policy,
-            navigation,
-            None,
-            Vec::new(),
-        )
-        .await
-    }
-
-    pub(crate) async fn fulfill_synthetic_async(
-        self,
-        conn: &mut CdpConnection,
-        permit: super::state::NavigationInterceptionPermit,
-        navigation: &NavigationDispatchState,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        synthetic_body: CapturedBody,
-    ) -> Result<NavigationLoadOutcome, String> {
-        let Self {
-            request_load_policy,
-            state,
-        } = self;
-        match state {
-            PausedDocumentTransferState::Pending { body } => {
-                body.fulfill_synthetic_navigation_async(
-                    conn,
-                    permit,
-                    request_load_policy,
-                    navigation,
-                    response_code,
-                    response_headers,
-                    synthetic_body,
-                )
-                .await
-            }
-            PausedDocumentTransferState::ActiveBodyStream { stream } => {
-                stream
-                    .fulfill_synthetic_async(
-                        conn,
-                        permit,
-                        request_load_policy,
-                        navigation,
-                        response_code,
-                        response_headers,
-                        synthetic_body,
-                    )
-                    .await
-            }
-        }
-    }
-}
-
-impl ActiveDocumentBodyStreamState {
-    fn new(
-        requested_url: Url,
-        request_method: String,
-        request_headers: Vec<(String, String)>,
-        response: StreamingRawResponse,
-        network_observation_journal: NetworkObservationJournal,
-        body_progress_source: MainDocumentBodyProgressSource,
-    ) -> Self {
-        Self {
+#[allow(clippy::too_many_arguments)]
+async fn continue_document_body_source_async(
+    conn: &mut CdpConnection,
+    permit: super::state::NavigationInterceptionPermit,
+    request_load_policy: NavigationRequestLoadPolicy,
+    navigation: &NavigationDispatchState,
+    body: DocumentBodySource,
+    body_progress_source: MainDocumentBodyProgressSource,
+    prepared_document_projection: Option<Box<PausedResponsePreparedDocument>>,
+    response_code: Option<u16>,
+    response_headers: Vec<(String, String)>,
+) -> Result<NavigationLoadOutcome, String> {
+    let has_response_override = response_code.is_some() || !response_headers.is_empty();
+    match body {
+        DocumentBodySource::BufferedRaw {
             requested_url,
             request_method,
             request_headers,
             response,
             network_observation_journal,
-            body_progress_source,
-            captured_body: CapturedBodyWriter::default(),
-            unread_body: Vec::new(),
-            offset: 0,
-            finished: false,
-        }
-    }
-
-    fn offset(&self) -> usize {
-        self.offset
-    }
-
-    async fn read_async(&mut self, size: Option<usize>) -> Result<(Vec<u8>, bool), String> {
-        read_active_body_stream_async(
-            &mut self.response,
-            &mut self.captured_body,
-            &mut self.unread_body,
-            &mut self.offset,
-            &mut self.finished,
-            size,
-        )
-        .await
-    }
-
-    fn finish_pending_body_source(&mut self) -> Result<DocumentBodySource, String> {
-        let head = ResponseHead {
-            final_url: self.response.final_url.clone(),
-            status: self.response.status,
-            headers: self.response.headers.clone(),
-            request_cookie_report: self.response.request_cookie_report.clone(),
-            cookie_set_reports: self.response.cookie_set_reports.clone(),
-            redirected: self.response.redirected,
-            redirect_chain: self.response.redirect_chain.clone(),
-            from_cache: self.response.from_cache,
-            negotiated_http_version: self.response.negotiated_http_version,
-        };
-        let body = self
-            .captured_body
-            .finish_in_place()
-            .map_err(|error| format!("failed to finish captured response body: {error}"))?;
-        Ok(DocumentBodySource::CapturedRaw {
-            requested_url: self.requested_url.clone(),
-            request_method: self.request_method.clone(),
-            request_headers: self.request_headers.clone(),
-            head,
-            body,
-            network_observation_journal: self.network_observation_journal.clone(),
-            body_progress_source: self.body_progress_source.clone(),
-        })
-    }
-
-    async fn fulfill_synthetic_async(
-        self,
-        conn: &mut CdpConnection,
-        permit: super::state::NavigationInterceptionPermit,
-        request_load_policy: NavigationRequestLoadPolicy,
-        navigation: &NavigationDispatchState,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        synthetic_body: CapturedBody,
-    ) -> Result<NavigationLoadOutcome, String> {
-        let final_url = self.response.final_url.clone();
-        let request_cookie_report = self.response.request_cookie_report.clone();
-        let work = conn.start_intercepted_navigation_load_for_response(
-            permit,
-            request_load_policy,
-            self.requested_url,
-            self.request_method,
-            self.request_headers,
-        )?;
-        conn.build_navigation_from_buffered_body_source_for_intercepted_request_async(
-            navigation,
-            work,
-            final_url,
-            response_code,
-            response_headers,
-            synthetic_body,
-            request_cookie_report,
-            NetworkObservationJournal::default(),
-            self.body_progress_source,
-        )
-        .await
-    }
-}
-
-#[derive(Debug)]
-pub enum DocumentBodySource {
-    BufferedRaw {
-        requested_url: Url,
-        request_method: String,
-        request_headers: Vec<(String, String)>,
-        response: RawResponse,
-        network_observation_journal: NetworkObservationJournal,
-    },
-    StreamingRaw {
-        requested_url: Url,
-        request_method: String,
-        request_headers: Vec<(String, String)>,
-        response: StreamingRawResponse,
-        network_observation_journal: NetworkObservationJournal,
-        body_progress_source: MainDocumentBodyProgressSource,
-        prepared_document: Option<Box<PausedResponsePreparedDocument>>,
-    },
-    CapturedRaw {
-        requested_url: Url,
-        request_method: String,
-        request_headers: Vec<(String, String)>,
-        head: ResponseHead,
-        body: CapturedBody,
-        network_observation_journal: NetworkObservationJournal,
-        body_progress_source: MainDocumentBodyProgressSource,
-    },
-}
-
-async fn read_active_body_stream_async(
-    response: &mut StreamingRawResponse,
-    captured_body: &mut CapturedBodyWriter,
-    unread_body: &mut Vec<u8>,
-    offset: &mut usize,
-    finished: &mut bool,
-    size: Option<usize>,
-) -> Result<(Vec<u8>, bool), String> {
-    let mut bytes = Vec::new();
-    match size {
-        Some(limit) => {
-            while bytes.len() < limit {
-                if unread_body.is_empty() && !*finished {
-                    read_next_active_body_stream_chunk_async(
-                        response,
-                        captured_body,
-                        unread_body,
-                        finished,
-                    )
-                    .await?;
-                }
-                if unread_body.is_empty() {
-                    break;
-                }
-                let remaining = limit.saturating_sub(bytes.len());
-                drain_unread_active_body_stream_bytes(unread_body, &mut bytes, remaining);
-            }
-        }
-        None => {
-            while !unread_body.is_empty() || !*finished {
-                if unread_body.is_empty() {
-                    read_next_active_body_stream_chunk_async(
-                        response,
-                        captured_body,
-                        unread_body,
-                        finished,
-                    )
-                    .await?;
-                }
-                let remaining = unread_body.len();
-                drain_unread_active_body_stream_bytes(unread_body, &mut bytes, remaining);
-            }
-        }
-    }
-    *offset = offset.saturating_add(bytes.len());
-
-    let eof = *finished && unread_body.is_empty();
-    Ok((bytes, eof))
-}
-
-fn drain_unread_active_body_stream_bytes(
-    unread_body: &mut Vec<u8>,
-    bytes: &mut Vec<u8>,
-    limit: usize,
-) {
-    let take = limit.min(unread_body.len());
-    bytes.extend(unread_body.drain(..take));
-}
-
-async fn read_next_active_body_stream_chunk_async(
-    response: &mut StreamingRawResponse,
-    captured_body: &mut CapturedBodyWriter,
-    unread_body: &mut Vec<u8>,
-    finished: &mut bool,
-) -> Result<(), String> {
-    if *finished {
-        return Ok(());
-    }
-    if let Some(chunk) = response.next_chunk().await {
-        captured_body
-            .append(&chunk)
-            .map_err(|error| format!("failed to capture response body stream: {error}"))?;
-        unread_body.extend(chunk);
-        return Ok(());
-    }
-    response
-        .finish()
-        .await
-        .map_err(|error| format!("failed to read page body from stream: {error}"))?;
-    *finished = true;
-    Ok(())
-}
-
-fn clone_buffered_raw_body_for_paused_reuse(response: &RawResponse) -> Vec<u8> {
-    // Fetch.getResponseBody and Fetch.takeResponseBodyAsStream can inspect a
-    // buffered response-stage body while the paused request remains resumable.
-    // Until paused state owns a shared/spooled body source, that requires an
-    // explicit clone rather than consuming the RawResponse.
-    response.clone_body_bytes()
-}
-
-impl DocumentBodySource {
-    pub(crate) async fn continue_navigation_async(
-        self,
-        conn: &mut CdpConnection,
-        permit: super::state::NavigationInterceptionPermit,
-        request_load_policy: NavigationRequestLoadPolicy,
-        navigation: &NavigationDispatchState,
-        response_code: Option<u16>,
-        response_headers: Vec<(String, String)>,
-    ) -> Result<NavigationLoadOutcome, String> {
-        let has_response_override = response_code.is_some() || !response_headers.is_empty();
-        match self {
-            Self::BufferedRaw {
+        } => {
+            let work = conn.start_intercepted_navigation_load_for_response(
+                permit,
+                request_load_policy,
                 requested_url,
                 request_method,
                 request_headers,
-                response,
-                network_observation_journal,
-            } => {
-                let work = conn.start_intercepted_navigation_load_for_response(
-                    permit,
-                    request_load_policy,
-                    requested_url,
-                    request_method,
-                    request_headers,
-                )?;
-                if !has_response_override {
-                    conn.build_intercepted_navigation_response_async(
-                        navigation,
-                        work.with_response(NetworkFetchResult::with_observation_journal(
-                            response,
-                            network_observation_journal,
-                        )),
-                    )
-                    .await
-                } else {
-                    let (head, body) = response.into_body();
-                    let status = head.status;
-                    let headers = head.headers.clone();
-                    let final_url = head.final_url.clone();
-                    let request_cookie_report = head.request_cookie_report.clone();
-                    let body = body
-                        .try_into_materialized_bytes()
-                        .expect("RawResponse body should remain materialized at the response override boundary");
-                    let body = CapturedBody::from_bytes(body);
-                    conn.build_navigation_from_buffered_body_source_for_intercepted_request_async(
-                        navigation,
-                        work,
-                        final_url,
-                        response_code.unwrap_or(status),
-                        if response_headers.is_empty() {
-                            headers
-                        } else {
-                            response_headers
-                        },
-                        body,
-                        request_cookie_report,
-                        network_observation_journal,
-                        MainDocumentBodyProgressSource::default(),
-                    )
-                    .await
-                }
-            }
-            Self::StreamingRaw {
-                requested_url,
-                request_method,
-                request_headers,
-                response,
-                network_observation_journal,
-                body_progress_source,
-                prepared_document,
-            } => {
-                if !has_response_override && let Some(prepared_document) = prepared_document {
-                    return Ok(prepared_document.resume_streaming(response, None));
-                }
-                let work = conn.start_intercepted_navigation_load_for_response(
-                    permit,
-                    request_load_policy,
-                    requested_url,
-                    request_method,
-                    request_headers,
-                )?;
-                conn.build_navigation_from_intercepted_streaming_response_with_override_async(
+            )?;
+            if !has_response_override {
+                conn.build_intercepted_navigation_response_async(
                     navigation,
                     work.with_response(NetworkFetchResult::with_observation_journal(
                         response,
                         network_observation_journal,
                     )),
-                    response_code,
-                    response_headers,
-                    body_progress_source,
+                )
+                .await
+            } else {
+                let (head, body) = response.into_body();
+                let status = head.status;
+                let headers = head.headers.clone();
+                let final_url = head.final_url.clone();
+                let request_cookie_report = head.request_cookie_report.clone();
+                let body = body.try_into_materialized_bytes().expect(
+                    "RawResponse body should remain materialized at the response override boundary",
+                );
+                conn.build_navigation_from_buffered_body_source_for_intercepted_request_async(
+                    navigation,
+                    work,
+                    final_url,
+                    response_code.unwrap_or(status),
+                    if response_headers.is_empty() {
+                        headers
+                    } else {
+                        response_headers
+                    },
+                    CapturedBody::from_bytes(body),
+                    request_cookie_report,
+                    network_observation_journal,
+                    MainDocumentBodyProgressSource::default(),
                 )
                 .await
             }
-            Self::CapturedRaw {
-                requested_url,
-                request_method,
-                request_headers,
-                head,
-                body,
-                network_observation_journal,
-                body_progress_source,
-            } => {
-                let work = conn.start_intercepted_navigation_load_for_response(
-                    permit,
-                    request_load_policy,
-                    requested_url,
-                    request_method,
-                    request_headers,
-                )?;
-                if !has_response_override {
-                    conn.build_navigation_from_captured_raw_response_for_intercepted_request_async(
-                        navigation,
-                        work,
-                        head,
-                        body,
-                        network_observation_journal,
-                        body_progress_source,
-                    )
-                    .await
-                } else {
-                    let status = head.status;
-                    let headers = head.headers.clone();
-                    let final_url = head.final_url.clone();
-                    let request_cookie_report = head.request_cookie_report.clone();
-                    conn.build_navigation_from_buffered_body_source_for_intercepted_request_async(
-                        navigation,
-                        work,
-                        final_url,
-                        response_code.unwrap_or(status),
-                        if response_headers.is_empty() {
-                            headers
-                        } else {
-                            response_headers
-                        },
-                        body,
-                        request_cookie_report,
-                        network_observation_journal,
-                        body_progress_source,
-                    )
-                    .await
-                }
-            }
         }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    async fn fulfill_synthetic_navigation_async(
-        self,
-        conn: &mut CdpConnection,
-        permit: super::state::NavigationInterceptionPermit,
-        request_load_policy: NavigationRequestLoadPolicy,
-        navigation: &NavigationDispatchState,
-        response_code: u16,
-        response_headers: Vec<(String, String)>,
-        synthetic_body: CapturedBody,
-    ) -> Result<NavigationLoadOutcome, String> {
-        let (
+        DocumentBodySource::StreamingRaw {
             requested_url,
             request_method,
             request_headers,
-            final_url,
-            request_cookie_report,
-            body_progress_source,
-        ) = match self {
-            Self::BufferedRaw {
+            response,
+            network_observation_journal,
+            prepared_document,
+        } => {
+            if !has_response_override
+                && let (Some(prepared_document), Some(projection)) =
+                    (prepared_document, prepared_document_projection)
+            {
+                return Ok(projection.resume_streaming(*prepared_document, response, None));
+            }
+            let work = conn.start_intercepted_navigation_load_for_response(
+                permit,
+                request_load_policy,
                 requested_url,
                 request_method,
                 request_headers,
-                response,
-                ..
-            } => (
-                requested_url,
-                request_method,
-                request_headers,
-                response.final_url.clone(),
-                response.request_cookie_report.clone(),
-                MainDocumentBodyProgressSource::default(),
-            ),
-            Self::StreamingRaw {
-                requested_url,
-                request_method,
-                request_headers,
-                response,
+            )?;
+            conn.build_navigation_from_intercepted_streaming_response_with_override_async(
+                navigation,
+                work.with_response(NetworkFetchResult::with_observation_journal(
+                    response,
+                    network_observation_journal,
+                )),
+                response_code,
+                response_headers,
                 body_progress_source,
-                ..
-            } => (
-                requested_url,
-                request_method,
-                request_headers,
-                response.final_url.clone(),
-                response.request_cookie_report.clone(),
-                body_progress_source,
-            ),
-            Self::CapturedRaw {
-                requested_url,
-                request_method,
-                request_headers,
-                head,
-                body_progress_source,
-                ..
-            } => (
-                requested_url,
-                request_method,
-                request_headers,
-                head.final_url.clone(),
-                head.request_cookie_report.clone(),
-                body_progress_source,
-            ),
-        };
-        let work = conn.start_intercepted_navigation_load_for_response(
-            permit,
-            request_load_policy,
+            )
+            .await
+        }
+        DocumentBodySource::CapturedRaw {
             requested_url,
             request_method,
             request_headers,
-        )?;
-        conn.build_navigation_from_buffered_body_source_for_intercepted_request_async(
-            navigation,
-            work,
-            final_url,
-            response_code,
-            response_headers,
-            synthetic_body,
-            request_cookie_report,
-            NetworkObservationJournal::default(),
-            body_progress_source,
-        )
-        .await
-    }
-
-    pub(crate) async fn materialize_body_limited_async(
-        self,
-        limit: usize,
-    ) -> Result<(Vec<u8>, Self), (String, Self)> {
-        match self {
-            Self::BufferedRaw {
+            head,
+            body,
+            network_observation_journal,
+        } => {
+            let work = conn.start_intercepted_navigation_load_for_response(
+                permit,
+                request_load_policy,
                 requested_url,
                 request_method,
                 request_headers,
-                response,
-                network_observation_journal,
-            } => {
-                if let Err(error) = ensure_materialize_limit(response.body_bytes().len(), limit) {
-                    return Err((
-                        error.to_string(),
-                        Self::BufferedRaw {
-                            requested_url,
-                            request_method,
-                            request_headers,
-                            response,
-                            network_observation_journal,
-                        },
-                    ));
-                }
-                let bytes = clone_buffered_raw_body_for_paused_reuse(&response);
-                Ok((
-                    bytes,
-                    Self::BufferedRaw {
-                        requested_url,
-                        request_method,
-                        request_headers,
-                        response,
-                        network_observation_journal,
+            )?;
+            if !has_response_override {
+                conn.build_navigation_from_captured_raw_response_for_intercepted_request_async(
+                    navigation,
+                    work,
+                    head,
+                    body,
+                    network_observation_journal,
+                    body_progress_source,
+                )
+                .await
+            } else {
+                let status = head.status;
+                let headers = head.headers.clone();
+                let final_url = head.final_url.clone();
+                let request_cookie_report = head.request_cookie_report.clone();
+                conn.build_navigation_from_buffered_body_source_for_intercepted_request_async(
+                    navigation,
+                    work,
+                    final_url,
+                    response_code.unwrap_or(status),
+                    if response_headers.is_empty() {
+                        headers
+                    } else {
+                        response_headers
                     },
-                ))
-            }
-            Self::StreamingRaw {
-                requested_url,
-                request_method,
-                request_headers,
-                response,
-                network_observation_journal,
-                body_progress_source,
-                prepared_document: _,
-            } => {
-                let preserved_head = response.head();
-                let (head, body) = match capture_streaming_raw_response(response).await {
-                    Ok(captured) => captured,
-                    Err(message) => {
-                        return Err((
-                            message,
-                            Self::CapturedRaw {
-                                requested_url,
-                                request_method,
-                                request_headers,
-                                head: preserved_head,
-                                body: CapturedBody::from_bytes(Vec::new()),
-                                network_observation_journal,
-                                body_progress_source,
-                            },
-                        ));
-                    }
-                };
-                let result = body.materialize_bytes_limited(limit).map_err(|error| {
-                    format!("failed to materialize captured response body: {error}")
-                });
-                let source = Self::CapturedRaw {
-                    requested_url,
-                    request_method,
-                    request_headers,
-                    head,
                     body,
+                    request_cookie_report,
                     network_observation_journal,
                     body_progress_source,
-                };
-                match result {
-                    Ok(bytes) => Ok((bytes, source)),
-                    Err(message) => Err((message, source)),
-                }
-            }
-            Self::CapturedRaw {
-                requested_url,
-                request_method,
-                request_headers,
-                head,
-                body,
-                network_observation_journal,
-                body_progress_source,
-            } => {
-                let result = body.materialize_bytes_limited(limit).map_err(|error| {
-                    format!("failed to materialize captured response body: {error}")
-                });
-                let source = Self::CapturedRaw {
-                    requested_url,
-                    request_method,
-                    request_headers,
-                    head,
-                    body,
-                    network_observation_journal,
-                    body_progress_source,
-                };
-                match result {
-                    Ok(bytes) => Ok((bytes, source)),
-                    Err(message) => Err((message, source)),
-                }
+                )
+                .await
             }
         }
     }
 }
 
-async fn capture_streaming_raw_response(
-    mut response: StreamingRawResponse,
-) -> Result<(ResponseHead, CapturedBody), String> {
-    let head = response.head();
-    let mut body = CapturedBodyWriter::default();
-    while let Some(chunk) = response.next_chunk().await {
-        body.append(&chunk)
-            .map_err(|error| format!("failed to capture response body stream: {error}"))?;
-    }
-    response
-        .finish()
-        .await
-        .map_err(|error| format!("failed to read page body from stream: {error}"))?;
-    let body = body
-        .finish()
-        .map_err(|error| format!("failed to finish captured response body: {error}"))?;
-    Ok((head, body))
+#[allow(clippy::too_many_arguments)]
+async fn fulfill_synthetic_document_response_async(
+    conn: &mut CdpConnection,
+    permit: super::state::NavigationInterceptionPermit,
+    navigation: &NavigationDispatchState,
+    context: moli_core::browser::web_contents::SyntheticDocumentResponseContext,
+    body_progress_source: MainDocumentBodyProgressSource,
+    response_code: u16,
+    response_headers: Vec<(String, String)>,
+    synthetic_body: CapturedBody,
+) -> Result<NavigationLoadOutcome, String> {
+    let work = conn.start_intercepted_navigation_load_for_response(
+        permit,
+        context.request_load_policy,
+        context.requested_url,
+        context.request_method,
+        context.request_headers,
+    )?;
+    conn.build_navigation_from_buffered_body_source_for_intercepted_request_async(
+        navigation,
+        work,
+        context.final_url,
+        response_code,
+        response_headers,
+        synthetic_body,
+        context.request_cookie_report,
+        NetworkObservationJournal::default(),
+        body_progress_source,
+    )
+    .await
 }
 
 /// Residence that owns a request-stage subresource Fetch pause.

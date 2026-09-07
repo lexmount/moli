@@ -372,7 +372,7 @@ mod tests {
 
     use super::{DEFAULT_IO_READ_SIZE, read_io_stream_state};
     use crate::{
-        conn::{BrowserContext, CdpCommandTaskStep, IoStreamState},
+        conn::{CdpCommandTaskStep, IoStreamState},
         testing::TestContext,
     };
 
@@ -401,7 +401,7 @@ mod tests {
     #[tokio::test]
     async fn read_supports_offsets_and_eof() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-1".into(), b"abcdef".to_vec(), 0);
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -433,7 +433,7 @@ mod tests {
     #[tokio::test]
     async fn close_removes_stream_handle() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-1".into(), b"abcdef".to_vec(), 0);
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -478,7 +478,7 @@ mod tests {
     #[tokio::test]
     async fn read_large_stream_handle_uses_captured_body_backing() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-2".into(), vec![b'x'; 1024 * 1024 + 8], 0);
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -511,7 +511,7 @@ mod tests {
     #[tokio::test]
     async fn read_command_dispatch_handles_buffered_stream_without_fallback() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.insert_io_stream("STREAM-DISPATCH".into(), b"dispatch".to_vec(), 0);
         ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -535,7 +535,9 @@ mod tests {
     #[tokio::test]
     async fn target_scoped_stream_handle_requires_matching_session_owner() {
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-io-owner".to_owned());
+        let mut bc = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-io-owner".to_owned());
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         bc.register_page_target_url_fixture(

@@ -27,7 +27,7 @@ fn bidi_network_context(session_id: &str) -> crate::devtools_runtime::DevToolsCo
 #[tokio::test(flavor = "multi_thread")]
 async fn get_response_body_respects_recorded_session_visibility() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     bc.active_page_target_mut()
@@ -67,7 +67,7 @@ async fn get_response_body_respects_recorded_session_visibility() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_response_body_requires_calling_session_network_listener() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     bc.active_page_target_mut()
@@ -118,7 +118,7 @@ async fn get_response_body_requires_calling_session_network_listener() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_response_body_reports_pending_body_as_existing_without_data() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -140,7 +140,7 @@ async fn get_response_body_reports_pending_body_as_existing_without_data() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_response_body_ready_body_replaces_pending_body() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -169,8 +169,8 @@ async fn get_response_body_rejects_bodies_over_materialization_limit() {
     let mut config = FetchConfig::default();
     config.set_connection_limits(None, None, Some(4));
     let mut ctx = TestContext::new();
-    ctx.conn = CdpConnection::new_with_fetch_config(config);
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    ctx.conn = crate::test_support::connection_with_fetch_config(config);
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -193,7 +193,7 @@ async fn get_response_body_rejects_bodies_over_materialization_limit() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_response_body_reports_default_single_resource_budget_eviction() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -220,7 +220,7 @@ async fn get_response_body_reports_default_single_resource_budget_eviction() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_response_body_base64_encodes_non_utf8_captured_bytes() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -247,7 +247,7 @@ async fn get_response_body_base64_encodes_non_utf8_captured_bytes() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_request_post_data_matches_chromium_errors_and_binary_encoding() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -331,7 +331,7 @@ async fn get_response_body_returns_partial_body_after_staged_loading_failed() {
     }
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-1".to_owned());
     bc.active_page_target_mut()
@@ -451,7 +451,7 @@ async fn get_response_body_returns_partial_body_after_staged_loading_failed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_request_post_data_respects_recorded_session_visibility() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     bc.active_page_target_mut()
@@ -497,7 +497,7 @@ async fn get_request_post_data_respects_recorded_session_visibility() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_request_post_data_returns_main_document_navigation_post_body() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-1".to_owned());
     bc.active_page_target_mut()
@@ -553,7 +553,7 @@ async fn get_request_post_data_returns_main_document_navigation_post_body() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_request_post_data_uses_text_projection_while_bidi_collector_keeps_transport_bytes() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-1".to_owned());
     bc.active_page_target_mut()
@@ -659,7 +659,7 @@ async fn get_request_post_data_uses_text_projection_while_bidi_collector_keeps_t
 #[tokio::test(flavor = "multi_thread")]
 async fn get_network_data_returns_bidi_response_body_bytes() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("bidi-session-1".to_owned());
     bc.active_page_target_mut()
@@ -996,7 +996,7 @@ async fn get_network_data_returns_bidi_response_body_bytes() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_data_collectors_gate_get_data_disown_and_remove() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("bidi-session-1".to_owned());
     bc.record_captured_response_body(
@@ -1312,7 +1312,7 @@ async fn network_data_collectors_gate_get_data_disown_and_remove() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_data_collector_body_persists_after_target_artifact_cleanup() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("bidi-session-1".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1467,7 +1467,7 @@ async fn network_data_collector_body_persists_after_target_artifact_cleanup() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_data_explicit_collector_prefers_collected_body_over_stale_target_artifact() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("bidi-session-1".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1549,7 +1549,7 @@ async fn network_data_explicit_collector_prefers_collected_body_over_stale_targe
 #[tokio::test(flavor = "multi_thread")]
 async fn network_data_explicit_collector_rejects_unconfigured_data_type() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("bidi-session-1".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1613,7 +1613,7 @@ async fn network_data_explicit_collector_rejects_unconfigured_data_type() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_data_without_collector_requires_matching_collected_data_type() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("bidi-session-1".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1685,7 +1685,7 @@ async fn network_data_without_collector_requires_matching_collected_data_type() 
 #[tokio::test(flavor = "multi_thread")]
 async fn network_data_collector_membership_uses_recorded_target_scope() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("bidi-session-1".to_owned());
     bc.register_page_target_url_fixture("TID-other".to_owned(), None, "about:blank".to_owned());
@@ -1804,7 +1804,7 @@ async fn network_data_collector_membership_uses_recorded_target_scope() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_data_collector_gated_body_without_match_is_not_readable() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("bidi-session-1".to_owned());
     bc.register_page_target_url_fixture("TID-other".to_owned(), None, "about:blank".to_owned());
@@ -1885,7 +1885,7 @@ async fn network_data_collector_gated_body_without_match_is_not_readable() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_network_data_reports_unimplemented_or_missing_data_with_bidi_errors() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.record_pending_response_body("REQ-pending".to_owned(), [None::<String>]);
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -1943,7 +1943,7 @@ async fn get_network_data_reports_unimplemented_or_missing_data_with_bidi_errors
 #[tokio::test(flavor = "multi_thread")]
 async fn get_response_body_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
 
     ctx.process_async(json!({
         "id": 3,
@@ -1983,7 +1983,7 @@ async fn main_document_navigation_get_response_body_preserves_binary_bytes() {
 
     let url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2073,7 +2073,7 @@ fetch('/binary')
     let page_url = format!("http://{addr}/page");
     let binary_url = format!("http://{addr}/binary");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2200,7 +2200,7 @@ fetch("/upload", {method: "POST", body: formData})
     let page_url = format!("http://{addr}/page");
     let upload_url = format!("http://{addr}/upload");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);

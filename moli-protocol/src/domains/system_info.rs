@@ -55,7 +55,6 @@ fn get_process_info(cmd: &Cmd<'_>) -> CommandOutputPlan {
 mod tests {
     use serde_json::json;
 
-    use crate::conn::BrowserContext;
     use crate::testing::TestContext;
 
     #[tokio::test(flavor = "multi_thread")]
@@ -87,7 +86,9 @@ mod tests {
         // Chromium source:
         // content/browser/devtools/protocol/system_info_handler.cc
         let mut ctx = TestContext::new();
-        let mut browser_context = BrowserContext::new("BID-system-info".to_owned());
+        let mut browser_context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-system-info".to_owned());
         browser_context.set_active_target_id("TID-system-info".to_owned());
         browser_context.attach_active_session("SID-frame".to_owned());
         ctx.conn
@@ -128,7 +129,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn system_info_get_process_info_rejects_frame_target_session() {
         let mut ctx = TestContext::new();
-        let mut browser_context = BrowserContext::new("BID-system-info".to_owned());
+        let mut browser_context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-system-info".to_owned());
         browser_context.set_active_target_id("TID-system-info".to_owned());
         browser_context.attach_active_session("SID-frame".to_owned());
         ctx.conn

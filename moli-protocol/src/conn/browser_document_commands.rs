@@ -13,13 +13,13 @@ use moli_core::{
 use std::sync::Arc;
 use url::Url;
 
+use super::BrowserContext;
 use super::{
-    BrowserAppManifestLoadPreparation, CdpConnection, CommandOwnerScope,
-    CompletedAppManifestLoadPreparation, CompletedAppManifestPublication,
-    CompletedCaptureDocumentImage, CompletedCaptureDocumentScreencastFrame,
-    CompletedCaptureDocumentSnapshot, CompletedChildFrameLifecycleWork,
-    CompletedChildFrameNavigation, CompletedChildFrameTreeSnapshot,
-    CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
+    BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
+    CompletedAppManifestPublication, CompletedCaptureDocumentImage,
+    CompletedCaptureDocumentScreencastFrame, CompletedCaptureDocumentSnapshot,
+    CompletedChildFrameLifecycleWork, CompletedChildFrameNavigation,
+    CompletedChildFrameTreeSnapshot, CompletedDocumentAutofillTrigger, CompletedDocumentBlobRead,
     CompletedDocumentCookieOwnerSnapshot, CompletedDocumentCspBypassUpdate,
     CompletedDocumentDiagnosticsSnapshot, CompletedDocumentFetchCommand,
     CompletedDocumentInputCommand, CompletedDocumentLifecycleStop, CompletedDocumentPolicyBatch,
@@ -40,7 +40,7 @@ use super::{
     PendingNetworkResourceLoadPreparation, PendingSetDocumentContent,
     PendingTopLevelHistoryTraversal, PendingTopLevelSameDocumentNavigation,
 };
-use crate::conn::state::BrowserContext;
+use crate::conn::{CdpConnection, CommandOwnerScope};
 
 impl CdpConnection {
     pub(crate) fn browser_context_by_browser_id(
@@ -51,7 +51,7 @@ impl CdpConnection {
             .find(|candidate| candidate.browser_context_id() == context)
     }
 
-    pub(super) fn browser_context_by_browser_id_mut(
+    pub(in crate::conn) fn browser_context_by_browser_id_mut(
         &mut self,
         context: BrowserContextId,
     ) -> Option<&mut BrowserContext> {
@@ -59,6 +59,24 @@ impl CdpConnection {
             .iter_mut()
             .chain(&mut self.inactive_browser_contexts)
             .find(|candidate| candidate.browser_context_id() == context)
+    }
+
+    fn browser_context_handle_by_id(
+        &self,
+        context: BrowserContextId,
+    ) -> Option<&moli_core::browser::BrowserContextHandle> {
+        Some(&self.browser_context_by_browser_id(context)?.browser_context)
+    }
+
+    fn browser_context_handle_by_id_mut(
+        &mut self,
+        context: BrowserContextId,
+    ) -> Option<&mut moli_core::browser::BrowserContextHandle> {
+        Some(
+            &mut self
+                .browser_context_by_browser_id_mut(context)?
+                .browser_context,
+        )
     }
 
     /// DevTools projection boundary: resolve a session/target once into an
@@ -88,7 +106,7 @@ impl CdpConnection {
         &mut self,
         document: DocumentHandle,
     ) -> Result<DocumentLifetimeObserver, String> {
-        self.browser_context_by_browser_id_mut(document.web_contents().context())
+        self.browser_context_handle_by_id_mut(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .observe_document_lifetime(document)
     }
@@ -98,7 +116,7 @@ impl CdpConnection {
         document: DocumentHandle,
         command: DocumentFetchCommand,
     ) -> Result<PendingDocumentFetchCommand, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_fetch_command(document, command)
     }
@@ -108,10 +126,10 @@ impl CdpConnection {
         completed: CompletedDocumentFetchCommand,
     ) -> Result<DocumentFetchCommandOutcome, String> {
         let context = completed.document().web_contents().context();
-        match self.browser_context_by_browser_id_mut(context) {
+        match self.browser_context_handle_by_id_mut(context) {
             Some(context) => context.finish_document_fetch_command(completed),
             None if completed.is_interception_update() => {
-                BrowserContext::finish_unobserved_document_fetch_interception_update(completed)
+                moli_core::browser::BrowserContext::finish_unobserved_document_fetch_interception_update(completed)
             }
             None => Err("NoDocumentLoaded".to_owned()),
         }
@@ -120,9 +138,9 @@ impl CdpConnection {
     pub(crate) fn start_document_input_command(
         &self,
         document: DocumentHandle,
-        command: PageInputCommand<'_>,
+        command: PageInputCommand,
     ) -> Result<PendingDocumentInputCommand, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_input_command(document, command)
     }
@@ -132,7 +150,7 @@ impl CdpConnection {
         completed: CompletedDocumentInputCommand,
     ) -> Result<RendererCommandTurnOutput, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_document_input_command(completed)
     }
@@ -142,7 +160,7 @@ impl CdpConnection {
         document: DocumentHandle,
         request: RendererAutofillTriggerRequest,
     ) -> Result<PendingDocumentAutofillTrigger, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_autofill_trigger(document, request)
     }
@@ -152,7 +170,7 @@ impl CdpConnection {
         completed: CompletedDocumentAutofillTrigger,
     ) -> Result<RendererAutofillTriggerOutcome, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_document_autofill_trigger(completed)
     }
@@ -161,7 +179,7 @@ impl CdpConnection {
         &self,
         document: DocumentHandle,
     ) -> Result<PendingDocumentLifecycleStop, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_lifecycle_stop(document)
     }
@@ -171,7 +189,7 @@ impl CdpConnection {
         completed: CompletedDocumentLifecycleStop,
     ) -> Result<RendererCommandTurnOutput, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_document_lifecycle_stop(completed)
     }
@@ -180,7 +198,7 @@ impl CdpConnection {
         &self,
         document: DocumentHandle,
     ) -> Result<PendingDocumentDiagnosticsSnapshot, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_diagnostics_snapshot(document)
     }
@@ -190,7 +208,7 @@ impl CdpConnection {
         completed: CompletedDocumentDiagnosticsSnapshot,
     ) -> Result<RendererPageDiagnosticsSnapshot, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_document_diagnostics_snapshot(completed)
     }
@@ -200,7 +218,7 @@ impl CdpConnection {
         document: DocumentHandle,
         timeout: std::time::Duration,
     ) -> Result<PendingChildFrameLifecycleWork, String> {
-        self.browser_context_by_browser_id_mut(document.web_contents().context())
+        self.browser_context_handle_by_id_mut(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_child_frame_lifecycle_work(document, timeout)
     }
@@ -210,7 +228,7 @@ impl CdpConnection {
         completed: CompletedChildFrameLifecycleWork,
     ) -> Result<(bool, RendererCommandTurnOutput), String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_document_child_frame_lifecycle_work(completed)
     }
@@ -220,9 +238,9 @@ impl CdpConnection {
         completed: CompletedDocumentResourceRuntimeUpdate,
     ) -> Result<(), String> {
         let context = completed.document().web_contents().context();
-        match self.browser_context_by_browser_id_mut(context) {
+        match self.browser_context_handle_by_id_mut(context) {
             Some(context) => context.finish_document_resource_runtime_update(completed),
-            None => BrowserContext::finish_unobserved_document_resource_runtime_update(completed),
+            None => moli_core::browser::BrowserContext::finish_unobserved_document_resource_runtime_update(completed),
         }
     }
 
@@ -232,7 +250,7 @@ impl CdpConnection {
         frame_id: String,
         html: String,
     ) -> Result<PendingSetDocumentContent, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_set_document_content(document, frame_id, html)
     }
@@ -242,7 +260,7 @@ impl CdpConnection {
         document: DocumentHandle,
         enabled: bool,
     ) -> Result<(), String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .set_document_javascript_dialog_handler_enabled(document, enabled)
     }
@@ -252,7 +270,7 @@ impl CdpConnection {
         document: DocumentHandle,
         update: DocumentPolicyUpdate,
     ) -> Result<PendingDocumentPolicyUpdate, String> {
-        self.browser_context_by_browser_id_mut(document.web_contents().context())
+        self.browser_context_handle_by_id_mut(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_policy_update(document, update)
     }
@@ -263,7 +281,7 @@ impl CdpConnection {
         policy: DocumentRuntimePolicyReconciliation,
     ) -> Result<PendingDocumentPolicyBatch, String> {
         Ok(self
-            .browser_context_by_browser_id_mut(document.web_contents().context())
+            .browser_context_handle_by_id_mut(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_runtime_policy_reconciliation(document, policy))
     }
@@ -273,7 +291,7 @@ impl CdpConnection {
         completed: CompletedDocumentPolicyUpdate,
     ) -> Result<(), String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_document_policy_update(completed)
     }
@@ -283,7 +301,7 @@ impl CdpConnection {
         completed: CompletedDocumentPolicyBatch,
     ) -> Result<(), String> {
         let context = completed.context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_document_policy_batch(completed)
     }
@@ -293,7 +311,7 @@ impl CdpConnection {
         completed: CompletedSetDocumentContent,
     ) -> Result<(RendererSetDocumentContentResult, RendererCommandTurnOutput), String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_set_document_content(completed)
     }
@@ -303,7 +321,7 @@ impl CdpConnection {
         document: DocumentHandle,
         url: String,
     ) -> Result<PendingTopLevelSameDocumentNavigation, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_top_level_same_document_navigation(document, url)
     }
@@ -313,7 +331,7 @@ impl CdpConnection {
         completed: CompletedTopLevelSameDocumentNavigation,
     ) -> Result<(bool, RendererCommandTurnOutput), String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_top_level_same_document_navigation(completed)
     }
@@ -323,7 +341,7 @@ impl CdpConnection {
         document: DocumentHandle,
         delta: i64,
     ) -> Result<PendingTopLevelHistoryTraversal, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_top_level_history_traversal(document, delta)
     }
@@ -333,7 +351,7 @@ impl CdpConnection {
         completed: CompletedTopLevelHistoryTraversal,
     ) -> Result<bool, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_top_level_history_traversal(completed)
     }
@@ -342,7 +360,7 @@ impl CdpConnection {
         &self,
         document: DocumentHandle,
     ) -> Result<PendingNavigationHistoryReset, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_navigation_history_reset(document)
     }
@@ -352,7 +370,7 @@ impl CdpConnection {
         completed: CompletedNavigationHistoryReset,
     ) -> Result<bool, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_navigation_history_reset(completed)
     }
@@ -363,7 +381,7 @@ impl CdpConnection {
         frame_id: String,
         url: String,
     ) -> Result<PendingChildFrameNavigation, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_child_frame_navigation(document, frame_id, url)
     }
@@ -373,7 +391,7 @@ impl CdpConnection {
         completed: CompletedChildFrameNavigation,
     ) -> Result<(bool, RendererCommandTurnOutput), String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_child_frame_navigation(completed)
     }
@@ -382,7 +400,7 @@ impl CdpConnection {
         &self,
         document: DocumentHandle,
     ) -> Result<PendingCaptureDocumentSnapshot, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_capture_document_snapshot(document)
     }
@@ -392,7 +410,7 @@ impl CdpConnection {
         completed: CompletedCaptureDocumentSnapshot,
     ) -> Result<DocumentSnapshot, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_capture_document_snapshot(completed)
     }
@@ -402,7 +420,7 @@ impl CdpConnection {
         document: DocumentHandle,
         request: RendererCaptureScreenshotRequest,
     ) -> Result<PendingCaptureDocumentImage, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_capture_document_image(document, request)
     }
@@ -412,7 +430,7 @@ impl CdpConnection {
         completed: CompletedCaptureDocumentImage,
     ) -> Result<RendererCaptureScreenshotReply, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_capture_document_image(completed)
     }
@@ -422,7 +440,7 @@ impl CdpConnection {
         document: DocumentHandle,
         request: RendererCaptureScreencastFrameRequest,
     ) -> Result<PendingCaptureDocumentScreencastFrame, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_capture_document_screencast_frame(document, request)
     }
@@ -432,7 +450,7 @@ impl CdpConnection {
         completed: CompletedCaptureDocumentScreencastFrame,
     ) -> Result<RendererCaptureScreencastFrameReply, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_capture_document_screencast_frame(completed)
     }
@@ -446,7 +464,7 @@ impl CdpConnection {
         case_sensitive: bool,
         is_regex: bool,
     ) -> Result<PendingDocumentResourceTextSearch, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_child_frame_document_resource_text_search(
                 document,
@@ -466,7 +484,7 @@ impl CdpConnection {
         case_sensitive: bool,
         is_regex: bool,
     ) -> Result<PendingDocumentResourceTextSearch, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_text_search(document, text, query, case_sensitive, is_regex)
     }
@@ -476,7 +494,7 @@ impl CdpConnection {
         completed: CompletedDocumentResourceTextSearch,
     ) -> Result<RendererResourceTextSearchOutcome, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_document_resource_text_search(completed)
     }
@@ -485,7 +503,7 @@ impl CdpConnection {
         &self,
         document: DocumentHandle,
     ) -> Result<Vec<SubresourceNetworkRecord>, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .document_subresource_network_records(document)
     }
@@ -494,7 +512,7 @@ impl CdpConnection {
         &self,
         document: DocumentHandle,
     ) -> Result<(), String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .ensure_document_current(document)
     }
@@ -504,7 +522,7 @@ impl CdpConnection {
         document: DocumentHandle,
     ) -> Result<Vec<(String, String)>, String> {
         Ok(self
-            .browser_context_by_browser_id(document.web_contents().context())
+            .browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .document_response_headers(document)?
             .to_vec())
@@ -515,7 +533,7 @@ impl CdpConnection {
         document: DocumentHandle,
         bypass: bool,
     ) -> Result<PendingDocumentCspBypassUpdate, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_csp_bypass_update(document, bypass)
     }
@@ -525,7 +543,7 @@ impl CdpConnection {
         completed: CompletedDocumentCspBypassUpdate,
     ) -> Result<(), String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_document_csp_bypass_update(completed)
     }
@@ -534,7 +552,7 @@ impl CdpConnection {
         &self,
         document: DocumentHandle,
     ) -> Result<PendingDocumentStorageKeySnapshot, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_storage_key_snapshot(document)
     }
@@ -544,7 +562,7 @@ impl CdpConnection {
         completed: CompletedDocumentStorageKeySnapshot,
     ) -> Result<String, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_document_storage_key_snapshot(completed)
     }
@@ -553,7 +571,7 @@ impl CdpConnection {
         &self,
         document: DocumentHandle,
     ) -> Result<PendingChildFrameTreeSnapshot, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_child_frame_tree_snapshot(document)
     }
@@ -563,7 +581,7 @@ impl CdpConnection {
         completed: CompletedChildFrameTreeSnapshot,
     ) -> Result<Vec<ChildFrameTreeSnapshot>, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_child_frame_tree_snapshot(completed)
     }
@@ -572,7 +590,7 @@ impl CdpConnection {
         &self,
         document: DocumentHandle,
     ) -> Result<PendingDocumentCookieOwnerSnapshot, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_cookie_owner_snapshot(document)
     }
@@ -582,7 +600,7 @@ impl CdpConnection {
         completed: CompletedDocumentCookieOwnerSnapshot,
     ) -> Result<DocumentCookieOwnerSnapshot, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_document_cookie_owner_snapshot(completed)
     }
@@ -592,7 +610,7 @@ impl CdpConnection {
         document: DocumentHandle,
         uuid: String,
     ) -> Result<PendingDocumentBlobRead, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_document_blob_read(document, uuid)
     }
@@ -602,7 +620,7 @@ impl CdpConnection {
         completed: CompletedDocumentBlobRead,
     ) -> Result<Option<Arc<[u8]>>, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_document_blob_read(completed)
     }
@@ -615,7 +633,7 @@ impl CdpConnection {
         disable_cache: bool,
         include_credentials: bool,
     ) -> Result<PendingNetworkResourceLoadPreparation, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_network_resource_load_preparation(
                 document,
@@ -631,7 +649,7 @@ impl CdpConnection {
         completed: CompletedNetworkResourceLoadPreparation,
     ) -> Result<RendererNetworkResourceLoadPreparation, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_network_resource_load_preparation(completed)
     }
@@ -640,7 +658,7 @@ impl CdpConnection {
         &self,
         document: DocumentHandle,
     ) -> Result<PendingAppManifestLoadPreparation, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_app_manifest_load_preparation(document)
     }
@@ -650,7 +668,7 @@ impl CdpConnection {
         completed: CompletedAppManifestLoadPreparation,
     ) -> Result<BrowserAppManifestLoadPreparation, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_app_manifest_load_preparation(completed)
     }
@@ -660,7 +678,7 @@ impl CdpConnection {
         document: DocumentHandle,
         publication: RendererAppManifestLoadPublication,
     ) -> Result<PendingAppManifestPublication, String> {
-        self.browser_context_by_browser_id(document.web_contents().context())
+        self.browser_context_handle_by_id(document.web_contents().context())
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .start_app_manifest_publication(document, publication)
     }
@@ -670,7 +688,7 @@ impl CdpConnection {
         completed: CompletedAppManifestPublication,
     ) -> Result<RendererCommandTurnOutput, String> {
         let context = completed.document().web_contents().context();
-        self.browser_context_by_browser_id_mut(context)
+        self.browser_context_handle_by_id_mut(context)
             .ok_or_else(|| "NoDocumentLoaded".to_owned())?
             .finish_app_manifest_publication(completed)
     }

@@ -29,30 +29,22 @@ mod tests {
     use tokio::net::TcpListener;
 
     use crate::conn::{
-        BrowserContext, CdpCommandTaskStep, PendingCdpCommandDispatch, ProfilerAction,
-        ProfilerInspectorCommand,
+        CdpCommandTaskStep, PendingCdpCommandDispatch, ProfilerAction, ProfilerInspectorCommand,
     };
     use crate::testing::{TestContext, wait_until_messages, wait_until_scheduler_message};
 
     async fn with_loaded_document_async(ctx: &mut TestContext, html: &str) {
-        ctx.conn
-            .insert_browser_context(BrowserContext::new("BID-profiler".into()));
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should exist")
-            .set_active_target_id("TID-profiler");
-        let page = ctx
+        let mut browser_context = ctx
             .conn
-            .load_page_via_runtime_async(&format!("data:text/html,{html}"))
-            .await
-            .expect("must load document for Profiler domain tests");
-        let browser_context = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should exist");
-        let _ = browser_context.replace_active_page_for_test(Some(page));
+            .new_browser_context_fixture_for_test("BID-profiler");
+        browser_context.set_active_target_id("TID-profiler");
+        ctx.conn
+            .install_browser_context_fixture_for_test(browser_context);
+        ctx.install_quiet_navigation_fixture_for_session_owner(
+            &format!("data:text/html,{html}"),
+            None,
+        )
+        .await;
     }
 
     async fn spawn_profiler_navigation_server() -> (String, tokio::task::JoinHandle<()>) {
@@ -81,20 +73,17 @@ mod tests {
     }
 
     async fn with_loaded_target_document_async(ctx: &mut TestContext, target_id: &str, html: &str) {
-        let mut browser_context = BrowserContext::new("BID-profiler".into());
+        let mut browser_context = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-profiler");
         browser_context.set_active_target_id(target_id);
-        ctx.conn.insert_browser_context(browser_context);
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async(&format!("data:text/html,{html}"))
-            .await
-            .expect("must load target document for Profiler domain tests");
-        let browser_context = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should exist");
-        let _ = browser_context.replace_active_page_for_test(Some(page));
+        ctx.conn
+            .install_browser_context_fixture_for_test(browser_context);
+        ctx.install_quiet_navigation_fixture_for_session_owner(
+            &format!("data:text/html,{html}"),
+            None,
+        )
+        .await;
     }
 
     async fn complete_pending_command_task_for_test(
@@ -1976,24 +1965,17 @@ mod tests {
     async fn active_profiler_recording_survives_http_page_navigation_and_disable() {
         let (fixture, _server) = spawn_profiler_navigation_server().await;
         let mut ctx = TestContext::new();
-        ctx.conn
-            .insert_browser_context(BrowserContext::new("BID-profiler-http".into()));
-        ctx.conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should exist")
-            .set_active_target_id("TID-profiler-http");
-        let page = ctx
+        let mut browser_context = ctx
             .conn
-            .load_page_via_runtime_async(&format!("{fixture}/plain?phase=before"))
-            .await
-            .expect("must load initial HTTP document");
-        let browser_context = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should exist");
-        let _ = browser_context.replace_active_page_for_test(Some(page));
+            .new_browser_context_fixture_for_test("BID-profiler-http");
+        browser_context.set_active_target_id("TID-profiler-http");
+        ctx.conn
+            .install_browser_context_fixture_for_test(browser_context);
+        ctx.install_navigation_fixture_for_session_owner(
+            &format!("{fixture}/plain?phase=before"),
+            None,
+        )
+        .await;
 
         assert_eq!(
             process_and_take_response(&mut ctx, json!({"id": 200, "method": "Page.enable"}), 200)
@@ -2123,6 +2105,7 @@ mod tests {
             "<!doctype html><body>before target close</body>",
         )
         .await;
+        ctx.sent.clear();
 
         let enable = process_and_take_response(
             &mut ctx,
@@ -2178,19 +2161,11 @@ mod tests {
                 .expect("browser context should survive target close");
             browser_context.set_active_target_id(target_id);
         }
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><body>after target close</body>",
-            )
-            .await
-            .expect("same target id should be reusable after close");
-        let browser_context = ctx
-            .conn
-            .browser_context
-            .as_mut()
-            .expect("browser context should exist after reload");
-        let _ = browser_context.replace_active_page_for_test(Some(page));
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><body>after target close</body>",
+            None,
+        )
+        .await;
 
         let stop_after_target_reuse =
             process_and_take_response(&mut ctx, json!({"id": 125, "method": "Profiler.stop"}), 125)

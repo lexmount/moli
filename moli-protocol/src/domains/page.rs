@@ -1583,11 +1583,13 @@ fn disable_page_command(conn: &mut CdpConnection, cmd: &Cmd<'_>) -> CommandOutpu
     if !conn.disable_page_domain_for_session_owner(cmd.session_id) {
         return CommandOutputPlan::error(-31998, "BrowserContextNotLoaded");
     }
-    let dialog_handler_enabled = conn
+    let browser_context_id = conn
         .navigation_load_inputs_for_session_owner(cmd.session_id)
-        .renderer_runtime
-        .runtime()
-        .javascript_dialog_handler_enabled();
+        .browser_context_id;
+    let dialog_handler_enabled = browser_context_id
+        .as_deref()
+        .and_then(|id| conn.browser_context_by_id(id))
+        .is_some_and(crate::conn::BrowserContext::javascript_dialog_handler_enabled);
     if let Err(error) =
         start_set_javascript_dialog_handler_enabled(conn, cmd.session_id, dialog_handler_enabled)
     {
@@ -2466,9 +2468,7 @@ mod producer_tests {
     };
     use serde_json::{Value, json};
 
-    use crate::conn::{
-        BackgroundProtocolEvent, BrowserContext, CdpConnection, CdpTargetFilter, CommandOwnerScope,
-    };
+    use crate::conn::{BackgroundProtocolEvent, CdpConnection, CdpTargetFilter, CommandOwnerScope};
     use crate::devtools_runtime::{AutomationEvent, NavigationFrameEventKind};
     use crate::domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext};
     use crate::domains::input::{InputPreparedOutputSlot, InputPreparedOutputs};
@@ -2524,13 +2524,18 @@ mod producer_tests {
         assert!(initial_events.is_empty());
     }
 
-    fn page_residence_identity_for_test(
+    async fn page_residence_identity_for_test(
         conn: &mut CdpConnection,
         session_id: &str,
     ) -> crate::conn::TargetPageResidenceIdentity {
         let owner = crate::conn::CommandOwnerScope::capture(conn, Some(session_id));
-        if conn.current_document_id_for_owner(&owner).is_none() {
-            conn.replace_document_fixture_for_owner_test(&owner);
+        if conn.resolve_browser_document_for_owner(&owner).is_err() {
+            conn.install_navigation_fixture_for_session_owner_for_test(
+                "about:blank",
+                Some(session_id),
+            )
+            .await
+            .expect("test target should materialize an exact Browser Document");
         }
         conn.target_page_residence_identity_for_session(Some(session_id))
             .expect("test target should expose a Page residence identity")
@@ -2671,7 +2676,7 @@ mod producer_tests {
         url: &str,
     ) -> TestContext {
         let mut ctx = TestContext::new();
-        let mut context = BrowserContext::new(context_id.into());
+        let mut context = ctx.conn.new_browser_context_fixture_for_test(context_id);
         context.set_active_target_id(target_id);
         context.attach_active_session(session_id);
         ctx.conn.install_browser_context_fixture_for_test(context);
@@ -2754,12 +2759,12 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn javascript_dialog_drain_consumes_prepared_dialogs_without_page_readback() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active");
         bc.attach_active_session("SID-1");
         conn.install_browser_context_fixture_for_test(bc);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-1");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-1").await;
         let source_document = renderer_document_identity_for_test(1, 1);
         let mut out: Vec<BackgroundProtocolEvent> = Vec::new();
         let mut prepared =
@@ -2820,8 +2825,9 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_dialog_output_stays_with_its_exact_protocol_attachment() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-dialog-attachment".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-dialog-attachment");
         browser_context.set_active_target_id("TID-dialog-attachment");
         browser_context.attach_active_session("SID-primary");
         assert!(
@@ -2831,7 +2837,7 @@ mod producer_tests {
             )
         );
         conn.install_browser_context_fixture_for_test(browser_context);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-attached");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-attached").await;
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
@@ -2879,8 +2885,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn detached_source_attachment_dismisses_prepared_child_dialog() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-dialog-detached".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-dialog-detached");
         browser_context.set_active_target_id("TID-dialog-detached");
         browser_context.attach_active_session("SID-primary");
         assert!(
@@ -2894,7 +2900,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_javascript_dialogs_for_test(
-                    page_residence_identity_for_test(&mut conn, "SID-detached"),
+                    page_residence_identity_for_test(&mut conn, "SID-detached").await,
                     Some("SID-detached"),
                     javascript_dialog_scope_for_test(&conn, "SID-detached"),
                     "TID-dialog-detached",
@@ -2935,8 +2941,9 @@ mod producer_tests {
     async fn pending_popup_dialog_rejects_a_retired_source_attachment() {
         const POPUP_ID: u64 = 76;
 
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-popup-stale-source".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-popup-stale-source");
         browser_context.set_active_target_id("TID-popup-stale-source");
         browser_context.attach_active_session("SID-primary");
         assert!(
@@ -2947,7 +2954,7 @@ mod producer_tests {
         );
         conn.install_browser_context_fixture_for_test(browser_context);
         conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach());
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-source");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-source").await;
         let source_document = renderer_document_identity_for_test(1, 1);
         let completion = RendererJavaScriptDialogCompletion::pending();
         let mut dialog_output =
@@ -3032,13 +3039,13 @@ mod producer_tests {
     async fn lightweight_popup_dialog_waits_for_and_uses_popup_attachment() {
         const POPUP_ID: u64 = 77;
 
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-popup-dialog".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-popup-dialog");
         browser_context.set_active_target_id("TID-opener");
         browser_context.attach_active_session("SID-opener");
         conn.install_browser_context_fixture_for_test(browser_context);
         conn.set_auto_attach_owner(None, true, false, CdpTargetFilter::default_auto_attach());
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener").await;
         let source_dialog_scope = javascript_dialog_scope_for_test(&conn, "SID-opener");
         let source_document = renderer_document_identity_for_test(1, 1);
         let completion = RendererJavaScriptDialogCompletion::pending();
@@ -3186,12 +3193,12 @@ mod producer_tests {
     async fn unattached_popup_dialog_is_dismissed_without_opener_fallback() {
         const POPUP_ID: u64 = 78;
 
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-popup-no-session".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-popup-no-session");
         browser_context.set_active_target_id("TID-opener-no-session");
         browser_context.attach_active_session("SID-opener-no-session");
         conn.install_browser_context_fixture_for_test(browser_context);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener-no-session");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener-no-session").await;
         let source_document = renderer_document_identity_for_test(1, 1);
         let completion = RendererJavaScriptDialogCompletion::pending();
         let mut prepared =
@@ -3261,8 +3268,8 @@ mod producer_tests {
 
     #[test]
     fn renderer_document_epoch_change_retires_page_dialog_scope_once() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-dialog-epoch".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-dialog-epoch");
         bc.set_active_target_id("TID-dialog-epoch");
         bc.attach_active_session("SID-dialog-epoch");
         conn.install_browser_context_fixture_for_test(bc);
@@ -3308,12 +3315,12 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn javascript_dialog_prepared_action_dismisses_replacement_page_output() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-dialog-stale-page".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-dialog-stale-page");
         bc.set_active_target_id("TID-dialog-stale-page");
         bc.attach_active_session("SID-dialog-stale-page");
         conn.install_browser_context_fixture_for_test(bc);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-stale-page");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-stale-page").await;
         let completion = moli_core::page::RendererJavaScriptDialogCompletion::pending();
         let dialog = renderer_javascript_dialog_for_test(
             renderer_document_identity_for_test(1, 1),
@@ -3362,12 +3369,12 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn javascript_dialog_prepared_action_dismisses_retired_dialog_scope() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-dialog-generation".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-dialog-generation");
         bc.set_active_target_id("TID-dialog-generation");
         bc.attach_active_session("SID-dialog-generation");
         conn.install_browser_context_fixture_for_test(bc);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-generation");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-generation").await;
         let completion = moli_core::page::RendererJavaScriptDialogCompletion::pending();
         let dialog = renderer_javascript_dialog_for_test(
             renderer_document_identity_for_test(1, 1),
@@ -3409,13 +3416,13 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn javascript_dialog_projection_uses_captured_url_and_frame() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-dialog-source".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-dialog-source");
         bc.set_active_target_id("TID-dialog-source");
         bc.set_target_url("https://example.test/current-before-capture".to_owned());
         bc.attach_active_session("SID-dialog-source");
         conn.install_browser_context_fixture_for_test(bc);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-source");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-dialog-source").await;
         let dialog = RendererPendingJavaScriptDialog::new(
             RendererJavaScriptDialogId::new(9),
             renderer_document_identity_for_test(2, 3),
@@ -3464,7 +3471,7 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn canonical_activity_drain_order_survives_ordered_typed_event_stream() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
         conn.configure_download_policy(
             None,
@@ -3475,7 +3482,7 @@ mod producer_tests {
             Some(true),
         )
         .unwrap();
-        let mut bc = BrowserContext::new("BID-activity-order".into());
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-activity-order");
         bc.set_active_target_id("TID-activity-order");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-activity-order");
@@ -3491,7 +3498,7 @@ mod producer_tests {
             "TID-activity-order",
             source_document,
         );
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-activity-order");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-activity-order").await;
         let download_owner = CommandOwnerScope::for_session("SID-activity-order");
 
         let mut prepared =
@@ -3670,7 +3677,7 @@ mod producer_tests {
         prepared.extend_payload(
             super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_same_document_navigations_for_test(
-                    page_residence_identity_for_test(conn, "SID-later-activity-order"),
+                    page_residence_identity_for_test(conn, "SID-later-activity-order").await,
                     vec![document_sourced_same_document_navigation_for_test(
                         source_document,
                         "https://example.test/page#ordered",
@@ -3682,7 +3689,7 @@ mod producer_tests {
         prepared.extend_payload(
             super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_top_level_location_navigation_for_test(
-                    page_residence_identity_for_test(conn, "SID-later-activity-order"),
+                    page_residence_identity_for_test(conn, "SID-later-activity-order").await,
                     Some(RendererDocumentSourcedTopLevelLocationNavigation::new(
                         source_document,
                         "data:text/html,%3Cmain%3Eordered-location%3C/main%3E".to_owned(),
@@ -3801,8 +3808,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn browser_initiated_child_frame_completion_omits_renderer_request_events() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -3885,8 +3892,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_frame_activity_emits_navigation_before_init_before_lifecycle_terminal() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -3958,8 +3965,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_frame_activity_fans_out_page_events_to_enabled_attached_session() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-child-page-fanout".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-child-page-fanout");
         bc.set_active_target_id("TID-child-page-fanout");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-primary");
@@ -4025,8 +4032,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_frame_activity_projects_sandboxed_about_blank_from_document_url() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://top.example/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -4090,8 +4097,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_frame_activity_emits_document_network_events_from_prepared_load() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -4232,8 +4239,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn stale_child_document_response_emits_network_without_navigation_or_lifecycle() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -4359,8 +4366,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_document_network_without_body_records_known_no_data() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         conn.install_browser_context_fixture_for_test(bc);
@@ -4412,8 +4419,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_frame_activity_drain_preserves_prepared_attachment_only_token() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -4497,8 +4504,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_child_frame_activity_does_not_follow_replacement_page_residence() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-child-page-owner".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-child-page-owner");
         browser_context.set_active_target_id("TID-child-page-owner");
         browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-page-owner");
@@ -4535,8 +4542,9 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_child_frame_activity_does_not_follow_root_document_open_replacement() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-child-root-document".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-child-root-document");
         browser_context.set_active_target_id("TID-child-root-document");
         browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-root-document");
@@ -4575,8 +4583,9 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_child_frame_activity_keeps_root_document_route_until_delivery() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-child-delivery-route".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-child-delivery-route");
         browser_context.set_active_target_id("TID-child-delivery-route");
         browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-delivery-route");
@@ -4626,8 +4635,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_child_frame_activity_does_not_follow_detached_protocol_session() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-child-session".into());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-child-session");
         browser_context.set_active_target_id("TID-child-session");
         browser_context.set_target_url("https://example.test/page".to_owned());
         browser_context.attach_active_session("SID-child-session");
@@ -4669,8 +4678,8 @@ mod producer_tests {
 
     #[test]
     fn child_frame_tree_emission_deduplicates_attach_and_removes_owner_state_on_detach() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("about:blank".to_owned());
         bc.attach_active_session("SID-1");
@@ -4731,8 +4740,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn child_frame_activity_drain_requires_prepared_output() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.set_target_url("https://example.test/page".to_owned());
         bc.attach_active_session("SID-1");
@@ -4753,13 +4762,13 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn popup_activation_creates_target_and_schedules_navigation_without_page_readback() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_root_target_discovery_enabled(true);
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active");
         bc.attach_active_session("SID-1");
         conn.install_browser_context_fixture_for_test(bc);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-1");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-1").await;
         let source_document = renderer_document_identity_for_test(1, 1);
         let mut out = Vec::new();
         let mut prepared =
@@ -4823,7 +4832,7 @@ mod producer_tests {
                     .background_targets()
                     .next()
                     .and_then(|target| context.target_document_url(target.target_id()))
-                    .is_some_and(moli_url::is_about_blank)
+                    .is_some_and(|url| moli_url::is_about_blank(&url))
             },
             "target creation should install only the initial empty Document"
         );
@@ -4838,12 +4847,12 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn popup_activation_publishes_automation_lifecycle_without_cdp_discovery() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-automation".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-automation");
         bc.set_active_target_id("TID-opener");
         bc.attach_active_session("SID-opener");
         conn.install_browser_context_fixture_for_test(bc);
-        let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener");
+        let page_owner = page_residence_identity_for_test(&mut conn, "SID-opener").await;
         let source_document = renderer_document_identity_for_test(1, 1);
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
@@ -4923,7 +4932,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_same_document_navigations_for_test(
-                    page_residence_identity_for_test(conn, "SID-1"),
+                    page_residence_identity_for_test(conn, "SID-1").await,
                     vec![document_sourced_same_document_navigation_for_test(
                         source_document,
                         "https://example.test/page#prepared",
@@ -5081,7 +5090,8 @@ mod producer_tests {
             .target_root_document_lifecycle_identity_for_owner(&session)
             .unwrap();
         let owner =
-            page_residence_identity_for_test(&mut ctx.conn, "SID-document-open-same-document");
+            page_residence_identity_for_test(&mut ctx.conn, "SID-document-open-same-document")
+                .await;
         ctx.process_async(json!({"id": 810, "sessionId": "SID-document-open-same-document",
             "method": "Runtime.evaluate", "params": {"expression": "document.open(); document.write('<title>replacement</title>'); document.close()"}
         })).await;
@@ -5125,8 +5135,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn stale_page_residence_same_document_navigation_cannot_mutate_replacement() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-stale-page-same-document".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-stale-page-same-document");
         bc.set_active_target_id("TID-stale-page-same-document");
         bc.set_target_url("https://example.test/replacement".to_owned());
         bc.attach_active_session("SID-stale-page-same-document");
@@ -5139,7 +5149,12 @@ mod producer_tests {
             "TID-stale-page-same-document",
             source_document,
         );
-        let owner = page_residence_identity_for_test(&mut conn, "SID-stale-page-same-document");
+        let owner =
+            page_residence_identity_for_test(&mut conn, "SID-stale-page-same-document").await;
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .set_target_url("https://example.test/replacement".to_owned());
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-stale-page-same-document"),
@@ -5175,8 +5190,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_top_level_location_navigation_waits_for_its_scheduler_turn() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-location".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-location");
         bc.set_active_target_id("TID-location");
         bc.set_target_url("about:blank".to_owned());
         bc.attach_active_session("SID-location");
@@ -5188,7 +5203,7 @@ mod producer_tests {
         let mut prepared =
             ProtocolOutputPayloads::from_slot(super::PagePreparedOutputSlot::from_outputs(
                 super::PagePreparedOutputs::from_top_level_location_navigation_for_test(
-                    page_residence_identity_for_test(&mut conn, "SID-location"),
+                    page_residence_identity_for_test(&mut conn, "SID-location").await,
                     Some(RendererDocumentSourcedTopLevelLocationNavigation::new(
                         source_document,
                         target_url.clone(),
@@ -5249,8 +5264,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn document_open_replacement_keeps_requested_top_level_navigation() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-document-open-location".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-document-open-location");
         bc.set_active_target_id("TID-document-open-location");
         bc.set_target_url("https://example.test/source".to_owned());
         bc.attach_active_session("SID-document-open-location");
@@ -5264,7 +5279,7 @@ mod producer_tests {
             "TID-document-open-location",
             source_document,
         );
-        let owner = page_residence_identity_for_test(&mut conn, "SID-document-open-location");
+        let owner = page_residence_identity_for_test(&mut conn, "SID-document-open-location").await;
         bind_renderer_document_for_test(
             &mut conn,
             "SID-document-open-location",
@@ -5314,8 +5329,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn stale_page_residence_top_level_navigation_cannot_replace_current_page() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-stale-page-location".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-stale-page-location");
         bc.set_active_target_id("TID-stale-page-location");
         bc.set_target_url("https://example.test/replacement".to_owned());
         bc.attach_active_session("SID-stale-page-location");
@@ -5328,7 +5343,11 @@ mod producer_tests {
             "TID-stale-page-location",
             source_document,
         );
-        let owner = page_residence_identity_for_test(&mut conn, "SID-stale-page-location");
+        let owner = page_residence_identity_for_test(&mut conn, "SID-stale-page-location").await;
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .set_target_url("https://example.test/replacement".to_owned());
         conn.replace_document_fixture_for_owner_test(&crate::conn::CommandOwnerScope::capture(
             &conn,
             Some("SID-stale-page-location"),
@@ -7009,7 +7028,7 @@ mod protocol_neutral_tests {
     };
     use serde_json::{Value, json};
 
-    use crate::conn::{CdpConnection, Cmd};
+    use crate::conn::Cmd;
 
     use super::{
         PageCommandTaskStep, build_cdp_capture_screenshot_command,
@@ -7020,7 +7039,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_frame_tree_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(120),
@@ -7043,7 +7062,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_routes_get_frame_tree_command_to_page_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(121),
@@ -7069,7 +7088,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_layout_metrics_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(122),
@@ -7092,7 +7111,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_routes_get_layout_metrics_command_to_page_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(123),
@@ -7121,7 +7140,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_handle_javascript_dialog_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "accept": false,
             "promptText": "typed text"
@@ -7150,7 +7169,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_routes_handle_javascript_dialog_command_to_page_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "accept": true
         });
@@ -7184,7 +7203,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_capture_screenshot_builds_requested_capture_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "format": "png",
             "quality": 100,
@@ -7219,7 +7238,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_capture_screenshot_preserves_page_clip() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "format": "png",
             "clip": {
@@ -7254,7 +7273,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_rejects_unsupported_capture_screenshot_format() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "format": "webp"
         });
@@ -7280,7 +7299,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_capture_screenshot_rejects_invalid_quality_and_clip() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         for (id, params, expected_message) in [
             (
                 132,
@@ -7321,7 +7340,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_validates_capture_screenshot_target_before_unsupported() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let command = DevToolsCaptureScreenshotCommand {
             context: DevToolsCommandContext {
                 protocol: DevToolsProtocol::WebDriverBidi,
@@ -7354,7 +7373,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_print_to_pdf_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "landscape": true,
             "printBackground": true,
@@ -7404,7 +7423,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_reports_layout_disabled_without_placeholder_payload() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(130),
@@ -7438,7 +7457,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_page_entry_validates_print_to_pdf_target_before_unsupported() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let command = DevToolsPrintToPdfCommand {
             context: DevToolsCommandContext {
                 protocol: DevToolsProtocol::WebDriverBidi,

@@ -2,71 +2,8 @@ use super::*;
 
 async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
     load_bc_with_session(ctx, "BID-set-content", "TID-1", "SID-1", "about:blank");
-    let committed_document = {
-        let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-        browser_context.set_target_url(url.to_owned());
-        browser_context
-            .start_document_navigation_for_active_target(LOADER_ID.to_owned())
-            .expect("document-content test navigation should start")
-    };
-    let navigation = ctx
-        .conn
-        .load_navigation_via_runtime_for_session_owner_async(Some("SID-1"), url)
-        .await
-        .expect("document-content test page should load");
-    let artifacts = navigation.page_creation_artifacts;
-    let committed = {
-        let browser_context = ctx.conn.browser_context.as_mut().expect("browser context");
-        let identity = navigation.main_document_commit.as_ref().unwrap();
-        let prepared = browser_context
-            .start_loaded_document_navigation_for_target(
-                "TID-1",
-                committed_document,
-                navigation.page,
-                crate::conn::DocumentNavigationDestination {
-                    url: navigation.final_url,
-                    security_origin: identity.security_origin.clone(),
-                    secure_context_type: identity.secure_context_type.clone(),
-                },
-                &artifacts,
-                &Default::default(),
-            )
-            .unwrap()
-            .await
-            .unwrap();
-        browser_context
-            .commit_loaded_navigation(prepared)
-            .expect("document-content test Document should commit")
-    };
-    let projection_fence = committed
-        .inspection_projection
-        .expect("document-content test inspection projection should succeed");
-    committed.previous_document_retirement.close().await;
-    let (binding, _) = ctx.conn.project_committed_document_lifecycle_for_owner(
-        &crate::conn::CommandOwnerScope::for_session("SID-1"),
-        committed.lifecycle,
-        Some(committed_document),
-        "TID-1".to_owned(),
-        LOADER_ID.to_owned(),
-    );
-    let binding = binding.expect("renderer lifecycle should bind");
-    assert!(
-        ctx.conn
-            .publish_document_projection_fence_for_owner(
-                &crate::conn::CommandOwnerScope::for_session("SID-1"),
-                &binding,
-                projection_fence,
-            )
-            .released_output
-            .is_empty(),
-        "the fixture should not leave buffered Inspector output behind"
-    );
-    // The fixture commits an already-running renderer Page directly instead
-    // of going through the production navigation command. Route that exact
-    // Document's initial lifecycle publication before enabling observers.
-    // Otherwise Page.enable can replay its old load while a later
-    // setDocumentContent replacement is running, and a test may mistake the
-    // previous epoch for the replacement's terminal event.
+    ctx.install_navigation_fixture_for_session_owner(url, Some("SID-1"))
+        .await;
     wait_until_renderer_document_load(ctx, Some("SID-1"), "TID-1", LOADER_ID).await;
 }
 

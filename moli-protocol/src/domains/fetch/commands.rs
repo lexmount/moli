@@ -1606,12 +1606,14 @@ fn continue_streaming_document_response_in_background(
         network_observation_journal,
         body_progress_source,
         prepared_document,
+        prepared_document_projection,
     } = pending;
     let document_navigation_token = permit.navigation();
     let cancellation = response.cancellation_handle();
     if response_code.is_none()
         && response_headers.is_empty()
-        && let Some(prepared_document) = prepared_document
+        && let (Some(prepared_document), Some(projection)) =
+            (prepared_document, prepared_document_projection)
     {
         conn.arm_background_navigation_completion(&document_navigation_token, Some(cancellation));
         tokio::task::spawn_local(async move {
@@ -1620,8 +1622,11 @@ fn continue_streaming_document_response_in_background(
                 document_navigation_token,
                 navigation.clone(),
             );
-            let navigation_result =
-                prepared_document.resume_streaming(response, Some(body_completion_sink));
+            let navigation_result = projection.resume_streaming(
+                *prepared_document,
+                response,
+                Some(body_completion_sink),
+            );
             let _ = sender.send(page::BackgroundNavigationCompletion::new(
                 document_navigation_token,
                 navigation,
@@ -1667,10 +1672,10 @@ mod protocol_neutral_tests {
     use url::Url;
 
     use crate::conn::{
-        BrowserContext, CapturedBody, CdpConnection, Cmd, PendingSubresourceFetchOwnerKind,
-        PendingSubresourceFetchRequest, PendingSubresourceFetchRequestStage,
-        PendingSubresourceFetchRequestStageChain, PendingSubresourceFetchResponseRequest,
-        PendingSubresourceFetchResponseStage, PendingSubresourceFetchResponseStageChain,
+        CapturedBody, Cmd, PendingSubresourceFetchOwnerKind, PendingSubresourceFetchRequest,
+        PendingSubresourceFetchRequestStage, PendingSubresourceFetchRequestStageChain,
+        PendingSubresourceFetchResponseRequest, PendingSubresourceFetchResponseStage,
+        PendingSubresourceFetchResponseStageChain,
     };
 
     use super::{
@@ -1682,7 +1687,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_continue_request_builds_protocol_neutral_intercepted_request_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "requestId": "interception-job-0",
             "url": "https://example.test/next",
@@ -1732,7 +1737,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_continue_response_builds_protocol_neutral_intercepted_response_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(21),
@@ -1769,7 +1774,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_fetch_entry_routes_continue_request_command() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({"requestId": "missing-request"});
         let cmd = Cmd::for_test(
             Some(24),
@@ -1803,8 +1808,8 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_continue_request_repauses_next_matching_fetch_session() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-chain".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-chain".to_owned());
         browser_context.set_active_target_id("TID-chain".to_owned());
         browser_context.attach_active_session("SID-primary".to_owned());
         assert!(
@@ -1944,8 +1949,9 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_continue_response_repauses_next_matching_fetch_session() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-response-chain".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-response-chain".to_owned());
         browser_context.set_active_target_id("TID-response-chain".to_owned());
         browser_context.attach_active_session("SID-primary".to_owned());
         assert!(
@@ -2081,8 +2087,9 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_continue_request_repauses_network_or_bidi_stage_on_target_owner_route() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-chain-bidi".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-chain-bidi".to_owned());
         browser_context.set_active_target_id("TID-chain-bidi".to_owned());
         browser_context.attach_active_session("SID-primary".to_owned());
         browser_context.set_active_document_fixture_for_test(1);
@@ -2194,7 +2201,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_fail_request_builds_protocol_neutral_intercepted_request_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(22),
@@ -2224,7 +2231,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_fulfill_request_builds_protocol_neutral_intercepted_request_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(23),

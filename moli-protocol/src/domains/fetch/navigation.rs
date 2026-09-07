@@ -547,6 +547,13 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
             return;
         }
     };
+    let (prepared_document, prepared_document_projection) = match prepared_document {
+        Some((prepared_document, projection)) => (
+            Some(Box::new(prepared_document)),
+            Some(Box::new(projection)),
+        ),
+        None => (None, None),
+    };
     let (response, network_observation_journal) = response.into_parts_with_observation_journal();
     conn.register_pending_fetch_response_navigation_for_owner(
         &pending.navigation.owner,
@@ -559,9 +566,10 @@ async fn handle_streaming_response_head_for_navigation_into_buffer_async(
             request_headers: pending.navigation.request_headers.clone(),
             response,
             network_observation_journal,
-            body_progress_source,
-            prepared_document: prepared_document.map(Box::new),
+            prepared_document,
         },
+        body_progress_source,
+        prepared_document_projection,
     );
     out.extend_background_events_after_messages([navigation_response_stage_request_paused_event(
         pending.interception_session_id.as_deref(),
@@ -631,6 +639,8 @@ fn pause_buffered_raw_response_stage_navigation_into_buffer(
             response,
             network_observation_journal,
         },
+        network::MainDocumentBodyProgressSource::default(),
+        None,
     );
     out.extend_background_events_after_messages([navigation_response_stage_request_paused_event(
         pending.interception_session_id.as_deref(),
@@ -705,16 +715,10 @@ pub(super) async fn continue_navigation_response_neutrally_as_background_events_
     pending: crate::conn::PendingFetchResponseNavigation,
     transfer: Option<crate::conn::PausedDocumentTransfer>,
 ) {
-    let token = Some(pending.permit.navigation());
-    let navigation_state = pending.navigation;
-    let navigation = match transfer {
-        Some(transfer) => {
-            transfer
-                .continue_response_neutrally_async(conn, pending.permit, &navigation_state)
-                .await
-        }
-        None => Err("renderer channel navigation was superseded by a newer navigation".to_owned()),
-    };
+    let (token, navigation_state, navigation) =
+        crate::conn::ClaimedFetchResponseNavigation::new(String::new(), pending, transfer)
+            .continue_response_neutrally_async(conn)
+            .await;
     let navigation =
         network::materialize_navigation_load_result(conn, &navigation_state, navigation);
     complete_tokened_materialized_navigation_as_background_events_async(

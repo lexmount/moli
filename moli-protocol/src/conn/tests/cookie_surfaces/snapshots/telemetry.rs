@@ -1,11 +1,9 @@
 use super::*;
 #[tokio::test]
 async fn browser_context_document_cookie_snapshots_reflect_live_page_state() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-        "BID-cookie-facade",
-        "TID-cookie-facade",
-    ));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context =
+        Some(conn.new_page_target_fixture_for_test("BID-cookie-facade", "TID-cookie-facade"));
     let navigation = conn
         .build_loaded_navigation_from_buffered_response_async(
             Url::parse("https://example.com/app").unwrap(),
@@ -20,7 +18,7 @@ async fn browser_context_document_cookie_snapshots_reflect_live_page_state() {
     conn.browser_context
         .as_mut()
         .unwrap()
-        .set_loaded_page_async(navigation.page)
+        .commit_active_navigation_for_test(navigation.page)
         .await;
 
     let before = conn
@@ -117,8 +115,8 @@ async fn browser_context_document_cookie_snapshots_reflect_live_page_state() {
 #[tokio::test]
 async fn browser_context_document_cookie_facade_snapshot_projects_probe_telemetry_into_owner_view()
 {
-    let mut conn = CdpConnection::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-cookie-facade", "TID-cookie-facade");
+    let mut conn = crate::test_support::connection();
+    let mut bc = conn.new_page_target_fixture_for_test("BID-cookie-facade", "TID-cookie-facade");
     bc.set_target_url("https://example.com/app".into());
     conn.install_browser_context_fixture_for_test(bc);
 
@@ -136,7 +134,7 @@ async fn browser_context_document_cookie_facade_snapshot_projects_probe_telemetr
     conn.browser_context
         .as_mut()
         .unwrap()
-        .set_loaded_page_async(navigation.page)
+        .commit_active_navigation_for_test(navigation.page)
         .await;
 
     let payload = conn

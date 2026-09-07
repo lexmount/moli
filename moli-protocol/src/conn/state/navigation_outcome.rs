@@ -6,8 +6,6 @@ use moli_core::page::{
 };
 use serde::Serialize;
 use serde_json::Value;
-#[cfg(test)]
-use std::sync::Arc;
 use url::Url;
 
 use crate::conn::{CommandOwnerScope, ResponseCommitReady};
@@ -187,13 +185,11 @@ pub struct LoadedNavigation<P = Page> {
     pub response_from_cache: bool,
     pub initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
     pub renderer_output_predecessor: Option<moli_core::RendererOutputFence>,
-    #[cfg(test)]
-    pub(crate) main_document_commit: Option<Arc<RendererMainDocumentCommit>>,
     pub(crate) document_progress_transfer: CompletedDocumentProgressTransfer,
     pub(crate) network_error_page: Option<NetworkErrorPageNavigation>,
 }
 
-impl LoadedNavigation {
+impl<P> LoadedNavigation<P> {
     #[cfg(test)]
     pub(crate) fn response_body(&self) -> String {
         self.document_progress_transfer
