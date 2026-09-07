@@ -36,6 +36,14 @@ async fn set_position(ctx: &mut TestContext, latitude: f64) {
 #[tokio::test(flavor = "multi_thread")]
 async fn native_navigator_descriptors_survive_cdp_override_and_clear() {
     let mut ctx = setup().await;
+    assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_navigator_overrides(),
+        moli_page_types::NavigatorOverrides::default()
+    );
     assert_eq!(evaluate(&mut ctx, r#"
         globalThis.navKeys = ['onLine', 'maxTouchPoints', 'geolocation'];
         globalThis.navGetters = navKeys.map(k => Object.getOwnPropertyDescriptor(Navigator.prototype, k).get);
@@ -65,6 +73,13 @@ async fn native_navigator_descriptors_survive_cdp_override_and_clear() {
         json!({"offline": true, "latency": 0, "downloadThroughput": -1, "uploadThroughput": -1}),
     )
     .await;
+    let bc = ctx.conn.browser_context.as_ref().unwrap();
+    let overrides = bc.active_navigator_overrides();
+    // This CDP command updates the native network source, so onLine must still
+    // report offline without requiring a separate Navigator override.
+    assert!(bc.active_page_target().network_policy.network_offline());
+    assert_eq!(overrides.online, None);
+    assert_eq!(overrides.max_touch_points, Some(1));
     assert_eq!(
         evaluate(
             &mut ctx,
@@ -98,6 +113,14 @@ async fn native_navigator_descriptors_survive_cdp_override_and_clear() {
     )
     .await;
     assert_eq!(
+        ctx.conn
+            .browser_context
+            .as_ref()
+            .unwrap()
+            .active_navigator_overrides(),
+        moli_page_types::NavigatorOverrides::default()
+    );
+    assert_eq!(
         evaluate(
             &mut ctx,
             "[checkDescriptors(), navigator.onLine, navigator.maxTouchPoints]"
@@ -105,6 +128,81 @@ async fn native_navigator_descriptors_survive_cdp_override_and_clear() {
         .await,
         json!([true, true, 0])
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn native_geolocation_watch_tracks_unavailable_and_cleared_overrides() {
+    use moli_page_types::{GeolocationOverride, GeolocationPositionOverride};
+
+    let mut ctx = setup().await;
+    assert_eq!(
+        evaluate(
+            &mut ctx,
+            r#"
+        globalThis.nextResult = new Promise(resolve => globalThis.nextResolve = resolve);
+        globalThis.watchId = navigator.geolocation.watchPosition(
+            p => nextResolve(['position', p.coords.latitude]),
+            e => nextResolve(['error', e.code]));
+        nextResult
+    "#
+        )
+        .await,
+        json!(["error", 2])
+    );
+
+    for (method, params, expected_override, expected_result) in [
+        (
+            "Emulation.setGeolocationOverride",
+            json!({}),
+            Some(GeolocationOverride::PositionUnavailable),
+            json!(["error", 2]),
+        ),
+        (
+            "Emulation.setGeolocationOverride",
+            json!({"latitude": 1, "longitude": 2, "accuracy": 3}),
+            Some(GeolocationOverride::Position(GeolocationPositionOverride {
+                latitude: 1.0,
+                longitude: 2.0,
+                accuracy: 3.0,
+                altitude: None,
+                altitude_accuracy: None,
+                heading: None,
+                speed: None,
+            })),
+            json!(["position", 1]),
+        ),
+        (
+            "Emulation.setGeolocationOverride",
+            json!({}),
+            Some(GeolocationOverride::PositionUnavailable),
+            json!(["error", 2]),
+        ),
+        (
+            "Emulation.clearGeolocationOverride",
+            json!({}),
+            None,
+            json!(["error", 2]),
+        ),
+    ] {
+        evaluate(&mut ctx, "globalThis.nextResult = new Promise(resolve => globalThis.nextResolve = resolve); undefined").await;
+        expect_session_command_result(&mut ctx, 88002, "SID-1", method, params).await;
+        assert_eq!(
+            ctx.conn
+                .browser_context
+                .as_ref()
+                .unwrap()
+                .active_navigator_overrides()
+                .geolocation,
+            expected_override,
+            "{method} must preserve the source state"
+        );
+        assert_eq!(
+            evaluate(&mut ctx, "nextResult").await,
+            expected_result,
+            "{method}"
+        );
+    }
+    evaluate(&mut ctx, "navigator.geolocation.clearWatch(watchId)").await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

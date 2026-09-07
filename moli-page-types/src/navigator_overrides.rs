@@ -2,14 +2,31 @@
 //!
 //! These values are state, not document-start JavaScript. Updating or clearing
 //! an override must not replace Web IDL descriptors or expose a second object.
+//! Every `None` removes an override and restores the corresponding native source.
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NavigatorOverrides {
-    /// None uses the renderer's actual network state.
+    /// `None` uses the renderer's actual network state.
     pub online: Option<bool>,
-    pub max_touch_points: u32,
-    /// None means that no emulated coordinate source is available.
-    pub geolocation: Option<GeolocationPositionOverride>,
+    /// `None` uses the native Navigator profile; `Some(0)` explicitly reports zero.
+    pub max_touch_points: Option<u32>,
+    /// `None` restores native positioning, unlike an emulated unavailable position.
+    pub geolocation: Option<GeolocationOverride>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum GeolocationOverride {
+    Position(GeolocationPositionOverride),
+    PositionUnavailable,
+}
+
+impl GeolocationOverride {
+    pub fn position(&self) -> Option<&GeolocationPositionOverride> {
+        match self {
+            Self::Position(position) => Some(position),
+            Self::PositionUnavailable => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

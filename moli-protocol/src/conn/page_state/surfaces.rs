@@ -68,10 +68,6 @@ impl SurfaceOverrideInputs {
         }
     }
 
-    fn max_touch_points(&self) -> u32 {
-        if self.touch_emulation_enabled { 1 } else { 0 }
-    }
-
     fn document_has_focus(&self) -> bool {
         self.document_is_focused()
     }
@@ -93,20 +89,8 @@ impl SurfaceOverrideInputs {
             online: self
                 .network_conditions
                 .map(|conditions| conditions.navigator_online()),
-            max_touch_points: self.max_touch_points(),
-            geolocation: self
-                .geolocation_override
-                .as_ref()
-                .and_then(EmulatedGeolocationOverrideState::position)
-                .map(|position| moli_page_types::GeolocationPositionOverride {
-                    latitude: position.latitude,
-                    longitude: position.longitude,
-                    accuracy: position.accuracy,
-                    altitude: position.altitude,
-                    altitude_accuracy: position.altitude_accuracy,
-                    heading: position.heading,
-                    speed: position.speed,
-                }),
+            max_touch_points: self.touch_emulation_enabled.then_some(1),
+            geolocation: self.geolocation_override.clone(),
         }
     }
 

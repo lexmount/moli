@@ -664,8 +664,10 @@ fn navigator_runtime_data_getter_callback<'s>(
                 return;
             }
             "maxTouchPoints" => {
-                rv.set_uint32(host.navigator_overrides().max_touch_points);
-                return;
+                if let Some(max_touch_points) = host.navigator_overrides().max_touch_points {
+                    rv.set_uint32(max_touch_points);
+                    return;
+                }
             }
             _ => {}
         }
