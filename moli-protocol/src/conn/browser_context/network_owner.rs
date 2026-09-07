@@ -12,7 +12,7 @@ use moli_core::page::PendingPageCommand;
 use moli_page_types::DevToolsSessionKey;
 
 struct TargetNetworkListenerOwnerMut<'a> {
-    target: &'a mut crate::conn::PageTargetHost,
+    target: &'a mut crate::conn::PageAgentHost,
     session_key: DevToolsSessionKey,
 }
 

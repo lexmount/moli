@@ -5,7 +5,7 @@ mod output_payloads;
 mod output_slot;
 mod output_work;
 mod publication_route;
-mod runtime_command_barrier;
+mod renderer_command_response_order;
 mod scheduler_work;
 mod subresource;
 
@@ -26,9 +26,9 @@ pub(crate) use output_work::{
     ProtocolOutputWork, RootFrameStoppedLoadingSettlement, RootFrameStoppedLoadingSettlementError,
 };
 pub(crate) use publication_route::{RendererPublicationOwner, renderer_publication_owners};
-pub use runtime_command_barrier::{
-    RuntimeCommandOutputBarrierCompletion, RuntimeCommandOutputBarrierPermit,
-    RuntimeCommandOutputBarrierTerminal, RuntimeCommandOutputBarriers,
+pub use renderer_command_response_order::{
+    RendererCommandResponseCompletion, RendererCommandResponseOrder, RendererCommandResponsePermit,
+    RendererCommandResponseTerminal,
 };
 pub(crate) use scheduler_work::ReadyProtocolSchedulerWork;
 pub use scheduler_work::{

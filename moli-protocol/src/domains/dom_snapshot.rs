@@ -9,7 +9,7 @@ use moli_core::page::{
 };
 use serde::Deserialize;
 
-use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope, RendererDispatchLane};
 use crate::domains::actions::DomSnapshotAction;
 use crate::domains::command_output::CommandOutputPlan;
 
@@ -30,7 +30,17 @@ pub(crate) enum DomSnapshotCommandDispatchStep {
     Complete(CommandOutputPlan),
 }
 
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    cmd.parse_action::<DomSnapshotAction>() == Some(DomSnapshotAction::CaptureSnapshot)
+}
+
 impl PendingDomSnapshotCommandDispatch {
+    pub(crate) fn renderer_dispatch_lane(&self) -> Option<RendererDispatchLane> {
+        self.pending
+            .renderer_agent_attachment_id()
+            .map(|_| RendererDispatchLane::Main)
+    }
+
     pub async fn wait(self) -> CompletedDomSnapshotCommandDispatch {
         CompletedDomSnapshotCommandDispatch {
             command_id: self.command_id,

@@ -234,7 +234,7 @@ impl CdpFrontendTargetControl {
             .await;
         assert!(
             output.is_empty(),
-            "a frontend-control command without a Runtime barrier cannot release held output"
+            "a frontend-control command without a renderer response permit cannot release held output"
         );
         if method == "Target.attachToBrowserTarget"
             && let Some(session_id) = response

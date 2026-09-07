@@ -64,6 +64,10 @@ pub(crate) enum PerformanceCommandTaskStep {
 }
 
 impl PendingPerformanceCommandDispatch {
+    pub(crate) const fn renderer_dispatch_lane(&self) -> Option<crate::conn::RendererDispatchLane> {
+        Some(crate::conn::RendererDispatchLane::Io)
+    }
+
     pub async fn wait(self) -> CompletedPerformanceCommandDispatch {
         let completed = match *self.pending {
             PendingPerformanceRendererCommand::IoAdapterReply {

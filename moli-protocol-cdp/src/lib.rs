@@ -21,5 +21,5 @@ pub use target::{CdpTargetKindWire, CdpTargetType, cdp_target_type_wire_value};
 pub use time::{DEFAULT_LOADER_ID, monotonic_timestamp_seconds};
 pub use wire::{
     CdpInspectorTaskMode, CdpRendererCommandPolicy, CdpRendererCommandReplacement,
-    CdpRendererCommandReplayDispatch, CdpRendererDispatchLane, CdpRequest, ParsedCdpCommand,
+    CdpRendererCommandReplayDispatch, CdpRequest, ParsedCdpCommand,
 };

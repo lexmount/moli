@@ -14,8 +14,8 @@ use crate::domains::page::{PagePreparedOutputSlot, SLOT_TOP_LEVEL_LOCATION_NAVIG
 ///
 /// The batch owns typed payload exactly once and preserves the producer's
 /// explicit FIFO order. It cannot select renderer work or inspect current renderer state. Consumers
-/// must either project it, hold its remaining after-response slots behind an
-/// exact command barrier, or consume only its owner actions during stale
+/// must either project it, hold its remaining after-response slots for an
+/// exact command response permit, or consume only its owner actions during stale
 /// cleanup.
 #[derive(Debug)]
 #[must_use = "prepared protocol outputs must be projected, held, or cleaned up exactly once"]

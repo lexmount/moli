@@ -6,7 +6,7 @@ use moli_core::page::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
-use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope, RendererDispatchLane};
 use crate::domains::actions::DomDebuggerAction;
 use crate::domains::command_output::CommandOutputPlan;
 
@@ -41,6 +41,10 @@ enum CompletedDomDebuggerOperation {
 pub(crate) enum DomDebuggerCommandTaskStep {
     Pending(PendingDomDebuggerCommandDispatch),
     Complete(CommandOutputPlan),
+}
+
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    cmd.parse_action::<DomDebuggerAction>().is_some()
 }
 
 #[derive(Deserialize)]
@@ -78,6 +82,12 @@ fn default_depth() -> i32 {
 }
 
 impl PendingDomDebuggerCommandDispatch {
+    pub(crate) fn renderer_dispatch_lane(&self) -> Option<RendererDispatchLane> {
+        self.pending
+            .renderer_agent_attachment_id()
+            .map(|_| RendererDispatchLane::Main)
+    }
+
     pub(crate) async fn wait(self) -> CompletedDomDebuggerCommandDispatch {
         CompletedDomDebuggerCommandDispatch {
             command_id: self.command_id,

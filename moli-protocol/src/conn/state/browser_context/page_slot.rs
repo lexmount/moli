@@ -3,8 +3,8 @@ use super::BrowserContext;
 use moli_core::page::RendererLifecycleEventStamp;
 use moli_core::{
     browser::{
-        DocumentId, DocumentLifecycle, DocumentLifetime, DocumentLifetimeObserver, NavigationId,
-        RendererPageResidenceIdentity,
+        BrowserSequence, DocumentId, DocumentLifecycle, DocumentLifetime, DocumentLifetimeObserver,
+        NavigationId, RendererPageResidenceIdentity,
     },
     page::{
         Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
@@ -60,6 +60,7 @@ pub(crate) struct CommittedRendererDocumentBinding {
     pub(crate) frame_id: String,
     pub(crate) loader_id: String,
     pub(crate) document_id: DocumentId,
+    pub(crate) browser_sequence: BrowserSequence,
     pub(crate) document_open_replacement_epoch: Option<RendererLifecycleEpoch>,
 }
 
@@ -980,7 +981,7 @@ impl BrowserContext {
             .get_mut(target_id)
             .expect("registered Target projection")
             .runtime_slot
-            .start_renderer_document_navigation(token);
+            .begin_document_projection(token);
         token
     }
 
@@ -1278,10 +1279,16 @@ impl BrowserContext {
             return Vec::new();
         };
         self.install_document_lifecycle_for_test(target_id, lifecycle);
+        let browser_sequence = self
+            .renderer_document_lifecycle_binding_for_target(target_id)
+            .filter(|binding| binding.document_id == document)
+            .map(|binding| binding.browser_sequence)
+            .unwrap_or_else(BrowserSequence::allocate);
         self.project_committed_document_lifecycle_for_target(
             target_id,
             crate::conn::CommittedDocumentLifecycle {
                 document,
+                browser_sequence,
                 artifacts,
             },
             navigation,
@@ -1300,6 +1307,7 @@ impl BrowserContext {
     ) -> Vec<RendererDocumentLifecycleEvent> {
         let crate::conn::CommittedDocumentLifecycle {
             document,
+            browser_sequence,
             artifacts,
         } = lifecycle;
         if self.target_document_id(target_id) != Some(document) {
@@ -1337,6 +1345,7 @@ impl BrowserContext {
             frame_id,
             loader_id,
             document_id,
+            browser_sequence,
             document_open_replacement_epoch: None,
         };
         if self

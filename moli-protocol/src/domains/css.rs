@@ -1,4 +1,4 @@
-use crate::conn::{CdpConnection, Cmd, CommandOwnerScope};
+use crate::conn::{CdpConnection, Cmd, CommandOwnerScope, RendererDispatchLane};
 use crate::domains::actions::CssAction;
 use crate::domains::command_output::CommandOutputPlan;
 use chromiumoxide_cdp::cdp::browser_protocol::css::{
@@ -44,6 +44,10 @@ pub(crate) enum CssCommandDispatchStep {
     Complete(CommandOutputPlan),
 }
 
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    cmd.parse_action::<CssAction>().is_some()
+}
+
 enum PendingCssCommandKind {
     Enable {
         frame_id: String,
@@ -78,6 +82,12 @@ struct PendingCssCommandStartError {
 }
 
 impl PendingCssCommandDispatch {
+    pub(crate) fn renderer_dispatch_lane(&self) -> Option<RendererDispatchLane> {
+        self.pending
+            .renderer_agent_attachment_id()
+            .map(|_| RendererDispatchLane::Main)
+    }
+
     fn from_command(
         conn: &CdpConnection,
         cmd: &Cmd<'_>,

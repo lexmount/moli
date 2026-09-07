@@ -6,6 +6,16 @@ use crate::domains::runtime::{
     start_moli_diagnostics_command_dispatch,
 };
 
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    cmd.parse_action::<HeapProfilerAction>()
+        .is_some_and(|action| {
+            !matches!(
+                action,
+                HeapProfilerAction::MoliDiagnostics | HeapProfilerAction::MoliResetIdleEngine
+            )
+        })
+}
+
 pub(crate) fn try_start_heap_profiler_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,

@@ -92,6 +92,31 @@ define_browser_identity!(
     "Identity of one browser-owned request decision, independent of protocol request IDs."
 );
 
+static NEXT_BROWSER_SEQUENCE: AtomicU64 = AtomicU64::new(1);
+
+/// Process-monotonic sequence of completed Browser semantic occurrences.
+///
+/// Unlike the object identities above, this value defines publication order.
+/// It is allocated only after the Browser mutation represented by an
+/// occurrence has completed successfully.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct BrowserSequence(NonZeroU64);
+
+impl BrowserSequence {
+    /// Allocates the next process-wide Browser occurrence sequence.
+    pub fn allocate() -> Self {
+        Self(allocate_nonzero_u64(
+            &NEXT_BROWSER_SEQUENCE,
+            "Browser sequence",
+        ))
+    }
+
+    /// Returns the ordered value for diagnostics and projection fences.
+    pub const fn get(self) -> u64 {
+        self.0.get()
+    }
+}
+
 #[cfg(any(test, feature = "test-support"))]
 impl DocumentId {
     /// Constructs a deterministic identity for cross-crate tests.
@@ -123,6 +148,7 @@ mod tests {
         assert_ne!(DocumentId::allocate(), DocumentId::allocate());
         assert_ne!(NavigationId::allocate(), NavigationId::allocate());
         assert_ne!(BrowserRequestId::allocate(), BrowserRequestId::allocate());
+        assert!(BrowserSequence::allocate() < BrowserSequence::allocate());
     }
 
     #[test]
@@ -144,6 +170,10 @@ mod tests {
         assert_eq!(
             size_of::<Option<BrowserRequestId>>(),
             size_of::<BrowserRequestId>()
+        );
+        assert_eq!(
+            size_of::<Option<BrowserSequence>>(),
+            size_of::<BrowserSequence>()
         );
     }
 }

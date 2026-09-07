@@ -3,6 +3,10 @@ use serde_json::{Map, Value};
 use crate::conn::{CdpConnection, Cmd};
 use crate::domains::runtime::{RuntimeCommandTaskStep, start_debugger_inspector_command_dispatch};
 
+pub(crate) fn command_waits_for_document_projection(cmd: &Cmd<'_>) -> bool {
+    crate::domains::runtime::debugger_command_waits_for_document_projection(cmd)
+}
+
 pub(crate) fn try_start_debugger_command_dispatch(
     conn: &mut CdpConnection,
     cmd: &Cmd<'_>,
@@ -160,7 +164,7 @@ mod tests {
             .expect("start cross-Document navigation");
         assert!(
             ctx.conn
-                .renderer_document_navigation_is_suspended_for_session_owner(None)
+                .document_projection_is_pending_for_session_owner(None)
         );
 
         let source = command(
@@ -182,7 +186,10 @@ mod tests {
 
         let _ = ctx
             .conn
-            .finish_renderer_document_navigation_for_owner(&navigation_owner, &navigation);
+            .finish_navigation_without_document_projection_for_owner(
+                &navigation_owner,
+                &navigation,
+            );
         ctx.conn
             .clear_pending_document_navigation_for_owner_if_matches(&navigation_owner, &navigation);
     }

@@ -19,7 +19,7 @@ pub(super) async fn commit_loaded_navigation_async(
     prepared: crate::conn::PreparedDocumentNavigation,
     navigation: MaterializedLoadedDocumentProgress,
     command_context: &mut CommandDispatchContext,
-) {
+) -> Option<crate::conn::DocumentProjectionOutputRelease> {
     let MaterializedLoadedDocumentProgress {
         pending_download,
         final_url,
@@ -38,7 +38,7 @@ pub(super) async fn commit_loaded_navigation_async(
         navigation_activity =
             navigation_activity.with_network_error_page_result(error_page.error_text().to_owned());
     }
-    let Some(lifecycle) = commit_and_project_loaded_navigation_async(
+    let (lifecycle, projection_fence) = commit_and_project_loaded_navigation_async(
         conn,
         out,
         navigation_activity.state(),
@@ -46,10 +46,7 @@ pub(super) async fn commit_loaded_navigation_async(
         initial_runtime_realms,
         command_context,
     )
-    .await
-    else {
-        return;
-    };
+    .await?;
     if !is_network_error_page {
         let _ = conn.commit_main_document_resource_for_owner(
             &navigation_activity.state().owner,
@@ -69,6 +66,7 @@ pub(super) async fn commit_loaded_navigation_async(
             &navigation_activity.state().owner,
             crate::conn::CommittedDocumentLifecycle {
                 document: lifecycle.document,
+                browser_sequence: lifecycle.browser_sequence,
                 artifacts,
             },
             Some(*token),
@@ -95,21 +93,39 @@ pub(super) async fn commit_loaded_navigation_async(
     navigation_activity.defer_initial_renderer_document_lifecycle_events_until_load_boundary(
         deferred_initial_renderer_document_lifecycle_events,
     );
+    let projection_owner = navigation_activity.state().owner.clone();
+    let projected_document = renderer_document_binding.clone();
     // Keep the loaded commit tail boxed: the target/Patchright CDP test thread
     // has historically hit stack limits when this future is inlined.
-    Box::pin(async move {
-        navigation_activity
-            .emit_loaded_navigation_commit_async(
-                conn,
-                out,
-                pending_download,
-                renderer_document_binding,
-                initial_renderer_document_lifecycle_events,
-                renderer_output_predecessor,
-            )
-            .await;
-    })
+    Box::pin(navigation_activity.emit_loaded_navigation_commit_async(
+        &mut *conn,
+        out,
+        pending_download,
+        renderer_document_binding,
+        initial_renderer_document_lifecycle_events,
+        renderer_output_predecessor,
+    ))
     .await;
+
+    match projection_fence {
+        Some(fence) => {
+            let projected_document = projected_document.as_ref().unwrap_or_else(|| {
+                panic!(
+                    "Browser sequence {} rebound renderer attachment {} without a committed frame projection",
+                    fence.browser_sequence().get(),
+                    fence.renderer_attachment().get(),
+                )
+            });
+            Some(conn.publish_document_projection_fence_for_owner(
+                &projection_owner,
+                projected_document,
+                fence,
+            ))
+        }
+        None => {
+            conn.finish_navigation_without_document_projection_for_owner(&projection_owner, token)
+        }
+    }
 }
 
 fn split_renderer_page_creation_lifecycle_at_load_boundary(
@@ -196,7 +212,10 @@ async fn commit_and_project_loaded_navigation_async(
     prepared: crate::conn::PreparedDocumentNavigation,
     initial_runtime_realms: Vec<RendererRuntimeRealmInfo>,
     command_context: &mut CommandDispatchContext,
-) -> Option<crate::conn::CommittedDocumentLifecycle> {
+) -> Option<(
+    crate::conn::CommittedDocumentLifecycle,
+    Option<crate::conn::DocumentProjectionFence>,
+)> {
     let commit = match conn.commit_loaded_navigation(prepared) {
         Ok(commit) => commit,
         Err(error) => {
@@ -207,8 +226,8 @@ async fn commit_and_project_loaded_navigation_async(
 
     // Everything below observes a committed Browser Document. Inspection failure
     // settles DevTools work; it must never turn this navigation into a rollback.
-    let inspection_available = match commit.inspection_projection {
-        Ok(()) => true,
+    let (inspection_available, projection_fence) = match commit.inspection_projection {
+        Ok(fence) => (true, Some(fence)),
         Err(error) => {
             tracing::warn!(%error, session_id = state.owner.session_id(),
                 "inspection projection failed after Browser navigation committed");
@@ -230,7 +249,7 @@ async fn commit_and_project_loaded_navigation_async(
                 sessions,
                 "Inspector rebind failed after navigation",
             );
-            false
+            (false, None)
         }
     };
     commit.previous_document_retirement.close().await;
@@ -277,7 +296,7 @@ async fn commit_and_project_loaded_navigation_async(
         }
         out.extend_background_events_after_messages(events);
     }
-    Some(commit.lifecycle)
+    Some((commit.lifecycle, projection_fence))
 }
 
 /// Rebind failures are session failures, never Browser crash or close commands.

@@ -985,7 +985,7 @@ fn runtime_observable_console_payloads(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::PageTargetHost;
+    use crate::conn::PageAgentHost;
 
     #[test]
     fn csp_policy_preserves_peer_contributions_across_update_disable_and_detach() {
@@ -1072,7 +1072,7 @@ mod tests {
         }
     }
 
-    fn background_session_state_mut(state: &mut PageTargetHost) -> TargetSessionStateMut<'_> {
+    fn background_session_state_mut(state: &mut PageAgentHost) -> TargetSessionStateMut<'_> {
         TargetSessionStateMut {
             devtools_session_state: &mut state.devtools_sessions
                 [moli_page_types::DevToolsSessionKey::Primary],

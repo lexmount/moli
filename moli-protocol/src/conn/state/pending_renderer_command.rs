@@ -9,8 +9,7 @@ use moli_core::{
     RendererRuntimeInspectorResponseSender,
 };
 use moli_page_types::{
-    DevToolsSessionKey, FrontendCommandId, RendererAgentAttachmentId, RendererCallId,
-    RendererInspectorResponseDelivery,
+    FrontendCommandId, RendererAgentAttachmentId, RendererCallId, RendererInspectorResponseDelivery,
 };
 use moli_protocol_cdp::{
     CdpRendererCommandPolicy, CdpRendererCommandReplacement, CdpRendererCommandReplayDispatch,
@@ -133,21 +132,6 @@ impl fmt::Display for DuplicatePendingRendererCommand {
 }
 
 impl std::error::Error for DuplicatePendingRendererCommand {}
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) struct PendingRendererCommandKey {
-    session_key: DevToolsSessionKey,
-    frontend_command_id: FrontendCommandId,
-}
-
-impl PendingRendererCommandKey {
-    pub(crate) fn new(session_id: Option<&str>, frontend_command_id: u64) -> Self {
-        Self {
-            session_key: DevToolsSessionKey::from_wire_session_id(session_id),
-            frontend_command_id: FrontendCommandId::new(frontend_command_id),
-        }
-    }
-}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct RendererCallIdExhausted;

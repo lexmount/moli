@@ -3,13 +3,13 @@ use crate::conn::state::TargetPageAbsenceReason;
 use crate::conn::state::web_contents::{
     DocumentNavigationDestination, PreparedDocumentNavigation, RetiringDocument,
 };
-use crate::conn::state::{DevToolsRendererChannelError, DocumentId};
-use crate::conn::{BrowserContext, PageTargetHost, TargetRuntimeSlot};
+use crate::conn::state::{DevToolsRendererChannelError, DocumentId, DocumentProjectionFence};
+use crate::conn::{BrowserContext, PageAgentHost, TargetRuntimeSlot};
 use moli_core::page::{Page, RendererPageCommandPostResponseContinuation};
 
 pub(crate) struct LoadedNavigationPageCommit {
     pub(crate) lifecycle: crate::conn::state::web_contents::CommittedDocumentLifecycle,
-    pub(crate) inspection_projection: Result<(), DevToolsRendererChannelError>,
+    pub(crate) inspection_projection: Result<DocumentProjectionFence, DevToolsRendererChannelError>,
     pub(crate) replaced_page_owner: Option<TargetPageResidenceIdentity>,
     pub(crate) previous_document_retirement: RetiringDocument,
     pub(crate) committed_document_post_response_continuation:
@@ -80,10 +80,11 @@ impl BrowserContext {
             .page_targets
             .get_mut(target_id)
             .expect("resolved projection");
-        if let Err(error) = target
-            .runtime_slot
-            .project_initial_document_inspection(commit.inspection_endpoint)
-        {
+        if let Err(error) = target.runtime_slot.project_initial_document_inspection(
+            commit.key.document(),
+            commit.lifecycle.browser_sequence,
+            commit.inspection_endpoint,
+        ) {
             tracing::warn!(%error, "initial document inspection projection failed");
         }
         target
@@ -370,8 +371,13 @@ impl BrowserContext {
             .expect("resolved target projection");
         let inspection_projection = target
             .runtime_slot
-            .project_committed_document_inspection(commit.navigation, commit.inspection_endpoint)
-            .map(|previous| {
+            .project_committed_document_inspection(
+                commit.navigation,
+                commit.document,
+                commit.lifecycle.browser_sequence,
+                commit.inspection_endpoint,
+            )
+            .map(|(previous, fence)| {
                 if let Some(previous) = previous {
                     let new_attachment = target
                         .runtime_slot
@@ -387,6 +393,7 @@ impl BrowserContext {
                         .runtime_slot
                         .install_pending_renderer_call_replacements(replacements);
                 }
+                fence
             });
         self.reset_document_projection_for_target(
             target_id,
@@ -431,7 +438,7 @@ impl BrowserContext {
     }
 }
 
-impl PageTargetHost {
+impl PageAgentHost {
     pub(crate) fn target_url(&self) -> &str {
         self.target_identity.url()
     }

@@ -1,5 +1,5 @@
 use crate::conn::{
-    BackgroundProtocolEvent, CdpConnection, SessionDisposalPlan, SessionDisposalTarget,
+    BackgroundProtocolEvent, CdpConnection, DevToolsSessionHandlerSet, SessionDisposalPlan,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,22 +44,13 @@ const WORKER_HANDLERS: &[DevToolsSessionDomainHandler] = &[
 /// state or disable operation. Page Inspector resources have already retired
 /// through the renderer session lifecycle; these handlers revoke service
 /// contributions and reconcile Browser-owned policy without that Inspector.
-struct DevToolsSessionHandlers {
-    handlers: &'static [DevToolsSessionDomainHandler],
-}
-
-impl DevToolsSessionHandlers {
-    fn for_target(target: &SessionDisposalTarget) -> Self {
-        let handlers = match target {
-            SessionDisposalTarget::PageTarget { .. } => PAGE_HANDLERS,
-            SessionDisposalTarget::SharedWorkerTarget { .. }
-            | SessionDisposalTarget::DedicatedWorkerTarget { .. }
-            | SessionDisposalTarget::ServiceWorkerTarget { .. } => WORKER_HANDLERS,
-            SessionDisposalTarget::Browser | SessionDisposalTarget::TabTarget { .. } => {
-                CONNECTION_HANDLERS
-            }
-        };
-        Self { handlers }
+impl DevToolsSessionHandlerSet {
+    fn handlers(self) -> &'static [DevToolsSessionDomainHandler] {
+        match self {
+            Self::Connection => CONNECTION_HANDLERS,
+            Self::Page => PAGE_HANDLERS,
+            Self::Worker => WORKER_HANDLERS,
+        }
     }
 }
 
@@ -92,7 +83,7 @@ pub(crate) async fn dispose_live_handlers_async(
         first_error: None,
         renderer_output_predecessor: None,
     };
-    for handler in DevToolsSessionHandlers::for_target(plan.target()).handlers {
+    for handler in plan.handler_set().handlers() {
         let result = handler
             .dispose_async(
                 conn,
@@ -211,30 +202,16 @@ impl DevToolsSessionDomainHandler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use moli_page_types::DevToolsSessionKey;
 
     #[test]
     fn handler_sets_are_owned_by_session_target_kind() {
-        let page = SessionDisposalTarget::PageTarget {
-            browser_context_id: "BID".to_owned(),
-            target_id: "TID".to_owned(),
-            session_key: DevToolsSessionKey::Attached("SID".to_owned()),
-        };
+        assert_eq!(DevToolsSessionHandlerSet::Page.handlers(), PAGE_HANDLERS);
         assert_eq!(
-            DevToolsSessionHandlers::for_target(&page).handlers,
-            PAGE_HANDLERS
-        );
-
-        let worker = SessionDisposalTarget::DedicatedWorkerTarget {
-            browser_context_id: "BID".to_owned(),
-            target_id: "WID".to_owned(),
-        };
-        assert_eq!(
-            DevToolsSessionHandlers::for_target(&worker).handlers,
+            DevToolsSessionHandlerSet::Worker.handlers(),
             WORKER_HANDLERS
         );
         assert_eq!(
-            DevToolsSessionHandlers::for_target(&SessionDisposalTarget::Browser).handlers,
+            DevToolsSessionHandlerSet::Connection.handlers(),
             CONNECTION_HANDLERS
         );
     }

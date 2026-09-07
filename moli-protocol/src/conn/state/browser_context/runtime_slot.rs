@@ -1,4 +1,5 @@
 use super::BrowserContext;
+use moli_core::browser::BrowserSequence;
 use moli_core::page::{
     Page, RendererAgentAttachmentId, RendererDocumentLifecycleIdentity,
     RendererRuntimeInspectorMessageBatch, ScriptNetworkOutputItem, ScriptObservableOutputItem,
@@ -24,7 +25,8 @@ use crate::{
 };
 
 use crate::conn::state::devtools_renderer_channel::{
-    DevToolsRendererChannel, RendererAgentBinding, RendererAgentDetachReason,
+    DevToolsRendererChannel, DocumentProjectionFence, RendererAgentBinding,
+    RendererAgentDetachReason, RendererOutputHoldRelease,
 };
 use crate::conn::state::page_slot::{TargetPageAbsenceReason, TargetPageSlot};
 use crate::conn::state::{
@@ -33,7 +35,7 @@ use crate::conn::state::{
     TargetJavaScriptDialogScope, TargetJavaScriptDialogScopeObserver,
 };
 
-pub(crate) struct FinishedRendererDocumentNavigation {
+pub(crate) struct DocumentProjectionOutputRelease {
     pub(crate) released_output: Vec<RendererRuntimeInspectorMessageBatch>,
     pub(crate) renderer_call_replacements: Option<PreparedRendererCallReplacements>,
 }
@@ -162,28 +164,39 @@ impl TargetRuntimeSlot {
         self.javascript_dialog_scope.retire();
     }
 
-    pub(super) fn start_renderer_document_navigation(&mut self, navigation: NavigationId) {
+    pub(super) fn begin_document_projection(&mut self, navigation: NavigationId) {
         self.devtools_renderer_channel.reopen_after_target_crash();
         self.devtools_renderer_channel
-            .navigation_started(navigation)
+            .begin_document_projection(navigation)
             .expect("an open target runtime slot must accept a new document navigation");
     }
 
     pub(in crate::conn::state) fn project_committed_document_inspection(
         &mut self,
         navigation: NavigationId,
+        document: DocumentId,
+        browser_sequence: BrowserSequence,
         endpoint: moli_renderer_v8::RendererInspectionEndpoint,
-    ) -> Result<Option<RendererAgentAttachment>, DevToolsRendererChannelError> {
-        self.devtools_renderer_channel
-            .document_committed(navigation, endpoint)
+    ) -> Result<
+        (Option<RendererAgentAttachment>, DocumentProjectionFence),
+        DevToolsRendererChannelError,
+    > {
+        self.devtools_renderer_channel.document_committed(
+            navigation,
+            document,
+            browser_sequence,
+            endpoint,
+        )
     }
 
     pub(in crate::conn::state) fn project_initial_document_inspection(
         &mut self,
+        document: DocumentId,
+        browser_sequence: BrowserSequence,
         endpoint: moli_renderer_v8::RendererInspectionEndpoint,
     ) -> Result<(), DevToolsRendererChannelError> {
         self.devtools_renderer_channel
-            .attach_current(endpoint)
+            .attach_current(document, browser_sequence, endpoint)
             .map(|_| ())
     }
 
@@ -196,19 +209,38 @@ impl TargetRuntimeSlot {
             .route_current_output(attachment_id, batches)
     }
 
-    pub(crate) fn finish_renderer_document_navigation(
+    pub(crate) fn finish_navigation_without_document_projection(
         &mut self,
         token: &NavigationId,
-    ) -> Result<FinishedRendererDocumentNavigation, DevToolsRendererChannelError> {
-        let resume = self.devtools_renderer_channel.navigation_finished(token)?;
+    ) -> Result<DocumentProjectionOutputRelease, DevToolsRendererChannelError> {
+        let resume = self
+            .devtools_renderer_channel
+            .finish_navigation_without_document_projection(token)?;
+        Ok(self.release_renderer_document_output(resume))
+    }
+
+    pub(crate) fn publish_document_projection_fence(
+        &mut self,
+        fence: DocumentProjectionFence,
+    ) -> Result<DocumentProjectionOutputRelease, DevToolsRendererChannelError> {
+        let resume = self
+            .devtools_renderer_channel
+            .publish_document_projection(fence)?;
+        Ok(self.release_renderer_document_output(resume))
+    }
+
+    fn release_renderer_document_output(
+        &mut self,
+        resume: Option<RendererOutputHoldRelease>,
+    ) -> DocumentProjectionOutputRelease {
         let renderer_call_replacements = resume
             .is_some()
             .then(|| std::mem::take(&mut self.pending_renderer_call_replacements))
             .filter(|replacements| !replacements.is_empty());
-        Ok(FinishedRendererDocumentNavigation {
+        DocumentProjectionOutputRelease {
             released_output: self.devtools_renderer_channel.take_released_output(),
             renderer_call_replacements,
-        })
+        }
     }
 
     pub(crate) fn install_pending_renderer_call_replacements(
@@ -218,8 +250,9 @@ impl TargetRuntimeSlot {
         self.pending_renderer_call_replacements = replacements;
     }
 
-    pub(crate) fn renderer_document_navigation_is_suspended(&self) -> bool {
-        self.devtools_renderer_channel.output_is_suspended()
+    pub(crate) fn document_projection_is_pending(&self) -> bool {
+        self.devtools_renderer_channel
+            .document_projection_is_pending()
     }
 
     pub(crate) fn current_renderer_attachment(&self) -> Option<RendererAgentAttachment> {
@@ -235,8 +268,18 @@ impl TargetRuntimeSlot {
         &mut self,
         endpoint: moli_renderer_v8::RendererInspectionEndpoint,
     ) {
+        let document = self
+            .devtools_renderer_channel
+            .current()
+            .expect("reattachment requires a current renderer binding")
+            .document();
+        let browser_sequence = self
+            .devtools_renderer_channel
+            .current()
+            .expect("reattachment requires a current renderer binding")
+            .browser_sequence();
         self.devtools_renderer_channel
-            .attach_current(endpoint)
+            .attach_current(document, browser_sequence, endpoint)
             .unwrap();
     }
 
@@ -344,19 +387,21 @@ impl TargetRuntimeSlot {
     }
 
     #[cfg(test)]
-    fn ensure_renderer_attachment_for_replacement(&mut self, page: Option<&mut Page>) {
-        let Some(page) = page else {
-            return;
-        };
+    fn ensure_renderer_attachment_for_replacement(
+        &mut self,
+        document: DocumentId,
+        agent_token: moli_core::page::RendererDevToolsAgentToken,
+        endpoint: moli_renderer_v8::RendererInspectionEndpoint,
+    ) {
         if !self
             .devtools_renderer_channel
             .current()
             .is_some_and(|attachment| {
-                attachment.agent_token() == page.renderer_devtools_agent_token()
+                attachment.agent_token() == agent_token && attachment.document() == document
             })
         {
             self.devtools_renderer_channel
-                .attach_current(page.renderer_inspection_endpoint())
+                .attach_current(document, BrowserSequence::allocate(), endpoint)
                 .expect("a loaded page cannot be installed into a closed renderer channel");
         }
     }
@@ -883,20 +928,31 @@ impl BrowserContext {
     pub(super) fn replace_loaded_page_for_target(
         &mut self,
         target_id: &str,
-        mut page: Option<Page>,
+        page: Option<Page>,
     ) -> Option<Page> {
+        let inspection = page.as_ref().map(|page| {
+            (
+                page.renderer_devtools_agent_token(),
+                page.renderer_inspection_endpoint(),
+            )
+        });
         let previous_document = self.target_document_id(target_id).zip(
             self.loaded_page_for_target(target_id)
                 .map(RendererPageResidenceIdentity::from_page),
         );
         let retiring =
             self.begin_document_projection_replacement_for_target(target_id, previous_document);
-        self.page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection")
-            .runtime_slot
-            .ensure_renderer_attachment_for_replacement(page.as_mut());
         let previous = self.replace_target_document(target_id, page);
+        if let Some((agent_token, endpoint)) = inspection {
+            let document = self
+                .target_document_id(target_id)
+                .expect("a replacement Page must install a Document");
+            self.page_targets
+                .get_mut(target_id)
+                .expect("resolved target projection")
+                .runtime_slot
+                .ensure_renderer_attachment_for_replacement(document, agent_token, endpoint);
+        }
         self.finish_document_projection_replacement_for_target(target_id, retiring);
         previous
     }
@@ -1021,8 +1077,8 @@ impl BrowserContext {
             "rendererChannelClosed": self.page_targets.get(target_id).expect("resolved target projection must remain live").runtime_slot.devtools_renderer_channel.is_closed(),
             "rendererChannelHasCurrentAttachment":
                 self.page_targets.get(target_id).expect("resolved target projection must remain live").runtime_slot.devtools_renderer_channel.current().is_some(),
-            "rendererChannelInflightNavigationCount":
-                self.page_targets.get(target_id).expect("resolved target projection must remain live").runtime_slot.devtools_renderer_channel.inflight_navigation_count(),
+            "pendingDocumentProjectionCount":
+                self.page_targets.get(target_id).expect("resolved target projection must remain live").runtime_slot.devtools_renderer_channel.pending_navigation_count(),
             "hasNetworkEventListeners": self.page_targets.get(target_id).expect("resolved target projection must remain live").runtime_slot.has_network_event_listeners(),
             "nextFetchRequestId": self.page_targets.get(target_id).expect("resolved target projection must remain live").runtime_slot.request_counters.next_fetch_request_id,
             "nextSubresourceFetchRequestId": self.page_targets.get(target_id).expect("resolved target projection must remain live").runtime_slot.request_counters.next_subresource_fetch_request_id,
@@ -1269,6 +1325,7 @@ mod tests {
                     frame_id: "FRAME-old".to_owned(),
                     loader_id: "LOADER-old".to_owned(),
                     document_id: DocumentId::from_raw_for_test(1),
+                    browser_sequence: BrowserSequence::allocate(),
                     document_open_replacement_epoch: None,
                 },
                 network_agent: retiring_agent,

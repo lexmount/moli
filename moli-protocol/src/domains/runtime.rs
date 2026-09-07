@@ -151,8 +151,8 @@ pub(in crate::domains) use dispatcher::replay_shared_worker_runtime_bindings_for
 pub(crate) use dispatcher::{
     BidiPreloadFunctionDeclaration, CompletedRuntimeCommandDispatch, PendingRuntimeCommandDispatch,
     RuntimeCommandTaskStep, bidi_preload_function_declaration_source,
-    complete_pending_runtime_command_at_response_boundary,
-    devtools_deep_serialization_options_json,
+    command_waits_for_document_projection, complete_pending_runtime_command_at_response_boundary,
+    debugger_command_waits_for_document_projection, devtools_deep_serialization_options_json,
     execute_devtools_runtime_command_async_with_protocol_events,
     execute_runtime_listener_command_for_owner,
     start_bidi_preload_channel_listeners_for_execution_context_background_events_async,

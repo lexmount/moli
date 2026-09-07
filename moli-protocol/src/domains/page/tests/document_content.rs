@@ -34,31 +34,33 @@ async fn install_document_content_test_page(ctx: &mut TestContext, url: &str) {
             .unwrap()
             .await
             .unwrap();
-        let committed = browser_context
+        browser_context
             .commit_loaded_navigation(prepared)
-            .expect("document-content test Document should commit");
-        assert!(committed.inspection_projection.is_ok());
-        assert!(
-            browser_context
-                .active_page_target_mut()
-                .runtime_slot
-                .finish_renderer_document_navigation(&committed_document)
-                .expect("document-content test renderer navigation should finish")
-                .released_output
-                .is_empty(),
-            "the fixture should not leave buffered Inspector output behind"
-        );
-        committed
+            .expect("document-content test Document should commit")
     };
+    let projection_fence = committed
+        .inspection_projection
+        .expect("document-content test inspection projection should succeed");
     committed.previous_document_retirement.close().await;
-    let (binding, _) = ctx.conn.bind_renderer_document_lifecycle_for_owner(
+    let (binding, _) = ctx.conn.project_committed_document_lifecycle_for_owner(
         &crate::conn::CommandOwnerScope::for_session("SID-1"),
-        artifacts,
+        committed.lifecycle,
         Some(committed_document),
         "TID-1".to_owned(),
         LOADER_ID.to_owned(),
     );
-    assert!(binding.is_some(), "renderer lifecycle should bind");
+    let binding = binding.expect("renderer lifecycle should bind");
+    assert!(
+        ctx.conn
+            .publish_document_projection_fence_for_owner(
+                &crate::conn::CommandOwnerScope::for_session("SID-1"),
+                &binding,
+                projection_fence,
+            )
+            .released_output
+            .is_empty(),
+        "the fixture should not leave buffered Inspector output behind"
+    );
     // The fixture commits an already-running renderer Page directly instead
     // of going through the production navigation command. Route that exact
     // Document's initial lifecycle publication before enabling observers.

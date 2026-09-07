@@ -11,16 +11,16 @@ use moli_core::{
     runtime::NavigationRuntimeConfig,
 };
 use moli_protocol::{
-    BackgroundNavigationCompletion, BackgroundProtocolEvent, CdpCommandTaskStep, CdpConnection,
-    CdpInitialStoragePartition, CdpRendererDispatchLane, CdpSchedulerEvent,
-    CdpTargetHostLifecycleObserver, CommandDispatchContext, CompletedCdpCommandDispatch,
+    AgentHostDispatchResult, BackgroundNavigationCompletion, BackgroundProtocolEvent,
+    CdpConnection, CdpInitialStoragePartition, CdpSchedulerEvent, CdpTargetHostLifecycleObserver,
+    CommandDispatchContext, CompletedCdpCommandDispatch,
     CompletedDeferredMainDocumentLoadCompletion, DeferredMainDocumentLoadCompletionOutputAction,
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadObservationId,
     DeferredMainDocumentLoadPredecessorCandidate, DevToolsPageResidenceIdentity,
     PageScreencastCaptureCompletion, PageScreencastCaptureStart, PageScreencastRegistration,
     PageScreencastSubscriptionStatus, ParsedCdpCommand, PendingCdpCommandDispatch,
     PendingDeferredMainDocumentLoadCompletion, PendingPageScreencastCapture,
-    ProtocolSchedulerWorkKind, RuntimeCommandOutputBarriers,
+    ProtocolSchedulerWorkKind, RendererCommandResponseOrder,
     conn::{RuntimeInspectorResponseReady, RuntimeInspectorResponseReadySender},
     devtools_runtime::{
         DevToolsCommand, DevToolsCommandResult, DevToolsError, DevToolsNavigationWait,
@@ -39,7 +39,7 @@ mod adapter_scheduler;
 mod command_dispatch;
 mod frontend_control;
 mod protocol_residence;
-mod runtime_command_barrier;
+mod renderer_command_response_order;
 mod runtime_dispatch;
 
 pub(crate) use actor::spawn_cdp_scheduler_actor;
@@ -51,7 +51,7 @@ pub(crate) use frontend_control::{CdpCookieSnapshot, CdpOwnerActorLifecycle};
 use protocol_residence::{
     ClientTurnPredecessor, ProtocolSchedulerResidence, ProtocolSchedulerStep, SchedulerQueues,
 };
-use runtime_command_barrier::CommandOutputReleasePermit;
+use renderer_command_response_order::CommandOutputReleasePermit;
 pub(crate) use runtime_dispatch::{
     DevToolsRuntimeCommandProgress, PendingDevToolsRuntimeDeferredReplyExecution,
 };
@@ -113,7 +113,7 @@ pub(crate) enum CommandStartAction {
 pub(crate) struct CdpScheduler {
     conn: CdpConnection,
     pending_navigation_background_events: VecDeque<PendingNavigationBackgroundEvent>,
-    runtime_command_output_barriers: RuntimeCommandOutputBarriers,
+    renderer_command_response_order: RendererCommandResponseOrder,
     queues: SchedulerQueues,
     page_screencasts: HashMap<Option<String>, PageScreencastSchedule>,
     page_screencast_interval_ms: u32,
@@ -704,7 +704,7 @@ impl CdpScheduler {
         Self {
             conn,
             pending_navigation_background_events: VecDeque::new(),
-            runtime_command_output_barriers: RuntimeCommandOutputBarriers::default(),
+            renderer_command_response_order: RendererCommandResponseOrder::default(),
             queues: SchedulerQueues::default(),
             page_screencasts: HashMap::new(),
             page_screencast_interval_ms,
@@ -844,11 +844,11 @@ impl CdpScheduler {
             .conn
             .start_parsed_command_dispatch_with_context(command, &mut command_context);
         // Dispatch registers a session-local renderer call id before the
-        // renderer task can be observed by this actor. The response barrier
+        // renderer task can be observed by this actor. The response-order permit
         // must use that exact id rather than infer one from the frontend CDP
         // request id.
-        let runtime_output_barrier = if command.runtime_command_executes_page_javascript() {
-            self.runtime_command_output_barriers.admit(
+        let renderer_response_permit = if command.runtime_command_executes_page_javascript() {
+            self.renderer_command_response_order.admit(
                 &self.conn,
                 command.request().id(),
                 command.command_output_session_id(),
@@ -857,14 +857,20 @@ impl CdpScheduler {
             None
         };
         let output_release_permit =
-            CommandOutputReleasePermit::new(response_flush_permit, runtime_output_barrier);
+            CommandOutputReleasePermit::new(response_flush_permit, renderer_response_permit);
         let step = match dispatch_step {
-            CdpCommandTaskStep::Pending(mut pending) => {
+            AgentHostDispatchResult::PendingService(mut pending) => {
                 let scheduler_events = pending.take_scheduler_events();
                 self.apply_scheduler_events(scheduler_events);
                 CommandTaskStep::Pending(pending)
             }
-            CdpCommandTaskStep::Complete(result) => {
+            AgentHostDispatchResult::FallThrough(dispatch) => {
+                let mut pending = dispatch.into_pending();
+                let scheduler_events = pending.take_scheduler_events();
+                self.apply_scheduler_events(scheduler_events);
+                CommandTaskStep::Pending(pending)
+            }
+            AgentHostDispatchResult::Complete(result) => {
                 let (
                     events,
                     post_renderer_output_events,
@@ -905,12 +911,18 @@ impl CdpScheduler {
             .complete_pending_command_dispatch_with_context(completed, command_context)
             .await
         {
-            CdpCommandTaskStep::Pending(mut pending) => {
+            AgentHostDispatchResult::PendingService(mut pending) => {
                 let scheduler_events = pending.take_scheduler_events();
                 self.apply_scheduler_events(scheduler_events);
                 CommandTaskStep::Pending(pending)
             }
-            CdpCommandTaskStep::Complete(result) => {
+            AgentHostDispatchResult::FallThrough(dispatch) => {
+                let mut pending = dispatch.into_pending();
+                let scheduler_events = pending.take_scheduler_events();
+                self.apply_scheduler_events(scheduler_events);
+                CommandTaskStep::Pending(pending)
+            }
+            AgentHostDispatchResult::Complete(result) => {
                 let (
                     events,
                     post_renderer_output_events,
@@ -2032,10 +2044,7 @@ impl CdpScheduler {
     }
 
     pub(crate) fn command_waits_for_navigation_flush(&self, command: &ParsedCdpCommand) -> bool {
-        command.renderer_lane() == Some(CdpRendererDispatchLane::Main)
-            && self
-                .conn
-                .renderer_document_navigation_is_suspended_for_session_owner(command.session_id())
+        self.conn.command_waits_for_document_projection(command)
     }
 
     pub(crate) fn route_background_event_around_inflight_navigation(
@@ -2327,7 +2336,7 @@ impl CdpScheduler {
             .conn
             .ingest_renderer_output_turn_async(
                 publication,
-                &mut self.runtime_command_output_barriers,
+                &mut self.renderer_command_response_order,
             )
             .await;
         let (
@@ -2471,20 +2480,20 @@ impl CdpScheduler {
         let Some(permit) = output_release_permit else {
             return ProtocolOutputSequence::empty();
         };
-        let Some(runtime_barrier) = permit.finish_response() else {
+        let Some(renderer_response) = permit.finish_response() else {
             return ProtocolOutputSequence::empty();
         };
         let completion = self
             .conn
-            .release_runtime_command_output_barrier_turn_async(
-                &mut self.runtime_command_output_barriers,
-                runtime_barrier,
+            .release_renderer_command_response_permit_turn_async(
+                &mut self.renderer_command_response_order,
+                renderer_response,
             )
             .await;
         if moli_trace::cdp_runtime_trace_enabled() {
             tracing::info!(
                 target: "moli_cdp_runtime",
-                stage = "runtime_command_output_barrier_terminal",
+                stage = "renderer_command_response_terminal",
                 terminal = ?completion.terminal(),
             );
         }

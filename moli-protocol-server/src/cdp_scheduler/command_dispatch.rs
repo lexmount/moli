@@ -136,7 +136,7 @@ impl CommandTurnOutput {
     ///
     /// The frozen sequence has already been split by its domain-declared
     /// `BeforeResponse`/`AfterResponse` order. Only the former reaches this
-    /// method; the latter remains in the command barrier until the response
+    /// method; the latter remains held by response ordering until the response
     /// flush consumes its single-use permit.
     pub(crate) fn prepend_protocol_output(&mut self, output: ProtocolOutputSequence) {
         if output.is_empty() {

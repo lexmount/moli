@@ -74,12 +74,13 @@ impl PendingBidiChannelListener {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub(crate) struct PendingInspectorAwait {
     session_id: Option<String>,
     object_group: Option<String>,
     bidi_channel_listener: Option<crate::conn::BidiChannelListenerResidence>,
     renderer_correlation: Option<RendererCommandCorrelation>,
+    scheduler_deferred_reply_claimed: bool,
 }
 
 impl PendingInspectorAwait {
@@ -100,9 +101,13 @@ impl PendingInspectorAwait {
     pub(crate) fn renderer_correlation(&self) -> Option<RendererCommandCorrelation> {
         self.renderer_correlation
     }
+
+    pub(crate) const fn scheduler_deferred_reply_claimed(&self) -> bool {
+        self.scheduler_deferred_reply_claimed
+    }
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct TargetPendingInspectorAwaitRegistry {
     entries: PendingRendererCommandRegistry<PendingInspectorAwait>,
 }
@@ -127,6 +132,7 @@ impl TargetPendingInspectorAwaitRegistry {
                 object_group: object_group.map(str::to_owned),
                 bidi_channel_listener: None,
                 renderer_correlation: None,
+                scheduler_deferred_reply_claimed: false,
             },
         )
     }
@@ -147,6 +153,7 @@ impl TargetPendingInspectorAwaitRegistry {
                 object_group: object_group.map(str::to_owned),
                 bidi_channel_listener: Some(listener),
                 renderer_correlation,
+                scheduler_deferred_reply_claimed: false,
             },
         )
     }
@@ -265,8 +272,60 @@ impl TargetPendingInspectorAwaitRegistry {
         self.entries.len()
     }
 
+    /// Claims an await for a scheduler-owned deferred reply without moving it
+    /// out of its DevTools session. The session registry remains the sole
+    /// lifetime authority, so detach can settle the command before a late
+    /// scheduler continuation resumes.
+    pub(crate) fn claim_scheduler_deferred_reply(&mut self, cdp_request_id: u64) -> bool {
+        let Some(entry) = self.entries.get_mut(FrontendCommandId::new(cdp_request_id)) else {
+            return false;
+        };
+        if entry.scheduler_deferred_reply_claimed {
+            return false;
+        }
+        entry.scheduler_deferred_reply_claimed = true;
+        true
+    }
+
+    pub(crate) fn take_claimed_scheduler_deferred_reply(
+        &mut self,
+        cdp_request_id: u64,
+    ) -> Option<PendingInspectorAwait> {
+        let frontend_command_id = FrontendCommandId::new(cdp_request_id);
+        if !self
+            .entries
+            .get_mut(frontend_command_id)?
+            .scheduler_deferred_reply_claimed
+        {
+            return None;
+        }
+        self.entries.remove(frontend_command_id)
+    }
+
     pub(crate) fn remove(&mut self, cdp_request_id: u64) -> Option<PendingInspectorAwait> {
-        self.entries.remove(FrontendCommandId::new(cdp_request_id))
+        let frontend_command_id = FrontendCommandId::new(cdp_request_id);
+        if self
+            .entries
+            .get_mut(frontend_command_id)?
+            .scheduler_deferred_reply_claimed
+        {
+            return None;
+        }
+        self.entries.remove(frontend_command_id)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_claimed_scheduler_deferred_reply(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|(_, entry)| entry.scheduler_deferred_reply_claimed)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn has_unclaimed_await(&self) -> bool {
+        self.entries
+            .iter()
+            .any(|(_, entry)| !entry.scheduler_deferred_reply_claimed)
     }
 
     pub(crate) fn drain_all(&mut self) -> Vec<(u64, PendingInspectorAwait)> {
