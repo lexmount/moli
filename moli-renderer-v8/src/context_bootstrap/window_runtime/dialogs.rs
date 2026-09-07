@@ -107,6 +107,14 @@ pub(crate) fn window_stop_callback<'s>(
     args: v8::FunctionCallbackArguments<'s>,
     _rv: v8::ReturnValue<'_, v8::Value>,
 ) {
+    if !crate::context_bootstrap::is_window_receiver(scope, args.this()) {
+        webidl::throw_type_error(scope, "Window.stop called on incompatible receiver.");
+        return;
+    }
+    let owner = super::super::navigation_window::runtime_window_owner(scope, args.this());
+    if super::super::navigation_window::navigation_unload_event_active(scope, owner) {
+        return;
+    }
     inform_about_canceled_navigation_for_window(
         scope,
         args.this(),
