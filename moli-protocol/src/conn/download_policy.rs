@@ -118,11 +118,11 @@ impl CdpConnection {
     pub(crate) fn download_policy_for_browser_context(
         &self,
         context_id: Option<&str>,
-    ) -> &DownloadPolicy {
+    ) -> DownloadPolicy {
         context_id
             .and_then(|id| self.browser_context_by_id(id))
             .and_then(|context| context.download_policy())
-            .unwrap_or(&self.download_policy)
+            .unwrap_or_else(|| self.download_policy.clone())
     }
 
     #[cfg(test)]
@@ -144,8 +144,7 @@ impl CdpConnection {
         Some((
             context
                 .download_policy()
-                .unwrap_or(&self.download_policy)
-                .clone(),
+                .unwrap_or_else(|| self.download_policy.clone()),
             context
                 .automation_download_events_enabled
                 .unwrap_or(self.download_subscriptions.automation_events_enabled),

@@ -2,12 +2,14 @@ use std::{future::Future, pin::pin, task::Poll};
 
 use serde_json::{Value, json};
 
-use crate::conn::{BrowserContext, CdpCommandTaskStep, CdpSessionRoute};
+use crate::conn::{CdpCommandTaskStep, CdpSessionRoute};
 use crate::testing::TestContext;
 
 fn context_with_page_sessions() -> TestContext {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-tracing".to_owned());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-tracing".to_owned());
     browser_context.set_active_target_id("TID-tracing".to_owned());
     browser_context.set_target_url("https://example.test/page#fragment".to_owned());
     browser_context.attach_active_session("SID-owner".to_owned());

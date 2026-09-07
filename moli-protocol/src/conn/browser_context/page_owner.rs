@@ -992,7 +992,7 @@ mod tests {
         for session in ["SID-attached", "SID-observer"] {
             assert!(context.assign_attached_session_to_target("TID-csp", session.to_owned()));
         }
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.install_browser_context_fixture_for_test(context);
         for (session, enabled, expected) in [
             ("SID-primary", true, true),
@@ -1209,12 +1209,12 @@ mod tests {
 
     #[test]
     fn page_domain_dialog_handler_tracks_the_session_owner_browser_context() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
 
-        let mut active = BrowserContext::new_with_page_for_test("BID-active", "TID-active");
+        let mut active = conn.new_page_target_fixture_for_test("BID-active", "TID-active");
         active.set_active_target_id("TID-active".to_owned());
 
-        let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+        let mut inactive = conn.new_browser_context_fixture_for_test("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
         assert!(
             inactive
@@ -1261,8 +1261,9 @@ mod tests {
 
     #[test]
     fn file_dialog_opened_target_listener_can_be_disabled_after_enable() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-file-dialog".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context =
+            Some(conn.new_browser_context_fixture_for_test("BID-file-dialog".to_owned()));
         conn.browser_context
             .as_mut()
             .expect("browser context")

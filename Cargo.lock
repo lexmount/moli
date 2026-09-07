@@ -2421,6 +2421,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "http",
+ "indexmap",
  "moli-browser-profile",
  "moli-cookie-jar",
  "moli-crypto",
@@ -2431,6 +2432,8 @@ dependencies = [
  "moli-parser",
  "moli-renderer-v8",
  "moli-selector",
+ "moli-shared-worker",
+ "moli-site",
  "moli-storage-key",
  "moli-storage-service",
  "moli-test-support",

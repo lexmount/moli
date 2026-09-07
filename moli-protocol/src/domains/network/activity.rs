@@ -507,7 +507,7 @@ mod tests {
 
     use super::NetworkPreparedOutputs;
     use crate::{
-        conn::{BrowserContext, CdpConnection, PendingSubresourceFetchRequest},
+        conn::PendingSubresourceFetchRequest,
         domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext},
         testing::{TestContext, wait_until_message, wait_until_messages},
     };
@@ -581,8 +581,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn pending_subresource_continue_drain_consumes_prepared_events_without_page_readback() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         bc.set_active_document_fixture_for_test(1);
@@ -672,8 +672,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn prepared_subresource_continue_rejects_replacement_id_and_handle_collision() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-collision".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-collision");
         bc.set_active_target_id("TID-collision");
         bc.attach_active_session("SID-collision");
         bc.set_active_document_fixture_for_test(1);
@@ -752,8 +752,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn subresource_fetch_interception_drain_consumes_prepared_pause_without_page_readback() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         assert!(bc.assign_attached_session_to_target("TID-1", "FETCH-SID".to_owned()));
@@ -809,8 +809,8 @@ mod tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn subresource_fetch_interception_omits_network_events_without_listener() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         assert!(bc.assign_attached_session_to_target("TID-1", "FETCH-SID".to_owned()));
@@ -844,7 +844,7 @@ mod tests {
 
     #[test]
     fn network_backlog_prepared_outputs_are_absent_without_loaded_observed_page() {
-        let mut conn = crate::conn::CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         let owner = CommandOwnerScope::capture(&conn, None);
         assert_eq!(
             super::network_backlog_prepared_outputs_for_owner(&mut conn, &owner, None,).outputs(),
@@ -895,7 +895,7 @@ mod tests {
 
         let page_url = format!("http://{addr}/page");
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-active");
         bc.attach_active_session("SID-active");
         bc.register_page_target_url_fixture(
@@ -988,7 +988,7 @@ mod tests {
         let socket_url = format!("ws://{addr}/socket");
         let socket_literal = serde_json::to_string(&socket_url).unwrap();
         let mut ctx = TestContext::new();
-        let mut bc = BrowserContext::new("BID-1".into());
+        let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
         bc.set_active_target_id("TID-1");
         bc.attach_active_session("SID-1");
         ctx.conn.install_browser_context_fixture_for_test(bc);

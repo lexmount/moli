@@ -60,7 +60,7 @@ impl CdpConnection {
             self.dedicated_worker_pause_on_start_for_devtools(),
         );
         browser_context.bind_page_navigation_engines(
-            self.standalone_navigation_engine.runtime_config(),
+            self.navigation_runtime_config.clone(),
             self.scheduler_hooks.renderer_publication_sender(),
         );
         if self.browser_context.is_none() {

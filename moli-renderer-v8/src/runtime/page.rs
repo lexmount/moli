@@ -295,13 +295,13 @@ impl JsRuntime {
     }
 
     pub fn document_isolate_model_for_diagnostics(&self) -> &'static str {
-        "page-vm"
+        RendererDocumentIsolateAccountingDiagnostics::MODEL
     }
 
     pub fn document_isolate_accounting_for_diagnostics(
         &self,
     ) -> RendererDocumentIsolateAccountingDiagnostics {
-        crate::script_vm::renderer_document_isolate_accounting_diagnostics()
+        RendererDocumentIsolateAccountingDiagnostics::snapshot()
     }
 
     pub fn renderer_owner_id_for_diagnostics(&self) -> u64 {

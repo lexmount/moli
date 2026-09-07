@@ -308,7 +308,7 @@ async fn project_renderer_output_records_for_owner(
 mod tests {
     use moli_core::RendererRuntimeCommandCausalIdentity;
 
-    use crate::conn::{BrowserContext, CdpConnection, CommandOwnerScope};
+    use crate::conn::CommandOwnerScope;
 
     use super::renderer_owner_action_owner;
 
@@ -334,8 +334,8 @@ mod tests {
             Some(RendererPublicationProjection::InspectionOnly),
             Some(RendererPublicationProjection::CurrentOwner),
         ] {
-            let mut conn = CdpConnection::default();
-            let mut context = BrowserContext::new(CONTEXT.into());
+            let mut conn = crate::test_support::connection();
+            let mut context = conn.new_browser_context_fixture_for_test(CONTEXT);
             context.set_active_target_id(TARGET);
             context.set_active_document_fixture_for_test(1);
             let page_id = moli_core::PageId::new_for_testing(42);
@@ -475,8 +475,9 @@ mod tests {
 
     #[test]
     fn unbound_owner_actions_choose_a_stable_attachment_without_overriding_exact_root_cause() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-owner-action".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-owner-action".to_owned());
         browser_context.set_active_target_id("TID-owner-action".to_owned());
         assert!(
             browser_context.assign_attached_session_to_target(

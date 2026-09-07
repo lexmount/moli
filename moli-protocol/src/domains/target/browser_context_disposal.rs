@@ -172,7 +172,16 @@ pub(super) async fn execute_browser_context_disposal_async(
         return Err(browser_context_not_found(&disposal.browser_context_id));
     };
     removed.close_all_pages_async().await;
-    conn.release_idle_navigation_engine_memory_after_target_close();
+    match removed.remove_from_browser() {
+        Ok(true) => {}
+        Ok(false) => return Err(browser_context_not_found(&disposal.browser_context_id)),
+        Err(error) => {
+            return Err(DevToolsError::new(
+                DevToolsErrorKind::Internal,
+                format!("failed to remove BrowserContext: {error}"),
+            ));
+        }
+    }
     Ok(())
 }
 

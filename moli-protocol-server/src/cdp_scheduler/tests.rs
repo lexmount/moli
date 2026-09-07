@@ -11,8 +11,7 @@ use moli_core::{
     },
 };
 use moli_protocol::{
-    BackgroundProtocolEvent, CdpConnection, CdpSchedulerEvent,
-    DeferredMainDocumentLoadCompletionOutputAction,
+    BackgroundProtocolEvent, CdpSchedulerEvent, DeferredMainDocumentLoadCompletionOutputAction,
     DeferredMainDocumentLoadCompletionOutputInterest, DeferredMainDocumentLoadPredecessorCandidate,
     ProtocolSchedulerWork,
     conn::RuntimeInspectorResponseReady,
@@ -380,7 +379,7 @@ fn network_finished_event_for_target(
 
 #[test]
 fn mixed_owner_protocol_output_keeps_the_conservative_global_gate() {
-    let mut conn = CdpConnection::new();
+    let mut conn = moli_protocol::test_support::connection();
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-known");
     let target_id = navigation.target_id().to_owned();
     let known = network_response_event_for_target(
@@ -605,7 +604,7 @@ fn concrete_renderer_output_precedes_work_published_by_the_same_ingress() {
 #[test]
 fn protocol_work_published_by_held_ingress_inherits_exact_load_predecessor() {
     let load = deferred_main_document_load_observation_id(1);
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let mut scheduler = CdpScheduler::new(moli_protocol::test_support::connection());
     scheduler.apply_scheduler_events_with_load_predecessors(
         vec![CdpSchedulerEvent::ProtocolWorkPublished {
             work: root_frame_stopped_loading_work(1, "FRAME-1"),
@@ -834,7 +833,7 @@ async fn runtime_response_releases_its_frozen_renderer_publication_predecessor()
     let publication = post_load_renderer_publication(PageId::new_for_testing(1), 1);
     let candidate = future_load_candidate(&publication);
     let cursor = publication_cursor(&publication);
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let mut scheduler = CdpScheduler::new(moli_protocol::test_support::connection());
     scheduler.queues.enqueue_renderer_output_publication(
         cursor,
         ProtocolOutputSequence::from_messages(vec![json!({
@@ -863,7 +862,7 @@ async fn runtime_response_cannot_release_renderer_output_with_an_exact_load_pred
     let publication = post_load_renderer_publication(PageId::new_for_testing(1), 1);
     let load = deferred_main_document_load_observation_id(1);
     let cursor = publication_cursor(&publication);
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let mut scheduler = CdpScheduler::new(moli_protocol::test_support::connection());
     scheduler.queues.enqueue_renderer_output_publication(
         cursor,
         ProtocolOutputSequence::from_messages(vec![json!({
@@ -919,7 +918,7 @@ async fn specialized_wait_yield_closes_candidate_retained_in_the_main_fifo() {
     let candidate = future_load_candidate(&publication);
     let interest = load_interest_for_publication(&publication);
     let unrelated_later_load = deferred_main_document_load_observation_id(1);
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let mut scheduler = CdpScheduler::new(moli_protocol::test_support::connection());
     scheduler.queues.enqueue_renderer_output_publication(
         cursor,
         ProtocolOutputSequence::from_messages(vec![json!({"method": "Runtime.consoleAPICalled"})]),
@@ -948,7 +947,7 @@ fn scheduler_holds_concrete_renderer_output_until_its_exact_load_predecessor_fin
     let publication = post_load_renderer_publication(PageId::new_for_testing(7), 1);
     let cursor = publication_cursor(&publication);
     let load = deferred_main_document_load_observation_id(1);
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let mut scheduler = CdpScheduler::new(moli_protocol::test_support::connection());
     scheduler.queues.enqueue_renderer_output_publication(
         cursor,
         ProtocolOutputSequence::from_messages(vec![json!({"method": "Runtime.consoleAPICalled"})]),
@@ -977,7 +976,7 @@ async fn renderer_stream_control_is_consumed_without_protocol_residence() {
         )),
     }
     .into();
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let mut scheduler = CdpScheduler::new(moli_protocol::test_support::connection());
     let output = scheduler.ingest_renderer_publication_now(control).await;
 
     assert!(output.is_empty());
@@ -1004,7 +1003,7 @@ async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
         RendererOutputStreamIdentity::new_page_for_protocol_test(PageId::new_for_testing(90));
     let predecessor =
         RendererOutputFence::new_for_test(RendererOutputCursor::new_for_test(stream, 1));
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let mut scheduler = CdpScheduler::new(moli_protocol::test_support::connection());
 
     let failure = scheduler
         .project_renderer_output_predecessor_before_devtools_result(&mut receivers, &predecessor)
@@ -1021,7 +1020,7 @@ async fn closed_renderer_transport_fails_an_unprojected_command_fence() {
 
 #[test]
 fn concrete_protocol_output_waits_for_its_client_turn_predecessor() {
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let mut scheduler = CdpScheduler::new(moli_protocol::test_support::connection());
     scheduler.apply_scheduler_events(vec![CdpSchedulerEvent::ProtocolWorkPublished {
         work: root_frame_stopped_loading_work(1, "FRAME-1"),
     }]);
@@ -1050,7 +1049,7 @@ fn concrete_protocol_output_waits_for_its_client_turn_predecessor() {
 
 #[test]
 fn concrete_protocol_output_preserves_protocol_publish_order() {
-    let mut scheduler = CdpScheduler::new(CdpConnection::new());
+    let mut scheduler = CdpScheduler::new(moli_protocol::test_support::connection());
     scheduler.apply_scheduler_events(vec![
         CdpSchedulerEvent::ProtocolWorkPublished {
             work: root_frame_stopped_loading_work(1, "FRAME-1"),
@@ -1105,7 +1104,7 @@ fn concrete_protocol_output_rejects_missing_earlier_publication() {
 
 #[tokio::test]
 async fn background_navigation_blocks_only_its_target_protocol_residences() {
-    let mut conn = CdpConnection::new();
+    let mut conn = moli_protocol::test_support::connection();
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-nav");
     let navigation_target_id = navigation.target_id().to_owned();
     let browser_context_id = conn.default_browser_context_id().to_owned();
@@ -1168,7 +1167,7 @@ async fn background_navigation_blocks_only_its_target_protocol_residences() {
 
 #[tokio::test]
 async fn protocol_residence_snapshot_skips_another_targets_navigation_gate() {
-    let mut conn = CdpConnection::new();
+    let mut conn = moli_protocol::test_support::connection();
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-A");
     let target_a = navigation.target_id().to_owned();
     let browser_context_id = conn.default_browser_context_id().to_owned();
@@ -1217,7 +1216,7 @@ async fn protocol_residence_snapshot_skips_another_targets_navigation_gate() {
 
 #[test]
 fn replacement_navigation_cancels_and_exactly_settles_the_target_owned_request() {
-    let mut conn = CdpConnection::new();
+    let mut conn = moli_protocol::test_support::connection();
     let source = arm_background_navigation_request(&mut conn, "LOADER-source");
     let replacement = arm_background_navigation_request(&mut conn, "LOADER-replacement");
     assert!(source.is_cancelled());
@@ -1237,7 +1236,7 @@ fn replacement_navigation_cancels_and_exactly_settles_the_target_owned_request()
 
 #[test]
 fn scheduler_defers_subresource_network_events_until_background_navigation_gate_clears() {
-    let mut conn = CdpConnection::new();
+    let mut conn = moli_protocol::test_support::connection();
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-nav");
     let target_id = navigation.target_id().to_owned();
     let mut scheduler = CdpScheduler::new(conn);
@@ -1302,7 +1301,7 @@ fn scheduler_defers_subresource_network_events_until_background_navigation_gate_
 
 #[tokio::test]
 async fn target_a_navigation_does_not_defer_target_b_network_events() {
-    let mut conn = CdpConnection::new();
+    let mut conn = moli_protocol::test_support::connection();
     conn.install_default_browser_target();
     let context = DevToolsCommandContext {
         protocol: DevToolsProtocol::WebDriverBidi,
@@ -1391,7 +1390,7 @@ async fn target_a_navigation_does_not_defer_target_b_network_events() {
 
 #[test]
 fn navigation_gate_release_precedes_later_renderer_boundary_network_output() {
-    let mut conn = CdpConnection::new();
+    let mut conn = moli_protocol::test_support::connection();
     let navigation = arm_background_navigation_request(&mut conn, "LOADER-nav");
     let target_id = navigation.target_id().to_owned();
     let mut scheduler = CdpScheduler::new(conn);

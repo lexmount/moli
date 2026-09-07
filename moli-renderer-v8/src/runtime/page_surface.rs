@@ -1690,6 +1690,15 @@ pub struct RendererDocumentIsolateAccountingDiagnostics {
     pub reserved: u64,
 }
 
+impl RendererDocumentIsolateAccountingDiagnostics {
+    pub const MODEL: &str = "page-vm";
+
+    /// Process-wide accounting; observing it does not create a renderer owner.
+    pub fn snapshot() -> Self {
+        crate::script_vm::renderer_document_isolate_accounting_diagnostics()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RendererActivityDiagnostics {
     pub document_context_count: usize,

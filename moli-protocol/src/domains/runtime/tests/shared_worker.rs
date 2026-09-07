@@ -573,11 +573,6 @@ onconnect = event => {
     .await;
 
     let background_url = "data:text/html,<!doctype html><body>background</body>";
-    let background_page = ctx
-        .conn
-        .load_page_via_runtime_async(background_url)
-        .await
-        .expect("background diagnostics page should load");
     let browser_context = ctx
         .conn
         .browser_context
@@ -588,8 +583,11 @@ onconnect = event => {
         Some("SID-diagnostics-document-worker-bg".to_owned()),
         background_url.to_owned(),
     );
-    browser_context
-        .replace_target_page_for_test("TID-diagnostics-document-worker-bg", Some(background_page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        background_url,
+        Some("SID-diagnostics-document-worker-bg"),
+    )
+    .await;
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -604,8 +602,8 @@ onconnect = event => {
     assert_eq!(isolate_scope["loadedDocumentPageCount"], json!(2));
     assert_eq!(
         isolate_scope["loadedDocumentRendererOwnerCount"],
-        json!(1),
-        "this accounting fixture deliberately reuses the active engine for both document snapshots: {response:?}"
+        json!(2),
+        "each WebContents must build its Document on its own renderer owner: {response:?}"
     );
     assert_eq!(
         isolate_scope["estimatedDocumentIsolateCount"],

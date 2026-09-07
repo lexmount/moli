@@ -774,6 +774,5 @@ pub(crate) async fn complete_page_target_termination_owner_action_async(
         );
     }
     out.extend(conn.prepared_target_host_deltas_event_plan(target_destroyed_deltas));
-    conn.release_idle_navigation_engine_memory_after_target_close();
     crate::conn::CdpTurnOutcome::new_with_protocol_events(out, conn.take_scheduler_events())
 }

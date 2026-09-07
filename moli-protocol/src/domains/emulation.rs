@@ -2311,10 +2311,15 @@ async fn execute_devtools_set_viewport_for_browser_contexts(
     let browser_context_ids = resolve_set_viewport_browser_context_ids(conn, &command)?;
     let mut pending = Vec::new();
     for browser_context_id in browser_context_ids {
-        let current_default = conn
+        let current_defaults = conn
             .browser_context_by_id(&browser_context_id)
-            .and_then(|context| context.emulation_defaults().device_metrics.as_ref());
-        let metrics = set_viewport_metrics_from_current(current_default, &command)?;
+            .map(|context| context.emulation_defaults());
+        let metrics = set_viewport_metrics_from_current(
+            current_defaults
+                .as_ref()
+                .and_then(|defaults| defaults.device_metrics.as_ref()),
+            &command,
+        )?;
         let browser_context = conn
             .browser_context_by_id(&browser_context_id)
             .expect("resolved browser context must remain addressable");

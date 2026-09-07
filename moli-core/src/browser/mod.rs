@@ -4,18 +4,41 @@
 //! CDP wire identifiers and their numeric representation does not define an
 //! ordering relationship.
 
+mod browser_context;
+mod captured_body;
 mod document_lifecycle;
 mod document_lifetime;
 mod downloads;
+mod emulation;
+mod owner;
 mod permissions;
 mod renderer_residence;
 mod service_workers;
+pub mod web_contents;
 
+pub use browser_context::*;
+pub use captured_body::{
+    CapturedBody, CapturedBodyChunkReader, CapturedBodyWriter, DEFAULT_BODY_MATERIALIZE_LIMIT,
+    ensure_materialize_limit,
+};
 pub use document_lifecycle::DocumentLifecycle;
 pub use document_lifetime::{DocumentLifetime, DocumentLifetimeObserver, DocumentRetirement};
 pub use downloads::{
     DownloadAccessError, DownloadBehavior, DownloadBody, DownloadManager, DownloadMetadata,
     DownloadObservation, DownloadPolicy, DownloadSnapshot, DownloadState,
+};
+pub use emulation::{
+    EmulatedDeviceMetrics, EmulatedGeolocationOverride, EmulatedGeolocationOverrideState,
+    EmulatedMediaOverrides, EmulatedNetworkConditions, EmulatedViewportSurface,
+    viewport_surface_install_script,
+};
+pub use owner::{
+    BrowserBuiltInitialDocument, BrowserCommittedInitialDocument, BrowserContextHandle,
+    BrowserDocumentMaterialization, BrowserDocumentNavigationCommit, BrowserHandle,
+    BrowserInitialDocumentAdmission, BrowserInitialDocumentBuild, BrowserInterceptedNavigationLoad,
+    BrowserInterceptedNavigationResponse, BrowserNavigationLoad, BrowserPreparedDocumentNavigation,
+    BrowserPreparedNavigationResponse, BrowserService, PendingDocumentRetirement,
+    PendingWebContentsClose, WebContentsCreation,
 };
 pub use permissions::{PermissionDefaults, PermissionOverrides};
 pub use renderer_residence::RendererPageResidenceIdentity;

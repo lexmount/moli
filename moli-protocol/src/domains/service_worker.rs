@@ -613,39 +613,44 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn controlled_client_ids_map_to_exact_page_target_ids_even_for_same_url() {
         let mut ctx = TestContext::new();
-        let active_page = ctx
+        let mut context = ctx
             .conn
-            .load_page_via_runtime_async("data:text/html,<title>same-url</title>")
-            .await
-            .expect("active page should load");
-        let background_page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<title>same-url</title>")
-            .await
-            .expect("background page should load");
-        let active_client_id = active_page.service_worker_client_id();
-        let background_client_id = background_page.service_worker_client_id();
-        assert_ne!(active_client_id, background_client_id);
-
-        let mut context = BrowserContext::new("BID-1".to_owned());
+            .new_browser_context_fixture_for_test("BID-1".to_owned());
         context.set_active_target_id("TID-active".to_owned());
+        context.attach_active_session("SID-active".to_owned());
         context.set_target_url("data:text/html,<title>same-url</title>".to_owned());
-        let _ = context.replace_loaded_page(Some(active_page));
-
         context.register_page_target_url_fixture(
             "TID-background".to_owned(),
-            None,
+            Some("SID-background".to_owned()),
             "data:text/html,<title>same-url</title>".to_owned(),
         );
-        let _ = context.replace_target_page_for_test("TID-background", Some(background_page));
+        ctx.conn.install_browser_context_fixture_for_test(context);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<title>same-url</title>",
+            Some("SID-active"),
+        )
+        .await;
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<title>same-url</title>",
+            Some("SID-background"),
+        )
+        .await;
+        let context = ctx.conn.browser_context.as_ref().unwrap();
+        let active_client_id = context
+            .target_service_worker_client_id("TID-active")
+            .expect("active client id");
+        let background_client_id = context
+            .target_service_worker_client_id("TID-background")
+            .expect("background client id");
+        assert_ne!(active_client_id, background_client_id);
 
         assert_eq!(
-            super::page_target_ids_for_controlled_client_ids(&context, &[background_client_id]),
+            super::page_target_ids_for_controlled_client_ids(context, &[background_client_id]),
             vec!["TID-background".to_owned()]
         );
         assert_eq!(
             super::page_target_ids_for_controlled_client_ids(
-                &context,
+                context,
                 &[
                     active_client_id,
                     background_client_id,

@@ -12,7 +12,7 @@ use std::sync::{
 use crate::conn::state::TargetPageProtocolAttachmentIdentity;
 #[cfg(test)]
 use crate::conn::state::TargetPageResidenceIdentity;
-use crate::conn::state::web_contents::{
+use moli_core::browser::web_contents::{
     JavaScriptDialogClosed, JavaScriptDialogError, JavaScriptDialogKey, JavaScriptDialogSnapshot,
 };
 
@@ -301,23 +301,12 @@ impl TargetJavaScriptDialogState {
 }
 
 impl BrowserContext {
-    fn validate_javascript_dialog_document(&self, document: DocumentHandle) -> Result<(), String> {
-        match self.document_handle_for_web_contents(document.web_contents())? {
-            Some(current) if current == document => Ok(()),
-            Some(_) => Err("Document changed".into()),
-            None => Err("NoDocumentLoaded".into()),
-        }
-    }
-
     pub(crate) fn web_contents_has_pending_javascript_dialog(
         &self,
         handle: WebContentsHandle,
     ) -> Result<bool, String> {
-        Ok(!self
-            .physical
-            .web_contents(handle)?
-            .javascript_dialogs
-            .is_empty())
+        self.browser_context
+            .web_contents_has_pending_javascript_dialog(handle)
     }
 
     pub(crate) fn install_document_javascript_dialog(
@@ -325,15 +314,8 @@ impl BrowserContext {
         document: DocumentHandle,
         dialog: RendererPendingJavaScriptDialog,
     ) -> Result<JavaScriptDialogKey, String> {
-        if let Err(error) = self.validate_javascript_dialog_document(document) {
-            let _ = dialog.finish(false, String::new());
-            return Err(error);
-        }
-        Ok(self
-            .physical
-            .web_contents_mut(document.web_contents())?
-            .javascript_dialogs
-            .install(document.id(), dialog))
+        self.browser_context
+            .install_document_javascript_dialog(document, dialog)
     }
 
     pub(crate) fn project_javascript_dialog_for_session(
@@ -376,7 +358,8 @@ impl BrowserContext {
             .peek_next()?;
         (self.document_handle_for_target(target_id) == Some(dialog.document)
             && self
-                .validate_javascript_dialog_document(dialog.document)
+                .browser_context
+                .ensure_document_current(dialog.document)
                 .is_ok())
         .then_some((dialog.document, dialog.key))
     }
@@ -386,12 +369,8 @@ impl BrowserContext {
         document: DocumentHandle,
         key: JavaScriptDialogKey,
     ) -> Option<JavaScriptDialogSnapshot> {
-        self.validate_javascript_dialog_document(document).ok()?;
-        self.physical
-            .web_contents(document.web_contents())
-            .ok()?
-            .javascript_dialogs
-            .snapshot(key)
+        self.browser_context
+            .document_javascript_dialog_snapshot(document, key)
     }
 
     pub(crate) fn set_document_javascript_dialog_prompt_text(
@@ -400,13 +379,8 @@ impl BrowserContext {
         key: JavaScriptDialogKey,
         prompt_text: String,
     ) -> Result<(), JavaScriptDialogError> {
-        self.validate_javascript_dialog_document(document)
-            .map_err(|_| JavaScriptDialogError::NotFound)?;
-        self.physical
-            .web_contents_mut(document.web_contents())
-            .map_err(|_| JavaScriptDialogError::NotFound)?
-            .javascript_dialogs
-            .set_prompt_text(key, prompt_text)
+        self.browser_context
+            .set_document_javascript_dialog_prompt_text(document, key, prompt_text)
     }
 
     pub(crate) fn finish_document_javascript_dialog(
@@ -416,12 +390,8 @@ impl BrowserContext {
         accepted: bool,
         prompt_text: Option<String>,
     ) -> Option<JavaScriptDialogClosed> {
-        self.validate_javascript_dialog_document(document).ok()?;
-        self.physical
-            .web_contents_mut(document.web_contents())
-            .ok()?
-            .javascript_dialogs
-            .finish(key, accepted, prompt_text)
+        self.browser_context
+            .finish_document_javascript_dialog(document, key, accepted, prompt_text)
     }
 
     pub(crate) fn dismiss_document_javascript_dialog(
@@ -429,11 +399,8 @@ impl BrowserContext {
         document: DocumentHandle,
         key: JavaScriptDialogKey,
     ) {
-        if self.validate_javascript_dialog_document(document).is_ok()
-            && let Ok(contents) = self.physical.web_contents_mut(document.web_contents())
-        {
-            contents.javascript_dialogs.dismiss(key);
-        }
+        self.browser_context
+            .dismiss_document_javascript_dialog(document, key);
     }
 
     pub(crate) fn pop_projected_javascript_dialog_for_session(

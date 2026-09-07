@@ -1366,15 +1366,16 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn observable_source_queue_snapshot_can_be_read_without_resyncing_renderer_snapshot() {
         let mut ctx = TestContext::new();
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async("data:text/html,<!doctype html><body></body>")
-            .await
-            .expect("test page should load");
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
-        let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
-        source_context.replace_active_page_for_test(Some(page));
-        source_context.set_active_document_fixture_for_test(45);
+        let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
+        let mut source_context = ctx.conn.new_browser_context_fixture_for_test("BID-queue");
+        source_context.set_active_target_id("TID-queue".to_owned());
+        ctx.conn
+            .install_browser_context_fixture_for_test(source_context);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><body></body>",
+            None,
+        )
+        .await;
         let source_snapshot = renderer_source_snapshot(
             RendererRuntimeObservableSourceSummary::from_source_messages(
                 Some(5),
@@ -1387,8 +1388,10 @@ mod tests {
                 Vec::new(),
             ),
         );
+        let source_context = ctx.conn.browser_context.as_mut().unwrap();
+        source_context.set_active_document_fixture_for_test(45);
         let _ = TargetObservableOutputQueue::from_target_source_snapshot(
-            &mut source_context,
+            source_context,
             "TID-queue",
             "http://example.test/stored-source".to_owned(),
             &source_snapshot,
@@ -1762,15 +1765,16 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn observable_queue_snapshot_is_owned_by_target_runtime_slot() {
         let mut ctx = TestContext::new();
-        let page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.warn('slot queue')</script>",
-            )
-            .await
-            .expect("test page should load");
-        let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
-        source_context.replace_active_page_for_test(Some(page));
+        let mut source_context = ctx.conn.new_browser_context_fixture_for_test("BID-queue");
+        source_context.set_active_target_id("TID-queue".to_owned());
+        ctx.conn
+            .install_browser_context_fixture_for_test(source_context);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><script>console.warn('slot queue')</script>",
+            None,
+        )
+        .await;
+        let source_context = ctx.conn.browser_context.as_mut().unwrap();
 
         let snapshot = source_context
             .active_page_target()
@@ -1797,7 +1801,7 @@ mod tests {
             "runtime slot DTO should capture loaded-page lifecycle output"
         );
 
-        let queue = TargetObservableOutputQueue::from_target(&source_context, "TID-queue")
+        let queue = TargetObservableOutputQueue::from_target(source_context, "TID-queue")
             .expect("observable queue should be built from the runtime slot snapshot");
         assert_eq!(
             queue.console_message_count(),
@@ -1809,23 +1813,16 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn observable_queue_snapshot_tracks_runtime_slot_page_replacement() {
         let mut ctx = TestContext::new();
-        let first_page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.warn('first slot queue')</script>",
-            )
-            .await
-            .expect("first test page should load");
-        let second_page = ctx
-            .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<!doctype html><script>console.warn('second slot queue')</script>",
-            )
-            .await
-            .expect("second test page should load");
-        let mut source_context = BrowserContext::new_with_page_for_test("BID-queue", "TID-queue");
-
-        let _ = source_context.replace_active_page_for_test(Some(first_page));
+        let mut source_context = ctx.conn.new_browser_context_fixture_for_test("BID-queue");
+        source_context.set_active_target_id("TID-queue".to_owned());
+        ctx.conn
+            .install_browser_context_fixture_for_test(source_context);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><script>console.warn('first slot queue')</script>",
+            None,
+        )
+        .await;
+        let source_context = ctx.conn.browser_context.as_ref().unwrap();
         assert_eq!(
             source_context
                 .active_page_target()
@@ -1844,7 +1841,12 @@ mod tests {
             "runtime slot observable snapshot should track the current loaded page"
         );
 
-        let _ = source_context.replace_active_page_for_test(Some(second_page));
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<!doctype html><script>console.warn('second slot queue')</script>",
+            None,
+        )
+        .await;
+        let source_context = ctx.conn.browser_context.as_mut().unwrap();
         assert_eq!(
             source_context
                 .active_page_target()

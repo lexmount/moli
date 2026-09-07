@@ -1,6 +1,6 @@
 use moli_core::browser::WebContentsHandle;
 
-use super::{
+use crate::conn::{
     CdpConnection, CommandOwnerScope, TargetPageResidenceIdentity, WindowSurface,
     WindowSurfaceState,
 };
@@ -77,6 +77,7 @@ impl CdpConnection {
     ) -> Result<(), String> {
         self.browser_context_by_browser_id(handle.context())
             .ok_or_else(|| "WebContents unavailable".to_owned())?
+            .browser_context
             .crash_web_contents_renderer_from_io(handle)
     }
 
@@ -123,7 +124,12 @@ impl CdpConnection {
             let Some(document) = context.document_handle_for_web_contents(handle)? else {
                 return Ok(false);
             };
-            context.start_document_page_surface_update(document, foreground, &browser_globals)?
+            context.browser_context.start_document_page_surface_update(
+                document,
+                foreground,
+                browser_globals.network_conditions,
+                browser_globals.geolocation.as_ref(),
+            )?
         };
         let completed = pending.wait().await;
         self.finish_document_policy_batch(completed)?;

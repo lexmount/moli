@@ -1442,7 +1442,7 @@ mod protocol_neutral_tests {
     use crate::devtools_runtime::{DevToolsCommand, DevToolsProtocol};
     use serde_json::{Value, json};
 
-    use crate::conn::{CdpConnection, Cmd};
+    use crate::conn::Cmd;
 
     use super::{
         StorageCommandTaskStep, build_cdp_storage_clear_cookies_command,
@@ -1488,7 +1488,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_storage_entry_routes_get_cookies_command_to_cookie_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(141),
@@ -1565,7 +1565,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_storage_entry_routes_delete_cookies_command_to_cookie_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(146),
@@ -1628,7 +1628,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_storage_entry_routes_clear_cookies_command_to_cookie_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(153),
@@ -1699,7 +1699,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_storage_entry_routes_set_cookies_command_to_cookie_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "cookies": [{
                 "name": "sid",

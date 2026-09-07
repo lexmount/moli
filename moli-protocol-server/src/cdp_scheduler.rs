@@ -7,8 +7,8 @@ use std::{
 use moli_cookie_jar::StoredCookie;
 use moli_core::page::RendererVisualStateToken;
 use moli_core::{
-    RendererOutputTransportMessage, page::RendererDocumentLifecycleMilestone,
-    runtime::NavigationRuntimeConfig,
+    RendererOutputTransportMessage, browser::BrowserHandle,
+    page::RendererDocumentLifecycleMilestone, runtime::NavigationRuntimeConfig,
 };
 use moli_protocol::{
     AgentHostDispatchResult, BackgroundNavigationCompletion, BackgroundProtocolEvent,
@@ -704,10 +704,12 @@ impl CdpScheduler {
     }
 
     pub(crate) fn new_with_initial_state_runtime_config(
+        browser: BrowserHandle,
         initial_storage_partition: CdpInitialStoragePartition,
         navigation_runtime_config: NavigationRuntimeConfig,
     ) -> (Self, CdpSchedulerEventReceivers) {
         Self::new_with_initial_state_runtime_config_and_target_host_integration(
+            browser,
             initial_storage_partition,
             navigation_runtime_config,
             None,
@@ -715,11 +717,13 @@ impl CdpScheduler {
     }
 
     pub(crate) fn new_with_initial_state_runtime_config_and_target_host_integration(
+        browser: BrowserHandle,
         initial_storage_partition: CdpInitialStoragePartition,
         navigation_runtime_config: NavigationRuntimeConfig,
         target_host_integration: Option<CdpTargetHostIntegration>,
     ) -> (Self, CdpSchedulerEventReceivers) {
         Self::new_with_default_target_runtime_initialization(
+            browser,
             initial_storage_partition,
             navigation_runtime_config,
             target_host_integration,
@@ -728,11 +732,13 @@ impl CdpScheduler {
     }
 
     pub(crate) fn new_with_deferred_default_target_runtime(
+        browser: BrowserHandle,
         initial_storage_partition: CdpInitialStoragePartition,
         navigation_runtime_config: NavigationRuntimeConfig,
         target_host_integration: Option<CdpTargetHostIntegration>,
     ) -> (Self, CdpSchedulerEventReceivers) {
         Self::new_with_default_target_runtime_initialization(
+            browser,
             initial_storage_partition,
             navigation_runtime_config,
             target_host_integration,
@@ -741,25 +747,17 @@ impl CdpScheduler {
     }
 
     fn new_with_default_target_runtime_initialization(
+        browser: BrowserHandle,
         initial_storage_partition: CdpInitialStoragePartition,
         navigation_runtime_config: NavigationRuntimeConfig,
         target_host_integration: Option<CdpTargetHostIntegration>,
         initialization: DefaultTargetRuntimeInitialization,
     ) -> (Self, CdpSchedulerEventReceivers) {
-        let conn = match initialization {
-            DefaultTargetRuntimeInitialization::Materialized => {
-                CdpConnection::new_with_initial_storage_partition_and_runtime_config(
-                    initial_storage_partition,
-                    navigation_runtime_config,
-                )
-            }
-            DefaultTargetRuntimeInitialization::Deferred => {
-                CdpConnection::new_with_deferred_navigation_runtime(
-                    initial_storage_partition,
-                    navigation_runtime_config,
-                )
-            }
-        };
+        let conn = CdpConnection::new(
+            browser,
+            initial_storage_partition,
+            navigation_runtime_config,
+        );
         let mut scheduler = Self::new(conn);
         if let Some(target_host_integration) = target_host_integration {
             target_host_integration.install(&mut scheduler.conn);

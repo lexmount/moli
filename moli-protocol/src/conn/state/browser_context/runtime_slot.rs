@@ -1,7 +1,7 @@
 use super::BrowserContext;
-use moli_core::browser::{BrowserSequence, DocumentHandle};
+use moli_core::browser::{BrowserSequence, WebContentsHandle};
 use moli_core::page::{
-    Page, RendererAgentAttachmentId, RendererDocumentLifecycleIdentity,
+    RendererAgentAttachmentId, RendererDocumentLifecycleIdentity,
     RendererRuntimeInspectorMessageBatch, ScriptNetworkOutputItem, ScriptObservableOutputItem,
     SubresourceNetworkRequestHandle,
 };
@@ -383,26 +383,6 @@ impl TargetRuntimeSlot {
                     .devtools_renderer_channel
                     .detach_current(RendererAgentDetachReason::ExplicitDetach);
             }
-        }
-    }
-
-    #[cfg(test)]
-    fn ensure_renderer_attachment_for_replacement(
-        &mut self,
-        document: DocumentId,
-        agent_token: moli_core::page::RendererDevToolsAgentToken,
-        endpoint: moli_renderer_v8::RendererInspectionEndpoint,
-    ) {
-        if !self
-            .devtools_renderer_channel
-            .current()
-            .is_some_and(|attachment| {
-                attachment.agent_token() == agent_token && attachment.document() == document
-            })
-        {
-            self.devtools_renderer_channel
-                .attach_current(document, BrowserSequence::allocate(), endpoint)
-                .expect("a loaded page cannot be installed into a closed renderer channel");
         }
     }
 
@@ -924,39 +904,6 @@ impl BrowserContext {
             TargetPageAbsenceReason::TestFixture => None,
         }
     }
-    #[cfg(test)]
-    pub(super) fn replace_loaded_page_for_target(
-        &mut self,
-        target_id: &str,
-        page: Option<Page>,
-    ) -> Option<Page> {
-        let inspection = page.as_ref().map(|page| {
-            (
-                page.renderer_devtools_agent_token(),
-                page.renderer_inspection_endpoint(),
-            )
-        });
-        let previous_document = self.target_document_id(target_id).zip(
-            self.loaded_page_for_target(target_id)
-                .map(RendererPageResidenceIdentity::from_page),
-        );
-        let retiring =
-            self.begin_document_projection_replacement_for_target(target_id, previous_document);
-        let previous = self.replace_target_document(target_id, page);
-        if let Some((agent_token, endpoint)) = inspection {
-            let document = self
-                .target_document_id(target_id)
-                .expect("a replacement Page must install a Document");
-            self.page_targets
-                .get_mut(target_id)
-                .expect("resolved target projection")
-                .runtime_slot
-                .ensure_renderer_attachment_for_replacement(document, agent_token, endpoint);
-        }
-        self.finish_document_projection_replacement_for_target(target_id, retiring);
-        previous
-    }
-
     pub(super) fn begin_document_projection_replacement_for_target(
         &mut self,
         target_id: &str,
@@ -1007,30 +954,27 @@ impl BrowserContext {
         }
         self.ingest_owner_page_observable_output_updates_for_target(target_id);
     }
-    pub(super) fn clear_loaded_page_with_reason_for_target(
+    pub(super) fn retire_loaded_document_with_reason_for_target(
         &mut self,
         target_id: &str,
         reason: TargetPageAbsenceReason,
-    ) -> Option<Page> {
+    ) -> Option<moli_core::browser::PendingDocumentRetirement> {
         self.page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection must remain live")
+            .get_mut(target_id)?
             .runtime_slot
             .javascript_dialog_scope
             .retire();
-        let previous = self.replace_loaded_page_with_reason_for_target(target_id, None, reason);
-        self.page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection must remain live")
-            .runtime_slot
-            .transition_renderer_channel_for_page_absence(reason);
-        self.page_targets
-            .get_mut(target_id)
-            .expect("resolved target projection must remain live")
-            .runtime_slot
-            .reset_document_output_state();
+        let handle = self.web_contents_handle_for_target(target_id)?;
+        let has_physical_document = self.browser_context.has_loaded_document(handle);
+        self.reset_document_projection_for_target(target_id, false, reason);
+        let retiring = has_physical_document
+            .then(|| self.browser_context.retire_document(handle).ok())
+            .flatten();
+        let runtime = &mut self.page_targets.get_mut(target_id)?.runtime_slot;
+        runtime.transition_renderer_channel_for_page_absence(reason);
+        runtime.reset_document_output_state();
         self.ingest_owner_page_observable_output_updates_for_target(target_id);
-        previous
+        retiring
     }
     pub(crate) fn mark_loaded_page_absent_for_target(
         &mut self,
@@ -1054,9 +998,10 @@ impl BrowserContext {
         &self,
         target_id: &str,
     ) -> Option<moli_core::page::RendererPerformanceMetricSnapshot> {
-        self.web_contents_for_target(target_id)
-            .expect("resolved WebContents must remain live")
-            .performance_metric_snapshot()
+        let handle = self.web_contents_handle_for_target(target_id)?;
+        self.browser_context
+            .performance_metric_snapshot(handle)
+            .ok()?
     }
     pub(crate) fn routes_current_renderer_page_owner_for_target(
         &self,
@@ -1102,9 +1047,13 @@ impl BrowserContext {
         preferred_request_id: Option<NetworkBacklogPreferredRequestId<'_>>,
         network_request_id_allocator: &mut ConnectionNetworkRequestIdAllocator,
     ) -> Option<TargetNetworkBacklogPreparedDelivery> {
-        let current_renderer_page = self
-            .loaded_page_for_target(target_id)
-            .map(RendererPageResidenceIdentity::from_page);
+        let current_renderer_page =
+            self.document_handle_for_target(target_id)
+                .and_then(|document| {
+                    self.browser_context
+                        .document_renderer_residence(document)
+                        .ok()
+                });
         if let Some(binding) = self.renderer_document_lifecycle_binding_for_target(target_id)
             && binding.renderer_document_identity() == source_document
             && source_renderer_page.is_none_or(|page| Some(page) == current_renderer_page)
@@ -1242,37 +1191,27 @@ impl BrowserContext {
         let Some(projection) = self.page_targets.get_mut(target_id) else {
             return false;
         };
-        let page = self
-            .physical
-            .web_contents
-            .get(&projection.web_contents_id())
-            .and_then(|contents| contents.main_frame.current_document.as_ref());
+        let web_contents = projection.web_contents_id();
         let queue = &mut projection.runtime_slot.observable_queue;
-        let Some(document) = page else {
+        let handle = WebContentsHandle::new(self.browser_context.id(), web_contents);
+        let Some(document) = self
+            .browser_context
+            .document_handle_for_web_contents(handle)
+            .ok()
+            .flatten()
+        else {
             queue.reset_output_queue();
             return false;
         };
-        queue.ingest_observable_output_snapshot(
-            document.page.script_execution().observable_output_items(),
-        );
-        true
-    }
-
-    pub(crate) fn ingest_document_observable_output_updates(
-        &mut self,
-        document: DocumentHandle,
-    ) -> bool {
-        if self.physical.document(document).is_err() {
-            return false;
-        }
-        let Some(target_id) = self
-            .page_targets
-            .get_for_web_contents(document.web_contents().id())
-            .map(|projection| projection.target_id().to_owned())
+        let Ok(snapshot) = self
+            .browser_context
+            .document_observable_output_snapshot(document)
         else {
+            queue.reset_output_queue();
             return false;
         };
-        self.ingest_owner_page_observable_output_updates_for_target(&target_id)
+        queue.ingest_observable_output_snapshot(&snapshot);
+        true
     }
 
     pub(crate) fn observe_renderer_page_state_for_target(
@@ -1280,9 +1219,12 @@ impl BrowserContext {
         target_id: &str,
         snapshot: &std::sync::Arc<moli_renderer_v8::RendererPageState>,
     ) -> bool {
-        self.web_contents_for_target_mut(target_id)
-            .expect("resolved WebContents must remain live")
-            .observe_renderer_page_state(snapshot)
+        let Some(handle) = self.web_contents_handle_for_target(target_id) else {
+            return false;
+        };
+        self.browser_context
+            .observe_renderer_page_state(handle, snapshot.clone())
+            .unwrap_or(false)
     }
 }
 

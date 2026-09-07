@@ -8,7 +8,10 @@ use std::{
 
 use axum::extract::ws::WebSocket;
 use moli_cookie_jar::StoredCookie;
-use moli_core::{page::RendererDocumentLifecycleMilestone, runtime::NavigationRuntimeConfig};
+use moli_core::{
+    browser::BrowserHandle, page::RendererDocumentLifecycleMilestone,
+    runtime::NavigationRuntimeConfig,
+};
 use moli_protocol::{
     CdpInitialStoragePartition, DevToolsPageResidenceIdentity,
     devtools_runtime::{
@@ -477,6 +480,7 @@ pub(in crate::protocol_server) struct ClassicSessionRuntimeHandle {
 
 impl ClassicSessionRuntimeHandle {
     pub(super) fn spawn(
+        browser: BrowserHandle,
         initial_cookie_snapshot: Vec<StoredCookie>,
         initial_storage_partition: CdpInitialStoragePartition,
         navigation_runtime_config: NavigationRuntimeConfig,
@@ -484,6 +488,7 @@ impl ClassicSessionRuntimeHandle {
         let (tx, rx) = mpsc::unbounded_channel();
         let _runtime_finished_rx = spawn_protocol_local_task("classic-session", move || {
             classic_session_runtime_loop(
+                browser,
                 rx,
                 initial_cookie_snapshot,
                 initial_storage_partition,
@@ -1338,12 +1343,14 @@ fn classic_pending_navigation_timeout_error() -> DevToolsError {
 }
 
 async fn classic_session_runtime_loop(
+    browser: BrowserHandle,
     mut rx: mpsc::UnboundedReceiver<ClassicSessionRuntimeRequest>,
     initial_cookie_snapshot: Vec<StoredCookie>,
     initial_storage_partition: CdpInitialStoragePartition,
     navigation_runtime_config: NavigationRuntimeConfig,
 ) -> CookieProfileCommit {
     let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
+        browser,
         initial_storage_partition,
         navigation_runtime_config,
     );

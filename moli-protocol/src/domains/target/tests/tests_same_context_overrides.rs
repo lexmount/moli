@@ -434,13 +434,7 @@ async fn same_context_targets_restore_their_own_cookie_manager_surface_after_swi
         "params": {"browserContextId": "BID-9-COOKIE", "url": "about:blank#second"}
     }))
     .await;
-    let created = ctx.take_one();
-    assert_eq!(created["method"], "Target.targetCreated");
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    ctx.expect_result(1041693, json!({ "targetId": second_target_id }), None);
+    let second_target_id = take_created_target_id(&mut ctx, 1041693);
 
     ctx.process_async(json!({
         "id": 1041694,
@@ -903,9 +897,8 @@ async fn same_context_targets_restore_their_own_loader_overrides_after_switching
         );
         assert!(
             browser_context
-                .page_navigation_engine(background.target_id())
+                .page_navigation_fetch_config(background.target_id())
                 .expect("background navigation engine")
-                .fetch_config()
                 .tls_verify_host(),
             "the exact background engine must be rebuilt before activation"
         );
@@ -1090,8 +1083,8 @@ async fn assert_context_proxy_survives_target_selection(close_second: bool) {
     assert_eq!(context.id, context_id);
     assert_eq!(context.active_target_id(), Some(targets[0].as_str()));
     assert_eq!(context.page_target(&targets[1]).is_some(), !close_second);
-    assert_eq!(ctx.conn.http_proxy(), Some(proxy));
-    assert_eq!(ctx.conn.http_no_proxy(), Some(""));
+    assert_eq!(ctx.conn.http_proxy().as_deref(), Some(proxy));
+    assert_eq!(ctx.conn.http_no_proxy().as_deref(), Some(""));
     let client = ctx
         .conn
         .ensure_resource_request_client()

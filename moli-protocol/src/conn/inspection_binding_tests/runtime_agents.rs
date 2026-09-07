@@ -4,7 +4,7 @@ use super::*;
 async fn runtime_controls_start_without_protocol_document() {
     let mut ctx = dom_context().await;
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let document = take_inspection_document(&mut ctx.conn, &owner);
+    let document = inspection_document_handle(&ctx.conn, &owner);
     for (id, method) in (1..).zip([
         "Runtime.enable",
         "Runtime.disable",
@@ -37,7 +37,7 @@ async fn runtime_controls_start_without_protocol_document() {
         };
         assert!(response.get("error").is_none(), "{method}: {response}");
     }
-    assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
+    assert!(ctx.conn.has_loaded_page_for_owner(&owner));
     drop(document);
 }
 
@@ -46,7 +46,7 @@ async fn preloads_register_run_remove_and_replay_without_protocol_document() {
     let mut ctx = dom_context().await;
     dom_command(&mut ctx, 1, "Runtime.enable", json!({})).await;
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let document = take_inspection_document(&mut ctx.conn, &owner);
+    let document = inspection_document_handle(&ctx.conn, &owner);
     dom_command(
         &mut ctx,
         2,
@@ -113,7 +113,7 @@ async fn preloads_register_run_remove_and_replay_without_protocol_document() {
             "realm creation must consume the renderer's updated preload registry"
         );
     }
-    assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
+    assert!(ctx.conn.has_loaded_page_for_owner(&owner));
     drop(document);
 }
 
@@ -128,13 +128,13 @@ async fn isolated_world_restarts_on_replacement_binding_without_protocol_documen
     );
     assert!(matches!(&step, CdpCommandTaskStep::Pending(_)));
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let old_document = take_inspection_document(&mut ctx.conn, &owner);
+    let old_document = inspection_document_handle(&ctx.conn, &owner);
     ctx.install_navigation_fixture_for_session_owner(
         "data:text/html,<main id='inspected'>replacement</main>",
         None,
     )
     .await;
-    let replacement = take_inspection_document(&mut ctx.conn, &owner);
+    let replacement = inspection_document_handle(&ctx.conn, &owner);
     let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
     let response = messages
         .iter()
@@ -169,7 +169,7 @@ async fn session_preload_cleanup_updates_renderer_without_protocol_document() {
     }})).await;
     ctx.expect_result(1, json!({"identifier": "1"}), Some("SID-preload-cleanup"));
     let owner = CommandOwnerScope::capture(&ctx.conn, Some("SID-preload-cleanup"));
-    let document = take_inspection_document(&mut ctx.conn, &owner);
+    let document = inspection_document_handle(&ctx.conn, &owner);
     ctx.process_async(
         json!({"id": 10, "method": "Target.detachFromTarget", "params": {
             "targetId": "TID-dom-inspection", "sessionId": "SID-preload-cleanup",
@@ -315,8 +315,8 @@ async fn runtime_agent_round_trip(method: &str, start_before_move: bool) {
     })).await["result"]["objectId"].clone();
     assert!(object.is_string());
     let owner = CommandOwnerScope::capture(&ctx.conn, None);
-    let take_document = |ctx: &mut TestContext| take_inspection_document(&mut ctx.conn, &owner);
-    let mut document = (!start_before_move).then(|| take_document(&mut ctx));
+    let document_handle = |ctx: &mut TestContext| inspection_document_handle(&ctx.conn, &owner);
+    let mut document = (!start_before_move).then(|| document_handle(&mut ctx));
     let params = match method {
         "Runtime.addBinding" => json!({"name": "inspectBinding"}),
         "Page.createIsolatedWorld" => {
@@ -333,7 +333,7 @@ async fn runtime_agent_round_trip(method: &str, start_before_move: bool) {
         "{method} must dispatch to the live binding"
     );
     if start_before_move {
-        document = Some(take_document(&mut ctx));
+        document = Some(document_handle(&mut ctx));
     }
     let document = document.unwrap();
     let (messages, _) = ctx.complete_command_task_step_for_test(step).await;
@@ -451,6 +451,6 @@ async fn runtime_agent_round_trip(method: &str, start_before_move: bool) {
         }
         _ => unreachable!(),
     }
-    assert!(!ctx.conn.has_loaded_page_for_owner(&owner));
+    assert!(ctx.conn.has_loaded_page_for_owner(&owner));
     drop(document);
 }

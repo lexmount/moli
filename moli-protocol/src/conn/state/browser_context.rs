@@ -4,22 +4,25 @@ use std::{
 };
 
 #[cfg(test)]
-use moli_cookie_jar::BrowserCookieStore;
+use moli_cookie_jar::{BrowserCookieStore, SharedBrowserCookieStore};
 use moli_cookie_jar::{
-    CookieSource, NetworkCookieRequestContext, SharedBrowserCookieStore, StoredCookie,
-    StoredCookieQueryReport, new_shared_browser_cookie_store,
+    CookieSource, NetworkCookieRequestContext, StoredCookie, StoredCookieQueryReport,
 };
-use moli_core::browser::{BrowserContextId, NavigationId};
-use moli_core::network::{SharedWebStorageStore, new_shared_web_storage_store};
-use moli_core::runtime::{
-    NavigationEngine, NavigationPageStorageHandles, NavigationResourceStorageHandles,
-    NavigationRuntimeConfig, RendererBrowserContextRuntimeOwner,
-    RendererBrowserContextRuntimeOwnerAccess, RendererSharedWorkerRuntimeDiagnostics,
-    storage_partition::StoragePartitionState,
+#[cfg(test)]
+use moli_core::browser::BrowserContextResourceStorageHandles;
+#[cfg(test)]
+use moli_core::browser::BrowserService;
+use moli_core::browser::{
+    BrowserContextHandle, BrowserContextId, BrowserContextPageStorageHandles,
+    BrowserContextStoragePartitionHandles, BrowserHandle, ContextEmulationDefaults,
+    ContextNetworkPolicy, EmulatedDeviceMetrics, EmulatedGeolocationOverrideState,
+    EmulatedNetworkConditions, NavigationId, StoragePartitionKind,
 };
-use moli_core::storage::{
-    SharedIndexedDbManager, SharedStorageBucketStore, WeakIndexedDbManager,
-    new_shared_storage_bucket_store_with_indexed_db_manager,
+use moli_core::runtime::{NavigationRuntimeConfig, RendererSharedWorkerRuntimeDiagnostics};
+#[cfg(test)]
+use moli_core::{
+    network::SharedWebStorageStore,
+    storage::{SharedIndexedDbManager, SharedStorageBucketStore},
 };
 use moli_shared_worker::SharedWorkerInstanceId;
 use serde_json::{Value, json};
@@ -31,23 +34,24 @@ use super::{
     DevToolsSessionState,
     browser_identity::BrowserIdentityOverrideInputs,
     dedicated_worker_target::DedicatedWorkerTargetState,
-    emulation::{
-        EmulatedDeviceMetrics, EmulatedGeolocationOverrideState, EmulatedNetworkConditions,
-    },
     javascript_dialog::TargetPreparedJavaScriptDialog,
     page_agent_host::{PageAgentHost, PageAgentHostRegistry},
     page_slot::DocumentStartScript,
     service_worker_target::ServiceWorkerTargetState,
     shared_worker_target::SharedWorkerTargetState,
-    web_contents::WebContents,
 };
 
+#[path = "../browser_document_commands.rs"]
+mod browser_document_commands;
+#[path = "../browser_web_contents_commands.rs"]
+mod browser_web_contents_commands;
 mod collection;
 mod downloads;
+#[cfg(test)]
+mod initial_document_tests;
 pub(in crate::conn) mod javascript_dialog;
 mod navigation;
 mod page_runtime;
-mod resource_runtime;
 pub(crate) use page_runtime::{
     BrowserAppManifestLoadPreparation, CompletedAppManifestLoadPreparation,
     CompletedAppManifestPublication, CompletedCaptureDocumentImage,
@@ -78,23 +82,15 @@ pub(crate) use page_runtime::{
 pub(in crate::conn) mod page_slot;
 mod page_state;
 mod permissions;
-pub(crate) use permissions::{CompletedContextPermissionUpdate, PendingContextPermissionUpdate};
-mod physical;
 pub(in crate::conn) mod runtime_slot;
 pub(in crate::conn) mod session;
-mod storage_partition;
 #[cfg(test)]
 mod tests;
 mod workers;
+pub(crate) use moli_core::browser::{OriginStorageUsage, SiteDataClearOptions};
 pub(crate) use page_state::LoadedNavigationPageCommit;
-use physical::BrowserContext as PhysicalBrowserContext;
-pub(crate) use physical::{ContextEmulationDefaults, ContextNetworkPolicy};
-use storage_partition::StoragePartitionKind;
-pub(crate) use storage_partition::{OriginStorageUsage, SiteDataClearOptions};
 
-/// DevTools context projection with a privately embedded Browser context.
-/// Storage/runtime and the page collection/selection live in the Browser owner.
-/// This migration wrapper is removed at Commits 24b/30.
+/// DevTools projection for one Browser-owned Context.
 pub struct BrowserContext {
     pub id: String,
     pub(crate) page_targets: PageAgentHostRegistry,
@@ -111,155 +107,18 @@ pub struct BrowserContext {
     browser_identity_inputs: BrowserIdentityOverrideInputs,
     pub(crate) next_default_document_start_script_id: u32,
     pub(crate) default_document_start_scripts: Vec<(String, DocumentStartScript)>,
-    renderer_output_transport_sender: Option<moli_core::RendererOutputTransportSender>,
-    // Embedded page/engine residents must be dropped before the context root.
-    physical: PhysicalBrowserContext,
-}
-
-#[derive(Clone)]
-pub(crate) struct BrowserContextStoragePartitionHandles {
-    cookie_store: SharedBrowserCookieStore,
-    web_storage_store: SharedWebStorageStore,
-    indexed_db_manager: SharedIndexedDbManager,
-    storage_bucket_store: SharedStorageBucketStore,
-}
-
-#[derive(Clone)]
-pub(crate) struct BrowserContextResourceStorageHandles {
-    pub(crate) cookie_store: SharedBrowserCookieStore,
-    pub(crate) web_storage_store: SharedWebStorageStore,
-    pub(crate) session_storage_store: SharedWebStorageStore,
-}
-
-#[derive(Clone)]
-pub(crate) struct BrowserContextPageStorageHandles {
-    pub(crate) cookie_store: SharedBrowserCookieStore,
-    pub(crate) web_storage_store: SharedWebStorageStore,
-    pub(crate) session_storage_store: SharedWebStorageStore,
-    pub(crate) indexed_db_manager: Option<WeakIndexedDbManager>,
-    pub(crate) storage_bucket_store: Option<SharedStorageBucketStore>,
-}
-
-impl BrowserContextStoragePartitionHandles {
-    fn from_stores(
-        cookie_store: SharedBrowserCookieStore,
-        web_storage_store: SharedWebStorageStore,
-        indexed_db_manager: SharedIndexedDbManager,
-        storage_bucket_store: SharedStorageBucketStore,
-    ) -> Self {
-        Self {
-            cookie_store,
-            web_storage_store,
-            indexed_db_manager,
-            storage_bucket_store,
-        }
-    }
-
-    pub(crate) fn memory() -> Self {
-        Self::with_initial_cookies(Vec::new())
-    }
-
-    pub(crate) fn with_initial_cookies(
-        initial_cookies: impl IntoIterator<Item = StoredCookie>,
-    ) -> Self {
-        let cookie_store = new_shared_browser_cookie_store();
-        seed_initial_cookies(&cookie_store, initial_cookies);
-        let indexed_db_manager = moli_core::storage::new_indexed_db_manager(None)
-            .expect("in-memory IndexedDB manager should initialize");
-        let storage_bucket_store =
-            new_shared_storage_bucket_store_with_indexed_db_manager(&indexed_db_manager);
-        Self::from_stores(
-            cookie_store,
-            new_shared_web_storage_store(),
-            indexed_db_manager,
-            storage_bucket_store,
-        )
-    }
-
-    fn from_initial_storage_partition(
-        cookie_store: SharedBrowserCookieStore,
-        local_storage_store: SharedWebStorageStore,
-        indexed_db_manager: SharedIndexedDbManager,
-        storage_bucket_store: SharedStorageBucketStore,
-    ) -> Self {
-        Self::from_stores(
-            cookie_store,
-            local_storage_store,
-            indexed_db_manager,
-            storage_bucket_store,
-        )
-    }
-
-    pub(crate) fn from_storage_partition(
-        initial_cookies: impl IntoIterator<Item = StoredCookie>,
-        storage_partition: &StoragePartitionState,
-    ) -> Self {
-        let cookie_store = new_shared_browser_cookie_store();
-        seed_initial_cookies(&cookie_store, initial_cookies);
-        let shared_storage = storage_partition.shared_storage_handles();
-        Self::from_initial_storage_partition(
-            cookie_store,
-            shared_storage.web_storage_store(),
-            shared_storage.indexed_db_manager(),
-            shared_storage.storage_bucket_store(),
-        )
-    }
-
-    pub(crate) fn resource_storage_handles(
-        &self,
-        session_storage_store: SharedWebStorageStore,
-    ) -> BrowserContextResourceStorageHandles {
-        BrowserContextResourceStorageHandles {
-            cookie_store: self.cookie_store.clone(),
-            web_storage_store: self.web_storage_store.clone(),
-            session_storage_store,
-        }
-    }
-
-    pub(crate) fn page_storage_handles(
-        &self,
-        session_storage_store: SharedWebStorageStore,
-    ) -> BrowserContextPageStorageHandles {
-        BrowserContextPageStorageHandles {
-            cookie_store: self.cookie_store.clone(),
-            web_storage_store: self.web_storage_store.clone(),
-            session_storage_store,
-            indexed_db_manager: Some(moli_core::storage::downgrade_indexed_db_manager(
-                &self.indexed_db_manager,
-            )),
-            storage_bucket_store: Some(self.storage_bucket_store.clone()),
-        }
-    }
-}
-
-impl BrowserContextResourceStorageHandles {
-    pub(crate) fn into_navigation_storage(self) -> NavigationResourceStorageHandles {
-        NavigationResourceStorageHandles::new(
-            self.cookie_store,
-            self.web_storage_store,
-            self.session_storage_store,
-        )
-    }
-}
-
-impl BrowserContextPageStorageHandles {
-    pub(crate) fn into_navigation_storage(self) -> NavigationPageStorageHandles {
-        NavigationPageStorageHandles::new(
-            self.cookie_store,
-            self.web_storage_store,
-            self.session_storage_store,
-            self.indexed_db_manager,
-            self.storage_bucket_store,
-        )
-    }
+    browser_context: BrowserContextHandle,
 }
 
 impl std::fmt::Debug for BrowserContext {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BrowserContext")
-            .field("browser_context_id", &self.physical.id)
+            .field("browser_context_id", &self.browser_context.id())
             .field("id", &self.id)
-            .field("storage_partition", &self.physical.storage_partition)
+            .field(
+                "storage_partition_kind",
+                &self.browser_context.storage_partition_kind_label(),
+            )
             .field("active_target_id", &self.active_target_id())
             .field("active_session_id", &self.active_session_id())
             .field("has_loaded_page", &self.has_loaded_page())
@@ -268,27 +127,15 @@ impl std::fmt::Debug for BrowserContext {
 }
 
 impl BrowserContext {
-    pub(crate) fn download_policy(&self) -> Option<&moli_core::browser::DownloadPolicy> {
-        self.physical.download_policy.as_ref()
+    pub(crate) fn download_policy(&self) -> Option<moli_core::browser::DownloadPolicy> {
+        self.browser_context.download_policy()
     }
 
     pub(in crate::conn) fn set_download_policy(
         &mut self,
         policy: Option<moli_core::browser::DownloadPolicy>,
     ) {
-        self.physical.download_policy = policy;
-    }
-
-    // Internal owner lookup only. These references never leave this private
-    // Context module; protocol callers use concrete operations and values.
-    fn web_contents_for_target(&self, target_id: &str) -> Option<&WebContents> {
-        let id = self.page_targets.get(target_id)?.web_contents_id();
-        self.physical.web_contents.get(&id)
-    }
-
-    fn web_contents_for_target_mut(&mut self, target_id: &str) -> Option<&mut WebContents> {
-        let id = self.page_targets.get(target_id)?.web_contents_id();
-        self.physical.web_contents.get_mut(&id)
+        self.browser_context.set_download_policy(policy);
     }
 
     fn page_slot_for_target(&self, target_id: &str) -> Option<&super::page_slot::TargetPageSlot> {
@@ -308,18 +155,25 @@ impl BrowserContext {
     }
 
     pub fn browser_context_id(&self) -> BrowserContextId {
-        self.physical.id
+        self.browser_context.id()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn renderer_runtime_id_for_test(
+        &self,
+    ) -> moli_core::RendererBrowserContextRuntimeId {
+        self.browser_context.renderer_runtime_id_for_test()
     }
 
     pub(crate) fn active_page_target(&self) -> &PageAgentHost {
         self.page_targets
-            .active(self.physical.selected_web_contents_id())
+            .active(self.browser_context.selected_web_contents_id())
             .expect("BrowserContext has no active page target")
     }
 
     pub(crate) fn active_page_target_mut(&mut self) -> &mut PageAgentHost {
         self.page_targets
-            .active_mut(self.physical.selected_web_contents_id())
+            .active_mut(self.browser_context.selected_web_contents_id())
             .expect("BrowserContext has no active page target")
     }
 
@@ -355,8 +209,21 @@ impl BrowserContext {
         drop(self.take_pending_popup_javascript_dialogs(popup_id));
     }
 
-    pub fn new(id: String) -> Self {
-        Self::new_with_initial_cookies(id, Vec::new())
+    /// Isolated projection-unit fixture. Connection integration tests use its
+    /// fixture factory so every Context belongs to that connection's Browser.
+    #[cfg(test)]
+    pub(crate) fn new(id: String) -> Self {
+        let browser = BrowserService::start()
+            .expect("standalone Browser owner should start")
+            .handle();
+        Self::new_with_browser_and_storage_partition_kind(
+            &browser,
+            id,
+            BrowserContextStoragePartitionHandles::memory(),
+            None,
+            None,
+            StoragePartitionKind::ProfileBacked,
+        )
     }
 
     #[cfg(test)]
@@ -365,57 +232,54 @@ impl BrowserContext {
         target_id: impl Into<String>,
     ) -> Self {
         let mut context = Self::new(id.into());
+        context.bind_page_navigation_engines(Default::default(), None);
         context.set_active_target_id(target_id);
         context
     }
 
-    pub(crate) fn new_with_initial_cookies(
-        id: String,
-        initial_cookies: impl IntoIterator<Item = StoredCookie>,
+    #[cfg(test)]
+    pub(crate) fn new_with_browser_for_test(
+        browser: &BrowserHandle,
+        id: impl Into<String>,
     ) -> Self {
-        Self::new_with_storage_partition_and_http_cache(
-            id,
-            BrowserContextStoragePartitionHandles::with_initial_cookies(initial_cookies),
+        Self::new_with_browser_and_storage_partition_kind(
+            browser,
+            id.into(),
+            BrowserContextStoragePartitionHandles::memory(),
             None,
             None,
+            StoragePartitionKind::ProfileBacked,
         )
     }
 
-    pub(crate) fn new_ephemeral_with_storage_partition_handles(
+    pub(crate) fn new_ephemeral_with_http_cache(
+        browser: &BrowserHandle,
         id: String,
-        partition: BrowserContextStoragePartitionHandles,
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
     ) -> Self {
-        Self::new_with_storage_partition_kind(
+        Self::new_with_browser_and_storage_partition_kind(
+            browser,
             id,
-            partition,
+            BrowserContextStoragePartitionHandles::memory(),
             http_cache_root,
             http_cache_max_bytes,
             StoragePartitionKind::Ephemeral,
         )
     }
 
-    pub(crate) fn new_ephemeral_with_http_cache(
-        id: String,
-        http_cache_root: Option<PathBuf>,
-        http_cache_max_bytes: Option<u64>,
-    ) -> Self {
-        Self::new_ephemeral_with_storage_partition_handles(
-            id,
-            BrowserContextStoragePartitionHandles::memory(),
-            http_cache_root,
-            http_cache_max_bytes,
-        )
-    }
-
+    #[cfg(test)]
     pub(crate) fn new_with_storage_partition_and_http_cache(
         id: String,
         partition: BrowserContextStoragePartitionHandles,
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
     ) -> Self {
-        Self::new_with_storage_partition_kind(
+        let browser = BrowserService::start()
+            .expect("standalone Browser owner should start")
+            .handle();
+        Self::new_with_browser_and_storage_partition_kind(
+            &browser,
             id,
             partition,
             http_cache_root,
@@ -425,28 +289,33 @@ impl BrowserContext {
     }
 
     pub(crate) fn new_with_storage_partition_handles_and_http_cache(
+        browser: &BrowserHandle,
         id: String,
         partition: BrowserContextStoragePartitionHandles,
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
     ) -> Self {
-        Self::new_with_storage_partition_and_http_cache(
+        Self::new_with_browser_and_storage_partition_kind(
+            browser,
             id,
             partition,
             http_cache_root,
             http_cache_max_bytes,
+            StoragePartitionKind::ProfileBacked,
         )
     }
 
-    fn new_with_storage_partition_kind(
+    fn new_with_browser_and_storage_partition_kind(
+        browser: &BrowserHandle,
         id: String,
         partition: BrowserContextStoragePartitionHandles,
         http_cache_root: Option<PathBuf>,
         http_cache_max_bytes: Option<u64>,
         kind: StoragePartitionKind,
     ) -> Self {
-        let physical =
-            PhysicalBrowserContext::new(partition, kind, http_cache_root, http_cache_max_bytes);
+        let browser_context = browser
+            .create_context(partition, kind, http_cache_root, http_cache_max_bytes)
+            .expect("BrowserContext creation should succeed");
 
         Self {
             id,
@@ -463,26 +332,12 @@ impl BrowserContext {
             browser_identity_inputs: BrowserIdentityOverrideInputs::default(),
             next_default_document_start_script_id: 0,
             default_document_start_scripts: Vec::new(),
-            renderer_output_transport_sender: None,
-            physical,
+            browser_context,
         }
     }
 
-    pub(crate) fn new_page_navigation_engine(
-        &self,
-        config: NavigationRuntimeConfig,
-    ) -> NavigationEngine {
-        let engine = self.physical.new_page_navigation_engine(config);
-        if let Some(sender) = self.renderer_output_transport_sender.clone() {
-            engine.set_renderer_output_transport_sender(sender);
-        }
-        engine
-    }
-
-    pub(in crate::conn) fn page_navigation_runtime_config(
-        &self,
-    ) -> Option<NavigationRuntimeConfig> {
-        self.physical.page_navigation_runtime_config.clone()
+    pub(crate) fn remove_from_browser(&self) -> Result<bool, String> {
+        self.browser_context.remove()
     }
 
     pub(crate) fn bind_page_navigation_engines(
@@ -490,111 +345,56 @@ impl BrowserContext {
         config: NavigationRuntimeConfig,
         renderer_output_transport_sender: Option<moli_core::RendererOutputTransportSender>,
     ) {
-        self.physical.page_navigation_runtime_config = Some(config.clone());
-        self.renderer_output_transport_sender = renderer_output_transport_sender;
-
-        let sender = self.renderer_output_transport_sender.clone();
-        let runtime = self.physical.renderer_runtime_owner_access();
-        for contents in self.physical.web_contents.values_mut() {
-            if contents.has_navigation_engine() {
-                continue;
-            }
-            let engine = NavigationEngine::new_with_runtime_config_and_browser_context_access(
-                config.clone(),
-                runtime.clone(),
-            )
-            .expect("live BrowserContext owner must accept a page engine");
-            if let Some(sender) = sender.clone() {
-                engine.set_renderer_output_transport_sender(sender);
-            }
-            contents.install_navigation_engine(engine);
-        }
+        self.browser_context
+            .bind_page_navigation_engines(config, renderer_output_transport_sender);
     }
 
     pub(crate) fn set_renderer_output_transport_sender(
         &mut self,
         sender: moli_core::RendererOutputTransportSender,
     ) {
-        self.renderer_output_transport_sender = Some(sender.clone());
-        for contents in self.physical.web_contents.values() {
-            contents.set_renderer_output_transport_sender(sender.clone());
-        }
-    }
-
-    #[cfg(test)]
-    pub(crate) fn page_navigation_engine(&self, target_id: &str) -> Option<&NavigationEngine> {
-        self.web_contents_for_target(target_id)?
-            .navigation_engine_for_test()
-    }
-
-    #[cfg(test)]
-    pub(crate) fn page_navigation_engine_mut(
-        &mut self,
-        target_id: &str,
-    ) -> Option<&mut NavigationEngine> {
-        self.web_contents_for_target_mut(target_id)?
-            .navigation_engine_for_test_mut()
+        self.browser_context
+            .set_renderer_output_transport_sender(sender);
     }
 
     pub(crate) fn is_profile_backed_storage_partition(&self) -> bool {
-        self.physical.storage_partition.kind == StoragePartitionKind::ProfileBacked
+        self.browser_context.storage_partition_kind() == StoragePartitionKind::ProfileBacked
     }
 
     pub(crate) fn storage_partition_id(&self) -> &str {
-        match self.physical.storage_partition.kind {
+        match self.browser_context.storage_partition_kind() {
             StoragePartitionKind::ProfileBacked => "default",
             StoragePartitionKind::Ephemeral => &self.id,
         }
     }
 
     pub(crate) fn storage_partition_kind_label(&self) -> &'static str {
-        self.physical.storage_partition.kind_label()
+        self.browser_context.storage_partition_kind_label()
     }
 
     #[cfg(test)]
     pub(crate) fn resource_storage_handles(&self) -> BrowserContextResourceStorageHandles {
-        let session_storage_store = self
-            .physical
-            .selected_web_contents_id()
-            .and_then(|id| self.physical.web_contents.get(&id))
-            .map(|contents| contents.session_storage.store().clone())
-            .unwrap_or_else(new_shared_web_storage_store);
-        self.physical
-            .storage_partition
-            .handles
-            .resource_storage_handles(session_storage_store)
+        self.browser_context.resource_storage_handles_for_test()
     }
 
     pub(crate) fn page_storage_handles(&self) -> BrowserContextPageStorageHandles {
-        let session_storage_store = self
-            .physical
-            .selected_web_contents_id()
-            .and_then(|id| self.physical.web_contents.get(&id))
-            .map(|contents| contents.session_storage.store().clone())
-            .unwrap_or_else(new_shared_web_storage_store);
-        self.physical
-            .storage_partition
-            .handles
-            .page_storage_handles(session_storage_store)
+        self.browser_context
+            .page_storage_handles(None)
+            .expect("selected WebContents belongs to its BrowserContext")
     }
 
     pub(crate) fn page_storage_handles_for_target(
         &self,
         target_id: &str,
     ) -> Option<BrowserContextPageStorageHandles> {
-        let contents = self.web_contents_for_target(target_id)?;
-        Some(
-            self.physical
-                .storage_partition
-                .handles
-                .page_storage_handles(contents.session_storage.store().clone()),
-        )
+        let handle = self.web_contents_handle_for_target(target_id)?;
+        self.browser_context.page_storage_handles(Some(handle)).ok()
     }
 
     #[cfg(test)]
     pub(crate) fn with_cookie_store<R>(&self, f: impl FnOnce(&BrowserCookieStore) -> R) -> R {
-        let cookie_store = self.physical.storage_partition.cookie_store().lock();
-        f(&cookie_store)
+        let store = self.browser_context.cookie_store_for_test();
+        f(&store.lock())
     }
 
     #[cfg(test)]
@@ -602,8 +402,8 @@ impl BrowserContext {
         &self,
         f: impl FnOnce(&mut BrowserCookieStore) -> R,
     ) -> R {
-        let mut cookie_store = self.physical.storage_partition.cookie_store().lock();
-        f(&mut cookie_store)
+        let store = self.browser_context.cookie_store_for_test();
+        f(&mut store.lock())
     }
 
     #[cfg(test)]
@@ -616,85 +416,64 @@ impl BrowserContext {
         request_url: &url::Url,
         request_context: NetworkCookieRequestContext,
     ) -> Option<StoredCookieQueryReport> {
-        let mut cookie_store = self.physical.storage_partition.cookie_store().lock();
-        let report =
-            cookie_store.observe_cookie_access_report_for_request(request_url, request_context);
-        (!report.included_cookies.is_empty() || !report.excluded_cookies.is_empty())
-            .then_some(report)
+        self.browser_context
+            .observe_request_cookie_access_report(request_url, request_context)
     }
 
     pub(crate) fn storage_quota_for_origin(&self, origin: &str) -> (f64, bool) {
-        self.physical
-            .storage_partition
-            .storage_quota_for_origin(origin)
+        self.browser_context.storage_quota_for_origin(origin)
     }
 
     pub(crate) fn set_storage_quota_override(&mut self, origin: String, quota: f64) {
-        self.physical
-            .storage_partition
+        self.browser_context
             .set_storage_quota_override(origin, quota);
     }
 
     pub(crate) fn clear_storage_quota_override(&mut self, origin: &str) {
-        self.physical
-            .storage_partition
-            .clear_storage_quota_override(origin);
+        self.browser_context.clear_storage_quota_override(origin);
     }
 
     pub(crate) fn storage_usage_for_origin(
         &self,
         serialized_origin: &str,
     ) -> Result<OriginStorageUsage, String> {
-        self.physical
-            .storage_partition
-            .usage_for_origin(serialized_origin)
+        self.browser_context
+            .storage_usage_for_origin(serialized_origin)
     }
 
-    pub(crate) fn renderer_runtime_owner_access(&self) -> RendererBrowserContextRuntimeOwnerAccess {
-        self.physical.renderer_runtime_owner_access()
+    pub(crate) fn selected_document_navigation_metadata(
+        &self,
+    ) -> Option<moli_core::browser::DocumentNavigationMetadata> {
+        self.browser_context.selected_document_navigation_metadata()
     }
 
     pub(crate) fn set_javascript_dialog_handler_enabled(&self, enabled: bool) {
-        self.physical
-            .renderer_runtime()
+        self.browser_context
             .set_javascript_dialog_handler_enabled(enabled);
     }
 
-    #[cfg(test)]
     pub(crate) fn javascript_dialog_handler_enabled(&self) -> bool {
-        self.physical
-            .renderer_runtime()
-            .javascript_dialog_handler_enabled()
-    }
-
-    pub(crate) fn take_renderer_runtime_owner_for_teardown(
-        &mut self,
-    ) -> Option<RendererBrowserContextRuntimeOwner> {
-        self.physical.take_renderer_runtime_owner_for_teardown()
+        self.browser_context.javascript_dialog_handler_enabled()
     }
 
     pub(crate) fn routes_renderer_browser_context_runtime(
         &self,
         runtime_id: moli_core::RendererBrowserContextRuntimeId,
     ) -> bool {
-        self.physical.renderer_runtime().id() == runtime_id
+        self.browser_context
+            .routes_renderer_browser_context_runtime(runtime_id)
     }
 
     pub(crate) fn target_id_for_renderer_owner_local_host_id(
         &self,
         owner_local_host_id: moli_core::RendererOwnerLocalHostId,
     ) -> Option<String> {
-        if self
-            .loaded_page()
-            .is_some_and(|page| page.renderer_owner_local_host_id() == owner_local_host_id)
-        {
-            return self.active_target_id_owned();
-        }
-        self.background_targets().find_map(|target| {
-            self.loaded_page_for_target(target.target_id())
-                .is_some_and(|page| page.renderer_owner_local_host_id() == owner_local_host_id)
-                .then(|| target.target_id().to_owned())
-        })
+        let handle = self
+            .browser_context
+            .web_contents_for_renderer_owner(owner_local_host_id)?;
+        self.page_targets
+            .get_for_web_contents(handle.id())
+            .map(|target| target.target_id().to_owned())
     }
 
     pub(crate) fn moli_memory_diagnostics(&self) -> Value {
@@ -714,7 +493,7 @@ impl BrowserContext {
             self.service_worker_target_pending_inspector_await_count_for_diagnostics();
         let active_target = self
             .page_targets
-            .active(self.physical.selected_web_contents_id());
+            .active(self.browser_context.selected_web_contents_id());
         let runtime_session_diagnostics = active_target
             .map(|target| {
                 let primary = target.devtools_sessions.primary();
@@ -804,14 +583,11 @@ impl BrowserContext {
                 .iter()
                 .map(|target| target.devtools_sessions.attached_len())
                 .sum::<usize>(),
-            "targetOpenerCount": self.page_targets.iter()
-                .filter(|target| self.web_contents_for_target(target.target_id()).is_some_and(|contents| contents.window.opener.is_some())).count(),
+            "targetOpenerCount": self.browser_context.web_contents_window_counts().0,
             "targetOpenerFrameCount": self.page_targets.iter()
                 .filter(|target| target.opener_frame_id.is_some()).count(),
-            "targetCanAccessOpenerCount": self.page_targets.iter()
-                .filter(|target| self.web_contents_for_target(target.target_id()).is_some_and(|contents| contents.window.opener.is_some_and(|opener| opener.can_access))).count(),
-            "targetWindowNameCount": self.page_targets.iter()
-                .filter(|target| self.web_contents_for_target(target.target_id()).is_some_and(|contents| contents.window.name.is_some())).count(),
+            "targetCanAccessOpenerCount": self.browser_context.web_contents_window_counts().1,
+            "targetWindowNameCount": self.browser_context.web_contents_window_counts().2,
             "defaultDocumentStartScriptCount": self.default_document_start_scripts.len(),
             "domRemoteObjectNodeCacheCount": active_target
                 .map_or(0, |target| target.dom_remote_object_node_cache.len()),
@@ -837,7 +613,7 @@ impl BrowserContext {
                 "estimatedDocumentIsolateCount": estimated_document_isolate_count,
                 "sharedWorkerTargetCount": self.shared_worker_targets.len(),
                 "serviceWorkerTargetCount": self.service_worker_targets.len(),
-                "browserContextRuntime": self.physical.renderer_runtime().moli_memory_diagnostics(),
+                "browserContextRuntime": self.browser_context.renderer_memory_diagnostics(),
             },
             "runtimeSession": runtime_session_diagnostics,
             "pageSession": page_session_diagnostics,
@@ -852,32 +628,37 @@ impl BrowserContext {
     }
 
     fn target_owner_diagnostics(&self, target: &PageAgentHost) -> Value {
-        let navigation = self
-            .web_contents_for_target(target.target_id())
-            .expect("live WebContents")
-            .navigation();
-        let initial = navigation.initial_empty_document_state().map(|document| {
-            let creator = document.creator().map(|creator| json!({
+        let handle = self
+            .web_contents_handle_for_target(target.target_id())
+            .expect("live WebContents");
+        let initial =
+            self.browser_context
+                .web_contents_initial_document_state(handle)
+                .expect("live WebContents")
+                .map(|document| {
+                    let creator = document.creator().map(|creator| json!({
                 "targetId": self.page_targets.iter()
                     .find(|target| target.web_contents_id() == creator.web_contents_id())
                     .map(PageAgentHost::target_id),
                 "securityOrigin": creator.security_origin(),
                 "secureContextType": creator.secure_context_type(),
             }));
-            json!({
-                "targetId": target.target_id(),
-                "initialUrl": document.initial_url(),
-                "creator": creator,
-                "materialized": document.materialized(),
-                "exited": document.exited(),
-                "pendingCrossDocumentNavigation": navigation.initial_empty_document_pending_cross_document_navigation(),
-                "isOnInitialEmptyDocument": document.is_on_initial_empty_document(),
-            })
-        });
+                    json!({
+                        "targetId": target.target_id(),
+                        "initialUrl": document.initial_url(),
+                        "creator": creator,
+                        "materialized": document.materialized(),
+                        "exited": document.exited(),
+                        "pendingCrossDocumentNavigation": self.browser_context
+                            .initial_document_has_pending_navigation(handle)
+                            .unwrap_or(false),
+                        "isOnInitialEmptyDocument": document.is_on_initial_empty_document(),
+                    })
+                });
         let mut diagnostics = target.owner_state.moli_memory_diagnostics();
         let window_surface = self
             .web_contents_window_surface(moli_core::browser::WebContentsHandle::new(
-                self.physical.id,
+                self.browser_context.id(),
                 target.web_contents_id(),
             ))
             .expect("live WebContents");
@@ -886,7 +667,10 @@ impl BrowserContext {
         diagnostics["targetCrashed"] = json!(self.target_is_crashed(target.target_id()));
         diagnostics["isDefault"] = json!(
             target.owner_state.is_default()
-                && navigation.is_default()
+                && self
+                    .browser_context
+                    .navigation_is_default(handle)
+                    .unwrap_or(false)
                 && !self.target_is_crashed(target.target_id())
                 && window_surface == super::WindowSurface::default()
         );
@@ -894,11 +678,7 @@ impl BrowserContext {
     }
 
     pub(crate) fn loaded_document_page_count(&self) -> usize {
-        self.physical
-            .web_contents
-            .values()
-            .filter(|contents| contents.main_frame.current_document.is_some())
-            .count()
+        self.browser_context.loaded_document_count()
     }
 
     pub(crate) fn pending_document_page_build_count(&self) -> usize {
@@ -915,13 +695,14 @@ impl BrowserContext {
         &self,
         target_id: &str,
     ) -> Result<(), String> {
-        let Some(contents) = self.web_contents_for_target(target_id) else {
+        let Some(handle) = self.web_contents_handle_for_target(target_id) else {
             return Ok(());
         };
-        if contents
-            .navigation()
-            .has_materialized_current_initial_empty_document()
-            && contents.main_frame.current_document.is_none()
+        if self
+            .browser_context
+            .web_contents_initial_document_state(handle)?
+            .is_some_and(|initial| initial.is_on_initial_empty_document() && initial.materialized())
+            && !self.browser_context.has_loaded_document(handle)
         {
             return Err(format!(
                 "TargetInitialEmptyDocumentMissingPage: target {target_id} has materialized current initial empty document without loaded Page"
@@ -932,17 +713,20 @@ impl BrowserContext {
 
     #[cfg(test)]
     pub(crate) fn can_install_current_initial_empty_document_page(&self, target_id: &str) -> bool {
-        let Some(target) = self.page_target(target_id) else {
+        let Some(handle) = self.web_contents_handle_for_target(target_id) else {
             return false;
         };
-        !self.target_has_loaded_page(target.target_id())
+        !self.target_has_loaded_page(target_id)
+            && !self
+                .browser_context
+                .has_pending_document_navigation(handle)
+                .unwrap_or(true)
             && self
-                .web_contents_for_target(target_id)
-                .is_some_and(|contents| {
-                    contents
-                        .navigation()
-                        .can_install_current_initial_empty_document_page()
-                })
+                .browser_context
+                .is_on_initial_document(handle)
+                .ok()
+                .flatten()
+                .unwrap_or(true)
     }
 
     /// Reports whether one exact Page target is still on its materialized
@@ -955,24 +739,26 @@ impl BrowserContext {
         let Some(target) = self.page_target(target_id) else {
             return false;
         };
-        let navigation = &self
-            .web_contents_for_target(target.target_id())
-            .expect("live WebContents")
-            .navigation();
-        let Some(initial_url) = navigation.initial_empty_document_url_if_current() else {
+        let handle = self
+            .web_contents_handle_for_target(target.target_id())
+            .expect("live WebContents");
+        let Some(initial_url) = self
+            .browser_context
+            .initial_document_url(handle)
+            .ok()
+            .flatten()
+        else {
             return false;
         };
         target.target_url() != initial_url
-            && !navigation.initial_empty_document_pending_cross_document_navigation()
+            && !self
+                .browser_context
+                .initial_document_has_pending_navigation(handle)
+                .unwrap_or(false)
     }
 
     pub(crate) fn loaded_document_renderer_owner_ids_for_diagnostics(&self) -> HashSet<u64> {
-        self.physical
-            .web_contents
-            .values()
-            .filter_map(|contents| contents.main_frame.current_document.as_ref())
-            .map(|document| document.page.renderer_owner_local_host_id().as_u64())
-            .collect()
+        self.browser_context.loaded_document_renderer_owner_ids()
     }
 
     pub(crate) fn pending_document_renderer_owner_ids_for_diagnostics(&self) -> HashSet<u64> {
@@ -986,18 +772,8 @@ impl BrowserContext {
     }
 
     pub(crate) fn dedicated_worker_running_worker_isolate_count_for_diagnostics(&self) -> usize {
-        self.loaded_pages_for_diagnostics()
-            .map(
-                moli_core::page::Page::dedicated_worker_running_worker_isolate_count_for_diagnostics,
-            )
-            .sum()
-    }
-
-    fn loaded_pages_for_diagnostics(&self) -> impl Iterator<Item = &moli_core::page::Page> {
-        self.loaded_page().into_iter().chain(
-            self.background_targets()
-                .filter_map(|target| self.loaded_page_for_target(target.target_id())),
-        )
+        self.browser_context
+            .dedicated_worker_running_isolate_count()
     }
 
     pub(crate) fn page_target_pending_inspector_await_count_for_diagnostics(&self) -> usize {
@@ -1008,10 +784,7 @@ impl BrowserContext {
     }
 
     pub(crate) fn has_pending_javascript_dialog(&self) -> bool {
-        self.physical
-            .web_contents
-            .values()
-            .any(|contents| !contents.javascript_dialogs.is_empty())
+        self.browser_context.has_pending_javascript_dialog()
     }
 
     pub(crate) fn page_target_with_pending_inspector_await_count_for_diagnostics(&self) -> usize {
@@ -1060,9 +833,7 @@ impl BrowserContext {
     pub(crate) fn shared_worker_runtime_diagnostics_for_diagnostics(
         &self,
     ) -> RendererSharedWorkerRuntimeDiagnostics {
-        self.physical
-            .renderer_runtime()
-            .shared_worker_runtime_diagnostics_for_diagnostics()
+        self.browser_context.shared_worker_runtime_diagnostics()
     }
 
     #[cfg(test)]
@@ -1095,11 +866,8 @@ impl BrowserContext {
     }
 
     pub(crate) fn accepts_pending_document_navigation_event(&self, token: &NavigationId) -> bool {
-        self.physical.web_contents.values().any(|contents| {
-            contents
-                .navigation()
-                .accepts_pending_document_navigation_event(token)
-        })
+        self.browser_context
+            .accepts_any_pending_navigation_event(token)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1107,11 +875,8 @@ impl BrowserContext {
         &self,
         token: &NavigationId,
     ) -> Option<moli_fetch::FetchCancelHandle> {
-        self.physical.web_contents.values().find_map(|contents| {
-            contents
-                .navigation()
-                .document_navigation_cancellation_handle(token)
-        })
+        self.browser_context
+            .document_navigation_cancellation_handle_for_test(token)
     }
 
     pub(crate) fn arm_background_navigation_completion(
@@ -1119,40 +884,23 @@ impl BrowserContext {
         token: &NavigationId,
         additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
     ) -> bool {
-        let Some(contents) = self.physical.web_contents.values_mut().find(|contents| {
-            contents
-                .navigation()
-                .accepts_pending_document_navigation_event(token)
-        }) else {
-            if let Some(cancellation) = additional_cancellation {
-                cancellation.cancel();
-            }
-            return false;
-        };
-        contents.arm_background_navigation_completion(token, additional_cancellation)
+        self.browser_context
+            .arm_background_navigation_completion(token, additional_cancellation)
     }
 
     pub(crate) fn settle_background_navigation_completion(&mut self, token: &NavigationId) -> bool {
-        self.physical
-            .web_contents
-            .values_mut()
-            .any(|contents| contents.settle_background_navigation_completion(token))
+        self.browser_context
+            .settle_background_navigation_completion(token)
     }
 
     pub(crate) fn has_inflight_background_navigation(&self) -> bool {
-        self.physical
-            .web_contents
-            .values()
-            .any(|contents| contents.navigation().has_inflight_background_navigation())
+        self.browser_context.has_inflight_background_navigation()
     }
 
     #[cfg(test)]
     pub(crate) fn accepts_document_body_completion_event(&self, token: &NavigationId) -> bool {
-        self.physical.web_contents.values().any(|contents| {
-            contents
-                .navigation()
-                .accepts_document_body_completion_event(token)
-        })
+        self.browser_context
+            .accepts_any_document_body_completion_for_test(token)
     }
 
     pub(crate) fn clear_pending_document_navigation_for_target_if_matches(
@@ -1208,8 +956,7 @@ impl BrowserContext {
         origin: &url::Url,
         options: SiteDataClearOptions,
     ) -> Result<(), String> {
-        self.physical
-            .storage_partition
+        self.browser_context
             .clear_site_data_for_origin(origin, options)
     }
 
@@ -1218,28 +965,21 @@ impl BrowserContext {
         storage_key: &moli_storage_key::MoliStorageKey,
         options: SiteDataClearOptions,
     ) -> Result<(), String> {
-        self.physical
-            .storage_partition
+        self.browser_context
             .clear_site_data_for_storage_key(storage_key, options)
     }
 
     pub(crate) fn clear_http_cache(&self) -> Result<(), String> {
-        self.physical.storage_partition.clear_http_cache()
+        self.browser_context.clear_http_cache()
     }
 
     #[cfg(test)]
-    pub(crate) fn http_cache_configuration_for_test(
-        &self,
-    ) -> (Option<&std::path::Path>, Option<u64>) {
-        self.physical.storage_partition.http_cache_configuration()
+    pub(crate) fn http_cache_configuration_for_test(&self) -> (Option<PathBuf>, Option<u64>) {
+        self.browser_context.http_cache_configuration_for_test()
     }
 
     pub(crate) fn snapshot_cookies(&self) -> Vec<StoredCookie> {
-        self.physical
-            .storage_partition
-            .cookie_store()
-            .lock()
-            .cookies()
+        self.browser_context.snapshot_cookies()
     }
 
     pub(crate) fn store_cookie(
@@ -1248,11 +988,8 @@ impl BrowserContext {
         request_url: Option<&url::Url>,
         source: CookieSource,
     ) -> moli_cookie_jar::StoredCookieSetReport {
-        self.physical
-            .storage_partition
-            .cookie_store()
-            .lock()
-            .upsert_with_request_url_report(cookie, request_url, source)
+        self.browser_context
+            .store_cookie(cookie, request_url, source)
     }
 
     #[cfg(test)]
@@ -1267,38 +1004,30 @@ impl BrowserContext {
     }
 
     #[cfg(test)]
-    pub(crate) fn cookie_store_for_test(&self) -> &SharedBrowserCookieStore {
-        self.physical.storage_partition.cookie_store()
+    pub(crate) fn cookie_store_for_test(&self) -> SharedBrowserCookieStore {
+        self.browser_context.cookie_store_for_test()
     }
 
     #[cfg(test)]
-    pub(crate) fn web_storage_store_for_test(&self) -> &SharedWebStorageStore {
-        self.physical.storage_partition.web_storage_store()
+    pub(crate) fn web_storage_store_for_test(&self) -> SharedWebStorageStore {
+        self.browser_context.web_storage_store_for_test()
     }
 
     #[cfg(test)]
-    pub(crate) fn session_storage_store_for_test(&self) -> &SharedWebStorageStore {
-        self.physical
-            .web_contents
-            .get(
-                &self
-                    .physical
-                    .selected_web_contents_id()
-                    .expect("active WebContents"),
-            )
-            .expect("selected WebContents")
-            .session_storage
-            .store()
+    pub(crate) fn session_storage_store_for_test(&self) -> SharedWebStorageStore {
+        self.browser_context
+            .selected_session_storage_store_for_test()
+            .expect("active WebContents")
     }
 
     #[cfg(test)]
-    pub(crate) fn indexed_db_manager_for_test(&self) -> &SharedIndexedDbManager {
-        self.physical.storage_partition.indexed_db_manager()
+    pub(crate) fn indexed_db_manager_for_test(&self) -> SharedIndexedDbManager {
+        self.browser_context.indexed_db_manager_for_test()
     }
 
     #[cfg(test)]
-    pub(crate) fn storage_bucket_store_for_test(&self) -> &SharedStorageBucketStore {
-        self.physical.storage_partition.storage_bucket_store()
+    pub(crate) fn storage_bucket_store_for_test(&self) -> SharedStorageBucketStore {
+        self.browser_context.storage_bucket_store_for_test()
     }
 
     #[cfg(test)]
@@ -1306,9 +1035,8 @@ impl BrowserContext {
         &mut self,
         storage_bucket_store: SharedStorageBucketStore,
     ) {
-        self.physical
-            .storage_partition
-            .replace_storage_bucket_store(storage_bucket_store);
+        self.browser_context
+            .replace_storage_bucket_store_for_test(storage_bucket_store);
     }
 
     #[cfg(test)]
@@ -1316,7 +1044,7 @@ impl BrowserContext {
         &self,
         cookie: StoredCookie,
     ) -> moli_cookie_jar::StoredCookieSetReport {
-        self.store_cookie(cookie, None, CookieSource::Cdp)
+        self.store_cookie(cookie, None, CookieSource::Management)
     }
 
     #[cfg(test)]
@@ -1348,13 +1076,18 @@ impl BrowserContext {
         url_host: Option<&str>,
         partition_key: Option<&moli_cookie_jar::StoredCookiePartitionKey>,
     ) {
-        let mut cookie_store = self.physical.storage_partition.cookie_store().lock();
-        cookie_store.delete_cookies_with_partition_key(name, domain, path, url_host, partition_key);
+        self.browser_context.delete_cookies_with_partition_key(
+            name,
+            domain,
+            path,
+            url_host,
+            partition_key,
+        );
     }
 
     pub(crate) fn active_target_id(&self) -> Option<&str> {
         self.page_targets
-            .get_for_web_contents(self.physical.selected_web_contents_id()?)
+            .get_for_web_contents(self.browser_context.selected_web_contents_id()?)
             .map(PageAgentHost::target_id)
     }
 
@@ -1366,34 +1099,32 @@ impl BrowserContext {
         &self,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
         self.page_targets
-            .active(self.physical.selected_web_contents_id())
-            .and_then(|host| {
-                self.browser_identity_override_for_target(host.target_id())
-                    .cloned()
-            })
+            .active(self.browser_context.selected_web_contents_id())
+            .and_then(|host| self.browser_identity_override_for_target(host.target_id()))
             .or_else(|| self.default_browser_identity_override_owned())
     }
 
-    pub(crate) fn reported_active_user_agent_override(&self) -> Option<&str> {
+    pub(crate) fn reported_active_user_agent_override(&self) -> Option<String> {
         self.page_targets
-            .active(self.physical.selected_web_contents_id())
+            .active(self.browser_context.selected_web_contents_id())
             .and_then(PageAgentHost::reported_user_agent_override)
+            .map(str::to_owned)
             .or_else(|| {
                 self.default_browser_identity_override()
-                    .map(moli_browser_profile::BrowserIdentityProfile::user_agent)
+                    .map(|identity| identity.user_agent().to_owned())
             })
     }
 
     pub(crate) fn default_browser_identity_override(
         &self,
-    ) -> Option<&moli_browser_profile::BrowserIdentityProfile> {
-        self.physical.browser_identity_override.as_ref()
+    ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
+        self.browser_context.browser_identity_override()
     }
 
     pub(crate) fn default_browser_identity_override_owned(
         &self,
     ) -> Option<moli_browser_profile::BrowserIdentityProfile> {
-        self.default_browser_identity_override().cloned()
+        self.default_browser_identity_override()
     }
 
     pub(crate) fn set_default_user_agent_override(
@@ -1402,8 +1133,8 @@ impl BrowserContext {
         fallback: &moli_browser_profile::BrowserIdentityProfile,
     ) {
         self.browser_identity_inputs.user_agent = user_agent;
-        self.physical.browser_identity_override =
-            self.browser_identity_inputs.materialize(fallback);
+        self.browser_context
+            .set_browser_identity_override(self.browser_identity_inputs.materialize(fallback));
     }
 
     pub(crate) fn set_default_locale_override(
@@ -1411,10 +1142,11 @@ impl BrowserContext {
         locale: Option<String>,
         fallback: &moli_browser_profile::BrowserIdentityProfile,
     ) {
-        self.physical.emulation_defaults.locale = locale.clone();
+        self.browser_context
+            .set_default_locale_override(locale.clone());
         self.browser_identity_inputs.accept_language = locale;
-        self.physical.browser_identity_override =
-            self.browser_identity_inputs.materialize(fallback);
+        self.browser_context
+            .set_browser_identity_override(self.browser_identity_inputs.materialize(fallback));
     }
 
     #[cfg(test)]
@@ -1423,87 +1155,79 @@ impl BrowserContext {
         identity: moli_browser_profile::BrowserIdentityProfile,
     ) {
         self.browser_identity_inputs = BrowserIdentityOverrideInputs::from_profile(&identity);
-        self.physical.browser_identity_override = Some(identity);
+        self.browser_context
+            .set_browser_identity_override(Some(identity));
     }
 
     pub(crate) fn effective_active_locale_override_owned(&self) -> Option<String> {
         self.page_targets
-            .active(self.physical.selected_web_contents_id())
-            .and_then(|host| {
-                self.locale_override_for_target(host.target_id())
-                    .map(str::to_owned)
-            })
+            .active(self.browser_context.selected_web_contents_id())
+            .and_then(|host| self.locale_override_for_target(host.target_id()))
             .or_else(|| self.emulation_defaults().locale.clone())
     }
 
     pub(crate) fn effective_active_timezone_override_owned(&self) -> Option<String> {
         self.page_targets
-            .active(self.physical.selected_web_contents_id())
-            .and_then(|host| {
-                self.timezone_override_for_target(host.target_id())
-                    .map(str::to_owned)
-            })
+            .active(self.browser_context.selected_web_contents_id())
+            .and_then(|host| self.timezone_override_for_target(host.target_id()))
             .or_else(|| self.emulation_defaults().timezone.clone())
     }
 
     pub(crate) fn effective_active_tls_verify_host_override(&self) -> Option<bool> {
         self.page_targets
-            .active(self.physical.selected_web_contents_id())
+            .active(self.browser_context.selected_web_contents_id())
             .and_then(|host| self.tls_verify_host_override_for_target(host.target_id()))
-            .or(self.physical.network_policy.tls_verify_host)
+            .or(self.browser_context.network_policy().tls_verify_host)
     }
 
-    // Value-only migration boundary, replaced by typed Browser operations at
-    // Commit 22. Never expose the physical Context for mutation through it.
-    pub(crate) fn emulation_defaults(&self) -> &ContextEmulationDefaults {
-        &self.physical.emulation_defaults
+    pub(crate) fn emulation_defaults(&self) -> ContextEmulationDefaults {
+        self.browser_context.emulation_defaults()
     }
 
     pub(crate) fn set_default_timezone_override(&mut self, timezone: Option<String>) {
-        self.physical.emulation_defaults.timezone = timezone;
+        self.browser_context.set_default_timezone_override(timezone);
     }
 
     pub(crate) fn set_default_network_conditions(
         &mut self,
         conditions: Option<EmulatedNetworkConditions>,
     ) {
-        self.physical.emulation_defaults.network_conditions = conditions;
+        self.browser_context
+            .set_default_network_conditions(conditions);
     }
 
     pub(crate) fn set_default_geolocation_override(
         &mut self,
         geolocation: Option<EmulatedGeolocationOverrideState>,
     ) {
-        self.physical.emulation_defaults.geolocation = geolocation;
+        self.browser_context
+            .set_default_geolocation_override(geolocation);
     }
 
     pub(crate) fn set_default_device_metrics(&mut self, metrics: EmulatedDeviceMetrics) -> bool {
-        self.physical
-            .emulation_defaults
-            .device_metrics
-            .replace(metrics)
-            .is_some()
+        self.browser_context.set_default_device_metrics(metrics)
     }
 
-    pub(crate) fn network_policy(&self) -> &ContextNetworkPolicy {
-        &self.physical.network_policy
+    pub(crate) fn network_policy(&self) -> ContextNetworkPolicy {
+        self.browser_context.network_policy()
     }
 
     pub(crate) fn set_default_extra_headers(&mut self, headers: Vec<(String, String)>) {
-        self.physical.network_policy.extra_headers = headers;
+        self.browser_context.set_default_extra_headers(headers);
     }
 
     pub(crate) fn set_network_policy(&mut self, policy: ContextNetworkPolicy) {
-        self.physical.network_policy = policy;
+        self.browser_context.set_network_policy(policy);
     }
 
     pub(crate) fn set_tls_verify_host_override(&mut self, enabled: bool) {
-        self.physical.network_policy.tls_verify_host = Some(enabled);
+        self.browser_context
+            .set_context_tls_verify_host_override(enabled);
     }
 
     #[cfg(test)]
     pub(crate) fn set_http_proxy_override_for_test(&mut self, proxy: Option<String>) {
-        self.physical.network_policy.http_proxy = proxy;
+        self.browser_context.set_http_proxy_override_for_test(proxy);
     }
 
     pub(crate) fn effective_active_network_offline(
@@ -1511,7 +1235,7 @@ impl BrowserContext {
         global_network_conditions: Option<EmulatedNetworkConditions>,
     ) -> bool {
         self.page_targets
-            .active(self.physical.selected_web_contents_id())
+            .active(self.browser_context.selected_web_contents_id())
             .and_then(|host| {
                 self.target_emulation_policy(host.target_id())
                     .expect("live WebContents")
@@ -1543,16 +1267,13 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<String> {
         self.page_target(target_id)
-            .and_then(|state| {
-                self.locale_override_for_target(state.target_id())
-                    .map(str::to_owned)
-            })
+            .and_then(|state| self.locale_override_for_target(state.target_id()))
             .or_else(|| self.emulation_defaults().locale.clone())
     }
 
     pub(crate) fn has_active_target(&self) -> bool {
         self.page_targets
-            .active(self.physical.selected_web_contents_id())
+            .active(self.browser_context.selected_web_contents_id())
             .is_some()
     }
 
@@ -1567,7 +1288,7 @@ impl BrowserContext {
                 target_id.clone(),
                 None,
                 super::identity::TargetIdentityState::about_blank(),
-                WebContents::default(),
+                moli_core::browser::WebContentsCreation::default(),
                 super::page_slot::TargetPageSlot::default(),
             );
             debug_assert!(inserted, "new page target id must be unique");
@@ -1588,7 +1309,7 @@ impl BrowserContext {
 
     pub(crate) fn active_session_id(&self) -> Option<&str> {
         self.page_targets
-            .active(self.physical.selected_web_contents_id())?
+            .active(self.browser_context.selected_web_contents_id())?
             .session_id()
     }
 
@@ -1622,7 +1343,7 @@ impl BrowserContext {
     #[cfg(test)]
     pub(crate) fn detach_active_session(&mut self) -> Option<String> {
         self.page_targets
-            .active_mut(self.physical.selected_web_contents_id())?
+            .active_mut(self.browser_context.selected_web_contents_id())?
             .detach_session()
     }
 
@@ -1646,15 +1367,5 @@ impl BrowserContext {
         self.active_page_target_mut()
             .target_identity
             .set_secure_context_type(secure_context_type);
-    }
-}
-
-pub(crate) fn seed_initial_cookies(
-    cookie_store: &SharedBrowserCookieStore,
-    initial_cookies: impl IntoIterator<Item = StoredCookie>,
-) {
-    let mut store = cookie_store.lock();
-    for cookie in initial_cookies {
-        let _ = store.upsert_with_request_url_report(cookie, None, CookieSource::Cdp);
     }
 }

@@ -23,7 +23,7 @@ async fn set_blocked_urls_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     ctx.process_async(json!({
         "id": 2801,
         "method": "Network.setBlockedURLs",
@@ -35,7 +35,7 @@ async fn set_blocked_urls_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_updates_browser_context_state() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     enable_network_domain(&mut ctx, 28_020, None).await;
 
     ctx.process_async(json!({
@@ -77,7 +77,7 @@ async fn set_blocked_urls_updates_browser_context_state() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_contribution_activates_with_network_handler() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 28_021,
@@ -111,7 +111,7 @@ async fn set_blocked_urls_contribution_activates_with_network_handler() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_navigation_fails_with_blocked_by_client() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -153,7 +153,7 @@ async fn set_blocked_urls_navigation_fails_with_blocked_by_client() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_runtime_fetch_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -295,7 +295,9 @@ async fn background_set_blocked_urls_updates_loaded_owner_page_without_activatio
     ctx.conn.browser_context = None;
     ctx.sent.clear();
 
-    let mut inactive = BrowserContext::new("BID-background".to_owned());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-background".to_owned());
     inactive.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -396,7 +398,7 @@ async fn background_set_blocked_urls_updates_loaded_owner_page_without_activatio
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -540,7 +542,7 @@ async fn set_blocked_urls_worker_fetch_emits_loading_failed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -680,7 +682,7 @@ async fn set_blocked_urls_worker_xhr_emits_loading_failed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_worker_websocket_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -841,7 +843,7 @@ async fn set_blocked_urls_worker_websocket_emits_loading_failed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -957,7 +959,7 @@ async fn emulate_network_conditions_offline_worker_fetch_emits_loading_failed() 
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -1069,7 +1071,7 @@ async fn emulate_network_conditions_offline_worker_xhr_emits_loading_failed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_runtime_xhr_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -1158,7 +1160,7 @@ async fn set_blocked_urls_runtime_xhr_emits_loading_failed() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_blocked_urls_runtime_websocket_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -1279,7 +1281,7 @@ async fn emulate_network_conditions_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     for params in [
         json!({ "offline": true }),
         json!({ "offline": true, "latency": "slow", "downloadThroughput": -1, "uploadThroughput": -1 }),
@@ -1301,7 +1303,7 @@ async fn emulate_network_conditions_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_installs_only_the_supported_offline_value() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 30,
@@ -1343,7 +1345,7 @@ async fn emulate_network_conditions_installs_only_the_supported_offline_value() 
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_offline_navigation_fails_before_completion_events() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -1385,7 +1387,7 @@ async fn emulate_network_conditions_offline_navigation_fails_before_completion_e
 #[tokio::test(flavor = "multi_thread")]
 async fn emulate_network_conditions_offline_runtime_fetch_emits_loading_failed() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -1517,7 +1519,7 @@ globalThis.__lm_after_blocked_parser_script = true;
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);

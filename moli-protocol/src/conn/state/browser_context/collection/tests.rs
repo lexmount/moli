@@ -1,9 +1,6 @@
 use super::*;
-use crate::conn::state::{DevToolsRendererChannelError, WindowOpener};
-use moli_core::{
-    browser::{DocumentRetirement, NavigationId, RendererPageResidenceIdentity},
-    runtime::{Browser, BrowserConfig, NavigationEngine},
-};
+use crate::conn::state::DevToolsRendererChannelError;
+use moli_core::browser::{DocumentRetirement, NavigationId};
 use std::{
     future::Future,
     task::{Context, Poll, Waker},
@@ -31,12 +28,13 @@ fn window_and_crash_state_outlive_the_devtools_projection() {
     let id = context.selected_web_contents_id().unwrap();
     let surface = context.web_contents_window_surface(handle).unwrap();
     let opener = WebContentsId::allocate();
-    let window = &mut context.physical.web_contents.get_mut(&id).unwrap().window;
-    window.name = Some("report".into());
-    window.opener = Some(WindowOpener {
-        web_contents_id: opener,
-        can_access: true,
-    });
+    context
+        .set_web_contents_window_name(handle, Some("report".into()))
+        .unwrap();
+    context
+        .browser_context
+        .set_web_contents_opener_for_test(handle, opener, true)
+        .unwrap();
     let target = context.page_targets.get_mut("TID-window").unwrap();
     target.opener_frame_id = Some("FRAME-opener".into());
     assert_eq!(target.detach_session().as_deref(), Some("SID-window"));
@@ -45,43 +43,76 @@ fn window_and_crash_state_outlive_the_devtools_projection() {
 
     drop(context.page_targets.remove("TID-window").unwrap());
     assert_eq!(context.selected_web_contents_id(), Some(id));
-    let contents = context.physical.web_contents.get(&id).unwrap();
-    assert_eq!(contents.id(), id);
-    assert!(contents.crashed);
-    assert_eq!(contents.window.surface, surface);
-    assert_eq!(contents.window.name.as_deref(), Some("report"));
-    let relationship = contents.window.opener.unwrap();
-    assert_eq!(relationship.web_contents_id, opener);
-    assert!(relationship.can_access);
+    assert!(
+        context
+            .browser_context
+            .web_contents_is_crashed(handle)
+            .unwrap()
+    );
+    assert_eq!(
+        context.browser_context.web_contents_window_surface(handle),
+        Ok(surface)
+    );
+    assert_eq!(
+        context.browser_context.web_contents_window_name(handle),
+        Ok(Some("report".to_owned()))
+    );
+    assert_eq!(
+        context.browser_context.web_contents_opener(handle),
+        Ok(Some((opener, true)))
+    );
 
     context.set_active_target_id("TID-window");
     let replacement_id = context.selected_web_contents_id().unwrap();
     assert_ne!(replacement_id, id);
-    let replacement = context.physical.web_contents.get(&replacement_id).unwrap();
-    assert!(!replacement.crashed);
-    assert_eq!(replacement.window.surface, WindowSurface::default());
-    assert!(replacement.window.name.is_none());
-    assert!(replacement.window.opener.is_none());
-    assert!(context.physical.web_contents.contains_key(&id));
+    let replacement = context.selected_web_contents_handle().unwrap();
+    assert!(
+        !context
+            .browser_context
+            .web_contents_is_crashed(replacement)
+            .unwrap()
+    );
+    assert_eq!(
+        context
+            .browser_context
+            .web_contents_window_surface(replacement),
+        Ok(WindowSurface::default())
+    );
+    assert_eq!(
+        context
+            .browser_context
+            .web_contents_window_name(replacement),
+        Ok(None)
+    );
+    assert_eq!(
+        context.browser_context.web_contents_opener(replacement),
+        Ok(None)
+    );
+    assert!(context.browser_context.contains_web_contents(handle));
 }
 
 #[tokio::test]
 async fn projection_drop_preserves_the_contexts_page_engine_selection_and_document_lifetime() {
-    let browser = Browser::new(BrowserConfig::default()).unwrap();
-    let page = browser
-        .fetch("data:text/html,<title>Browser owned</title>")
-        .await
-        .unwrap();
-    let residence = RendererPageResidenceIdentity::from_page(&page);
-    let mut context = BrowserContext::new("BID-physical-owner".into());
+    let mut conn = crate::test_support::connection();
+    let mut context = conn.new_browser_context_fixture_for_test("BID-physical-owner");
     context.set_active_target_id("TID-physical-owner");
     context.bind_page_navigation_engines(Default::default(), None);
-    assert!(context.replace_loaded_page(Some(page)).is_none());
+    conn.install_browser_context_fixture_for_test(context);
+    conn.install_navigation_fixture_for_session_owner_for_test(
+        "data:text/html,<title>Browser owned</title>",
+        None,
+    )
+    .await;
+    let mut context = conn.browser_context.take().unwrap();
+    let residence = context
+        .target_renderer_page_residence_identity("TID-physical-owner")
+        .unwrap();
     let id = context.selected_web_contents_id().unwrap();
+    let handle = context.selected_web_contents_handle().unwrap();
     let document_id = context.target_document_id("TID-physical-owner").unwrap();
     let engine = context
-        .page_navigation_engine("TID-physical-owner")
-        .unwrap() as *const NavigationEngine;
+        .page_navigation_renderer_owner_id("TID-physical-owner")
+        .unwrap();
     let observer = context
         .document_lifetime_observer_for_target("TID-physical-owner")
         .unwrap();
@@ -101,19 +132,29 @@ async fn projection_drop_preserves_the_contexts_page_engine_selection_and_docume
 
     drop(context.page_targets.remove("TID-physical-owner").unwrap());
     assert_eq!(context.selected_web_contents_id(), Some(id));
-    let contents = context.physical.web_contents.get(&id).unwrap();
-    assert_eq!(contents.navigation_history_snapshot(), history);
     assert_eq!(
-        contents.navigation_engine_for_test().unwrap() as *const NavigationEngine,
+        context.browser_context.navigation_history_snapshot(handle),
+        Ok(history)
+    );
+    assert_eq!(
+        context
+            .browser_context
+            .web_contents_navigation_renderer_owner_id(handle)
+            .unwrap(),
         engine
     );
-    let document = contents.main_frame.current_document.as_ref().unwrap();
-    assert_eq!(document.id, document_id);
+    let document = moli_core::browser::DocumentHandle::new(handle, document_id);
     assert_eq!(
-        RendererPageResidenceIdentity::from_page(&document.page),
+        context
+            .browser_context
+            .document_renderer_residence(document)
+            .unwrap(),
         residence
     );
-    assert_eq!(document.page.document_title(), "Browser owned");
+    assert_eq!(
+        context.browser_context.document_title(document).unwrap(),
+        "Browser owned"
+    );
     let mut retired = Box::pin(observer.wait());
     assert_eq!(
         retired
@@ -124,7 +165,7 @@ async fn projection_drop_preserves_the_contexts_page_engine_selection_and_docume
 
     context.close_all_pages_async().await;
     assert_eq!(retired.await, DocumentRetirement::Superseded);
-    assert!(context.physical.web_contents.is_empty());
+    assert_eq!(context.browser_context.web_contents_count(), 0);
     assert!(context.page_targets.is_empty());
     assert_eq!(context.selected_web_contents_id(), None);
 }
@@ -135,7 +176,7 @@ fn emulation_policy_survives_projection_drop_and_updates_without_sessions() {
     context.attach_active_session("SID-primary");
     assert!(context.assign_attached_session_to_target("TID-policy", "SID-attached".into()));
     let id = context.active_page_target().web_contents_id();
-    let mut conn = crate::conn::CdpConnection::default();
+    let mut conn = crate::test_support::connection();
     conn.install_browser_context_fixture_for_test(context);
     for (session, change) in [
         ("SID-primary", EmulationPolicyChange::CpuThrottlingRate(4.0)),
@@ -156,16 +197,29 @@ fn emulation_policy_survives_projection_drop_and_updates_without_sessions() {
     let mut context = conn.browser_context.take().unwrap();
     drop(context.page_targets.remove("TID-policy").unwrap());
     drop(conn);
-    let contents = context.physical.web_contents.get_mut(&id).unwrap();
-    assert_eq!(contents.id(), id);
-    assert_eq!(contents.emulation_policy.cpu_throttling_rate, 2.0);
-    assert!(contents.emulation_policy.focus_emulation_enabled);
-    let snapshot = contents.emulation_policy.clone();
-    contents
-        .emulation_policy
-        .apply(EmulationPolicyChange::ScriptExecutionDisabled(true));
+    let handle = WebContentsHandle::new(context.browser_context_id(), id);
+    let policy = context
+        .browser_context
+        .web_contents_emulation_policy(handle)
+        .unwrap();
+    assert_eq!(policy.cpu_throttling_rate, 2.0);
+    assert!(policy.focus_emulation_enabled);
+    let snapshot = policy;
+    context
+        .browser_context
+        .apply_web_contents_emulation_policy_change(
+            handle,
+            EmulationPolicyChange::ScriptExecutionDisabled(true),
+        )
+        .unwrap();
     assert!(!snapshot.script_execution_disabled);
-    assert!(contents.emulation_policy.script_execution_disabled);
+    assert!(
+        context
+            .browser_context
+            .web_contents_emulation_policy(handle)
+            .unwrap()
+            .script_execution_disabled
+    );
 }
 
 #[tokio::test]
@@ -177,34 +231,23 @@ async fn close_retires_projection_waiters_and_channel_before_the_owned_page_tear
     context.attach_active_session("SID-close");
     context.target_popup_ids.insert("TID-close".into(), 7);
     let InitialDocumentAdmission::Build(build) = context
-        .start_initial_document_for_target(
-            "TID-close",
-            Default::default(),
-            &Default::default(),
-            &Default::default(),
-        )
+        .start_initial_document_for_target("TID-close", Default::default(), &Default::default())
         .unwrap()
     else {
         panic!("expected build");
     };
     let InitialDocumentAdmission::Join(waiter) = context
-        .start_initial_document_for_target(
-            "TID-close",
-            Default::default(),
-            &Default::default(),
-            &Default::default(),
-        )
+        .start_initial_document_for_target("TID-close", Default::default(), &Default::default())
         .unwrap()
     else {
         panic!("expected join");
     };
     let slot = &context.page_targets.get("TID-close").unwrap().runtime_slot;
     let dialog_scope = slot.javascript_dialog_scope_observer();
-    let id = context.selected_web_contents_id().unwrap();
     let handle = context.web_contents_handle_for_target("TID-close").unwrap();
 
     let (mut projection, closing) = context.begin_web_contents_close(handle).unwrap();
-    assert!(!context.physical.web_contents.contains_key(&id));
+    assert!(!context.browser_context.contains_web_contents(handle));
     assert!(context.page_targets.is_empty());
     assert_eq!(context.selected_web_contents_id(), None);
     assert!(context.target_popup_ids.is_empty());
@@ -246,24 +289,14 @@ async fn close_all_retires_background_builds_and_removes_every_projection() {
             TargetPageSlot::empty_for_initial_document_page_build(),
         ));
         let InitialDocumentAdmission::Build(build) = context
-            .start_initial_document_for_target(
-                id,
-                Default::default(),
-                &Default::default(),
-                &Default::default(),
-            )
+            .start_initial_document_for_target(id, Default::default(), &Default::default())
             .unwrap()
         else {
             panic!("expected build");
         };
         builds.push(build);
         let InitialDocumentAdmission::Join(waiter) = context
-            .start_initial_document_for_target(
-                id,
-                Default::default(),
-                &Default::default(),
-                &Default::default(),
-            )
+            .start_initial_document_for_target(id, Default::default(), &Default::default())
             .unwrap()
         else {
             panic!("expected join");
@@ -272,7 +305,7 @@ async fn close_all_retires_background_builds_and_removes_every_projection() {
     }
     context.set_active_target_id("TID-first");
     context.close_all_pages_async().await;
-    assert!(context.physical.web_contents.is_empty());
+    assert_eq!(context.browser_context.web_contents_count(), 0);
     assert!(context.page_targets.is_empty());
     assert_eq!(context.selected_web_contents_id(), None);
     for waiter in waiters {

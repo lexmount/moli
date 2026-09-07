@@ -32,12 +32,7 @@ async fn same_context_targets_restore_their_own_script_execution_disabled_after_
         "params": {"browserContextId": "BID-9A", "url": "about:blank#second"}
     }))
     .await;
-    let created = ctx.take_one();
-    let second_target_id = created["params"]["targetInfo"]["targetId"]
-        .as_str()
-        .expect("second target id")
-        .to_owned();
-    ctx.expect_result(104171, json!({ "targetId": second_target_id }), None);
+    let second_target_id = take_created_target_id(&mut ctx, 104171);
 
     ctx.process_async(json!({
         "id": 104172,

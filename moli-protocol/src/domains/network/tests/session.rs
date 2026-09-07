@@ -1,21 +1,15 @@
 use super::*;
 
 async fn install_network_session_page(ctx: &mut TestContext, url: &str) {
-    let mut browser_context = BrowserContext::new("BID-navigation".into());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-navigation");
     browser_context.set_active_target_id("TID-navigation");
     browser_context.attach_active_session("SID-navigation");
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(url)
-        .await
-        .expect("the target should have a committed document");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .replace_active_page_for_test(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(url, None)
+        .await;
 }
 
 /// Network.enable without a browser context fails.
@@ -30,7 +24,7 @@ async fn enable_no_bc_error() {
 #[tokio::test(flavor = "multi_thread")]
 async fn enable_with_bc_succeeds() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     ctx.process_async(json!({"id": 1, "method": "Network.enable"}))
         .await;
     ctx.expect_result(1, json!({}), None);
@@ -206,7 +200,7 @@ async fn network_configuration_completion_does_not_restore_a_replaced_document()
 #[tokio::test(flavor = "multi_thread")]
 async fn commit_configuration_resolves_the_exact_target_network_runtime() {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-runtime".into());
+    let mut browser_context = ctx.conn.new_browser_context_fixture_for_test("BID-runtime");
     browser_context.set_active_target_id("TID-a");
     browser_context.attach_active_session("SID-a");
     browser_context.register_page_target_url_fixture(
@@ -255,7 +249,7 @@ async fn commit_configuration_resolves_the_exact_target_network_runtime() {
 #[tokio::test(flavor = "multi_thread")]
 async fn attached_network_enable_does_not_enable_primary_session() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
@@ -286,7 +280,7 @@ async fn attached_network_enable_does_not_enable_primary_session() {
 #[tokio::test(flavor = "multi_thread")]
 async fn page_network_policy_aggregates_enabled_sessions_like_chromium_handlers() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
@@ -473,26 +467,24 @@ async fn enable_after_page_load_does_not_replay_historical_subresource_events() 
     let page_url = format!("http://{addr}/page");
     let script_url = format!("http://{addr}/before-enable.js");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(&page_url)
-        .await
-        .expect("page should load before Network is enabled");
+    ctx.install_navigation_fixture_for_session_owner(&page_url, Some("SID-1"))
+        .await;
+    let browser_context = ctx.conn.browser_context.as_ref().unwrap();
+    let document = browser_context
+        .document_handle_for_target("TID-1")
+        .expect("loaded target document");
     assert!(
-        page.subresource_network_records()
+        browser_context
+            .document_subresource_network_records(document)
+            .expect("document subresource records")
             .iter()
             .any(|record| record.url().as_str() == script_url)
     );
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .unwrap()
-        .replace_active_page_for_test(Some(page));
     ctx.sent.clear();
 
     ctx.process_async(json!({
@@ -559,7 +551,7 @@ async fn attached_enable_after_pending_subresource_does_not_replay_history_to_ne
     let page_url = format!("http://{addr}/page");
     let script_url = format!("http://{addr}/pending-before-aux.js");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-primary");
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
@@ -663,7 +655,7 @@ async fn websocket_runtime_activity_broadcasts_to_attached_network_session() {
     let socket_url = format!("ws://{addr}/socket");
     let socket_literal = serde_json::to_string(&socket_url).unwrap();
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -768,7 +760,7 @@ async fn attached_network_enable_after_websocket_activity_does_not_replay_histor
     let socket_url = format!("ws://{addr}/socket");
     let socket_literal = serde_json::to_string(&socket_url).unwrap();
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.active_page_target_mut()
         .runtime_slot
@@ -873,7 +865,7 @@ async fn fetch_runtime_activity_broadcasts_to_attached_network_session() {
 
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.active_page_target_mut()
         .runtime_slot
@@ -990,7 +982,9 @@ async fn background_fetch_runtime_activity_broadcasts_to_attached_network_sessio
     let page_url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
 
-    let mut bc = BrowserContext::new("BID-background".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-background");
     bc.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -1095,7 +1089,7 @@ async fn main_document_navigation_broadcasts_to_attached_network_session() {
     let page_url = format!("http://{addr}/page");
     let next_url = format!("http://{addr}/next");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.active_page_target_mut()
         .runtime_slot
@@ -1166,7 +1160,7 @@ async fn main_document_navigation_broadcasts_to_attached_network_session() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_response_body_reads_background_attached_target_slot() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.register_page_target_url_fixture(
@@ -1220,7 +1214,7 @@ async fn get_response_body_reads_background_attached_target_slot() {
 #[tokio::test(flavor = "multi_thread")]
 async fn network_disable_removes_session_response_body_visibility() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     bc.active_page_target_mut()
@@ -1294,7 +1288,7 @@ async fn network_disable_removes_session_response_body_visibility() {
 #[tokio::test(flavor = "multi_thread")]
 async fn disable_clears_enabled_flag_and_captured_bodies() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -1316,7 +1310,7 @@ async fn disable_clears_enabled_flag_and_captured_bodies() {
 #[tokio::test(flavor = "multi_thread")]
 async fn primary_network_disable_preserves_attached_network_session() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1".to_owned());
     bc.attach_active_session("SID-primary".to_owned());
     bc.active_page_target_mut()
@@ -1413,7 +1407,7 @@ async fn parser_external_script_navigation_broadcasts_network_events_to_attached
     let page_url = format!("http://{addr}/page");
     let script_url = format!("http://{addr}/script.js");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-primary");
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-attached".into()));
@@ -1523,7 +1517,7 @@ async fn network_disable_suppresses_navigation_network_events() {
 
     let url = format!("http://{addr}/page");
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);

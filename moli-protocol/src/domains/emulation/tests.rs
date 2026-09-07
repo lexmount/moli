@@ -60,14 +60,14 @@ async fn load_session_page_for_pending_emulation_test(ctx: &mut TestContext) {
 }
 
 async fn load_session_page_for_pending_emulation_test_at_url(ctx: &mut TestContext, url: &str) {
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     install_session_page_for_emulation_test(ctx, bc, url).await;
 }
 
 fn install_multi_session_page_state(ctx: &mut TestContext) {
-    let mut browser_context = BrowserContext::new("BID-1".into());
+    let mut browser_context = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-primary");
     assert!(browser_context.assign_attached_session_to_target("TID-1", "SID-attached".to_owned()));
@@ -182,7 +182,7 @@ async fn execute_set_extra_headers_for_test(
 #[tokio::test(flavor = "multi_thread")]
 async fn bidi_set_extra_headers_merges_global_user_context_and_context_layers() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -549,9 +549,8 @@ async fn inspection_reattach_does_not_retire_outgoing_browser_policy_commands() 
     let context = ctx.conn.browser_context.as_mut().unwrap();
     let page_source = super::EmulationPageCommandSource::browser(context, "TID-1");
     let endpoint = context
-        .loaded_page()
-        .unwrap()
-        .renderer_inspection_endpoint();
+        .loaded_document_renderer_inspection_endpoint_for_test()
+        .unwrap();
     let document_id = context.target_document_id("TID-1");
     let old_attachment = context
         .page_target("TID-1")
@@ -839,7 +838,7 @@ async fn idle_override_updates_idle_detector_and_clear_restores_actual_state() {
 #[tokio::test(flavor = "multi_thread")]
 async fn pure_state_emulation_commands_complete_through_command_dispatch() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -910,7 +909,7 @@ async fn pure_state_emulation_commands_complete_through_command_dispatch() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_cpu_throttling_rate_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -939,7 +938,7 @@ async fn set_cpu_throttling_rate_rejects_invalid_params() {
 #[tokio::test(flavor = "multi_thread")]
 async fn live_apply_emulation_commands_without_loaded_page_do_not_use_legacy_fallback() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1010,7 +1009,7 @@ async fn live_apply_emulation_commands_without_loaded_page_do_not_use_legacy_fal
 #[tokio::test(flavor = "multi_thread")]
 async fn live_geolocation_override_uses_pending_command_dispatch() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     install_session_page_for_emulation_test(&mut ctx, bc, "data:text/html,<body>geo</body>").await;
@@ -1537,7 +1536,7 @@ async fn multi_session_emulation_separates_handler_input_from_target_effective_s
 #[tokio::test(flavor = "multi_thread")]
 async fn async_emulation_device_state_updates_browser_context() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    ctx.conn.browser_context = Some(ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
 
     ctx.process_async(json!({
         "id": 501,
@@ -1605,9 +1604,8 @@ async fn async_emulation_device_state_updates_browser_context() {
             bc.target_emulation_policy(bc.active_target_id().unwrap())
                 .expect("registered WebContents")
                 .geolocation_override
-                .as_ref()
         })
-        .and_then(EmulatedGeolocationOverrideState::position)
+        .and_then(|state| state.position().cloned())
         .expect("geolocation override should be set");
     assert_eq!(geolocation.latitude, 37.33182);
     assert_eq!(geolocation.longitude, -122.03118);
@@ -1628,7 +1626,6 @@ async fn async_emulation_device_state_updates_browser_context() {
             bc.target_emulation_policy(bc.active_target_id().unwrap())
                 .expect("registered WebContents")
                 .emulated_device_metrics
-                .as_ref()
         })
         .expect("device metrics should be set");
     assert_eq!(metrics.width, 800);
@@ -1704,7 +1701,7 @@ async fn set_user_agent_override_applies_to_subsequent_navigation_requests() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.active_page_target_mut()
@@ -1777,7 +1774,7 @@ async fn emulation_user_agent_override_replaces_network_override() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1845,7 +1842,7 @@ async fn set_user_agent_override_applies_to_current_page_xhr_requests() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -1933,7 +1930,7 @@ async fn set_user_agent_override_applies_complete_chromium_identity_profile() {
 
     let mut ctx = TestContext::new();
     let natural_identity = ctx.conn.base_browser_identity().clone();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2209,7 +2206,7 @@ async fn emulation_async_dispatch_updates_live_page_user_agent_and_xhr_header() 
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     install_session_page_for_emulation_test(&mut ctx, bc, "data:text/html,<body>ok</body>").await;
@@ -2301,7 +2298,7 @@ async fn emulation_async_dispatch_updates_live_page_surface_without_mutating_acc
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2487,7 +2484,7 @@ async fn evaluate_geolocation_once_for_session(
 #[tokio::test(flavor = "multi_thread")]
 async fn set_geolocation_override_updates_loaded_page_geolocation_surface() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     install_geolocation_page_for_test(&mut ctx, bc).await;
@@ -2528,7 +2525,7 @@ async fn set_geolocation_override_applies_to_subsequent_navigation_surface() {
         .unwrap();
     });
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2564,7 +2561,7 @@ async fn set_geolocation_override_applies_to_subsequent_navigation_surface() {
 #[tokio::test(flavor = "multi_thread")]
 async fn set_geolocation_override_missing_position_reports_unavailable() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     install_geolocation_page_for_test(&mut ctx, bc).await;
@@ -2585,7 +2582,7 @@ async fn set_geolocation_override_missing_position_reports_unavailable() {
 #[tokio::test(flavor = "multi_thread")]
 async fn clear_geolocation_override_restores_default_after_explicit_unavailable() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     bc.set_default_geolocation_override(Some(EmulatedGeolocationOverrideState::Position(
@@ -2616,8 +2613,7 @@ async fn clear_geolocation_override_restores_default_after_explicit_unavailable(
             .and_then(|browser_context| browser_context
                 .target_emulation_policy(browser_context.active_target_id().unwrap())
                 .expect("registered WebContents")
-                .geolocation_override
-                .as_ref()),
+                .geolocation_override),
         Some(EmulatedGeolocationOverrideState::PositionUnavailable)
     ));
     assert_eq!(
@@ -2655,7 +2651,7 @@ async fn clear_geolocation_override_restores_default_after_explicit_unavailable(
 #[tokio::test(flavor = "multi_thread")]
 async fn set_geolocation_override_respects_denied_permission() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     install_geolocation_page_for_test(&mut ctx, bc).await;
@@ -2688,7 +2684,7 @@ async fn set_geolocation_override_respects_denied_permission() {
 #[tokio::test(flavor = "multi_thread")]
 async fn device_metrics_override_updates_layout_metrics() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -2775,7 +2771,7 @@ async fn locale_override_updates_intl_without_mutating_language_surfaces() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2831,7 +2827,7 @@ async fn bidi_user_context_locale_composes_with_user_agent_on_all_identity_surfa
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2935,7 +2931,7 @@ async fn live_locale_override_updates_intl_without_mutating_navigator() {
 #[tokio::test(flavor = "multi_thread")]
 async fn touch_and_timezone_overrides_apply_to_document_start_surface() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -2974,7 +2970,7 @@ async fn touch_and_timezone_overrides_apply_to_document_start_surface() {
 #[tokio::test(flavor = "multi_thread")]
 async fn locale_and_timezone_overrides_apply_to_locale_date_formatting() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -3015,7 +3011,7 @@ async fn locale_and_timezone_overrides_apply_to_locale_date_formatting() {
 async fn context_emulated_media_applies_to_loaded_background_page_without_activation() {
     let mut ctx = TestContext::new();
 
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active");
     bc.register_page_target_fixture(
@@ -3090,7 +3086,7 @@ async fn context_emulated_media_applies_to_loaded_background_page_without_activa
 async fn context_locale_override_applies_to_loaded_background_page_without_activation() {
     let mut ctx = TestContext::new();
 
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active");
     bc.register_page_target_fixture(
@@ -3178,7 +3174,7 @@ async fn context_locale_override_applies_to_loaded_background_page_without_activ
 async fn session_emulation_routes_to_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
 
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active");
     bc.register_page_target_fixture(
@@ -3329,7 +3325,7 @@ async fn session_emulation_routes_to_loaded_background_owner_without_activation(
 #[tokio::test(flavor = "multi_thread")]
 async fn emulated_media_updates_existing_media_query_list_matches() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -3402,7 +3398,7 @@ async fn emulated_media_updates_existing_media_query_list_matches() {
 #[tokio::test(flavor = "multi_thread")]
 async fn generated_surface_refresh_does_not_freeze_match_media_override() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -3458,7 +3454,7 @@ async fn generated_surface_refresh_does_not_freeze_match_media_override() {
 #[tokio::test(flavor = "multi_thread")]
 async fn target_session_detach_disposes_non_aggregated_emulation_state_before_reattach() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
     ctx.install_navigation_fixture_for_session_owner("data:text/html,<body></body>", None)
@@ -3606,7 +3602,7 @@ async fn target_session_detach_disposes_non_aggregated_emulation_state_before_re
 #[tokio::test(flavor = "multi_thread")]
 async fn emulated_media_color_scheme_applies_to_match_media_surface() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -3642,7 +3638,7 @@ async fn emulated_media_color_scheme_applies_to_match_media_surface() {
 #[tokio::test(flavor = "multi_thread")]
 async fn active_document_start_surface_reports_active_focus_and_visibility() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -3665,7 +3661,7 @@ async fn active_document_start_surface_reports_active_focus_and_visibility() {
 #[tokio::test(flavor = "multi_thread")]
 async fn focus_emulation_override_applies_to_document_start_surface() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     bc.attach_active_session("SID-1");
     ctx.conn.install_browser_context_fixture_for_test(bc);

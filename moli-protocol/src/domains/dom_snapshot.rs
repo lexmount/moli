@@ -211,7 +211,9 @@ mod tests {
     };
 
     async fn load_document(ctx: &mut TestContext, html: &str) {
-        let mut bc = BrowserContext::new("BID-1".to_owned());
+        let mut bc = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-1".to_owned());
         bc.set_active_target_id("TID-1".to_owned());
         ctx.conn.install_browser_context_fixture_for_test(bc);
         ctx.install_navigation_fixture_for_session_owner(&format!("data:text/html,{html}"), None)
@@ -1021,24 +1023,22 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn capture_snapshot_targets_loaded_background_owner_without_activation() {
         let mut ctx = TestContext::new();
-        let page = ctx
+        let mut bc = ctx
             .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<html><head><title>Background Snapshot</title></head><body><main>owner</main></body></html>",
-            )
-            .await
-            .expect("background page should load");
-
-        let mut bc = BrowserContext::new("BID-DS-BG".to_owned());
+            .new_browser_context_fixture_for_test("BID-DS-BG".to_owned());
         bc.set_active_target_id("TID-active".to_owned());
         bc.attach_active_session("SID-active".to_owned());
         bc.register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
-            page.final_url().as_str().to_owned(),
+            "about:blank".to_owned(),
         );
-        bc.replace_target_page_for_test("TID-background", Some(page));
         ctx.conn.install_browser_context_fixture_for_test(bc);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<html><head><title>Background Snapshot</title></head><body><main>owner</main></body></html>",
+            Some("SID-background"),
+        )
+        .await;
 
         ctx.process_async(json!({
             "id": 101,
@@ -1078,26 +1078,25 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn capture_snapshot_targets_inactive_owner_without_activation() {
         let mut ctx = TestContext::new();
-        let page = ctx
+        let mut active = ctx
             .conn
-            .load_page_via_runtime_async(
-                "data:text/html,<html><head><title>Inactive Snapshot</title></head><body><section>inactive</section></body></html>",
-            )
-            .await
-            .expect("inactive page should load");
-
-        let mut active = BrowserContext::new("BID-active".to_owned());
+            .new_browser_context_fixture_for_test("BID-active".to_owned());
         active.set_active_target_id("TID-active".to_owned());
         active.attach_active_session("SID-active".to_owned());
         ctx.conn.install_browser_context_fixture_for_test(active);
 
-        let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+        let mut inactive = ctx
+            .conn
+            .new_browser_context_fixture_for_test("BID-inactive".to_owned());
         inactive.set_active_target_id("TID-inactive".to_owned());
-        inactive.set_target_url(page.final_url().as_str().to_owned());
         inactive.attach_active_session("SID-inactive".to_owned());
-        inactive.replace_loaded_page(Some(page));
         ctx.conn
             .push_inactive_browser_context_fixture_for_test(inactive);
+        ctx.install_navigation_fixture_for_session_owner(
+            "data:text/html,<html><head><title>Inactive Snapshot</title></head><body><section>inactive</section></body></html>",
+            Some("SID-inactive"),
+        )
+        .await;
 
         ctx.process_async(json!({
             "id": 111,
@@ -1129,7 +1128,10 @@ mod tests {
     #[tokio::test]
     async fn capture_snapshot_reports_no_document_without_loaded_page() {
         let mut ctx = TestContext::new();
-        ctx.conn.browser_context = Some(BrowserContext::new("BID-1".to_owned()));
+        ctx.conn.browser_context = Some(
+            ctx.conn
+                .new_browser_context_fixture_for_test("BID-1".to_owned()),
+        );
 
         ctx.process_async(json!({
             "id": 11,

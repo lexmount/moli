@@ -134,9 +134,8 @@ async fn supersession_retires_browser_auth_work_before_late_protocol_decision() 
                 .browser_context
                 .as_ref()
                 .unwrap()
-                .loaded_page()
+                .loaded_document_url_for_test()
                 .unwrap()
-                .final_url()
                 .as_str(),
             "https://navigation.example/winner"
         );
@@ -179,7 +178,7 @@ async fn continue_with_auth_retries_navigation_with_basic_credentials() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -327,7 +326,7 @@ async fn disable_uses_default_decision_for_paused_navigation_auth() {
     });
     let mut ctx = TestContext::new();
     ctx.conn
-        .install_browser_context_fixture_for_test(attached_browser_context());
+        .install_browser_context_fixture_for_test(attached_browser_context(&ctx.conn));
     let url = format!("http://{addr}/auth");
     ctx.process_async(json!({
         "id": 680, "method": "Fetch.enable", "sessionId": "SID-1",
@@ -410,7 +409,7 @@ async fn devtools_continue_response_credentials_retries_auth_navigation() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -556,7 +555,7 @@ async fn continue_with_auth_and_intercept_response_pauses_before_authorized_body
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -631,8 +630,7 @@ async fn continue_with_auth_and_intercept_response_pauses_before_authorized_body
         ctx.conn
             .browser_context
             .as_ref()
-            .and_then(|bc| bc.loaded_page())
-            .is_none(),
+            .is_none_or(|bc| !bc.has_loaded_page()),
         "authorized document should not commit before Fetch.continueResponse"
     );
 
@@ -690,7 +688,7 @@ async fn continue_with_non_basic_auth_and_intercept_response_fails_explicitly_wi
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -807,13 +805,14 @@ async fn navigation_auth_required_includes_synthesized_cookie_header() {
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
     let url = format!("http://{addr}/auth");
     {
-        let mut jar = bc.cookie_store_for_test().lock();
+        let jar_handle = bc.cookie_store_for_test();
+        let mut jar = jar_handle.lock();
         jar.store_response_headers(
             &Url::parse(&url).unwrap(),
             &[(
@@ -904,7 +903,7 @@ async fn continue_with_auth_prefers_supported_navigation_challenge_over_unsuppor
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     bc.active_page_target_mut()
         .runtime_slot
         .enable_primary_network_events();
@@ -1053,7 +1052,7 @@ async fn run_navigation_cdp_fetch_then_bidi_network_auth_required_terminal(
     });
 
     let mut ctx = TestContext::new();
-    let mut bc = attached_browser_context();
+    let mut bc = attached_browser_context(&ctx.conn);
     assert!(bc.assign_attached_session_to_target("TID-1", "SID-fetch".to_owned()));
     bc.active_page_target_mut()
         .runtime_slot

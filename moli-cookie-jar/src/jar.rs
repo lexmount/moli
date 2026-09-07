@@ -768,8 +768,8 @@ fn insert_context<'a>(url: &'a Url, source: CookieSource) -> InsertContext<'a> {
     match source {
         #[cfg(any(test, feature = "test-support"))]
         CookieSource::Http => InsertContext::http(url),
-        // CDP is a privileged browser-side API. Treat it closer to Chromium's manager-side set
-        // path than to `document.cookie`, so fork-side HttpOnly guards do not reject it.
-        CookieSource::Cdp => InsertContext::cdp(url),
+        // Browser management is privileged. Treat it closer to Chromium's manager-side set path
+        // than to `document.cookie`, so fork-side HttpOnly guards do not reject it.
+        CookieSource::Management => InsertContext::cdp(url),
     }
 }

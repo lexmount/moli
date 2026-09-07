@@ -6019,7 +6019,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_document_builds_protocol_neutral_document_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "depth": 2,
             "pierce": true
@@ -6055,7 +6055,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_flattened_document_builds_protocol_neutral_document_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(62),
@@ -6082,7 +6082,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_entry_routes_document_command_to_dom_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(63),
@@ -6116,7 +6116,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_frame_owner_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "frameId": "TID-child"
         });
@@ -6139,7 +6139,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_entry_routes_get_frame_owner_command_to_dom_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "frameId": "TID-child"
         });
@@ -6174,7 +6174,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_request_child_nodes_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 24,
             "depth": 3,
@@ -6204,7 +6204,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_entry_routes_request_child_nodes_command_to_dom_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 25
         });
@@ -6236,7 +6236,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_complete_routes_request_child_nodes_command_to_dom_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let mut out = super::DomCommandOutput::default();
         let params = json!({
             "nodeId": 26
@@ -6269,7 +6269,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_node_for_location_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "x": 12,
             "y": 34,
@@ -6298,7 +6298,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_entry_routes_get_node_for_location_command_to_dom_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "x": 10,
             "y": 20
@@ -6331,7 +6331,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_complete_routes_get_node_for_location_command_to_dom_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "x": 10,
             "y": 20
@@ -6362,7 +6362,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_query_selector_builds_protocol_neutral_dom_query_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 7,
             "selector": "section > p.target"
@@ -6395,7 +6395,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_query_selector_all_builds_protocol_neutral_dom_query_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 8,
             "selector": ".item"
@@ -6424,7 +6424,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_entry_routes_query_selector_command_to_dom_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 9,
             "selector": "main"
@@ -6457,7 +6457,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_resolve_node_builds_protocol_neutral_dom_resolve_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 10,
             "executionContextId": 42,
@@ -6491,7 +6491,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_resolve_node_preserves_backend_node_reference_source() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "backendNodeId": 31,
             "objectGroup": "backend"
@@ -6518,7 +6518,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_resolve_node_without_node_reference_keeps_cdp_invalid_param_shape() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "objectGroup": "webdriver"
         });
@@ -6565,7 +6565,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_entry_routes_resolve_node_command_to_dom_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 11
         });
@@ -6597,7 +6597,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_attributes_builds_protocol_neutral_dom_attributes_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 12
         });
@@ -6627,7 +6627,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_complete_entry_requires_pending_get_attributes_command() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 13
         });
@@ -6657,7 +6657,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_push_nodes_by_backend_ids_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "backendNodeIds": [14, 15, 16]
         });
@@ -6684,7 +6684,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_complete_entry_requires_pending_push_nodes_by_backend_ids_command() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "backendNodeIds": [17]
         });
@@ -6714,7 +6714,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_request_node_builds_protocol_neutral_object_reference_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "objectId": "remote-object-1"
         });
@@ -6749,7 +6749,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_outer_html_without_object_id_keeps_node_reference_path() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 14
         });
@@ -6776,7 +6776,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_outer_html_builds_protocol_neutral_node_reference_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 15,
             "includeShadowDOM": true
@@ -6804,7 +6804,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_outer_html_object_id_keeps_object_reference_path() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "objectId": "remote-object-outer",
             "includeShadowDOM": true
@@ -6844,7 +6844,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_complete_entry_requires_pending_get_outer_html_command() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 16
         });
@@ -6872,7 +6872,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_scroll_into_view_builds_protocol_neutral_node_reference_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "backendNodeId": 17,
             "rect": { "x": 1, "y": 2, "width": 3, "height": 4 }
@@ -6939,7 +6939,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_scroll_into_view_object_id_keeps_object_reference_path() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "objectId": "remote-object-scroll"
         });
@@ -6960,7 +6960,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_start_entry_routes_scroll_command_to_renderer_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 18
         });
@@ -6992,7 +6992,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_box_model_builds_protocol_neutral_geometry_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "backendNodeId": 19
         });
@@ -7023,7 +7023,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_get_content_quads_object_id_keeps_object_reference_path() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "objectId": "remote-object-geometry"
         });
@@ -7048,7 +7048,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_entry_routes_geometry_command_to_dom_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 20
         });
@@ -7084,7 +7084,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_remove_node_builds_protocol_neutral_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "backendNodeId": 21
         });
@@ -7110,7 +7110,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_entry_routes_remove_node_command_to_dom_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 22
         });
@@ -7142,7 +7142,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_describe_node_builds_protocol_neutral_node_reference_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "backendNodeId": 21,
             "depth": 2,
@@ -7172,7 +7172,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_describe_node_object_id_keeps_object_reference_path() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "objectId": "remote-object-describe"
         });
@@ -7193,7 +7193,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_entry_routes_describe_node_command_to_dom_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 22
         });
@@ -7225,7 +7225,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_complete_entry_requires_pending_describe_node_command() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "nodeId": 23
         });
@@ -7253,7 +7253,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_describe_node_object_id_builds_protocol_neutral_object_reference_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "objectId": "remote-object-3",
             "depth": 2,
@@ -7292,7 +7292,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_dom_entry_routes_object_reference_command_to_dom_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = json!({
             "objectId": "remote-object-2"
         });
@@ -7328,7 +7328,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_set_file_input_files_builds_protocol_neutral_object_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let file_path = unique_test_file_path("set-file-object");
         std::fs::write(&file_path, b"upload bytes").expect("test upload file should be writable");
         let params = json!({
@@ -7370,7 +7370,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_set_file_input_files_node_reference_falls_back_to_pending_node_reference_path() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = json!({
             "backendNodeId": 25,
             "files": ["/tmp/upload.txt"]

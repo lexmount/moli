@@ -621,7 +621,7 @@ fn start_pending_input_command(
                 cmd.id,
                 &owner,
                 PendingInputCommandKind::InsertText,
-                PageInputCommand::InsertText(&text),
+                PageInputCommand::InsertText(text),
             )
         }
         InputAction::CancelDragging
@@ -985,10 +985,10 @@ fn start_devtools_dispatch_key_event_command(
         owner,
         PendingInputCommandKind::DispatchKeyEvent,
         PageInputCommand::Key {
-            event_name: key::devtools_key_event_dom_event_name(command.event_type),
-            key: &command.key,
-            code: &command.code,
-            text: &command.text,
+            event_name: key::devtools_key_event_dom_event_name(command.event_type).to_owned(),
+            key: command.key,
+            code: command.code,
+            text: command.text,
             modifiers: command.modifiers,
             auto_repeat: command.auto_repeat,
             should_insert_text: command.should_insert_text,
@@ -1001,7 +1001,7 @@ fn start_page_input_command(
     command_id: Option<u64>,
     command_owner: &CommandOwnerScope,
     kind: PendingInputCommandKind,
-    command: PageInputCommand<'_>,
+    command: PageInputCommand,
 ) -> Result<Option<PendingInputCommandDispatch>, PendingInputCommandStartError> {
     let page_owner = conn
         .target_page_residence_identity_for_owner(command_owner)
@@ -1085,7 +1085,7 @@ fn start_devtools_dispatch_mouse_event_command(
         PageInputCommand::Mouse {
             x: command.x,
             y: command.y,
-            event_name,
+            event_name: event_name.to_owned(),
             button: command.button,
             buttons: command.buttons,
             click_count: command.click_count,
@@ -1120,7 +1120,7 @@ fn start_devtools_dispatch_touch_event_command(
         PendingInputCommandKind::DispatchTouchEvent,
         PageInputCommand::Touch {
             points,
-            event_name,
+            event_name: event_name.to_owned(),
             activate: false,
         },
     )
@@ -1205,7 +1205,7 @@ fn start_devtools_dispatch_drag_event_command(
         PageInputCommand::Drag {
             x: command.x,
             y: command.y,
-            event_name,
+            event_name: event_name.to_owned(),
             data,
             modifiers: command.modifiers,
         },
@@ -1229,7 +1229,7 @@ fn start_devtools_synthesize_tap_gesture_command(
                 x: command.x,
                 y: command.y,
             }],
-            event_name: "touchend",
+            event_name: "touchend".to_owned(),
             activate: true,
         },
     )
@@ -1813,7 +1813,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn cdp_dispatch_key_event_builds_protocol_neutral_key_command() {
-        let conn = CdpConnection::new();
+        let conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(43),
@@ -1852,7 +1852,7 @@ mod protocol_neutral_tests {
 
     #[test]
     fn devtools_input_entry_routes_key_command_to_input_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(44),
@@ -1954,8 +1954,8 @@ mod producer_tests {
     use serde_json::json;
 
     use crate::conn::{
-        BackgroundProtocolEvent, BrowserContext, CdpConnection, CommandDispatchContext,
-        CommandOwnerScope, TargetPageResidenceIdentity, build_event,
+        BackgroundProtocolEvent, CdpConnection, CommandDispatchContext, CommandOwnerScope,
+        TargetPageResidenceIdentity, build_event,
     };
     use crate::devtools_runtime::{
         AutomationEvent, BrowserDownloadProgressEvent, BrowserDownloadWillBeginEvent,
@@ -2037,8 +2037,8 @@ mod producer_tests {
 
     #[test]
     fn input_prepared_slot_keeps_download_and_file_chooser_payloads_separate() {
-        let mut conn = CdpConnection::default();
-        let mut context = BrowserContext::new("BID-slot".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut context = conn.new_browser_context_fixture_for_test("BID-slot".to_owned());
         context.set_active_target_id("TID-slot");
         context.attach_active_session("SID-slot");
         conn.install_browser_context_fixture_for_test(context);
@@ -2172,8 +2172,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn file_chooser_opened_preserves_typed_automation_sidecar() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-typed", "TID-typed");
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_page_target_fixture_for_test("BID-typed", "TID-typed");
         bc.attach_active_session("SID-typed");
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -2227,8 +2227,8 @@ mod producer_tests {
 
     #[test]
     fn file_chooser_capture_resolves_root_frame_once() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-root-capture".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-root-capture");
         bc.set_active_target_id("TID-root-capture");
         bc.attach_active_session("SID-root-capture");
         conn.install_browser_context_fixture_for_test(bc);
@@ -2255,8 +2255,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn document_open_replacement_preserves_causal_file_chooser_activation() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-document-collision".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-document-collision");
         bc.set_active_target_id("TID-document-collision");
         bc.attach_active_session("SID-document-collision");
         bc.active_page_target_mut().devtools_sessions
@@ -2326,8 +2326,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn replaced_page_residence_discards_only_stale_backend_node_collision() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-page-replacement".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-page-replacement");
         bc.set_active_target_id("TID-page-replacement");
         bc.attach_active_session("SID-page-replacement");
         bc.active_page_target_mut().devtools_sessions
@@ -2394,8 +2394,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn download_activity_without_protocol_observers_keeps_typed_automation_events() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new("BID-download".into());
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_browser_context_fixture_for_test("BID-download");
         bc.set_active_target_id("FRAME-download");
         bc.attach_active_session("SID-download");
         conn.install_browser_context_fixture_for_test(bc);
@@ -2452,8 +2452,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn file_chooser_drain_consumes_prepared_activations_without_page_readback() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         bc.attach_active_session("SID-1");
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]
@@ -2500,8 +2500,8 @@ mod producer_tests {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn file_chooser_activity_background_events_keep_typed_sidecar() {
-        let mut conn = CdpConnection::default();
-        let mut bc = BrowserContext::new_with_page_for_test("BID-context", "TID-context");
+        let mut conn = crate::test_support::connection();
+        let mut bc = conn.new_page_target_fixture_for_test("BID-context", "TID-context");
         bc.attach_active_session("SID-context");
         bc.active_page_target_mut().devtools_sessions
             [moli_page_types::DevToolsSessionKey::Primary]

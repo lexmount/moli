@@ -1,12 +1,9 @@
 use super::BrowserContext;
-use crate::conn::state::{
-    PageAgentHost, TargetIdentityState,
-    page_slot::TargetPageSlot,
-    web_contents::{
-        EmulationPolicy, EmulationPolicyChange, WebContents, WindowSurface, WindowSurfaceState,
-    },
+use crate::conn::state::{PageAgentHost, TargetIdentityState, page_slot::TargetPageSlot};
+use moli_core::browser::web_contents::{
+    EmulationPolicy, EmulationPolicyChange, WindowSurface, WindowSurfaceState,
 };
-use moli_core::browser::{WebContentsHandle, WebContentsId};
+use moli_core::browser::{WebContentsCreation, WebContentsHandle, WebContentsId};
 
 #[cfg(test)]
 mod tests;
@@ -23,18 +20,20 @@ impl BrowserContext {
         self.set_document_id_for_test_for_target(&target_id, raw)
     }
 
-    /// Move the physical Document out only in capability-independence tests.
-    /// Deliberately leave its inspection binding installed: tests must prove
-    /// that dispatch can start and finish without a borrowed Browser owner.
+    /// Capture only the exact Browser document capability used by inspection
+    /// independence tests. The physical Document remains on its Browser owner.
     #[cfg(test)]
-    pub(in crate::conn) fn take_document_host_for_inspection_test(
-        &mut self,
+    pub(in crate::conn) fn inspection_document_handle_for_test(
+        &self,
         target_id: &str,
-    ) -> Option<crate::conn::state::web_contents::DocumentHost> {
-        self.web_contents_for_target_mut(target_id)?
-            .main_frame
-            .current_document
-            .take()
+    ) -> Option<(
+        moli_core::browser::BrowserContextHandle,
+        moli_core::browser::DocumentHandle,
+    )> {
+        Some((
+            self.browser_context.clone(),
+            self.document_handle_for_target(target_id)?,
+        ))
     }
 
     #[cfg(test)]
@@ -49,7 +48,7 @@ impl BrowserContext {
             target_id,
             primary_session_id,
             identity,
-            WebContents::default(),
+            WebContentsCreation::default(),
             page_projection,
         )
     }
@@ -74,19 +73,23 @@ impl BrowserContext {
         target_id: String,
         primary_session_id: Option<String>,
         identity: TargetIdentityState,
-        mut contents: WebContents,
+        creation: WebContentsCreation,
         page_projection: TargetPageSlot,
     ) -> bool {
         if self.page_targets.get(&target_id).is_some() {
             return false;
         }
-        let id = contents.id();
+        let (handle, main_frame) = self
+            .browser_context
+            .create_web_contents(creation)
+            .expect("new WebContents identity must be unique");
+        let id = handle.id();
         let projection = PageAgentHost::new(
             target_id,
             primary_session_id,
             identity,
             id,
-            contents.main_frame.id(),
+            main_frame,
             page_projection,
         );
         #[cfg(test)]
@@ -96,13 +99,6 @@ impl BrowserContext {
             projection.document_cookie_manager_surface =
                 self.default_document_cookie_manager_surface.clone();
         }
-        if let Some(config) = self.page_navigation_runtime_config() {
-            contents.install_navigation_engine(self.new_page_navigation_engine(config));
-        }
-        assert!(
-            self.physical.web_contents.insert(id, contents).is_none(),
-            "WebContents identity must be unique"
-        );
         let inserted = self.page_targets.insert(projection);
         debug_assert!(
             inserted,
@@ -115,21 +111,20 @@ impl BrowserContext {
         &mut self,
         handle: WebContentsHandle,
     ) -> Result<(), String> {
-        self.physical.web_contents(handle)?;
-        let selected = self.physical.select_web_contents(handle.id());
+        if !self.browser_context.contains_web_contents(handle) {
+            return Err("WebContents unavailable".into());
+        }
+        let selected = self.browser_context.select_web_contents(handle.id());
         debug_assert!(selected, "registered WebContents must be selectable");
         Ok(())
     }
 
     pub(crate) fn selected_web_contents_id(&self) -> Option<WebContentsId> {
-        self.physical.selected_web_contents_id()
+        self.browser_context.selected_web_contents_id()
     }
 
     pub(crate) fn selected_web_contents_handle(&self) -> Option<WebContentsHandle> {
-        Some(WebContentsHandle::new(
-            self.physical.id,
-            self.physical.selected_web_contents_id()?,
-        ))
+        self.browser_context.selected_web_contents_handle()
     }
 
     pub(crate) fn web_contents_handle_for_target(
@@ -137,7 +132,7 @@ impl BrowserContext {
         target_id: &str,
     ) -> Option<WebContentsHandle> {
         Some(WebContentsHandle::new(
-            self.physical.id,
+            self.browser_context.id(),
             self.page_targets.get(target_id)?.web_contents_id(),
         ))
     }
@@ -146,27 +141,27 @@ impl BrowserContext {
         &self,
         window_id: u64,
     ) -> Option<WebContentsHandle> {
-        let id = self
-            .physical
-            .web_contents
-            .keys()
-            .copied()
-            .find(|id| id.get() == window_id)?;
-        Some(WebContentsHandle::new(self.physical.id, id))
+        self.browser_context
+            .web_contents_handle_for_window_id(window_id)
     }
 
     pub(crate) fn target_is_crashed(&self, target_id: &str) -> bool {
-        self.web_contents_for_target(target_id)
-            .is_some_and(|contents| contents.crashed)
+        self.web_contents_handle_for_target(target_id)
+            .is_some_and(|handle| {
+                self.browser_context
+                    .web_contents_is_crashed(handle)
+                    .unwrap_or(false)
+            })
     }
 
     pub(crate) fn target_initial_empty_document_state(
         &self,
         target_id: &str,
-    ) -> Option<&crate::conn::state::InitialDocument> {
-        self.web_contents_for_target(target_id)?
-            .navigation()
-            .initial_empty_document_state()
+    ) -> Option<crate::conn::state::InitialDocumentSnapshot> {
+        let handle = self.web_contents_handle_for_target(target_id)?;
+        self.browser_context
+            .web_contents_initial_document_state(handle)
+            .ok()?
     }
 
     pub(crate) fn target_initial_empty_document_loader_id_if_current(
@@ -183,9 +178,11 @@ impl BrowserContext {
         target_id: &str,
         change: &moli_core::RendererDocumentTitleChanged,
     ) -> Option<bool> {
+        let handle = self.web_contents_handle_for_target(target_id)?;
         let changed = self
-            .web_contents_for_target_mut(target_id)?
-            .commit_document_title(change)?;
+            .browser_context
+            .commit_document_title(handle, change)
+            .ok()??;
         self.page_targets
             .get_mut(target_id)?
             .owner_state
@@ -194,8 +191,10 @@ impl BrowserContext {
     }
 
     pub(crate) fn set_target_crash_state(&mut self, target_id: &str, crashed: bool) {
-        if let Some(contents) = self.web_contents_for_target_mut(target_id) {
-            contents.crashed = crashed;
+        if let Some(handle) = self.web_contents_handle_for_target(target_id) {
+            let _ = self
+                .browser_context
+                .set_web_contents_crashed(handle, crashed);
         }
     }
 
@@ -203,7 +202,7 @@ impl BrowserContext {
         &self,
         handle: WebContentsHandle,
     ) -> Result<WindowSurface, String> {
-        Ok(self.physical.web_contents(handle)?.window.surface)
+        self.browser_context.web_contents_window_surface(handle)
     }
 
     pub(crate) fn update_web_contents_window_surface(
@@ -215,12 +214,8 @@ impl BrowserContext {
         x: Option<i32>,
         y: Option<i32>,
     ) -> Result<(), String> {
-        self.physical
-            .web_contents_mut(handle)?
-            .window
-            .surface
-            .update(state, width, height, x, y);
-        Ok(())
+        self.browser_context
+            .update_web_contents_window_surface(handle, state, width, height, x, y)
     }
 
     pub(crate) fn set_web_contents_window_name(
@@ -228,16 +223,8 @@ impl BrowserContext {
         handle: WebContentsHandle,
         name: Option<String>,
     ) -> Result<(), String> {
-        self.physical.web_contents(handle)?;
-        for contents in self.physical.web_contents.values_mut() {
-            if contents.id() == handle.id() {
-                contents.window.name = name.clone();
-            } else if name.is_some() && contents.window.name == name {
-                // Preserve the existing last-assignment-wins lookup rule.
-                contents.window.name = None;
-            }
-        }
-        Ok(())
+        self.browser_context
+            .set_web_contents_window_name(handle, name)
     }
 
     pub(crate) fn set_web_contents_opener(
@@ -246,17 +233,8 @@ impl BrowserContext {
         opener: Option<WebContentsHandle>,
         can_access: bool,
     ) -> Result<(), String> {
-        if let Some(opener) = opener {
-            self.physical.web_contents(opener)?;
-            self.physical.web_contents_mut(handle)?.window.opener =
-                Some(crate::conn::state::web_contents::WindowOpener {
-                    web_contents_id: opener.id(),
-                    can_access,
-                });
-        } else {
-            self.physical.web_contents_mut(handle)?.window.opener = None;
-        }
-        Ok(())
+        self.browser_context
+            .set_web_contents_opener(handle, opener, can_access)
     }
 
     pub(crate) fn set_web_contents_network_offline(
@@ -264,14 +242,15 @@ impl BrowserContext {
         handle: WebContentsHandle,
         offline: bool,
     ) -> Result<(), String> {
-        self.physical
-            .web_contents_mut(handle)?
-            .set_network_offline(offline);
-        Ok(())
+        self.browser_context
+            .set_web_contents_network_offline(handle, offline)
     }
 
-    pub(crate) fn target_emulation_policy(&self, target_id: &str) -> Option<&EmulationPolicy> {
-        Some(&self.web_contents_for_target(target_id)?.emulation_policy)
+    pub(crate) fn target_emulation_policy(&self, target_id: &str) -> Option<EmulationPolicy> {
+        let handle = self.web_contents_handle_for_target(target_id)?;
+        self.browser_context
+            .web_contents_emulation_policy(handle)
+            .ok()
     }
 
     pub(crate) fn apply_target_emulation_policy_change(
@@ -279,8 +258,10 @@ impl BrowserContext {
         target_id: &str,
         change: EmulationPolicyChange,
     ) {
-        if let Some(contents) = self.web_contents_for_target_mut(target_id) {
-            contents.emulation_policy.apply(change);
+        if let Some(handle) = self.web_contents_handle_for_target(target_id) {
+            let _ = self
+                .browser_context
+                .apply_web_contents_emulation_policy_change(handle, change);
         }
     }
 
@@ -289,8 +270,10 @@ impl BrowserContext {
         target_id: &str,
         changes: Vec<EmulationPolicyChange>,
     ) {
-        if let Some(contents) = self.web_contents_for_target_mut(target_id) {
-            contents.emulation_policy.apply_changes(changes);
+        if let Some(handle) = self.web_contents_handle_for_target(target_id) {
+            let _ = self
+                .browser_context
+                .apply_web_contents_emulation_policy_changes(handle, changes);
         }
     }
 }

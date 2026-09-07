@@ -918,7 +918,7 @@ async fn queued_popup_navigation_rechecks_a_late_debugger_barrier() {
         .conn
         .browser_context_by_id(&browser_context_id)
         .and_then(|browser_context| browser_context.target_document_url(&popup_target_id))
-        .map(|page| page.as_str())
+        .map(|page| page.to_string())
         .expect("popup initial Page");
     assert_eq!(page_url, "about:blank");
 }

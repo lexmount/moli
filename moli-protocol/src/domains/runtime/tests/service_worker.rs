@@ -12,7 +12,9 @@ use moli_core::page::{
 };
 
 fn load_service_worker_target(ctx: &mut TestContext, session_id: &str) {
-    let mut bc = BrowserContext::new("BID-service".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-service".to_owned());
     let mut target = service_worker_target();
     target.attach_session(session_id.to_owned());
     bc.insert_service_worker_target(target);
@@ -20,7 +22,9 @@ fn load_service_worker_target(ctx: &mut TestContext, session_id: &str) {
 }
 
 fn load_unattached_service_worker_target(ctx: &mut TestContext) {
-    let mut bc = BrowserContext::new("BID-service".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-service".to_owned());
     bc.insert_service_worker_target(service_worker_target());
     ctx.conn.install_browser_context_fixture_for_test(bc);
 }

@@ -3,25 +3,16 @@ use crate::conn::{EmulatedGeolocationOverrideState, EmulatedNetworkConditions};
 
 impl CdpConnection {
     pub(crate) fn apply_active_engine_fetch_overrides(&mut self) {
-        #[cfg(test)]
-        if let Some((context_id, target_id)) = self
-            .browser_context
-            .as_ref()
-            .and_then(|context| Some((context.id.clone(), context.active_target_id()?.to_owned())))
-        {
-            self.ensure_page_navigation_engine_for_target(&context_id, &target_id);
-        }
         let defaults = self.document_fetch_defaults();
         let browser_globals = self.browser_global_overrides.clone();
-        if let Some(context) = self.browser_context.as_mut() {
-            if let Err(error) =
-                context.configure_selected_navigation_policy(defaults, &browser_globals)
-            {
-                tracing::warn!(%error, "Browser navigation policy configuration failed");
-            }
-        } else {
-            self.standalone_navigation_engine
-                .apply_fetch_defaults(defaults);
+        if let Some(context) = self.browser_context.as_mut()
+            && let Err(error) = context.configure_selected_navigation_policy(
+                defaults,
+                &browser_globals.extra_headers,
+                browser_globals.network_conditions,
+            )
+        {
+            tracing::warn!(%error, "Browser navigation policy configuration failed");
         }
     }
 
@@ -42,16 +33,16 @@ impl CdpConnection {
             .unwrap_or(self.base_tls_verify_host)
     }
 
-    pub fn user_agent(&self) -> &str {
+    pub fn user_agent(&self) -> String {
         self.browser_context
             .as_ref()
             .and_then(|browser_context| browser_context.reported_active_user_agent_override())
             .or_else(|| {
                 self.global_browser_identity_override
                     .as_ref()
-                    .map(moli_browser_profile::BrowserIdentityProfile::user_agent)
+                    .map(|identity| identity.user_agent().to_owned())
             })
-            .unwrap_or_else(|| self.base_browser_identity.user_agent())
+            .unwrap_or_else(|| self.base_browser_identity.user_agent().to_owned())
     }
 
     pub async fn set_user_agent_override_async(&mut self, user_agent: impl Into<String>) {
@@ -111,11 +102,11 @@ impl CdpConnection {
         self.rebuild_resource_runtime_for_loaded_page_async().await;
     }
 
-    pub fn http_proxy(&self) -> Option<&str> {
+    pub fn http_proxy(&self) -> Option<String> {
         self.browser_context
             .as_ref()
-            .and_then(|bc| bc.network_policy().http_proxy.as_deref())
-            .or(self.base_http_proxy.as_deref())
+            .and_then(|bc| bc.network_policy().http_proxy)
+            .or_else(|| self.base_http_proxy.clone())
     }
 
     pub(crate) fn http_proxy_for_session_owner_owned(
@@ -127,18 +118,18 @@ impl CdpConnection {
             .or_else(|| self.base_http_proxy.clone())
     }
 
-    pub fn http_no_proxy(&self) -> Option<&str> {
+    pub fn http_no_proxy(&self) -> Option<String> {
         self.browser_context
             .as_ref()
-            .and_then(|bc| bc.network_policy().http_no_proxy.as_deref())
-            .or(self.base_http_no_proxy.as_deref())
+            .and_then(|bc| bc.network_policy().http_no_proxy)
+            .or_else(|| self.base_http_no_proxy.clone())
     }
 
-    pub(crate) fn fetch_config(&self) -> &moli_fetch::FetchConfig {
+    pub(crate) fn fetch_config(&self) -> moli_fetch::FetchConfig {
         self.browser_context
             .as_ref()
             .and_then(|context| context.page_navigation_fetch_config(context.active_target_id()?))
-            .unwrap_or_else(|| self.standalone_navigation_engine.fetch_config())
+            .unwrap_or_else(|| self.document_fetch_defaults())
     }
 
     pub(crate) fn base_browser_identity(&self) -> &moli_browser_profile::BrowserIdentityProfile {

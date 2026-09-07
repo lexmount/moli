@@ -12,8 +12,8 @@ use super::{
     },
     session::{InspectorSessionState, TargetPageSessionState, TargetRuntimeSessionState},
     target_state::{PendingInspectorAwait, TargetPendingInspectorAwaitRegistry},
-    web_contents::NetworkRequestPolicy,
 };
+use moli_core::browser::web_contents::NetworkRequestPolicy;
 use moli_core::{
     network::WebStorageMutationSubscription,
     page::{

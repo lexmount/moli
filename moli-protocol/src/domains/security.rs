@@ -105,13 +105,13 @@ pub(crate) fn complete_pending_security_command(
 mod tests {
     use serde_json::json;
 
-    use crate::{conn::BrowserContext, testing::TestContext};
+    use crate::testing::TestContext;
 
     #[tokio::test(flavor = "multi_thread")]
     async fn set_ignore_certificate_errors_toggles_tls_verification() {
         let mut ctx = TestContext::new();
         ctx.conn
-            .insert_browser_context(BrowserContext::new("BID-9".into()));
+            .insert_browser_context(ctx.conn.new_browser_context_fixture_for_test("BID-9"));
 
         ctx.process_async(json!({
             "id": 11,
@@ -135,9 +135,9 @@ mod tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn set_ignore_certificate_errors_is_scoped_to_active_browser_context() {
         let mut ctx = TestContext::new();
-        let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+        let mut first = ctx.conn.new_page_target_fixture_for_test("BID-1", "TID-1");
         first.attach_active_session("SID-1");
-        let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
+        let mut second = ctx.conn.new_page_target_fixture_for_test("BID-2", "TID-2");
         second.attach_active_session("SID-2");
         ctx.conn.insert_browser_context(first);
         ctx.conn.insert_browser_context(second);

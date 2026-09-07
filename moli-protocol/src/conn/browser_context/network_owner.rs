@@ -860,8 +860,9 @@ mod tests {
     use super::*;
 
     fn connection_with_background_attached_session() -> CdpConnection {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-background".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-background".to_owned());
         browser_context.register_page_target_url_fixture(
             "TID-background".to_owned(),
             Some("SID-background".to_owned()),
@@ -877,7 +878,7 @@ mod tests {
 
     #[test]
     fn browser_globals_apply_to_context_inserted_after_configuration() {
-        let mut conn = CdpConnection::default();
+        let mut conn = crate::test_support::connection();
         conn.set_global_extra_headers(vec![("X-Browser".into(), "global".into())]);
         conn.set_global_network_conditions(Some(crate::conn::EmulatedNetworkConditions::offline()));
         conn.set_global_geolocation_override(Some(
@@ -895,7 +896,7 @@ mod tests {
         ));
         conn.set_global_cache_disabled(true);
 
-        let mut browser_context = BrowserContext::new("BID-late".to_owned());
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-late".to_owned());
         browser_context.set_active_target_id("TID-late");
         browser_context.attach_active_session("SID-late");
         conn.insert_browser_context(browser_context);
@@ -1093,8 +1094,8 @@ mod tests {
 
     #[test]
     fn subresource_fetch_network_request_ids_are_connection_global_across_target_owners() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-mixed".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-mixed".to_owned());
         browser_context.set_active_target_id("TID-active".to_owned());
         browser_context.attach_active_session("SID-active".to_owned());
         browser_context.register_page_target_url_fixture(
@@ -1346,8 +1347,9 @@ mod tests {
 
     #[test]
     fn network_target_listener_can_be_disabled_after_enable() {
-        let mut conn = CdpConnection::default();
-        conn.browser_context = Some(BrowserContext::new("BID-network".to_owned()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context =
+            Some(conn.new_browser_context_fixture_for_test("BID-network".to_owned()));
         conn.browser_context
             .as_mut()
             .expect("browser context")

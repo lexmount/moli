@@ -1,5 +1,5 @@
 #[cfg(test)]
-use crate::conn::fetch_support::OpenBodyStreamError;
+use crate::conn::OpenBodyStreamError;
 use crate::conn::{BrowserContext, ConnectionNetworkRequestIdAllocator, PageAgentHost};
 #[cfg(test)]
 use crate::conn::{
@@ -36,17 +36,17 @@ impl BrowserContext {
 
     pub(crate) fn background_targets(&self) -> impl DoubleEndedIterator<Item = &PageAgentHost> {
         self.page_targets
-            .background(self.physical.selected_web_contents_id())
+            .background(self.browser_context.selected_web_contents_id())
     }
 
     pub(crate) fn background_target_count(&self) -> usize {
         self.page_targets
-            .background_len(self.physical.selected_web_contents_id())
+            .background_len(self.browser_context.selected_web_contents_id())
     }
 
     pub(crate) fn has_no_background_targets(&self) -> bool {
         self.page_targets
-            .background_is_empty(self.physical.selected_web_contents_id())
+            .background_is_empty(self.browser_context.selected_web_contents_id())
     }
 
     #[cfg(test)]
@@ -152,8 +152,7 @@ impl BrowserContext {
         self.page_target(target_id)?
             .fetch_owner
             .pending_fetch_response_navigation(request_id)?;
-        self.paused_navigation_response_for_target(target_id)?
-            .prepared_renderer_agent_token()
+        self.paused_navigation_response_renderer_agent_for_target(target_id)
     }
 
     #[cfg(test)]

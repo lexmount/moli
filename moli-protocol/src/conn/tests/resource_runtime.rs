@@ -15,11 +15,14 @@ use tokio::sync::Notify;
 
 #[tokio::test]
 async fn resource_defaults_without_a_page_do_not_materialize_a_fallback_engine() {
-    let mut conn = CdpConnection::new_with_deferred_navigation_runtime(
+    let mut conn = crate::test_support::connection_with_config(
         CdpInitialStoragePartition::memory(),
         Default::default(),
     );
-    assert!(conn.standalone_navigation_engine.engine.get().is_none());
+    assert_eq!(
+        conn.moli_memory_diagnostics()["isolateScope"]["estimatedRendererOwnerCount"],
+        json!(0)
+    );
     conn.set_user_agent_override_async("Lazy/1").await;
     conn.set_tls_verify_host_async(false).await;
     assert_eq!(
@@ -28,7 +31,10 @@ async fn resource_defaults_without_a_page_do_not_materialize_a_fallback_engine()
     );
     assert!(!conn.fetch_config().tls_verify_host());
     assert!(conn.browser_context.is_none());
-    assert!(conn.standalone_navigation_engine.engine.get().is_none());
+    assert_eq!(
+        conn.moli_memory_diagnostics()["isolateScope"]["estimatedRendererOwnerCount"],
+        json!(0)
+    );
 
     let context = conn.new_browser_context("BID-empty".into());
     conn.insert_browser_context(context);
@@ -46,12 +52,15 @@ async fn resource_defaults_without_a_page_do_not_materialize_a_fallback_engine()
             .active_target_id()
             .is_none()
     );
-    assert!(conn.standalone_navigation_engine.engine.get().is_none());
+    assert_eq!(
+        conn.moli_memory_diagnostics()["isolateScope"]["estimatedRendererOwnerCount"],
+        json!(0)
+    );
 }
 
 #[tokio::test]
 async fn resource_maintenance_rejects_stale_routes_without_touching_the_selected_peer() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
     let mut context = conn.new_browser_context("BID-live".into());
     context.set_active_target_id("TID-peer");
     conn.insert_browser_context(context);
@@ -90,7 +99,7 @@ async fn resource_maintenance_rejects_stale_routes_without_touching_the_selected
 
 #[tokio::test]
 async fn detached_session_cannot_rebuild_but_its_live_browser_owner_keeps_its_client() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
     let mut context = conn.new_browser_context("BID-live".into());
     context.set_active_target_id("TID-owner");
     context.attach_active_session("SID-owner");
@@ -155,7 +164,7 @@ fn stored_cookie(name: &str, value: &str) -> moli_cookie_jar::StoredCookie {
 async fn commit_navigation_outcome_for_test(
     conn: &mut CdpConnection,
     outcome: NavigationLoadOutcome,
-) -> LoadedNavigation {
+) -> LoadedNavigation<crate::conn::PreparedDocumentNavigation> {
     commit_navigation_outcome_for_session_test(conn, outcome, None).await
 }
 
@@ -163,22 +172,19 @@ async fn commit_navigation_outcome_for_session_test(
     conn: &mut CdpConnection,
     outcome: NavigationLoadOutcome,
     session_id: Option<&str>,
-) -> LoadedNavigation {
+) -> LoadedNavigation<crate::conn::PreparedDocumentNavigation> {
     match outcome {
         NavigationLoadOutcome::ResponseCommitReady(navigation) => {
-            let navigation = *navigation;
             let owner = match session_id {
                 Some(session_id) => CommandOwnerScope::for_session(session_id),
                 None => CommandOwnerScope::capture(conn, None),
             };
-            let policy = conn
-                .capture_document_policy_for_owner(&owner, navigation.final_url())
-                .expect("test navigation commit configuration should resolve");
-            let inspection = conn.prepared_document_inspection_for_owner(&owner);
-            navigation
-                .materialize(policy, inspection)
-                .await
-                .expect("test navigation should commit")
+            conn.commit_navigation_load_outcome_for_owner_async(
+                &owner,
+                NavigationLoadOutcome::ResponseCommitReady(navigation),
+            )
+            .await
+            .expect("test navigation should commit")
         }
         NavigationLoadOutcome::Download(_) => {
             panic!("test navigation should not resolve to a download")
@@ -205,13 +211,15 @@ async fn canceled_document_materialization_does_not_mutate_engine_policy() {
 }
 
 async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
-    let mut conn = CdpConnection::new();
-    let ambient_context = conn.new_browser_context("BID-ambient".to_owned());
+    let mut conn = crate::test_support::connection();
+    let mut ambient_context = conn.new_browser_context("BID-ambient".to_owned());
+    ambient_context.set_active_target_id("TID-ambient");
     conn.insert_browser_context(ambient_context);
     let ambient_renderer_owner = conn
-        .standalone_navigation_engine
-        .ensure()
-        .renderer_owner_id_for_diagnostics();
+        .browser_context
+        .as_ref()
+        .and_then(|context| context.page_navigation_renderer_owner_id("TID-ambient"))
+        .expect("ambient target renderer owner");
 
     let mut target_context = conn.new_browser_context("BID-target".to_owned());
     target_context.set_active_target_id("TID-target");
@@ -274,9 +282,8 @@ async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
     if let Some(canceled) = reject_canceled {
         assert!(
             context
-                .page_navigation_engine("TID-target")
+                .page_navigation_fetch_config("TID-target")
                 .unwrap()
-                .fetch_config()
                 .tls_verify_host()
         );
         context.set_tls_verify_host_override_for_target("TID-target", Some(false));
@@ -300,9 +307,8 @@ async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
         assert!(
             conn.browser_context_by_id("BID-target")
                 .unwrap()
-                .page_navigation_engine("TID-target")
+                .page_navigation_fetch_config("TID-target")
                 .unwrap()
-                .fetch_config()
                 .tls_verify_host(),
             "rejected admission must not install the new native TLS policy on the engine"
         );
@@ -334,14 +340,17 @@ async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
         continuation.release();
     }
     commit.previous_document_retirement.close().await;
-    let target_engine = conn
-        .browser_context_by_id("BID-target")
-        .and_then(|context| context.page_navigation_engine("TID-target"))
-        .expect("inactive target must keep its navigation engine after completion");
-    let retained_client = target_engine
-        .resource_request_client()
+    let defaults = conn.document_fetch_defaults();
+    let browser_globals = conn.browser_global_overrides.clone();
+    let context = conn
+        .browser_context_by_id_mut("BID-target")
+        .expect("inactive target context");
+    let retained_client = context
+        .resource_request_client_for_test("TID-target", defaults, &browser_globals)
         .expect("resident target engine must keep a resource request client");
-    let target_renderer_owner = target_engine.renderer_owner_id_for_diagnostics();
+    let target_renderer_owner = context
+        .page_navigation_renderer_owner_id("TID-target")
+        .expect("inactive target must keep its navigation engine after completion");
 
     assert!(
         resident_client.shares_page_network_policy_with(&retained_client),
@@ -384,10 +393,10 @@ async fn buffered_navigation_policy_checkpoint(reject_canceled: Option<bool>) {
 
 #[test]
 fn current_navigation_initiator_url_uses_loaded_browser_context_url_when_available() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
     assert!(conn.current_navigation_initiator_url().is_none());
 
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.set_target_url("about:blank".into());
     conn.install_browser_context_fixture_for_test(bc);
     assert!(conn.current_navigation_initiator_url().is_none());
@@ -404,7 +413,10 @@ fn current_navigation_initiator_url_uses_loaded_browser_context_url_when_availab
 
 #[test]
 fn connection_initial_cookies_seed_new_browser_contexts() {
-    let conn = CdpConnection::new_with_initial_cookies(vec![stored_cookie("sid", "seeded")]);
+    let conn = crate::test_support::connection_with_config(
+        CdpInitialStoragePartition::with_cookies(vec![stored_cookie("sid", "seeded")]),
+        Default::default(),
+    );
 
     for id in ["BID-1", "BID-2"] {
         let bc = conn.new_browser_context(id.to_owned());
@@ -425,7 +437,8 @@ fn initial_storage_partition_derives_store_handles_from_core_owner() {
         vec![stored_cookie("sid", "seeded")],
         &storage_partition,
     );
-    let conn = CdpConnection::new_with_initial_storage_partition(initial_storage_partition);
+    let conn =
+        crate::test_support::connection_with_config(initial_storage_partition, Default::default());
 
     let browser_context = conn.new_browser_context("BID-owner".to_owned());
     let shared_storage = storage_partition.shared_storage_handles();
@@ -434,15 +447,15 @@ fn initial_storage_partition_derives_store_handles_from_core_owner() {
     let expected_storage_bucket_store = shared_storage.storage_bucket_store();
 
     assert!(Arc::ptr_eq(
-        browser_context.web_storage_store_for_test(),
+        &browser_context.web_storage_store_for_test(),
         &expected_web_storage_store
     ));
     assert!(Arc::ptr_eq(
-        browser_context.indexed_db_manager_for_test(),
+        &browser_context.indexed_db_manager_for_test(),
         &expected_indexed_db_manager
     ));
     assert!(Arc::ptr_eq(
-        browser_context.storage_bucket_store_for_test(),
+        &browser_context.storage_bucket_store_for_test(),
         &expected_storage_bucket_store
     ));
     let cookies = browser_context.snapshot_cookies();
@@ -456,7 +469,8 @@ fn default_browser_contexts_reuse_partition_with_distinct_target_session_storage
     let storage_partition = StoragePartitionState::open(None).expect("memory partition");
     let initial_storage_partition =
         CdpInitialStoragePartition::from_storage_partition(Vec::new(), &storage_partition);
-    let conn = CdpConnection::new_with_initial_storage_partition(initial_storage_partition);
+    let conn =
+        crate::test_support::connection_with_config(initial_storage_partition, Default::default());
 
     let mut first = conn.new_browser_context("BID-first".to_owned());
     first.set_active_target_id("TID-first");
@@ -467,34 +481,37 @@ fn default_browser_contexts_reuse_partition_with_distinct_target_session_storage
         .web_storage_store();
 
     assert!(Arc::ptr_eq(
-        first.cookie_store_for_test(),
-        second.cookie_store_for_test()
+        &first.cookie_store_for_test(),
+        &second.cookie_store_for_test()
     ));
     assert!(Arc::ptr_eq(
-        first.web_storage_store_for_test(),
+        &first.web_storage_store_for_test(),
         &expected_web_storage_store
     ));
     assert!(Arc::ptr_eq(
-        second.web_storage_store_for_test(),
+        &second.web_storage_store_for_test(),
         &expected_web_storage_store
     ));
     assert!(Arc::ptr_eq(
-        first.indexed_db_manager_for_test(),
-        second.indexed_db_manager_for_test()
+        &first.indexed_db_manager_for_test(),
+        &second.indexed_db_manager_for_test()
     ));
     assert!(Arc::ptr_eq(
-        first.storage_bucket_store_for_test(),
-        second.storage_bucket_store_for_test()
+        &first.storage_bucket_store_for_test(),
+        &second.storage_bucket_store_for_test()
     ));
     assert!(!Arc::ptr_eq(
-        first.session_storage_store_for_test(),
-        second.session_storage_store_for_test()
+        &first.session_storage_store_for_test(),
+        &second.session_storage_store_for_test()
     ));
 }
 
 #[test]
 fn connection_ephemeral_browser_context_uses_isolated_storage_partition() {
-    let conn = CdpConnection::new_with_initial_cookies(vec![stored_cookie("sid", "seeded")]);
+    let conn = crate::test_support::connection_with_config(
+        CdpInitialStoragePartition::with_cookies(vec![stored_cookie("sid", "seeded")]),
+        Default::default(),
+    );
 
     let bc = conn.new_ephemeral_browser_context("BID-ephemeral".to_owned());
 
@@ -509,7 +526,8 @@ fn connection_default_and_ephemeral_context_creation_use_named_partition_paths()
     let storage_partition = StoragePartitionState::open(None).expect("memory partition");
     let initial_storage_partition =
         CdpInitialStoragePartition::from_storage_partition(Vec::new(), &storage_partition);
-    let conn = CdpConnection::new_with_initial_storage_partition(initial_storage_partition);
+    let conn =
+        crate::test_support::connection_with_config(initial_storage_partition, Default::default());
 
     let profile_backed = conn.new_browser_context("BID-profile".to_owned());
     let ephemeral = conn.new_ephemeral_browser_context("BID-ephemeral".to_owned());
@@ -520,21 +538,21 @@ fn connection_default_and_ephemeral_context_creation_use_named_partition_paths()
     assert!(profile_backed.is_profile_backed_storage_partition());
     assert_eq!(profile_backed.storage_partition_id(), "default");
     assert!(Arc::ptr_eq(
-        profile_backed.web_storage_store_for_test(),
+        &profile_backed.web_storage_store_for_test(),
         &expected_web_storage_store
     ));
 
     assert!(!ephemeral.is_profile_backed_storage_partition());
     assert_eq!(ephemeral.storage_partition_id(), "BID-ephemeral");
     assert!(!Arc::ptr_eq(
-        ephemeral.web_storage_store_for_test(),
+        &ephemeral.web_storage_store_for_test(),
         &expected_web_storage_store
     ));
 }
 
 #[test]
 fn browser_context_memory_diagnostics_include_storage_partition_identity() {
-    let conn = CdpConnection::new();
+    let conn = crate::test_support::connection();
     let profile_backed = conn.new_browser_context("BID-profile".to_owned());
     let ephemeral = conn.new_ephemeral_browser_context("BID-ephemeral".to_owned());
 
@@ -568,7 +586,8 @@ fn browser_context_request_cookie_report_reads_storage_partition_cookie_handle()
     let browser_context = BrowserContext::new("BID-cookie-report".to_owned());
     let request_url = Url::parse("https://example.com/app/index.html").unwrap();
     {
-        let mut cookie_store = browser_context.cookie_store_for_test().lock();
+        let cookie_store_handle = browser_context.cookie_store_for_test();
+        let mut cookie_store = cookie_store_handle.lock();
         cookie_store.store_response_headers(
             &request_url,
             &[(
@@ -596,7 +615,8 @@ fn browser_context_cookie_snapshot_and_delete_use_storage_partition_cookie_handl
     let mut browser_context = BrowserContext::new("BID-cookie-snapshot".to_owned());
     let request_url = Url::parse("https://example.com/app/index.html").unwrap();
     {
-        let mut cookie_store = browser_context.cookie_store_for_test().lock();
+        let cookie_store_handle = browser_context.cookie_store_for_test();
+        let mut cookie_store = cookie_store_handle.lock();
         cookie_store.store_response_headers(
             &request_url,
             &[(
@@ -634,7 +654,8 @@ fn browser_context_storage_usage_reads_storage_partition_owner() {
         moli_storage_key::MoliStorageKey::first_party_from_url(&Url::parse(&origin).unwrap(), None)
             .serialized_storage_key();
     {
-        let mut store = browser_context.web_storage_store_for_test().lock();
+        let store_handle = browser_context.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert!(store.set_item(&storage_key, "local", "owner"));
     }
 
@@ -650,7 +671,7 @@ fn browser_context_storage_usage_reads_storage_partition_owner() {
 
 #[test]
 fn navigation_load_inputs_own_cookie_request_and_response_reports() {
-    let conn = CdpConnection::new();
+    let conn = crate::test_support::connection();
     let response_url = Url::parse("https://example.com/app/index.html").unwrap();
     let load_inputs = conn.navigation_load_inputs_for_session_owner(None);
 
@@ -674,8 +695,8 @@ fn navigation_load_inputs_own_cookie_request_and_response_reports() {
 }
 
 #[test]
-fn no_loaded_browser_context_navigation_inputs_reuse_initial_storage_stores() {
-    let mut conn = CdpConnection::new();
+fn initial_storage_is_reused_without_an_unowned_resource_runtime() {
+    let mut conn = crate::test_support::connection();
 
     let first_inputs = conn.navigation_load_inputs_for_session_owner(None);
     let second_inputs = conn.navigation_load_inputs_for_session_owner(None);
@@ -709,18 +730,37 @@ fn no_loaded_browser_context_navigation_inputs_reuse_initial_storage_stores() {
             .expect("initial storage bucket store"),
     ));
 
+    for inputs in [&first_inputs, &second_inputs] {
+        assert!(matches!(
+            conn.ensure_resource_request_client_for_navigation_load_inputs(inputs),
+            Err(message) if message == "resource request fixture requires an installed WebContents"
+        ));
+    }
+    assert_eq!(
+        conn.moli_memory_diagnostics()["isolateScope"]["estimatedRendererOwnerCount"],
+        json!(0)
+    );
+
+    let mut context = conn.new_browser_context("BID-initial-storage".into());
+    context.set_active_target_id("TID-initial-storage");
+    conn.insert_browser_context(context);
+    let owned_inputs = conn.navigation_load_inputs_for_session_owner(None);
     let (loader_cookie_store, resource_runtime_id) = {
         let loader = conn
-            .ensure_resource_request_client_for_navigation_load_inputs(&first_inputs)
-            .expect("loader for first no-context inputs");
+            .ensure_resource_request_client_for_navigation_load_inputs(&owned_inputs)
+            .expect("loader for the installed WebContents");
         (
             loader.cookie_store(),
             loader.resource_runtime_diagnostics().runtime_id,
         )
     };
+    assert!(Arc::ptr_eq(
+        &loader_cookie_store,
+        &first_storage.cookie_store
+    ));
     let loader = conn
-        .ensure_resource_request_client_for_navigation_load_inputs(&second_inputs)
-        .expect("loader for second no-context inputs");
+        .ensure_resource_request_client_for_navigation_load_inputs(&owned_inputs)
+        .expect("reused loader for the same WebContents");
     assert!(Arc::ptr_eq(&loader.cookie_store(), &loader_cookie_store));
     assert_eq!(
         loader.resource_runtime_diagnostics().runtime_id,
@@ -731,8 +771,8 @@ fn no_loaded_browser_context_navigation_inputs_reuse_initial_storage_stores() {
 
 #[test]
 fn page_request_client_for_navigation_inputs_inherits_service_worker_bypass() {
-    let mut conn = CdpConnection::new();
-    let mut browser_context = BrowserContext::new("BID-1".to_owned());
+    let mut conn = crate::test_support::connection();
+    let mut browser_context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
     browser_context.set_active_target_id("TID-1");
     browser_context.attach_active_session("SID-1");
     {
@@ -762,10 +802,10 @@ fn page_request_client_for_navigation_inputs_inherits_service_worker_bypass() {
 
 #[test]
 fn connection_snapshot_cookies_collects_active_and_inactive_contexts() {
-    let mut conn = CdpConnection::new();
-    let active = BrowserContext::new("BID-active".to_owned());
+    let mut conn = crate::test_support::connection();
+    let active = conn.new_browser_context_fixture_for_test("BID-active".to_owned());
     active.upsert_cookie_for_test(stored_cookie("active", "1"));
-    let inactive = BrowserContext::new("BID-inactive".to_owned());
+    let inactive = conn.new_browser_context_fixture_for_test("BID-inactive".to_owned());
     inactive.upsert_cookie_for_test(stored_cookie("inactive", "1"));
     conn.install_browser_context_fixture_for_test(active);
     conn.push_inactive_browser_context_fixture_for_test(inactive);
@@ -782,7 +822,7 @@ fn connection_snapshot_cookies_collects_active_and_inactive_contexts() {
 
 #[test]
 fn connection_profile_backed_cookie_snapshot_ignores_ephemeral_contexts() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
     let profile_backed = conn.new_browser_context("BID-profile".to_owned());
     profile_backed.upsert_cookie_for_test(stored_cookie("profile", "1"));
     let ephemeral = conn.new_ephemeral_browser_context("BID-ephemeral".to_owned());
@@ -800,7 +840,10 @@ fn connection_profile_backed_cookie_snapshot_ignores_ephemeral_contexts() {
 
 #[test]
 fn connection_profile_backed_cookie_snapshot_is_none_without_profile_backed_context() {
-    let mut conn = CdpConnection::new_with_initial_cookies(vec![stored_cookie("sid", "seeded")]);
+    let mut conn = crate::test_support::connection_with_config(
+        CdpInitialStoragePartition::with_cookies(vec![stored_cookie("sid", "seeded")]),
+        Default::default(),
+    );
     let ephemeral = conn.new_ephemeral_browser_context("BID-ephemeral".to_owned());
     assert!(ephemeral.snapshot_cookies().is_empty());
     conn.install_browser_context_fixture_for_test(ephemeral);
@@ -810,9 +853,9 @@ fn connection_profile_backed_cookie_snapshot_is_none_without_profile_backed_cont
 
 #[tokio::test]
 async fn build_loaded_navigation_from_buffered_response_updates_request_cookie_access_time() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
     let requested_url = Url::parse("https://example.com/app/index.html").unwrap();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.set_target_url("https://example.com/origin".into());
     bc.store_response_cookie_headers_for_test(
         &requested_url,
@@ -863,9 +906,9 @@ async fn build_loaded_navigation_from_buffered_response_updates_request_cookie_a
 
 #[tokio::test]
 async fn rebuild_buffered_response_preserving_request_report_avoids_second_access_touch() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
     let requested_url = Url::parse("https://example.com/app/index.html").unwrap();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut bc = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     bc.set_target_url("https://example.com/origin".into());
     bc.store_response_cookie_headers_for_test(
         &requested_url,
@@ -932,8 +975,8 @@ async fn rebuild_buffered_response_preserving_request_report_avoids_second_acces
 
 #[tokio::test]
 async fn reset_resource_runtime_clears_loaded_page_cookie_backend() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     let url = Url::parse("https://example.com/app").unwrap();
 
     let navigation = conn
@@ -950,7 +993,8 @@ async fn reset_resource_runtime_clears_loaded_page_cookie_backend() {
     conn.browser_context
         .as_mut()
         .unwrap()
-        .replace_active_page_for_test(Some(navigation.page));
+        .commit_active_navigation_for_test(navigation.page)
+        .await;
 
     let context = conn.browser_context.as_mut().unwrap();
     let target_id = context.active_target_id_owned().unwrap();
@@ -999,12 +1043,12 @@ async fn reset_resource_runtime_clears_loaded_page_cookie_backend() {
 
 #[tokio::test]
 async fn same_target_navigations_reuse_local_and_session_storage() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     let first_url = Url::parse("https://storage.example/app/one").unwrap();
     let second_url = Url::parse("https://storage.example/app/two").unwrap();
 
-    let mut first = conn
+    let first = conn
         .build_loaded_navigation_from_buffered_response_async(
             first_url,
             "GET".into(),
@@ -1014,17 +1058,26 @@ async fn same_target_navigations_reuse_local_and_session_storage() {
             "<!doctype html><html><body>one</body></html>".into(),
         )
         .await
-        .expect("first synthetic navigation should build")
-        .page;
-    let write = first
-        .evaluate_runtime_expression_async(
+        .expect("first synthetic navigation should build");
+    conn.browser_context
+        .as_mut()
+        .unwrap()
+        .commit_active_navigation_for_test(first.page)
+        .await;
+    let write = conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .evaluate_target_expression_for_test(
+            "TID-1",
             "localStorage.clear(); sessionStorage.clear(); localStorage.setItem('shared', 'yes'); sessionStorage.setItem('ephemeral', 'yes'); 'ok'",
+            false,
         )
         .await
         .expect("storage write should evaluate");
     assert_eq!(write["value"], json!("ok"));
 
-    let mut second = conn
+    let second = conn
         .build_loaded_navigation_from_buffered_response_async(
             second_url,
             "GET".into(),
@@ -1034,11 +1087,20 @@ async fn same_target_navigations_reuse_local_and_session_storage() {
             "<!doctype html><html><body>two</body></html>".into(),
         )
         .await
-        .expect("second synthetic navigation should build")
-        .page;
-    let read = second
-        .evaluate_runtime_expression_async(
+        .expect("second synthetic navigation should build");
+    conn.browser_context
+        .as_mut()
+        .unwrap()
+        .commit_active_navigation_for_test(second.page)
+        .await;
+    let read = conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .evaluate_target_expression_for_test(
+            "TID-1",
             "`${localStorage.getItem('shared')}|${String(sessionStorage.getItem('ephemeral'))}`",
+            false,
         )
         .await
         .expect("storage read should evaluate");
@@ -1048,13 +1110,13 @@ async fn same_target_navigations_reuse_local_and_session_storage() {
 
 #[tokio::test]
 async fn browser_context_storage_does_not_cross_context_switches() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     conn.inactive_browser_contexts
-        .push(BrowserContext::new("BID-2".into()));
+        .push(conn.new_page_target_fixture_for_test("BID-2", "TID-2"));
     let url = Url::parse("https://context-storage.example/app").unwrap();
 
-    let mut first = conn
+    let first = conn
         .build_loaded_navigation_from_buffered_response_async(
             url.clone(),
             "GET".into(),
@@ -1064,17 +1126,25 @@ async fn browser_context_storage_does_not_cross_context_switches() {
             "<!doctype html><html><body>first</body></html>".into(),
         )
         .await
-        .expect("first context navigation should build")
-        .page;
-    first
-        .evaluate_runtime_expression_async(
+        .expect("first context navigation should build");
+    conn.browser_context
+        .as_mut()
+        .unwrap()
+        .commit_active_navigation_for_test(first.page)
+        .await;
+    conn.browser_context
+        .as_mut()
+        .unwrap()
+        .evaluate_target_expression_for_test(
+            "TID-1",
             "localStorage.clear(); sessionStorage.clear(); localStorage.setItem('contextOnly', 'first'); sessionStorage.setItem('sessionOnly', 'first');",
+            false,
         )
         .await
         .expect("first context storage write should evaluate");
 
     assert!(conn.activate_browser_context_by_id_async("BID-2").await);
-    let mut second = conn
+    let second = conn
         .build_loaded_navigation_from_buffered_response_async(
             url,
             "GET".into(),
@@ -1084,11 +1154,20 @@ async fn browser_context_storage_does_not_cross_context_switches() {
             "<!doctype html><html><body>second</body></html>".into(),
         )
         .await
-        .expect("second context navigation should build")
-        .page;
-    let read = second
-        .evaluate_runtime_expression_async(
+        .expect("second context navigation should build");
+    conn.browser_context
+        .as_mut()
+        .unwrap()
+        .commit_active_navigation_for_test(second.page)
+        .await;
+    let read = conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .evaluate_target_expression_for_test(
+            "TID-2",
             "`${String(localStorage.getItem('contextOnly'))}|${String(sessionStorage.getItem('sessionOnly'))}`",
+            false,
         )
         .await
         .expect("second context storage read should evaluate");
@@ -1098,15 +1177,17 @@ async fn browser_context_storage_does_not_cross_context_switches() {
 
 #[tokio::test]
 async fn browser_context_storage_buckets_reuse_within_context_and_isolate_between_contexts() {
-    let mut conn = CdpConnection::new();
-    let context_a = conn.new_ephemeral_browser_context("BID-1".into());
-    let context_b = conn.new_ephemeral_browser_context("BID-2".into());
+    let mut conn = crate::test_support::connection();
+    let mut context_a = conn.new_ephemeral_browser_context("BID-1".into());
+    context_a.set_active_target_id("TID-1");
+    let mut context_b = conn.new_ephemeral_browser_context("BID-2".into());
+    context_b.set_active_target_id("TID-2");
     conn.install_browser_context_fixture_for_test(context_a);
     conn.push_inactive_browser_context_fixture_for_test(context_b);
     let first_url = Url::parse("https://context-storage-buckets.example/app/one").unwrap();
     let second_url = Url::parse("https://context-storage-buckets.example/app/two").unwrap();
 
-    let mut first = conn
+    let first = conn
         .build_loaded_navigation_from_buffered_response_async(
             first_url.clone(),
             "GET".into(),
@@ -1116,10 +1197,18 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
             "<!doctype html><html><body>first</body></html>".into(),
         )
         .await
-        .expect("first context navigation should build")
-        .page;
-    let write = first
-        .evaluate_runtime_expression_with_await_async(
+        .expect("first context navigation should build");
+    conn.browser_context
+        .as_mut()
+        .unwrap()
+        .commit_active_navigation_for_test(first.page)
+        .await;
+    let write = conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .evaluate_target_expression_for_test(
+            "TID-1",
             r#"
 (async () => {
   await navigator.storageBuckets.open("bucket-a");
@@ -1133,7 +1222,7 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
         .expect("first context storage bucket write should evaluate");
     assert_eq!(write["value"], json!("bucket-a|bucket-b"));
 
-    let mut same_context = conn
+    let same_context = conn
         .build_loaded_navigation_from_buffered_response_async(
             second_url.clone(),
             "GET".into(),
@@ -1143,10 +1232,18 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
             "<!doctype html><html><body>same context</body></html>".into(),
         )
         .await
-        .expect("same context navigation should build")
-        .page;
-    let same_context_keys = same_context
-        .evaluate_runtime_expression_with_await_async(
+        .expect("same context navigation should build");
+    conn.browser_context
+        .as_mut()
+        .unwrap()
+        .commit_active_navigation_for_test(same_context.page)
+        .await;
+    let same_context_keys = conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .evaluate_target_expression_for_test(
+            "TID-1",
             r#"
 (async () => (await navigator.storageBuckets.keys()).join("|"))()
 "#,
@@ -1157,7 +1254,7 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
     assert_eq!(same_context_keys["value"], json!("bucket-a|bucket-b"));
 
     assert!(conn.activate_browser_context_by_id_async("BID-2").await);
-    let mut other_context = conn
+    let other_context = conn
         .build_loaded_navigation_from_buffered_response_async(
             second_url,
             "GET".into(),
@@ -1167,10 +1264,18 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
             "<!doctype html><html><body>other context</body></html>".into(),
         )
         .await
-        .expect("other context navigation should build")
-        .page;
-    let other_context_keys = other_context
-        .evaluate_runtime_expression_with_await_async(
+        .expect("other context navigation should build");
+    conn.browser_context
+        .as_mut()
+        .unwrap()
+        .commit_active_navigation_for_test(other_context.page)
+        .await;
+    let other_context_keys = conn
+        .browser_context
+        .as_mut()
+        .unwrap()
+        .evaluate_target_expression_for_test(
+            "TID-2",
             r#"
 (async () => (await navigator.storageBuckets.keys()).join("|"))()
 "#,
@@ -1183,8 +1288,8 @@ async fn browser_context_storage_buckets_reuse_within_context_and_isolate_betwee
 
 #[tokio::test]
 async fn user_agent_override_rebinds_live_document_after_engine_runtime_invalidation() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     let url = Url::parse("https://example.com/app").unwrap();
 
     let navigation = conn
@@ -1201,7 +1306,8 @@ async fn user_agent_override_rebinds_live_document_after_engine_runtime_invalida
     conn.browser_context
         .as_mut()
         .unwrap()
-        .replace_active_page_for_test(Some(navigation.page));
+        .commit_active_navigation_for_test(navigation.page)
+        .await;
 
     // Invalidate only the NavigationEngine's cached browser runtime. The
     // committed Document keeps its exact lifecycle authority so the setting
@@ -1220,8 +1326,8 @@ async fn user_agent_override_rebinds_live_document_after_engine_runtime_invalida
 
 #[tokio::test]
 async fn tls_and_proxy_overrides_rebind_live_document_after_engine_runtime_invalidation() {
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new_with_page_for_test("BID-1", "TID-1"));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     let url = Url::parse("https://example.com/app").unwrap();
 
     let navigation = conn
@@ -1238,7 +1344,8 @@ async fn tls_and_proxy_overrides_rebind_live_document_after_engine_runtime_inval
     conn.browser_context
         .as_mut()
         .unwrap()
-        .replace_active_page_for_test(Some(navigation.page));
+        .commit_active_navigation_for_test(navigation.page)
+        .await;
 
     // Network settings rebuild the transport behind the live Document
     // authority; they must not retire that authority first.
@@ -1272,11 +1379,11 @@ fn build_loaded_navigation_from_buffered_response_works_inside_current_thread_ru
         .expect("test runtime should build");
 
     runtime.block_on(async {
-        let mut conn = CdpConnection::new();
-        conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
         let url = Url::parse("https://example.com/app").unwrap();
 
-        let mut navigation = conn
+        let navigation = conn
             .build_loaded_navigation_from_buffered_response_async(
                 url.clone(),
                 "GET".into(),
@@ -1290,10 +1397,20 @@ fn build_loaded_navigation_from_buffered_response_works_inside_current_thread_ru
 
         assert_eq!(navigation.final_url, url);
         assert_eq!(navigation.response_status, 200);
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .commit_active_navigation_for_test(navigation.page)
+            .await;
         assert_eq!(
-            navigation
-                .page
-                .evaluate_runtime_expression_async("document.getElementById('ok').textContent")
+            conn.browser_context
+                .as_mut()
+                .unwrap()
+                .evaluate_target_expression_for_test(
+                    "TID-1",
+                    "document.getElementById('ok').textContent",
+                    false,
+                )
                 .await
                 .expect("dom evaluation should succeed")["value"],
             json!("ok")
@@ -1303,8 +1420,8 @@ fn build_loaded_navigation_from_buffered_response_works_inside_current_thread_ru
 
 #[tokio::test]
 async fn loader_uses_active_browser_context_user_agent_override() {
-    let mut conn = CdpConnection::new();
-    let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut conn = crate::test_support::connection();
+    let mut first = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     {
         let context = &mut first;
         let target_id = context
@@ -1314,7 +1431,7 @@ async fn loader_uses_active_browser_context_user_agent_override() {
     };
     conn.install_browser_context_fixture_for_test(first);
 
-    let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
+    let mut second = conn.new_page_target_fixture_for_test("BID-2", "TID-2");
     {
         let context = &mut second;
         let target_id = context
@@ -1342,15 +1459,15 @@ async fn loader_uses_active_browser_context_user_agent_override() {
 
 #[tokio::test]
 async fn loader_uses_active_browser_context_http_proxy_override() {
-    let mut conn = CdpConnection::new();
-    let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut conn = crate::test_support::connection();
+    let mut first = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     first.set_network_policy(crate::conn::ContextNetworkPolicy {
         http_proxy: Some("http://proxy-a.test:8080".into()),
         ..Default::default()
     });
     conn.install_browser_context_fixture_for_test(first);
 
-    let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
+    let mut second = conn.new_page_target_fixture_for_test("BID-2", "TID-2");
     second.set_network_policy(crate::conn::ContextNetworkPolicy {
         http_proxy: Some("http://proxy-b.test:8080".into()),
         ..Default::default()
@@ -1375,15 +1492,15 @@ async fn loader_uses_active_browser_context_http_proxy_override() {
 
 #[tokio::test]
 async fn loader_uses_active_browser_context_http_no_proxy_override() {
-    let mut conn = CdpConnection::new();
-    let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut conn = crate::test_support::connection();
+    let mut first = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     first.set_network_policy(crate::conn::ContextNetworkPolicy {
         http_no_proxy: Some("localhost,127.0.0.1".into()),
         ..Default::default()
     });
     conn.install_browser_context_fixture_for_test(first);
 
-    let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
+    let mut second = conn.new_page_target_fixture_for_test("BID-2", "TID-2");
     second.set_network_policy(crate::conn::ContextNetworkPolicy {
         http_no_proxy: Some("::1,.example.com".into()),
         ..Default::default()
@@ -1408,8 +1525,8 @@ async fn loader_uses_active_browser_context_http_no_proxy_override() {
 
 #[tokio::test]
 async fn loader_uses_active_browser_context_tls_verify_host_override() {
-    let mut conn = CdpConnection::new();
-    let mut first = BrowserContext::new_with_page_for_test("BID-1", "TID-1");
+    let mut conn = crate::test_support::connection();
+    let mut first = conn.new_page_target_fixture_for_test("BID-1", "TID-1");
     {
         let context = &mut first;
         let target_id = context
@@ -1419,7 +1536,7 @@ async fn loader_uses_active_browser_context_tls_verify_host_override() {
     };
     conn.install_browser_context_fixture_for_test(first);
 
-    let mut second = BrowserContext::new_with_page_for_test("BID-2", "TID-2");
+    let mut second = conn.new_page_target_fixture_for_test("BID-2", "TID-2");
     {
         let context = &mut second;
         let target_id = context
@@ -1446,9 +1563,9 @@ async fn loader_uses_active_browser_context_tls_verify_host_override() {
 
 #[tokio::test]
 async fn removing_an_inactive_browser_context_keeps_the_previously_active_context() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
+    let mut first = conn.new_page_target_fixture_for_test("BID-A", "TID-A");
     {
         let context = &mut first;
         let target_id = context
@@ -1458,7 +1575,7 @@ async fn removing_an_inactive_browser_context_keeps_the_previously_active_contex
     };
     conn.install_browser_context_fixture_for_test(first);
 
-    let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
+    let mut second = conn.new_page_target_fixture_for_test("BID-B", "TID-B");
     {
         let context = &mut second;
         let target_id = context
@@ -1468,7 +1585,7 @@ async fn removing_an_inactive_browser_context_keeps_the_previously_active_contex
     };
     conn.push_inactive_browser_context_fixture_for_test(second);
 
-    let mut third = BrowserContext::new_with_page_for_test("BID-C", "TID-C");
+    let mut third = conn.new_page_target_fixture_for_test("BID-C", "TID-C");
     {
         let context = &mut third;
         let target_id = context
@@ -1508,9 +1625,9 @@ async fn removing_an_inactive_browser_context_keeps_the_previously_active_contex
 
 #[tokio::test]
 async fn manual_browser_context_restore_reselects_original_context_after_switch() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
+    let mut first = conn.new_page_target_fixture_for_test("BID-A", "TID-A");
     {
         let context = &mut first;
         let target_id = context
@@ -1520,7 +1637,7 @@ async fn manual_browser_context_restore_reselects_original_context_after_switch(
     };
     conn.install_browser_context_fixture_for_test(first);
 
-    let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
+    let mut second = conn.new_page_target_fixture_for_test("BID-B", "TID-B");
     {
         let context = &mut second;
         let target_id = context
@@ -1564,12 +1681,12 @@ async fn manual_browser_context_restore_reselects_original_context_after_switch(
 
 #[tokio::test]
 async fn session_scoped_process_message_restores_previously_active_context_after_dispatch() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
+    let first = conn.new_page_target_fixture_for_test("BID-A", "TID-A");
     conn.install_browser_context_fixture_for_test(first);
 
-    let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
+    let mut second = conn.new_page_target_fixture_for_test("BID-B", "TID-B");
     second.attach_active_session("SID-B");
     conn.push_inactive_browser_context_fixture_for_test(second);
 
@@ -1603,12 +1720,12 @@ async fn session_scoped_process_message_restores_previously_active_context_after
 
 #[tokio::test(flavor = "multi_thread")]
 async fn session_scoped_process_message_async_restores_previously_active_context_after_dispatch() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let first = BrowserContext::new_with_page_for_test("BID-A", "TID-A");
+    let first = conn.new_page_target_fixture_for_test("BID-A", "TID-A");
     conn.install_browser_context_fixture_for_test(first);
 
-    let mut second = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
+    let mut second = conn.new_page_target_fixture_for_test("BID-B", "TID-B");
     second.attach_active_session("SID-B");
     conn.push_inactive_browser_context_fixture_for_test(second);
 
@@ -1642,9 +1759,9 @@ async fn session_scoped_process_message_async_restores_previously_active_context
 
 #[tokio::test]
 async fn direct_network_enable_routes_to_inactive_active_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
     conn.push_inactive_browser_context_fixture_for_test(inactive);
@@ -1800,8 +1917,8 @@ async fn direct_runtime_evaluate_document_replacement_lifecycle_uses_inactive_ow
 
 #[test]
 fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() {
-    let mut conn = CdpConnection::new();
-    let mut browser_context = BrowserContext::new("BID-lifecycle-wait".into());
+    let mut conn = crate::test_support::connection();
+    let mut browser_context = conn.new_browser_context_fixture_for_test("BID-lifecycle-wait");
     browser_context.set_active_target_id("TID-lifecycle-wait".to_owned());
     browser_context.attach_active_session("SID-lifecycle-wait");
     browser_context.set_active_document_fixture_for_test(901);
@@ -1930,7 +2047,7 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
         DevToolsDocumentLifecycleWaitState::Unavailable
     );
 
-    let mut replacement_context = BrowserContext::new("BID-other".into());
+    let mut replacement_context = conn.new_browser_context_fixture_for_test("BID-other");
     replacement_context.set_active_target_id("TID-other".to_owned());
     replacement_context.attach_active_session("SID-lifecycle-wait");
     replacement_context.set_active_document_fixture_for_test(902);
@@ -1971,8 +2088,8 @@ fn devtools_document_lifecycle_wait_key_observes_interruption_and_target_loss() 
 
 #[test]
 fn devtools_target_context_resolves_background_page_without_ambient_route() {
-    let mut conn = CdpConnection::new();
-    let mut browser_context = BrowserContext::new("BID-explicit-owner".into());
+    let mut conn = crate::test_support::connection();
+    let mut browser_context = conn.new_browser_context_fixture_for_test("BID-explicit-owner");
     browser_context.set_active_target_id("TID-active");
     browser_context.set_active_document_fixture_for_test(1001);
     assert!(browser_context.register_page_target_url_fixture(
@@ -2274,7 +2391,9 @@ async fn direct_runtime_evaluate_self_popup_does_not_navigate_active_target_for_
     ctx.conn.install_browser_context_fixture_for_test(active);
 
     let page_url = "data:text/html,<!doctype html><title>self-popup</title>";
-    let mut inactive = BrowserContext::new("BID-self-popup-background".into());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-self-popup-background");
     inactive.register_page_target_url_fixture(
         "TID-self-popup-background".to_owned(),
         Some("SID-self-popup-background".to_owned()),
@@ -2447,9 +2566,9 @@ async fn direct_runtime_evaluate_routes_to_inactive_attached_owner_without_activ
 
 #[tokio::test]
 async fn direct_network_enable_disable_routes_to_inactive_attached_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-primary");
     assert!(inactive.assign_attached_session_to_target("TID-B", "SID-attached".to_owned()));
@@ -2515,9 +2634,9 @@ async fn direct_network_enable_disable_routes_to_inactive_attached_owner_without
 
 #[tokio::test]
 async fn direct_page_preload_routes_to_inactive_active_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
     conn.push_inactive_browser_context_fixture_for_test(inactive);
@@ -2569,9 +2688,9 @@ async fn direct_page_preload_routes_to_inactive_active_owner_without_activating_
 
 #[tokio::test]
 async fn direct_page_preload_routes_to_inactive_background_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = conn.new_browser_context_fixture_for_test("BID-B");
     inactive.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -2625,9 +2744,9 @@ async fn direct_page_preload_routes_to_inactive_background_owner_without_activat
 
 #[tokio::test]
 async fn direct_network_enable_routes_to_inactive_background_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = conn.new_browser_context_fixture_for_test("BID-B");
     inactive.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -2666,9 +2785,9 @@ async fn direct_network_enable_routes_to_inactive_background_owner_without_activ
 
 #[tokio::test]
 async fn direct_attached_network_enable_for_background_target_does_not_enable_primary_listener() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = conn.new_browser_context_fixture_for_test("BID-B");
     inactive.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -2708,9 +2827,9 @@ async fn direct_attached_network_enable_for_background_target_does_not_enable_pr
 
 #[tokio::test]
 async fn direct_network_enable_routes_to_active_background_owner_without_activating_target() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut active = BrowserContext::new("BID-A".into());
+    let mut active = conn.new_browser_context_fixture_for_test("BID-A");
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active");
     active.register_page_target_fixture(
@@ -2869,22 +2988,15 @@ async fn direct_network_enable_for_loaded_background_owner_starts_at_network_tai
 #[tokio::test]
 async fn direct_background_command_does_not_emit_active_observable_output_under_background_session()
 {
-    let mut conn = CdpConnection::new();
-    let active_page = conn
-        .load_page_via_runtime_async(
-            "data:text/html,<!doctype html><script>console.warn('active warning')</script>",
-        )
-        .await
-        .expect("active page should load");
+    let mut conn = crate::test_support::connection();
 
-    let mut active = BrowserContext::new("BID-A".into());
+    let mut active = conn.new_browser_context_fixture_for_test("BID-A");
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active");
     active.active_page_target_mut().devtools_sessions
         [moli_page_types::DevToolsSessionKey::Primary]
         .console_output_session_state
         .console_enabled = true;
-    active.replace_loaded_page(Some(active_page));
     active.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -2892,6 +3004,11 @@ async fn direct_background_command_does_not_emit_active_observable_output_under_
         TargetPageSlot::empty_for_test_fixture(),
     );
     conn.install_browser_context_fixture_for_test(active);
+    conn.install_navigation_fixture_for_session_owner_for_test(
+        "data:text/html,<!doctype html><script>console.warn('active warning')</script>",
+        Some("SID-active"),
+    )
+    .await;
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -3026,9 +3143,9 @@ async fn direct_console_routes_to_inactive_active_owner_without_activating_slot(
 
 #[tokio::test]
 async fn direct_console_routes_to_inactive_background_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = conn.new_browser_context_fixture_for_test("BID-B");
     inactive.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -3218,19 +3335,16 @@ async fn direct_console_routes_to_loaded_background_owner_and_advances_backgroun
 #[tokio::test]
 async fn direct_log_enable_routes_to_inactive_active_owner_without_activating_slot_or_replaying_console_api()
  {
-    let mut conn = CdpConnection::new();
-
-    let page = conn
-        .load_page_via_runtime_async(
-            "data:text/html,<!doctype html><script>console.warn('boot warning')</script>",
-        )
-        .await
-        .expect("test page should load");
-    let mut inactive = BrowserContext::new_with_page_for_test("BID-B", "TID-B");
+    let mut conn = crate::test_support::connection();
+    let mut inactive = conn.new_page_target_fixture_for_test("BID-B", "TID-B");
     inactive.set_target_url("data:text/html,log-direct-test".to_owned());
     inactive.attach_active_session("SID-B");
-    inactive.replace_loaded_page(Some(page));
     conn.push_inactive_browser_context_fixture_for_test(inactive);
+    conn.install_navigation_fixture_for_session_owner_for_test(
+        "data:text/html,<!doctype html><script>console.warn('boot warning')</script>",
+        Some("SID-B"),
+    )
+    .await;
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -3275,9 +3389,9 @@ async fn direct_log_enable_routes_to_inactive_active_owner_without_activating_sl
 
 #[tokio::test]
 async fn direct_log_enable_routes_to_inactive_background_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = conn.new_browser_context_fixture_for_test("BID-B");
     inactive.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -3318,27 +3432,20 @@ async fn direct_log_enable_routes_to_inactive_background_owner_without_activatin
 
 #[tokio::test]
 async fn direct_log_enable_routes_to_loaded_background_owner_without_replaying_console_api() {
-    let mut conn = CdpConnection::new();
-    let page = conn
-        .load_page_via_runtime_async(
-            "data:text/html,<!doctype html><script>console.warn('background log')</script>",
-        )
-        .await
-        .expect("background page should load");
-
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut conn = crate::test_support::connection();
+    let mut inactive = conn.new_browser_context_fixture_for_test("BID-B");
     inactive.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
         TargetIdentityState::about_blank(),
         TargetPageSlot::empty_for_test_fixture(),
     );
-    inactive
-        .page_target_mut("TID-background")
-        .unwrap()
-        .set_target_url(page.final_url().as_str().to_owned());
-    inactive.replace_target_page_for_test("TID-background", Some(page));
     conn.push_inactive_browser_context_fixture_for_test(inactive);
+    conn.install_navigation_fixture_for_session_owner_for_test(
+        "data:text/html,<!doctype html><script>console.warn('background log')</script>",
+        Some("SID-background"),
+    )
+    .await;
 
     let response = conn
         .process_message_messages_only_for_test(
@@ -3441,9 +3548,9 @@ async fn direct_log_disable_routes_to_inactive_active_owner_without_activating_s
 
 #[tokio::test]
 async fn direct_log_disable_routes_to_inactive_background_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = conn.new_browser_context_fixture_for_test("BID-B");
     inactive.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -3490,9 +3597,9 @@ async fn direct_log_disable_routes_to_inactive_background_owner_without_activati
 
 #[tokio::test]
 async fn direct_network_policy_routes_to_inactive_active_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
     conn.push_inactive_browser_context_fixture_for_test(inactive);
@@ -3561,9 +3668,9 @@ async fn direct_network_policy_routes_to_inactive_active_owner_without_activatin
 
 #[tokio::test]
 async fn direct_network_policy_invalid_params_return_owner_plan_error_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = conn.new_browser_context_fixture_for_test("BID-B");
     inactive.set_active_target_id("TID-B".to_owned());
     inactive.attach_active_session("SID-B");
     conn.push_inactive_browser_context_fixture_for_test(inactive);
@@ -3613,9 +3720,9 @@ async fn direct_network_policy_invalid_params_return_owner_plan_error_without_ac
 
 #[tokio::test]
 async fn direct_network_policy_routes_to_inactive_background_owner_without_activating_slot() {
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
 
-    let mut inactive = BrowserContext::new("BID-B".into());
+    let mut inactive = conn.new_browser_context_fixture_for_test("BID-B");
     inactive.register_page_target_fixture(
         "TID-background".to_owned(),
         Some("SID-background".to_owned()),
@@ -3742,13 +3849,13 @@ async fn streaming_navigation_collect_transition_preserves_redirect_cookie_and_b
     });
 
     let start_url = format!("http://{addr}/start");
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
     let outcome = conn
         .load_navigation_request_via_runtime_async("GET", &start_url, None, Vec::new())
         .await
         .expect("streaming navigation should load");
-    let mut navigation = commit_navigation_outcome_for_test(&mut conn, outcome).await;
+    let navigation = commit_navigation_outcome_for_test(&mut conn, outcome).await;
 
     assert_eq!(
         navigation.final_url.as_str(),
@@ -3778,10 +3885,20 @@ async fn streaming_navigation_collect_transition_preserves_redirect_cookie_and_b
         .map(|cookie| cookie.name)
         .collect::<Vec<_>>();
     assert!(cookie_names.iter().any(|name| name == "final"));
+    conn.browser_context
+        .as_mut()
+        .unwrap()
+        .commit_active_navigation_for_test(navigation.page)
+        .await;
     assert_eq!(
-        navigation
-            .page
-            .evaluate_runtime_expression_async("document.getElementById('from-stream').textContent")
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .evaluate_target_expression_for_test(
+                "TID-1",
+                "document.getElementById('from-stream').textContent",
+                false,
+            )
             .await
             .expect("loaded page should be evaluable")["value"],
         json!("streamed")
@@ -3794,7 +3911,10 @@ async fn streaming_navigation_collect_transition_preserves_redirect_cookie_and_b
 async fn data_image_navigation_loads_from_synthetic_response_without_curl() {
     let data_url = "data:image/png;base64,AP9h";
     let request_headers = vec![("accept".to_owned(), "image/png".to_owned())];
-    let mut conn = CdpConnection::new();
+    let mut conn = crate::test_support::connection();
+    conn.install_browser_context_fixture_for_test(
+        conn.new_page_target_fixture_for_test("BID-image", "TID-image"),
+    );
 
     let outcome = conn
         .load_navigation_request_via_runtime_async("GET", data_url, None, request_headers.clone())
@@ -3905,9 +4025,9 @@ async fn streaming_navigation_feeds_parser_before_body_eof() {
     });
 
     let page_url = format!("http://{addr}/page");
-    let mut conn = CdpConnection::new();
-    conn.browser_context = Some(BrowserContext::new("BID-1".into()));
-    let mut navigation = tokio::time::timeout(std::time::Duration::from_secs(4), async {
+    let mut conn = crate::test_support::connection();
+    conn.browser_context = Some(conn.new_page_target_fixture_for_test("BID-1", "TID-1"));
+    let navigation = tokio::time::timeout(std::time::Duration::from_secs(4), async {
         let outcome = conn
             .load_navigation_request_via_runtime_async("GET", &page_url, None, Vec::new())
             .await
@@ -3922,20 +4042,33 @@ async fn streaming_navigation_feeds_parser_before_body_eof() {
         "parser should request the external script before the main body EOF"
     );
     assert!(navigation.response_body().contains("id=\"tail\""));
+    conn.browser_context
+        .as_mut()
+        .unwrap()
+        .commit_active_navigation_for_test(navigation.page)
+        .await;
     assert_eq!(
-        navigation
-            .page
-            .evaluate_runtime_expression_async(
-                "document.documentElement.getAttribute('data-script')"
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .evaluate_target_expression_for_test(
+                "TID-1",
+                "document.documentElement.getAttribute('data-script')",
+                false,
             )
             .await
             .expect("loaded page should be evaluable")["value"],
         json!("seen")
     );
     assert_eq!(
-        navigation
-            .page
-            .evaluate_runtime_expression_async("document.getElementById('tail').textContent")
+        conn.browser_context
+            .as_mut()
+            .unwrap()
+            .evaluate_target_expression_for_test(
+                "TID-1",
+                "document.getElementById('tail').textContent",
+                false,
+            )
             .await
             .expect("loaded page should be evaluable")["value"],
         json!("done")

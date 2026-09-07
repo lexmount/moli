@@ -437,7 +437,7 @@ mod tests {
     use moli_shared_worker::SharedWorkerInstanceId;
     use serde_json::json;
 
-    use crate::conn::{BrowserContext, CdpConnection, CdpSessionRoute, SharedWorkerTargetState};
+    use crate::conn::{CdpSessionRoute, SharedWorkerTargetState};
 
     #[test]
     fn runtime_listener_session_ids_are_worker_type_scoped() {
@@ -457,8 +457,9 @@ mod tests {
 
     #[tokio::test]
     async fn runtime_listener_enable_uses_shared_worker_target_session() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-shared".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-shared".to_owned());
         browser_context.insert_shared_worker_target(SharedWorkerTargetState::new(
             RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(91),

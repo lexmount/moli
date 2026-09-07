@@ -4381,7 +4381,7 @@ mod tests {
         BackgroundServiceWorkerVersion, NavigationBackgroundEvent, PageScreencastFrameMetadata,
         RuntimeInspectorResponseReady, build_event,
     };
-    use crate::conn::{BrowserContext, CdpConnection, DevToolsDocumentLifecycleWaitKey};
+    use crate::conn::{BrowserContext, DevToolsDocumentLifecycleWaitKey};
     use moli_core::{
         PageId, RendererRuntimeInspectorAsyncCompletion,
         page::{
@@ -4429,7 +4429,7 @@ mod tests {
 
     #[test]
     fn page_download_envelope_rejects_disabled_and_reenabled_subscription() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.install_default_browser_target();
         assert!(conn.set_page_domain_enabled_for_session_owner(None, true));
         let first_generation = conn
@@ -4474,7 +4474,7 @@ mod tests {
 
     #[test]
     fn browser_download_route_guard_rejects_detached_and_reenabled_subscription() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         conn.set_browser_download_events_enabled_for_session(Some("SID-browser"), true);
         let first_generation = conn.download_subscriptions.browser_event_observers()[0].1;
         let event = BackgroundProtocolEvent::browser_download_progress(

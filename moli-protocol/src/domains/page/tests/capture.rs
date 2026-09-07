@@ -172,18 +172,11 @@ async fn capture_screenshot_rejects_completion_from_replaced_renderer_attachment
         panic!("captureScreenshot should use the pending renderer page-command lane");
     };
 
-    let replacement = ctx
-        .conn
-        .load_page_via_runtime_async(
-            "data:text/html,<style>html%7Bbackground-color%3Agreen%7D</style>",
-        )
-        .await
-        .expect("replacement page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .replace_active_page_for_test(Some(replacement));
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<style>html%7Bbackground-color%3Agreen%7D</style>",
+        None,
+    )
+    .await;
 
     let mut command_context = CommandDispatchContext::default();
     let PageCommandTaskStep::Complete(plan) =
@@ -255,16 +248,8 @@ async fn capture_snapshot_returns_minimal_mhtml_for_loaded_page() {
     let mut ctx = TestContext::new();
     let page_url = "data:text/html,<div id='x' class='container'><p>Text</p></div>";
     load_bc_with_target(&mut ctx, "BID-MHTML", "TID-MHTML", page_url);
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .replace_active_page_for_test(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(page_url, None)
+        .await;
 
     ctx.process_async(json!({
         "id": 1110,
@@ -305,16 +290,8 @@ async fn capture_snapshot_dispatch_serializes_html_in_renderer_owner() {
     let page_url =
         "data:text/html,<!doctype html><html><body><main id='live'>renderer</main></body></html>";
     load_bc_with_target(&mut ctx, "BID-MHTML-LIVE", "TID-MHTML-LIVE", page_url);
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .replace_active_page_for_test(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(page_url, None)
+        .await;
 
     let params = serde_json::Value::Null;
     let cmd = Cmd::for_test(
@@ -481,7 +458,9 @@ async fn capture_screenshot_uses_emulated_device_metrics() {
 #[tokio::test(flavor = "multi_thread")]
 async fn capture_screenshot_targets_loaded_background_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-screenshot-background".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-screenshot-background".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.register_page_target_url_fixture(
@@ -543,14 +522,9 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
         "SID-active",
         "about:blank",
     );
-    let page = ctx
+    let mut inactive = ctx
         .conn
-        .load_page_via_runtime_async(
-            "data:text/html,<title>Inactive Screenshot</title><main>inactive</main>",
-        )
-        .await
-        .expect("inactive page should load");
-    let mut inactive = BrowserContext::new("BID-inactive-screenshot".to_owned());
+        .new_browser_context_fixture_for_test("BID-inactive-screenshot".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
     {
@@ -569,9 +543,13 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
             })),
         )
     };
-    inactive.replace_loaded_page(Some(page));
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);
+    ctx.install_quiet_navigation_fixture_for_session_owner(
+        "data:text/html,<title>Inactive Screenshot</title><main>inactive</main>",
+        Some("SID-inactive"),
+    )
+    .await;
 
     ctx.process_async(json!({
         "id": 115,
@@ -580,7 +558,8 @@ async fn capture_screenshot_targets_inactive_loaded_owner_without_activation() {
     }))
     .await;
     let response = take_response_by_id(&mut ctx, 115);
-    assert_png_dimensions(&screenshot_png_bytes(&response), 1920, 1080);
+    // The inactive Document inherits its own 500x300 viewport at DPR 1.5.
+    assert_png_dimensions(&screenshot_png_bytes(&response), 750, 450);
     assert_eq!(
         ctx.conn
             .browser_context
@@ -916,16 +895,8 @@ async fn get_layout_metrics_queries_live_renderer_for_loaded_pages() {
         "about:blank",
     );
     let page_url = "data:text/html,<html style='width:2300px;height:1500px'><body style='margin:0;width:2300px;height:1500px'><div style='width:2300px;height:1500px'></div></body></html>";
-    let page = ctx
-        .conn
-        .load_page_via_runtime_async(page_url)
-        .await
-        .expect("page should load");
-    ctx.conn
-        .browser_context
-        .as_mut()
-        .expect("browser context")
-        .replace_active_page_for_test(Some(page));
+    ctx.install_quiet_navigation_fixture_for_session_owner(page_url, None)
+        .await;
 
     ctx.process_async(json!({
         "id": 125,
@@ -950,7 +921,9 @@ async fn get_layout_metrics_targets_loaded_background_owner_without_activation()
     let mut ctx = TestContext::new();
     let page_url = "data:text/html,<html style='width:2300px;height:1700px'><body style='margin:0;width:2300px;height:1700px'><div style='width:2300px;height:1700px'></div></body></html>";
 
-    let mut bc = BrowserContext::new("BID-1".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-1".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.set_target_url("data:text/html,<body>active</body>".to_owned());
@@ -1007,7 +980,9 @@ async fn get_layout_metrics_targets_loaded_background_owner_without_activation()
 async fn get_layout_metrics_targets_inactive_loaded_owner_without_activation() {
     let mut ctx = TestContext::new();
     let page_url = "data:text/html,<html style='width:2100px;height:1600px'><body style='margin:0;width:2100px;height:1600px'><div style='width:2100px;height:1600px'></div></body></html>";
-    let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());

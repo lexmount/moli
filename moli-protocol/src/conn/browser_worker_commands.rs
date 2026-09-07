@@ -49,21 +49,20 @@ impl CdpConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::conn::BrowserContext;
 
     #[test]
     fn service_worker_control_rejects_a_replaced_devtools_context_id() {
-        let mut conn = CdpConnection::default();
-        conn.install_browser_context_fixture_for_test(BrowserContext::new(
-            "BID-worker-control".into(),
-        ));
+        let mut conn = crate::test_support::connection();
+        conn.install_browser_context_fixture_for_test(
+            conn.new_browser_context_fixture_for_test("BID-worker-control"),
+        );
         let original = conn
             .browser_context_handle_for_devtools_id("BID-worker-control")
             .unwrap();
 
-        conn.install_browser_context_fixture_for_test(BrowserContext::new(
-            "BID-worker-control".into(),
-        ));
+        conn.install_browser_context_fixture_for_test(
+            conn.new_browser_context_fixture_for_test("BID-worker-control"),
+        );
         let replacement = conn
             .browser_context_handle_for_devtools_id("BID-worker-control")
             .unwrap();

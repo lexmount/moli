@@ -33,7 +33,7 @@ async fn complete_command_task_for_test(
 }
 
 async fn load_page_async(ctx: &mut TestContext, html: &str) {
-    let mut bc = BrowserContext::new("BID-1".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-1");
     bc.set_active_target_id("TID-1");
     let data_url = format!("data:text/html,{html}");
     ctx.conn.install_browser_context_fixture_for_test(bc);
@@ -398,7 +398,9 @@ fn renderer_backed_ax_node_id(node: &Value) -> String {
 async fn accessibility_loaded_page_methods_target_background_owner_without_activation() {
     let mut ctx = TestContext::new();
 
-    let mut bc = BrowserContext::new("BID-A".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-A".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.register_page_target_url_fixture(
@@ -515,12 +517,16 @@ async fn accessibility_loaded_page_methods_target_background_owner_without_activ
 #[tokio::test(flavor = "multi_thread")]
 async fn accessibility_loaded_page_methods_target_inactive_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let mut active = BrowserContext::new("BID-active".to_owned());
+    let mut active = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-active".to_owned());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(active);
 
-    let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.set_target_url("about:blank".to_owned());
     inactive.attach_active_session("SID-inactive".to_owned());
@@ -574,7 +580,7 @@ async fn get_full_ax_tree_requires_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_full_ax_tree_requires_loaded_page() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     ctx.process_async(json!({"id": 2, "method": "Accessibility.getFullAXTree"}))
         .await;
     ctx.expect_error(2, -32000, "NoDocumentLoaded");
@@ -888,7 +894,7 @@ async fn get_root_ax_node_rejects_foreign_frame() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_root_ax_node_requires_loaded_page() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
 
     ctx.process_async(json!({
         "id": 350,
@@ -1079,7 +1085,7 @@ async fn get_child_ax_nodes_validates_ax_id_and_frame() {
 #[tokio::test(flavor = "multi_thread")]
 async fn get_child_ax_nodes_requires_loaded_page() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
 
     ctx.process_async(json!({
         "id": 390,
@@ -2029,7 +2035,7 @@ async fn get_ax_node_and_ancestors_requires_context_loaded_page_and_bound_node()
     .await;
     ctx.expect_error(530, -31998, "BrowserContextNotLoaded");
 
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     ctx.process_async(json!({
         "id": 531,
         "method": "Accessibility.getAXNodeAndAncestors",
@@ -2516,7 +2522,7 @@ async fn query_ax_tree_requires_context_loaded_page_and_bound_node() {
     .await;
     ctx.expect_error(580, -31998, "BrowserContextNotLoaded");
 
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-1".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-1"));
     ctx.process_async(json!({
         "id": 581,
         "method": "Accessibility.queryAXTree",

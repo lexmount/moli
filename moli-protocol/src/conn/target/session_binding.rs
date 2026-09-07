@@ -112,6 +112,30 @@ impl CdpConnection {
     }
 
     #[cfg(test)]
+    pub(crate) fn new_browser_context_fixture_for_test(
+        &self,
+        id: impl Into<String>,
+    ) -> BrowserContext {
+        let mut context = BrowserContext::new_with_browser_for_test(&self.browser, id);
+        context.bind_page_navigation_engines(
+            self.navigation_runtime_config.clone(),
+            self.scheduler_hooks.renderer_publication_sender(),
+        );
+        context
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_page_target_fixture_for_test(
+        &self,
+        id: impl Into<String>,
+        target_id: impl Into<String>,
+    ) -> BrowserContext {
+        let mut context = self.new_browser_context_fixture_for_test(id);
+        context.set_active_target_id(target_id);
+        context
+    }
+
+    #[cfg(test)]
     pub(crate) fn install_browser_context_fixture_for_test(
         &mut self,
         mut browser_context: BrowserContext,
@@ -120,7 +144,7 @@ impl CdpConnection {
         // fall back to a connection/another WebContents' navigation engine.
         browser_context.apply_browser_cache_disabled(self.browser_global_overrides.cache_disabled);
         browser_context.bind_page_navigation_engines(
-            self.standalone_navigation_engine.runtime_config(),
+            self.navigation_runtime_config.clone(),
             self.scheduler_hooks.renderer_publication_sender(),
         );
         self.browser_context = Some(browser_context);
@@ -134,7 +158,7 @@ impl CdpConnection {
     ) {
         browser_context.apply_browser_cache_disabled(self.browser_global_overrides.cache_disabled);
         browser_context.bind_page_navigation_engines(
-            self.standalone_navigation_engine.runtime_config(),
+            self.navigation_runtime_config.clone(),
             self.scheduler_hooks.renderer_publication_sender(),
         );
         self.inactive_browser_contexts.push(browser_context);

@@ -146,7 +146,7 @@ async fn wait_for_storage_test_completion(ctx: &mut TestContext) -> String {
         .to_owned()
 }
 
-fn seed_indexed_db_usage(manager: &moli_core::storage::SharedIndexedDbManager, origin: &str) {
+fn seed_indexed_db_usage(manager: moli_core::storage::SharedIndexedDbManager, origin: &str) {
     let mut manager = manager.lock();
     let opened = manager
         .open(moli_core::storage::IndexedDbOpenOptions {
@@ -388,7 +388,7 @@ async fn spawn_partitioned_child_frame_server() -> (String, String, tokio::task:
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_get_storage_key_for_frame_returns_top_frame_origin() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-SK-TOP".into());
+    let mut bc = ctx.conn.new_browser_context_fixture_for_test("BID-SK-TOP");
     bc.set_active_target_id("TID-SK-TOP");
     bc.set_target_url("https://top.example/app".into());
     bc.set_target_security_origin("https://top.example".into());
@@ -416,7 +416,9 @@ async fn storage_get_storage_key_for_top_frame_uses_loaded_page_storage_key() {
         .expect("page url should parse")
         .origin()
         .ascii_serialization();
-    let mut bc = BrowserContext::new("BID-SK-TOP-LIVE".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-SK-TOP-LIVE");
     bc.set_active_target_id("TID-SK-TOP-LIVE");
     bc.set_target_url("https://stale-target-url.example/app".into());
     bc.set_target_security_origin("https://stale-target-url.example".into());
@@ -452,7 +454,9 @@ async fn storage_get_storage_key_for_frame_returns_child_frame_inherited_origin(
         .expect("page url should parse")
         .origin();
     let top_origin = top_origin.ascii_serialization();
-    let mut bc = BrowserContext::new("BID-SK-CHILD".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-SK-CHILD");
     bc.set_active_target_id("TID-SK-CHILD");
     bc.set_target_url(page_url.clone());
     bc.set_target_security_origin(top_origin.clone());
@@ -500,7 +504,9 @@ async fn storage_get_storage_key_for_credentialless_child_uses_page_nonce() {
         .expect("page url should parse")
         .origin()
         .ascii_serialization();
-    let mut bc = BrowserContext::new("BID-SK-CREDENTIALLESS".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-SK-CREDENTIALLESS");
     bc.set_active_target_id("TID-SK-CREDENTIALLESS");
     bc.set_target_url(page_url.clone());
     bc.set_target_security_origin(top_origin.clone());
@@ -646,7 +652,9 @@ async fn storage_get_storage_key_for_frame_returns_child_frame_partition_key() {
         .expect("page url should parse")
         .origin();
     let top_origin = top_origin.ascii_serialization();
-    let mut bc = BrowserContext::new("BID-SK-PARTITIONED".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-SK-PARTITIONED");
     bc.set_active_target_id("TID-SK-PARTITIONED");
     bc.set_target_url(page_url.clone());
     bc.set_target_security_origin(top_origin);
@@ -703,7 +711,9 @@ async fn storage_get_storage_key_for_frame_rejects_opaque_child_frame() {
         .expect("page url should parse")
         .origin();
     let top_origin = top_origin.ascii_serialization();
-    let mut bc = BrowserContext::new("BID-SK-OPAQUE".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-SK-OPAQUE");
     bc.set_active_target_id("TID-SK-OPAQUE");
     bc.set_target_url(page_url.clone());
     bc.set_target_security_origin(top_origin);
@@ -751,7 +761,9 @@ async fn storage_get_storage_key_for_frame_rejects_opaque_child_frame() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_get_storage_key_for_frame_rejects_unknown_frame() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new("BID-SK-MISSING".into());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-SK-MISSING");
     bc.set_active_target_id("TID-SK-MISSING");
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -775,7 +787,9 @@ async fn storage_key_targets_loaded_background_owner_without_activation() {
         .origin()
         .ascii_serialization();
 
-    let mut bc = BrowserContext::new("BID-SK-BG".to_owned());
+    let mut bc = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-SK-BG".to_owned());
     bc.set_active_target_id("TID-active".to_owned());
     bc.attach_active_session("SID-active".to_owned());
     bc.register_page_target_url_fixture(
@@ -846,28 +860,23 @@ async fn pending_storage_key_keeps_background_owner_route_across_completion() {
         .origin()
         .ascii_serialization();
 
-    let active_page = ctx
+    let mut bc = ctx
         .conn
-        .load_page_via_runtime_async(&active_url)
-        .await
-        .expect("active page should load");
-    let background_page = ctx
-        .conn
-        .load_page_via_runtime_async(&background_url)
-        .await
-        .expect("background page should load");
-
-    let mut bc = BrowserContext::new("BID-storage-owner-route".to_owned());
+        .new_browser_context_fixture_for_test("BID-storage-owner-route".to_owned());
     bc.set_active_target_id("TID-storage-active".to_owned());
-    bc.set_target_url(active_page.final_url().as_str().to_owned());
-    bc.replace_active_page_for_test(Some(active_page));
     bc.register_page_target_url_fixture(
         "TID-storage-background".to_owned(),
         Some("SID-storage-background".to_owned()),
-        background_page.final_url().as_str().to_owned(),
+        "about:blank".to_owned(),
     );
-    bc.replace_target_page_for_test("TID-storage-background", Some(background_page));
     ctx.conn.install_browser_context_fixture_for_test(bc);
+    ctx.install_navigation_fixture_for_session_owner(&active_url, None)
+        .await;
+    ctx.install_navigation_fixture_for_session_owner(
+        &background_url,
+        Some("SID-storage-background"),
+    )
+    .await;
 
     let raw = serde_json::to_string(&json!({
         "id": 104,
@@ -919,12 +928,16 @@ async fn pending_storage_key_keeps_background_owner_route_across_completion() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_key_targets_inactive_owner_without_activation() {
     let mut ctx = TestContext::new();
-    let mut active = BrowserContext::new("BID-active".to_owned());
+    let mut active = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-active".to_owned());
     active.set_active_target_id("TID-active".to_owned());
     active.attach_active_session("SID-active".to_owned());
     ctx.conn.install_browser_context_fixture_for_test(active);
 
-    let mut inactive = BrowserContext::new("BID-inactive".to_owned());
+    let mut inactive = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-inactive".to_owned());
     inactive.set_active_target_id("TID-inactive".to_owned());
     inactive.set_target_url("https://inactive.example/app".to_owned());
     inactive.set_target_security_origin("https://inactive.example".to_owned());
@@ -953,7 +966,9 @@ async fn storage_key_targets_inactive_owner_without_activation() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_get_cookies_accepts_attached_page_session_route() {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-attached-storage".into());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-attached-storage");
     browser_context.set_active_target_id("TID-attached-storage".to_owned());
     assert!(browser_context.assign_attached_session_to_target(
         "TID-attached-storage",
@@ -985,7 +1000,9 @@ async fn storage_get_cookies_accepts_attached_page_session_route() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_get_cookies_accepts_background_page_session_route() {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-background-storage".into());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-background-storage");
     browser_context.set_active_target_id("TID-active-storage".to_owned());
     browser_context.stage_background_target(
         "TID-background-storage".to_owned(),
@@ -1018,7 +1035,7 @@ async fn storage_get_cookies_accepts_background_page_session_route() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_cookie_metadata_round_trip_includes_priority_and_source() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-M".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-M"));
 
     ctx.process_async(json!({
         "id": 10,
@@ -1062,7 +1079,7 @@ async fn storage_cookie_metadata_round_trip_includes_priority_and_source() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_get_cookies_omits_same_site_for_unspecified_cookie() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-U".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-U"));
 
     ctx.process_async(json!({
         "id": 111,
@@ -1096,7 +1113,7 @@ async fn storage_get_cookies_omits_same_site_for_unspecified_cookie() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_returns_cookie_reports_for_accepted_cookie() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-R".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-R"));
 
     ctx.process_async(json!({
         "id": 15,
@@ -1131,7 +1148,7 @@ async fn storage_set_cookies_returns_cookie_reports_for_accepted_cookie() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_reports_secure_access_warning_for_localhost_http() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-RW".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-RW"));
 
     ctx.process_async(json!({
         "id": 17,
@@ -1165,7 +1182,7 @@ async fn storage_set_cookies_reports_secure_access_warning_for_localhost_http() 
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_returns_cookie_reports_for_rejected_cookie() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-RJ".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-RJ"));
 
     ctx.process_async(json!({
         "id": 16,
@@ -1203,7 +1220,7 @@ async fn storage_set_cookies_returns_cookie_reports_for_rejected_cookie() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_reports_multiple_rejection_reasons() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-RM".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-RM"));
 
     ctx.process_async(json!({
         "id": 18,
@@ -1244,7 +1261,7 @@ async fn storage_set_cookies_reports_multiple_rejection_reasons() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_reports_public_suffix_rejection() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-PSL".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-PSL"));
 
     ctx.process_async(json!({
         "id": 19,
@@ -1403,7 +1420,7 @@ fn cookie_query_report_json_projects_facade_exclusion_reasons() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_round_trips_partition_key() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-P".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-P"));
 
     ctx.process_async(json!({
         "id": 12,
@@ -1463,7 +1480,7 @@ async fn storage_set_cookies_round_trips_partition_key() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_delete_cookies_matches_exact_partition_key() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-PD".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-PD"));
 
     ctx.process_async(json!({
         "id": 14,
@@ -1541,7 +1558,7 @@ async fn storage_delete_cookies_matches_exact_partition_key() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_delete_cookies_rejects_malformed_partition_key() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-PD-BAD".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-PD-BAD"));
 
     ctx.process_async(json!({
         "id": 17,
@@ -1559,7 +1576,10 @@ async fn storage_delete_cookies_rejects_malformed_partition_key() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_keeps_cookie_store_available_after_lock_holder_panic() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-store-panic".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-store-panic"),
+    );
     let cookie_store = ctx
         .conn
         .browser_context
@@ -1626,7 +1646,7 @@ async fn storage_set_cookies_keeps_cookie_store_available_after_lock_holder_pani
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_accepts_leading_dot_domain() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-DOT".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-DOT"));
 
     ctx.process_async(json!({
         "id": 121,
@@ -1663,7 +1683,7 @@ async fn storage_set_cookies_accepts_leading_dot_domain() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_reports_invalid_path_and_url_as_facade_rejections() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-PATH".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-PATH"));
 
     ctx.process_async(json!({
         "id": 122,
@@ -1718,7 +1738,7 @@ async fn storage_set_cookies_reports_invalid_path_and_url_as_facade_rejections()
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_reports_structured_name_value_facade_rejections() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-NV".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-NV"));
 
     ctx.process_async(json!({
         "id": 123,
@@ -1785,7 +1805,9 @@ async fn storage_set_cookies_reports_structured_name_value_facade_rejections() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_uses_browser_context_default_cookie_url_when_missing() {
     let mut ctx = TestContext::new();
-    let mut bc = BrowserContext::new_with_page_for_test("BID-DEF", "TID-DEF");
+    let mut bc = ctx
+        .conn
+        .new_page_target_fixture_for_test("BID-DEF", "TID-DEF");
     bc.set_target_url("https://example.com/app".into());
     ctx.conn.install_browser_context_fixture_for_test(bc);
 
@@ -1840,11 +1862,13 @@ async fn storage_set_cookies_uses_browser_context_default_cookie_url_when_missin
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_cookie_methods_accept_inactive_browser_context_ids() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-        "BID-ACTIVE",
-        "TID-ACTIVE",
-    ));
-    let mut inactive = BrowserContext::new_with_page_for_test("BID-INACTIVE", "TID-INACTIVE");
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_page_target_fixture_for_test("BID-ACTIVE", "TID-ACTIVE"),
+    );
+    let mut inactive = ctx
+        .conn
+        .new_page_target_fixture_for_test("BID-INACTIVE", "TID-INACTIVE");
     inactive.set_target_url("https://inactive.example/app".into());
     ctx.conn
         .push_inactive_browser_context_fixture_for_test(inactive);
@@ -1929,7 +1953,10 @@ async fn storage_cookie_methods_accept_inactive_browser_context_ids() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_clear_data_for_origin_clears_cookies_visible_to_origin() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-origin-clear".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-origin-clear"),
+    );
 
     ctx.process_async(json!({
         "id": 12_510,
@@ -1975,7 +2002,10 @@ async fn storage_clear_data_for_origin_clears_cookies_visible_to_origin() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_clear_data_for_origin_non_cookie_types_do_not_clear_cookies() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-origin-noncookie".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-origin-noncookie"),
+    );
 
     ctx.process_async(json!({
         "id": 12_520,
@@ -2022,7 +2052,10 @@ async fn storage_clear_data_for_origin_non_cookie_types_do_not_clear_cookies() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_clear_data_for_origin_clears_local_storage_area() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-origin-local-storage".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-origin-local-storage"),
+    );
 
     let origin = Url::parse("https://app.example.com/app")
         .unwrap()
@@ -2044,7 +2077,8 @@ async fn storage_clear_data_for_origin_clears_local_storage_area() {
     );
     {
         let bc = ctx.conn.browser_context.as_ref().unwrap();
-        let mut store = bc.web_storage_store_for_test().lock();
+        let store_handle = bc.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert!(store.set_item(&first_party_key, "local", "1"));
         assert!(store.set_item(&partitioned_origin_top_a, "local", "1a"));
         assert!(store.set_item(&partitioned_origin_top_b, "local", "1b"));
@@ -2064,7 +2098,8 @@ async fn storage_clear_data_for_origin_clears_local_storage_area() {
     ctx.expect_result(12_525, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    let mut store = bc.web_storage_store_for_test().lock();
+    let store_handle = bc.web_storage_store_for_test();
+    let mut store = store_handle.lock();
     assert_eq!(store.len(&first_party_key), 0);
     assert_eq!(store.get_item(&first_party_key, "local"), None);
     assert_eq!(store.get_item(&partitioned_origin_top_a, "local"), None);
@@ -2082,7 +2117,10 @@ async fn storage_clear_data_for_origin_clears_local_storage_area() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_clear_data_for_storage_key_clears_site_data_for_matching_origin() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-storage-key-clear".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-storage-key-clear"),
+    );
 
     let origin = Url::parse("https://storage-key-clear.example/app")
         .unwrap()
@@ -2096,13 +2134,15 @@ async fn storage_clear_data_for_storage_key_clears_site_data_for_matching_origin
     let sibling_storage_key = first_party_storage_key_for_origin(&sibling_origin);
     {
         let bc = ctx.conn.browser_context.as_ref().unwrap();
-        let mut store = bc.web_storage_store_for_test().lock();
+        let store_handle = bc.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert!(store.set_item(&storage_key, "local", "1"));
         assert!(store.set_item(&sibling_storage_key, "local", "2"));
     }
     {
         let bc = ctx.conn.browser_context.as_ref().unwrap();
-        let mut store = bc.storage_bucket_store_for_test().lock();
+        let store_handle = bc.storage_bucket_store_for_test();
+        let mut store = store_handle.lock();
         store
             .open_bucket(&storage_key, "bucket-a")
             .expect("origin bucket should open");
@@ -2123,7 +2163,7 @@ async fn storage_clear_data_for_storage_key_clears_site_data_for_matching_origin
         seed_indexed_db_usage(bc.indexed_db_manager_for_test(), &sibling_bucket_key);
         assert!(
             moli_core::storage::indexed_db_origin_usage_bytes(
-                bc.indexed_db_manager_for_test(),
+                &bc.indexed_db_manager_for_test(),
                 &bucket_a_key,
             )
             .expect("bucket-a usage should be readable")
@@ -2144,20 +2184,22 @@ async fn storage_clear_data_for_storage_key_clears_site_data_for_matching_origin
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     {
-        let mut store = bc.web_storage_store_for_test().lock();
+        let store_handle = bc.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert_eq!(store.get_item(&storage_key, "local"), None);
         assert_eq!(
             store.get_item(&sibling_storage_key, "local"),
             Some("2".to_owned())
         );
     }
-    let store = bc.storage_bucket_store_for_test().lock();
+    let store_handle = bc.storage_bucket_store_for_test();
+    let store = store_handle.lock();
     assert_eq!(store.keys(&storage_key), Vec::<String>::new());
     assert_eq!(store.keys(&sibling_storage_key), vec!["bucket-b"]);
     drop(store);
     assert_eq!(
         moli_core::storage::indexed_db_origin_usage_bytes(
-            bc.indexed_db_manager_for_test(),
+            &bc.indexed_db_manager_for_test(),
             &bucket_a_key
         )
         .expect("bucket-a usage should be readable"),
@@ -2165,7 +2207,7 @@ async fn storage_clear_data_for_storage_key_clears_site_data_for_matching_origin
     );
     assert!(
         moli_core::storage::indexed_db_origin_usage_bytes(
-            bc.indexed_db_manager_for_test(),
+            &bc.indexed_db_manager_for_test(),
             &sibling_bucket_key,
         )
         .expect("sibling bucket usage should be readable")
@@ -2176,9 +2218,10 @@ async fn storage_clear_data_for_storage_key_clears_site_data_for_matching_origin
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_only() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new(
-        "BID-storage-key-partitioned-clear".into(),
-    ));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-storage-key-partitioned-clear"),
+    );
 
     let origin = "https://partitioned-storage-key.example";
     let first_party_key = first_party_storage_key_for_origin(origin);
@@ -2190,14 +2233,16 @@ async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_o
     );
     {
         let bc = ctx.conn.browser_context.as_ref().unwrap();
-        let mut store = bc.web_storage_store_for_test().lock();
+        let store_handle = bc.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert!(store.set_item(&first_party_key, "local", "must-stay"));
         assert!(store.set_item(&partitioned_key, "local", "must-clear"));
         assert!(store.set_item(&other_partitioned_key, "local", "other-must-stay"));
     }
     {
         let bc = ctx.conn.browser_context.as_ref().unwrap();
-        let mut store = bc.storage_bucket_store_for_test().lock();
+        let store_handle = bc.storage_bucket_store_for_test();
+        let mut store = store_handle.lock();
         store
             .open_bucket(&partitioned_key, "bucket")
             .expect("partitioned bucket should open");
@@ -2233,7 +2278,8 @@ async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_o
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     {
-        let mut store = bc.web_storage_store_for_test().lock();
+        let store_handle = bc.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert_eq!(
             store.get_item(&first_party_key, "local"),
             Some("must-stay".to_owned())
@@ -2245,13 +2291,14 @@ async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_o
         );
     }
     {
-        let store = bc.storage_bucket_store_for_test().lock();
+        let store_handle = bc.storage_bucket_store_for_test();
+        let store = store_handle.lock();
         assert_eq!(store.keys(&partitioned_key), Vec::<String>::new());
         assert_eq!(store.keys(&other_partitioned_key), vec!["other-bucket"]);
     }
     assert_eq!(
         moli_core::storage::indexed_db_origin_usage_bytes(
-            bc.indexed_db_manager_for_test(),
+            &bc.indexed_db_manager_for_test(),
             &partitioned_key
         )
         .expect("partitioned IndexedDB usage should be readable"),
@@ -2259,7 +2306,7 @@ async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_o
     );
     assert!(
         moli_core::storage::indexed_db_origin_usage_bytes(
-            bc.indexed_db_manager_for_test(),
+            &bc.indexed_db_manager_for_test(),
             &other_partitioned_key
         )
         .expect("other partitioned IndexedDB usage should be readable")
@@ -2267,7 +2314,7 @@ async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_o
     );
     assert_eq!(
         moli_core::storage::indexed_db_origin_usage_bytes(
-            bc.indexed_db_manager_for_test(),
+            &bc.indexed_db_manager_for_test(),
             &bucket_key
         )
         .expect("partitioned bucket IndexedDB usage should be readable"),
@@ -2275,7 +2322,7 @@ async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_o
     );
     assert!(
         moli_core::storage::indexed_db_origin_usage_bytes(
-            bc.indexed_db_manager_for_test(),
+            &bc.indexed_db_manager_for_test(),
             &other_bucket_key
         )
         .expect("other partitioned bucket IndexedDB usage should be readable")
@@ -2286,10 +2333,10 @@ async fn storage_clear_data_for_partitioned_storage_key_clears_exact_partition_o
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_get_usage_and_quota_reports_local_storage_usage_for_origin() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-        "BID-usage-local",
-        "TID-usage-local",
-    ));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_page_target_fixture_for_test("BID-usage-local", "TID-usage-local"),
+    );
 
     let origin = Url::parse("https://usage.example/app")
         .unwrap()
@@ -2304,11 +2351,13 @@ async fn storage_get_usage_and_quota_reports_local_storage_usage_for_origin() {
     );
     {
         let bc = ctx.conn.browser_context.as_ref().unwrap();
-        let mut store = bc.web_storage_store_for_test().lock();
+        let store_handle = bc.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert!(store.set_item(&first_party_key, "local", "abc"));
         assert!(store.set_item(&partitioned_origin, "partitioned", "de"));
         assert!(store.set_item(&partitioned_sibling, "sibling", "ignored"));
-        let mut session_store = bc.session_storage_store_for_test().lock();
+        let session_store_handle = bc.session_storage_store_for_test();
+        let mut session_store = session_store_handle.lock();
         assert!(session_store.set_item(&first_party_key, "session", "session-only"));
         assert!(session_store.set_item(&partitioned_origin, "session", "also-ignored"));
     }
@@ -2345,7 +2394,9 @@ async fn storage_get_usage_and_quota_reports_local_storage_usage_for_origin() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_get_usage_and_quota_reports_indexed_db_usage_for_origin() {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-usage-indexeddb".into());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-usage-indexeddb");
     browser_context.set_active_target_id("TID-usage-indexeddb");
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
@@ -2423,7 +2474,10 @@ async fn storage_get_usage_and_quota_reports_indexed_db_usage_for_origin() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_get_usage_and_quota_reports_storage_bucket_usage_for_origin() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-usage-storage-buckets".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-usage-storage-buckets"),
+    );
     let indexed_db_manager = ctx
         .conn
         .browser_context
@@ -2564,12 +2618,12 @@ async fn storage_get_usage_and_quota_reports_storage_bucket_usage_for_origin() {
     let bucket_usage = usage_breakdown_value(&result, "storage_buckets");
     let bc = ctx.conn.browser_context.as_ref().unwrap();
     let bucket_a_usage = moli_core::storage::indexed_db_origin_usage_bytes(
-        bc.indexed_db_manager_for_test(),
+        &bc.indexed_db_manager_for_test(),
         &bucket_a_key,
     )
     .expect("bucket-a usage should be readable");
     let bucket_b_usage = moli_core::storage::indexed_db_origin_usage_bytes(
-        bc.indexed_db_manager_for_test(),
+        &bc.indexed_db_manager_for_test(),
         &bucket_b_key,
     )
     .expect("bucket-b usage should be readable");
@@ -2594,18 +2648,23 @@ async fn storage_get_usage_and_quota_targets_command_session_browser_context() {
         .ascii_serialization();
     let storage_key = first_party_storage_key_for_origin(&origin);
 
-    let mut active = BrowserContext::new_with_page_for_test("BID-usage-active", "TID-usage-active");
+    let mut active = ctx
+        .conn
+        .new_page_target_fixture_for_test("BID-usage-active", "TID-usage-active");
     active.attach_active_session("SID-usage-active");
     {
-        let mut store = active.web_storage_store_for_test().lock();
+        let store_handle = active.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert!(store.set_item(&storage_key, "local", "aa"));
     }
 
-    let mut inactive =
-        BrowserContext::new_with_page_for_test("BID-usage-inactive", "TID-usage-inactive");
+    let mut inactive = ctx
+        .conn
+        .new_page_target_fixture_for_test("BID-usage-inactive", "TID-usage-inactive");
     inactive.attach_active_session("SID-usage-inactive");
     {
-        let mut store = inactive.web_storage_store_for_test().lock();
+        let store_handle = inactive.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert!(store.set_item(&storage_key, "local", "bbbb"));
     }
 
@@ -2635,7 +2694,10 @@ async fn storage_get_usage_and_quota_targets_command_session_browser_context() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_override_quota_for_origin_affects_get_usage_and_quota() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-quota-override".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-quota-override"),
+    );
 
     ctx.process_async(json!({
         "id": 12_531,
@@ -2692,10 +2754,13 @@ async fn storage_override_quota_for_origin_affects_get_usage_and_quota() {
 async fn storage_override_quota_for_origin_targets_command_session_browser_context() {
     let mut ctx = TestContext::new();
 
-    let mut active = BrowserContext::new_with_page_for_test("BID-quota-active", "TID-quota-active");
+    let mut active = ctx
+        .conn
+        .new_page_target_fixture_for_test("BID-quota-active", "TID-quota-active");
     active.attach_active_session("SID-quota-active");
-    let mut inactive =
-        BrowserContext::new_with_page_for_test("BID-quota-inactive", "TID-quota-inactive");
+    let mut inactive = ctx
+        .conn
+        .new_page_target_fixture_for_test("BID-quota-inactive", "TID-quota-inactive");
     inactive.attach_active_session("SID-quota-inactive");
 
     ctx.conn.install_browser_context_fixture_for_test(active);
@@ -2755,7 +2820,10 @@ async fn storage_override_quota_for_origin_targets_command_session_browser_conte
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_get_usage_and_quota_rejects_invalid_origin() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-usage-invalid".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-usage-invalid"),
+    );
 
     ctx.process_async(json!({
         "id": 12_530,
@@ -2772,7 +2840,10 @@ async fn storage_get_usage_and_quota_rejects_invalid_origin() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_get_usage_and_quota_rejects_opaque_origin() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-usage-opaque".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-usage-opaque"),
+    );
 
     ctx.process_async(json!({
         "id": 12_538,
@@ -2789,7 +2860,10 @@ async fn storage_get_usage_and_quota_rejects_opaque_origin() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_override_quota_for_origin_rejects_invalid_params() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-quota-invalid".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-quota-invalid"),
+    );
 
     ctx.process_async(json!({
         "id": 12_539,
@@ -2834,23 +2908,24 @@ async fn storage_clear_data_for_origin_targets_command_session_browser_context()
         .ascii_serialization();
     let storage_key = first_party_storage_key_for_origin(&origin);
 
-    let mut active = BrowserContext::new_with_page_for_test(
-        "BID-session-clear-active",
-        "TID-session-clear-active",
-    );
+    let mut active = ctx
+        .conn
+        .new_page_target_fixture_for_test("BID-session-clear-active", "TID-session-clear-active");
     active.attach_active_session("SID-session-clear-active");
     {
-        let mut store = active.web_storage_store_for_test().lock();
+        let store_handle = active.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert!(store.set_item(&storage_key, "local", "active"));
     }
 
-    let mut inactive = BrowserContext::new_with_page_for_test(
+    let mut inactive = ctx.conn.new_page_target_fixture_for_test(
         "BID-session-clear-inactive",
         "TID-session-clear-inactive",
     );
     inactive.attach_active_session("SID-session-clear-inactive");
     {
-        let mut store = inactive.web_storage_store_for_test().lock();
+        let store_handle = inactive.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert!(store.set_item(&storage_key, "local", "inactive"));
     }
 
@@ -2870,29 +2945,31 @@ async fn storage_clear_data_for_origin_targets_command_session_browser_context()
     .await;
     ctx.expect_result(12_527, json!({}), Some("SID-session-clear-inactive"));
 
-    let mut active_store = ctx
+    let active_store_handle = ctx
         .conn
         .browser_context
         .as_ref()
         .unwrap()
-        .web_storage_store_for_test()
-        .lock();
+        .web_storage_store_for_test();
+    let mut active_store = active_store_handle.lock();
     assert_eq!(
         active_store.get_item(&storage_key, "local"),
         Some("active".to_owned())
     );
     drop(active_store);
 
-    let mut inactive_store = ctx.conn.inactive_browser_contexts[0]
-        .web_storage_store_for_test()
-        .lock();
+    let inactive_store_handle = ctx.conn.inactive_browser_contexts[0].web_storage_store_for_test();
+    let mut inactive_store = inactive_store_handle.lock();
     assert_eq!(inactive_store.get_item(&storage_key, "local"), None);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_clear_data_for_origin_clears_cookies_and_local_storage_together() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-origin-all".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-origin-all"),
+    );
 
     let origin = Url::parse("https://app.example.com/app")
         .unwrap()
@@ -2901,7 +2978,8 @@ async fn storage_clear_data_for_origin_clears_cookies_and_local_storage_together
     let storage_key = first_party_storage_key_for_origin(&origin);
     {
         let bc = ctx.conn.browser_context.as_ref().unwrap();
-        let mut store = bc.web_storage_store_for_test().lock();
+        let store_handle = bc.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert!(store.set_item(&storage_key, "local", "1"));
     }
 
@@ -2931,7 +3009,8 @@ async fn storage_clear_data_for_origin_clears_cookies_and_local_storage_together
 
     {
         let bc = ctx.conn.browser_context.as_ref().unwrap();
-        let mut store = bc.web_storage_store_for_test().lock();
+        let store_handle = bc.web_storage_store_for_test();
+        let mut store = store_handle.lock();
         assert_eq!(store.len(&storage_key), 0);
         assert_eq!(store.get_item(&storage_key, "local"), None);
     }
@@ -2960,7 +3039,9 @@ async fn storage_clear_data_for_origin_clears_cookies_and_local_storage_together
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_clear_data_for_origin_clears_indexed_db_backend() {
     let mut ctx = TestContext::new();
-    let mut browser_context = BrowserContext::new("BID-origin-indexeddb".into());
+    let mut browser_context = ctx
+        .conn
+        .new_browser_context_fixture_for_test("BID-origin-indexeddb");
     browser_context.set_active_target_id("TID-origin-indexeddb");
     ctx.conn
         .install_browser_context_fixture_for_test(browser_context);
@@ -3074,7 +3155,10 @@ async fn storage_clear_data_for_origin_clears_indexed_db_backend() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_clear_data_for_origin_clears_storage_bucket_names_for_origin() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-origin-storage-buckets".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-origin-storage-buckets"),
+    );
 
     let origin = Url::parse("https://bucket-clear.example/app")
         .unwrap()
@@ -3088,7 +3172,8 @@ async fn storage_clear_data_for_origin_clears_storage_bucket_names_for_origin() 
     let sibling_storage_key = first_party_storage_key_for_origin(&sibling_origin);
     {
         let bc = ctx.conn.browser_context.as_ref().unwrap();
-        let mut store = bc.storage_bucket_store_for_test().lock();
+        let store_handle = bc.storage_bucket_store_for_test();
+        let mut store = store_handle.lock();
         store
             .open_bucket(&storage_key, "bucket-a")
             .expect("bucket-a should open");
@@ -3112,7 +3197,8 @@ async fn storage_clear_data_for_origin_clears_storage_bucket_names_for_origin() 
     ctx.expect_result(12_530, json!({}), None);
     {
         let bc = ctx.conn.browser_context.as_ref().unwrap();
-        let store = bc.storage_bucket_store_for_test().lock();
+        let store_handle = bc.storage_bucket_store_for_test();
+        let store = store_handle.lock();
         assert_eq!(store.keys(&storage_key), vec!["bucket-a", "bucket-b"]);
         assert_eq!(store.keys(&sibling_storage_key), vec!["bucket-c"]);
     }
@@ -3129,7 +3215,8 @@ async fn storage_clear_data_for_origin_clears_storage_bucket_names_for_origin() 
     ctx.expect_result(12_531, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    let store = bc.storage_bucket_store_for_test().lock();
+    let store_handle = bc.storage_bucket_store_for_test();
+    let store = store_handle.lock();
     assert_eq!(store.keys(&storage_key), Vec::<String>::new());
     assert_eq!(store.keys(&sibling_storage_key), vec!["bucket-c"]);
 }
@@ -3137,7 +3224,10 @@ async fn storage_clear_data_for_origin_clears_storage_bucket_names_for_origin() 
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_clear_data_for_origin_clears_storage_bucket_indexeddb_for_origin() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-origin-storage-bucket-idb".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-origin-storage-bucket-idb"),
+    );
 
     let origin = Url::parse("https://bucket-idb-clear.example/app")
         .unwrap()
@@ -3152,7 +3242,8 @@ async fn storage_clear_data_for_origin_clears_storage_bucket_indexeddb_for_origi
     {
         let bc = ctx.conn.browser_context.as_ref().unwrap();
         {
-            let mut store = bc.storage_bucket_store_for_test().lock();
+            let store_handle = bc.storage_bucket_store_for_test();
+            let mut store = store_handle.lock();
             store
                 .open_bucket(&storage_key, "bucket-a")
                 .expect("bucket-a should open");
@@ -3172,7 +3263,7 @@ async fn storage_clear_data_for_origin_clears_storage_bucket_indexeddb_for_origi
         seed_indexed_db_usage(bc.indexed_db_manager_for_test(), &sibling_bucket_key);
         assert!(
             moli_core::storage::indexed_db_origin_usage_bytes(
-                bc.indexed_db_manager_for_test(),
+                &bc.indexed_db_manager_for_test(),
                 &bucket_a_key,
             )
             .expect("bucket-a usage should be readable")
@@ -3180,7 +3271,7 @@ async fn storage_clear_data_for_origin_clears_storage_bucket_indexeddb_for_origi
         );
         assert!(
             moli_core::storage::indexed_db_origin_usage_bytes(
-                bc.indexed_db_manager_for_test(),
+                &bc.indexed_db_manager_for_test(),
                 &bucket_b_key,
             )
             .expect("bucket-b usage should be readable")
@@ -3234,13 +3325,14 @@ async fn storage_clear_data_for_origin_clears_storage_bucket_indexeddb_for_origi
     ctx.expect_result(12_532, json!({}), None);
 
     let bc = ctx.conn.browser_context.as_ref().unwrap();
-    let store = bc.storage_bucket_store_for_test().lock();
+    let store_handle = bc.storage_bucket_store_for_test();
+    let store = store_handle.lock();
     assert_eq!(store.keys(&storage_key), Vec::<String>::new());
     assert_eq!(store.keys(&sibling_storage_key), vec!["bucket-c"]);
     drop(store);
     assert_eq!(
         moli_core::storage::indexed_db_origin_usage_bytes(
-            bc.indexed_db_manager_for_test(),
+            &bc.indexed_db_manager_for_test(),
             &bucket_a_key
         )
         .expect("bucket-a usage should be readable"),
@@ -3248,7 +3340,7 @@ async fn storage_clear_data_for_origin_clears_storage_bucket_indexeddb_for_origi
     );
     assert_eq!(
         moli_core::storage::indexed_db_origin_usage_bytes(
-            bc.indexed_db_manager_for_test(),
+            &bc.indexed_db_manager_for_test(),
             &bucket_b_key
         )
         .expect("bucket-b usage should be readable"),
@@ -3256,13 +3348,14 @@ async fn storage_clear_data_for_origin_clears_storage_bucket_indexeddb_for_origi
     );
     assert!(
         moli_core::storage::indexed_db_origin_usage_bytes(
-            bc.indexed_db_manager_for_test(),
+            &bc.indexed_db_manager_for_test(),
             &sibling_bucket_key,
         )
         .expect("sibling bucket usage should be readable")
             > 0
     );
-    let storage_service = bc.storage_bucket_store_for_test().lock().storage_service();
+    let store_handle = bc.storage_bucket_store_for_test();
+    let storage_service = store_handle.lock().storage_service();
     assert_eq!(
         storage_service
             .opfs_usage(&bucket_a_identity.locator())
@@ -3315,7 +3408,7 @@ async fn storage_clear_data_for_origin_clears_http_cache_entries_for_origin() {
     assert_eq!(app_hits.load(Ordering::SeqCst), 1);
     assert_eq!(other_hits.load(Ordering::SeqCst), 1);
 
-    let mut ctx = TestContext::from_conn(crate::conn::CdpConnection::new_with_fetch_config(
+    let mut ctx = TestContext::from_conn(crate::test_support::connection_with_fetch_config(
         fetch_config.clone(),
     ));
     let browser_context = ctx.conn.new_browser_context("BID-cache-clear".into());
@@ -3387,7 +3480,7 @@ async fn storage_clear_data_for_origin_uses_browser_context_http_cache_owner() {
 
     let mut clear_config = moli_fetch::FetchConfig::default();
     clear_config.set_http_cache_dir(None);
-    let mut ctx = TestContext::from_conn(crate::conn::CdpConnection::new_with_fetch_config(
+    let mut ctx = TestContext::from_conn(crate::test_support::connection_with_fetch_config(
         clear_config,
     ));
     let browser_context = BrowserContext::new_with_storage_partition_and_http_cache(
@@ -3434,7 +3527,10 @@ async fn storage_clear_data_for_origin_uses_browser_context_http_cache_owner() {
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_clear_data_for_origin_rejects_invalid_origin_even_for_noop_types() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-origin-invalid".into()));
+    ctx.conn.browser_context = Some(
+        ctx.conn
+            .new_browser_context_fixture_for_test("BID-origin-invalid"),
+    );
 
     ctx.process_async(json!({
         "id": 12_530,
@@ -3451,7 +3547,7 @@ async fn storage_clear_data_for_origin_rejects_invalid_origin_even_for_noop_type
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_set_cookies_reports_missing_cookie_url_when_no_default_scope_exists() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-MISS".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-MISS"));
 
     ctx.process_async(json!({
         "id": 126,
@@ -3486,7 +3582,7 @@ async fn storage_set_cookies_reports_missing_cookie_url_when_no_default_scope_ex
 #[tokio::test(flavor = "multi_thread")]
 async fn storage_delete_cookies_respects_optional_path_filter() {
     let mut ctx = TestContext::new();
-    ctx.conn.browser_context = Some(BrowserContext::new("BID-D".into()));
+    ctx.conn.browser_context = Some(ctx.conn.new_browser_context_fixture_for_test("BID-D"));
 
     ctx.process_async(json!({
         "id": 20,

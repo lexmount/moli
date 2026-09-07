@@ -14,7 +14,9 @@ use axum::{
 };
 use futures_util::SinkExt;
 use moli_cookie_jar::StoredCookie;
-use moli_core::{RendererOutputTransportMessage, runtime::NavigationRuntimeConfig};
+use moli_core::{
+    RendererOutputTransportMessage, browser::BrowserHandle, runtime::NavigationRuntimeConfig,
+};
 use moli_protocol::{
     BackgroundCommandResponsePayload, BackgroundProtocolEvent, CdpInitialStoragePartition,
     conn::RuntimeInspectorResponseReady,
@@ -71,6 +73,7 @@ pub(super) async fn ws_bidi_session_upgrade_handler(
     let web_socket_url = state.bidi_ws_url;
     let session_registry = state.bidi_session_registry;
     let cookie_profile = state.cookie_profile;
+    let browser = state.browser_service.handle();
     let navigation_runtime_config = NavigationRuntimeConfig::new(
         state.fetch_config,
         state.optional_resource_fetch_mask,
@@ -79,6 +82,7 @@ pub(super) async fn ws_bidi_session_upgrade_handler(
     );
     ws.on_upgrade(move |socket| {
         handle_bidi_session_socket(
+            browser,
             socket,
             web_socket_url,
             session_registry,
@@ -130,6 +134,7 @@ pub(super) async fn ws_bidi_existing_session_upgrade_handler(
 }
 
 async fn handle_bidi_session_socket(
+    browser: BrowserHandle,
     socket: WebSocket,
     web_socket_url: String,
     session_registry: SharedBidiSessionRegistry,
@@ -140,6 +145,7 @@ async fn handle_bidi_session_socket(
 ) {
     let cookie_commit = spawn_protocol_local_task("bidi-socket", move || {
         handle_bidi_session_socket_local(
+            browser,
             socket,
             web_socket_url,
             session_registry,
@@ -163,6 +169,7 @@ async fn handle_bidi_session_socket(
 }
 
 async fn handle_bidi_session_socket_local(
+    browser: BrowserHandle,
     socket: WebSocket,
     web_socket_url: String,
     session_registry: SharedBidiSessionRegistry,
@@ -172,6 +179,7 @@ async fn handle_bidi_session_socket_local(
 ) -> CookieProfileCommit {
     let mut actor = BidiSocketActor::new(socket, web_socket_url);
     let (mut scheduler, mut receivers) = CdpScheduler::new_with_initial_state_runtime_config(
+        browser,
         initial_storage_partition,
         navigation_runtime_config,
     );

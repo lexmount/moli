@@ -489,8 +489,7 @@ mod tests {
     use serde_json::Value;
 
     use crate::conn::{
-        BrowserContext, CdpConnection, CommandDispatchContext, CommandOwnerScope,
-        RendererCommandDescriptor,
+        CdpConnection, CommandDispatchContext, CommandOwnerScope, RendererCommandDescriptor,
     };
 
     use super::{
@@ -501,23 +500,22 @@ mod tests {
     const SESSION_ID: &str = "SID-runtime-command-permit";
 
     async fn connection_with_loaded_page() -> CdpConnection {
-        let mut conn = CdpConnection::new();
-        let page = conn
-            .load_page_via_runtime_async("data:text/html,<title>runtime-command-permit</title>")
-            .await
-            .expect("permit test page should load");
-        let mut browser_context = BrowserContext::new("BID-runtime-command-permit".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-runtime-command-permit".to_owned());
         browser_context.set_active_target_id("TID-runtime-command-permit");
         browser_context.attach_active_session(SESSION_ID);
-        browser_context.set_target_url(page.final_url().as_str().to_owned());
-        let _ = browser_context.replace_active_page_for_test(Some(page));
         conn.install_browser_context_fixture_for_test(browser_context);
+        conn.install_navigation_fixture_for_session_owner_for_test(
+            "data:text/html,<title>runtime-command-permit</title>",
+            Some(SESSION_ID),
+        )
+        .await;
         conn
     }
 
     /// Returns the initial Document identity used by this minimal protocol
-    /// fixture. The fixture installs a loaded Page directly, so it has no
-    /// separate protocol-side root-Document binding to query.
+    /// fixture.
     fn loaded_page_source_document(conn: &CdpConnection) -> RendererDocumentLifecycleIdentity {
         let owner = crate::conn::CommandOwnerScope::capture(conn, Some(SESSION_ID));
         let (context_id, target_id) = conn.resolved_page_owner_identity_for_owner(&owner).unwrap();

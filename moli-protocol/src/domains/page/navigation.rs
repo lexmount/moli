@@ -3243,7 +3243,7 @@ mod child_frame_attachment_tests {
     };
     use serde_json::{Value, json};
 
-    use crate::conn::{CdpConnection, Cmd};
+    use crate::conn::Cmd;
 
     use super::{
         DevToolsNavigationStartOptions, NavigationResultProjection, PageCommandTaskStep,
@@ -3320,7 +3320,7 @@ mod child_frame_attachment_tests {
 
     #[test]
     fn devtools_page_entry_routes_navigate_command_to_navigation_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(12),
@@ -3393,7 +3393,7 @@ mod child_frame_attachment_tests {
 
     #[test]
     fn devtools_page_entry_routes_reload_command_to_navigation_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(14),
@@ -3465,7 +3465,7 @@ mod child_frame_attachment_tests {
 
     #[test]
     fn devtools_page_entry_routes_history_traversal_to_navigation_owner() {
-        let mut conn = CdpConnection::new();
+        let mut conn = crate::test_support::connection();
         let params = Value::Null;
         let cmd = Cmd::for_test(
             Some(16),

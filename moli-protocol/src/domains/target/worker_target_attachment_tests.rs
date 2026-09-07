@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 
 use super::*;
 use crate::{
-    conn::{BrowserContext, CdpTargetFilter, CommandDispatchContext, CommandOwnerScope},
+    conn::{CdpTargetFilter, CommandDispatchContext, CommandOwnerScope},
     devtools_runtime::AutomationEvent,
     domains::activity::{ProtocolOutputPayloads, ProtocolOutputProjectionContext},
 };
@@ -93,8 +93,9 @@ fn protocol_messages(events: Vec<crate::conn::BackgroundProtocolEvent>) -> Vec<V
 
 #[tokio::test]
 async fn short_lived_shared_worker_preserves_exact_lifecycle_order() {
-    let mut conn = CdpConnection::default();
-    conn.browser_context = Some(BrowserContext::new(BROWSER_CONTEXT_ID.to_owned()));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context =
+        Some(conn.new_browser_context_fixture_for_test(BROWSER_CONTEXT_ID.to_owned()));
     conn.set_target_discovery_for_owner(None, CdpTargetFilter::default_target_discovery());
     conn.set_auto_attach_owner(None, true, true, CdpTargetFilter::default_auto_attach());
 
@@ -170,14 +171,15 @@ async fn short_lived_shared_worker_preserves_exact_lifecycle_order() {
 
 #[tokio::test]
 async fn detached_session_cannot_be_resurrected_by_held_auto_attach_output() {
-    let mut conn = CdpConnection::default();
+    let mut conn = crate::test_support::connection();
     conn.set_auto_attach_owner(
         None,
         true,
         false,
         crate::conn::CdpTargetFilter::default_auto_attach(),
     );
-    conn.browser_context = Some(BrowserContext::new(BROWSER_CONTEXT_ID.to_owned()));
+    conn.browser_context =
+        Some(conn.new_browser_context_fixture_for_test(BROWSER_CONTEXT_ID.to_owned()));
 
     let outputs =
         register_shared_worker_target(&mut conn, BROWSER_CONTEXT_ID, None, renderer_info(703));
@@ -217,8 +219,9 @@ async fn detached_session_cannot_be_resurrected_by_held_auto_attach_output() {
 
 #[tokio::test]
 async fn exact_scope_rejects_old_console_batch_after_complete_raw_identity_reuse() {
-    let mut conn = CdpConnection::default();
-    conn.browser_context = Some(BrowserContext::new(BROWSER_CONTEXT_ID.to_owned()));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context =
+        Some(conn.new_browser_context_fixture_for_test(BROWSER_CONTEXT_ID.to_owned()));
     install_collision_target(&mut conn);
     conn.shared_worker_target_for_session_mut(Some(SESSION_ID))
         .expect("old worker target")
@@ -276,8 +279,9 @@ async fn exact_scope_rejects_old_console_batch_after_complete_raw_identity_reuse
 
 #[tokio::test]
 async fn exact_scope_independently_authorizes_old_and_new_inspector_batches_in_one_slot() {
-    let mut conn = CdpConnection::default();
-    conn.browser_context = Some(BrowserContext::new(BROWSER_CONTEXT_ID.to_owned()));
+    let mut conn = crate::test_support::connection();
+    conn.browser_context =
+        Some(conn.new_browser_context_fixture_for_test(BROWSER_CONTEXT_ID.to_owned()));
     install_collision_target(&mut conn);
     let mut outputs = record_shared_worker_target_runtime_inspector_messages(
         &mut conn,

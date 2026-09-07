@@ -8,7 +8,7 @@ use moli_core::{
         BrowserSequence, DocumentId, DocumentLifecycle, NavigationId, RendererPageResidenceIdentity,
     },
     page::{
-        Page, RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
+        RendererDocumentLifecycleEvent, RendererDocumentLifecycleEventKind,
         RendererDocumentLifecycleIdentity, RendererDocumentLifecycleMilestone,
         RendererDocumentLifecycleSnapshot, RendererDocumentLifecycleWaitOutcome,
         RendererDocumentLifecycleWaiter, RendererDocumentToken, RendererFrameToken,
@@ -20,8 +20,6 @@ use crate::conn::state::document_lifecycle_observer::{
     RendererDocumentLifecycleObservation, RendererDocumentLifecycleObservationPublisher,
     RendererDocumentLifecycleObserver,
 };
-
-use crate::conn::state::web_contents::DocumentHost;
 
 #[cfg(test)]
 mod document_host_tests;
@@ -179,6 +177,7 @@ impl PendingRendererPageBinding {
         }
     }
 
+    #[cfg(test)]
     fn document_id(&self) -> DocumentId {
         match self {
             #[cfg(test)]
@@ -455,40 +454,23 @@ impl TargetPageSlot {
 }
 
 impl BrowserContext {
-    pub(super) fn loaded_page_for_target(&self, target_id: &str) -> Option<&Page> {
-        self.web_contents_for_target(target_id)?
-            .main_frame
-            .current_document
-            .as_ref()
-            .map(|document| &document.page)
-    }
-
-    #[cfg(test)]
-    pub(super) fn loaded_page_for_target_mut(&mut self, target_id: &str) -> Option<&mut Page> {
-        self.web_contents_for_target_mut(target_id)?
-            .main_frame
-            .current_document
-            .as_mut()
-            .map(|document| &mut document.page)
-    }
-
     pub(crate) fn target_has_loaded_page(&self, target_id: &str) -> bool {
-        self.web_contents_for_target(target_id)
-            .is_some_and(|contents| contents.main_frame.current_document.is_some())
+        self.web_contents_handle_for_target(target_id)
+            .is_some_and(|handle| self.browser_context.has_loaded_document(handle))
     }
 
     pub(crate) fn loaded_page_absence_reason_for_target(
         &self,
         target_id: &str,
     ) -> Option<TargetPageAbsenceReason> {
-        let contents = self.web_contents_for_target(target_id)?;
-        if contents.main_frame.current_document.is_some() {
+        let handle = self.web_contents_handle_for_target(target_id)?;
+        if self.browser_context.has_loaded_document(handle) {
             return None;
         }
-        if contents
-            .navigation()
-            .initial_document_build()
-            .is_some_and(|build| build.completion.pending())
+        if self
+            .browser_context
+            .initial_document_build_pending(handle)
+            .unwrap_or(false)
         {
             return Some(TargetPageAbsenceReason::InitialDocumentPageBuildInProgress);
         }
@@ -514,11 +496,11 @@ impl BrowserContext {
     pub(in crate::conn) fn project_initial_document_build(
         &mut self,
         target_id: &str,
-        key: crate::conn::state::web_contents::InitialDocumentBuildKey,
+        key: moli_core::browser::web_contents::InitialDocumentBuildKey,
     ) {
         debug_assert_eq!(
-            self.web_contents_for_target(target_id)
-                .map(|contents| contents.id()),
+            self.web_contents_handle_for_target(target_id)
+                .map(|handle| handle.id()),
             Some(key.web_contents())
         );
         self.page_slot_for_target_mut(target_id)
@@ -531,7 +513,7 @@ impl BrowserContext {
 
     pub(in crate::conn) fn retire_initial_document_projection(
         &mut self,
-        key: crate::conn::state::web_contents::InitialDocumentBuildKey,
+        key: moli_core::browser::web_contents::InitialDocumentBuildKey,
     ) {
         let Some(target_id) = self
             .page_targets
@@ -552,42 +534,6 @@ impl BrowserContext {
         {
             slot.pending_renderer_page = None;
         }
-    }
-
-    pub(super) fn replace_loaded_page_with_reason_for_target(
-        &mut self,
-        target_id: &str,
-        page: Option<Page>,
-        absence_reason: TargetPageAbsenceReason,
-    ) -> Option<Page> {
-        let next_document = page.map(|page| {
-            let renderer_page = RendererPageResidenceIdentity::from_page(&page);
-            let id = match self
-                .page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .pending_renderer_page
-                .as_ref()
-            {
-                Some(binding) => {
-                    assert_eq!(
-                        binding.renderer_page(),
-                        renderer_page,
-                        "installed Page must match its explicit renderer Page reservation"
-                    );
-                    binding.document_id()
-                }
-                None => DocumentId::allocate(),
-            };
-            DocumentHost::new(id, page)
-        });
-        self.reset_document_projection_for_target(
-            target_id,
-            next_document.is_some(),
-            absence_reason,
-        );
-        self.web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .replace_document(next_document)
     }
 
     pub(super) fn reset_document_projection_for_target(
@@ -630,31 +576,14 @@ impl BrowserContext {
         }
     }
 
-    #[cfg(test)]
-    pub(super) fn replace_target_document(
-        &mut self,
-        target_id: &str,
-        page: Option<Page>,
-    ) -> Option<Page> {
-        let Some(page) = page else {
-            panic!(
-                "replace_loaded_page(None) is not a valid production transition; use clear_loaded_page_with_reason"
-            );
-        };
-        self.replace_loaded_page_with_reason_for_target(
-            target_id,
-            Some(page),
-            TargetPageAbsenceReason::NoTarget,
-        )
-    }
-
     pub(crate) fn target_document_id(&self, target_id: &str) -> Option<DocumentId> {
+        let handle = self.web_contents_handle_for_target(target_id)?;
         let id = self
-            .web_contents_for_target(target_id)?
-            .main_frame
-            .current_document
-            .as_ref()
-            .map(|document| document.id);
+            .browser_context
+            .document_handle(handle)
+            .ok()
+            .flatten()
+            .map(|document| document.id());
         #[cfg(test)]
         let id = id.or_else(|| {
             self.page_slot_for_target(target_id)
@@ -666,26 +595,34 @@ impl BrowserContext {
         id
     }
 
-    pub(super) fn document_lifecycle_for_target(
+    #[cfg(test)]
+    pub(super) fn document_lifecycle_snapshot_for_target(
         &self,
         target_id: &str,
-    ) -> Option<&DocumentLifecycle> {
-        let lifecycle = self
-            .web_contents_for_target(target_id)
-            .expect("registered Target must reference live WebContents")
-            .main_frame
-            .current_document
-            .as_ref()
-            .map(|document| &document.lifecycle);
+    ) -> Option<moli_core::page::RendererDocumentLifecycleSnapshot> {
+        let snapshot = self
+            .web_contents_handle_for_target(target_id)
+            .and_then(|web_contents| {
+                self.browser_context
+                    .document_handle(web_contents)
+                    .ok()
+                    .flatten()
+                    .and_then(|document| {
+                        self.browser_context
+                            .document_lifecycle_snapshot(document)
+                            .ok()
+                            .flatten()
+                    })
+            });
         #[cfg(test)]
-        let lifecycle = lifecycle.or_else(|| {
+        let snapshot = snapshot.or_else(|| {
             self.page_slot_for_target(target_id)
                 .expect("registered Target projection")
                 .document_fixture
                 .as_ref()
-                .map(|fixture| &fixture.lifecycle)
+                .and_then(|fixture| fixture.lifecycle.snapshot())
         });
-        lifecycle
+        snapshot
     }
 
     #[cfg(test)]
@@ -696,17 +633,19 @@ impl BrowserContext {
     ) {
         let snapshot = lifecycle.snapshot().expect("fixture lifecycle");
         let previous = self
-            .document_lifecycle_for_target(target_id)
-            .and_then(DocumentLifecycle::snapshot)
+            .document_lifecycle_snapshot_for_target(target_id)
             .map(|snapshot| (snapshot.frame, snapshot.document, snapshot.epoch));
-        if let Some(document) = self
-            .web_contents_for_target_mut(target_id)
-            .unwrap()
-            .main_frame
-            .current_document
-            .as_mut()
-        {
-            document.lifecycle = lifecycle;
+        let web_contents = self
+            .web_contents_handle_for_target(target_id)
+            .expect("registered Target must reference live WebContents");
+        let physical_document = self
+            .browser_context
+            .document_handle(web_contents)
+            .expect("registered Target must reference live WebContents");
+        if let Some(document) = physical_document {
+            self.browser_context
+                .install_document_lifecycle_for_test(document, lifecycle)
+                .expect("current fixture Document");
         } else {
             self.page_slot_for_target_mut(target_id)
                 .unwrap()
@@ -718,10 +657,10 @@ impl BrowserContext {
         if previous != Some((snapshot.frame, snapshot.document, snapshot.epoch))
             || snapshot.terminated.is_some()
         {
-            self.web_contents_for_target_mut(target_id)
-                .unwrap()
-                .javascript_dialogs
-                .clear();
+            let handle = self.web_contents_handle_for_target(target_id).unwrap();
+            self.browser_context
+                .clear_web_contents_javascript_dialogs_for_test(handle)
+                .unwrap();
         }
     }
 
@@ -731,12 +670,10 @@ impl BrowserContext {
         target_id: &str,
         event: RendererDocumentLifecycleEvent,
     ) -> bool {
-        if self
-            .web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .main_frame
-            .current_document
-            .is_none()
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("registered Target must reference live WebContents");
+        if !self.browser_context.has_loaded_document(handle)
             && let Some(fixture) = self
                 .page_slot_for_target_mut(target_id)
                 .expect("registered Target projection")
@@ -755,10 +692,9 @@ impl BrowserContext {
                         RendererDocumentLifecycleEventKind::Terminated { .. }
                     ))
             {
-                self.web_contents_for_target_mut(target_id)
-                    .expect("registered Target must reference live WebContents")
-                    .javascript_dialogs
-                    .clear();
+                self.browser_context
+                    .clear_web_contents_javascript_dialogs_for_test(handle)
+                    .unwrap();
             }
             if accepted
                 && matches!(
@@ -769,44 +705,18 @@ impl BrowserContext {
                     }
                 )
             {
-                self.web_contents_for_target_mut(target_id)
-                    .unwrap()
-                    .mark_initial_empty_document_exited();
+                self.browser_context
+                    .mark_initial_empty_document_exited_for_test(handle)
+                    .unwrap();
             }
             return accepted;
         }
-        self.web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .apply_document_lifecycle(event)
-            .is_some()
-    }
-
-    #[cfg(test)]
-    pub(super) fn document_lifetime_mut_for_target(
-        &mut self,
-        target_id: &str,
-    ) -> Option<&mut DocumentLifetime> {
-        #[cfg(test)]
-        if self
-            .web_contents_for_target(target_id)
-            .expect("registered Target must reference live WebContents")
-            .main_frame
-            .current_document
-            .is_none()
-        {
-            return self
-                .page_slot_for_target_mut(target_id)
-                .expect("registered Target projection")
-                .document_fixture
-                .as_mut()
-                .map(|fixture| &mut fixture.lifetime);
-        }
-        self.web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .main_frame
-            .current_document
-            .as_mut()
-            .map(|document| &mut document.lifetime)
+        let document = self
+            .document_handle_for_target(target_id)
+            .expect("current fixture Document");
+        self.browser_context
+            .apply_document_lifecycle_for_test(document, event)
+            .unwrap_or(false)
     }
 
     #[cfg(test)]
@@ -817,10 +727,13 @@ impl BrowserContext {
             .as_ref()
             .map(PendingRendererPageBinding::document_id)
             .or_else(|| {
-                self.web_contents_for_target(target_id)
-                    .expect("registered Target must reference live WebContents")
-                    .navigation()
-                    .pending_document()
+                let handle = self
+                    .web_contents_handle_for_target(target_id)
+                    .expect("registered Target must reference live WebContents");
+                self.browser_context
+                    .pending_document_for_test(handle)
+                    .ok()
+                    .flatten()
                     .map(|(_, document)| document)
             })
     }
@@ -848,11 +761,13 @@ impl BrowserContext {
                 .pending_renderer_page = None;
         }
 
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("registered Target must reference live WebContents");
         if let Some((navigation, document_id)) = self
-            .web_contents_for_target_mut(target_id)
+            .browser_context
+            .pending_document_for_test(handle)
             .expect("registered Target must reference live WebContents")
-            .navigation()
-            .pending_document()
         {
             self.page_slot_for_target_mut(target_id)
                 .expect("registered Target projection")
@@ -879,8 +794,23 @@ impl BrowserContext {
         &mut self,
         target_id: &str,
     ) -> Option<DocumentLifetimeObserver> {
-        self.document_lifetime_mut_for_target(target_id)
-            .map(DocumentLifetime::observe)
+        let web_contents = self.web_contents_handle_for_target(target_id)?;
+        let physical_document = self
+            .browser_context
+            .document_handle(web_contents)
+            .ok()
+            .flatten();
+        if let Some(document) = physical_document {
+            return self
+                .browser_context
+                .observe_document_lifetime(document)
+                .ok();
+        }
+        self.page_slot_for_target_mut(target_id)
+            .expect("registered Target projection")
+            .document_fixture
+            .as_mut()
+            .map(|fixture| fixture.lifetime.observe())
     }
 
     #[cfg(test)]
@@ -921,28 +851,34 @@ impl BrowserContext {
             .expect("registered Target projection")
             .runtime_slot
             .retire_javascript_dialog_scope();
-        self.web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .javascript_dialogs
-            .clear();
+        let web_contents = self
+            .web_contents_handle_for_target(target_id)
+            .expect("registered Target must reference live WebContents");
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .finish_renderer_document_lifecycle_observers(
                 RendererDocumentLifecycleObservation::Superseded,
             );
-        if let Some(lifetime) = self.document_lifetime_mut_for_target(target_id) {
-            std::mem::take(lifetime).supersede();
-        }
         if let Some(document) = self
-            .web_contents_for_target_mut(target_id)
+            .browser_context
+            .document_handle(web_contents)
             .expect("registered Target must reference live WebContents")
-            .main_frame
-            .current_document
-            .as_mut()
         {
-            document.id = document_id;
-            document.lifecycle = DocumentLifecycle::default();
+            self.browser_context
+                .replace_document_identity_for_test(document, document_id)
+                .expect("current fixture Document");
         } else {
+            self.browser_context
+                .clear_web_contents_javascript_dialogs_for_test(web_contents)
+                .unwrap();
+            if let Some(fixture) = self
+                .page_slot_for_target_mut(target_id)
+                .expect("registered Target projection")
+                .document_fixture
+                .take()
+            {
+                fixture.lifetime.supersede();
+            }
             self.page_slot_for_target_mut(target_id)
                 .expect("registered Target projection")
                 .document_fixture = Some(DocumentFixture {
@@ -970,9 +906,12 @@ impl BrowserContext {
                 RendererDocumentLifecycleObservation::Superseded,
             );
         let token = self
-            .web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .start_document_navigation();
+            .browser_context
+            .start_document_navigation(
+                self.web_contents_handle_for_target(target_id)
+                    .expect("registered Target must reference live WebContents"),
+            )
+            .expect("registered Target must reference live WebContents");
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .pending_renderer_page = None;
@@ -995,10 +934,9 @@ impl BrowserContext {
         target_id: &str,
         token: &NavigationId,
     ) -> Option<moli_fetch::FetchCancelHandle> {
-        self.web_contents_for_target(target_id)
-            .expect("registered Target must reference live WebContents")
-            .navigation()
-            .document_navigation_cancellation_handle(token)
+        let _ = self.web_contents_handle_for_target(target_id)?;
+        self.browser_context
+            .document_navigation_cancellation_handle_for_test(token)
     }
 
     #[cfg(test)]
@@ -1008,8 +946,10 @@ impl BrowserContext {
         token: &NavigationId,
         additional_cancellation: Option<moli_fetch::FetchCancelHandle>,
     ) -> bool {
-        self.web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
+        let Some(_handle) = self.web_contents_handle_for_target(target_id) else {
+            return false;
+        };
+        self.browser_context
             .arm_background_navigation_completion(token, additional_cancellation)
     }
 
@@ -1019,14 +959,20 @@ impl BrowserContext {
         target_id: &str,
         token: &NavigationId,
     ) -> bool {
-        self.web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
+        let Some(_handle) = self.web_contents_handle_for_target(target_id) else {
+            return false;
+        };
+        self.browser_context
             .settle_background_navigation_completion(token)
     }
 
     pub(crate) fn has_inflight_background_navigation_for_target(&self, target_id: &str) -> bool {
-        self.web_contents_for_target(target_id)
-            .is_some_and(|contents| contents.navigation().has_inflight_background_navigation())
+        self.web_contents_handle_for_target(target_id)
+            .is_some_and(|handle| {
+                self.browser_context
+                    .has_inflight_background_navigation_for_web_contents(handle)
+                    .unwrap_or(false)
+            })
     }
 
     #[cfg(test)]
@@ -1036,11 +982,13 @@ impl BrowserContext {
         token: &NavigationId,
         renderer_page: RendererPageResidenceIdentity,
     ) -> bool {
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("registered Target must reference live WebContents");
         let Some((navigation, document_id)) = self
-            .web_contents_for_target_mut(target_id)
+            .browser_context
+            .pending_document_for_test(handle)
             .expect("registered Target must reference live WebContents")
-            .navigation()
-            .pending_document()
             .filter(|(navigation, _)| navigation == token)
         else {
             return false;
@@ -1077,8 +1025,11 @@ impl BrowserContext {
         target_id: &str,
         renderer_page: RendererPageResidenceIdentity,
     ) -> bool {
-        self.loaded_page_for_target(target_id)
-            .is_some_and(|page| RendererPageResidenceIdentity::from_page(page) == renderer_page)
+        self.web_contents_handle_for_target(target_id)
+            .is_some_and(|handle| {
+                self.browser_context
+                    .document_renderer_matches(handle, renderer_page)
+            })
             || self
                 .page_slot_for_target(target_id)
                 .expect("registered Target projection")
@@ -1092,10 +1043,12 @@ impl BrowserContext {
         target_id: &str,
         token: &NavigationId,
     ) -> bool {
-        self.web_contents_for_target(target_id)
-            .expect("registered Target must reference live WebContents")
-            .navigation()
-            .accepts_pending_document_navigation_event(token)
+        self.web_contents_handle_for_target(target_id)
+            .is_some_and(|handle| {
+                self.browser_context
+                    .accepts_pending_navigation(handle, token)
+                    .unwrap_or(false)
+            })
     }
 
     pub(crate) fn accepts_document_body_completion_event_for_target(
@@ -1103,15 +1056,21 @@ impl BrowserContext {
         target_id: &str,
         token: &NavigationId,
     ) -> bool {
-        self.web_contents_for_target(target_id)
-            .expect("registered Target must reference live WebContents")
-            .navigation()
-            .accepts_document_body_completion_event(token)
+        self.web_contents_handle_for_target(target_id)
+            .is_some_and(|handle| {
+                self.browser_context
+                    .accepts_document_body_completion(handle, token)
+                    .unwrap_or(false)
+            })
     }
 
     pub(crate) fn has_pending_document_navigation_for_target(&self, target_id: &str) -> bool {
-        self.web_contents_for_target(target_id)
-            .is_some_and(|contents| contents.navigation().has_pending_document_navigation())
+        self.web_contents_handle_for_target(target_id)
+            .is_some_and(|handle| {
+                self.browser_context
+                    .has_pending_document_navigation(handle)
+                    .unwrap_or(false)
+            })
     }
 
     pub(in crate::conn) fn pending_navigation_id_for_loader(
@@ -1119,13 +1078,16 @@ impl BrowserContext {
         target_id: &str,
         loader_id: &str,
     ) -> Option<NavigationId> {
-        let controller = self.web_contents_for_target(target_id)?.navigation();
+        let handle = self.web_contents_handle_for_target(target_id)?;
         self.page_slot_for_target(target_id)?
             .cdp_navigation_loaders
             .iter()
             .find_map(|(navigation, loader)| {
                 (loader == loader_id
-                    && controller.accepts_pending_document_navigation_event(navigation))
+                    && self
+                        .browser_context
+                        .accepts_pending_navigation(handle, navigation)
+                        .unwrap_or(false))
                 .then_some(*navigation)
             })
     }
@@ -1133,15 +1095,17 @@ impl BrowserContext {
     pub(in crate::conn) fn project_navigation_load_for_target(
         &mut self,
         target_id: &str,
-        load: &crate::conn::state::web_contents::AdmittedNavigationLoad,
+        load: &moli_core::browser::BrowserNavigationLoad,
     ) -> Result<(), String> {
-        let contents = self
-            .web_contents_for_target(target_id)
+        let handle = self
+            .web_contents_handle_for_target(target_id)
             .ok_or("navigation WebContents unavailable")?;
-        if contents.id() != load.web_contents_id()
-            || !contents
-                .navigation()
-                .accepts_document_preparation(load.navigation_id(), load.renderer_page())
+        if handle.id() != load.web_contents_id()
+            || !self.browser_context.accepts_document_preparation(
+                handle,
+                load.navigation_id(),
+                load.renderer_page(),
+            )?
         {
             return Err("stale navigation document candidate".to_owned());
         }
@@ -1159,10 +1123,12 @@ impl BrowserContext {
         self.page_slot_for_target(target_id)
             .expect("registered Target projection")
             .loader_id_for_navigation(
-                self.web_contents_for_target(target_id)
-                    .expect("registered Target must reference live WebContents")
-                    .navigation()
-                    .current_document_navigation()?,
+                self.browser_context
+                    .current_document_navigation(
+                        self.web_contents_handle_for_target(target_id)
+                            .expect("registered Target must reference live WebContents"),
+                    )
+                    .ok()??,
             )
     }
 
@@ -1170,10 +1136,12 @@ impl BrowserContext {
         self.page_slot_for_target(target_id)
             .expect("registered Target projection")
             .loader_id_for_navigation(
-                self.web_contents_for_target(target_id)
-                    .expect("registered Target must reference live WebContents")
-                    .navigation()
-                    .committed_document_navigation()?,
+                self.browser_context
+                    .committed_document_navigation(
+                        self.web_contents_handle_for_target(target_id)
+                            .expect("registered Target must reference live WebContents"),
+                    )
+                    .ok()??,
             )
     }
 
@@ -1182,16 +1150,19 @@ impl BrowserContext {
             .page_targets
             .get_mut(target_id)
             .expect("registered Target projection");
-        let contents = self
-            .physical
-            .web_contents
-            .get(&target.web_contents_id())
-            .expect("registered WebContents");
+        let handle = moli_core::browser::WebContentsHandle::new(
+            self.browser_context.id(),
+            target.web_contents_id(),
+        );
         target
             .runtime_slot
             .page_slot_mut()
             .cdp_navigation_loaders
-            .retain(|(id, _)| contents.navigation().retains_navigation(*id));
+            .retain(|(id, _)| {
+                self.browser_context
+                    .navigation_retains(handle, *id)
+                    .unwrap_or(false)
+            });
     }
 
     #[cfg(test)]
@@ -1200,10 +1171,12 @@ impl BrowserContext {
         target_id: &str,
         token: &NavigationId,
     ) -> bool {
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("registered Target must reference live WebContents");
         if !self
-            .web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .commit_pending_document_navigation_if_matches(token)
+            .browser_context
+            .commit_pending_document_navigation_for_test(handle, token)
         {
             return false;
         }
@@ -1216,10 +1189,13 @@ impl BrowserContext {
         target_id: &str,
         navigation: &NavigationId,
     ) -> bool {
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("registered Target must reference live WebContents");
         if self
-            .web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .clear_pending_document_navigation_if_matches(navigation)
+            .browser_context
+            .clear_pending_navigation_if_matches(handle, navigation)
+            .unwrap_or(false)
         {
             if matches!(
                 self.page_slot_for_target_mut(target_id).expect("registered Target projection").pending_renderer_page.as_ref(),
@@ -1249,9 +1225,12 @@ impl BrowserContext {
             .finish_renderer_document_lifecycle_observers(
                 RendererDocumentLifecycleObservation::Unavailable,
             );
-        self.web_contents_for_target_mut(target_id)
-            .expect("registered Target must reference live WebContents")
-            .clear_document_navigation_state();
+        let handle = self
+            .web_contents_handle_for_target(target_id)
+            .expect("registered Target must reference live WebContents");
+        self.browser_context
+            .clear_document_navigation_state(handle)
+            .expect("registered Target must reference live WebContents");
         self.page_slot_for_target_mut(target_id)
             .expect("registered Target projection")
             .cdp_navigation_loaders
@@ -1418,10 +1397,13 @@ impl BrowserContext {
             .is_some_and(|binding| {
                 Some(binding.document_id) == self.target_document_id(target_id)
                     && binding.navigation.as_ref().is_none_or(|navigation| {
-                        self.web_contents_for_target(target_id)
-                            .expect("registered Target must reference live WebContents")
-                            .navigation()
-                            .committed_document_navigation()
+                        self.browser_context
+                            .committed_document_navigation(
+                                self.web_contents_handle_for_target(target_id)
+                                    .expect("registered Target must reference live WebContents"),
+                            )
+                            .ok()
+                            .flatten()
                             .as_ref()
                             == Some(navigation)
                     })
@@ -1577,10 +1559,13 @@ impl BrowserContext {
             .filter(|binding| {
                 Some(binding.document_id) == self.target_document_id(target_id)
                     && binding.navigation.as_ref().is_none_or(|navigation| {
-                        self.web_contents_for_target(target_id)
-                            .expect("registered Target must reference live WebContents")
-                            .navigation()
-                            .committed_document_navigation()
+                        self.browser_context
+                            .committed_document_navigation(
+                                self.web_contents_handle_for_target(target_id)
+                                    .expect("registered Target must reference live WebContents"),
+                            )
+                            .ok()
+                            .flatten()
                             .as_ref()
                             == Some(navigation)
                     })
@@ -1591,7 +1576,18 @@ impl BrowserContext {
         &self,
         target_id: &str,
     ) -> Option<RendererDocumentLifecycleSnapshot> {
-        self.document_lifecycle_for_target(target_id)?.snapshot()
+        #[cfg(test)]
+        {
+            self.document_lifecycle_snapshot_for_target(target_id)
+        }
+
+        #[cfg(not(test))]
+        {
+            let document = self.document_handle_for_target(target_id)?;
+            self.browser_context
+                .document_lifecycle_snapshot(document)
+                .ok()?
+        }
     }
 
     pub(crate) fn apply_renderer_document_lifecycle(
@@ -1599,16 +1595,11 @@ impl BrowserContext {
         renderer_page: RendererPageResidenceIdentity,
         event: RendererDocumentLifecycleEvent,
     ) -> Option<crate::conn::DocumentLifecycleEvent> {
-        if let Some(contents) = self.physical.web_contents.values_mut().find(|contents| {
-            contents
-                .main_frame
-                .current_document
-                .as_ref()
-                .is_some_and(|document| {
-                    RendererPageResidenceIdentity::from_page(&document.page) == renderer_page
-                })
-        }) {
-            return contents.apply_document_lifecycle(event);
+        if let Some(occurrence) = self
+            .browser_context
+            .apply_renderer_document_lifecycle(renderer_page, event)
+        {
+            return Some(occurrence);
         }
         #[cfg(test)]
         {
@@ -1616,7 +1607,7 @@ impl BrowserContext {
                 .page_targets
                 .iter()
                 .find(|target| {
-                    self.loaded_page_for_target(target.target_id()).is_none()
+                    !self.target_has_loaded_page(target.target_id())
                         && self.routes_renderer_page_for_target(target.target_id(), renderer_page)
                         && target.runtime_slot.page_slot().document_fixture.is_some()
                 })
@@ -1883,9 +1874,8 @@ mod page_residence_tests {
         );
         assert!(
             browser_context
-                .replace_loaded_page_with_reason_for_target(
+                .retire_loaded_document_with_reason_for_target(
                     PAGE_SLOT_TEST_TARGET,
-                    None,
                     TargetPageAbsenceReason::TestFixture
                 )
                 .is_none()
@@ -2117,7 +2107,6 @@ mod pending_renderer_page_tests {
                 PAGE_SLOT_TEST_TARGET,
                 Default::default(),
                 &Default::default(),
-                &Default::default(),
             )
             .unwrap()
         else {
@@ -2133,7 +2122,6 @@ mod pending_renderer_page_tests {
             .start_initial_document_for_target(
                 PAGE_SLOT_TEST_TARGET,
                 Default::default(),
-                &Default::default(),
                 &Default::default(),
             )
             .unwrap()

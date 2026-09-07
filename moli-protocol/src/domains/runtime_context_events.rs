@@ -496,7 +496,7 @@ fn mark_child_default_context_event_emitted(
 
 #[cfg(test)]
 mod tests {
-    use crate::conn::{BrowserContext, CdpConnection, CommandOwnerScope};
+    use crate::conn::CommandOwnerScope;
     use crate::conn::{ServiceWorkerTargetState, SharedWorkerTargetState};
     use crate::devtools_runtime::AutomationEvent;
     use moli_core::{RendererOwnerLocalHostId, page::RendererServiceWorkerVersionStatus};
@@ -505,8 +505,8 @@ mod tests {
 
     #[test]
     fn runtime_context_event_qualification_uses_target_owner_prefix() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         browser_context.set_active_target_id("TID-1".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
 
@@ -550,8 +550,9 @@ mod tests {
 
     #[test]
     fn typed_runtime_context_qualification_tags_shared_worker_target() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-shared".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-shared".to_owned());
         let mut target = SharedWorkerTargetState::new(
             RendererOwnerLocalHostId::new_for_testing(1),
             SharedWorkerInstanceId::from_u64(9),
@@ -601,8 +602,9 @@ mod tests {
 
     #[test]
     fn typed_runtime_context_qualification_classifies_service_worker_target() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-service".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-service".to_owned());
         let mut target = ServiceWorkerTargetState::new(
             41,
             29,
@@ -702,8 +704,8 @@ mod tests {
 
     #[test]
     fn live_child_context_delivery_advances_runtime_enable_inventory_cursor() {
-        let mut conn = CdpConnection::default();
-        let mut browser_context = BrowserContext::new("BID-1".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context = conn.new_browser_context_fixture_for_test("BID-1".to_owned());
         browser_context.set_active_target_id("TID-1".to_owned());
         browser_context.attach_active_session("SID-1".to_owned());
         conn.install_browser_context_fixture_for_test(browser_context);
@@ -811,11 +813,10 @@ mod tests {
 
     #[test]
     fn runtime_context_destroyed_clears_matching_remote_object_realm() {
-        let mut conn = CdpConnection::new();
-        conn.browser_context = Some(BrowserContext::new_with_page_for_test(
-            "BID-runtime-context",
-            "TID-runtime-context",
-        ));
+        let mut conn = crate::test_support::connection();
+        conn.browser_context = Some(
+            conn.new_page_target_fixture_for_test("BID-runtime-context", "TID-runtime-context"),
+        );
         conn.register_runtime_remote_object_ids_for_session_owner_with_realm(
             None,
             vec!["object-realm-1".to_owned()],
@@ -852,8 +853,9 @@ mod tests {
 
     #[test]
     fn runtime_contexts_cleared_clears_shared_worker_remote_object_tracking() {
-        let mut conn = CdpConnection::new();
-        let mut browser_context = BrowserContext::new("BID-shared-runtime-context".to_owned());
+        let mut conn = crate::test_support::connection();
+        let mut browser_context =
+            conn.new_browser_context_fixture_for_test("BID-shared-runtime-context".to_owned());
         let mut target = SharedWorkerTargetState::new(
             RendererOwnerLocalHostId::new_for_testing(7),
             SharedWorkerInstanceId::from_u64(11),
