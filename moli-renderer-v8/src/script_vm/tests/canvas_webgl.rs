@@ -2403,6 +2403,72 @@ fn html_legacy_factory_constructors_use_element_interface_prototypes() {
     );
 }
 
+#[test]
+fn html_legacy_factory_constructors_honor_new_target_prototypes() {
+    let mut vm = new_storage_test_vm("https://legacy-factory-new-target.test/");
+
+    let result = vm
+        .eval(
+            r#"
+(() => {
+  function check(ctor, iface, localName, args) {
+    const Derived = class extends ctor {};
+    const instance = Reflect.construct(ctor, args, Derived);
+    return [
+      Object.getPrototypeOf(instance) === Derived.prototype,
+      instance instanceof Derived,
+      instance instanceof iface,
+      instance.localName === localName
+    ].join(':');
+  }
+
+  function fallback(ctor, iface) {
+    function BadNewTarget() {}
+    BadNewTarget.prototype = 1;
+    const instance = Reflect.construct(ctor, [], BadNewTarget);
+    return [
+      Object.getPrototypeOf(instance) === iface.prototype,
+      instance instanceof iface
+    ].join(':');
+  }
+
+  let prototypeGets = 0;
+  const proxyPrototype = Object.create(HTMLImageElement.prototype);
+  const ProxyNewTarget = new Proxy(function() {}, {
+    get(target, property, receiver) {
+      if (property === 'prototype') {
+        prototypeGets++;
+        return proxyPrototype;
+      }
+      return Reflect.get(target, property, receiver);
+    }
+  });
+  const proxyImage = Reflect.construct(Image, [], ProxyNewTarget);
+
+  return [
+    check(Audio, HTMLAudioElement, 'audio', ['clip.mp3']),
+    check(Image, HTMLImageElement, 'img', [4, 5]),
+    check(Option, HTMLOptionElement, 'option', ['label', 'value']),
+    fallback(Audio, HTMLAudioElement),
+    fallback(Image, HTMLImageElement),
+    fallback(Option, HTMLOptionElement),
+    prototypeGets,
+    Object.getPrototypeOf(proxyImage) === proxyPrototype
+  ].join('|');
+})()
+"#,
+        )
+        .expect("legacy factory NewTarget prototype probe should evaluate");
+
+    assert_eq!(
+        result,
+        concat!(
+            "true:true:true:true|true:true:true:true|true:true:true:true|",
+            "true:true|true:true|true:true|1|true"
+        )
+    );
+}
+
 #[tokio::test]
 async fn html_image_load_runs_on_its_dom_task_not_window_load_dispatch() {
     let loader = ResourceRequestClient::new(&moli_fetch::FetchConfig::default()).expect("loader");
