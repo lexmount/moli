@@ -284,179 +284,67 @@ fn url_writable_attribute_setter_callback<'s>(
         URL_WRITABLE_ATTRIBUTES,
         "URL writable attributes",
     ) else {
-        rv.set_undefined();
         return;
     };
     let Some(this) = require_url_receiver(scope, args.this()) else {
         return;
     };
-    match attribute {
-        UrlAttribute::Href => {
-            let Some(href) = url_attribute_usv_string(scope, args.get(0), attribute) else {
-                return;
-            };
-            match url::Url::parse(&href) {
-                Ok(url) => apply_url_update(scope, this, &url),
-                Err(_) => throw_type_error(
-                    scope,
-                    "Failed to set the 'href' property on 'URL': Invalid URL.",
-                ),
-            }
+    // WebIDL conversion can run script that changes this URL. Read its current
+    // record only after conversion, rather than overwriting those side effects.
+    let Some(value) = url_attribute_usv_string(scope, args.get(0), attribute) else {
+        return;
+    };
+    if matches!(attribute, UrlAttribute::Href) {
+        match url::Url::parse(&value) {
+            Ok(url) => apply_url_update(scope, this, &url),
+            Err(_) => throw_type_error(
+                scope,
+                "Failed to set the 'href' property on 'URL': Invalid URL.",
+            ),
         }
-        UrlAttribute::Protocol => {
-            let Some(mut url) = url_object_value(scope, this) else {
-                rv.set_undefined();
-                return;
-            };
-            let Some(protocol) = url_attribute_usv_string(scope, args.get(0), attribute) else {
-                rv.set_undefined();
-                return;
-            };
-            let scheme = protocol.trim_end_matches(':');
-            if !scheme.is_empty() && url.set_scheme(scheme).is_ok() {
-                apply_url_update(scope, this, &url);
-            }
-        }
-        UrlAttribute::Username => {
-            if let Some(mut url) = url_object_value(scope, this)
-                && let Some(username) = url_attribute_usv_string(scope, args.get(0), attribute)
-                && url.set_username(&username).is_ok()
-            {
-                apply_url_update(scope, this, &url);
-            }
-        }
-        UrlAttribute::Password => {
-            if let Some(mut url) = url_object_value(scope, this)
-                && let Some(password) = url_attribute_usv_string(scope, args.get(0), attribute)
-                && url.set_password(Some(&password)).is_ok()
-            {
-                apply_url_update(scope, this, &url);
-            }
-        }
+        return;
+    }
+    let Some(mut url) = url_object_value(scope, this) else {
+        return;
+    };
+    let applied = match attribute {
+        UrlAttribute::Protocol => url::quirks::set_protocol(&mut url, &value).is_ok(),
+        UrlAttribute::Username => url::quirks::set_username(&mut url, &value).is_ok(),
+        UrlAttribute::Password => url::quirks::set_password(&mut url, &value).is_ok(),
         UrlAttribute::Host => {
-            if let Some(mut url) = url_object_value(scope, this)
-                && let Some(host) = url_attribute_usv_string(scope, args.get(0), attribute)
-            {
-                if host.is_empty() {
-                    rv.set_undefined();
-                    return;
-                }
-                let parsed = if host.starts_with('[') {
-                    let Some(end_bracket) = host.find(']') else {
-                        rv.set_undefined();
-                        return;
-                    };
-                    let hostname_part = &host[..=end_bracket];
-                    let suffix = &host[end_bracket + 1..];
-                    if suffix.is_empty() {
-                        Some((hostname_part, None))
-                    } else {
-                        suffix
-                            .strip_prefix(':')
-                            .map(|port_part| (hostname_part, Some(port_part)))
-                    }
-                } else if let Some(colon_idx) = host.rfind(':') {
-                    let hostname_part = &host[..colon_idx];
-                    let port_part = &host[colon_idx + 1..];
-                    if hostname_part.contains(':') {
-                        Some((host.as_str(), None))
-                    } else if hostname_part.is_empty() {
-                        None
-                    } else {
-                        Some((hostname_part, Some(port_part)))
-                    }
-                } else {
-                    Some((host.as_str(), None))
-                };
-                let Some((hostname_part, explicit_port)) = parsed else {
-                    rv.set_undefined();
-                    return;
-                };
-                if url.set_host(Some(hostname_part)).is_ok() {
-                    let port_result = match explicit_port {
-                        Some("") => url.set_port(None),
-                        Some(port_part) => match port_part.parse::<u16>() {
-                            Ok(port) => url.set_port(Some(port)),
-                            Err(_) => {
-                                rv.set_undefined();
-                                return;
-                            }
-                        },
-                        None => url.set_port(None),
-                    };
-                    if port_result.is_ok() {
-                        apply_url_update(scope, this, &url);
-                    }
-                }
+            if url.cannot_be_a_base() {
+                return;
             }
+            moli_url::components::set_host(&mut url, &value);
+            true
         }
         UrlAttribute::Hostname => {
-            if let Some(mut url) = url_object_value(scope, this)
-                && let Some(hostname) = url_attribute_usv_string(scope, args.get(0), attribute)
-                && !hostname.is_empty()
-            {
-                let port = url.port();
-                if url.set_host(Some(&hostname)).is_ok() {
-                    let _ = url.set_port(port);
-                    apply_url_update(scope, this, &url);
-                } else {
-                    let candidate = format!(
-                        "{}{}{}",
-                        &url[..url::Position::BeforeHost],
-                        hostname,
-                        &url[url::Position::AfterHost..]
-                    );
-                    if let Ok(next_url) = url::Url::parse(&candidate) {
-                        apply_url_update(scope, this, &next_url);
-                    }
-                }
-            }
+            moli_url::components::set_hostname(&mut url, &value);
+            true
         }
         UrlAttribute::Port => {
-            if let Some(mut url) = url_object_value(scope, this)
-                && let Some(port) = url_attribute_usv_string(scope, args.get(0), attribute)
-            {
-                let updated = if port.is_empty() {
-                    url.set_port(None)
-                } else if let Ok(parsed) = port.parse::<u16>() {
-                    url.set_port(Some(parsed))
-                } else {
-                    rv.set_undefined();
-                    return;
-                };
-                if updated.is_ok() {
-                    apply_url_update(scope, this, &url);
-                }
-            }
+            moli_url::components::set_port(&mut url, &value);
+            true
         }
         UrlAttribute::Pathname => {
-            if let Some(mut url) = url_object_value(scope, this)
-                && let Some(mut pathname) = url_attribute_usv_string(scope, args.get(0), attribute)
-            {
-                if !pathname.starts_with('/') {
-                    pathname.insert(0, '/');
-                }
-                url.set_path(&pathname);
-                apply_url_update(scope, this, &url);
+            if url.cannot_be_a_base() {
+                return;
             }
+            moli_url::components::set_pathname(&mut url, &value);
+            true
         }
         UrlAttribute::Search => {
-            if let Some(mut url) = url_object_value(scope, this)
-                && let Some(search) = url_attribute_usv_string(scope, args.get(0), attribute)
-            {
-                url::quirks::set_search(&mut url, &search);
-                apply_url_update(scope, this, &url);
-            }
+            url::quirks::set_search(&mut url, &value);
+            true
         }
         UrlAttribute::Hash => {
-            if let Some(mut url) = url_object_value(scope, this)
-                && let Some(hash) = url_attribute_usv_string(scope, args.get(0), attribute)
-            {
-                url::quirks::set_hash(&mut url, &hash);
-                apply_url_update(scope, this, &url);
-            }
+            url::quirks::set_hash(&mut url, &value);
+            true
         }
-        UrlAttribute::Origin | UrlAttribute::SearchParams => {}
+        UrlAttribute::Href | UrlAttribute::Origin | UrlAttribute::SearchParams => false,
+    };
+    if applied {
+        apply_url_update(scope, this, &url);
     }
     rv.set_undefined();
 }
