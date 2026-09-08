@@ -1,6 +1,5 @@
 use super::helpers::{
-    can_parse_url_input, constructor_url_href, require_url_receiver, resolve_url_constructor_input,
-    url_href_slot,
+    can_parse_url_input, require_url_receiver, resolve_url_constructor_input, url_href_slot,
 };
 use super::*;
 use crate::util::get_private_value;
@@ -73,7 +72,7 @@ pub(super) fn url_constructor_callback<'s>(
     };
 
     let this = args.this();
-    let href = constructor_url_href(&parsed.input, &url);
+    let href = url.as_str().to_owned();
     let has_search_params = get_private_value(scope, this, URL_SEARCH_PARAMS_SLOT)
         .is_some_and(|value| !value.is_undefined());
     let search_params = if has_search_params {
