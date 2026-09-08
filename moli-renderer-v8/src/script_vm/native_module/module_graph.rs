@@ -513,6 +513,13 @@ impl ScriptVm {
                         }
                     }
                 }
+                // Script-element evaluation consumes rejection itself, either
+                // below or through its retained TLA continuation. Claim that
+                // responsibility before cleanup can notify rejected promises.
+                // Dynamic import returned above and owns its own reaction.
+                if let Some(promise) = promise {
+                    promise.mark_as_handled();
+                }
                 if let Err(error) = Self::perform_microtask_checkpoints(&mut scope, None) {
                     return Ok(Err(ModuleLoadError::new(
                         ModuleLoadStage::Evaluate,

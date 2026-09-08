@@ -1033,7 +1033,7 @@ impl ScriptVm {
                                         )
                                     },
                                 );
-                                let error_constructor = error.error_constructor();
+                                let error_value = error.error_value();
                                 let error = error.into_message();
                                 if failure_kind
                                     == crate::dynamic_script_owner::DynamicScriptFailureKind::Immediate
@@ -1051,7 +1051,7 @@ impl ScriptVm {
                                         self.apply_runtime_script_failure_terminal(&script,
                                             &error,
                                             module_failure_policy,
-                                            error_constructor,
+                                            error_value,
                                             lease,
                                         );
                                     }
@@ -1059,13 +1059,13 @@ impl ScriptVm {
                                     self.document_runtime
                                         .runtime_script_work_mut()
                                         .dynamic_scripts
-                                        .note_script_failed_with_kind_and_error_constructor(
+                                        .note_script_failed_with_kind_and_error_value(
                                             id,
                                             &script,
                                             error,
                                             failure_kind,
                                             module_failure_policy,
-                                            error_constructor,
+                                            error_value,
                                         );
                                 }
                                 processed_runnable_this_turn = true;
@@ -1093,20 +1093,20 @@ impl ScriptVm {
                         kind,
                         module_failure_policy,
                         source_network_result,
-                        error_constructor,
+                        error_value,
                     } => {
                         if yield_after_one_runnable && processed_runnable_this_turn {
                             self.document_runtime
                                 .runtime_script_work_mut()
                                 .dynamic_scripts
-                                .requeue_failed_script_front_with_error_constructor(
+                                .requeue_failed_script_front_with_error_value(
                                     id,
                                     script,
                                     message,
                                     kind,
                                     module_failure_policy,
                                     source_network_result,
-                                    error_constructor,
+                                    error_value,
                                 );
                             return Ok(RuntimePendingWorkFlushOutcome::Complete);
                         }
@@ -1121,14 +1121,14 @@ impl ScriptVm {
                             self.document_runtime
                                 .runtime_script_work_mut()
                                 .dynamic_scripts
-                                .requeue_failed_script_front_with_error_constructor(
+                                .requeue_failed_script_front_with_error_value(
                                     id,
                                     script,
                                     message,
                                     kind,
                                     module_failure_policy,
                                     source_network_result,
-                                    error_constructor,
+                                    error_value,
                                 );
                             return Ok(RuntimePendingWorkFlushOutcome::Complete);
                         }
@@ -1156,7 +1156,7 @@ impl ScriptVm {
                                 &script,
                                 &message,
                                 module_failure_policy,
-                                error_constructor,
+                                error_value,
                                 lease,
                             );
                         }
@@ -1224,7 +1224,7 @@ impl ScriptVm {
             self.document_runtime
                 .runtime_script_work_mut()
                 .dynamic_scripts
-                .requeue_failed_script_front_with_error_constructor(
+                .requeue_failed_script_front_with_error_value(
                     owner_id,
                     continuation.script,
                     error.message().to_owned(),
@@ -1233,7 +1233,7 @@ impl ScriptVm {
                         &error,
                     )),
                     None,
-                    error.error_constructor(),
+                    error.error_value(),
                 );
         }
     }
