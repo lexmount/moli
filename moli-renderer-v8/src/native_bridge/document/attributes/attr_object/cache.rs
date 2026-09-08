@@ -1,30 +1,9 @@
+use super::super::attribute_node::{native_attr_object_by_name, native_attr_object_by_namespace};
 use super::instance::attr_current_value;
 use super::*;
-use crate::native_bridge::node_runtime_and_handle_from_object;
 use crate::util::{get_private_value, new_null_prototype_object, set_private_value};
 
 const ATTR_OBJECT_CACHE_SLOT: &str = "__moliAttrObjectCache";
-
-fn live_native_attribute_lookup_name<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    element: v8::Local<'s, v8::Object>,
-    name: &str,
-) -> Option<String> {
-    let (runtime_ptr, handle) = node_runtime_and_handle_from_object(scope, element).ok()?;
-    unsafe { &*runtime_ptr }
-        .dom_host()
-        .dom()
-        .normalized_attribute_name(handle, name)
-}
-
-fn attribute_lookup_name<'s>(
-    scope: &mut v8::PinScope<'s, '_>,
-    element: v8::Local<'s, v8::Object>,
-    name: &str,
-) -> String {
-    live_native_attribute_lookup_name(scope, element, name)
-        .unwrap_or_else(|| detached_attribute_name(scope, element, name))
-}
 
 fn ensure_object_cache<'s>(
     scope: &mut v8::PinScope<'s, '_>,
@@ -276,42 +255,7 @@ pub(crate) fn live_get_attribute_node_object<'s>(
     element: v8::Local<'s, v8::Object>,
     name: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let lookup_name = attribute_lookup_name(scope, element, name);
-    let value = call_object_method(
-        scope,
-        element,
-        "getAttribute",
-        &[v8_string(scope, &lookup_name)
-            .map(Into::<v8::Local<'_, v8::Value>>::into)
-            .unwrap_or_else(|| v8::String::empty(scope).into())],
-    )?;
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    let cache = live_attr_cache_object(scope, element)?;
-    let mut attr = object_property_as_object(scope, cache, &lookup_name)
-        .or_else(|| cached_attr_by_name(scope, cache, &lookup_name));
-    if attr.is_none() {
-        attr = new_attr_object(
-            scope,
-            &lookup_name,
-            "",
-            Some(element),
-            None,
-            None,
-            None,
-            &lookup_name,
-        );
-        if let Some(attr_object) = attr {
-            set_attr_cache_entry(scope, cache, &lookup_name, attr_object);
-        }
-    }
-    let attr = attr?;
-    if let Some(state) = attr_state_object(scope, attr) {
-        let _ = state.set(scope, v8str(scope, "ownerElement").into(), element.into());
-        let _ = state.set(scope, v8str(scope, "value").into(), value);
-    }
-    Some(attr)
+    native_attr_object_by_name(scope, element, name)
 }
 
 pub(in crate::native_bridge) fn live_get_attribute_node_ns_object<'s>(
@@ -320,41 +264,5 @@ pub(in crate::native_bridge) fn live_get_attribute_node_ns_object<'s>(
     namespace_uri: Option<&str>,
     local_name: &str,
 ) -> Option<v8::Local<'s, v8::Object>> {
-    let namespace_value = namespace_uri
-        .and_then(|namespace| v8_string(scope, namespace))
-        .map(Into::<v8::Local<'_, v8::Value>>::into)
-        .unwrap_or_else(|| v8::null(scope).into());
-    let local_name_value = v8_string(scope, local_name)?;
-    let value = call_object_method(
-        scope,
-        element,
-        "getAttributeNS",
-        &[namespace_value, local_name_value.into()],
-    )?;
-    if value.is_null_or_undefined() {
-        return None;
-    }
-    let cache = live_attr_cache_object(scope, element)?;
-    let namespace_key = namespace_attr_cache_key(namespace_uri, local_name);
-    let attr = object_property_as_object(scope, cache, &namespace_key)
-        .or_else(|| cached_attr_by_namespace(scope, cache, namespace_uri, local_name))
-        .or_else(|| {
-            let attr = new_attr_object(
-                scope,
-                local_name,
-                "",
-                Some(element),
-                None,
-                namespace_uri,
-                None,
-                local_name,
-            )?;
-            set_attr_cache_entry(scope, cache, &namespace_key, attr);
-            Some(attr)
-        })?;
-    if let Some(state) = attr_state_object(scope, attr) {
-        let _ = state.set(scope, v8str(scope, "ownerElement").into(), element.into());
-        let _ = state.set(scope, v8str(scope, "value").into(), value);
-    }
-    Some(attr)
+    native_attr_object_by_namespace(scope, element, namespace_uri, local_name)
 }
