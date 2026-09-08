@@ -459,7 +459,7 @@ fn location_attribute_getter<'s>(
         LocationAttribute::Search => {
             let search = url::Url::parse(&current_href)
                 .ok()
-                .and_then(|url| url.query().map(|query| format!("?{query}")))
+                .map(|url| url::quirks::search(&url).to_owned())
                 .unwrap_or_default();
             set_return_string(scope, rv, &search);
         }

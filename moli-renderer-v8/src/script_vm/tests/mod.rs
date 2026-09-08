@@ -15606,6 +15606,7 @@ mod queue_microtask;
 mod rendering_update;
 mod script_terminal_completion;
 mod streams;
+mod url_components;
 mod webidl_collections;
 mod webidl_fetch;
 mod webidl_receivers;
