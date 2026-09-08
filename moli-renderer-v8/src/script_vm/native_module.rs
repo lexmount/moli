@@ -981,7 +981,29 @@ impl ScriptVm {
         let source = self
             .inline_script_element_source_for_execution(script.node_id, source, request)
             .unwrap_or_default();
-        ModuleSource::text(source)
+        self.inline_module_script_source_with_origin(script, source)
+    }
+
+    pub(crate) fn inline_module_script_source_with_origin(
+        &self,
+        script: &PreparedScript,
+        source: String,
+    ) -> ModuleSource {
+        let position = self
+            .document_runtime
+            .parser_script_start_position(script.node_id);
+        ModuleSource::text_with_origin(
+            source,
+            crate::document_module_graph::ModuleSourceOrigin {
+                url: script.url.clone(),
+                line_offset: position.map_or(0, |position| {
+                    position.line.saturating_sub(1).min(i32::MAX as u64) as u32
+                }),
+                column_offset: position.map_or(0, |position| {
+                    position.column.saturating_sub(1).min(i32::MAX as u64) as u32
+                }),
+            },
+        )
     }
 
     pub(crate) fn seal_main_parser_deferred_scripts(
@@ -3283,6 +3305,7 @@ impl ScriptVm {
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
         match key.kind() {
             ModuleKind::JavaScript => {
+                let origin = source.origin();
                 let Some(source) = source.text_source() else {
                     return Err(ModuleLoadError::new(
                         ModuleLoadStage::Compile,
@@ -3295,6 +3318,7 @@ impl ScriptVm {
                     source,
                     source_url,
                     fetch_metadata,
+                    origin,
                 )
             }
             ModuleKind::Json | ModuleKind::Css => {
@@ -3334,6 +3358,7 @@ impl ScriptVm {
         source: &str,
         source_url: &Url,
         fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
+        source_origin: Option<&crate::document_module_graph::ModuleSourceOrigin>,
     ) -> std::result::Result<(ModuleRecordEntry, ModuleIdentityHash), ModuleLoadError> {
         let mut exception_id = None;
         self.renderer_document_isolate
@@ -3351,6 +3376,7 @@ impl ScriptVm {
                     &mut scope,
                     source_url.as_str(),
                     fetch_metadata,
+                    source_origin,
                 );
                 let mut compiler_source =
                     v8::script_compiler::Source::new(source_string, Some(&origin));
@@ -4992,8 +5018,15 @@ fn create_module_script_origin<'s>(
     scope: &mut v8::PinScope<'s, '_>,
     resource_name: &str,
     fetch_metadata: &crate::module_runtime::ModuleFetchMetadata,
+    source_origin: Option<&crate::document_module_graph::ModuleSourceOrigin>,
 ) -> v8::ScriptOrigin<'s> {
-    let name = v8::String::new(scope, resource_name).expect("v8 string allocation");
+    let name = v8::String::new(
+        scope,
+        source_origin.map_or(resource_name, |origin| origin.url.as_str()),
+    )
+    .expect("v8 string allocation");
+    // Inline diagnostics identify the source document, while imports continue
+    // to resolve against the module's preparation-time base URL.
     let base_url = Url::parse(resource_name).ok();
     let host_defined_options = base_url.as_ref().and_then(|base_url| {
         crate::util::script_host_defined_options_with_fetch_metadata(
@@ -5006,8 +5039,8 @@ fn create_module_script_origin<'s>(
     v8::ScriptOrigin::new(
         scope,
         name.into(),
-        0,
-        0,
+        source_origin.map_or(0, |origin| origin.line_offset.min(i32::MAX as u32) as i32),
+        source_origin.map_or(0, |origin| origin.column_offset.min(i32::MAX as u32) as i32),
         false,
         -1,
         None,
