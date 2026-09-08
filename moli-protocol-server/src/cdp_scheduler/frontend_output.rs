@@ -114,6 +114,31 @@ pub(crate) enum DevToolsFrontendOutput {
 }
 
 impl CdpScheduler {
+    pub(crate) fn webdriver_event_is_visible(
+        &self,
+        session: Option<&str>,
+        event: &moli_protocol::BackgroundProtocolEvent,
+    ) -> bool {
+        self.conn.webdriver_event_is_visible(session, event)
+    }
+
+    pub(crate) fn webdriver_automation_event_is_visible(
+        &self,
+        session: Option<&str>,
+        event: Option<&moli_protocol::devtools_runtime::AutomationEvent>,
+        fallback_target: Option<&str>,
+    ) -> bool {
+        self.conn
+            .webdriver_automation_event_is_visible(session, event, fallback_target)
+    }
+    pub(crate) fn publish_devtools_output(&self, output: ProtocolOutputSequence) {
+        if !output.is_empty()
+            && let Some(tx) = &self.frontend_output_tx
+        {
+            let _ = tx.send(DevToolsFrontendOutput::Cdp(output));
+        }
+    }
+
     pub(super) fn retire_bidi_target_event_sources(&mut self, target_id: &str) {
         self.bidi_event_sources.retain(|source, _| match source {
             BidiEventSource::Runtime(target)

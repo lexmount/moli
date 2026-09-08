@@ -1672,15 +1672,6 @@ impl CdpConnection {
     /// Binds renderer-produced child-frame activity to the Page attachment
     /// that captured it and to the exact root Document reported by the same
     /// renderer snapshot.
-    pub(crate) fn target_root_document_protocol_attachment_identity_for_session(
-        &self,
-        session_id: Option<&str>,
-        root_document: moli_core::RendererDocumentLifecycleIdentity,
-    ) -> Option<crate::conn::TargetRootDocumentProtocolAttachmentIdentity> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.target_root_document_protocol_attachment_identity_for_owner(&owner, root_document)
-    }
-
     pub(crate) fn target_root_document_protocol_attachment_identity_for_owner(
         &self,
         owner: &CommandOwnerScope,
@@ -1703,14 +1694,15 @@ impl CdpConnection {
         if !self.target_page_protocol_attachment_identity_is_current(expected.attachment()) {
             return false;
         }
-        self.target_session_owner_ref(expected.session_id())
-            .and_then(|owner| {
-                owner
-                    .browser_context
-                    .renderer_document_lifecycle_binding_for_target(&owner.target_id)
-                    .map(crate::conn::CommittedRendererDocumentBinding::renderer_document_identity)
-            })
-            == Some(expected.root_document())
+        self.target_session_owner_ref_for_owner(&CommandOwnerScope::for_page_attachment(
+            expected.attachment(),
+        ))
+        .and_then(|owner| {
+            owner
+                .browser_context
+                .renderer_document_lifecycle_binding_for_target(&owner.target_id)
+                .map(crate::conn::CommittedRendererDocumentBinding::renderer_document_identity)
+        }) == Some(expected.root_document())
     }
 
     pub(crate) fn target_root_document_lifecycle_identity_for_owner(
@@ -1905,14 +1897,6 @@ impl CdpConnection {
             }
         }
         session_ids
-    }
-
-    pub(crate) fn subscribed_page_event_session_ids_for_session_owner(
-        &self,
-        session_id: Option<&str>,
-    ) -> Vec<Option<String>> {
-        let owner = CommandOwnerScope::capture(self, session_id);
-        self.subscribed_page_event_session_ids_for_owner(&owner)
     }
 
     pub(crate) fn subscribed_page_event_session_ids_for_owner(
@@ -3388,8 +3372,10 @@ mod tests {
             .expect("target session should be mutable");
         }
         assert!(
-            conn.subscribed_page_event_session_ids_for_session_owner(Some("SID-primary"))
-                .is_empty(),
+            conn.subscribed_page_event_session_ids_for_owner(&CommandOwnerScope::for_session(
+                "SID-primary"
+            ))
+            .is_empty(),
             "Page.setLifecycleEventsEnabled must not subscribe a session to Page events"
         );
 
@@ -3399,7 +3385,9 @@ mod tests {
         )
         .expect("Page-enabled attached session should be mutable");
         assert_eq!(
-            conn.subscribed_page_event_session_ids_for_session_owner(Some("SID-primary")),
+            conn.subscribed_page_event_session_ids_for_owner(&CommandOwnerScope::for_session(
+                "SID-primary"
+            )),
             vec![Some("SID-page-enabled".to_owned())]
         );
 
@@ -3408,7 +3396,9 @@ mod tests {
         })
         .expect("primary session should be mutable");
         assert_eq!(
-            conn.subscribed_page_event_session_ids_for_session_owner(Some("SID-page-enabled")),
+            conn.subscribed_page_event_session_ids_for_owner(&CommandOwnerScope::for_session(
+                "SID-page-enabled"
+            )),
             vec![
                 Some("SID-primary".to_owned()),
                 Some("SID-page-enabled".to_owned()),

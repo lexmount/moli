@@ -1091,6 +1091,16 @@ impl BrowserContextHandle {
         fn web_contents_for_renderer_owner(owner: crate::RendererOwnerLocalHostId) -> Option<WebContentsHandle>;
     }
 
+    /// Classify the partition and snapshot its cookies in one exact owner turn.
+    pub fn snapshot_profile_backed_cookies(
+        &self,
+    ) -> Result<Option<Vec<moli_cookie_jar::StoredCookie>>, String> {
+        self.read(|context| {
+            (context.storage_partition_kind() == super::StoragePartitionKind::ProfileBacked)
+                .then(|| context.snapshot_cookies())
+        })
+    }
+
     // Session policy retirement can follow native Context or Browser shutdown.
     // An absent owner needs no reset; never redirect it to a surviving Context.
     pub fn set_service_worker_pause_on_start(&self, pause: bool) {

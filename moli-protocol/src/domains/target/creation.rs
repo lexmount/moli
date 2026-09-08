@@ -326,7 +326,8 @@ pub(super) fn execute_devtools_create_target_command(
     let activation = activating_created_target
         .then(|| TargetActivationTransition::new(target_id.clone(), previous_active_target_id));
     let initial_empty_document_url = create_target_initial_empty_document_url(&command.url);
-    let browser_cache_disabled = conn.browser_global_overrides.cache_disabled;
+    let browser_cache_disabled =
+        conn.cache_disabled_for_browser_context(&conn.browser_context.as_ref().unwrap().id);
     {
         let bc = conn.browser_context.as_mut().unwrap();
         if creating_background_target {

@@ -218,21 +218,6 @@ impl CdpConnection {
         events
     }
 
-    /// Explicitly end the private runtime of a WebDriver session. Disconnecting
-    /// a frontend, or merely dropping its DevTools projection, must not do this.
-    pub fn end_webdriver_session(self) -> Result<(), String> {
-        let contexts = self
-            .browser_contexts()
-            .map(BrowserContext::browser_context_id)
-            .collect::<Vec<_>>();
-        let browser = self.browser.clone();
-        drop(self);
-        for context in contexts {
-            browser.remove_context(context)?;
-        }
-        Ok(())
-    }
-
     pub(crate) fn active_browser_context_id(&self) -> Option<moli_core::browser::BrowserContextId> {
         self.browser_context
             .as_ref()

@@ -59,8 +59,7 @@ pub(super) async fn start_navigation(
     command: DevToolsCommand,
     timeout: Option<Duration>,
     response_tx: oneshot::Sender<ClassicSessionRuntimeCommandExecution>,
-    pending: &mut Option<ClassicPendingNavigation>,
-    attached: Option<&mut ClassicAttachedBidiSocket>,
+    pending: &mut Option<ClassicPendingCommand>,
 ) -> ClassicSessionRuntimeRequestOutcome {
     let reply = NavigationReply {
         response_tx,
@@ -70,14 +69,17 @@ pub(super) async fn start_navigation(
     let progress = scheduler
         .start_devtools_navigation_command(receivers, command, None)
         .await;
-    apply_progress(scheduler, receivers, reply, progress, pending, attached).await
+    apply_progress(scheduler, reply, progress, pending)
 }
 
 pub(super) async fn recv_navigation_completion(
-    pending: &mut Option<ClassicPendingNavigation>,
+    pending: &mut Option<ClassicPendingCommand>,
 ) -> Result<CompletedDevToolsNavigationExecution, tokio::task::JoinError> {
-    match pending.as_mut().map(|pending| &mut pending.wait) {
-        Some(NavigationWait::Network(wait)) => wait.await,
+    match pending.as_mut() {
+        Some(ClassicPendingCommand::Navigation(ClassicPendingNavigation {
+            wait: NavigationWait::Network(wait),
+            ..
+        })) => wait.await,
         _ => std::future::pending().await,
     }
 }
@@ -93,12 +95,11 @@ pub(super) async fn complete_navigation(
     scheduler: &mut CdpScheduler,
     receivers: &mut CdpSchedulerEventReceivers,
     completed: Result<CompletedDevToolsNavigationExecution, tokio::task::JoinError>,
-    pending: &mut Option<ClassicPendingNavigation>,
-    attached: Option<&mut ClassicAttachedBidiSocket>,
+    pending: &mut Option<ClassicPendingCommand>,
 ) -> ClassicSessionRuntimeRequestOutcome {
-    let command = pending
-        .take()
-        .expect("completed Classic navigation must retain its reply");
+    let Some(ClassicPendingCommand::Navigation(command)) = pending.take() else {
+        unreachable!("completed Classic navigation must retain its reply")
+    };
     let progress = match completed {
         Ok(completed) => {
             scheduler
@@ -115,84 +116,68 @@ pub(super) async fn complete_navigation(
             }))
         }
     };
-    apply_progress(
-        scheduler,
-        receivers,
-        command.reply,
-        progress,
-        pending,
-        attached,
-    )
-    .await
+    apply_progress(scheduler, command.reply, progress, pending)
 }
 
-pub(super) async fn poll_navigation_lifecycle(
+pub(super) fn poll_navigation_lifecycle(
     scheduler: &mut CdpScheduler,
-    receivers: &mut CdpSchedulerEventReceivers,
-    pending: &mut Option<ClassicPendingNavigation>,
-    attached: Option<&mut ClassicAttachedBidiSocket>,
+    pending: &mut Option<ClassicPendingCommand>,
 ) -> ClassicSessionRuntimeRequestOutcome {
-    if !pending
-        .as_ref()
-        .is_some_and(|command| matches!(command.wait, NavigationWait::Lifecycle(_)))
-    {
+    if !pending.as_ref().is_some_and(|command| {
+        matches!(
+            command,
+            ClassicPendingCommand::Navigation(ClassicPendingNavigation {
+                wait: NavigationWait::Lifecycle(_),
+                ..
+            })
+        )
+    }) {
         return ClassicSessionRuntimeRequestOutcome::Continue;
     }
-    let command = pending.take().expect("Classic navigation lifecycle wait");
+    let Some(ClassicPendingCommand::Navigation(command)) = pending.take() else {
+        unreachable!()
+    };
     let NavigationWait::Lifecycle(wait) = command.wait else {
         unreachable!()
     };
     let progress =
         scheduler.advance_devtools_navigation_lifecycle(wait, ProtocolOutputSequence::empty());
-    apply_progress(
-        scheduler,
-        receivers,
-        command.reply,
-        progress,
-        pending,
-        attached,
-    )
-    .await
+    apply_progress(scheduler, command.reply, progress, pending)
 }
 
-async fn apply_progress(
+fn apply_progress(
     scheduler: &mut CdpScheduler,
-    receivers: &mut CdpSchedulerEventReceivers,
     reply: NavigationReply,
     progress: DevToolsNavigationCommandProgress,
-    pending: &mut Option<ClassicPendingNavigation>,
-    attached: Option<&mut ClassicAttachedBidiSocket>,
+    pending: &mut Option<ClassicPendingCommand>,
 ) -> ClassicSessionRuntimeRequestOutcome {
     let (output, completed_reply) = match progress {
         DevToolsNavigationCommandProgress::Complete(execution) => {
             (execution.protocol_output, Some((reply, execution.result)))
         }
         DevToolsNavigationCommandProgress::Pending(network) => {
-            *pending = Some(ClassicPendingNavigation {
-                reply,
-                wait: NavigationWait::Network(DevToolsNavigationCommandWait::new(*network)),
-            });
+            *pending = Some(ClassicPendingCommand::Navigation(
+                ClassicPendingNavigation {
+                    reply,
+                    wait: NavigationWait::Network(DevToolsNavigationCommandWait::new(*network)),
+                },
+            ));
             return ClassicSessionRuntimeRequestOutcome::Continue;
         }
         DevToolsNavigationCommandProgress::PendingLifecycle {
             pending: lifecycle,
             protocol_output,
         } => {
-            *pending = Some(ClassicPendingNavigation {
-                reply,
-                wait: NavigationWait::Lifecycle(lifecycle),
-            });
+            *pending = Some(ClassicPendingCommand::Navigation(
+                ClassicPendingNavigation {
+                    reply,
+                    wait: NavigationWait::Lifecycle(lifecycle),
+                },
+            ));
             (protocol_output, None)
         }
     };
-    let keep_attached = if let Some(attached) = attached {
-        attached
-            .actor
-            .send_or_route_protocol_output(scheduler, receivers, output, None)
-            .await
-    } else {
-        true
-    };
+    scheduler.publish_devtools_output(output);
     if let Some((reply, result)) = completed_reply {
         let _ = reply
             .response_tx
@@ -201,11 +186,7 @@ async fn apply_progress(
                 page_residence: reply.page_residence,
             });
     }
-    if keep_attached {
-        ClassicSessionRuntimeRequestOutcome::Continue
-    } else {
-        ClassicSessionRuntimeRequestOutcome::DetachBidi
-    }
+    ClassicSessionRuntimeRequestOutcome::Continue
 }
 
 pub(super) async fn next_classic_request(

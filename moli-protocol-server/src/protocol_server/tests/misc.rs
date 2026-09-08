@@ -186,18 +186,13 @@ fn shared_cookie_profile_partition_backing_uses_storage_partition() -> anyhow::R
 }
 
 #[test]
-fn app_state_storage_partition_backing_derives_initial_partition_from_owner() -> anyhow::Result<()>
-{
+fn initial_storage_partition_uses_owner_backing() -> anyhow::Result<()> {
     let partition = Arc::new(StoragePartitionState::open(None)?);
-    let state = AppState::new_with_storage_partition(
-        "127.0.0.1:9222".parse().expect("test addr"),
-        partition.clone(),
-        FetchConfig::default(),
-        OptionalResourceFetchMask::NONE,
-        true,
-    )?;
     let initial_storage_partition =
-        state.initial_storage_partition(vec![stored_cookie("owner-cookie", "owner-value")]);
+        moli_protocol::CdpInitialStoragePartition::from_storage_partition(
+            vec![stored_cookie("owner-cookie", "owner-value")],
+            &partition,
+        );
     let mut conn = moli_protocol::test_support::connection_with_config(
         initial_storage_partition,
         Default::default(),

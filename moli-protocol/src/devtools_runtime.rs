@@ -292,91 +292,20 @@ pub enum DevToolsCommand {
     FulfillInterceptedRequest(DevToolsFulfillInterceptedRequestCommand),
 }
 
-impl DevToolsCommand {
-    pub fn context(&self) -> &DevToolsCommandContext {
-        match self {
-            DevToolsCommand::Navigate(command) => &command.context,
-            DevToolsCommand::Reload(command) => &command.context,
-            DevToolsCommand::GetNavigationHistory(command) => &command.context,
-            DevToolsCommand::TraverseHistory(command) => &command.context,
-            DevToolsCommand::GetRealms(command) => &command.context,
-            DevToolsCommand::EvaluateScript(command) => &command.context,
-            DevToolsCommand::CallFunction(command) => &command.context,
-            DevToolsCommand::TerminateExecution(command) => &command.context,
-            DevToolsCommand::ReleaseObjects(command) => &command.context,
-            DevToolsCommand::CreateTarget(command) => &command.context,
-            DevToolsCommand::CloseTarget(command) => &command.context,
-            DevToolsCommand::ActivateTarget(command) => &command.context,
-            DevToolsCommand::GetTargets(command) => &command.context,
-            DevToolsCommand::GetServiceWorkerLogs(command) => &command.context,
-            DevToolsCommand::GetClientWindows(command) => &command.context,
-            DevToolsCommand::SetClientWindowState(command) => &command.context,
-            DevToolsCommand::CreateBrowserContext(command) => &command.context,
-            DevToolsCommand::GetBrowserContexts(command) => &command.context,
-            DevToolsCommand::RemoveBrowserContext(command) => &command.context,
-            DevToolsCommand::SetDownloadBehavior(command) => &command.context,
-            DevToolsCommand::SetPermission(command) => &command.context,
-            DevToolsCommand::GetTargetInfo(command) => &command.context,
-            DevToolsCommand::GetFrameTree(command) => &command.context,
-            DevToolsCommand::GetFrameTrees(command) => &command.context,
-            DevToolsCommand::GetLayoutMetrics(command) => &command.context,
-            DevToolsCommand::GetJavaScriptDialog(command) => &command.context,
-            DevToolsCommand::SetJavaScriptDialogPromptText(command) => &command.context,
-            DevToolsCommand::HandleJavaScriptDialog(command) => &command.context,
-            DevToolsCommand::CaptureScreenshot(command) => &command.context,
-            DevToolsCommand::PrintToPdf(command) => &command.context,
-            DevToolsCommand::SetViewport(command) => &command.context,
-            DevToolsCommand::SetWindowState(command) => &command.context,
-            DevToolsCommand::SetUserAgentOverride(command) => &command.context,
-            DevToolsCommand::SetLocaleOverride(command) => &command.context,
-            DevToolsCommand::SetTimezoneOverride(command) => &command.context,
-            DevToolsCommand::SetGeolocationOverride(command) => &command.context,
-            DevToolsCommand::SetNetworkConditions(command) => &command.context,
-            DevToolsCommand::GetFrameOwner(command) => &command.context,
-            DevToolsCommand::LocateNodes(command) => &command.context,
-            DevToolsCommand::GetDocument(command) => &command.context,
-            DevToolsCommand::RequestChildNodes(command) => &command.context,
-            DevToolsCommand::QuerySelector(command) => &command.context,
-            DevToolsCommand::PerformSearch(command) => &command.context,
-            DevToolsCommand::GetSearchResults(command) => &command.context,
-            DevToolsCommand::DiscardSearchResults(command) => &command.context,
-            DevToolsCommand::GetNodeForLocation(command) => &command.context,
-            DevToolsCommand::ResolveNode(command) => &command.context,
-            DevToolsCommand::GetAttributes(command) => &command.context,
-            DevToolsCommand::GetText(command) => &command.context,
-            DevToolsCommand::GetProperty(command) => &command.context,
-            DevToolsCommand::PushNodesByBackendIds(command) => &command.context,
-            DevToolsCommand::DescribeNode(command) => &command.context,
-            DevToolsCommand::DomObjectReference(command) => &command.context,
-            DevToolsCommand::SetFileInputFiles(command) => &command.context,
-            DevToolsCommand::GetOuterHtml(command) => &command.context,
-            DevToolsCommand::ScrollIntoViewIfNeeded(command) => &command.context,
-            DevToolsCommand::DomGeometry(command) => &command.context,
-            DevToolsCommand::RemoveNode(command) => &command.context,
-            DevToolsCommand::AddPreloadScript(command) => &command.context,
-            DevToolsCommand::RemovePreloadScript(command) => &command.context,
-            DevToolsCommand::DispatchMouseEvent(command) => &command.context,
-            DevToolsCommand::DispatchKeyEvent(command) => &command.context,
-            DevToolsCommand::DispatchTouchEvent(command) => &command.context,
-            DevToolsCommand::DispatchDragEvent(command) => &command.context,
-            DevToolsCommand::SynthesizeTapGesture(command) => &command.context,
-            DevToolsCommand::GetCookies(command) => &command.context,
-            DevToolsCommand::DeleteCookies(command) => &command.context,
-            DevToolsCommand::SetCookies(command) => &command.context,
-            DevToolsCommand::AddNetworkIntercept(command) => &command.context,
-            DevToolsCommand::RemoveNetworkIntercept(command) => &command.context,
-            DevToolsCommand::AddNetworkDataCollector(command) => &command.context,
-            DevToolsCommand::RemoveNetworkDataCollector(command) => &command.context,
-            DevToolsCommand::DisownNetworkData(command) => &command.context,
-            DevToolsCommand::SetCacheBehavior(command) => &command.context,
-            DevToolsCommand::SetExtraHeaders(command) => &command.context,
-            DevToolsCommand::GetNetworkData(command) => &command.context,
-            DevToolsCommand::ContinueInterceptedRequest(command) => &command.context,
-            DevToolsCommand::ContinueInterceptedResponse(command) => &command.context,
-            DevToolsCommand::ContinueWithAuth(command) => &command.context,
-            DevToolsCommand::FailInterceptedRequest(command) => &command.context,
-            DevToolsCommand::FulfillInterceptedRequest(command) => &command.context,
+macro_rules! command_context_accessors {
+    ($($variant:ident),+ $(,)?) => {
+        pub fn context(&self) -> &DevToolsCommandContext {
+            match self { $(Self::$variant(command) => &command.context,)+ }
         }
+        pub fn context_mut(&mut self) -> &mut DevToolsCommandContext {
+            match self { $(Self::$variant(command) => &mut command.context,)+ }
+        }
+    };
+}
+
+impl DevToolsCommand {
+    command_context_accessors! {
+        Navigate, Reload, GetNavigationHistory, TraverseHistory, GetRealms, EvaluateScript, CallFunction, TerminateExecution, ReleaseObjects, CreateTarget, CloseTarget, ActivateTarget, GetTargets, GetServiceWorkerLogs, GetClientWindows, SetClientWindowState, CreateBrowserContext, GetBrowserContexts, RemoveBrowserContext, SetDownloadBehavior, SetPermission, GetTargetInfo, GetFrameTree, GetFrameTrees, GetLayoutMetrics, GetJavaScriptDialog, SetJavaScriptDialogPromptText, HandleJavaScriptDialog, CaptureScreenshot, PrintToPdf, SetViewport, SetWindowState, SetUserAgentOverride, SetLocaleOverride, SetTimezoneOverride, SetGeolocationOverride, SetNetworkConditions, GetFrameOwner, LocateNodes, GetDocument, RequestChildNodes, QuerySelector, PerformSearch, GetSearchResults, DiscardSearchResults, GetNodeForLocation, ResolveNode, GetAttributes, GetText, GetProperty, PushNodesByBackendIds, DescribeNode, DomObjectReference, SetFileInputFiles, GetOuterHtml, ScrollIntoViewIfNeeded, DomGeometry, RemoveNode, AddPreloadScript, RemovePreloadScript, DispatchMouseEvent, DispatchKeyEvent, DispatchTouchEvent, DispatchDragEvent, SynthesizeTapGesture, GetCookies, DeleteCookies, SetCookies, AddNetworkIntercept, RemoveNetworkIntercept, AddNetworkDataCollector, RemoveNetworkDataCollector, DisownNetworkData, SetCacheBehavior, SetExtraHeaders, GetNetworkData, ContinueInterceptedRequest, ContinueInterceptedResponse, ContinueWithAuth, FailInterceptedRequest, FulfillInterceptedRequest
     }
 
     pub fn set_webdriver_bidi_file_prompt_handler_for_script_command(

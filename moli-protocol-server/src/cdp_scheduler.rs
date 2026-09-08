@@ -62,7 +62,7 @@ use protocol_residence::{
 };
 use renderer_command_response_order::CommandOutputReleasePermit;
 pub(crate) use runtime_dispatch::{
-    DevToolsRuntimeCommandProgress, PendingDevToolsRuntimeDeferredReplyExecution,
+    DevToolsRuntimeCommandProgress, PendingDevToolsRuntimeExecution,
 };
 
 pub(crate) struct CdpTargetHostIntegration {
@@ -101,11 +101,6 @@ pub(crate) struct DevToolsCommandExecution {
     pub(crate) protocol_output: ProtocolOutputSequence,
 }
 
-pub(crate) struct DevToolsPageCommandExecution {
-    pub(crate) execution: DevToolsCommandExecution,
-    pub(crate) page_residence: Option<DevToolsPageResidenceIdentity>,
-}
-
 // `Dispatch` is the common, short-lived command-start result. Boxing it only
 // to match the rare no-payload variant would add one allocation to every
 // dispatched protocol command; the bounded stack value is intentional.
@@ -136,13 +131,40 @@ pub(crate) struct CdpScheduler {
 
 #[derive(Clone, Copy)]
 enum DefaultTargetRuntimeInitialization {
+    #[cfg(test)]
     Materialized,
     Deferred,
 }
 
+pub(crate) struct DevToolsContextDocumentWait {
+    context: moli_protocol::devtools_runtime::DevToolsCommandContext,
+    milestone: RendererDocumentLifecycleMilestone,
+    key: Option<moli_protocol::DevToolsDocumentLifecycleWaitKey>,
+}
+
+impl DevToolsContextDocumentWait {
+    pub(crate) fn new(
+        context: moli_protocol::devtools_runtime::DevToolsCommandContext,
+        milestone: RendererDocumentLifecycleMilestone,
+    ) -> Self {
+        Self {
+            context,
+            milestone,
+            key: None,
+        }
+    }
+}
+
 impl CdpScheduler {
-    pub(crate) fn end_webdriver_session(self) -> Result<(), String> {
-        self.conn.end_webdriver_session()
+    pub(crate) fn attach_webdriver_session(
+        &mut self,
+        session_id: &str,
+    ) -> Result<(), DevToolsError> {
+        self.conn.attach_webdriver_session(session_id)
+    }
+
+    pub(crate) fn close_webdriver_session(&mut self, session_id: &str) -> Result<(), String> {
+        self.conn.close_webdriver_session(session_id)
     }
 
     pub(crate) fn page_residence_identity_for_devtools_context(
@@ -329,10 +351,6 @@ impl RendererOutputTransportFailure {
     pub(crate) fn into_parts(self) -> (ProtocolOutputSequence, DevToolsError) {
         (self.protocol_output, self.error)
     }
-
-    fn without_output(error: DevToolsError) -> Self {
-        Self::new(ProtocolOutputSequence::empty(), error)
-    }
 }
 
 impl ProtocolOutputSequence {
@@ -515,12 +533,13 @@ impl CdpScheduler {
         self.conn.has_pending_javascript_dialog()
     }
 
-    pub(crate) fn set_automation_javascript_dialog_handler_enabled(
+    pub(crate) fn set_webdriver_session_dialog_handler_enabled(
         &mut self,
+        session_id: &str,
         enabled: bool,
     ) -> bool {
         self.conn
-            .set_automation_javascript_dialog_handler_enabled(enabled)
+            .set_webdriver_session_dialog_handler_enabled(session_id, enabled)
     }
 
     fn runtime_inspector_response_ready_sender(&self) -> RuntimeInspectorResponseReadySender {
@@ -747,6 +766,7 @@ impl CdpScheduler {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_initial_state_runtime_config(
         browser: BrowserHandle,
         initial_storage_partition: CdpInitialStoragePartition,
@@ -760,6 +780,7 @@ impl CdpScheduler {
         )
     }
 
+    #[cfg(test)]
     pub(crate) fn new_with_initial_state_runtime_config_and_target_host_integration(
         browser: BrowserHandle,
         initial_storage_partition: CdpInitialStoragePartition,
@@ -807,6 +828,7 @@ impl CdpScheduler {
             target_host_integration.install(&mut scheduler.conn);
         }
         match initialization {
+            #[cfg(test)]
             DefaultTargetRuntimeInitialization::Materialized => {
                 scheduler.conn.install_default_browser_target();
             }
@@ -992,6 +1014,26 @@ impl CdpScheduler {
     ) -> DevToolsCommandExecution {
         self.execute_devtools_command_with_protocol_messages_inner(None, command, true, None)
             .await
+    }
+
+    pub(crate) async fn execute_devtools_command_with_renderer_ingress(
+        &mut self,
+        receivers: &mut CdpSchedulerEventReceivers,
+        command: DevToolsCommand,
+    ) -> DevToolsCommandExecution {
+        let mut execution = self
+            .execute_devtools_command_with_protocol_messages_inner(
+                Some(receivers),
+                command,
+                true,
+                None,
+            )
+            .await;
+        execution.protocol_output.append(
+            self.complete_ready_protocol_residences_after_command()
+                .await,
+        );
+        execution
     }
 
     async fn execute_devtools_command_with_protocol_messages_inner(
@@ -1194,11 +1236,13 @@ impl CdpScheduler {
         receivers: &mut CdpSchedulerEventReceivers,
         command: DevToolsCommand,
     ) -> Result<DevToolsCommandResult, DevToolsError> {
-        self.execute_devtools_command_with_external_load_wait_and_protocol_messages(
-            receivers, command,
-        )
-        .await
-        .result
+        let execution = self
+            .execute_devtools_command_with_external_load_wait_and_protocol_messages(
+                receivers, command,
+            )
+            .await;
+        self.publish_devtools_output(execution.protocol_output);
+        execution.result
     }
 
     pub(crate) async fn execute_devtools_command_with_external_load_wait_and_protocol_messages(
@@ -1207,10 +1251,9 @@ impl CdpScheduler {
         command: DevToolsCommand,
     ) -> DevToolsCommandExecution {
         self.execute_devtools_command_with_external_load_wait_and_protocol_messages_inner(
-            receivers, command, None, None, None,
+            receivers, command, None,
         )
         .await
-        .execution
     }
 
     pub(crate) async fn execute_devtools_command_with_external_load_wait_and_protocol_messages_background_command_id(
@@ -1222,27 +1265,7 @@ impl CdpScheduler {
         self.execute_devtools_command_with_external_load_wait_and_protocol_messages_inner(
             receivers,
             command,
-            None,
             background_command_id,
-            None,
-        )
-        .await
-        .execution
-    }
-
-    pub(crate) async fn execute_devtools_command_with_external_load_wait_and_page_residence(
-        &mut self,
-        receivers: &mut CdpSchedulerEventReceivers,
-        command: DevToolsCommand,
-        timeout: Option<std::time::Duration>,
-        expected_page: Option<&DevToolsPageResidenceIdentity>,
-    ) -> DevToolsPageCommandExecution {
-        self.execute_devtools_command_with_external_load_wait_and_protocol_messages_inner(
-            receivers,
-            command,
-            timeout,
-            None,
-            expected_page,
         )
         .await
     }
@@ -1251,10 +1274,8 @@ impl CdpScheduler {
         &mut self,
         receivers: &mut CdpSchedulerEventReceivers,
         command: DevToolsCommand,
-        timeout: Option<std::time::Duration>,
         background_command_id: Option<u64>,
-        expected_page: Option<&DevToolsPageResidenceIdentity>,
-    ) -> DevToolsPageCommandExecution {
+    ) -> DevToolsCommandExecution {
         let mut protocol_output = self.drain_browser_events().await;
         let navigation_wait = devtools_navigation_wait(&command);
         let navigation_lifecycle_milestone =
@@ -1275,99 +1296,36 @@ impl CdpScheduler {
             Err(failure) => {
                 let (output, error) = failure.into_parts();
                 protocol_output.append(output);
-                return DevToolsPageCommandExecution {
-                    execution: DevToolsCommandExecution {
-                        result: Err(error),
-                        protocol_output,
-                    },
-                    page_residence: None,
+                return DevToolsCommandExecution {
+                    result: Err(error),
+                    protocol_output,
                 };
             }
         };
-        // Background navigation completion is deliberately drained before a
-        // command starts. Capture and authorize the Page only after that
-        // drain, so a DOM reference cannot pass a pre-drain check and then be
-        // dispatched to the replacement Page.
-        let page_residence = self.page_residence_identity_for_devtools_context(&navigation_context);
-        if expected_page.is_some_and(|expected| page_residence.as_ref() != Some(expected)) {
-            return DevToolsPageCommandExecution {
-                execution: DevToolsCommandExecution {
-                    result: Err(DevToolsError::new(
-                        moli_protocol::devtools_runtime::DevToolsErrorKind::NoSuchNode,
-                        "DOM reference belongs to a replaced Page",
-                    )),
-                    protocol_output,
-                },
-                page_residence,
-            };
-        }
         let navigation_command_output_start = protocol_output.len();
-        let mut execution =
+        let execution =
             if runtime_dispatch::devtools_command_uses_interleaved_runtime_dispatch(&command) {
-                match timeout {
-                    Some(timeout) => {
-                        self.execute_devtools_runtime_command_with_interleaved_progress_timeout(
-                            receivers, command, timeout,
-                        )
-                        .await
-                    }
-                    None => {
-                        self.execute_devtools_runtime_command_with_interleaved_progress(
-                            receivers, command,
-                        )
-                        .await
-                    }
-                }
+                self.execute_devtools_runtime_command_with_interleaved_progress(receivers, command)
+                    .await
             } else {
-                match timeout {
-                    Some(timeout) => {
-                        match tokio::time::timeout(
-                            timeout,
-                            self.execute_devtools_command_with_protocol_messages_inner(
-                                Some(&mut *receivers),
-                                command,
-                                false,
-                                background_command_id,
-                            ),
-                        )
-                        .await
-                        {
-                            Ok(execution) => execution,
-                            Err(_) => DevToolsCommandExecution {
-                                result: Err(DevToolsError::new(
-                                    moli_protocol::devtools_runtime::DevToolsErrorKind::Timeout,
-                                    "script timed out",
-                                )),
-                                protocol_output: ProtocolOutputSequence::empty(),
-                            },
-                        }
-                    }
-                    None => {
-                        self.execute_devtools_command_with_protocol_messages_inner(
-                            Some(&mut *receivers),
-                            command,
-                            false,
-                            background_command_id,
-                        )
-                        .await
-                    }
-                }
+                self.execute_devtools_command_with_protocol_messages_inner(
+                    Some(&mut *receivers),
+                    command,
+                    false,
+                    background_command_id,
+                )
+                .await
             };
-        execution = self
-            .finish_devtools_navigation_wait(
-                receivers,
-                navigation_context,
-                navigation_wait,
-                validate_root_document_lifecycle,
-                execution,
-                protocol_output,
-                navigation_command_output_start,
-            )
-            .await;
-        DevToolsPageCommandExecution {
+        self.finish_devtools_navigation_wait(
+            receivers,
+            navigation_context,
+            navigation_wait,
+            validate_root_document_lifecycle,
             execution,
-            page_residence,
-        }
+            protocol_output,
+            navigation_command_output_start,
+        )
+        .await
     }
 
     async fn finish_devtools_navigation_wait(
@@ -1596,217 +1554,90 @@ impl CdpScheduler {
     /// commits, then register against that exact committed Document. If a
     /// successor Document replaces it before the milestone, restart from the
     /// target route instead of observing or commanding the stale renderer.
-    pub(crate) async fn wait_for_devtools_context_document_lifecycle(
+    pub(crate) fn devtools_context_has_pending_document_navigation(
         &mut self,
-        receivers: &mut CdpSchedulerEventReceivers,
         context: &moli_protocol::devtools_runtime::DevToolsCommandContext,
-        milestone: RendererDocumentLifecycleMilestone,
-        timeout: Option<std::time::Duration>,
-    ) -> DevToolsCommandExecution {
-        use moli_protocol::devtools_runtime::DevToolsErrorKind;
-        use moli_protocol::{DevToolsDocumentLifecycleWaitState, DevToolsDocumentNavigationState};
+    ) -> bool {
+        self.conn
+            .has_inflight_background_navigation_for_devtools_context(context)
+            || self.has_deferred_main_document_load_completion_for_devtools_context(context)
+            || matches!(
+                self.conn
+                    .devtools_context_document_navigation_state(context),
+                moli_protocol::DevToolsDocumentNavigationState::PendingNavigation
+                    | moli_protocol::DevToolsDocumentNavigationState::AwaitingCommit
+            )
+    }
 
-        let started = Instant::now();
-        let mut protocol_output = ProtocolOutputSequence::empty();
-
-        loop {
-            let navigation_state = self
+    pub(crate) fn poll_devtools_context_document_lifecycle(
+        &mut self,
+        wait: &mut DevToolsContextDocumentWait,
+    ) -> Option<Result<(), DevToolsError>> {
+        if self.devtools_context_has_pending_document_navigation(&wait.context) {
+            return None;
+        }
+        use moli_protocol::{
+            DevToolsDocumentLifecycleWaitState as State,
+            DevToolsDocumentNavigationState as Navigation,
+        };
+        if let Some(key) = &wait.key {
+            match self
                 .conn
-                .devtools_context_document_navigation_state(context);
-            let loader_id = match navigation_state.clone() {
-                DevToolsDocumentNavigationState::Unavailable => {
-                    return DevToolsCommandExecution {
-                        result: Err(DevToolsError::new(
-                            DevToolsErrorKind::NoSuchTarget,
-                            "Target closed while waiting for document navigation",
-                        )),
-                        protocol_output,
-                    };
-                }
-                DevToolsDocumentNavigationState::PendingNavigation
-                | DevToolsDocumentNavigationState::AwaitingCommit => {
-                    let ready = self
-                        .complete_ready_protocol_residences_for_external_load_wait()
-                        .await;
-                    let ready_was_empty = ready.is_empty();
-                    protocol_output.append(ready);
-                    if !ready_was_empty
-                        || self
-                            .conn
-                            .devtools_context_document_navigation_state(context)
-                            != navigation_state
-                    {
-                        continue;
-                    }
-                    match self
-                        .wait_for_interleaved_scheduler_progress_before_deadline(
-                            receivers, started, timeout,
-                        )
-                        .await
-                    {
-                        Ok(progress) => protocol_output.append(progress),
-                        Err(failure) => {
-                            let (progress, error) = failure.into_parts();
-                            protocol_output.append(progress);
-                            return DevToolsCommandExecution {
-                                result: Err(error),
-                                protocol_output,
-                            };
-                        }
-                    }
-                    continue;
-                }
-                DevToolsDocumentNavigationState::Committed { loader_id } => loader_id,
-            };
-
-            let Some(key) = self
-                .conn
-                .capture_devtools_document_lifecycle_wait_key(context, &loader_id, milestone)
-            else {
-                // The target route and lifecycle journal are published by
-                // distinct owner turns. Let ordered ingress settle them, then
-                // resolve the target again; never infer a Document from an old
-                // loader id.
-                let ready = self
-                    .complete_ready_protocol_residences_for_external_load_wait()
-                    .await;
-                let ready_was_empty = ready.is_empty();
-                protocol_output.append(ready);
-                if !ready_was_empty
-                    || self
+                .devtools_document_lifecycle_wait_state(&wait.context, key)
+            {
+                State::Pending => return None,
+                State::Reached => {
+                    if !self
                         .conn
-                        .devtools_context_document_navigation_state(context)
-                        != (DevToolsDocumentNavigationState::Committed {
-                            loader_id: loader_id.clone(),
-                        })
-                {
-                    continue;
+                        .devtools_document_lifecycle_wait_is_visible(&wait.context, key)
+                    {
+                        return None;
+                    }
+                    self.cancel_devtools_context_document_lifecycle(wait);
+                    return Some(Ok(()));
                 }
-                match self
-                    .wait_for_interleaved_scheduler_progress_before_deadline(
-                        receivers, started, timeout,
-                    )
-                    .await
-                {
-                    Ok(progress) => protocol_output.append(progress),
-                    Err(failure) => {
-                        let (progress, error) = failure.into_parts();
-                        protocol_output.append(progress);
-                        return DevToolsCommandExecution {
-                            result: Err(error),
-                            protocol_output,
-                        };
-                    }
-                }
-                continue;
-            };
-
-            loop {
-                let wait_state = self
-                    .conn
-                    .devtools_document_lifecycle_wait_state(context, &key);
-                match wait_state {
-                    DevToolsDocumentLifecycleWaitState::Reached => {
-                        self.conn
-                            .release_devtools_document_lifecycle_wait_key(context, &key);
-                        return DevToolsCommandExecution {
-                            result: Ok(DevToolsCommandResult::Empty),
-                            protocol_output,
-                        };
-                    }
-                    DevToolsDocumentLifecycleWaitState::Superseded => {
-                        self.conn
-                            .release_devtools_document_lifecycle_wait_key(context, &key);
-                        break;
-                    }
-                    DevToolsDocumentLifecycleWaitState::Interrupted
-                    | DevToolsDocumentLifecycleWaitState::Unavailable => {
-                        self.conn
-                            .release_devtools_document_lifecycle_wait_key(context, &key);
-                        return DevToolsCommandExecution {
-                            result: Err(devtools_document_lifecycle_wait_error(
-                                wait_state, milestone,
-                            )
-                            .expect("terminal lifecycle wait state should produce an error")),
-                            protocol_output,
-                        };
-                    }
-                    DevToolsDocumentLifecycleWaitState::Pending => {}
-                }
-
-                let ready = self
-                    .complete_ready_protocol_residences_for_external_load_wait()
-                    .await;
-                let ready_was_empty = ready.is_empty();
-                protocol_output.append(ready);
-                if !ready_was_empty
-                    || self
-                        .conn
-                        .devtools_document_lifecycle_wait_state(context, &key)
-                        != wait_state
-                {
-                    continue;
-                }
-                match self
-                    .wait_for_interleaved_scheduler_progress_before_deadline(
-                        receivers, started, timeout,
-                    )
-                    .await
-                {
-                    Ok(progress) => protocol_output.append(progress),
-                    Err(failure) => {
-                        let (progress, error) = failure.into_parts();
-                        protocol_output.append(progress);
-                        self.conn
-                            .release_devtools_document_lifecycle_wait_key(context, &key);
-                        return DevToolsCommandExecution {
-                            result: Err(error),
-                            protocol_output,
-                        };
-                    }
+                State::Superseded => self.cancel_devtools_context_document_lifecycle(wait),
+                state => {
+                    let error = devtools_document_lifecycle_wait_error(state, wait.milestone)
+                        .expect("terminal lifecycle state");
+                    self.cancel_devtools_context_document_lifecycle(wait);
+                    return Some(Err(error));
                 }
             }
         }
-    }
-
-    async fn wait_for_interleaved_scheduler_progress_before_deadline(
-        &mut self,
-        receivers: &mut CdpSchedulerEventReceivers,
-        started: Instant,
-        timeout: Option<std::time::Duration>,
-    ) -> Result<ProtocolOutputSequence, RendererOutputTransportFailure> {
-        use moli_protocol::devtools_runtime::DevToolsErrorKind;
-
-        let input = match timeout {
-            Some(timeout) => {
-                let Some(remaining) = timeout.checked_sub(started.elapsed()) else {
-                    return Err(RendererOutputTransportFailure::without_output(
-                        DevToolsError::new(DevToolsErrorKind::Timeout, "navigation wait timed out"),
-                    ));
-                };
-                match tokio::time::timeout(remaining, self.recv_interleaved_input(receivers)).await
-                {
-                    Ok(progress) => progress,
-                    Err(_) => {
-                        return Err(RendererOutputTransportFailure::without_output(
-                            DevToolsError::new(
-                                DevToolsErrorKind::Timeout,
-                                "navigation wait timed out",
-                            ),
-                        ));
-                    }
+        match self
+            .conn
+            .devtools_context_document_navigation_state(&wait.context)
+        {
+            Navigation::Committed { loader_id } => {
+                wait.key = self.conn.capture_devtools_document_lifecycle_wait_key(
+                    &wait.context,
+                    &loader_id,
+                    wait.milestone,
+                );
+                if wait.key.is_some() {
+                    return self.poll_devtools_context_document_lifecycle(wait);
                 }
             }
-            None => self.recv_interleaved_input(receivers).await,
-        };
-        let input = input.ok_or_else(|| {
-            RendererOutputTransportFailure::without_output(DevToolsError::new(
-                DevToolsErrorKind::NoSuchSession,
-                "Protocol runtime stopped while waiting for document navigation",
-            ))
-        })?;
-        self.complete_interleaved_scheduler_input(receivers, input)
-            .await
+            Navigation::Unavailable => {
+                return Some(Err(DevToolsError::new(
+                    moli_protocol::devtools_runtime::DevToolsErrorKind::NoSuchTarget,
+                    "Target closed while waiting for document navigation",
+                )));
+            }
+            Navigation::PendingNavigation | Navigation::AwaitingCommit => {}
+        }
+        None
+    }
+
+    pub(crate) fn cancel_devtools_context_document_lifecycle(
+        &mut self,
+        wait: &mut DevToolsContextDocumentWait,
+    ) {
+        if let Some(key) = wait.key.take() {
+            self.conn
+                .release_devtools_document_lifecycle_wait_key(&wait.context, &key);
+        }
     }
 
     async fn drain_deferred_main_document_load_completion_for_wait(
