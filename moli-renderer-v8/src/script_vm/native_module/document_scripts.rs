@@ -318,7 +318,29 @@ impl ScriptVm {
         let source = self
             .inline_script_element_source_for_execution(script.node_id, source, request)
             .unwrap_or_default();
-        ModuleSource::text(source)
+        self.inline_module_script_source_with_origin(script, source)
+    }
+
+    pub(crate) fn inline_module_script_source_with_origin(
+        &self,
+        script: &PreparedScript,
+        source: String,
+    ) -> ModuleSource {
+        let position = self
+            .document_runtime
+            .parser_script_start_position(script.node_id);
+        ModuleSource::text_with_origin(
+            source,
+            crate::document_module_graph::ModuleSourceOrigin {
+                url: script.url.clone(),
+                line_offset: position.map_or(0, |position| {
+                    position.line.saturating_sub(1).min(i32::MAX as u64) as u32
+                }),
+                column_offset: position.map_or(0, |position| {
+                    position.column.saturating_sub(1).min(i32::MAX as u64) as u32
+                }),
+            },
+        )
     }
     pub(crate) fn seal_main_parser_deferred_scripts(
         &mut self,
